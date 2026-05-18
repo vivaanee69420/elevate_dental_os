@@ -21,7 +21,7 @@ Frontend (`cd frontend`):
 
 Local DB: `supabase start` then `cd db && supabase db reset` (runs `01_schema.sql`, `02_rls.sql`, `03_seed.sql` in order).
 
-> CI mismatch: `.github/workflows/ci.yml` runs `npm run typecheck` and `npm run build` for **backend**, but `backend/package.json` defines neither. Backend CI fails until those scripts exist or the workflow is fixed. Frontend CI matches.
+Backend `npm run typecheck` is `find src -name '*.js' -exec node --check {} +` (syntax check, no TS); `npm run build` is a no-op echo. `.github/workflows/ci.yml` runs typecheck/lint/test/build for both apps; all scripts exist (CI is green — the old "CI mismatch" was fixed in `b798750`).
 
 ## Backend architecture
 
@@ -48,6 +48,9 @@ The committed `backend/src/**/*.js` are **compiled CommonJS output** (`"use stri
 - Verifies the Supabase JWT via `serviceClient.auth.getUser`.
 - Loads the `users` row, sets `req.user = {id, email, organisation_id, role, access_token}`.
 - Attaches `req.db = tenantClient(token)` (RLS-respecting client).
+- Exports `requireRole(...roles)` route gate — use for RBAC on protected endpoints.
+
+`app.js` also serves a public HTML status page at `/` (Supabase connectivity check on boot). CORS allowlist is hardcoded (`dev.elevate.app`, `staging.elevate.app`, a Railway URL) plus `process.env.FRONTEND_URL`.
 
 `lib/supabase.js` exposes two clients:
 - `serviceClient` — **bypasses RLS**. Intended for webhooks/workers only.
@@ -61,11 +64,17 @@ Stripe webhook needs the raw body: `app.js` mounts `express.raw` on `/webhooks/s
 
 ### Financial code
 
-All money is **integer pence** — never floats. `lib/formulas.js` is the single source for financial calcs (`calculatePL`, `calculateValuation`, `calculateAssociatePay`, `calculateCashFlow`, `calculateKPIs`, `calculateLTV`, `calculateMarketingROI`, `calculateProgress`, helpers `pence`/`pct`/`formatPounds`). Any new/changed formula must update `docs/FORMULAS.md` and add a unit test (accountant reviews `FORMULAS.md` before launch).
+All money is **integer pence** — never floats. `lib/formulas.js` is the single source for financial calcs (`calculatePL`, `calculateValuation`, `calculateAssociatePay`, `calculateCashFlow`, `calculateKPIs`, `calculateLTV`, `calculateMarketingROI`, `calculateProgress`, `calculateCAGR`, helpers `pence`/`pct`/`formatPounds`). Any new/changed formula must update `docs/FORMULAS.md` and add a unit test (accountant reviews `FORMULAS.md` before launch).
 
 ## Frontend architecture
 
-Next.js 14 App Router. Route groups: `app/(auth)` (login/signup/forgot), `app/(dashboard)` (the ~39 product pages). `middleware.ts` gates auth. `lib/api.ts` is the backend client; `lib/supabase-browser.ts` / `lib/supabase-server.ts` are the SSR/client Supabase helpers. React Query for server state, Tailwind + `class-variance-authority` for UI, `recharts` for charts. `preview/elevate-dental-os-v2.html` is the visual reference prototype for porting pages.
+Next.js 14 App Router. Route groups: `app/(auth)` (login/signup/forgot), `app/(dashboard)` (the ~39 product pages). Feature-first modules under `frontend/features/` (contacts, dashboard, health, leads, payments, settings); shared UI primitives in `frontend/components/ui` (+ `components/{dashboard,layout,setup}`). `lib/format.ts` holds money/display helpers.
+
+**Server-side cookie auth (do not regress):** JWT lives in an **httpOnly cookie**, never in client JS. `lib/api.ts` calls a same-origin proxy `app/api/backend/[...path]/route.ts`, which injects the Bearer token server-side before forwarding to the Express backend. `middleware.ts` uses `@supabase/ssr` cookie sessions; `lib/supabase-browser.ts` / `lib/supabase-server.ts` are the client/SSR Supabase helpers.
+
+Current code is root-level (`frontend/{app,components,features,lib}`); a move under `frontend/src/` is documented in `TODOS.md` but **deferred** (blocked on Railway deploy stability) — don't start it unprompted.
+
+React Query for server state, Tailwind + `class-variance-authority` for UI, `recharts` for charts. `preview/elevate-dental-os-v2.html` is the visual reference prototype for porting pages.
 
 ## Project rules (from README "Key principles" — do not violate)
 
@@ -81,4 +90,4 @@ Next.js 14 App Router. Route groups: `app/(auth)` (login/signup/forgot), `app/(d
 
 ## Branch / deploy model
 
-`develop` → staging.elevate.app (auto), `main` → app.elevate.app (auto, manual approval gate). Merge to `main` requires green CI + Maryam approval; new endpoint → update `docs/API.md`. Deploy scripts in `scripts/`. Read `docs/ARCHITECTURE.md` and `docs/API.md` for deeper detail.
+`develop` → staging.elevate.app (auto), `main` → app.elevate.app (auto, manual approval gate). Merge to `main` requires green CI + Maryam approval; new endpoint → update `docs/API.md`. Deploy scripts in `scripts/`. Deeper detail in `docs/`: `ARCHITECTURE.md`, `API.md`, `FORMULAS.md`, `DEPLOYMENT.md`, `TESTING.md`, `DAILY_TASKS.md`.
