@@ -25,11 +25,21 @@ export async function POST(req: NextRequest) {
   }
 
   // 1. Create account via backend (org + owner user + seed plans).
-  const res = await fetch(`${BACKEND_URL}/auth/signup`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, full_name, organisation_name }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BACKEND_URL}/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, full_name, organisation_name }),
+    });
+  } catch {
+    // Backend unreachable (e.g. BACKEND_URL unset → localhost in a deployed
+    // container). Surface a clear 502 instead of an opaque Next 500.
+    return NextResponse.json(
+      { error: 'Backend unreachable. Check BACKEND_URL configuration.' },
+      { status: 502 }
+    );
+  }
   const data = await res.json().catch(() => ({ error: 'Signup failed' }));
   if (!res.ok) {
     return NextResponse.json({ error: data.error || 'Signup failed' }, { status: res.status });
