@@ -1,1 +1,0 @@
-self.__NEXT_FONT_MANIFEST="{\"pages\":{},\"app\":{\"/Users/ruhithpasha/code/work/elevate_dental_os/elevate-dental-os-handoff/frontend/app/layout\":[\"static/media/af4bf8399d1aacdf-s.p.woff2\",\"static/media/e4af272ccee01ff0-s.p.woff2\"]},\"appUsingSizeAdjust\":true,\"pagesUsingSizeAdjust\":false}"
