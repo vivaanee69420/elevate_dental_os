@@ -46,7 +46,9 @@ const CORS_ALLOWED = [
     'https://app.elevate.app',
     'https://dev.elevate.app',
     'https://staging.elevate.app',
-];
+    'https://talented-solace-production-cd10.up.railway.app',
+    process.env.FRONTEND_URL,
+].filter(Boolean);
 function buildApp() {
     const app = (0, express_1.default)();
     app.set('trust proxy', true);
