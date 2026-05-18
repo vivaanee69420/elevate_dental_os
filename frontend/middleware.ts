@@ -20,24 +20,19 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  // AUTH DISABLED (local dev): no redirects, all routes open.
-  // Restore the block below to re-enable auth gating.
-  return res;
+  const { data: { session } } = await supabase.auth.getSession();
 
-  /* eslint-disable no-unreachable */
-  // const { data: { session } } = await supabase.auth.getSession();
-  //
-  // const isAuthPage = ['/login', '/signup', '/forgot-password'].some((p) => req.nextUrl.pathname.startsWith(p));
-  // const isPublic = ['/', '/api/health'].includes(req.nextUrl.pathname);
-  //
-  // if (!session && !isAuthPage && !isPublic) {
-  //   return NextResponse.redirect(new URL('/login', req.url));
-  // }
-  // if (session && isAuthPage) {
-  //   return NextResponse.redirect(new URL('/dashboard', req.url));
-  // }
-  //
-  // return res;
+  const isAuthPage = ['/login', '/signup', '/forgot-password'].some((p) => req.nextUrl.pathname.startsWith(p));
+  const isPublic = ['/', '/api/health'].includes(req.nextUrl.pathname);
+
+  if (!session && !isAuthPage && !isPublic) {
+    return NextResponse.redirect(new URL('/login', req.url));
+  }
+  if (session && isAuthPage) {
+    return NextResponse.redirect(new URL('/dashboard', req.url));
+  }
+
+  return res;
 }
 
 export const config = {

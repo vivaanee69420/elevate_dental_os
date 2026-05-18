@@ -1,19 +1,12 @@
-import { supabase } from './supabase-browser';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
-
-async function getToken() {
-  const { data: { session } } = await supabase.auth.getSession();
-  return session?.access_token;
-}
+// Calls the same-origin proxy (/api/backend/*). The JWT lives in an httpOnly
+// cookie sent automatically; the proxy injects the Bearer token server-side.
+const PROXY_BASE = '/api/backend';
 
 export async function api<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
-  const token = await getToken();
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`${PROXY_BASE}${path}`, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(opts.headers || {}),
     },
   });
