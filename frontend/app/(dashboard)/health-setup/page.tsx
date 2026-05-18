@@ -123,7 +123,7 @@ function Welcome({ onNext }: { onNext: () => void }) {
     <>
       <div className="card-padded text-white mb-4" style={{ background: 'linear-gradient(135deg, #0E7C7B, #085857)' }}>
         <h2 className="display text-3xl font-bold mb-3">Welcome to Business Health</h2>
-        <p className="opacity-95 mb-5">In the next 10 minutes you'll capture exactly where your business is today. Then Elevate will:</p>
+        <p className="opacity-95 mb-5">In the next 10 minutes you&apos;ll capture exactly where your business is today. Then Elevate will:</p>
         <div className="grid grid-cols-2 gap-3">
           {[
             { icon: '📊', title: 'Auto-populate every dashboard', desc: 'Your numbers flow into P&L, KPIs, valuation, scorecard.' },
@@ -139,7 +139,7 @@ function Welcome({ onNext }: { onNext: () => void }) {
           ))}
         </div>
       </div>
-      <button onClick={onNext} className="btn-primary text-base px-6 py-3">Let's start →</button>
+      <button onClick={onNext} className="btn-primary text-base px-6 py-3">Let&apos;s start →</button>
     </>
   );
 }
@@ -216,7 +216,7 @@ function Patients({ baseline, update, onBack, onNext }: any) {
     <>
       <div className="card-padded mb-4">
         <h2 className="display text-xl font-semibold mb-1">Patients & Conversion</h2>
-        <p className="text-sm text-ink-muted mb-5">The lifeblood of the business. Estimate where you don't track exactly.</p>
+        <p className="text-sm text-ink-muted mb-5">The lifeblood of the business. Estimate where you don&apos;t track exactly.</p>
         <div className="grid grid-cols-3 gap-4">
           <NumberInput required label="Active patient base" helper="Visited within 24 months" value={baseline.active_patients} onChange={(v: number) => update('active_patients', v)} placeholder="14,820" />
           <NumberInput label="Lapsed patients" helper="No visit 12+ months" value={baseline.lapsed} onChange={(v: number) => update('lapsed', v)} placeholder="2,380" />
@@ -275,7 +275,7 @@ function Targets({ baseline, targets, update, onBack, onNext }: any) {
     <>
       <div className="card-padded mb-4">
         <h2 className="display text-xl font-semibold mb-1">Where Do You Want To Be?</h2>
-        <p className="text-sm text-ink-muted mb-5">Set the target. We'll model the path.</p>
+        <p className="text-sm text-ink-muted mb-5">Set the target. We&apos;ll model the path.</p>
         <div className="grid grid-cols-2 gap-4 mb-5">
           <div>
             <label className="text-xs font-semibold">Time horizon *</label>
@@ -393,7 +393,7 @@ function Review({ baseline, targets, onBack, onComplete }: any) {
       </div>
 
       <div className="card-padded mb-4">
-        <h3 className="display text-lg font-semibold mb-3">🤖 Plan4Growth AI's first read</h3>
+        <h3 className="display text-lg font-semibold mb-3">🤖 Plan4Growth AI&apos;s first read</h3>
         {!insights?.insights && <p className="text-sm text-ink-muted">Loading AI analysis…</p>}
         {insights?.insights?.map((ins: any, i: number) => {
           const colour = ins.severity === 'positive' ? 'border-success bg-green-50' :

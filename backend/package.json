@@ -8,6 +8,8 @@
     "start": "node src/server.js",
     "test": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.js",
+    "typecheck": "find src -name '*.js' -exec node --check {} +",
+    "build": "echo 'no build: backend ships committed CommonJS'",
     "lint": "eslint src --ext .js",
     "migrate": "node ../scripts/migrate.js",
     "seed": "node ../scripts/seed-tenant.js"

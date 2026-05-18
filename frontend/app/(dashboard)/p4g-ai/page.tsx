@@ -11,7 +11,7 @@ export default function P4GAIPage() {
         <div className="text-4xl mb-3">🛠️</div>
         <p className="text-sm text-ink-muted">Conversion from prototype pending</p>
         <p className="text-xs text-ink-muted mt-2">
-          See prototype: <code>preview/elevate-dental-os-v2.html → PAGES["p4g-ai"]</code>
+          See prototype: <code>preview/elevate-dental-os-v2.html → PAGES[&quot;p4g-ai&quot;]</code>
         </p>
       </div>
     </div>
