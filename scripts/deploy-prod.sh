@@ -39,9 +39,9 @@ cd backend
 railway up --environment production --service api
 cd ..
 
-echo "[4/5] Deploying frontend to Vercel production..."
+echo "[4/5] Deploying frontend to Railway production..."
 cd frontend
-vercel --prod --token=${VERCEL_TOKEN}
+railway up --environment production --service web
 cd ..
 
 echo "[5/5] Running smoke tests..."

@@ -5,8 +5,7 @@ Step-by-step setup for getting Elevate Dental OS into production.
 ## Pre-requisites
 
 - Node.js 20+ installed
-- Vercel account (Pro tier for custom domain)
-- Railway account (Hobby plan minimum)
+- Railway account (Hobby plan minimum — hosts both `api` + `web` services)
 - Supabase account (Pro tier for production)
 - Stripe account (live mode keys for production)
 - AWS account with admin access
@@ -21,8 +20,8 @@ Buy `elevate.app` (or use existing). Configure these DNS records:
 
 | Record | Type | Value |
 |---|---|---|
-| `app.elevate.app` | CNAME | `cname.vercel-dns.com` |
-| `api.elevate.app` | CNAME | (Railway domain) |
+| `app.elevate.app` | CNAME | (Railway domain — service `web`) |
+| `api.elevate.app` | CNAME | (Railway domain — service `api`) |
 | `mail.elevate.app` | MX/SPF/DKIM | per Postmark docs |
 | `elevate.app` | A | (marketing site IP) |
 
@@ -199,27 +198,31 @@ Create a SECOND service for workers in the same project:
 2. Set start command: `node dist/workers/index.js`
 3. Use same env vars
 
-## 9. Deploy frontend (Vercel)
+## 9. Deploy frontend (Railway)
+
+Frontend runs as Railway service `web`, built from `frontend/Dockerfile`
+(Next.js standalone output — see `frontend/next.config.js`).
 
 ```bash
 # Install CLI
-npm install -g vercel
+npm install -g @railway/cli
 
 # Login
-vercel login
+railway login
 
-# Deploy
+# Deploy (run from repo; service root = frontend/)
 cd frontend
-vercel --prod
+railway up --environment production --service web
 
-# Set env vars in Vercel dashboard:
+# Set env vars in Railway dashboard (service: web):
 # NEXT_PUBLIC_SUPABASE_URL
 # NEXT_PUBLIC_SUPABASE_ANON_KEY
 # NEXT_PUBLIC_API_URL=https://api.elevate.app
 # SUPABASE_SERVICE_ROLE_KEY (only used for SSR if needed)
+# NEXT_PUBLIC_* must be present at BUILD time (Docker build args)
 
 # Add custom domain: app.elevate.app
-# Vercel dashboard → Settings → Domains
+# Railway dashboard → service web → Settings → Networking → Custom Domain
 ```
 
 ## 10. Smoke test production
@@ -241,7 +244,7 @@ open https://app.elevate.app/login
 
 Before announcing launch:
 
-- [ ] All env vars set in Railway + Vercel
+- [ ] All env vars set in Railway (services `api` + `web`)
 - [ ] Custom domains pointing correctly
 - [ ] Supabase Custom Access Token Hook enabled (CRITICAL)
 - [ ] RLS verified — non-auth queries return zero rows
@@ -263,13 +266,13 @@ Before announcing launch:
 
 If a deployment goes wrong:
 
-**Frontend (Vercel):**
+**Frontend (Railway — service `web`):**
 ```bash
-vercel rollback --token=$VERCEL_TOKEN
-# Or use Vercel dashboard → Deployments → Promote to Production
+railway rollback --service web
+# Or use Railway dashboard → service web → Deployments → Redeploy
 ```
 
-**Backend (Railway):**
+**Backend (Railway — service `api`):**
 ```bash
 # Roll back to previous deployment
 railway rollback
@@ -297,8 +300,7 @@ Set up these alerts:
 | S3 upload failures | Slack #incidents | > 5/min |
 
 Tools:
-- Railway: built-in CPU/memory/restart alerts
-- Vercel: deployment alerts
+- Railway: built-in CPU/memory/restart + deployment alerts (services `api`, `web`)
 - Sentry: error alerts with grouping
 - Stripe: webhook delivery alerts
 - BetterStack: uptime monitoring + status page

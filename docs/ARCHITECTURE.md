@@ -10,7 +10,7 @@
                      │ HTTPS
                      ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    VERCEL (Frontend)                            │
+│              RAILWAY · service web (Frontend, Docker)           │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │  Next.js 14 App Router · React Server + Client         │   │
 │  │  Pages: 39 (dashboard, CRM, finance, wealth, etc.)     │   │
@@ -108,7 +108,7 @@ The Supabase Custom Access Token Hook injects `organisation_id` + `role` into th
 ### Compliance posture
 
 - **GDPR**: Right to access via `/settings/export-my-data`. Right to erasure via `/settings/delete-account`.
-- **Data residency**: All data in `eu-west-2` (London). Vercel pinned to `lhr1`. Railway to `europe-west4`.
+- **Data residency**: All data in `eu-west-2` (London). Railway (`api` + `web`) to `europe-west4`.
 - **Audit log retention**: 7 years (HIPAA-equivalent for medical-adjacent data)
 - **DPA**: Required with Anthropic, Stripe, Postmark, Twilio (all on file)
 
