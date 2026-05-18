@@ -28,11 +28,21 @@ async function proxy(req: NextRequest, path: string[]) {
   if (contentType) headers['Content-Type'] = contentType;
 
   const hasBody = !['GET', 'HEAD'].includes(req.method);
-  const res = await fetch(target, {
-    method: req.method,
-    headers,
-    body: hasBody ? await req.text() : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(target, {
+      method: req.method,
+      headers,
+      body: hasBody ? await req.text() : undefined,
+    });
+  } catch {
+    // Backend unreachable (e.g. BACKEND_URL unset → localhost in a deployed
+    // container). Surface a clear 502 instead of an opaque Next 500.
+    return NextResponse.json(
+      { error: 'Backend unreachable. Check BACKEND_URL configuration.' },
+      { status: 502 }
+    );
+  }
 
   const text = await res.text();
   return new NextResponse(text, {
