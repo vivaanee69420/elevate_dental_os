@@ -2,8 +2,6 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { api } from '@/lib/api';
-import { supabase } from '@/lib/supabase-browser';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -18,13 +16,18 @@ export default function SignupPage() {
     e.preventDefault();
     setLoading(true); setError('');
     try {
-      await api('/auth/signup', {
+      const res = await fetch('/auth/signup', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, full_name: fullName, organisation_name: orgName }),
       });
-      // Sign in after signup
-      await supabase.auth.signInWithPassword({ email, password });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Signup failed' }));
+        throw new Error(data.error || 'Signup failed');
+      }
+      // Account created + signed in server-side (httpOnly cookies set).
       router.push('/dashboard');
+      router.refresh();
     } catch (err: any) {
       setError(err.message);
     } finally {
