@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Multi-tenant SaaS for UK dental practice groups. Two apps: a Fastify-style **Express backend** (`backend/`, deploy Railway) and a **Next.js 14 frontend** (`frontend/`, deploy Vercel). Postgres + RLS on Supabase. Target launch Fri 30 May 2026.
+Multi-tenant SaaS for UK dental practice groups. Two apps: a Fastify-style **Express backend** (`backend/`, deploy Railway) and a **Next.js 14 frontend** (`frontend/`, deploy Railway via `frontend/Dockerfile`, service `web`). Postgres + RLS on Supabase. Target launch Fri 30 May 2026.
 
 ## Commands
 

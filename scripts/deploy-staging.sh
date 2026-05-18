@@ -18,10 +18,10 @@ cd backend
 railway up --environment staging --service api
 cd ..
 
-# 3. Deploy frontend to Vercel preview
-echo "[3/4] Deploying frontend to Vercel staging..."
+# 3. Deploy frontend to Railway staging
+echo "[3/4] Deploying frontend to Railway staging..."
 cd frontend
-vercel --prod=false --token=${VERCEL_TOKEN}
+railway up --environment staging --service web
 cd ..
 
 # 4. Run smoke tests

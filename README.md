@@ -62,7 +62,7 @@ elevate-handoff/
 
 | Layer | Tech | Hosted on |
 |---|---|---|
-| Frontend | Next.js 14 (App Router), TypeScript, Tailwind, React Query | Vercel |
+| Frontend | Next.js 14 (App Router), TypeScript, Tailwind, React Query | Railway (Docker) |
 | Backend | Fastify, TypeScript, Zod | Railway |
 | Database | Postgres 15 + Row-Level Security | Supabase |
 | Auth | Supabase Auth + Custom Access Token Hook | Supabase |
@@ -80,7 +80,7 @@ elevate-handoff/
 |---|---|---|
 | **Gaurav Mehta** | Owner / CEO | Product vision, customer feedback, GM Dental tenant |
 | **Maryam** | Tech lead | Backend, Supabase, integrations, architecture decisions |
-| **Nikhil** | Frontend + DevOps | All Next.js pages, Vercel, design polish |
+| **Nikhil** | Frontend + DevOps | All Next.js pages, Railway, design polish |
 | **Ruhith** | Backend + AWS | API endpoints, workers, S3/KMS, monitoring |
 | **Abhishek** | Design | Brand assets, marketing site, UI polish — non-technical |
 | **Sona** | Content | Copy, marketing emails, social — non-technical |
@@ -178,7 +178,7 @@ cd frontend && npm run dev  # http://localhost:3000
 
 - [ ] All CI green on main branch
 - [ ] Production database migrations applied
-- [ ] All env vars set in Railway + Vercel
+- [ ] All env vars set in Railway (services `api` + `web`)
 - [ ] Custom Access Token Hook enabled in Supabase
 - [ ] Stripe webhook endpoint responding
 - [ ] AT LEAST one paying customer in Stripe (Gaurav's GM Dental org)
