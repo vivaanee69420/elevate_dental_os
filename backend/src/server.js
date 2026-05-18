@@ -8,14 +8,29 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildApp = void 0;
 const app_1 = require("./app");
+const supabase_1 = require("./lib/supabase");
 Object.defineProperty(exports, "buildApp", { enumerable: true, get: function () { return app_1.buildApp; } });
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const HOST = '0.0.0.0';
+async function checkSupabase() {
+    try {
+        const { error } = await supabase_1.serviceClient
+            .from('users')
+            .select('id', { count: 'exact', head: true });
+        if (error)
+            throw error;
+        console.log(`✓ Supabase connected (${process.env.SUPABASE_URL})`);
+    }
+    catch (err) {
+        console.error(`✗ Supabase connection FAILED: ${err.message || err}`);
+    }
+}
 function start() {
     try {
         const app = (0, app_1.buildApp)();
         const server = app.listen(PORT, HOST, () => {
             console.log(`✓ Elevate API listening on ${HOST}:${PORT}`);
+            checkSupabase();
         });
         server.requestTimeout = 30000;
     }

@@ -80,6 +80,62 @@ function buildApp() {
     // Global JSON parser for everything else.
     app.use(express_1.default.json({ limit: '10mb' }));
     app.use(express_1.default.urlencoded({ extended: true }));
+    // ---- Root status page (public) ----
+    app.get('/', (_req, res) => {
+        res
+            .status(200)
+            .type('html')
+            .send(`<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>Elevate Dental OS API</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #ffffff; color: #0f172a;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 480px;
+    border: 1px solid #e2e8f0; border-radius: 16px;
+    padding: 40px; text-align: left;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 600; color: #047857;
+    background: #ecfdf5; border: 1px solid #a7f3d0;
+    padding: 6px 12px; border-radius: 999px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #10b981; }
+  h1 { font-size: 22px; font-weight: 700; margin: 24px 0 8px; }
+  p { font-size: 14px; color: #64748b; line-height: 1.6; }
+  .meta { margin-top: 28px; border-top: 1px solid #f1f5f9; padding-top: 20px; }
+  .row { display: flex; justify-content: space-between; font-size: 13px; padding: 6px 0; }
+  .row span:first-child { color: #94a3b8; }
+  .row span:last-child { color: #0f172a; font-weight: 600; }
+  a { color: #2563eb; text-decoration: none; font-weight: 600; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <span class="badge"><span class="dot"></span>Operational</span>
+    <h1>Elevate Dental OS API</h1>
+    <p>This is the backend API service. There is no user interface here &mdash; the application is served separately.</p>
+    <div class="meta">
+      <div class="row"><span>Environment</span><span>${process.env.NODE_ENV || 'development'}</span></div>
+      <div class="row"><span>Health</span><span><a href="/healthcheck">/healthcheck</a></span></div>
+    </div>
+  </main>
+</body>
+</html>`);
+    });
     // ---- Public routes (no auth) ----
     app.use('/healthcheck', health_routes_1.default);
     app.use('/webhooks', webhooks_routes_1.default);
