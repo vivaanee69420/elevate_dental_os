@@ -10,7 +10,7 @@ exports.authRepository = {
         return supabase_1.serviceClient.auth.admin.createUser({
             email,
             password,
-            email_confirm: false,
+            email_confirm: true,
         });
     },
     createOrganisation(name, slug) {
