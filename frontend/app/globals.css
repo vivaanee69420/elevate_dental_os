@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand: #0E7C7B;
+  --brand-50: #E6F2F2;
+  --accent: #FFB547;
+  --success: #10B981;
+  --danger: #EF4444;
+  --ink: #1F2937;
+  --ink-muted: #6B7280;
+  --bg: #F9FAFB;
+  --card: #FFFFFF;
+  --border: #E5E7EB;
+}
+
+body { font-family: var(--font-sans), system-ui, sans-serif; }
+h1, h2, h3, .display { font-family: var(--font-display), serif; }
+
+.btn-primary {
+  @apply bg-brand text-white px-4 py-2 rounded-lg font-semibold hover:bg-brand-700 transition;
+}
+.btn-ghost {
+  @apply text-ink hover:bg-bg px-4 py-2 rounded-lg transition;
+}
+.card {
+  @apply bg-card border border-border rounded-xl;
+}
+.card-padded {
+  @apply card p-5;
+}
+.input {
+  @apply border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-brand;
+}
