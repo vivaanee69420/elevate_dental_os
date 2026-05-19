@@ -51,6 +51,30 @@ const h = vi.hoisted(() => {
         q.eqs.push({ col, val });
         return builder;
       },
+      // Additive chainables (backward-compatible: existing tests only read
+      // q.table/q.op/q.eqs/q.upsertVals). Recorded for assertions; the
+      // analytics repo uses .limit() and .maybeSingle().
+      gte(col, val) {
+        (q.gtes ||= []).push({ col, val });
+        return builder;
+      },
+      lte(col, val) {
+        (q.ltes ||= []).push({ col, val });
+        return builder;
+      },
+      order(col, opts) {
+        q.order = { col, opts };
+        return builder;
+      },
+      in(col, vals) {
+        (q.ins ||= []).push({ col, vals });
+        return builder;
+      },
+      limit(n) {
+        q.limitN = n;
+        return builder;
+      },
+      maybeSingle: () => settle(),
       single: () => settle(),
       then: (resolve, reject) => settle().then(resolve, reject),
     };

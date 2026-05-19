@@ -1,10 +1,11 @@
 'use client';
-// AI Insights — pixel-faithful port of preview/elevate-dental-os-v2.html
-// (PAGES['ai-insights']). Surfaces patterns and anomalies from the last 30
-// days: 3 forecast KPIs, a "Live insights" card list, and a 90-day forward
-// projection bar chart (6 actual months + 3 projected). All figures come from
-// ../data.ts (mock only, no backend). The prototype's hand-rolled SVG
-// renderBarChart is reproduced here with recharts.
+// AI Insights — real-data wired. Sources:
+//   • 12-month revenue/profit series ← GET /api/analytics/revenue-series
+//     (baseline projection, derived — not live ledger)
+//   • per-practice + per-source 30d rollups ← GET /api/analytics/ai-insights
+//     (REAL leads/payments; locked D-Q2 conversion/pipeline defs)
+// buildInsights/buildProjection are pure transforms over the fetched data.
+// The prototype's hand-rolled SVG bar chart is reproduced with recharts.
 
 import {
   BarChart,
@@ -15,16 +16,14 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import Link from 'next/link';
 import { Card, KpiTile, Chip } from '@/components/ui';
 import { formatPounds, formatPoundsCompact } from '@/features/_mock';
-import {
-  MONTHLY_SERIES,
-  buildInsights,
-  buildProjection,
-  type Insight,
-} from '../data';
+import { useState } from 'react';
+import { buildInsights, buildProjection, type Insight } from '../data';
+import { useRevenueSeries, useAiInsights } from '../hooks';
+import { generateAiInsights } from '../api';
 
-// Tone palette per insight type, lifted from the prototype's `colors` map.
 const INSIGHT_TONE: Record<
   Insight['type'],
   { bg: string; border: string; glyph: string }
@@ -34,7 +33,39 @@ const INSIGHT_TONE: Record<
   info: { bg: '#DBEAFE', border: '#3B82F6', glyph: 'i' },
 };
 
-/** Short month label (e.g. "Nov") for the chart x-axis. */
+// Map an insight action to a real in-app route. Rule-based actions have a
+// known set; AI-generated actions are free text, so fall back to keyword
+// matching. No match → no button (never a dead affordance).
+function actionHref(action: string): string | null {
+  const a = action.toLowerCase();
+  const EXACT: Record<string, string> = {
+    'review p&l': '/profit',
+    'document process': '/workflows',
+    'adjust reminders': '/workflows',
+    'schedule review': '/kpiscorecard',
+    'scale this': '/marketing',
+  };
+  if (EXACT[a]) return EXACT[a];
+  if (a.includes('p&l') || a.includes('profit') || a.includes('margin'))
+    return '/profit';
+  if (a.includes('reminder') || a.includes('workflow') || a.includes('automat'))
+    return '/workflows';
+  if (
+    a.includes('marketing') ||
+    a.includes('source') ||
+    a.includes('channel') ||
+    a.includes('spend') ||
+    a.includes('campaign')
+  )
+    return '/marketing';
+  if (a.includes('lead') || a.includes('pipeline') || a.includes('convert'))
+    return '/pipeline';
+  if (a.includes('practice') || a.includes('kpi') || a.includes('scorecard'))
+    return '/kpiscorecard';
+  if (a.includes('cash') || a.includes('debtor')) return '/cashflow';
+  return null;
+}
+
 function monthLabel(key: string): string {
   const m = parseInt(key.split('-')[1], 10);
   return [
@@ -43,20 +74,137 @@ function monthLabel(key: string): string {
   ][m - 1];
 }
 
-/** AI Insights page. */
 export default function AiInsightsScreen() {
-  const series = MONTHLY_SERIES;
-  // 3-month trailing average drives both forecast KPIs.
-  const last3Avg = series.slice(-3).reduce((s, m) => s + m.revenue, 0) / 3;
-  const projectedRevenue90 = last3Avg * 3;
-  const projectedProfit90 = projectedRevenue90 * 0.1;
+  const {
+    data: seriesResp,
+    isLoading: seriesLoading,
+    isError: seriesError,
+  } = useRevenueSeries();
+  const {
+    data: insightsResp,
+    isLoading: insightsLoading,
+    isError: insightsError,
+  } = useAiInsights();
 
-  const insights = buildInsights();
+  // AI-generated cards (Claude). null = not generated yet → show rule-based.
+  const [aiInsights, setAiInsights] = useState<Insight[] | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+
+  async function generateFresh() {
+    if (generating) return;
+    setGenerating(true);
+    setAiNote(null);
+    try {
+      const r = await generateAiInsights();
+      if (r.insights.length > 0) {
+        setAiInsights(r.insights);
+      } else {
+        setAiNote(
+          r.error
+            ? `AI analysis unavailable (${r.error}) — showing rule-based insights.`
+            : 'AI returned no insights — showing rule-based insights.',
+        );
+      }
+    } catch {
+      setAiNote(
+        'AI analysis failed — showing rule-based insights. Try again shortly.',
+      );
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  // Export the currently shown insights (AI or rule-based) as a PDF via the
+  // browser's print-to-PDF — no extra dependency. Opens a clean report
+  // window and triggers print; the user picks "Save as PDF".
+  function downloadPdf() {
+    const esc = (s: string) =>
+      s.replace(
+        /[&<>"]/g,
+        (c) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string,
+      );
+    const when = new Date().toLocaleString('en-GB');
+    const kind = usingAi ? 'AI-generated' : 'Rule-based';
+    const rows = insights
+      .map(
+        (i) => `
+        <div class="card ${i.type}">
+          <div class="t">${esc(i.title)}</div>
+          <div class="d">${esc(i.detail)}</div>
+          ${i.action ? `<div class="a">Next: ${esc(i.action)}</div>` : ''}
+        </div>`,
+      )
+      .join('');
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+      <title>AI Insights — ${esc(when)}</title>
+      <style>
+        body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:40px;}
+        h1{font-size:22px;margin:0 0 4px;}
+        .sub{color:#6B7280;font-size:12px;margin-bottom:24px;}
+        .card{border:1px solid #E5E7EB;border-left-width:4px;border-radius:8px;padding:14px 16px;margin-bottom:12px;}
+        .card.positive{border-left-color:#10B981;}
+        .card.warning{border-left-color:#F59E0B;}
+        .card.info{border-left-color:#3B82F6;}
+        .t{font-weight:600;margin-bottom:4px;}
+        .d{color:#374151;font-size:13px;}
+        .a{color:#6B7280;font-size:12px;margin-top:6px;}
+        .f{color:#9CA3AF;font-size:11px;margin-top:24px;border-top:1px solid #E5E7EB;padding-top:10px;}
+        @media print{body{margin:16mm;}}
+      </style></head><body>
+      <h1>AI Insights</h1>
+      <div class="sub">${kind} · generated ${esc(when)} · ${insights.length} insight(s)</div>
+      ${rows || '<p>No insights to export.</p>'}
+      <div class="f">Elevate Dental OS — figures are baseline-derived projections / live rollups; AI cards are model-generated. Not financial advice.</div>
+      </body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) {
+      setAiNote('Allow pop-ups to export the PDF.');
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.onload = () => {
+      w.print();
+    };
+    // Fallback if onload already fired.
+    setTimeout(() => {
+      try {
+        w.print();
+      } catch {
+        /* user closed the window */
+      }
+    }, 400);
+  }
+
+  const loading = seriesLoading || insightsLoading;
+  const errored = seriesError || insightsError;
+  const noBaseline = !!seriesResp?.error;
+
+  const series = seriesResp?.series ?? [];
+  const practices = insightsResp?.practices ?? [];
+  const sources = insightsResp?.sources ?? [];
+
+  const last3Avg =
+    series.length > 0
+      ? series.slice(-3).reduce((s, m) => s + m.revenue, 0) /
+        Math.min(3, series.length)
+      : 0;
+  const projectedRevenue90 = last3Avg * 3;
+  const marginFrac =
+    series.length > 0 && series[series.length - 1].revenue > 0
+      ? series[series.length - 1].profit / series[series.length - 1].revenue
+      : 0.1;
+  const projectedProfit90 = projectedRevenue90 * marginFrac;
+
+  const insights = aiInsights ?? buildInsights(series, practices, sources);
   const positiveCount = insights.filter((i) => i.type === 'positive').length;
   const warningCount = insights.filter((i) => i.type === 'warning').length;
+  const usingAi = aiInsights !== null;
 
-  // Combined 6-actual + 3-projected series, mapped to a recharts-friendly row.
-  const chartData = buildProjection().map((p) => ({
+  const chartData = buildProjection(series).map((p) => ({
     name: monthLabel(p.month),
     Revenue: p.revenue,
     Profit: p.profit,
@@ -64,12 +212,72 @@ export default function AiInsightsScreen() {
 
   return (
     <div className="container mx-auto" style={{ maxWidth: 1500 }}>
-      <div className="mb-6">
-        <h1 className="display text-3xl font-bold">AI Insights</h1>
-        <p className="text-sm text-ink-muted mt-1">
-          Patterns and anomalies surfaced from your data — last 30 days
-        </p>
+      <div className="mb-6 flex justify-between items-start gap-4 flex-wrap">
+        <div>
+          <h1 className="display text-3xl font-bold">AI Insights</h1>
+          <p className="text-sm text-ink-muted mt-1">
+            Patterns and anomalies surfaced from your data — last 30 days
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={downloadPdf}
+            disabled={loading || insights.length === 0}
+            className="font-semibold"
+            style={{
+              padding: '9px 16px',
+              fontSize: 13,
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              background: 'white',
+              opacity: loading || insights.length === 0 ? 0.5 : 1,
+              cursor:
+                loading || insights.length === 0 ? 'default' : 'pointer',
+            }}
+          >
+            Download PDF
+          </button>
+          <button
+            type="button"
+            onClick={generateFresh}
+            disabled={generating || loading}
+            className="btn btn-primary font-semibold"
+            style={{
+              padding: '9px 16px',
+              fontSize: 13,
+              opacity: generating || loading ? 0.6 : 1,
+              cursor: generating || loading ? 'default' : 'pointer',
+            }}
+          >
+            {generating ? 'Analysing your data…' : 'Generate AI insights'}
+          </button>
+        </div>
       </div>
+
+      {errored && (
+        <Card className="mb-4">
+          <div className="font-semibold" style={{ fontSize: 14 }}>
+            Could not load insights
+          </div>
+          <p className="text-ink-muted" style={{ fontSize: 13, marginTop: 4 }}>
+            The analytics service did not respond. Refresh to retry.
+          </p>
+        </Card>
+      )}
+
+      {noBaseline && !errored && (
+        <Card className="mb-4">
+          <div className="font-semibold" style={{ fontSize: 14 }}>
+            No baseline set
+          </div>
+          <p className="text-ink-muted" style={{ fontSize: 13, marginTop: 4 }}>
+            The revenue forecast and projection read from your Business Health
+            baseline. Complete setup to populate them. Per-practice and
+            per-source insights still reflect your live leads.
+          </p>
+        </Card>
+      )}
 
       {/* Forecast KPIs */}
       <div
@@ -78,20 +286,24 @@ export default function AiInsightsScreen() {
       >
         <KpiTile
           label="Insights this week"
-          value={String(insights.length)}
+          value={loading ? '…' : String(insights.length)}
           delta={`${positiveCount} positive · ${warningCount} warning`}
           deltaTone="up"
         />
         <KpiTile
           label="90-day revenue forecast"
-          value={formatPoundsCompact(projectedRevenue90)}
-          delta="Based on 3mo trailing avg"
+          value={
+            loading ? '…' : noBaseline ? '—' : formatPoundsCompact(projectedRevenue90)
+          }
+          delta="Baseline projection · 3mo trailing avg"
           deltaTone="up"
         />
         <KpiTile
           label="90-day profit forecast"
-          value={formatPoundsCompact(projectedProfit90)}
-          delta="~10% margin assumed"
+          value={
+            loading ? '…' : noBaseline ? '—' : formatPoundsCompact(projectedProfit90)
+          }
+          delta="At baseline margin"
           deltaTone="up"
         />
       </div>
@@ -103,62 +315,100 @@ export default function AiInsightsScreen() {
           style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}
         >
           <h2 className="display font-semibold" style={{ fontSize: 17 }}>
-            Live insights
+            {usingAi ? 'AI-generated insights' : 'Live insights'}
           </h2>
-          <Chip colour="brand">Updated 2 min ago</Chip>
+          <Chip colour="brand">
+            {usingAi
+              ? 'AI analysis'
+              : insightsResp?.truncated
+                ? 'Partial data'
+                : 'Rule-based'}
+          </Chip>
         </div>
-        {insights.map((insight) => {
-          const tone = INSIGHT_TONE[insight.type];
-          return (
-            <div
-              key={insight.title}
-              className="flex"
-              style={{
-                gap: 14,
-                padding: '16px 20px',
-                borderBottom: '1px solid var(--border)',
-              }}
-            >
+        {aiNote && (
+          <div
+            className="text-ink-muted"
+            style={{
+              padding: '10px 20px',
+              fontSize: 12,
+              borderBottom: '1px solid var(--border)',
+            }}
+          >
+            {aiNote}
+          </div>
+        )}
+        {loading ? (
+          <div
+            className="text-ink-muted"
+            style={{ padding: '24px 20px', fontSize: 13 }}
+          >
+            Loading insights…
+          </div>
+        ) : insights.length === 0 ? (
+          <div
+            className="text-ink-muted"
+            style={{ padding: '24px 20px', fontSize: 13 }}
+          >
+            Not enough data yet to surface insights.
+          </div>
+        ) : (
+          insights.map((insight) => {
+            const tone = INSIGHT_TONE[insight.type];
+            return (
               <div
-                className="flex items-center justify-center flex-shrink-0 font-bold"
+                key={insight.title}
+                className="flex"
                 style={{
-                  width: 36,
-                  height: 36,
-                  background: tone.bg,
-                  color: tone.border,
-                  borderRadius: 8,
+                  gap: 14,
+                  padding: '16px 20px',
+                  borderBottom: '1px solid var(--border)',
                 }}
               >
-                {tone.glyph}
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-                  {insight.title}
-                </div>
                 <div
-                  className="text-ink-muted"
-                  style={{ fontSize: 13, lineHeight: 1.5 }}
+                  className="flex items-center justify-center flex-shrink-0 font-bold"
+                  style={{
+                    width: 36,
+                    height: 36,
+                    background: tone.bg,
+                    color: tone.border,
+                    borderRadius: 8,
+                  }}
                 >
-                  {insight.detail}
+                  {tone.glyph}
                 </div>
+                <div style={{ flex: 1 }}>
+                  <div
+                    style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}
+                  >
+                    {insight.title}
+                  </div>
+                  <div
+                    className="text-ink-muted"
+                    style={{ fontSize: 13, lineHeight: 1.5 }}
+                  >
+                    {insight.detail}
+                  </div>
+                </div>
+                {actionHref(insight.action) && (
+                  <Link
+                    href={actionHref(insight.action) as string}
+                    className="font-medium self-center"
+                    style={{
+                      fontSize: 12,
+                      padding: '6px 10px',
+                      whiteSpace: 'nowrap',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      background: 'white',
+                    }}
+                  >
+                    {insight.action} &rarr;
+                  </Link>
+                )}
               </div>
-              <button
-                type="button"
-                className="font-medium self-center"
-                style={{
-                  fontSize: 12,
-                  padding: '6px 10px',
-                  whiteSpace: 'nowrap',
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
-                  background: 'white',
-                }}
-              >
-                {insight.action} &rarr;
-              </button>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </Card>
 
       {/* 90-day forward projection */}
@@ -169,38 +419,54 @@ export default function AiInsightsScreen() {
         >
           90-day forward projection
         </h2>
-        <div style={{ width: '100%', height: 240 }}>
-          <ResponsiveContainer>
-            <BarChart data={chartData} margin={{ top: 20, right: 20, bottom: 10, left: 0 }}>
-              <CartesianGrid stroke="#E5E7EB" vertical={false} />
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 10, fill: '#94A3B8' }}
-                axisLine={false}
-                tickLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 10, fill: '#94A3B8' }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={(v: number) => formatPoundsCompact(v)}
-                width={56}
-              />
-              <Tooltip
-                formatter={(v: number, n: string) => [formatPounds(v), n]}
-                contentStyle={{ fontSize: 12 }}
-              />
-              <Bar dataKey="Revenue" fill="#0E7C7B" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="Profit" fill="#FFB547" radius={[2, 2, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <p
-          className="text-ink-muted"
-          style={{ fontSize: 11, marginTop: 12 }}
-        >
-          Last 6 actual months + 3 month forward projection · seasonality
-          adjusted
+        {loading ? (
+          <div
+            className="text-ink-muted"
+            style={{ fontSize: 13, padding: '40px 0' }}
+          >
+            Loading projection…
+          </div>
+        ) : chartData.length === 0 ? (
+          <div
+            className="text-ink-muted"
+            style={{ fontSize: 13, padding: '40px 0' }}
+          >
+            No projection — set your Business Health baseline.
+          </div>
+        ) : (
+          <div style={{ width: '100%', height: 240 }}>
+            <ResponsiveContainer>
+              <BarChart
+                data={chartData}
+                margin={{ top: 20, right: 20, bottom: 10, left: 0 }}
+              >
+                <CartesianGrid stroke="#E5E7EB" vertical={false} />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fontSize: 10, fill: '#94A3B8' }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: '#94A3B8' }}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(val: number) => formatPoundsCompact(val)}
+                  width={56}
+                />
+                <Tooltip
+                  formatter={(val: number, n: string) => [formatPounds(val), n]}
+                  contentStyle={{ fontSize: 12 }}
+                />
+                <Bar dataKey="Revenue" fill="#0E7C7B" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="Profit" fill="#FFB547" radius={[2, 2, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        <p className="text-ink-muted" style={{ fontSize: 11, marginTop: 12 }}>
+          Last 6 actual months + 3 month forward projection · baseline-derived,
+          seasonality adjusted
         </p>
       </Card>
     </div>

@@ -93,3 +93,55 @@ Return ONLY valid JSON array of 5 insights. No other text.`;
         return [];
     }
 }
+
+// ============================================================================
+// AI-INSIGHTS — Claude analyses LIVE rollups (baseline + per-practice/source
+// conversion + revenue projection) and writes insight cards in the exact
+// shape the AI Insights screen renders. Returns [] on any failure so the
+// caller can fall back to the deterministic rule-based insights.
+// ============================================================================
+export async function generateDataInsights(ctx) {
+    const prompt = `You are analysing a UK dental practice group's LIVE data. Generate 4-6 specific, prioritised insights a practice owner can act on. Reference the actual numbers — never generic advice.
+
+Baseline (annual, £ pounds; cost_* are % of revenue): ${JSON.stringify(ctx.baseline ?? {})}
+12-month revenue projection (pence): ${JSON.stringify(ctx.series ?? [])}
+Per-practice last 30 days (conversion %, revenue pence): ${JSON.stringify(ctx.practices ?? [])}
+Per-source last 30 days (conversion %, leads, pipeline pence): ${JSON.stringify(ctx.sources ?? [])}
+
+For each insight return an object:
+- type: "positive" | "warning" | "info"
+- title: short headline referencing a real number
+- detail: 1-2 sentences — the data point + why it matters
+- action: one specific next step
+
+Return ONLY a valid JSON array (4-6 items). No prose, no code fences.`;
+    const response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 1500,
+        system: 'You are a UK dental business analyst. Return only a valid JSON array of insight objects.',
+        messages: [{ role: 'user', content: prompt }],
+    });
+    const text = response.content
+        .filter((block) => block.type === 'text')
+        .map((block) => block.text)
+        .join('');
+    try {
+        const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const arr = JSON.parse(jsonText);
+        if (!Array.isArray(arr))
+            return [];
+        const ALLOWED = new Set(['positive', 'warning', 'info']);
+        return arr
+            .filter((x) => x && x.title && x.detail)
+            .map((x) => ({
+                type: ALLOWED.has(x.type) ? x.type : 'info',
+                title: String(x.title),
+                detail: String(x.detail),
+                action: x.action ? String(x.action) : 'Review',
+            }));
+    }
+    catch (err) {
+        console.error('Failed to parse data insights:', text);
+        return [];
+    }
+}
