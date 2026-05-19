@@ -24,6 +24,7 @@
 
 import { serviceClient, tenantClient, verifyToken } from '../lib/supabase.js';
 import { permissionsService } from '../services/permissions.service.js';
+import { defaultPermissionsForRole } from '../lib/permissions.js';
 
 export async function authenticate(req, res, next) {
   const header = req.headers.authorization;
@@ -57,9 +58,11 @@ export async function authenticate(req, res, next) {
         user.permissions,
       );
     } catch (permErr) {
-      // Fail closed: no permissions rather than accidental grant.
-      req.log?.warn({ err: permErr }, 'Permission resolution failed');
-      permissions = {};
+      // Fail SAFE to code role-defaults (not empty): a DB/infra failure must
+      // not silently lock an owner out of their own product. DB only ever
+      // *widens or narrows* on top of these known-good code defaults.
+      req.log?.warn({ err: permErr }, 'Permission resolution failed; using code role defaults');
+      permissions = defaultPermissionsForRole(user.role, user.permissions);
     }
 
     req.user = {
