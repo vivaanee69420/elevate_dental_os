@@ -1,46 +1,66 @@
 'use client';
-// System — Team Permissions. Pixel-faithful port of
-// preview/elevate-dental-os-v2.html PAGES['team-permissions'].
+// System — Team Permissions. Visual port of
+// preview/elevate-dental-os-v2.html PAGES['team-permissions'], now wired to
+// the live dynamic-RBAC backend.
 //
-// State model (local, no API — mirrors the prototype's localStorage):
-//   perms = { practice_manager: string[], reception: string[] }
-//   showMinor (All pages / Big picture only)
+// Data:
+//   GET /api/admin/permissions  -> { catalog: {key:label}, roles:{...} }
+//   PUT /api/admin/permissions/role { role, permission_key, allowed }
 //
-// Render pipeline:
-//   PAGE_META -> group by section -> SECTION_ORDER
-//     -> per section, filter (showMinor ? all : major)
-//       -> rows with two toggles (PM blue, Reception green);
-//          owner-only pages render a locked indicator instead.
-//
-// Toggling never grants an owner-only page (project rule 5: Wealth /
-// owner-only stay owner-only). Prototype emoji glyphs dropped per rule 7.
-import { useMemo, useState } from 'react';
-import {
-  PAGE_META,
-  DEFAULT_PM_PAGES,
-  DEFAULT_RECEPTION_PAGES,
-  SECTION_COLOURS,
-  SECTION_ORDER,
-} from '../data';
+// Owner column is always-on (the backend keeps Owner full-access). Toggling
+// a cell PUTs the change and optimistically updates the React Query cache.
+// Owner-only screen — also gated server-side by permissions.manage and
+// hidden from nav for non-holders.
+import { useMemo } from 'react';
+import { usePermissionsMatrix, useSetRolePermission } from '../hooks';
+import { SECTION_COLOURS } from '../data';
 
-const TEAL = '#0E7C7B';
 const PM_BLUE = '#3B82F6';
 const REC_GREEN = '#10B981';
 
-/** Role -> granted page-id list. */
-interface Perms {
-  practice_manager: string[];
-  reception: string[];
-}
+/**
+ * Visual grouping of catalogue permission keys into the prototype's coloured
+ * sections. Keys absent here fall into "System".
+ */
+const KEY_SECTION: Record<string, string> = {
+  'finance.view': 'Finance',
+  'valuation.view': 'Finance',
+  'businesshealth.manage': 'Business Health',
+  'operations.view': 'Operations',
+  'intelligence.view': 'Intelligence',
+  'growth.view': 'Growth',
+  'crm.view': 'Elevate CRM',
+  'crm.manage': 'Elevate CRM',
+  'wealth.view': 'Wealth',
+  'training.view': 'Training',
+  'system.manage': 'System',
+  'users.invite': 'System',
+  'users.manage': 'System',
+  'permissions.manage': 'System',
+};
+
+const SECTION_ORDER = [
+  'Finance',
+  'Business Health',
+  'Operations',
+  'Intelligence',
+  'Growth',
+  'Elevate CRM',
+  'Wealth',
+  'Training',
+  'System',
+];
 
 /** A small accessible toggle switch (prototype renderToggle). */
 function Toggle({
   on,
   colour,
+  disabled,
   onChange,
 }: {
   on: boolean;
   colour: string;
+  disabled?: boolean;
   onChange: (next: boolean) => void;
 }) {
   return (
@@ -50,19 +70,21 @@ function Toggle({
         display: 'inline-block',
         width: 40,
         height: 22,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       <input
         type="checkbox"
         checked={on}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         style={{ opacity: 0, width: 0, height: 0 }}
       />
       <span
         style={{
           position: 'absolute',
-          cursor: 'pointer',
+          cursor: disabled ? 'not-allowed' : 'pointer',
           inset: 0,
           background: on ? colour : '#cbd5e0',
           transition: '0.2s',
@@ -90,83 +112,62 @@ function Toggle({
 
 /** Team Permissions screen. */
 export default function TeamPermissionsScreen() {
-  const [perms, setPerms] = useState<Perms>({
-    practice_manager: [...DEFAULT_PM_PAGES],
-    reception: [...DEFAULT_RECEPTION_PAGES],
-  });
-  const [showMinor, setShowMinor] = useState(true);
+  const { data, isLoading, isError, error } = usePermissionsMatrix();
+  const setRole = useSetRolePermission();
 
-  // Group pages by section (declaration order within each section).
+  // Group catalogue keys into the prototype's coloured sections, preserving
+  // catalogue declaration order within each section.
   const grouped = useMemo(() => {
-    const g: Record<string, typeof PAGE_META> = {};
-    PAGE_META.forEach((p) => {
-      (g[p.section] ??= []).push(p);
-    });
+    const g: Record<string, { key: string; label: string }[]> = {};
+    if (data) {
+      Object.entries(data.catalog).forEach(([key, label]) => {
+        const section = KEY_SECTION[key] || 'System';
+        (g[section] ??= []).push({ key, label });
+      });
+    }
     return g;
-  }, []);
+  }, [data]);
 
-  const totalNonOwnerPages = PAGE_META.filter((p) => !p.ownerOnly).length;
-  const pmCount = perms.practice_manager.length;
-  const recCount = perms.reception.length;
+  const totalPerms = data ? Object.keys(data.catalog).length : 0;
+  const pmCount = data
+    ? Object.values(data.roles.practice_manager).filter(Boolean).length
+    : 0;
+  const recCount = data
+    ? Object.values(data.roles.reception).filter(Boolean).length
+    : 0;
 
-  /** Toggle a single page for a single role (owner-only guarded). */
-  function togglePage(
+  function toggle(
     role: 'practice_manager' | 'reception',
-    pageId: string,
-    value: boolean,
+    permission_key: string,
+    allowed: boolean,
   ) {
-    const meta = PAGE_META.find((p) => p.id === pageId);
-    if (meta?.ownerOnly) return; // never grant owner-only pages
-    setPerms((prev) => {
-      const list = prev[role];
-      const next = value
-        ? list.includes(pageId)
-          ? list
-          : [...list, pageId]
-        : list.filter((p) => p !== pageId);
-      return { ...prev, [role]: next };
-    });
+    setRole.mutate({ role, permission_key, allowed });
   }
 
-  /** Bulk-set every non-owner page for the Practice Manager. */
-  function bulkPm(action: 'all' | 'none') {
-    setPerms((prev) => ({
-      ...prev,
-      practice_manager:
-        action === 'all'
-          ? PAGE_META.filter((p) => !p.ownerOnly).map((p) => p.id)
-          : [],
-    }));
+  if (isLoading) {
+    return (
+      <div className="mx-auto" style={{ maxWidth: 1280 }}>
+        <p className="text-ink-muted" style={{ fontSize: 13 }}>
+          Loading permissions...
+        </p>
+      </div>
+    );
   }
 
-  /** Restore both roles to their default starter grants. */
-  function resetDefaults() {
-    setPerms({
-      practice_manager: [...DEFAULT_PM_PAGES],
-      reception: [...DEFAULT_RECEPTION_PAGES],
-    });
+  if (isError || !data) {
+    return (
+      <div className="mx-auto" style={{ maxWidth: 1280 }}>
+        <h1 className="display font-bold" style={{ fontSize: 28 }}>
+          Team Permissions
+        </h1>
+        <p className="text-ink-muted" style={{ fontSize: 13, marginTop: 8 }}>
+          Could not load permissions
+          {error instanceof Error ? ` (${error.message})` : ''}. You may not
+          have access to this screen.
+        </p>
+      </div>
+    );
   }
-
-  /** Pill-style control button (prototype controls bar). */
-  const ctrlBtn = (active: boolean): React.CSSProperties => ({
-    padding: '6px 12px',
-    borderRadius: 6,
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: 'pointer',
-    border: '1px solid var(--border)',
-    background: active ? TEAL : 'white',
-    color: active ? 'white' : 'var(--ink)',
-  });
-
-  const plainBtn: React.CSSProperties = {
-    padding: '6px 12px',
-    borderRadius: 6,
-    fontSize: 12,
-    cursor: 'pointer',
-    border: '1px solid var(--border)',
-    background: 'white',
-  };
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
@@ -176,8 +177,8 @@ export default function TeamPermissionsScreen() {
           Team Permissions
         </h1>
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          Tick which pages each role can see · Wealth pages are owner-only
-          forever
+          Choose which capabilities each role has · the Owner always has full
+          access
         </p>
       </div>
 
@@ -217,7 +218,7 @@ export default function TeamPermissionsScreen() {
               Practice Manager
             </div>
             <div style={{ fontSize: 11, opacity: 0.8 }}>
-              {pmCount} of {totalNonOwnerPages} pages
+              {pmCount} of {totalPerms} permissions
             </div>
           </div>
           <div>
@@ -225,58 +226,9 @@ export default function TeamPermissionsScreen() {
               Reception
             </div>
             <div style={{ fontSize: 11, opacity: 0.8 }}>
-              {recCount} of {totalNonOwnerPages} pages
+              {recCount} of {totalPerms} permissions
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Controls bar */}
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 12,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span
-            className="text-ink-muted"
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-            }}
-          >
-            View:
-          </span>
-          <button
-            onClick={() => setShowMinor(true)}
-            style={ctrlBtn(showMinor)}
-          >
-            All pages
-          </button>
-          <button
-            onClick={() => setShowMinor(false)}
-            style={ctrlBtn(!showMinor)}
-          >
-            Big picture only
-          </button>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => bulkPm('all')} style={plainBtn}>
-            Grant all to PM
-          </button>
-          <button onClick={() => bulkPm('none')} style={plainBtn}>
-            Revoke all from PM
-          </button>
-          <button onClick={resetDefaults} style={plainBtn}>
-            Reset to defaults
-          </button>
         </div>
       </div>
 
@@ -287,7 +239,7 @@ export default function TeamPermissionsScreen() {
           padding: '10px 16px',
           marginBottom: 0,
           display: 'grid',
-          gridTemplateColumns: '1fr 90px 90px',
+          gridTemplateColumns: '1fr 90px 90px 90px',
           gap: 12,
           alignItems: 'center',
           background: 'var(--bg)',
@@ -299,22 +251,20 @@ export default function TeamPermissionsScreen() {
           fontWeight: 700,
         }}
       >
-        <div>Page</div>
+        <div>Capability</div>
+        <div style={{ textAlign: 'center' }}>Owner</div>
         <div style={{ textAlign: 'center', color: PM_BLUE }}>Manager</div>
-        <div style={{ textAlign: 'center', color: REC_GREEN }}>
-          Reception
-        </div>
+        <div style={{ textAlign: 'center', color: REC_GREEN }}>Reception</div>
       </div>
 
       {/* Permission sections */}
       {SECTION_ORDER.map((sectionName) => {
-        const pages = grouped[sectionName] || [];
-        const filtered = showMinor
-          ? pages
-          : pages.filter((p) => p.importance === 'major');
-        if (filtered.length === 0) return null;
-        const meta = SECTION_COLOURS[sectionName];
-        const isOwnerOnlySection = sectionName === 'Wealth';
+        const rows = grouped[sectionName] || [];
+        if (rows.length === 0) return null;
+        const meta = SECTION_COLOURS[sectionName] || {
+          colour: '#6B7280',
+          bg: '#F3F4F6',
+        };
 
         return (
           <div
@@ -338,41 +288,20 @@ export default function TeamPermissionsScreen() {
             >
               <span
                 className="display"
-                style={{
-                  fontSize: 15,
-                  fontWeight: 600,
-                  color: meta.colour,
-                }}
+                style={{ fontSize: 15, fontWeight: 600, color: meta.colour }}
               >
                 {sectionName}
               </span>
-              {isOwnerOnlySection && (
-                <span
-                  style={{
-                    fontSize: 10,
-                    padding: '3px 8px',
-                    background: 'white',
-                    color: meta.colour,
-                    borderRadius: 4,
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                  }}
-                >
-                  Owner only
-                </span>
-              )}
             </div>
-            {filtered.map((page) => {
-              const isOwnerOnlyPage = !!page.ownerOnly;
-              const pmAllowed = perms.practice_manager.includes(page.id);
-              const recAllowed = perms.reception.includes(page.id);
+            {rows.map((row) => {
+              const pmAllowed = !!data.roles.practice_manager[row.key];
+              const recAllowed = !!data.roles.reception[row.key];
               return (
                 <div
-                  key={page.id}
+                  key={row.key}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 90px 90px',
+                    gridTemplateColumns: '1fr 90px 90px 90px',
                     gap: 12,
                     alignItems: 'center',
                     padding: '9px 14px',
@@ -386,60 +315,46 @@ export default function TeamPermissionsScreen() {
                       gap: 8,
                     }}
                   >
-                    <span style={{ fontSize: 13 }}>{page.label}</span>
-                    {page.importance === 'minor' && (
-                      <span
-                        className="text-ink-muted"
-                        style={{
-                          fontSize: 9,
-                          padding: '2px 6px',
-                          background: 'var(--bg)',
-                          borderRadius: 3,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.04em',
-                        }}
-                      >
-                        minor
-                      </span>
-                    )}
+                    <span style={{ fontSize: 13 }}>{row.label}</span>
+                    <span
+                      className="text-ink-muted"
+                      style={{
+                        fontSize: 9,
+                        padding: '2px 6px',
+                        background: 'var(--bg)',
+                        borderRadius: 3,
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      {row.key}
+                    </span>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    {isOwnerOnlyPage ? (
-                      <span
-                        className="text-ink-muted"
-                        style={{ fontSize: 11, opacity: 0.6 }}
-                        title="Owner only"
-                      >
-                        Owner
-                      </span>
-                    ) : (
-                      <Toggle
-                        on={pmAllowed}
-                        colour={PM_BLUE}
-                        onChange={(v) =>
-                          togglePage('practice_manager', page.id, v)
-                        }
-                      />
-                    )}
+                    <span
+                      className="text-ink-muted"
+                      style={{ fontSize: 11, opacity: 0.6 }}
+                      title="Owner always has full access"
+                    >
+                      Always
+                    </span>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    {isOwnerOnlyPage ? (
-                      <span
-                        className="text-ink-muted"
-                        style={{ fontSize: 11, opacity: 0.6 }}
-                        title="Owner only"
-                      >
-                        Owner
-                      </span>
-                    ) : (
-                      <Toggle
-                        on={recAllowed}
-                        colour={REC_GREEN}
-                        onChange={(v) =>
-                          togglePage('reception', page.id, v)
-                        }
-                      />
-                    )}
+                    <Toggle
+                      on={pmAllowed}
+                      colour={PM_BLUE}
+                      disabled={setRole.isPending}
+                      onChange={(v) =>
+                        toggle('practice_manager', row.key, v)
+                      }
+                    />
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    <Toggle
+                      on={recAllowed}
+                      colour={REC_GREEN}
+                      disabled={setRole.isPending}
+                      onChange={(v) => toggle('reception', row.key, v)}
+                    />
                   </div>
                 </div>
               );
@@ -455,13 +370,12 @@ export default function TeamPermissionsScreen() {
       >
         <strong style={{ fontSize: 14 }}>How this works</strong>
         <p style={{ fontSize: 13, marginTop: 6, lineHeight: 1.5 }}>
-          Tick any page for either role and it appears in their sidebar
-          immediately. Untick to remove access.{' '}
-          <strong>Wealth pages stay owner-only</strong> (you&apos;d never
-          want a team member seeing your personal pensions/property). Use
-          &quot;Big picture only&quot; to focus on the major pages and skip
-          the minor ones. Test by switching role in the sidebar at the
-          bottom left.
+          Toggle any capability for the Practice Manager or Reception role and
+          it takes effect for everyone in that role immediately — the matching
+          sidebar sections appear or disappear on their next page load. The{' '}
+          <strong>Owner always keeps full access</strong> and cannot be
+          restricted here. Reception is intentionally kept to the CRM
+          essentials by default.
         </p>
       </div>
     </div>

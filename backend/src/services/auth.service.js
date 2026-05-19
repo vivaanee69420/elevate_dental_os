@@ -38,7 +38,19 @@ exports.authService = {
             { organisation_id: org.id, name: 'Smile Club Plus', monthly_price_pence: 2495,
                 benefits: ['4 hygiene visits/year', 'Annual exam', '15% off treatments', 'Emergency cover'] },
         ]);
+        // Seed the dynamic-RBAC default permission matrix for this org.
+        await auth_repository_1.authRepository.seedRolePermissions(org.id);
         return { success: true, organisation_id: org.id };
+    },
+    async login(body) {
+        const { data, error } = await auth_repository_1.authRepository.signInWithPassword(body.email, body.password);
+        if (error || !data?.session)
+            throw new errors_1.AppError('Invalid email or password', 401);
+        return {
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token,
+            expires_at: data.session.expires_at,
+        };
     },
     async invite(orgId, body) {
         // Invite via Supabase

@@ -20,6 +20,7 @@ const pino_http_1 = require("pino-http");
 const auth_1 = require("./middleware/auth");
 const audit_1 = require("./middleware/audit");
 const errors_1 = require("./middleware/errors");
+const Sentry = require("@sentry/node");
 // Route modules (each exports an express.Router)
 const health_routes_1 = __importDefault(require("./routes/health.routes"));
 const health_business_routes_1 = __importDefault(require("./routes/health-business.routes"));
@@ -38,6 +39,7 @@ const webhooks_routes_1 = __importDefault(require("./routes/webhooks.routes"));
 const integrations_routes_1 = __importDefault(require("./routes/integrations.routes"));
 const p4g_ai_routes_1 = __importDefault(require("./routes/p4g-ai.routes"));
 const analytics_routes_1 = __importDefault(require("./routes/analytics.routes"));
+const permissions_routes_1 = __importDefault(require("./routes/permissions.routes"));
 const memberships_routes_1 = __importDefault(require("./routes/memberships.routes"));
 const reviews_routes_1 = __importDefault(require("./routes/reviews.routes"));
 const CORS_ALLOWED = [
@@ -160,7 +162,10 @@ function buildApp() {
     api.use('/analytics', analytics_routes_1.default);
     api.use('/memberships', memberships_routes_1.default);
     api.use('/reviews', reviews_routes_1.default);
+    api.use('/admin/permissions', permissions_routes_1.default);
     app.use('/api', api);
+    // Sentry Express error handler — must come AFTER routes, BEFORE our handler.
+    Sentry.setupExpressErrorHandler(app);
     app.use(errors_1.errorHandler);
     return app;
 }
