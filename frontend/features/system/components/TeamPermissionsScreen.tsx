@@ -11,9 +11,320 @@
 // a cell PUTs the change and optimistically updates the React Query cache.
 // Owner-only screen — also gated server-side by permissions.manage and
 // hidden from nav for non-holders.
-import { useMemo } from 'react';
-import { usePermissionsMatrix, useSetRolePermission } from '../hooks';
+import { useEffect, useMemo, useState } from 'react';
+import { api } from '@/lib/api';
+import { Chip, type ChipColour } from '@/components/ui';
+import {
+  usePermissionsMatrix,
+  useSetRolePermission,
+  useTeam,
+  useInviteMember,
+  useRemoveMember,
+} from '../hooks';
+import type { TeamMember } from '../api';
 import { SECTION_COLOURS } from '../data';
+
+/** Status -> chip colour, mirroring the STAGE_CHIP_COLOUR convention. */
+const STATUS_CHIP_COLOUR: Record<TeamMember['status'], ChipColour> = {
+  invited: 'amber',
+  active: 'emerald',
+};
+
+const ROLE_LABEL: Record<TeamMember['role'], string> = {
+  owner: 'Owner',
+  practice_manager: 'Practice Manager',
+  reception: 'Reception',
+};
+
+/** Signed-in user shape from GET /auth/me. */
+interface Me {
+  id?: string;
+}
+
+/** Team members management — invite, list, remove. */
+function TeamMembers() {
+  const { data, isLoading, isError } = useTeam();
+  const invite = useInviteMember();
+  const remove = useRemoveMember();
+  const [me, setMe] = useState<Me | null>(null);
+
+  // Current user id — used to block self-removal. Same pattern as TopBar.
+  useEffect(() => {
+    api('/auth/me')
+      .then((m: Me) => setMe(m))
+      .catch(() => {});
+  }, []);
+
+  const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [role, setRole] = useState<TeamMember['role']>('reception');
+  const [formError, setFormError] = useState('');
+  const [inviteSent, setInviteSent] = useState(false);
+
+  function submitInvite(e: React.FormEvent) {
+    e.preventDefault();
+    setFormError('');
+    setInviteSent(false);
+    invite.mutate(
+      { email: email.trim(), full_name: fullName.trim(), role },
+      {
+        onSuccess: () => {
+          setInviteSent(true);
+          setEmail('');
+          setFullName('');
+          setRole('reception');
+        },
+        onError: (err) => {
+          setFormError(
+            err instanceof Error ? err.message : 'Could not send invite',
+          );
+        },
+      },
+    );
+  }
+
+  function onRemove(member: TeamMember) {
+    if (
+      !window.confirm(
+        `Remove ${member.full_name || member.email} from this organisation?`,
+      )
+    ) {
+      return;
+    }
+    remove.mutate(member.id);
+  }
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div className="card overflow-hidden" style={{ marginBottom: 16 }}>
+        <div
+          style={{
+            padding: '12px 16px',
+            borderBottom: '1px solid var(--border)',
+          }}
+        >
+          <span
+            className="display"
+            style={{ fontSize: 16, fontWeight: 600 }}
+          >
+            Team members
+          </span>
+          <p
+            className="text-ink-muted"
+            style={{ fontSize: 12, marginTop: 2 }}
+          >
+            People with access to this organisation
+          </p>
+        </div>
+
+        {isLoading && (
+          <div
+            className="text-ink-muted"
+            style={{ padding: '16px', fontSize: 13 }}
+          >
+            Loading team...
+          </div>
+        )}
+
+        {isError && (
+          <div
+            className="text-ink-muted"
+            style={{ padding: '16px', fontSize: 13 }}
+          >
+            Could not load team members.
+          </div>
+        )}
+
+        {data && (
+          <table className="w-full text-sm">
+            <thead className="bg-bg border-b border-border">
+              <tr>
+                <th className="text-left p-3 font-semibold">Name</th>
+                <th className="text-left p-3 font-semibold">Role</th>
+                <th className="text-left p-3 font-semibold">Status</th>
+                <th className="text-left p-3 font-semibold">Last active</th>
+                <th className="text-right p-3 font-semibold">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.members.map((m) => {
+                const isSelf = !!me?.id && m.id === me.id;
+                return (
+                  <tr
+                    key={m.id}
+                    className="border-b border-border hover:bg-bg"
+                  >
+                    <td className="p-3">
+                      <div style={{ fontWeight: 500 }}>
+                        {m.full_name || '—'}
+                      </div>
+                      <div
+                        className="text-ink-muted"
+                        style={{ fontSize: 12 }}
+                      >
+                        {m.email}
+                      </div>
+                    </td>
+                    <td className="p-3">{ROLE_LABEL[m.role]}</td>
+                    <td className="p-3">
+                      <Chip colour={STATUS_CHIP_COLOUR[m.status]}>
+                        {m.status === 'invited' ? 'Invited' : 'Active'}
+                      </Chip>
+                    </td>
+                    <td className="p-3 text-ink-muted">
+                      {m.last_active_at
+                        ? new Date(m.last_active_at).toLocaleDateString(
+                            'en-GB',
+                          )
+                        : '—'}
+                    </td>
+                    <td className="p-3 text-right">
+                      {isSelf ? (
+                        <span
+                          className="text-ink-muted"
+                          style={{ fontSize: 12 }}
+                          title="You cannot remove your own account"
+                        >
+                          You
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onRemove(m)}
+                          disabled={remove.isPending}
+                          className="text-danger"
+                          style={{
+                            fontSize: 13,
+                            background: 'none',
+                            border: 'none',
+                            cursor: remove.isPending
+                              ? 'not-allowed'
+                              : 'pointer',
+                            opacity: remove.isPending ? 0.5 : 1,
+                          }}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {data.members.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="p-3 text-ink-muted"
+                    style={{ fontSize: 13 }}
+                  >
+                    No team members yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Add member */}
+      <div className="card-padded">
+        <strong style={{ fontSize: 14 }}>Add member</strong>
+        <p
+          className="text-ink-muted"
+          style={{ fontSize: 12, marginTop: 2, marginBottom: 12 }}
+        >
+          We will email an invitation. The member appears as Invited until
+          they accept and set a password.
+        </p>
+        <form
+          onSubmit={submitInvite}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr 180px auto',
+            gap: 12,
+            alignItems: 'end',
+          }}
+        >
+          <div>
+            <label
+              className="block text-ink-muted"
+              style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}
+            >
+              Email
+            </label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="colleague@practice.co.uk"
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label
+              className="block text-ink-muted"
+              style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}
+            >
+              Full name
+            </label>
+            <input
+              type="text"
+              required
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Jane Smith"
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label
+              className="block text-ink-muted"
+              style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}
+            >
+              Role
+            </label>
+            <select
+              value={role}
+              onChange={(e) =>
+                setRole(e.target.value as TeamMember['role'])
+              }
+              className="input w-full"
+            >
+              <option value="owner">Owner</option>
+              <option value="practice_manager">Practice Manager</option>
+              <option value="reception">Reception</option>
+            </select>
+          </div>
+          <button
+            type="submit"
+            disabled={invite.isPending}
+            className="btn-primary"
+            style={{ padding: '8px 16px' }}
+          >
+            {invite.isPending ? 'Sending...' : 'Send invite'}
+          </button>
+        </form>
+        {formError && (
+          <div
+            className="text-danger"
+            style={{ fontSize: 13, marginTop: 10 }}
+          >
+            {formError}
+          </div>
+        )}
+        {inviteSent && (
+          <div
+            style={{ fontSize: 13, marginTop: 10, color: '#059669' }}
+          >
+            Invite email sent. The member will appear as Invited until they
+            accept and set a password.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 const PM_BLUE = '#3B82F6';
 const REC_GREEN = '#10B981';
@@ -147,6 +458,7 @@ export default function TeamPermissionsScreen() {
   if (isLoading) {
     return (
       <div className="mx-auto" style={{ maxWidth: 1280 }}>
+        <TeamMembers />
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
           Loading permissions...
         </p>
@@ -157,6 +469,7 @@ export default function TeamPermissionsScreen() {
   if (isError || !data) {
     return (
       <div className="mx-auto" style={{ maxWidth: 1280 }}>
+        <TeamMembers />
         <h1 className="display font-bold" style={{ fontSize: 28 }}>
           Team Permissions
         </h1>
@@ -171,6 +484,8 @@ export default function TeamPermissionsScreen() {
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
+      <TeamMembers />
+
       {/* Header */}
       <div className="mb-6">
         <h1 className="display font-bold" style={{ fontSize: 28 }}>

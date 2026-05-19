@@ -34,6 +34,7 @@ import * as integrations_routes_1 from "./routes/integrations.routes.js";
 import * as p4g_ai_routes_1 from "./routes/p4g-ai.routes.js";
 import * as analytics_routes_1 from "./routes/analytics.routes.js";
 import * as permissions_routes_1 from "./routes/permissions.routes.js";
+import * as members_routes_1 from "./routes/members.routes.js";
 import * as memberships_routes_1 from "./routes/memberships.routes.js";
 import * as reviews_routes_1 from "./routes/reviews.routes.js";
 const CORS_ALLOWED = [
@@ -157,6 +158,7 @@ export function buildApp() {
     api.use('/memberships', memberships_routes_1.default);
     api.use('/reviews', reviews_routes_1.default);
     api.use('/admin/permissions', permissions_routes_1.default);
+    api.use('/admin/team', members_routes_1.default);
     app.use('/api', api);
     // Sentry Express error handler — must come AFTER routes, BEFORE our handler.
     Sentry.setupExpressErrorHandler(app);
