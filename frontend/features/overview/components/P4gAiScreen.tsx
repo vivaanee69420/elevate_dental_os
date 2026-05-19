@@ -2,17 +2,18 @@
 // Plan4Growth AI — pixel-faithful port of preview/elevate-dental-os-v2.html
 // (PAGES['p4g-ai'] + p4gAISend / generateP4GAIResponse). A single-column
 // chat: empty state with starter buttons, then user/bot bubbles with a
-// typing indicator before each canned reply. Replies come from
-// answerP4G() in ../data.ts (mock only, no backend). The prototype's
+// typing indicator before each reply. Replies come from the real
+// POST /api/p4g-ai/chat (backend injects business context). The prototype's
 // .p4g-ai* / .message* / .typing CSS is not in globals.css, so the layout
 // is reproduced with inline styles here (frozen-primitive constraint).
 //
 // ASCII data-flow:
 //   starter click / form submit ─► send(text)
-//     └─► push user bubble ─► show typing ─► answerP4G(text) ─► push bot bubble
+//     └─► push user bubble ─► typing ─► POST /api/p4g-ai/chat ─► bot bubble
 
 import { useRef, useState } from 'react';
-import { answerP4G, P4G_STARTERS } from '../data';
+import { P4G_STARTERS } from '../data';
+import { sendP4gChat, type ChatTurn } from '../api';
 
 const BRAND = '#0E7C7B';
 
@@ -70,22 +71,46 @@ export default function P4gAiScreen() {
 
   /**
    * Submit a question: append the user bubble, show the typing indicator,
-   * then after a short delay append the canned reply (mirrors the
-   * prototype's 900ms setTimeout).
+   * then call the real /api/p4g-ai/chat (backend injects business context).
+   * Prior turns are sent as history; a failure surfaces an inline bot bubble
+   * instead of crashing the chat.
    */
-  function send(text: string) {
+  async function send(text: string) {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    const userMsg: Message = { id: nextId.current++, role: 'user', text: trimmed };
+    if (!trimmed || typing) return;
+    const history: ChatTurn[] = messages.map((m) => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.text,
+    }));
+    const userMsg: Message = {
+      id: nextId.current++,
+      role: 'user',
+      text: trimmed,
+    };
     setMessages((m) => [...m, userMsg]);
     setTyping(true);
-    setTimeout(() => {
-      setTyping(false);
+    try {
+      const reply = await sendP4gChat(trimmed, history);
       setMessages((m) => [
         ...m,
-        { id: nextId.current++, role: 'bot', text: answerP4G(trimmed) },
+        {
+          id: nextId.current++,
+          role: 'bot',
+          text: reply || 'No response. Try rephrasing your question.',
+        },
       ]);
-    }, 900);
+    } catch {
+      setMessages((m) => [
+        ...m,
+        {
+          id: nextId.current++,
+          role: 'bot',
+          text: 'Plan4Growth AI is unavailable right now. Try again in a moment.',
+        },
+      ]);
+    } finally {
+      setTyping(false);
+    }
   }
 
   const empty = messages.length === 0 && !typing;
