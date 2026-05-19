@@ -34,7 +34,8 @@ Response:
   "id": "uuid",
   "email": "...",
   "role": "owner" | "practice_manager" | "reception",
-  "organisation_id": "uuid"
+  "organisation_id": "uuid",
+  "organisation_name": "..."
 }
 ```
 

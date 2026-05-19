@@ -23,6 +23,14 @@ export const authRepository = {
     deleteOrganisation(id) {
         return supabase_1.serviceClient.from('organisations').delete().eq('id', id);
     },
+    // Single org row by id — used by /auth/me to surface the name in the topbar.
+    getOrganisation(id) {
+        return supabase_1.serviceClient
+            .from('organisations')
+            .select('id, name')
+            .eq('id', id)
+            .single();
+    },
     seedMembershipPlans(rows) {
         return supabase_1.serviceClient.from('membership_plans').insert(rows);
     },
@@ -32,6 +40,31 @@ export const authRepository = {
     // Password sign-in — returns a Supabase session (access/refresh tokens).
     signInWithPassword(email, password) {
         return supabase_1.serviceClient.auth.signInWithPassword({ email, password });
+    },
+    // Admin sets/overwrites a user's password (provision-with-password reset).
+    updateUserPassword(id, password) {
+        return supabase_1.serviceClient.auth.admin.updateUserById(id, { password });
+    },
+    // Best-effort revoke of all of `id`'s sessions after an admin password
+    // reset. GoTrue/supabase-js exposes no guaranteed per-user admin signout
+    // (admin.signOut needs the *user's* JWT, which the server does not hold).
+    // We hit the GoTrue admin REST logout route directly with the service
+    // role key; a non-2xx (older GoTrue lacking the route) is logged by the
+    // caller and treated as non-fatal — the access-token TTL still bounds the
+    // residual window. Strongest control the platform allows.
+    async revokeUserSessions(id) {
+        const url = `${process.env.SUPABASE_URL}/auth/v1/admin/users/${id}/logout`;
+        const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: {
+                apikey: key,
+                Authorization: `Bearer ${key}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ scope: 'global' }),
+        });
+        return { ok: res.ok, status: res.status };
     },
     // Seed the dynamic-RBAC default matrix for a new organisation.
     seedRolePermissions(orgId) {
@@ -66,6 +99,11 @@ export const authRepository = {
     setUserStatus(id, status) {
         return supabase_1.serviceClient.from('users').update({ status }).eq('id', id);
     },
+    // NOTE: currently unreachable — no route/controller/service calls this.
+    // The hole is latent only. If ever wired to an endpoint, the caller MUST
+    // gate it with authService.canManageTarget(caller.role, target.role)
+    // (same escalation class as removeMember / setMemberPassword), else a
+    // non-owner with users.manage could re-role themselves to owner.
     setUserRole(orgId, id, role) {
         return supabase_1.serviceClient
             .from('users')

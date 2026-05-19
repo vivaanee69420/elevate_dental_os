@@ -1,6 +1,5 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { ORG_NAME } from '@/features/_mock';
 import { useMe } from '@/hooks/useMe';
 
 // TopBar — app shell header. Mirrors the preview prototype's .topbar:
@@ -34,7 +33,7 @@ export function TopBar() {
 
   return (
     <header className="h-14 bg-card border-b border-border px-6 flex items-center justify-between sticky top-0 z-10">
-      <span className="font-medium text-ink">{ORG_NAME}</span>
+      <span className="font-medium text-ink">{me?.organisation_name ?? ''}</span>
       <div className="flex items-center gap-3">
         {me && (
           <div className="w-7 h-7 rounded-full bg-brand-50 text-brand flex items-center justify-center text-[11px] font-semibold">
