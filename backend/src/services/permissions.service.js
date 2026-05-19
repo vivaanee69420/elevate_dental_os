@@ -15,6 +15,7 @@
 import { permissionsRepository } from '../repositories/permissions.repository.js';
 import {
   PERMISSION_CATALOG,
+  DEFAULT_ROLE_PERMISSIONS,
   isValidPermission,
   resolveEffectivePermissions,
 } from '../lib/permissions.js';
@@ -23,8 +24,16 @@ import { AppError } from '../middleware/errors.js';
 const permissionsService = {
   /** Effective permission map for a request's user. Pure merge over 1 query. */
   async getEffectiveForUser(orgId, role, userOverrides) {
-    const rows = await permissionsRepository.listByOrgRole(orgId, role);
-    return resolveEffectivePermissions(rows, userOverrides);
+    // DB rows only OVERRIDE the code role-default layer. If the table is
+    // unreadable (missing/unseeded/stale PostgREST cache), fall back to
+    // code defaults rather than locking the user out.
+    let rows = [];
+    try {
+      rows = await permissionsRepository.listByOrgRole(orgId, role);
+    } catch {
+      rows = [];
+    }
+    return resolveEffectivePermissions(rows, userOverrides, role);
   },
 
   /**
@@ -32,11 +41,21 @@ const permissionsService = {
    * Team Permissions UI. { catalog, roles: { role: { key: bool } } }.
    */
   async getMatrix(orgId) {
-    const rows = await permissionsRepository.listByOrg(orgId);
-    const roles = { owner: {}, practice_manager: {}, reception: {} };
-    for (const role of Object.keys(roles)) {
-      for (const key of Object.keys(PERMISSION_CATALOG)) roles[role][key] = false;
+    let rows = [];
+    try {
+      rows = await permissionsRepository.listByOrg(orgId);
+    } catch {
+      rows = [];
     }
+    const roles = { owner: {}, practice_manager: {}, reception: {} };
+    // Base each role on its CODE defaults so the admin UI shows the true
+    // effective baseline even before/without any DB rows.
+    for (const role of Object.keys(roles)) {
+      for (const key of Object.keys(PERMISSION_CATALOG)) {
+        roles[role][key] = !!(DEFAULT_ROLE_PERMISSIONS[role] || {})[key];
+      }
+    }
+    // DB rows override the code defaults.
     for (const r of rows) {
       if (roles[r.role] && isValidPermission(r.permission_key)) {
         roles[r.role][r.permission_key] = !!r.allowed;
