@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.authController = void 0;
-const auth_service_1 = require("../services/auth.service");
-const auth_model_1 = require("../models/auth.model");
-exports.authController = {
+import * as auth_service_1 from "../services/auth.service.js";
+import * as auth_model_1 from "../models/auth.model.js";
+export const authController = {
     async signup(req, res) {
         const body = auth_model_1.signupSchema.parse(req.body);
         res.json(await auth_service_1.authService.signup(body));

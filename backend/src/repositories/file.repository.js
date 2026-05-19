@@ -1,16 +1,13 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.fileRepository = void 0;
 // ============================================================================
 // File repository — S3 presign + Supabase data access for the files domain.
 // ============================================================================
-const client_s3_1 = require("@aws-sdk/client-s3");
-const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
-const crypto_1 = require("crypto");
-const supabase_1 = require("../lib/supabase");
+import * as client_s3_1 from "@aws-sdk/client-s3";
+import * as s3_request_presigner_1 from "@aws-sdk/s3-request-presigner";
+import * as crypto_1 from "crypto";
+import * as supabase_1 from "../lib/supabase.js";
 const s3 = new client_s3_1.S3Client({ region: 'eu-west-2' });
 const BUCKET = process.env.S3_BUCKET || 'elevate-files-eu-west-2';
-exports.fileRepository = {
+export const fileRepository = {
     buildKey(orgId, filename) {
         return `${orgId}/${(0, crypto_1.randomUUID)()}-${filename}`;
     },

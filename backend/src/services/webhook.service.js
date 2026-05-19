@@ -1,17 +1,11 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.webhookService = void 0;
 // ============================================================================
 // Webhook service — business logic for the webhooks domain (PUBLIC, no auth).
 // ============================================================================
-const stripe_1 = __importDefault(require("stripe"));
-const webhook_repository_1 = require("../repositories/webhook.repository");
-const errors_1 = require("../middleware/errors");
+import * as stripe_1 from "stripe";
+import * as webhook_repository_1 from "../repositories/webhook.repository.js";
+import * as errors_1 from "../middleware/errors.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
-exports.webhookService = {
+export const webhookService = {
     // body is the raw Buffer (express.raw applied to /webhooks/stripe in app.ts).
     async stripe(body, sig) {
         let event;

@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.taskController = void 0;
-const task_service_1 = require("../services/task.service");
-const task_model_1 = require("../models/task.model");
-exports.taskController = {
+import * as task_service_1 from "../services/task.service.js";
+import * as task_model_1 from "../models/task.model.js";
+export const taskController = {
     async list(req, res) {
         const q = task_model_1.taskListQuerySchema.parse(req.query);
         const tasks = await task_service_1.taskService.list(req.user.organisation_id, q);

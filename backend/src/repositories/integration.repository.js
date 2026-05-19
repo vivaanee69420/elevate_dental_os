@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.integrationRepository = void 0;
 // ============================================================================
 // Integration repository — all Supabase data access for integrations domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.integrationRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const integrationRepository = {
     async list(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('integrations')

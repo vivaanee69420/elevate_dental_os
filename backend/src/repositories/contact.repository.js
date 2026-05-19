@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.contactRepository = void 0;
 // ============================================================================
 // Contact repository — all Supabase data access for the contacts domain.
 // No business logic here: queries in, rows out (or thrown DB error).
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.contactRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const contactRepository = {
     async list(orgId, q) {
         let query = supabase_1.serviceClient
             .from('contacts')

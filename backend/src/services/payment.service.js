@@ -1,16 +1,10 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.paymentService = void 0;
 // ============================================================================
 // Payment service — business logic for the payments domain.
 // ============================================================================
-const stripe_1 = __importDefault(require("stripe"));
-const payment_repository_1 = require("../repositories/payment.repository");
+import * as stripe_1 from "stripe";
+import * as payment_repository_1 from "../repositories/payment.repository.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
-exports.paymentService = {
+export const paymentService = {
     async list(orgId, q) {
         const data = await payment_repository_1.paymentRepository.list(orgId, q);
         return { payments: data };

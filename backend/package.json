@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Elevate Dental OS — Backend API",
   "main": "src/server.js",
+  "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",

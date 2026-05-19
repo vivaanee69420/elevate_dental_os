@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.membershipController = void 0;
-const membership_service_1 = require("../services/membership.service");
-const membership_model_1 = require("../models/membership.model");
-exports.membershipController = {
+import * as membership_service_1 from "../services/membership.service.js";
+import * as membership_model_1 from "../models/membership.model.js";
+export const membershipController = {
     async listPlans(req, res) {
         res.json(await membership_service_1.membershipService.listPlans(req.user.organisation_id));
     },

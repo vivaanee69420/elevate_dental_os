@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.leadService = void 0;
 // ============================================================================
 // Lead service — business logic for the leads domain.
 // Orchestrates the repository; throws AppError for client-visible failures.
 // ============================================================================
-const lead_repository_1 = require("../repositories/lead.repository");
-const errors_1 = require("../middleware/errors");
-const lead_model_1 = require("../models/lead.model");
-exports.leadService = {
+import * as lead_repository_1 from "../repositories/lead.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+import * as lead_model_1 from "../models/lead.model.js";
+export const leadService = {
     list(orgId, q) {
         return lead_repository_1.leadRepository.list(orgId, q);
     },

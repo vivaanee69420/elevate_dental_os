@@ -1,11 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
 // ============================================================================
 // Health routes — Express Router. Mounted PUBLIC at /healthcheck (no auth).
 // ============================================================================
-const express_1 = require("express");
-const async_handler_1 = require("../middleware/async-handler");
-const health_controller_1 = require("../controllers/health.controller");
+import * as express_1 from "express";
+import * as async_handler_1 from "../middleware/async-handler.js";
+import * as health_controller_1 from "../controllers/health.controller.js";
 const router = (0, express_1.Router)();
 router.get('/', (0, async_handler_1.asyncHandler)(health_controller_1.healthController.check));
-exports.default = router;
+export default router;

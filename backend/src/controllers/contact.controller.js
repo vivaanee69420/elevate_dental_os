@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.contactController = void 0;
-const contact_service_1 = require("../services/contact.service");
-const contact_model_1 = require("../models/contact.model");
-exports.contactController = {
+import * as contact_service_1 from "../services/contact.service.js";
+import * as contact_model_1 from "../models/contact.model.js";
+export const contactController = {
     async list(req, res) {
         const q = contact_model_1.contactListQuerySchema.parse(req.query);
         const contacts = await contact_service_1.contactService.list(req.user.organisation_id, q);

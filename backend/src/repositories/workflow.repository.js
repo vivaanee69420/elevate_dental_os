@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.workflowRepository = void 0;
 // ============================================================================
 // Workflow repository — all Supabase data access for the workflows domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.workflowRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const workflowRepository = {
     async list(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('workflows')

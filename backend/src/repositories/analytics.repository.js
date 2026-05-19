@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.analyticsRepository = void 0;
 // ============================================================================
 // Analytics repository — Supabase reads for the analytics domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.analyticsRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const analyticsRepository = {
     async baselineMaybe(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('business_health')

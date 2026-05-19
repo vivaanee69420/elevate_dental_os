@@ -1,9 +1,8 @@
-"use strict";
 // ============================================================================
-// Sentry instrumentation — MUST be required before any other module.
+// Sentry instrumentation — MUST be imported before any other module.
 // No-op when SENTRY_DSN is unset (local/dev), so it is safe to always load.
 // ============================================================================
-const Sentry = require("@sentry/node");
+import * as Sentry from "@sentry/node";
 
 if (process.env.SENTRY_DSN) {
     Sentry.init({
@@ -19,4 +18,4 @@ if (process.env.SENTRY_DSN) {
     });
 }
 
-module.exports = Sentry;
+export default Sentry;

@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.integrationController = void 0;
-const integration_service_1 = require("../services/integration.service");
-const integration_model_1 = require("../models/integration.model");
-exports.integrationController = {
+import * as integration_service_1 from "../services/integration.service.js";
+import * as integration_model_1 from "../models/integration.model.js";
+export const integrationController = {
     async list(req, res) {
         res.json(await integration_service_1.integrationService.list(req.user.organisation_id));
     },

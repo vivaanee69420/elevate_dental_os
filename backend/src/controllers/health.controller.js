@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.healthController = void 0;
-exports.healthController = {
+export const healthController = {
     async check(_req, res) {
         res.json({
             status: 'ok',

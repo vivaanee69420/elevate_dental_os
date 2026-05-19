@@ -1,8 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.analyticsController = void 0;
-const analytics_service_1 = require("../services/analytics.service");
-exports.analyticsController = {
+import * as analytics_service_1 from "../services/analytics.service.js";
+export const analyticsController = {
     async dashboard(req, res) {
         res.json(await analytics_service_1.analyticsService.dashboard(req.user.organisation_id));
     },

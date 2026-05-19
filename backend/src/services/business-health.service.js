@@ -1,6 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.businessHealthService = void 0;
 // ============================================================================
 // Business Health service — setup wizard data, snapshots, progress, insights.
 // Role rules preserved exactly:
@@ -9,11 +6,11 @@ exports.businessHealthService = void 0;
 //  - /insights : owner-only.
 //  - POST /snapshots : owner-only.
 // ============================================================================
-const business_health_repository_1 = require("../repositories/business-health.repository");
-const errors_1 = require("../middleware/errors");
-const claude_1 = require("../lib/claude");
-const formulas_1 = require("../lib/formulas");
-exports.businessHealthService = {
+import * as business_health_repository_1 from "../repositories/business-health.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+import * as claude_1 from "../lib/claude.js";
+import * as formulas_1 from "../lib/formulas.js";
+export const businessHealthService = {
     async get(orgId, role) {
         if (role === 'reception') {
             return { setup_completed: false, baseline: {}, targets: {} };

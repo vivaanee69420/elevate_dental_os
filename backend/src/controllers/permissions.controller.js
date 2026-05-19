@@ -1,5 +1,3 @@
-'use strict';
-
 // ============================================================================
 // Permissions controller — dynamic RBAC admin API (idiomatic Express).
 // Parse/validate with Zod, call the service, shape the HTTP response.
@@ -7,8 +5,8 @@
 // can only ever touch its own organisation's matrix.
 // ============================================================================
 
-const { z } = require('zod');
-const { permissionsService } = require('../services/permissions.service');
+import { z } from 'zod';
+import { permissionsService } from '../services/permissions.service.js';
 
 const roleDefaultSchema = z.object({
   role: z.enum(['owner', 'practice_manager', 'reception']),
@@ -56,4 +54,4 @@ const permissionsController = {
   },
 };
 
-module.exports = { permissionsController };
+export { permissionsController };

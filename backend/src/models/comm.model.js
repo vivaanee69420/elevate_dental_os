@@ -1,16 +1,13 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.commSendSchema = exports.commListQuerySchema = void 0;
 // ============================================================================
 // Comm model — Zod schemas + inferred types for the communications domain.
 // ============================================================================
-const zod_1 = require("zod");
-exports.commListQuerySchema = zod_1.z.object({
+import * as zod_1 from "zod";
+export const commListQuerySchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),
     lead_id: zod_1.z.string().uuid().optional(),
     channel: zod_1.z.string().optional(),
 });
-exports.commSendSchema = zod_1.z.object({
+export const commSendSchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),
     lead_id: zod_1.z.string().uuid().optional(),
     channel: zod_1.z.enum(['email', 'sms', 'whatsapp']),

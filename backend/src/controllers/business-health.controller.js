@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.businessHealthController = void 0;
-const business_health_service_1 = require("../services/business-health.service");
-const business_health_model_1 = require("../models/business-health.model");
-exports.businessHealthController = {
+import * as business_health_service_1 from "../services/business-health.service.js";
+import * as business_health_model_1 from "../models/business-health.model.js";
+export const businessHealthController = {
     async get(req, res) {
         res.json(await business_health_service_1.businessHealthService.get(req.user.organisation_id, req.user.role));
     },

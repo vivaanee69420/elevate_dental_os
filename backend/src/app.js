@@ -1,47 +1,41 @@
-"use strict";
 // ============================================================================
-// ELEVATE DENTAL OS — Express application factory
+// ELEVATE DENTAL OS — Express application factory (native ESM)
 // ============================================================================
-// Express 4 + TypeScript + Supabase + Zod
+// Express 4 + Supabase + Zod
 // Layering: routes -> controllers -> services -> repositories -> models
 // Deploy to Railway. ENV vars set via Railway dashboard.
 // ============================================================================
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.buildApp = buildApp;
-require("dotenv/config");
-const express_1 = __importDefault(require("express"));
-const cors_1 = __importDefault(require("cors"));
-const helmet_1 = __importDefault(require("helmet"));
-const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
-const pino_http_1 = require("pino-http");
-const auth_1 = require("./middleware/auth");
-const audit_1 = require("./middleware/audit");
-const errors_1 = require("./middleware/errors");
-const Sentry = require("@sentry/node");
-// Route modules (each exports an express.Router)
-const health_routes_1 = __importDefault(require("./routes/health.routes"));
-const health_business_routes_1 = __importDefault(require("./routes/health-business.routes"));
-const auth_routes_1 = __importDefault(require("./routes/auth.routes"));
-const leads_routes_1 = __importDefault(require("./routes/leads.routes"));
-const contacts_routes_1 = __importDefault(require("./routes/contacts.routes"));
-const appointments_routes_1 = __importDefault(require("./routes/appointments.routes"));
-const tasks_routes_1 = __importDefault(require("./routes/tasks.routes"));
-const comms_routes_1 = __importDefault(require("./routes/comms.routes"));
-const payments_routes_1 = __importDefault(require("./routes/payments.routes"));
-const pay_runs_routes_1 = __importDefault(require("./routes/pay-runs.routes"));
-const workflows_routes_1 = __importDefault(require("./routes/workflows.routes"));
-const files_routes_1 = __importDefault(require("./routes/files.routes"));
-const billing_routes_1 = __importDefault(require("./routes/billing.routes"));
-const webhooks_routes_1 = __importDefault(require("./routes/webhooks.routes"));
-const integrations_routes_1 = __importDefault(require("./routes/integrations.routes"));
-const p4g_ai_routes_1 = __importDefault(require("./routes/p4g-ai.routes"));
-const analytics_routes_1 = __importDefault(require("./routes/analytics.routes"));
-const permissions_routes_1 = __importDefault(require("./routes/permissions.routes"));
-const memberships_routes_1 = __importDefault(require("./routes/memberships.routes"));
-const reviews_routes_1 = __importDefault(require("./routes/reviews.routes"));
+import "dotenv/config";
+import * as express_1 from "express";
+import * as cors_1 from "cors";
+import * as helmet_1 from "helmet";
+import * as express_rate_limit_1 from "express-rate-limit";
+import * as pino_http_1 from "pino-http";
+import * as auth_1 from "./middleware/auth.js";
+import * as audit_1 from "./middleware/audit.js";
+import * as errors_1 from "./middleware/errors.js";
+import * as Sentry from "@sentry/node";
+// Route modules (each default-exports an express.Router)
+import * as health_routes_1 from "./routes/health.routes.js";
+import * as health_business_routes_1 from "./routes/health-business.routes.js";
+import * as auth_routes_1 from "./routes/auth.routes.js";
+import * as leads_routes_1 from "./routes/leads.routes.js";
+import * as contacts_routes_1 from "./routes/contacts.routes.js";
+import * as appointments_routes_1 from "./routes/appointments.routes.js";
+import * as tasks_routes_1 from "./routes/tasks.routes.js";
+import * as comms_routes_1 from "./routes/comms.routes.js";
+import * as payments_routes_1 from "./routes/payments.routes.js";
+import * as pay_runs_routes_1 from "./routes/pay-runs.routes.js";
+import * as workflows_routes_1 from "./routes/workflows.routes.js";
+import * as files_routes_1 from "./routes/files.routes.js";
+import * as billing_routes_1 from "./routes/billing.routes.js";
+import * as webhooks_routes_1 from "./routes/webhooks.routes.js";
+import * as integrations_routes_1 from "./routes/integrations.routes.js";
+import * as p4g_ai_routes_1 from "./routes/p4g-ai.routes.js";
+import * as analytics_routes_1 from "./routes/analytics.routes.js";
+import * as permissions_routes_1 from "./routes/permissions.routes.js";
+import * as memberships_routes_1 from "./routes/memberships.routes.js";
+import * as reviews_routes_1 from "./routes/reviews.routes.js";
 const CORS_ALLOWED = [
     'http://localhost:3000',
     'http://localhost:3001',
@@ -51,7 +45,7 @@ const CORS_ALLOWED = [
     'https://talented-solace-production-cd10.up.railway.app',
     process.env.FRONTEND_URL,
 ].filter(Boolean);
-function buildApp() {
+export function buildApp() {
     const app = (0, express_1.default)();
     app.set('trust proxy', true);
     app.use((0, pino_http_1.pinoHttp)({

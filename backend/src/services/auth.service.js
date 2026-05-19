@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.authService = void 0;
 // ============================================================================
 // Auth service — signup (org + owner + seed plans, rollback on failure),
 // invite (Supabase invite + users row). /me is read straight off req.user
 // in the controller so it stays here only for signup/invite logic.
 // ============================================================================
-const auth_repository_1 = require("../repositories/auth.repository");
-const errors_1 = require("../middleware/errors");
-exports.authService = {
+import * as auth_repository_1 from "../repositories/auth.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+export const authService = {
     async signup(body) {
         // Create auth user
         const { data: authData, error: authError } = await auth_repository_1.authRepository.createAuthUser(body.email, body.password);

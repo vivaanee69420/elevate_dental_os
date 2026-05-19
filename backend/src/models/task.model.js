@@ -1,15 +1,12 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.taskUpdateSchema = exports.taskCreateSchema = exports.taskListQuerySchema = void 0;
 // ============================================================================
 // Task model — Zod schemas + inferred types for the tasks domain.
 // ============================================================================
-const zod_1 = require("zod");
-exports.taskListQuerySchema = zod_1.z.object({
+import * as zod_1 from "zod";
+export const taskListQuerySchema = zod_1.z.object({
     status: zod_1.z.enum(['open', 'in_progress', 'done', 'cancelled']).optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
 });
-exports.taskCreateSchema = zod_1.z.object({
+export const taskCreateSchema = zod_1.z.object({
     title: zod_1.z.string(),
     description: zod_1.z.string().optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
@@ -18,4 +15,4 @@ exports.taskCreateSchema = zod_1.z.object({
     related_lead_id: zod_1.z.string().uuid().optional(),
     related_contact_id: zod_1.z.string().uuid().optional(),
 });
-exports.taskUpdateSchema = zod_1.z.record(zod_1.z.any());
+export const taskUpdateSchema = zod_1.z.record(zod_1.z.any());

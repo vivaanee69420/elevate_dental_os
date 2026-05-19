@@ -1,4 +1,3 @@
-'use strict';
 
 // ============================================================================
 // Auth middleware — idiomatic Express (Phase A: new code, clean CJS).
@@ -23,10 +22,10 @@
 // organisation_id filters in repos; permissions never widen across orgs.
 // ============================================================================
 
-const { serviceClient, tenantClient, verifyToken } = require('../lib/supabase');
-const { permissionsService } = require('../services/permissions.service');
+import { serviceClient, tenantClient, verifyToken } from '../lib/supabase.js';
+import { permissionsService } from '../services/permissions.service.js';
 
-async function authenticate(req, res, next) {
+export async function authenticate(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing token' });
@@ -91,7 +90,7 @@ async function authenticate(req, res, next) {
 
 // Coarse built-in-role gate. Use only where a permission key is meaningless
 // (e.g. "must literally be the owner"). Prefer requirePermission otherwise.
-function requireRole(...roles) {
+export function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Insufficient permissions' });
@@ -103,7 +102,7 @@ function requireRole(...roles) {
 // Dynamic RBAC gate. Denies unless the admin-configured effective map grants
 // `permissionKey` for this user. This is the single enforcement path that
 // matches the Team Permissions matrix.
-function requirePermission(permissionKey) {
+export function requirePermission(permissionKey) {
   return (req, res, next) => {
     if (!req.user || req.user.permissions?.[permissionKey] !== true) {
       return res.status(403).json({ error: 'Insufficient permissions' });
@@ -112,4 +111,3 @@ function requirePermission(permissionKey) {
   };
 }
 
-module.exports = { authenticate, requireRole, requirePermission };

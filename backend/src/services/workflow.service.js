@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.workflowService = void 0;
 // ============================================================================
 // Workflow service — business logic for the workflows domain.
 // ============================================================================
-const workflow_repository_1 = require("../repositories/workflow.repository");
-const errors_1 = require("../middleware/errors");
-exports.workflowService = {
+import * as workflow_repository_1 from "../repositories/workflow.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+export const workflowService = {
     async list(orgId) {
         const data = await workflow_repository_1.workflowRepository.list(orgId);
         return { workflows: data || [] };

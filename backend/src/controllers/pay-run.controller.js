@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.payRunController = void 0;
-const pay_run_service_1 = require("../services/pay-run.service");
-const pay_run_model_1 = require("../models/pay-run.model");
-exports.payRunController = {
+import * as pay_run_service_1 from "../services/pay-run.service.js";
+import * as pay_run_model_1 from "../models/pay-run.model.js";
+export const payRunController = {
     async list(req, res) {
         res.json(await pay_run_service_1.payRunService.list(req.user.organisation_id));
     },

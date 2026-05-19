@@ -1,5 +1,3 @@
-'use strict';
-
 // ============================================================================
 // Permission catalog + pure resolution
 // ============================================================================
@@ -19,7 +17,7 @@
 // ============================================================================
 
 // permission_key -> human label (label is for the admin UI / docs only).
-const PERMISSION_CATALOG = {
+export const PERMISSION_CATALOG = {
   'finance.view': 'View finance (cash flow, P&L, financial)',
   'valuation.view': 'View practice valuation',
   'businesshealth.manage': 'Manage Business Health setup & targets',
@@ -36,10 +34,10 @@ const PERMISSION_CATALOG = {
   'permissions.manage': 'Edit the role-permission matrix',
 };
 
-const PERMISSION_KEYS = Object.keys(PERMISSION_CATALOG);
+export const PERMISSION_KEYS = Object.keys(PERMISSION_CATALOG);
 
 /** True if `key` is a real, grantable permission. */
-function isValidPermission(key) {
+export function isValidPermission(key) {
   return Object.prototype.hasOwnProperty.call(PERMISSION_CATALOG, key);
 }
 
@@ -54,7 +52,7 @@ function isValidPermission(key) {
  *
  * Unknown keys in either source are ignored (catalog is authoritative).
  */
-function resolveEffectivePermissions(rolePermissionRows, userOverrides) {
+export function resolveEffectivePermissions(rolePermissionRows, userOverrides) {
   const effective = {};
   // 1. Catalog default: deny everything.
   for (const key of PERMISSION_KEYS) effective[key] = false;
@@ -73,7 +71,9 @@ function resolveEffectivePermissions(rolePermissionRows, userOverrides) {
   return effective;
 }
 
-module.exports = {
+// Default export mirrors the named exports — some test modules import the
+// whole module as `pkg` / `permPkg.default`.
+export default {
   PERMISSION_CATALOG,
   PERMISSION_KEYS,
   isValidPermission,

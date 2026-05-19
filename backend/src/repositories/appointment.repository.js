@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.appointmentRepository = void 0;
 // ============================================================================
 // Appointment repository — all Supabase data access for the appointments domain.
 // No business logic here: queries in, rows out (or thrown DB error).
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.appointmentRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const appointmentRepository = {
     async list(orgId, q) {
         let query = supabase_1.serviceClient
             .from('appointments')

@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.integrationService = void 0;
 // ============================================================================
 // Integration service — business logic for the integrations domain.
 // ============================================================================
-const integration_repository_1 = require("../repositories/integration.repository");
-exports.integrationService = {
+import * as integration_repository_1 from "../repositories/integration.repository.js";
+export const integrationService = {
     async list(orgId) {
         const data = await integration_repository_1.integrationRepository.list(orgId);
         return { integrations: data || [] };

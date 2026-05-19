@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.fileController = void 0;
-const file_service_1 = require("../services/file.service");
-const file_model_1 = require("../models/file.model");
-exports.fileController = {
+import * as file_service_1 from "../services/file.service.js";
+import * as file_model_1 from "../models/file.model.js";
+export const fileController = {
     async presign(req, res) {
         const body = file_model_1.filePresignSchema.parse(req.body);
         res.json(await file_service_1.fileService.presign(req.user.organisation_id, req.user.id, body));

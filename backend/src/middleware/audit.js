@@ -1,12 +1,10 @@
-"use strict";
 // ============================================================================
 // Audit middleware — logs all mutations to audit_log table (Express)
 // Fires on res 'finish' to capture the completed response.
 // ============================================================================
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.audit = audit;
-const supabase_1 = require("../lib/supabase");
-function audit(req, res, next) {
+import * as supabase_1 from "../lib/supabase.js";
+
+export function audit(req, res, next) {
     res.on('finish', () => {
         if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method))
             return;

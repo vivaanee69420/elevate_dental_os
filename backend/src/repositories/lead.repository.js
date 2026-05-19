@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.leadRepository = void 0;
 // ============================================================================
 // Lead repository — all Supabase data access for the leads domain.
 // No business logic here: queries in, rows out (or thrown DB error).
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.leadRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const leadRepository = {
     async list(orgId, q) {
         let query = supabase_1.serviceClient
             .from('leads')

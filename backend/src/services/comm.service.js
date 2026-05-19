@@ -1,16 +1,13 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.commService = void 0;
 // ============================================================================
 // Comm service — business logic for the communications domain.
 // Orchestrates the repository + outbound providers; throws AppError for
 // client-visible failures.
 // ============================================================================
-const comm_repository_1 = require("../repositories/comm.repository");
-const errors_1 = require("../middleware/errors");
-const postmark_1 = require("../lib/postmark");
-const twilio_1 = require("../lib/twilio");
-exports.commService = {
+import * as comm_repository_1 from "../repositories/comm.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+import * as postmark_1 from "../lib/postmark.js";
+import * as twilio_1 from "../lib/twilio.js";
+export const commService = {
     list(orgId, q) {
         return comm_repository_1.commRepository.list(orgId, q);
     },

@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.webhookRepository = void 0;
 // ============================================================================
 // Webhook repository — all Supabase data access for the webhooks domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.webhookRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const webhookRepository = {
     async settlePayment(paymentIntentId) {
         return supabase_1.serviceClient
             .from('payments')

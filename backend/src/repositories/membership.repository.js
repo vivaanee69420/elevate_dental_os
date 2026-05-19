@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.membershipRepository = void 0;
 // ============================================================================
 // Membership repository — all Supabase data access for memberships domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.membershipRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const membershipRepository = {
     async listPlans(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('membership_plans')

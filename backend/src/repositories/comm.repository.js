@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.commRepository = void 0;
 // ============================================================================
 // Comm repository — all Supabase data access for the communications domain.
 // No business logic here: queries in, rows out (or thrown DB error).
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.commRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const commRepository = {
     async list(orgId, q) {
         let query = supabase_1.serviceClient
             .from('communications')

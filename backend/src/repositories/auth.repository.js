@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.authRepository = void 0;
 // ============================================================================
 // Auth repository — all Supabase auth + users/organisations data access.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.authRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const authRepository = {
     createAuthUser(email, password) {
         return supabase_1.serviceClient.auth.admin.createUser({
             email,
