@@ -1,10 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendEmail = sendEmail;
 // Email sending via Postmark
-const postmark_1 = require("postmark");
+import * as postmark_1 from "postmark";
+
 const postmark = new postmark_1.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
-async function sendEmail(opts) {
+
+export async function sendEmail(opts) {
     const result = await postmark.sendEmail({
         From: opts.from || process.env.POSTMARK_FROM || 'no-reply@elevate.app',
         To: opts.to,

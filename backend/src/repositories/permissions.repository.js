@@ -1,14 +1,12 @@
-'use strict';
-
 // ============================================================================
 // Permissions repository — data access only (queries in, rows out).
 // Uses serviceClient; every query is explicitly scoped by organisation_id
 // (the service-client path has no automatic RLS isolation — see CLAUDE.md).
 // ============================================================================
 
-const { serviceClient } = require('../lib/supabase');
+import { serviceClient } from '../lib/supabase.js';
 
-const permissionsRepository = {
+export const permissionsRepository = {
   /** All role_permissions rows for an org (the full matrix). */
   async listByOrg(orgId) {
     const { data, error } = await serviceClient
@@ -68,5 +66,3 @@ const permissionsRepository = {
     if (error) throw error;
   },
 };
-
-module.exports = { permissionsRepository };

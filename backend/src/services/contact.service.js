@@ -1,13 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.contactService = void 0;
 // ============================================================================
 // Contact service — business logic for the contacts domain.
 // Orchestrates the repository; throws AppError for client-visible failures.
 // ============================================================================
-const contact_repository_1 = require("../repositories/contact.repository");
-const errors_1 = require("../middleware/errors");
-exports.contactService = {
+import * as contact_repository_1 from "../repositories/contact.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+export const contactService = {
     list(orgId, q) {
         return contact_repository_1.contactRepository.list(orgId, q);
     },

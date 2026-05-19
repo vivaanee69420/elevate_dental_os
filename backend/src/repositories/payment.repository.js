@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.paymentRepository = void 0;
 // ============================================================================
 // Payment repository — all Supabase data access for the payments domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.paymentRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const paymentRepository = {
     async list(orgId, q) {
         let query = supabase_1.serviceClient
             .from('payments')

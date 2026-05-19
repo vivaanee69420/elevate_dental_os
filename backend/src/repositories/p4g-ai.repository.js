@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.p4gAiRepository = void 0;
 // ============================================================================
 // Plan4Growth AI repository — Supabase context reads for the chat domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.p4gAiRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const p4gAiRepository = {
     async health(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('business_health')

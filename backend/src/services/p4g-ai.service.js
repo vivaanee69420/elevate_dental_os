@@ -1,15 +1,12 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.p4gAiService = void 0;
 // ============================================================================
 // Plan4Growth AI service — loads business context (business_health + latest
 // snapshot), calls askPlan4GrowthAI, and surfaces a 500 'AI service
 // unavailable' on failure (preserved exactly from the original).
 // ============================================================================
-const p4g_ai_repository_1 = require("../repositories/p4g-ai.repository");
-const errors_1 = require("../middleware/errors");
-const claude_1 = require("../lib/claude");
-exports.p4gAiService = {
+import * as p4g_ai_repository_1 from "../repositories/p4g-ai.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+import * as claude_1 from "../lib/claude.js";
+export const p4gAiService = {
     async chat(orgId, body) {
         // Load context
         const health = await p4g_ai_repository_1.p4gAiRepository.health(orgId);

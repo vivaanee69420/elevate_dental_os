@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.businessHealthRepository = void 0;
 // ============================================================================
 // Business Health repository — all Supabase data access for the domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.businessHealthRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const businessHealthRepository = {
     async getHealth(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('business_health')

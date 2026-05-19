@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.taskRepository = void 0;
 // ============================================================================
 // Task repository — all Supabase data access for the tasks domain.
 // No business logic here: queries in, rows out (or thrown DB error).
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.taskRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const taskRepository = {
     async list(orgId, q) {
         let query = supabase_1.serviceClient
             .from('tasks')

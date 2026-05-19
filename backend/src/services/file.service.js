@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.fileService = void 0;
 // ============================================================================
 // File service — business logic for the files domain.
 // ============================================================================
-const file_repository_1 = require("../repositories/file.repository");
-exports.fileService = {
+import * as file_repository_1 from "../repositories/file.repository.js";
+export const fileService = {
     async presign(orgId, userId, input) {
         const key = file_repository_1.fileRepository.buildKey(orgId, input.filename);
         const uploadUrl = await file_repository_1.fileRepository.presignUpload(key, input.content_type);

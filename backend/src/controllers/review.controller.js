@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.reviewController = void 0;
-const review_service_1 = require("../services/review.service");
-const review_model_1 = require("../models/review.model");
-exports.reviewController = {
+import * as review_service_1 from "../services/review.service.js";
+import * as review_model_1 from "../models/review.model.js";
+export const reviewController = {
     async list(req, res) {
         res.json(await review_service_1.reviewService.list(req.user.organisation_id));
     },

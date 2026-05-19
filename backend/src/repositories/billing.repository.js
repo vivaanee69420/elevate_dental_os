@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.billingRepository = void 0;
 // ============================================================================
 // Billing repository — all Supabase data access for the billing domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.billingRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const billingRepository = {
     async getOrg(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('organisations')

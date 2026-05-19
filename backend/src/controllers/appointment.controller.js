@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.appointmentController = void 0;
-const appointment_service_1 = require("../services/appointment.service");
-const appointment_model_1 = require("../models/appointment.model");
-exports.appointmentController = {
+import * as appointment_service_1 from "../services/appointment.service.js";
+import * as appointment_model_1 from "../models/appointment.model.js";
+export const appointmentController = {
     async list(req, res) {
         const q = appointment_model_1.appointmentListQuerySchema.parse(req.query);
         const appointments = await appointment_service_1.appointmentService.list(req.user.organisation_id, q);

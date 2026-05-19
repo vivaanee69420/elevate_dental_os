@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.workflowController = void 0;
-const workflow_service_1 = require("../services/workflow.service");
-const workflow_model_1 = require("../models/workflow.model");
-exports.workflowController = {
+import * as workflow_service_1 from "../services/workflow.service.js";
+import * as workflow_model_1 from "../models/workflow.model.js";
+export const workflowController = {
     async list(req, res) {
         res.json(await workflow_service_1.workflowService.list(req.user.organisation_id));
     },

@@ -1,17 +1,15 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
 // ============================================================================
 // Pay-runs routes — Express Router. Mounted at /api/pay-runs (auth upstream).
 // All routes are owner-only (enforced via requireRole).
 // Static paths registered before the /:id param route.
 // ============================================================================
-const express_1 = require("express");
-const async_handler_1 = require("../middleware/async-handler");
-const auth_1 = require("../middleware/auth");
-const pay_run_controller_1 = require("../controllers/pay-run.controller");
+import * as express_1 from "express";
+import * as async_handler_1 from "../middleware/async-handler.js";
+import * as auth_1 from "../middleware/auth.js";
+import * as pay_run_controller_1 from "../controllers/pay-run.controller.js";
 const router = (0, express_1.Router)();
 router.use((0, auth_1.requireRole)('owner'));
 router.get('/', (0, async_handler_1.asyncHandler)(pay_run_controller_1.payRunController.list));
 router.post('/calculate', (0, async_handler_1.asyncHandler)(pay_run_controller_1.payRunController.calculate));
 router.post('/:id/approve', (0, async_handler_1.asyncHandler)(pay_run_controller_1.payRunController.approve));
-exports.default = router;
+export default router;

@@ -1,13 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.appointmentService = void 0;
 // ============================================================================
 // Appointment service — business logic for the appointments domain.
 // Orchestrates the repository; throws AppError for client-visible failures.
 // ============================================================================
-const appointment_repository_1 = require("../repositories/appointment.repository");
-const errors_1 = require("../middleware/errors");
-exports.appointmentService = {
+import * as appointment_repository_1 from "../repositories/appointment.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+export const appointmentService = {
     list(orgId, q) {
         return appointment_repository_1.appointmentRepository.list(orgId, q);
     },

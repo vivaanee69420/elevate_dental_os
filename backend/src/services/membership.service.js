@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.membershipService = void 0;
 // ============================================================================
 // Membership service — business logic for the memberships domain.
 // ============================================================================
-const membership_repository_1 = require("../repositories/membership.repository");
-const errors_1 = require("../middleware/errors");
-exports.membershipService = {
+import * as membership_repository_1 from "../repositories/membership.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+export const membershipService = {
     async listPlans(orgId) {
         const data = await membership_repository_1.membershipRepository.listPlans(orgId);
         return { plans: data || [] };

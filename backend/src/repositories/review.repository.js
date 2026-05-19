@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.reviewRepository = void 0;
 // ============================================================================
 // Review repository — all Supabase data access for the reviews domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.reviewRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const reviewRepository = {
     async list(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('reviews')

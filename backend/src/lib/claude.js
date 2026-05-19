@@ -1,14 +1,7 @@
-"use strict";
 // ============================================================================
 // PLAN4GROWTH AI — AI Coach powered by Claude Sonnet 4.6
 // ============================================================================
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.askPlan4GrowthAI = askPlan4GrowthAI;
-exports.generateHealthInsights = generateHealthInsights;
-const sdk_1 = __importDefault(require("@anthropic-ai/sdk"));
+import * as sdk_1 from "@anthropic-ai/sdk";
 const anthropic = new sdk_1.default({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = 'claude-sonnet-4-5-20250929';
 const SYSTEM_PROMPT = `You are Plan4Growth AI, the AI coach inside Elevate Dental OS — a business intelligence platform for UK dental practice groups.
@@ -33,7 +26,7 @@ Never:
 - Recommend specific tools/vendors unless asked
 - Diagnose individual patient cases
 - Give medical advice`;
-async function askPlan4GrowthAI(userMessage, context, conversationHistory = []) {
+export async function askPlan4GrowthAI(userMessage, context, conversationHistory = []) {
     const contextString = `
 USER'S BUSINESS DATA:
 ${context.baseline ? `Baseline (when they joined): ${JSON.stringify(context.baseline)}` : 'No baseline set'}
@@ -66,7 +59,7 @@ ${context.recentSnapshot ? `Most recent snapshot: ${JSON.stringify(context.recen
 // ============================================================================
 // PLAN4GROWTH AI INSIGHTS — Generates the initial business health analysis
 // ============================================================================
-async function generateHealthInsights(baseline, targets) {
+export async function generateHealthInsights(baseline, targets) {
     const prompt = `Analyse this UK dental practice group's baseline data and generate exactly 5 specific, prioritised insights.
 
 For each insight, return:

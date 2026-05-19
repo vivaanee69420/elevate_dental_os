@@ -1,18 +1,13 @@
-"use strict";
 // ============================================================================
-// Background workers — cron jobs
+// Background workers — cron jobs (native ESM)
 // ============================================================================
-// Run as separate Railway service: `node dist/workers/index.js`
+// Run as separate Railway service: `node src/workers/index.js`
 // Cron schedules driven by node-cron
 // ============================================================================
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-require("dotenv/config");
-const node_cron_1 = __importDefault(require("node-cron"));
-const supabase_1 = require("../lib/supabase");
-const postmark_1 = require("../lib/postmark");
+import "dotenv/config";
+import * as node_cron_1 from "node-cron";
+import * as supabase_1 from "../lib/supabase.js";
+import * as postmark_1 from "../lib/postmark.js";
 // --------------------------------------------------------------------------
 // Monthly business health snapshots — 1st of every month at 02:00 UTC
 // --------------------------------------------------------------------------

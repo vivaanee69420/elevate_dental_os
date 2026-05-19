@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.payRunRepository = void 0;
 // ============================================================================
 // Pay-run repository — all Supabase data access for the pay-runs domain.
 // ============================================================================
-const supabase_1 = require("../lib/supabase");
-exports.payRunRepository = {
+import * as supabase_1 from "../lib/supabase.js";
+export const payRunRepository = {
     async list(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('pay_runs')

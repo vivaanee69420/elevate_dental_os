@@ -1,13 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.payRunService = void 0;
 // ============================================================================
 // Pay-run service — business logic for the pay-runs domain.
 // ============================================================================
-const pay_run_repository_1 = require("../repositories/pay-run.repository");
-const errors_1 = require("../middleware/errors");
-const formulas_1 = require("../lib/formulas");
-exports.payRunService = {
+import * as pay_run_repository_1 from "../repositories/pay-run.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+import * as formulas_1 from "../lib/formulas.js";
+export const payRunService = {
     async list(orgId) {
         const data = await pay_run_repository_1.payRunRepository.list(orgId);
         return { pay_runs: data || [] };

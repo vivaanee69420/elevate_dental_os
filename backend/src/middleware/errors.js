@@ -1,19 +1,16 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.AppError = void 0;
-exports.errorHandler = errorHandler;
-const zod_1 = require("zod");
+import * as zod_1 from "zod";
+
 // AppError lets services throw with an explicit status code.
-class AppError extends Error {
+export class AppError extends Error {
     statusCode;
     constructor(message, statusCode = 500) {
         super(message);
         this.statusCode = statusCode;
     }
 }
-exports.AppError = AppError;
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function errorHandler(err, req, res, _next) {
+export function errorHandler(err, req, res, _next) {
     if (err instanceof zod_1.ZodError) {
         return res.status(400).json({
             error: 'Validation failed',

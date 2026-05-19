@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.leadController = void 0;
-const lead_service_1 = require("../services/lead.service");
-const lead_model_1 = require("../models/lead.model");
-exports.leadController = {
+import * as lead_service_1 from "../services/lead.service.js";
+import * as lead_model_1 from "../models/lead.model.js";
+export const leadController = {
     async list(req, res) {
         const q = lead_model_1.leadListQuerySchema.parse(req.query);
         const leads = await lead_service_1.leadService.list(req.user.organisation_id, q);

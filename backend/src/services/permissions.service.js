@@ -1,5 +1,3 @@
-'use strict';
-
 // ============================================================================
 // Permissions service — business logic for dynamic RBAC.
 //
@@ -14,13 +12,13 @@
 // query. RLS is still the hard floor; this never crosses orgs.
 // ============================================================================
 
-const { permissionsRepository } = require('../repositories/permissions.repository');
-const {
+import { permissionsRepository } from '../repositories/permissions.repository.js';
+import {
   PERMISSION_CATALOG,
   isValidPermission,
   resolveEffectivePermissions,
-} = require('../lib/permissions');
-const { AppError } = require('../middleware/errors');
+} from '../lib/permissions.js';
+import { AppError } from '../middleware/errors.js';
 
 const permissionsService = {
   /** Effective permission map for a request's user. Pure merge over 1 query. */
@@ -80,4 +78,4 @@ const permissionsService = {
   },
 };
 
-module.exports = { permissionsService };
+export { permissionsService };

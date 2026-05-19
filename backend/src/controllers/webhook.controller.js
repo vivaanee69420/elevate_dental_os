@@ -1,8 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.webhookController = void 0;
-const webhook_service_1 = require("../services/webhook.service");
-exports.webhookController = {
+import * as webhook_service_1 from "../services/webhook.service.js";
+export const webhookController = {
     async stripe(req, res) {
         const sig = req.headers['stripe-signature'];
         // app.ts applies express.raw to /webhooks/stripe, so req.body is a Buffer.

@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.analyticsService = void 0;
 // ============================================================================
 // Analytics service — P&L / valuation / KPI rollups from the saved baseline.
 // NOTE: endpoints with no baseline return { error: 'No baseline set' } with a
 // 200 status (NOT an error) — preserved exactly from the original.
 // ============================================================================
-const analytics_repository_1 = require("../repositories/analytics.repository");
-const formulas_1 = require("../lib/formulas");
-exports.analyticsService = {
+import * as analytics_repository_1 from "../repositories/analytics.repository.js";
+import * as formulas_1 from "../lib/formulas.js";
+export const analyticsService = {
     async dashboard(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
         const baseline = health?.baseline || {};

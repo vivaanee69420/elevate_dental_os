@@ -1,4 +1,3 @@
-'use strict';
 
 // ============================================================================
 // Permissions routes — mounted at /api/admin/permissions (behind the global
@@ -8,10 +7,10 @@
 // the org's whole access model.
 // ============================================================================
 
-const { Router } = require('express');
-const { asyncHandler } = require('../middleware/async-handler');
-const { requirePermission } = require('../middleware/auth');
-const { permissionsController } = require('../controllers/permissions.controller');
+import { Router } from "express";
+import { asyncHandler } from "../middleware/async-handler.js";
+import { requirePermission } from "../middleware/auth.js";
+import { permissionsController } from "../controllers/permissions.controller.js";
 
 const router = Router();
 
@@ -21,4 +20,4 @@ router.get('/', asyncHandler(permissionsController.getMatrix));
 router.put('/role', asyncHandler(permissionsController.setRoleDefault));
 router.put('/user', asyncHandler(permissionsController.setUserOverride));
 
-module.exports = router;
+export default router;

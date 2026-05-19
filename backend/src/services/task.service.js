@@ -1,13 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.taskService = void 0;
 // ============================================================================
 // Task service — business logic for the tasks domain.
 // Orchestrates the repository; throws AppError for client-visible failures.
 // ============================================================================
-const task_repository_1 = require("../repositories/task.repository");
-const errors_1 = require("../middleware/errors");
-exports.taskService = {
+import * as task_repository_1 from "../repositories/task.repository.js";
+import * as errors_1 from "../middleware/errors.js";
+export const taskService = {
     list(orgId, q) {
         return task_repository_1.taskRepository.list(orgId, q);
     },
