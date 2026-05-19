@@ -109,6 +109,11 @@ const NAV: NavSection[] = [
   ]},
 ];
 
+// TEMPORARY: RBAC nav-gating disabled so every page is visible while the UI
+// is being built out. Flip back to true (and see [[rbac-sidebar]]) once all
+// screens exist. The role logic below is intact — only the gate is bypassed.
+const RBAC_ENABLED = false;
+
 interface Me {
   role: string;
   full_name: string;
@@ -133,6 +138,7 @@ export function Sidebar() {
 
   // True when the whole section should render for this role.
   function canSeeSection(s: NavSection): boolean {
+    if (!RBAC_ENABLED) return true;
     if (isReception) return s.label === 'Elevate CRM';
     if (s.requiresOwner && !isOwner) return false;
     if (s.requiresFinance && !hasFinance) return false;
@@ -141,6 +147,7 @@ export function Sidebar() {
 
   // True when an individual item should render for this role.
   function canSeeItem(item: NavItem): boolean {
+    if (!RBAC_ENABLED) return true;
     if (isReception) return !!item.receptionOk;
     if (item.requiresOwner && !isOwner) return false;
     if (item.requiresFinance && !hasFinance) return false;
