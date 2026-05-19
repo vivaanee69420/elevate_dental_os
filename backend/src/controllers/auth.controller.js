@@ -15,11 +15,14 @@ export const authController = {
             email: req.user.email,
             role: req.user.role,
             organisation_id: req.user.organisation_id,
+            organisation_name: await auth_service_1.authService.organisationName(req.user.organisation_id),
             permissions: req.user.permissions,
+            // Frontend hides the email-invite mode until delivery is wired.
+            invite_enabled: process.env.TEAM_INVITE_ENABLED === 'true',
         });
     },
     async invite(req, res) {
         const body = auth_model_1.inviteSchema.parse(req.body);
-        res.json(await auth_service_1.authService.invite(req.user.organisation_id, body));
+        res.json(await auth_service_1.authService.invite(req.user.organisation_id, req.user, body));
     },
 };

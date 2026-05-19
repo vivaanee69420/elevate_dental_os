@@ -9,7 +9,10 @@ export interface Me {
   full_name?: string;
   role: string;
   organisation_id: string;
+  organisation_name?: string;
   permissions?: Permissions;
+  /** True once email/WhatsApp delivery is configured — gates the invite UI. */
+  invite_enabled?: boolean;
 }
 
 // Single shared, cached /auth/me. Before this, sidebar + topbar (and the
