@@ -14,3 +14,15 @@ export const seriesQuerySchema = zod_1.z.object({
 export const windowQuerySchema = zod_1.z.object({
     days: zod_1.z.coerce.number().int().min(1).max(365).default(30),
 });
+
+// cashflow ?weeks=13 — rolling forecast horizon, bounded.
+export const weeksQuerySchema = zod_1.z.object({
+    weeks: zod_1.z.coerce.number().int().min(1).max(52).default(13),
+});
+
+// /financial — owner-editable balance-sheet assumptions (the estimated BS is
+// driven by these, surfaced as inputs the owner owns, not hidden constants).
+export const financialQuerySchema = zod_1.z.object({
+    dsoDays: zod_1.z.coerce.number().int().min(0).max(365).default(45),
+    payableDays: zod_1.z.coerce.number().int().min(0).max(365).default(30),
+});

@@ -24,11 +24,10 @@
 //                              year-by-year interpolation table
 
 import { useMemo, useState } from 'react';
+import { useValuationBase } from '../hooks';
 import {
-  FINANCE_SERIES,
   calculateValuation,
   defaultValuationState,
-  valuationBase,
   getDefaultMultiples,
   poundsCompact,
   formatCurrency,
@@ -124,7 +123,18 @@ function SliderRow({
 
 // Practice Valuation page — three-model engine + Sale Planner.
 export default function ValuationScreen() {
-  const base = useMemo(() => valuationBase(), []);
+  // Real base (TTM revenue + reported EBITDA) from the baseline-derived
+  // finance-series. The interactive engine below stays client-side; this only
+  // feeds it real numbers. No baseline → zeros + a banner (degraded fallback).
+  const { data: baseData, isLoading: baseLoading } = useValuationBase();
+  const baseMissing = !!baseData?.error;
+  const base = useMemo(
+    () => ({
+      ttmRevenue: baseData?.error ? 0 : baseData?.ttmRevenue ?? 0,
+      reportedEbitda: baseData?.error ? 0 : baseData?.reportedEbitda ?? 0,
+    }),
+    [baseData],
+  );
   const [tab, setTab] = useState<'current' | 'planner'>('current');
   const [state, setState] = useState<ValuationState>(() => defaultValuationState());
 
@@ -205,6 +215,17 @@ export default function ValuationScreen() {
           </div>
         </div>
       </div>
+
+      {baseMissing && !baseLoading && (
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+          <div className="font-semibold">No baseline — valuation base is £0</div>
+          <div className="text-sm text-ink-muted">
+            TTM revenue + EBITDA come from your Business Health baseline.
+            Complete setup to populate the engine; the inputs below still work
+            as a what-if model.
+          </div>
+        </div>
+      )}
 
       {/* Tab switcher */}
       <div

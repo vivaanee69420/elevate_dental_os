@@ -34,29 +34,9 @@ export interface FinanceMonth {
   profit: number;
 }
 
-/**
- * Build the deterministic 12-month consolidated series.
- * Revenue ramps month-on-month at the prototype's group scale (~£10m/yr,
- * 5 practices); cost lines are revenue-proportional so net margin ~10%.
- */
-function buildSeries(): FinanceMonth[] {
-  const months = [
-    '2025-06', '2025-07', '2025-08', '2025-09', '2025-10', '2025-11',
-    '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05',
-  ];
-  return months.map((month, i) => {
-    const revenue = Math.round(815000 + i * 9000 + (i % 3) * 12000);
-    const associate_pay = Math.round(revenue * 0.42);
-    const staff_costs = Math.round(revenue * 0.18);
-    const lab_materials = Math.round(revenue * 0.13);
-    const opex = Math.round(revenue * 0.17);
-    const profit = revenue - associate_pay - staff_costs - lab_materials - opex;
-    return { month, revenue, associate_pay, staff_costs, lab_materials, opex, profit };
-  });
-}
-
-/** The shared consolidated dataset for every Finance screen. */
-export const FINANCE_SERIES: FinanceMonth[] = buildSeries();
+// Synthetic FINANCE_SERIES / buildSeries deleted — finance screens now fetch
+// real data (./api.ts ← /api/analytics/finance-series, baseline-derived).
+// annualTotal stays a pure helper over whatever FinanceMonth[] is passed.
 
 /** Sum a P&L field across the whole series (annual total). */
 export function annualTotal(series: FinanceMonth[]) {
@@ -278,11 +258,6 @@ export function defaultValuationState(): ValuationState {
   };
 }
 
-/** Trailing-12-month valuation base from the consolidated series. */
-export function valuationBase(): ValuationBase {
-  const ttmRevenue = FINANCE_SERIES.reduce((s, m) => s + m.revenue, 0);
-  const ttmProfit = FINANCE_SERIES.reduce((s, m) => s + m.profit, 0);
-  // Reported EBITDA ~ net profit + ~4% of revenue (D&A + interest add-back).
-  const reportedEbitda = ttmProfit + Math.round(ttmRevenue * 0.04);
-  return { ttmRevenue, reportedEbitda };
-}
+// valuationBase() deleted — the valuation base (TTM revenue + reported
+// EBITDA) now comes from the real finance-series via ./api.ts
+// getValuationBase(); the ValuationBase type is kept for the engine signature.

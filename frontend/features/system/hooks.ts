@@ -5,6 +5,8 @@ import {
   getTeam,
   inviteMember,
   removeMember,
+  provisionMember,
+  setMemberPassword,
   type PermissionsMatrix,
   type TeamResponse,
 } from './api';
@@ -59,6 +61,20 @@ export function useInviteMember() {
       qc.invalidateQueries({ queryKey: TEAM_KEY });
     },
   });
+}
+
+export function useProvisionMember() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: provisionMember,
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: TEAM_KEY });
+    },
+  });
+}
+
+export function useSetMemberPassword() {
+  return useMutation({ mutationFn: setMemberPassword });
 }
 
 export function useRemoveMember() {

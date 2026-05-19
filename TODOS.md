@@ -20,3 +20,25 @@ churn on an unstable deploy). Do as its own PR — no behaviour change.
 **Context:** Decided in `/plan-eng-review` (D1 scope reduction). Feature-first
 modules + `components/ui` primitives already landed; only the directory
 wrapper remains. Strictly mechanical + path updates.
+
+## Force password change on first login (`must_change_password`)
+
+**What:** Add a `users.must_change_password` column, enforce it in
+`authService.login()`, build a change-password screen, and set the flag when
+an admin provisions or resets a member's password.
+
+**Why:** Admin-set passwords are known to the admin forever. Until the member
+changes it, the credential is effectively shared — weak audit story for
+who-did-what. This closes that gap.
+
+**Pros:** Real fix for the shared-credential risk; proper attribution.
+**Cons:** Touches the login state machine and needs a new change-password UI
+flow the app does not have yet.
+
+**Depends on / blocked by:** a change-password / account-settings screen
+existing (none today).
+
+**Context:** Consciously deferred in `/plan-eng-review` (decision D3) as scope
+creep past the bounded "admin can set passwords + invite fallback" ask. The
+provision/reset endpoints intentionally create `status:'active'` members with
+no forced change. Revisit when any password-change UI is built.

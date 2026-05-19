@@ -89,6 +89,30 @@ export const analyticsService = {
             other: Math.round(revenuePence * (b.cost_other || 0) / 100),
         };
     },
+    // Shared deterministic baseline→curve projection. The ONLY source of the
+    // growth+ripple math — revenueSeries AND financeSeries both consume this
+    // so their monthly revenue is identical. Returns the raw factor + rounded
+    // revenue per month; callers derive their own lines (profit/cash, or P&L
+    // cost lines) from `revenue`. Keeping `monthlyBase` and the factor
+    // expression here verbatim guarantees revenueSeries stays byte-identical
+    // after the extraction (regression-gated in test/analytics.test.mjs).
+    _projectMonthly(revenuePence, months, now) {
+        const monthlyBase = revenuePence / 12;
+        const ref = now();
+        const out = [];
+        for (let i = months - 1; i >= 0; i--) {
+            const idx = months - 1 - i;
+            const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
+            const factor = 0.94 + 0.012 * idx + 0.02 * (idx % 3);
+            const revenue = Math.round(monthlyBase * factor);
+            out.push({
+                month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+                factor,
+                revenue,
+            });
+        }
+        return out;
+    },
     async dashboardSummary(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
         const b = health?.baseline;
@@ -125,24 +149,164 @@ export const analyticsService = {
         if (!b?.revenue)
             return { error: 'No baseline set' };
         const revenuePence = b.revenue * 100;
-        const monthlyBase = revenuePence / 12;
         const marginFrac = b.profit && b.revenue ? b.profit / b.revenue : 0.1;
         const cashFrac = b.cash && b.revenue ? Math.min(1, b.cash / b.revenue) : 1;
-        const ref = now();
-        const series = [];
-        for (let i = months - 1; i >= 0; i--) {
-            const idx = months - 1 - i;
-            const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
-            const factor = 0.94 + 0.012 * idx + 0.02 * (idx % 3);
-            const revenue = Math.round(monthlyBase * factor);
-            series.push({
-                month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        const series = this._projectMonthly(revenuePence, months, now).map(
+            ({ month, revenue }) => ({
+                month,
                 revenue,
                 profit: Math.round(revenue * marginFrac),
                 cash: Math.round(revenue * cashFrac),
-            });
-        }
+            }),
+        );
         return { basis: 'baseline-projection', months: series };
+    },
+    // 12-month consolidated P&L lines for /profit. Deterministic projection
+    // (shares _projectMonthly with revenueSeries so monthly revenue is
+    // identical) with cost lines = baseline cost_* applied to each month's
+    // projected revenue — same percentages `pl()` uses, just per month.
+    // Grouping per brief 06: associate / staff / lab+materials / opex(rest).
+    async financeSeries(orgId, { months = 12, now = () => new Date() } = {}) {
+        const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
+        const b = health?.baseline;
+        if (!b?.revenue)
+            return { error: 'No baseline set' };
+        const pct = (k) => (b[k] || 0) / 100;
+        const assocPct = pct('cost_associates');
+        const staffPct = pct('cost_staff');
+        const labMatPct = pct('cost_lab') + pct('cost_materials');
+        const opexPct = pct('cost_property') + pct('cost_marketing') + pct('cost_other');
+        const series = this._projectMonthly(b.revenue * 100, months, now).map(
+            ({ month, revenue }) => {
+                const associatePay = Math.round(revenue * assocPct);
+                const staffCosts = Math.round(revenue * staffPct);
+                const labMaterials = Math.round(revenue * labMatPct);
+                const opex = Math.round(revenue * opexPct);
+                return {
+                    month,
+                    revenue,
+                    associatePay,
+                    staffCosts,
+                    labMaterials,
+                    opex,
+                    profit: revenue - associatePay - staffCosts - labMaterials - opex,
+                };
+            },
+        );
+        return { basis: 'baseline-projection', months: series };
+    },
+    // 13-week rolling cash forecast. Opening = real bank balance (0 + flags
+    // if no bank / stale sync). Weekly receipts/payments = baseline run-rate
+    // seasonalised (NOT flat — same growth-family factor), with REAL settled
+    // payments overlaid by processed_at week, deduped by payment id (webhook
+    // re-delivery must not double-count) and skipping null processed_at.
+    // Closing/status come from formulas.calculateCashFlow (single source).
+    async cashflow(orgId, { weeks = 13, now = () => new Date() } = {}) {
+        const [health, bank] = await Promise.all([
+            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            analytics_repository_1.analyticsRepository.bankSummary(orgId),
+        ]);
+        const b = health?.baseline;
+        if (!b?.revenue)
+            return { error: 'No baseline set' };
+        const ref = now();
+        const sinceISO = ref.toISOString();
+        const realPayments = await analytics_repository_1.analyticsRepository.settledPaymentsForCashflow(orgId, sinceISO);
+        const annualRevenuePence = b.revenue * 100;
+        const costs = this._costsPence(b, annualRevenuePence);
+        const totalCostsPence = Object.values(costs).reduce((a, c) => a + c, 0);
+        const weeklyReceipts = annualRevenuePence / 52;
+        const weeklyPayments = totalCostsPence / 52;
+        // Overlay: dedupe by payment id, skip null processed_at, bucket by week.
+        const seenIds = new Set();
+        const overlayByWeek = new Map();
+        const refMid = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
+        for (const p of realPayments) {
+            if (!p.processed_at || seenIds.has(p.id))
+                continue;
+            seenIds.add(p.id);
+            const wk = Math.floor((new Date(p.processed_at).getTime() - refMid) / (7 * 86400000));
+            if (wk < 0 || wk >= weeks)
+                continue;
+            overlayByWeek.set(wk, (overlayByWeek.get(wk) || 0) + (p.amount_pence || 0));
+        }
+        const openingStart = bank.totalPence || 0;
+        const input = [];
+        let opening = openingStart;
+        for (let wi = 0; wi < weeks; wi++) {
+            const factor = 0.94 + 0.012 * (wi % 12) + 0.02 * (wi % 3);
+            const d = new Date(refMid + wi * 7 * 86400000);
+            const receiptsPence = Math.round(weeklyReceipts * factor) + (overlayByWeek.get(wi) || 0);
+            const paymentsPence = Math.round(weeklyPayments * factor);
+            input.push({
+                weekStartDate: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+                openingBalancePence: opening,
+                receiptsPence,
+                paymentsPence,
+            });
+            opening = opening + receiptsPence - paymentsPence;
+        }
+        const STALE_MS = 7 * 86400000;
+        const bankStale = !bank.lastSyncedAt ||
+            (ref.getTime() - new Date(bank.lastSyncedAt).getTime()) > STALE_MS;
+        return {
+            basis: 'baseline-projection',
+            bankConnected: bank.count > 0,
+            bankStale,
+            lastSyncedAt: bank.lastSyncedAt,
+            openingBalancePence: openingStart,
+            weeks: (0, formulas_1.calculateCashFlow)(input),
+        };
+    },
+    // /financial — Key Ratios + Balance Sheet. Margins are REAL (baseline
+    // P&L). The balance sheet has NO accounting source: every line is
+    // ESTIMATED from baseline + owner-supplied assumptions (DSO / payable
+    // days). Each estimated field carries estimated:true and the response
+    // carries basis:'estimated' so the UI can banner it and never present it
+    // as filed accounts.
+    async financial(orgId, { dsoDays = 45, payableDays = 30 } = {}) {
+        const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
+        const b = health?.baseline;
+        if (!b?.revenue)
+            return { error: 'No baseline set' };
+        const revenuePence = b.revenue * 100;
+        const costs = this._costsPence(b, revenuePence);
+        const pl = (0, formulas_1.calculatePL)({ revenue: revenuePence, costs });
+        const cogsPence = costs.associates + costs.lab + costs.materials;
+        const grossProfitPence = revenuePence - cogsPence;
+        const grossMarginPct = revenuePence > 0
+            ? Math.round((grossProfitPence / revenuePence) * 1000) / 10
+            : 0;
+        // ESTIMATED balance sheet — driven by owner assumptions.
+        const cashPence = b.cash != null ? b.cash * 100 : revenuePence;
+        const receivablesPence = Math.round((revenuePence / 365) * dsoDays);
+        const payablesPence = Math.round((pl.totalCosts / 365) * payableDays);
+        const currentAssetsPence = cashPence + receivablesPence;
+        const currentLiabilitiesPence = payablesPence;
+        const equityPence = currentAssetsPence - currentLiabilitiesPence;
+        const ratio = (n, d) => (d > 0 ? Math.round((n / d) * 100) / 100 : 0);
+        const light = (v, amber, green) =>
+            v >= green ? 'green' : v >= amber ? 'amber' : 'red';
+        return {
+            basis: 'estimated',
+            assumptions: { dsoDays, payableDays },
+            ratios: [
+                { key: 'grossMarginPct', value: grossMarginPct, estimated: false, light: light(grossMarginPct, 30, 40) },
+                { key: 'netMarginPct', value: pl.marginPct, estimated: false, light: light(pl.marginPct, 10, 18) },
+                { key: 'currentRatio', value: ratio(currentAssetsPence, currentLiabilitiesPence), estimated: true, light: light(ratio(currentAssetsPence, currentLiabilitiesPence), 1, 1.5) },
+                { key: 'quickRatio', value: ratio(currentAssetsPence, currentLiabilitiesPence), estimated: true, light: light(ratio(currentAssetsPence, currentLiabilitiesPence), 0.8, 1) },
+                { key: 'debtToEquity', value: ratio(currentLiabilitiesPence, equityPence), estimated: true, light: 'amber' },
+                { key: 'daysSalesOutstanding', value: dsoDays, estimated: true, light: light(60 - dsoDays, 10, 25) },
+            ],
+            balanceSheet: {
+                cashPence: { value: cashPence, estimated: b.cash == null },
+                receivablesPence: { value: receivablesPence, estimated: true },
+                currentAssetsPence: { value: currentAssetsPence, estimated: true },
+                payablesPence: { value: payablesPence, estimated: true },
+                currentLiabilitiesPence: { value: currentLiabilitiesPence, estimated: true },
+                equityPence: { value: equityPence, estimated: true },
+            },
+        };
     },
     // Per-practice scorecard from REAL data: practices table + sum of
     // settled payments per practice (turnover). There is no real per-practice

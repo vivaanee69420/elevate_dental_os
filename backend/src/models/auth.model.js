@@ -22,3 +22,19 @@ export const inviteSchema = zod_1.z.object({
 export const removeMemberSchema = zod_1.z.object({
     user_id: zod_1.z.string().uuid(),
 });
+// Admin provisions a member WITH a password (no email round-trip): the
+// member is 'active' immediately and can log in at once. `password` reuses
+// the signup min(8) rule. `permissions` is bounded at the service layer by
+// the caller's own effective grants (assertGrantCeiling).
+export const provisionMemberSchema = zod_1.z.object({
+    email: zod_1.z.string().email(),
+    full_name: zod_1.z.string(),
+    role: zod_1.z.enum(['owner', 'practice_manager', 'reception']),
+    password: zod_1.z.string().min(8),
+    permissions: zod_1.z.record(zod_1.z.boolean()).optional(),
+});
+// Admin resets an existing member's password.
+export const setPasswordSchema = zod_1.z.object({
+    user_id: zod_1.z.string().uuid(),
+    password: zod_1.z.string().min(8),
+});

@@ -63,6 +63,83 @@ describe('revenueSeries — deterministic projection of the real baseline', () =
   });
 });
 
+describe('REGRESSION (CRITICAL) — revenueSeries byte-identical after _projectMonthly extraction', () => {
+  it('full 12-month series matches the pre-refactor values exactly', async () => {
+    supaRec.resultProvider = () => ({
+      data: { baseline: { revenue: 1_200_000, profit: 300_000, cash: 1_140_000 } },
+      error: null,
+    });
+    const now = () => new Date(2026, 4, 15); // May 2026
+    const r = await svc.revenueSeries(ORG_A, { months: 12, now });
+    // monthlyBase = 120_000_000/12 = 10_000_000; factor = 0.94+0.012*idx+0.02*(idx%3)
+    // revenue=round(monthlyBase*factor); profit=round(rev*0.25); cash=round(rev*0.95)
+    const expected = Array.from({ length: 12 }, (_, idx) => {
+      const factor = 0.94 + 0.012 * idx + 0.02 * (idx % 3);
+      const revenue = Math.round(10_000_000 * factor);
+      const d = new Date(2026, 4 - (11 - idx), 1);
+      return {
+        month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
+        revenue,
+        profit: Math.round(revenue * 0.25),
+        cash: Math.round(revenue * 0.95),
+      };
+    });
+    expect(r).toEqual({ basis: 'baseline-projection', months: expected });
+  });
+
+  it('_projectMonthly exposes factor + revenue, reused by both callers', () => {
+    const now = () => new Date(2026, 4, 15);
+    const p = svc._projectMonthly(120_000_000, 12, now);
+    expect(p).toHaveLength(12);
+    expect(p[0]).toEqual({ month: '2025-06', factor: 0.94, revenue: 9_400_000 });
+    expect(p[11].month).toBe('2026-05');
+  });
+});
+
+describe('financeSeries — P&L lines, shares the curve with revenueSeries', () => {
+  it('{error} when no baseline', async () => {
+    supaRec.resultProvider = () => ({ data: { baseline: {} }, error: null });
+    expect(await svc.financeSeries(ORG_A)).toEqual({ error: 'No baseline set' });
+  });
+
+  it('cost lines = baseline cost_* × projected revenue; revenue == revenueSeries', async () => {
+    supaRec.resultProvider = () => ({
+      data: {
+        baseline: {
+          revenue: 1_200_000,
+          profit: 300_000,
+          cost_associates: 40,
+          cost_staff: 18,
+          cost_lab: 8,
+          cost_materials: 5,
+          cost_property: 10,
+          cost_marketing: 4,
+          cost_other: 3,
+        },
+      },
+      error: null,
+    });
+    const now = () => new Date(2026, 4, 15);
+    const fs = await svc.financeSeries(ORG_A, { months: 12, now });
+    const rs = await svc.revenueSeries(ORG_A, { months: 12, now });
+    expect(fs.basis).toBe('baseline-projection');
+    expect(fs.months).toHaveLength(12);
+    // monthly revenue identical to revenueSeries (shared _projectMonthly)
+    expect(fs.months.map((m) => m.revenue)).toEqual(
+      rs.months.map((m) => m.revenue),
+    );
+    const m0 = fs.months[0];
+    const rev = m0.revenue;
+    expect(m0.associatePay).toBe(Math.round(rev * 0.4));
+    expect(m0.staffCosts).toBe(Math.round(rev * 0.18));
+    expect(m0.labMaterials).toBe(Math.round(rev * 0.13)); // 8+5
+    expect(m0.opex).toBe(Math.round(rev * 0.17)); // 10+4+3
+    expect(m0.profit).toBe(
+      rev - m0.associatePay - m0.staffCosts - m0.labMaterials - m0.opex,
+    );
+  });
+});
+
 describe('dashboardSummary — KPIs from the real baseline', () => {
   it('{error} when no baseline revenue', async () => {
     supaRec.resultProvider = () => ({ data: { baseline: {} }, error: null });
@@ -119,6 +196,111 @@ describe('practiceSummary — real practices + settled payments', () => {
       { name: 'Ashford', turnoverPence: 7000, marginPct: 70 },
       { name: 'Barnet', turnoverPence: 9000, marginPct: 70 },
     ]);
+  });
+});
+
+describe('financial — real margins + estimated balance sheet', () => {
+  it('{error} when no baseline', async () => {
+    supaRec.resultProvider = () => ({ data: { baseline: {} }, error: null });
+    expect(await svc.financial(ORG_A)).toEqual({ error: 'No baseline set' });
+  });
+
+  it('margins real (estimated:false); balance sheet flagged estimated', async () => {
+    supaRec.resultProvider = () => ({
+      data: {
+        baseline: {
+          revenue: 1_000_000,
+          cash: 200_000,
+          cost_associates: 30,
+          cost_lab: 5,
+          cost_materials: 5,
+          cost_staff: 15,
+        },
+      },
+      error: null,
+    });
+    const r = await svc.financial(ORG_A, { dsoDays: 45, payableDays: 30 });
+    expect(r.basis).toBe('estimated');
+    expect(r.assumptions).toEqual({ dsoDays: 45, payableDays: 30 });
+    const gross = r.ratios.find((x) => x.key === 'grossMarginPct');
+    const net = r.ratios.find((x) => x.key === 'netMarginPct');
+    // COGS = 30+5+5 = 40% → gross 60%; total costs 30+5+5+15 = 55% → net 45%
+    expect(gross).toMatchObject({ value: 60, estimated: false });
+    expect(net).toMatchObject({ value: 45, estimated: false });
+    // every balance-sheet line flagged estimated (cash real here → false)
+    expect(r.balanceSheet.receivablesPence.estimated).toBe(true);
+    expect(r.balanceSheet.equityPence.estimated).toBe(true);
+    expect(r.balanceSheet.cashPence).toEqual({ value: 20_000_000, estimated: false });
+    // receivables = revenuePence/365*45
+    expect(r.balanceSheet.receivablesPence.value).toBe(
+      Math.round((100_000_000 / 365) * 45),
+    );
+    expect(r.ratios.find((x) => x.key === 'currentRatio').estimated).toBe(true);
+  });
+});
+
+describe('cashflow — bank opening + run-rate + deduped real overlay', () => {
+  const now = () => new Date(2026, 4, 15);
+
+  it('{error} when no baseline', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health'
+        ? { data: { baseline: {} }, error: null }
+        : { data: [], error: null };
+    expect(await svc.cashflow(ORG_A, { now })).toEqual({
+      error: 'No baseline set',
+    });
+  });
+
+  it('opening = Σ bank; webhook re-delivery counted once; null processed_at skipped', async () => {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'business_health')
+        return {
+          data: { baseline: { revenue: 1_200_000, cost_staff: 20 } },
+          error: null,
+        };
+      if (q.table === 'bank_accounts')
+        return {
+          data: [
+            { balance_pence: 400_000, last_synced_at: '2026-05-14T00:00:00Z' },
+            { balance_pence: 100_000, last_synced_at: '2026-05-10T00:00:00Z' },
+          ],
+          error: null,
+        };
+      // payments: same id twice (re-delivery) in week 0, + one null date
+      return {
+        data: [
+          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-16T09:00:00Z' },
+          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-16T09:00:00Z' },
+          { id: 'pay2', amount_pence: 9_999, processed_at: null },
+        ],
+        error: null,
+      };
+    };
+    const r = await svc.cashflow(ORG_A, { weeks: 13, now });
+    expect(r.basis).toBe('baseline-projection');
+    expect(r.bankConnected).toBe(true);
+    expect(r.bankStale).toBe(false); // freshest sync 2026-05-14, ref 05-15
+    expect(r.openingBalancePence).toBe(500_000);
+    expect(r.weeks).toHaveLength(13);
+    expect(r.weeks[0].opening).toBe(500_000);
+    // week 0 receipts = round(annualRev/52 * factor0(0.94)) + overlay 25_000 ONCE
+    const weeklyBase = (1_200_000 * 100) / 52;
+    expect(r.weeks[0].receipts).toBe(Math.round(weeklyBase * 0.94) + 25_000);
+    expect(r.weeks[0]).toHaveProperty('status');
+  });
+
+  it('no bank rows → opening 0, bankStale true, still 13 weeks', async () => {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'business_health')
+        return { data: { baseline: { revenue: 600_000 } }, error: null };
+      return { data: [], error: null };
+    };
+    const r = await svc.cashflow(ORG_A, { now });
+    expect(r.bankConnected).toBe(false);
+    expect(r.bankStale).toBe(true);
+    expect(r.openingBalancePence).toBe(0);
+    expect(r.weeks).toHaveLength(13);
   });
 });
 

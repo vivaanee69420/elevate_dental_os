@@ -11,6 +11,18 @@ export const analyticsController = {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.revenueSeries(req.user.organisation_id, { months: q.months }));
     },
+    async financeSeries(req, res) {
+        const q = analytics_model_1.seriesQuerySchema.parse(req.query);
+        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months }));
+    },
+    async cashflow(req, res) {
+        const q = analytics_model_1.weeksQuerySchema.parse(req.query);
+        res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks }));
+    },
+    async financial(req, res) {
+        const q = analytics_model_1.financialQuerySchema.parse(req.query);
+        res.json(await analytics_service_1.analyticsService.financial(req.user.organisation_id, { dsoDays: q.dsoDays, payableDays: q.payableDays }));
+    },
     async practiceSummary(req, res) {
         res.json(await analytics_service_1.analyticsService.practiceSummary(req.user.organisation_id));
     },

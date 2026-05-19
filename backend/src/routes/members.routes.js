@@ -13,6 +13,11 @@ const router = Router();
 
 router.get("/", requirePermission("users.invite"), asyncHandler(membersController.list));
 router.post("/invite", requirePermission("users.invite"), asyncHandler(membersController.invite));
+// Setting a password is account-takeover-grade — gate on the stronger
+// users.manage (same as remove), not users.invite. Role-hierarchy + grant
+// ceiling are enforced in the service.
+router.post("/provision", requirePermission("users.manage"), asyncHandler(membersController.provision));
+router.post("/password", requirePermission("users.manage"), asyncHandler(membersController.setPassword));
 router.post("/remove", requirePermission("users.manage"), asyncHandler(membersController.remove));
 
 export default router;

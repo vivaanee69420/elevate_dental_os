@@ -78,4 +78,37 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return data || [];
     },
+    // Cashflow sources. bankSummary: total balance + freshest sync (staleness
+    // surfaced — a 6-month-old balance must not read as "current").
+    async bankSummary(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('bank_accounts')
+            .select('balance_pence, last_synced_at')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        const rows = data || [];
+        const totalPence = rows.reduce((s, a) => s + (a.balance_pence || 0), 0);
+        const lastSyncedAt = rows
+            .map((a) => a.last_synced_at)
+            .filter(Boolean)
+            .sort()
+            .pop() || null;
+        return { totalPence, lastSyncedAt, count: rows.length };
+    },
+    // Settled payments with a real processed_at, for the cashflow overlay.
+    // id is selected so the service can dedupe against webhook re-delivery.
+    async settledPaymentsForCashflow(orgId, sinceISO) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('payments')
+            .select('id, amount_pence, processed_at')
+            .eq('organisation_id', orgId)
+            .eq('status', 'settled')
+            .gte('processed_at', sinceISO)
+            .limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        return data || [];
+    },
 };

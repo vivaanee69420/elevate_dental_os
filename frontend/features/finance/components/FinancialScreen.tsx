@@ -1,24 +1,33 @@
 'use client';
-// Financial Statements — pixel-faithful port of
-// preview/elevate-dental-os-v2.html (PAGES.financial). Balance sheet,
-// director loan account, and annual P&L summary. Fed by the finance
-// mock-data layer; swap to a real ledger / balance-sheet endpoint when
-// one exists server-side.
-//
-// Data flow:
-//   FINANCE_SERIES ──> annualTotal() ──> annual P&L summary table
-//   static balance-sheet figures (debtors keyed off annual revenue)
-//                  ──> KPI strip + balance sheet card
+// Financial Statements — real-data wired. Margins are REAL (baseline P&L).
+// The balance sheet has NO accounting source: every line is ESTIMATED from
+// the baseline + owner-editable assumptions (DSO / payable days), each field
+// flagged estimated and bannered — never presented as filed accounts. The
+// fabricated director-loan ledger was removed (no real source). Assumptions
+// persist in the URL (?dsoDays=&payableDays=) so the page is bookmarkable
+// (brief 06 hard rule).
 
-import { useMemo } from 'react';
-import { FINANCE_SERIES, annualTotal } from '../mock';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { annualTotal } from '../mock';
+import { useFinancial, useFinanceSeries } from '../hooks';
 
-// Full pounds with en-GB grouping (project rule 2) — prototype formatPounds.
 function fmt(n: number): string {
   return '£' + Math.round(n).toLocaleString('en-GB');
 }
+const LIGHT: Record<string, string> = {
+  green: '#10B981',
+  amber: '#F59E0B',
+  red: '#EF4444',
+};
+const RATIO_LABEL: Record<string, string> = {
+  grossMarginPct: 'Gross margin',
+  netMarginPct: 'Net margin',
+  currentRatio: 'Current ratio',
+  quickRatio: 'Quick ratio',
+  debtToEquity: 'Debt to equity',
+  daysSalesOutstanding: 'Days sales outstanding',
+};
 
-// One KPI card in the prototype's 4-up strip (label / value / optional delta).
 function Kpi({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
     <div className="card-padded">
@@ -33,261 +42,265 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
   );
 }
 
-// One label/value row inside the balance sheet (prototype .pnl-row).
-function Row({
-  label,
-  value,
-  strong,
-  brand,
-  style,
-}: {
-  label: string;
-  value: string;
-  strong?: boolean;
-  brand?: boolean;
-  style?: React.CSSProperties;
-}) {
+function Est() {
   return (
-    <div
-      className="flex justify-between items-center"
-      style={{ padding: '6px 0', fontWeight: strong ? 700 : 400, ...style }}
+    <span
+      className="chip chip-amber"
+      style={{ fontSize: 10, marginLeft: 6 }}
+      title="Estimated — derived from your baseline + assumptions, not filed accounts"
     >
-      <span style={{ color: brand ? 'var(--brand)' : strong ? undefined : 'var(--ink-muted)' }}>
-        {label}
-      </span>
-      <span
-        style={{
-          color: brand ? 'var(--brand)' : undefined,
-          fontFamily: brand ? 'var(--font-display), serif' : undefined,
-          fontSize: brand ? 16 : undefined,
-        }}
-      >
-        {value}
-      </span>
-    </div>
+      Est.
+    </span>
   );
 }
 
-// Financial Statements page: balance sheet, director loan, annual P&L.
 export default function FinancialScreen() {
-  // Annual P&L totals + static balance-sheet figures (debtors scale off
-  // annual revenue, mirroring the prototype).
-  const { annual, bs } = useMemo(() => {
-    const annual = annualTotal(FINANCE_SERIES);
-    const cash = 287000;
-    const debtors = Math.round(annual.revenue * 0.04);
-    const stock = 18000;
-    const equipment = 380000;
-    const totalAssets = cash + debtors + stock + equipment;
-    const tradeCreditors = 42000;
-    const accruals = 28000;
-    const loans = 180000;
-    const directorLoan = -45000;
-    const totalLiabilities = tradeCreditors + accruals + loans;
-    return {
-      annual,
-      bs: {
-        cash,
-        debtors,
-        stock,
-        equipment,
-        totalAssets,
-        tradeCreditors,
-        accruals,
-        loans,
-        directorLoan,
-        totalLiabilities,
-        netAssets: totalAssets - totalLiabilities,
-      },
-    };
-  }, []);
+  const router = useRouter();
+  const params = useSearchParams();
+  const dsoDays = Math.max(0, parseInt(params.get('dsoDays') ?? '45', 10) || 45);
+  const payableDays = Math.max(
+    0,
+    parseInt(params.get('payableDays') ?? '30', 10) || 30,
+  );
 
-  const asOf = new Date().toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  function setParam(k: string, v: number) {
+    const next = new URLSearchParams(Array.from(params.entries()));
+    next.set(k, String(v));
+    router.replace(`?${next.toString()}`);
+  }
 
-  // Annual P&L summary rows (line, annual, % of revenue, per-practice /5).
-  const plRows: { label: string; amount: number; strong?: boolean; brand?: boolean }[] = [
-    { label: 'Revenue', amount: annual.revenue, strong: true, brand: true },
-    { label: 'Associate pay', amount: annual.associate_pay },
-    { label: 'Staff costs', amount: annual.staff_costs },
-    { label: 'Lab + materials', amount: annual.lab_materials },
-    { label: 'OpEx', amount: annual.opex },
-    { label: 'Net profit', amount: annual.profit, strong: true },
-  ];
+  const { data, isLoading, isError } = useFinancial(dsoDays, payableDays);
+  const { data: seriesData } = useFinanceSeries();
+  const noBaseline = !!data?.error;
+  const ratios = data?.ratios ?? [];
+  const bs = data?.balanceSheet ?? {};
+  const series = seriesData?.months ?? [];
+  const annual =
+    series.length > 0
+      ? annualTotal(series)
+      : { revenue: 0, associate_pay: 0, staff_costs: 0, lab_materials: 0, opex: 0, profit: 0 };
 
-  // Director loan account ledger (static demo movements).
-  const loanRows = [
-    { date: '02 May 2026', desc: 'Director drawing', amount: -8000 },
-    { date: '28 Mar 2026', desc: 'Equipment (your card)', amount: 18500 },
-    { date: '12 Mar 2026', desc: 'Director drawing', amount: -10000 },
-    { date: '22 Feb 2026', desc: 'Cash injection', amount: 25000 },
-  ];
+  const cell = (k: string) => bs[k]?.value ?? 0;
+  const isEst = (k: string) => bs[k]?.estimated ?? true;
 
   return (
     <div className="container max-w-7xl mx-auto">
       <div className="mb-6">
         <h1 className="display text-3xl font-bold">Financial Statements</h1>
         <p className="text-sm text-ink-muted">
-          Balance sheet · Director loan account · Annual summary
+          Key ratios · Balance sheet · Annual summary
         </p>
       </div>
 
-      {/* KPI strip */}
+      {isError && (
+        <div className="card-padded mb-4">
+          <div className="font-semibold">Could not load financials</div>
+          <div className="text-sm text-ink-muted">Refresh to retry.</div>
+        </div>
+      )}
+      {noBaseline && !isError && (
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+          <div className="font-semibold">No baseline set</div>
+          <div className="text-sm text-ink-muted">
+            Financials read from your Business Health baseline. Complete setup
+            to populate them.
+          </div>
+        </div>
+      )}
+      {!noBaseline && !isError && (
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+          <div className="font-semibold">Estimated — not from filed accounts</div>
+          <div className="text-sm text-ink-muted">
+            Margins are real (from your baseline P&amp;L). Balance-sheet lines
+            are estimated from your baseline and the assumptions below. Adjust
+            the assumptions to fit your practice.
+          </div>
+        </div>
+      )}
+
+      {/* Owner-editable assumptions (persisted in URL) */}
+      <div
+        className="bg-bg flex gap-6 items-center flex-wrap mb-4"
+        style={{ borderRadius: 10, padding: 12 }}
+      >
+        <div className="text-xs text-ink-muted uppercase font-bold">
+          Your assumptions
+        </div>
+        <label className="flex items-center gap-2" style={{ fontSize: 12 }}>
+          Debtor days (DSO)
+          <input
+            type="number"
+            min={0}
+            max={365}
+            defaultValue={dsoDays}
+            onBlur={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (!isNaN(n) && n >= 0 && n <= 365) setParam('dsoDays', n);
+            }}
+            style={{
+              width: 64,
+              padding: '5px 8px',
+              border: '1px solid #E5E7EB',
+              borderRadius: 5,
+            }}
+          />
+        </label>
+        <label className="flex items-center gap-2" style={{ fontSize: 12 }}>
+          Payable days
+          <input
+            type="number"
+            min={0}
+            max={365}
+            defaultValue={payableDays}
+            onBlur={(e) => {
+              const n = parseInt(e.target.value, 10);
+              if (!isNaN(n) && n >= 0 && n <= 365) setParam('payableDays', n);
+            }}
+            style={{
+              width: 64,
+              padding: '5px 8px',
+              border: '1px solid #E5E7EB',
+              borderRadius: 5,
+            }}
+          />
+        </label>
+      </div>
+
       <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <Kpi label="Total assets" value={fmt(bs.totalAssets)} />
-        <Kpi label="Total liabilities" value={fmt(bs.totalLiabilities)} />
-        <Kpi label="Net worth (book)" value={fmt(bs.netAssets)} delta="Equity" />
-        <Kpi label="Director loan" value={fmt(Math.abs(bs.directorLoan))} delta="Owed to you" />
+        <Kpi
+          label="Total assets (est.)"
+          value={isLoading ? '…' : fmt(cell('currentAssetsPence'))}
+        />
+        <Kpi
+          label="Liabilities (est.)"
+          value={isLoading ? '…' : fmt(cell('currentLiabilitiesPence'))}
+        />
+        <Kpi
+          label="Equity (est.)"
+          value={isLoading ? '…' : fmt(cell('equityPence'))}
+          delta="Assets − liabilities"
+        />
+        <Kpi
+          label="Net margin"
+          value={
+            isLoading
+              ? '…'
+              : `${ratios.find((r) => r.key === 'netMarginPct')?.value ?? 0}%`
+          }
+          delta="Real (baseline P&L)"
+        />
       </div>
 
       <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        {/* Balance sheet */}
+        {/* Key ratios */}
         <div className="card-padded">
-          <h2 className="display text-lg font-semibold mb-4">Balance sheet — {asOf}</h2>
-          <div style={{ fontSize: 13 }}>
-            <div className="font-semibold mb-2">Assets</div>
-            <Row label="Cash at bank" value={fmt(bs.cash)} />
-            <Row label="Trade debtors" value={fmt(bs.debtors)} />
-            <Row label="Stock / consumables" value={fmt(bs.stock)} />
-            <Row label="Equipment (net)" value={fmt(bs.equipment)} />
-            <Row
-              label="Total assets"
-              value={fmt(bs.totalAssets)}
-              strong
-              style={{ borderTop: '2px solid var(--border)', paddingTop: 8 }}
-            />
-
-            <div className="font-semibold" style={{ margin: '18px 0 8px' }}>
-              Liabilities
+          <h2 className="display text-lg font-semibold mb-4">Key ratios</h2>
+          {isLoading ? (
+            <div className="text-ink-muted" style={{ fontSize: 13 }}>
+              Loading…
             </div>
-            <Row label="Trade creditors" value={fmt(bs.tradeCreditors)} />
-            <Row label="Accruals" value={fmt(bs.accruals)} />
-            <Row label="Bank loans" value={fmt(bs.loans)} />
-            <Row
-              label="Total liabilities"
-              value={fmt(bs.totalLiabilities)}
-              strong
-              style={{ borderTop: '2px solid var(--border)', paddingTop: 8 }}
-            />
-
-            <Row
-              label="Net assets"
-              value={fmt(bs.netAssets)}
-              brand
-              strong
-              style={{
-                borderTop: '3px double var(--brand)',
-                paddingTop: 12,
-                marginTop: 8,
-              }}
-            />
-          </div>
+          ) : ratios.length === 0 ? (
+            <div className="text-ink-muted" style={{ fontSize: 13 }}>
+              No data — set your baseline.
+            </div>
+          ) : (
+            ratios.map((r) => (
+              <div
+                key={r.key}
+                className="flex justify-between items-center"
+                style={{ padding: '8px 0', borderTop: '1px solid var(--border)', fontSize: 13 }}
+              >
+                <span className="text-ink-muted">
+                  {RATIO_LABEL[r.key] ?? r.key}
+                  {r.estimated && <Est />}
+                </span>
+                <span className="font-semibold" style={{ color: LIGHT[r.light] ?? 'inherit' }}>
+                  {r.key.endsWith('Pct') ? `${r.value}%` : r.value}
+                </span>
+              </div>
+            ))
+          )}
         </div>
 
-        {/* Director loan account */}
+        {/* Balance sheet */}
         <div className="card-padded">
-          <h2 className="display text-lg font-semibold mb-4">Director loan account</h2>
-          <div
-            className="bg-bg"
-            style={{ borderRadius: 8, padding: 16, marginBottom: 16, textAlign: 'center' }}
-          >
-            <div className="text-ink-muted" style={{ fontSize: 12 }}>
-              Balance owed to you
+          <h2 className="display text-lg font-semibold mb-4">Balance sheet (estimated)</h2>
+          {isLoading ? (
+            <div className="text-ink-muted" style={{ fontSize: 13 }}>
+              Loading…
             </div>
-            <div
-              className="display"
-              style={{ fontSize: 32, fontWeight: 600, color: 'var(--success)', marginTop: 4 }}
-            >
-              {fmt(Math.abs(bs.directorLoan))}
+          ) : Object.keys(bs).length === 0 ? (
+            <div className="text-ink-muted" style={{ fontSize: 13 }}>
+              No data — set your baseline.
             </div>
-            <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 4 }}>
-              CR balance — withdraw tax-free
+          ) : (
+            <div style={{ fontSize: 13 }}>
+              {[
+                ['cashPence', 'Cash at bank'],
+                ['receivablesPence', 'Trade debtors'],
+                ['currentAssetsPence', 'Total assets'],
+                ['payablesPence', 'Trade creditors'],
+                ['currentLiabilitiesPence', 'Total liabilities'],
+                ['equityPence', 'Equity (net assets)'],
+              ].map(([k, label]) => (
+                <div
+                  key={k}
+                  className="flex justify-between items-center"
+                  style={{ padding: '6px 0' }}
+                >
+                  <span className="text-ink-muted">
+                    {label}
+                    {isEst(k) && <Est />}
+                  </span>
+                  <span className="font-semibold">{fmt(cell(k))}</span>
+                </div>
+              ))}
             </div>
-          </div>
-          <table className="w-full" style={{ fontSize: 12 }}>
-            <thead className="bg-bg">
-              <tr>
-                <th style={{ textAlign: 'left', padding: 8 }}>Date</th>
-                <th style={{ textAlign: 'left', padding: 8 }}>Description</th>
-                <th style={{ textAlign: 'right', padding: 8 }}>Amount</th>
+          )}
+        </div>
+      </div>
+
+      {/* Annual P&L summary (baseline projection) */}
+      {series.length > 0 && (
+        <div className="card-padded">
+          <h2 className="display text-lg font-semibold mb-4">
+            Annual P&amp;L summary (baseline projection)
+          </h2>
+          <table className="w-full" style={{ fontSize: 13, margin: '-16px 0 0' }}>
+            <thead>
+              <tr className="text-ink-muted" style={{ textAlign: 'left' }}>
+                <th style={{ padding: '10px 8px' }}>Line</th>
+                <th className="text-right" style={{ padding: '10px 8px' }}>Annual</th>
+                <th className="text-right" style={{ padding: '10px 8px' }}>% of revenue</th>
               </tr>
             </thead>
             <tbody>
-              {loanRows.map((r) => (
-                <tr key={r.date + r.desc}>
-                  <td style={{ padding: 8 }}>{r.date}</td>
-                  <td style={{ padding: 8 }}>{r.desc}</td>
-                  <td
-                    style={{
-                      padding: 8,
-                      textAlign: 'right',
-                      color: r.amount < 0 ? 'var(--danger)' : 'var(--success)',
-                    }}
-                  >
-                    {r.amount < 0 ? '−' : '+'}
-                    {fmt(Math.abs(r.amount))}
+              {[
+                ['Revenue', annual.revenue],
+                ['Associate pay', annual.associate_pay],
+                ['Staff costs', annual.staff_costs],
+                ['Lab + materials', annual.lab_materials],
+                ['OpEx', annual.opex],
+                ['Net profit', annual.profit],
+              ].map(([label, amount]) => (
+                <tr key={label as string} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '10px 8px' }}>{label}</td>
+                  <td className="text-right" style={{ padding: '10px 8px' }}>
+                    {fmt(amount as number)}
+                  </td>
+                  <td className="text-right" style={{ padding: '10px 8px' }}>
+                    {label === 'Revenue'
+                      ? '100%'
+                      : annual.revenue > 0
+                        ? `${(((amount as number) / annual.revenue) * 100).toFixed(1)}%`
+                        : '0%'}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* Annual P&L summary */}
-      <div className="card-padded">
-        <h2 className="display text-lg font-semibold mb-4">Annual P&amp;L summary</h2>
-        <table className="w-full" style={{ fontSize: 13, margin: '-16px 0 0' }}>
-          <thead>
-            <tr className="text-ink-muted" style={{ textAlign: 'left' }}>
-              <th style={{ padding: '10px 8px' }}>Line</th>
-              <th className="text-right" style={{ padding: '10px 8px' }}>Annual</th>
-              <th className="text-right" style={{ padding: '10px 8px' }}>% of revenue</th>
-              <th className="text-right" style={{ padding: '10px 8px' }}>Per practice</th>
-            </tr>
-          </thead>
-          <tbody>
-            {plRows.map((r) => {
-              const isProfit = r.label === 'Net profit';
-              return (
-                <tr
-                  key={r.label}
-                  className={isProfit ? 'bg-bg' : ''}
-                  style={{
-                    fontWeight: r.strong ? 700 : 400,
-                    borderTop: isProfit ? undefined : '1px solid var(--border)',
-                  }}
-                >
-                  <td style={{ padding: '10px 8px' }}>
-                    {r.strong ? <strong>{r.label}</strong> : r.label}
-                  </td>
-                  <td
-                    className="text-right"
-                    style={{
-                      padding: '10px 8px',
-                      fontWeight: r.brand || isProfit ? 600 : undefined,
-                      color: r.brand
-                        ? 'var(--brand)'
-                        : isProfit
-                          ? 'var(--success)'
-                          : undefined,
-                    }}
-                  >
-                    {fmt(r.amount)}
-                  </td>
-                  <td className="text-right" style={{ padding: '10px 8px' }}>
-                    {r.label === 'Revenue'
-                      ? '100%'
-                      : `${((r.amount / annual.revenue) * 100).toFixed(1)}%`}
-                  </td>
-                  <td className="text-right" style={{ padding: '10px 8px' }}>
-                    {fmt(r.amount / 5)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      )}
     </div>
   );
 }
