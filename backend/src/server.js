@@ -7,6 +7,8 @@
 // ============================================================================
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildApp = void 0;
+// Sentry must load before app/route modules so it can instrument them.
+require("./instrument");
 const app_1 = require("./app");
 const supabase_1 = require("./lib/supabase");
 Object.defineProperty(exports, "buildApp", { enumerable: true, get: function () { return app_1.buildApp; } });

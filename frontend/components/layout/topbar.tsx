@@ -9,13 +9,17 @@ import { ORG_NAME } from '@/features/_mock';
 // Frozen Phase-0 primitive.
 
 interface Me {
-  full_name: string;
+  full_name?: string;
+  email?: string;
 }
 
-/** Build initials from a full name, e.g. "Gaurav Mehta" -> "GM". */
-function initials(name: string): string {
-  return name
-    .split(' ')
+/** Build initials from a name or email, e.g. "Gaurav Mehta" -> "GM".
+ *  /auth/me has no full_name, so fall back to email; never crash on undefined. */
+function initials(name?: string): string {
+  const src = (name || '').trim();
+  if (!src) return '?';
+  return src
+    .split(/[\s@.]+/)
     .map((p) => p[0])
     .filter(Boolean)
     .slice(0, 2)
@@ -45,7 +49,7 @@ export function TopBar() {
       <div className="flex items-center gap-3">
         {me && (
           <div className="w-7 h-7 rounded-full bg-brand-50 text-brand flex items-center justify-center text-[11px] font-semibold">
-            {initials(me.full_name)}
+            {initials(me.full_name || me.email)}
           </div>
         )}
         <button
