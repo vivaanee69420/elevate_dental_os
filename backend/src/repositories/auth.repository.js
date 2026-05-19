@@ -32,4 +32,12 @@ exports.authRepository = {
     inviteUserByEmail(email) {
         return supabase_1.serviceClient.auth.admin.inviteUserByEmail(email);
     },
+    // Password sign-in — returns a Supabase session (access/refresh tokens).
+    signInWithPassword(email, password) {
+        return supabase_1.serviceClient.auth.signInWithPassword({ email, password });
+    },
+    // Seed the dynamic-RBAC default matrix for a new organisation.
+    seedRolePermissions(orgId) {
+        return supabase_1.serviceClient.rpc('seed_role_permissions', { p_org: orgId });
+    },
 };

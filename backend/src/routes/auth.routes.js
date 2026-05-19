@@ -14,6 +14,8 @@ const auth_1 = require("../middleware/auth");
 const auth_controller_1 = require("../controllers/auth.controller");
 const router = (0, express_1.Router)();
 router.post('/signup', (0, async_handler_1.asyncHandler)(auth_controller_1.authController.signup));
+router.post('/login', (0, async_handler_1.asyncHandler)(auth_controller_1.authController.login));
 router.get('/me', auth_1.authenticate, (0, async_handler_1.asyncHandler)(auth_controller_1.authController.me));
-router.post('/invite', auth_1.authenticate, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(auth_controller_1.authController.invite));
+// CQ1: gate by the dynamic 'users.invite' capability, not a hardcoded role.
+router.post('/invite', auth_1.authenticate, (0, auth_1.requirePermission)('users.invite'), (0, async_handler_1.asyncHandler)(auth_controller_1.authController.invite));
 exports.default = router;

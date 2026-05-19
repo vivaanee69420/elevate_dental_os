@@ -8,12 +8,17 @@ exports.authController = {
         const body = auth_model_1.signupSchema.parse(req.body);
         res.json(await auth_service_1.authService.signup(body));
     },
+    async login(req, res) {
+        const body = auth_model_1.loginSchema.parse(req.body);
+        res.json(await auth_service_1.authService.login(body));
+    },
     async me(req, res) {
         res.json({
             id: req.user.id,
             email: req.user.email,
             role: req.user.role,
             organisation_id: req.user.organisation_id,
+            permissions: req.user.permissions,
         });
     },
     async invite(req, res) {

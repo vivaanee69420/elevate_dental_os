@@ -11,6 +11,10 @@ exports.signupSchema = zod_1.z.object({
     full_name: zod_1.z.string(),
     organisation_name: zod_1.z.string(),
 });
+exports.loginSchema = zod_1.z.object({
+    email: zod_1.z.string().email(),
+    password: zod_1.z.string().min(1),
+});
 exports.inviteSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     full_name: zod_1.z.string(),
