@@ -3,3 +3,4 @@ preview
 
 *node_modules
 *dist/
+.gstack/

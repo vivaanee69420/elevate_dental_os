@@ -20,6 +20,8 @@ import {
   useTeam,
   useInviteMember,
   useRemoveMember,
+  useProvisionMember,
+  useSetMemberPassword,
 } from '../hooks';
 import type { TeamMember } from '../api';
 import { SECTION_COLOURS } from '../data';
@@ -36,39 +38,100 @@ const ROLE_LABEL: Record<TeamMember['role'], string> = {
   reception: 'Reception',
 };
 
-/** Team members management — invite, list, remove. */
+/** Team members management — add (set-password / invite), list, remove,
+ *  reset password. Set-password is the primary path; the email-invite mode
+ *  is shown only once delivery is configured (me.invite_enabled). */
 function TeamMembers() {
   const { data, isLoading, isError } = useTeam();
   const invite = useInviteMember();
+  const provision = useProvisionMember();
+  const setPassword = useSetMemberPassword();
   const remove = useRemoveMember();
   // Shared cached identity (same /auth/me cache as sidebar/topbar) — used to
-  // block self-removal.
+  // block self-actions and gate the invite mode.
   const { data: me } = useMe();
+  const inviteEnabled = !!me?.invite_enabled;
 
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [role, setRole] = useState<TeamMember['role']>('reception');
+  const [password, setPassword2] = useState('');
+  // 'password' = admin sets the password (default, no email needed).
+  // 'invite'   = Supabase invite email (only when inviteEnabled).
+  const [mode, setMode] = useState<'password' | 'invite'>('password');
   const [formError, setFormError] = useState('');
-  const [inviteSent, setInviteSent] = useState(false);
+  const [okMsg, setOkMsg] = useState('');
 
-  function submitInvite(e: React.FormEvent) {
+  const busy = invite.isPending || provision.isPending;
+
+  function resetForm() {
+    setEmail('');
+    setFullName('');
+    setRole('reception');
+    setPassword2('');
+  }
+
+  function submitAdd(e: React.FormEvent) {
     e.preventDefault();
     setFormError('');
-    setInviteSent(false);
-    invite.mutate(
-      { email: email.trim(), full_name: fullName.trim(), role },
+    setOkMsg('');
+    const onError = (err: unknown) =>
+      setFormError(
+        err instanceof Error ? err.message : 'Could not add member',
+      );
+
+    if (mode === 'invite' && inviteEnabled) {
+      invite.mutate(
+        { email: email.trim(), full_name: fullName.trim(), role },
+        {
+          onSuccess: () => {
+            setOkMsg(
+              'Invite sent. The member appears as Invited until they accept and set a password.',
+            );
+            resetForm();
+          },
+          onError,
+        },
+      );
+      return;
+    }
+    provision.mutate(
+      {
+        email: email.trim(),
+        full_name: fullName.trim(),
+        role,
+        password,
+      },
       {
         onSuccess: () => {
-          setInviteSent(true);
-          setEmail('');
-          setFullName('');
-          setRole('reception');
-        },
-        onError: (err) => {
-          setFormError(
-            err instanceof Error ? err.message : 'Could not send invite',
+          setOkMsg(
+            'Member added and active. Share the password securely and ask them to change it after first login.',
           );
+          resetForm();
         },
+        onError,
+      },
+    );
+  }
+
+  function onSetPassword(member: TeamMember) {
+    const pw = window.prompt(
+      `Set a new password for ${member.full_name || member.email} (min 8 characters). They will be signed out of existing sessions.`,
+    );
+    if (pw == null) return;
+    if (pw.length < 8) {
+      window.alert('Password must be at least 8 characters.');
+      return;
+    }
+    setPassword.mutate(
+      { user_id: member.id, password: pw },
+      {
+        onSuccess: () =>
+          window.alert(`Password updated for ${member.full_name || member.email}.`),
+        onError: (err) =>
+          window.alert(
+            err instanceof Error ? err.message : 'Could not set password',
+          ),
       },
     );
   }
@@ -178,23 +241,48 @@ function TeamMembers() {
                           You
                         </span>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => onRemove(m)}
-                          disabled={remove.isPending}
-                          className="text-danger"
+                        <span
                           style={{
-                            fontSize: 13,
-                            background: 'none',
-                            border: 'none',
-                            cursor: remove.isPending
-                              ? 'not-allowed'
-                              : 'pointer',
-                            opacity: remove.isPending ? 0.5 : 1,
+                            display: 'inline-flex',
+                            gap: 14,
+                            justifyContent: 'flex-end',
                           }}
                         >
-                          Remove
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => onSetPassword(m)}
+                            disabled={setPassword.isPending}
+                            style={{
+                              fontSize: 13,
+                              background: 'none',
+                              border: 'none',
+                              cursor: setPassword.isPending
+                                ? 'not-allowed'
+                                : 'pointer',
+                              opacity: setPassword.isPending ? 0.5 : 1,
+                              color: 'var(--brand)',
+                            }}
+                          >
+                            Set password
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRemove(m)}
+                            disabled={remove.isPending}
+                            className="text-danger"
+                            style={{
+                              fontSize: 13,
+                              background: 'none',
+                              border: 'none',
+                              cursor: remove.isPending
+                                ? 'not-allowed'
+                                : 'pointer',
+                              opacity: remove.isPending ? 0.5 : 1,
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -223,14 +311,44 @@ function TeamMembers() {
           className="text-ink-muted"
           style={{ fontSize: 12, marginTop: 2, marginBottom: 12 }}
         >
-          We will email an invitation. The member appears as Invited until
-          they accept and set a password.
+          {mode === 'invite'
+            ? 'We will email an invitation. The member appears as Invited until they accept and set a password.'
+            : 'Set a password for the member. They become active immediately and can log in straight away.'}
         </p>
+
+        {inviteEnabled && (
+          <div
+            style={{ display: 'flex', gap: 8, marginBottom: 12 }}
+            role="radiogroup"
+            aria-label="How to add the member"
+          >
+            {(
+              [
+                ['password', 'Set a password'],
+                ['invite', 'Send email invite'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setMode(value)}
+                className={mode === value ? 'btn-primary' : 'btn-ghost'}
+                style={{ padding: '6px 12px', fontSize: 12 }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <form
-          onSubmit={submitInvite}
+          onSubmit={submitAdd}
           style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr 180px auto',
+            gridTemplateColumns:
+              mode === 'password'
+                ? '1fr 1fr 160px 160px auto'
+                : '1fr 1fr 180px auto',
             gap: 12,
             alignItems: 'end',
           }}
@@ -286,13 +404,36 @@ function TeamMembers() {
               <option value="reception">Reception</option>
             </select>
           </div>
+          {mode === 'password' && (
+            <div>
+              <label
+                className="block text-ink-muted"
+                style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}
+              >
+                Password
+              </label>
+              <input
+                type="text"
+                required
+                minLength={8}
+                value={password}
+                onChange={(e) => setPassword2(e.target.value)}
+                placeholder="Min 8 characters"
+                className="input w-full"
+              />
+            </div>
+          )}
           <button
             type="submit"
-            disabled={invite.isPending}
+            disabled={busy}
             className="btn-primary"
             style={{ padding: '8px 16px' }}
           >
-            {invite.isPending ? 'Sending...' : 'Send invite'}
+            {busy
+              ? 'Saving...'
+              : mode === 'invite'
+                ? 'Send invite'
+                : 'Add member'}
           </button>
         </form>
         {formError && (
@@ -303,12 +444,9 @@ function TeamMembers() {
             {formError}
           </div>
         )}
-        {inviteSent && (
-          <div
-            style={{ fontSize: 13, marginTop: 10, color: '#059669' }}
-          >
-            Invite email sent. The member will appear as Invited until they
-            accept and set a password.
+        {okMsg && (
+          <div style={{ fontSize: 13, marginTop: 10, color: '#059669' }}>
+            {okMsg}
           </div>
         )}
       </div>

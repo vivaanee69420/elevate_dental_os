@@ -41,6 +41,15 @@ const h = vi.hoisted(() => {
         q.updateVals = vals;
         return builder;
       },
+      insert(vals) {
+        q.op = 'insert';
+        q.insertVals = vals;
+        return settle();
+      },
+      delete() {
+        q.op = 'delete';
+        return builder;
+      },
       upsert(vals, opts) {
         q.op = 'upsert';
         q.upsertVals = vals;
@@ -81,6 +90,17 @@ const h = vi.hoisted(() => {
     return builder;
   }
 
+  // GoTrue admin / auth recorder. Tests read supaRec.adminCalls (ordered
+  // [{ m, args }]) and override outcomes via supaRec.adminProvider(m, args).
+  function admin(m) {
+    return async (...args) => {
+      (supaRec.adminCalls ||= []).push({ m, args });
+      return supaRec.adminProvider
+        ? supaRec.adminProvider(m, args)
+        : { data: { user: { id: 'auth-new' } }, error: null };
+    };
+  }
+
   function makeClient() {
     return {
       from: makeFrom,
@@ -89,6 +109,14 @@ const h = vi.hoisted(() => {
           supaRec.authUser
             ? { data: { user: supaRec.authUser }, error: null }
             : { data: { user: null }, error: { message: 'no user' } },
+        signInWithPassword: admin('signInWithPassword'),
+        admin: {
+          createUser: admin('createUser'),
+          inviteUserByEmail: admin('inviteUserByEmail'),
+          updateUserById: admin('updateUserById'),
+          deleteUser: admin('deleteUser'),
+          listUsers: admin('listUsers'),
+        },
       },
     };
   }

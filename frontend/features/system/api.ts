@@ -73,3 +73,34 @@ export function removeMember(
     body: JSON.stringify({ user_id }),
   });
 }
+
+export interface ProvisionMemberInput {
+  email: string;
+  full_name: string;
+  role: 'owner' | 'practice_manager' | 'reception';
+  password: string;
+  /** Optional per-member permission overrides (bounded server-side by the
+   *  caller's own grants). */
+  permissions?: Record<string, boolean>;
+}
+
+/** Add a member with a password set by the admin (active immediately). */
+export function provisionMember(
+  body: ProvisionMemberInput,
+): Promise<{ success: boolean; user_id: string; status: 'active' }> {
+  return api('/api/admin/team/provision', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/** Reset an existing member's password. */
+export function setMemberPassword(input: {
+  user_id: string;
+  password: string;
+}): Promise<{ success: boolean }> {
+  return api('/api/admin/team/password', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
