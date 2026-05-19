@@ -1,9 +1,9 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { api } from '@/lib/api';
 import { canAccessRoute, type Permissions } from '@/lib/permissions';
+import { useMe } from '@/hooks/useMe';
 
 // Sidebar — the app shell's primary navigation.
 //
@@ -101,22 +101,10 @@ const NAV: NavSection[] = [
   ]},
 ];
 
-interface Me {
-  role: string;
-  email?: string;
-  full_name?: string;
-  permissions?: Permissions;
-}
-
 export function Sidebar() {
   const pathname = usePathname();
-  const [me, setMe] = useState<Me | null>(null);
+  const { data: me } = useMe();
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
-
-  // Load the signed-in user once to drive role-based filtering.
-  useEffect(() => {
-    api('/auth/me').then(setMe).catch(() => {});
-  }, []);
 
   const role = me?.role || 'reception';
   // Effective permissions from /auth/me. If the call failed (me === null),

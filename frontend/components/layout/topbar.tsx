@@ -1,17 +1,11 @@
 'use client';
-import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { api } from '@/lib/api';
 import { ORG_NAME } from '@/features/_mock';
+import { useMe } from '@/hooks/useMe';
 
 // TopBar — app shell header. Mirrors the preview prototype's .topbar:
 // org name on the left, user avatar + sign out on the right.
 // Frozen Phase-0 primitive.
-
-interface Me {
-  full_name?: string;
-  email?: string;
-}
 
 /** Build initials from a name or email, e.g. "Gaurav Mehta" -> "GM".
  *  /auth/me has no full_name, so fall back to email; never crash on undefined. */
@@ -29,12 +23,7 @@ function initials(name?: string): string {
 
 export function TopBar() {
   const router = useRouter();
-  const [me, setMe] = useState<Me | null>(null);
-
-  // Load the signed-in user once for the avatar initials.
-  useEffect(() => {
-    api('/auth/me').then(setMe).catch(() => {});
-  }, []);
+  const { data: me } = useMe();
 
   // Clear the session cookie server-side, then return to the login page.
   async function signOut() {

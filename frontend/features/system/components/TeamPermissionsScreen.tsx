@@ -11,8 +11,8 @@
 // a cell PUTs the change and optimistically updates the React Query cache.
 // Owner-only screen — also gated server-side by permissions.manage and
 // hidden from nav for non-holders.
-import { useEffect, useMemo, useState } from 'react';
-import { api } from '@/lib/api';
+import { useMemo, useState } from 'react';
+import { useMe } from '@/hooks/useMe';
 import { Chip, type ChipColour } from '@/components/ui';
 import {
   usePermissionsMatrix,
@@ -36,24 +36,14 @@ const ROLE_LABEL: Record<TeamMember['role'], string> = {
   reception: 'Reception',
 };
 
-/** Signed-in user shape from GET /auth/me. */
-interface Me {
-  id?: string;
-}
-
 /** Team members management — invite, list, remove. */
 function TeamMembers() {
   const { data, isLoading, isError } = useTeam();
   const invite = useInviteMember();
   const remove = useRemoveMember();
-  const [me, setMe] = useState<Me | null>(null);
-
-  // Current user id — used to block self-removal. Same pattern as TopBar.
-  useEffect(() => {
-    api('/auth/me')
-      .then((m: Me) => setMe(m))
-      .catch(() => {});
-  }, []);
+  // Shared cached identity (same /auth/me cache as sidebar/topbar) — used to
+  // block self-removal.
+  const { data: me } = useMe();
 
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
