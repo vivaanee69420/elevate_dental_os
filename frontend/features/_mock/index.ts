@@ -65,6 +65,31 @@ export function formatPct(fraction: number): string {
 }
 
 /**
+ * Format a whole-pound amount compactly: £412k, £1.2M, £950.
+ * Mirrors the prototype's compact money style. Added centrally after
+ * Wave 1 — every section needed it; one source avoids per-feature drift.
+ */
+export function formatPoundsCompact(pounds: number): string {
+  const n = Math.round(pounds);
+  if (Math.abs(n) >= 1_000_000) return '£' + (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (Math.abs(n) >= 1_000) return '£' + Math.round(n / 1_000) + 'k';
+  return '£' + n.toLocaleString('en-GB');
+}
+
+/**
+ * Consolidated group annual figures (whole pounds), matching the
+ * prototype's blended dataset (~£10.3m revenue at a 23.5% margin).
+ * Single source so Tax / Financial / Valuation screens converge.
+ */
+export const GROUP_ANNUAL = {
+  revenue: 10_300_000,
+  profitPct: 0.235,
+  get profit() {
+    return Math.round(this.revenue * this.profitPct);
+  },
+};
+
+/**
  * Deterministic pseudo-random generator (mulberry32).
  * Same seed -> same sequence, so mock screens are stable across renders and
  * snapshot tests. Returns a function yielding floats in [0, 1).
