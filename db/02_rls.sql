@@ -276,3 +276,20 @@ CREATE POLICY "bank_tx_write_owner" ON bank_transactions
 -- For background workers (cron jobs), they MUST set the JWT claims explicitly
 -- before running queries on behalf of an org.
 -- ============================================================================
+
+-- ============================================================================
+-- DENTALLY/CSV/XERO tables (migration 20260101000014) — tenant isolation
+-- ============================================================================
+ALTER TABLE monthly_financials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE xero_account_map   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE csv_import_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE csv_import_rows    ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY monthly_financials_org ON monthly_financials
+  USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
+CREATE POLICY xero_account_map_org ON xero_account_map
+  USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
+CREATE POLICY csv_import_batches_org ON csv_import_batches
+  USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
+CREATE POLICY csv_import_rows_org ON csv_import_rows
+  USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());

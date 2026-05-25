@@ -5,6 +5,16 @@ const nextConfig = {
   experimental: { instrumentationHook: true },
   async headers() {
     return [
+      // Kill-switch service worker: never cache, allow root scope.
+      {
+        source: '/sw.js',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, no-cache, must-revalidate, max-age=0' },
+          { key: 'Service-Worker-Allowed', value: '/' },
+          { key: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+        ],
+      },
+      // Default security headers everywhere.
       {
         source: '/(.*)',
         headers: [

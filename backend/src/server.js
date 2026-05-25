@@ -7,6 +7,7 @@
 import "./instrument.js";
 import { buildApp } from "./app.js";
 import { serviceClient } from "./lib/supabase.js";
+import { bootstrapPlatformAdmin } from "./lib/platform-admin-bootstrap.js";
 
 export { buildApp };
 
@@ -33,6 +34,7 @@ function start() {
         const server = app.listen(PORT, HOST, () => {
             console.log(`✓ Elevate API listening on ${HOST}:${PORT}`);
             checkSupabase();
+            bootstrapPlatformAdmin();
         });
         server.requestTimeout = 30000;
     }

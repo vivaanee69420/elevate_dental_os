@@ -6,6 +6,37 @@ export const dynamic = 'force-dynamic';
 const BACKEND_URL =
   process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
+const PLATFORM_COOKIE = 'platform_token';
+const PLATFORM_COOKIE_MAX_AGE = 8 * 60 * 60; // matches the 8h platform JWT
+
+// ============================================================================
+// Unified login. ONE page, ONE route — but the two auth systems stay isolated:
+// a tenant gets a Supabase session cookie, a platform superadmin gets the
+// separate platform_token cookie (different signing secret + table entirely).
+//
+//   POST /auth/login
+//     │
+//     ├─ 1. backend /auth/login  (tenant: validate creds + approval gate)
+//     │      ok   -> supabase signin -> sb cookie -> redirect /dashboard
+//     │      401  -> ambiguous creds -> step 2
+//     │      403/409/429/5xx -> return verbatim (NOT a platform probe)
+//     │
+//     └─ 2. backend /api/platform/login  (bcrypt vs platform_admins)
+//            ok   -> platform_token cookie -> redirect /platform/overview
+//            else -> generic 401 (never reveal which store the email is in)
+//
+// SECURITY: these calls run server-side, so the backend would otherwise see
+// THIS server's IP for everyone, collapsing the per-IP login rate-limiters to
+// a single global bucket. We forward the real client IP as X-Forwarded-For
+// (backend has `trust proxy`) so brute-force limits key per client.
+// ============================================================================
+
+function clientIp(req: NextRequest): string | null {
+  const xff = req.headers.get('x-forwarded-for');
+  if (xff) return xff.split(',')[0].trim();
+  return req.headers.get('x-real-ip');
+}
+
 export async function POST(req: NextRequest) {
   let body: { email?: string; password?: string };
   try {
@@ -19,17 +50,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Email and password required' }, { status: 400 });
   }
 
-  // Validate credentials AND the provisioning gate via the backend first.
-  // The backend returns JSON { error } with 401 (bad credentials), 403
-  // ("Account not provisioned. Contact your administrator.") or 409
-  // ("An account with this email already exists"). Pass that text straight
-  // through so the login page can surface it verbatim.
-  let backendRes: Response;
+  const ip = clientIp(req);
+  const fwd: Record<string, string> = ip ? { 'x-forwarded-for': ip } : {};
+  const jsonBody = JSON.stringify({ email, password });
+
+  // ---- 1. Tenant login (credentials + approval/provisioning gate) ----------
+  let tenantRes: Response;
   try {
-    backendRes = await fetch(`${BACKEND_URL}/auth/login`, {
+    tenantRes = await fetch(`${BACKEND_URL}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      headers: { 'Content-Type': 'application/json', ...fwd },
+      body: jsonBody,
     });
   } catch {
     return NextResponse.json(
@@ -37,23 +68,61 @@ export async function POST(req: NextRequest) {
       { status: 502 },
     );
   }
-  if (!backendRes.ok) {
-    const data = await backendRes
-      .json()
-      .catch(() => ({ error: 'Sign in failed' }));
+
+  if (tenantRes.ok) {
+    // Establish the httpOnly Supabase session cookie.
+    const supabase = getSupabaseRoute();
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) {
+      return NextResponse.json({ error: 'Sign in failed' }, { status: 401 });
+    }
+    return NextResponse.json({ success: true, redirect: '/dashboard' });
+  }
+
+  // Only a plain 401 (unknown / wrong tenant credentials) is ambiguous enough
+  // to be "maybe a platform admin". Approval gate (403), conflicts (409),
+  // rate-limit (429) and backend errors are returned as-is — falling through
+  // would let those states probe / hammer the platform login path.
+  if (tenantRes.status !== 401) {
+    const data = await tenantRes.json().catch(() => ({ error: 'Sign in failed' }));
     return NextResponse.json(
       { error: data.error || 'Sign in failed' },
-      { status: backendRes.status },
+      { status: tenantRes.status },
     );
   }
 
-  // Backend accepted the account; now establish the httpOnly cookie session.
-  const supabase = getSupabaseRoute();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 401 });
+  // ---- 2. Platform-admin fallback ------------------------------------------
+  let platformRes: Response;
+  try {
+    platformRes = await fetch(`${BACKEND_URL}/api/platform/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...fwd },
+      body: jsonBody,
+    });
+  } catch {
+    return NextResponse.json(
+      { error: 'Backend unreachable. Check BACKEND_URL configuration.' },
+      { status: 502 },
+    );
   }
 
-  // Session cookies (httpOnly) set by the cookie adapter during signIn.
-  return NextResponse.json({ success: true });
+  if (platformRes.ok) {
+    const data = await platformRes.json().catch(() => ({}));
+    if (!data?.token) {
+      return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
+    }
+    const res = NextResponse.json({ success: true, redirect: '/platform/overview' });
+    res.cookies.set(PLATFORM_COOKIE, data.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+      maxAge: PLATFORM_COOKIE_MAX_AGE,
+    });
+    return res;
+  }
+
+  // Neither store accepted. Generic message — do not echo the platform-side
+  // error or otherwise reveal that the email is (or isn't) a platform admin.
+  return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
 }

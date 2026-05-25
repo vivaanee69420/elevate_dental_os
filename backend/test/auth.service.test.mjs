@@ -28,6 +28,40 @@ beforeEach(() => {
 const calledAdmin = (m) =>
   (supaRec.adminCalls || []).some((c) => c.m === m);
 
+describe('login (provisioning gate)', () => {
+  // signInWithPassword succeeds for all three; only the users lookup differs.
+  const signinOK = (m) =>
+    m === 'signInWithPassword'
+      ? { data: { user: { id: 'auth-1' }, session: { access_token: 'at', refresh_token: 'rt', expires_at: 1 } }, error: null }
+      : adminOK(m);
+
+  it('503 (retryable) when the users lookup ERRORS — not a false "not provisioned"', async () => {
+    supaRec.adminProvider = signinOK;
+    supaRec.resultProvider = (q) =>
+      q.table === 'users' ? { data: null, error: { message: 'PostgREST 503 / schema reload' } } : { data: [], error: null };
+    await expect(authService.login({ email: 'a@b.com', password: 'x' }))
+      .rejects.toMatchObject({ statusCode: 503 });
+  });
+
+  it('403 not provisioned when the row is genuinely absent (no error)', async () => {
+    supaRec.adminProvider = signinOK;
+    supaRec.resultProvider = (q) =>
+      q.table === 'users' ? { data: null, error: null } : { data: [], error: null };
+    await expect(authService.login({ email: 'a@b.com', password: 'x' }))
+      .rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('returns tokens for an active provisioned account', async () => {
+    supaRec.adminProvider = signinOK;
+    supaRec.resultProvider = (q) =>
+      q.table === 'users'
+        ? { data: { id: 'auth-1', organisation_id: 'org-1', role: 'owner', status: 'active' }, error: null }
+        : { data: [], error: null };
+    const r = await authService.login({ email: 'a@b.com', password: 'x' });
+    expect(r.access_token).toBe('at');
+  });
+});
+
 describe('provisionMember', () => {
   it('happy: creates active member, returns user_id', async () => {
     supaRec.resultProvider = (q) =>

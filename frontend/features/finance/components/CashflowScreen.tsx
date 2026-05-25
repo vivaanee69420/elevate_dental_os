@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import { poundsCompact } from '../mock';
 import { useCashflow } from '../hooks';
+import FinanceToolbar from './FinanceToolbar';
 
 const BRAND = '#0E7C7B';
 const STATUS_COLOUR: Record<string, string> = {
@@ -64,6 +65,7 @@ export default function CashflowScreen() {
           13-week rolling forecast · baseline projection + real payments
           overlaid (not a guaranteed forecast)
         </p>
+        <FinanceToolbar />
       </div>
 
       {isError && (

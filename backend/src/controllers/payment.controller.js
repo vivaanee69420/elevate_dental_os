@@ -9,4 +9,12 @@ export const paymentController = {
         const body = payment_model_1.paymentLinkCreateSchema.parse(req.body);
         res.json(await payment_service_1.paymentService.createPaymentLink(req.user.organisation_id, body));
     },
+    async createManual(req, res) {
+        const body = payment_model_1.paymentManualCreateSchema.parse(req.body);
+        res.json(await payment_service_1.paymentService.createManual(req.user.organisation_id, body));
+    },
+    async sourceBreakdown(req, res) {
+        const days = Number(req.query.days ?? 30) || 30;
+        res.json(await payment_service_1.paymentService.sourceBreakdown(req.user.organisation_id, days));
+    },
 };

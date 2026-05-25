@@ -18,9 +18,13 @@ export function errorHandler(err, req, res, _next) {
         });
     }
     req.log?.error({ err }, 'Request error');
-    const status = err instanceof AppError ? err.statusCode : 500;
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    return res.status(status).json({
-        error: status >= 500 ? 'Internal server error' : message,
-    });
+    const isApp = err instanceof AppError;
+    const status = isApp ? err.statusCode : 500;
+    // AppError messages are operator-authored and safe to surface at ANY status
+    // (e.g. a 501 "not configured"). Only mask UNEXPECTED (non-AppError) errors,
+    // which may leak internals — those always read as a generic 500.
+    const message = isApp
+        ? err.message
+        : (status >= 500 ? 'Internal server error' : (err instanceof Error ? err.message : 'Internal server error'));
+    return res.status(status).json({ error: message });
 }

@@ -104,6 +104,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
 
   // System
   integrations: 'system.manage',
+  'data-hub': 'system.manage',
   'team-permissions': 'permissions.manage',
   settings: 'system.manage',
 };

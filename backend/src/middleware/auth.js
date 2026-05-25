@@ -24,7 +24,51 @@
 
 import { serviceClient, tenantClient, verifyToken } from '../lib/supabase.js';
 import { permissionsService } from '../services/permissions.service.js';
-import { defaultPermissionsForRole } from '../lib/permissions.js';
+import { defaultPermissionsForRole, resolveEffectivePermissions } from '../lib/permissions.js';
+
+// Load the users row + that user's (org, role) role_permissions in ONE DB
+// round trip via the auth_bootstrap RPC. Falls back to the original
+// two-query path if the RPC is not deployed yet (migration …000010) or
+// errors — so the hot path never hard-breaks on infra state. Returns
+// { user, permissions } or null if no users row exists for this id.
+async function loadAuthContext(authUserId, log) {
+  try {
+    const { data, error } = await serviceClient.rpc('auth_bootstrap', { p_uid: authUserId });
+    if (error) throw error;
+    const user = data?.user;
+    if (!user) return null; // RPC worked, user genuinely absent.
+    const permissions = resolveEffectivePermissions(
+      data.role_permissions || [],
+      user.permissions,
+      user.role,
+    );
+    return { user, permissions };
+  } catch (rpcErr) {
+    // Fallback: RPC unavailable (pre-migration / transient). Original path.
+    log?.warn({ err: rpcErr }, 'auth_bootstrap RPC unavailable; using fallback queries');
+    const { data: user, error } = await serviceClient
+      .from('users')
+      .select('id, email, organisation_id, role, permissions')
+      .eq('id', authUserId)
+      .single();
+    if (error || !user) return null;
+    let permissions;
+    try {
+      permissions = await permissionsService.getEffectiveForUser(
+        user.organisation_id,
+        user.role,
+        user.permissions,
+      );
+    } catch (permErr) {
+      // Fail SAFE to code role-defaults (not empty): a DB/infra failure must
+      // not silently lock an owner out of their own product. DB only ever
+      // *widens or narrows* on top of these known-good code defaults.
+      log?.warn({ err: permErr }, 'Permission resolution failed; using code role defaults');
+      permissions = defaultPermissionsForRole(user.role, user.permissions);
+    }
+    return { user, permissions };
+  }
+}
 
 export async function authenticate(req, res, next) {
   const header = req.headers.authorization;
@@ -36,34 +80,11 @@ export async function authenticate(req, res, next) {
   try {
     const authUser = await verifyToken(token);
 
-    // Load the matching users row (org + role + per-user overrides).
-    const { data: user, error } = await serviceClient
-      .from('users')
-      .select('id, email, organisation_id, role, permissions')
-      .eq('id', authUser.id)
-      .single();
-
-    if (error || !user) {
+    const ctx = await loadAuthContext(authUser.id, req.log);
+    if (!ctx) {
       return res.status(403).json({ error: 'User not found in any organisation' });
     }
-
-    // Resolve effective permissions (one indexed query on role_permissions,
-    // merged with the user's JSONB overrides). Always fresh — an owner's
-    // change takes effect on this user's next request.
-    let permissions = {};
-    try {
-      permissions = await permissionsService.getEffectiveForUser(
-        user.organisation_id,
-        user.role,
-        user.permissions,
-      );
-    } catch (permErr) {
-      // Fail SAFE to code role-defaults (not empty): a DB/infra failure must
-      // not silently lock an owner out of their own product. DB only ever
-      // *widens or narrows* on top of these known-good code defaults.
-      req.log?.warn({ err: permErr }, 'Permission resolution failed; using code role defaults');
-      permissions = defaultPermissionsForRole(user.role, user.permissions);
-    }
+    const { user, permissions } = ctx;
 
     req.user = {
       id: user.id,
@@ -82,7 +103,10 @@ export async function authenticate(req, res, next) {
       .from('users')
       .update({ last_active_at: new Date().toISOString() })
       .eq('id', user.id)
-      .then(() => {});
+      .then(
+        () => {},
+        (err) => req.log?.warn({ err }, 'last_active_at update failed'),
+      );
 
     next();
   } catch (err) {

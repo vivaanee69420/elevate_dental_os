@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import { annualTotal, poundsCompact, monthLabel, monthShort } from '../mock';
 import { useFinanceSeries } from '../hooks';
+import FinanceToolbar from './FinanceToolbar';
 
 const BRAND = '#0E7C7B';
 const ACCENT = '#FFB547';
@@ -121,6 +122,8 @@ export default function ProfitScreen() {
           Export to PDF
         </button>
       </div>
+
+      <FinanceToolbar />
 
       {isError && (
         <div className="card-padded mb-4">

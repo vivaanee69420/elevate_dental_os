@@ -140,4 +140,11 @@ export const businessHealthService = {
             snapshots: snapshots || [],
         };
     },
+    async updateCadence(orgId, role, body) {
+        if (role !== 'owner') {
+            throw new errors_1.AppError('Only owners can change snapshot cadence', 403);
+        }
+        await business_health_repository_1.businessHealthRepository.updateCadence(orgId, body.snapshot_frequency);
+        return { ok: true, snapshot_frequency: body.snapshot_frequency };
+    },
 };

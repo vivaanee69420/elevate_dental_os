@@ -25,6 +25,7 @@
 
 import { useMemo, useState } from 'react';
 import { useValuationBase } from '../hooks';
+import FinanceToolbar from './FinanceToolbar';
 import {
   calculateValuation,
   defaultValuationState,
@@ -198,6 +199,7 @@ export default function ValuationScreen() {
             <p className="text-sm text-ink-muted">
               Three-model valuation: Principal-led · Associate-led · DSO/Corporate
             </p>
+            <FinanceToolbar />
           </div>
           <div
             style={{

@@ -97,11 +97,13 @@ CREATE TABLE practices (
   nhs_contract_uda INTEGER DEFAULT 0,
   nhs_uda_rate_pence INTEGER DEFAULT 2850, -- £28.50 default
   active BOOLEAN DEFAULT TRUE,
+  pms_site_id TEXT, -- Dentally site_id / CSV practice_code -> this practice
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE TRIGGER practices_updated_at BEFORE UPDATE ON practices FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE INDEX idx_practices_org ON practices(organisation_id);
+CREATE INDEX idx_practices_pms_site ON practices(organisation_id, pms_site_id) WHERE pms_site_id IS NOT NULL;
 
 -- ============================================================================
 -- BUSINESS HEALTH (setup data + targets)
@@ -282,6 +284,7 @@ CREATE TABLE appointments (
   deposit_pence INTEGER DEFAULT 0,
   deposit_paid BOOLEAN DEFAULT FALSE,
   pms_external_id TEXT,
+  source TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -364,6 +367,8 @@ CREATE TABLE payments (
   description TEXT,
   stripe_payment_intent_id TEXT,
   gocardless_payment_id TEXT,
+  source TEXT,
+  external_id TEXT,
   processed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -577,5 +582,70 @@ CREATE INDEX idx_bank_tx_org_date ON bank_transactions(organisation_id, transact
 -- (org_id, 'Smile Club Essential', 1495, '["2 hygiene visits", "Annual exam", "10% off treatments"]'),
 -- (org_id, 'Smile Club Plus', 2495, '["4 hygiene visits", "Annual exam", "15% off treatments", "Emergency cover"]'),
 -- (org_id, 'Smile Club Family', 3995, '["Family of 4", "All Plus benefits"]');
+
+-- ============================================================================
+-- DENTALLY SYNC + CSV FEED + XERO (migration 20260101000014) — kept in sync
+-- ============================================================================
+-- Composite-unique upsert keys (idempotent Dentally poll + CSV import; source namespaces)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contacts_src_ext
+  ON contacts (organisation_id, source, pms_external_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_appointments_src_ext
+  ON appointments (organisation_id, source, pms_external_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_src_ext
+  ON payments (organisation_id, source, external_id);
+
+CREATE TABLE IF NOT EXISTS monthly_financials (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  practice_id UUID REFERENCES practices(id),
+  period TEXT NOT NULL,
+  account_code TEXT NOT NULL,
+  dental_bucket TEXT CHECK (dental_bucket IN ('revenue','staff','lab','materials','overhead','tax','other')),
+  amount_pence INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'xero',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_monthly_financials
+  ON monthly_financials (organisation_id, period, account_code, COALESCE(practice_id, '00000000-0000-0000-0000-000000000000'::uuid), source);
+CREATE TRIGGER monthly_financials_updated_at BEFORE UPDATE ON monthly_financials FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TABLE IF NOT EXISTS xero_account_map (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  account_code TEXT NOT NULL,
+  dental_bucket TEXT NOT NULL CHECK (dental_bucket IN ('revenue','staff','lab','materials','overhead','tax','other')),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_xero_account_map ON xero_account_map (organisation_id, account_code);
+
+CREATE TABLE IF NOT EXISTS csv_import_batches (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  dataset TEXT NOT NULL CHECK (dataset IN ('payments','appointments','patients')),
+  filename TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  uploaded_by UUID REFERENCES users(id),
+  approved_by UUID REFERENCES users(id),
+  row_count INTEGER DEFAULT 0,
+  valid_count INTEGER DEFAULT 0,
+  rejected_count INTEGER DEFAULT 0,
+  reject_reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  approved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_csv_batches_org_status ON csv_import_batches (organisation_id, status);
+
+CREATE TABLE IF NOT EXISTS csv_import_rows (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  batch_id UUID NOT NULL REFERENCES csv_import_batches(id) ON DELETE CASCADE,
+  organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  row_number INTEGER NOT NULL,
+  raw JSONB NOT NULL,
+  valid BOOLEAN NOT NULL DEFAULT FALSE,
+  error TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_csv_rows_batch ON csv_import_rows (batch_id);
 
 COMMENT ON SCHEMA public IS 'Elevate Dental OS — Production schema v1.0';

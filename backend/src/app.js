@@ -28,15 +28,22 @@ import * as payments_routes_1 from "./routes/payments.routes.js";
 import * as pay_runs_routes_1 from "./routes/pay-runs.routes.js";
 import * as workflows_routes_1 from "./routes/workflows.routes.js";
 import * as files_routes_1 from "./routes/files.routes.js";
+import * as csv_import_routes_1 from "./routes/csv-import.routes.js";
 import * as billing_routes_1 from "./routes/billing.routes.js";
 import * as webhooks_routes_1 from "./routes/webhooks.routes.js";
 import * as integrations_routes_1 from "./routes/integrations.routes.js";
+import * as oauth_routes_1 from "./routes/oauth.routes.js";
 import * as p4g_ai_routes_1 from "./routes/p4g-ai.routes.js";
 import * as analytics_routes_1 from "./routes/analytics.routes.js";
 import * as permissions_routes_1 from "./routes/permissions.routes.js";
 import * as members_routes_1 from "./routes/members.routes.js";
 import * as memberships_routes_1 from "./routes/memberships.routes.js";
 import * as reviews_routes_1 from "./routes/reviews.routes.js";
+import * as growth_routes_1 from "./routes/growth.routes.js";
+import * as wealth_routes_1 from "./routes/wealth.routes.js";
+import * as training_routes_1 from "./routes/training.routes.js";
+import * as practices_routes_1 from "./routes/practices.routes.js";
+import platformAdminRouter from "./routes/platform-admin.routes.js";
 const CORS_ALLOWED = [
     'http://localhost:3000',
     'http://localhost:3001',
@@ -69,7 +76,11 @@ export function buildApp() {
         max: 100,
         standardHeaders: true,
         legacyHeaders: false,
-        keyGenerator: (req) => req.headers['x-user-id'] || req.ip || 'anon',
+        // Key by IP only. The previous x-user-id fallback was attacker-
+        // controlled (any header value = a fresh bucket), which defeated the
+        // limit on public routes. Authenticated /api uses a second limiter
+        // keyed by the VERIFIED req.user.id below.
+        keyGenerator: (req) => req.ip || 'anon',
     }));
     // Stripe webhook needs the raw body for signature verification.
     // Mount raw parser on that exact path BEFORE the global JSON parser.
@@ -136,7 +147,15 @@ export function buildApp() {
     // ---- Public routes (no auth) ----
     app.use('/healthcheck', health_routes_1.default);
     app.use('/webhooks', webhooks_routes_1.default);
+    // Public OAuth callbacks — browser redirects with no JWT; org from signed state.
+    app.use('/oauth', oauth_routes_1.default);
     app.use('/auth', auth_routes_1.default);
+    // ---- Platform-admin routes (own auth — see middleware/platform-auth.js) ----
+    // Mounted BEFORE the tenant /api router so /api/platform/* skips
+    // tenant `authenticate` entirely. Hard auth isolation between tenants
+    // (Supabase JWT) and SaaS owners (PLATFORM_ADMIN_JWT_SECRET).
+    app.use('/api/platform', platformAdminRouter);
+
     // ---- Authenticated routes ----
     const api = express_1.default.Router();
     api.use(auth_1.authenticate);
@@ -163,6 +182,7 @@ export function buildApp() {
     api.use('/pay-runs', pay_runs_routes_1.default);
     api.use('/workflows', workflows_routes_1.default);
     api.use('/files', files_routes_1.default);
+    api.use('/imports', csv_import_routes_1.default);
     api.use('/billing', billing_routes_1.default);
     api.use('/integrations', integrations_routes_1.default);
     api.use('/p4g-ai', p4g_ai_routes_1.default);
@@ -171,6 +191,10 @@ export function buildApp() {
     api.use('/reviews', reviews_routes_1.default);
     api.use('/admin/permissions', permissions_routes_1.default);
     api.use('/admin/team', members_routes_1.default);
+    api.use('/growth', growth_routes_1.default);
+    api.use('/wealth', wealth_routes_1.default);
+    api.use('/training', training_routes_1.default);
+    api.use('/practices', practices_routes_1.default);
     app.use('/api', api);
     // Sentry Express error handler — must come AFTER routes, BEFORE our handler.
     Sentry.setupExpressErrorHandler(app);

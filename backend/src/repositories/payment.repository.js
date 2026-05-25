@@ -22,4 +22,25 @@ export const paymentRepository = {
     async insertPending(row) {
         return supabase_1.serviceClient.from('payments').insert(row);
     },
+    async insertManual(row) {
+        const { data, error } = await supabase_1.serviceClient.from('payments').insert(row).select().single();
+        if (error) throw new Error(error.message);
+        return data;
+    },
+    async sourceBreakdown(orgId, since) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('payments')
+            .select('source, amount_pence, status')
+            .eq('organisation_id', orgId)
+            .gte('processed_at', since);
+        if (error) throw new Error(error.message);
+        const out = {};
+        for (const p of data ?? []) {
+            const k = p.source ?? 'manual';
+            if (!out[k]) out[k] = { count: 0, pence: 0 };
+            out[k].count++;
+            if (p.status === 'settled' || p.status === 'processing') out[k].pence += p.amount_pence ?? 0;
+        }
+        return out;
+    },
 };

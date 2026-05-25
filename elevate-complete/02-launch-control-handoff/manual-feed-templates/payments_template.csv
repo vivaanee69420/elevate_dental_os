@@ -1,0 +1,2 @@
+payment_id,entity_code,practice_code,patient_external_id,invoice_id,payment_date,amount,currency,payment_method,reference,provider,allocated_status,source_system,source_updated_at
+PAY-30021,GM_DENTAL_GROUP,ASHFORD,PAT-20011,INV-90018,2026-05-25,1250,GBP,card,STRIPE-9911,Stripe,allocated,DENTALLY_MANUAL,2026-05-25T18:11:00+01:00

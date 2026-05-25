@@ -9,6 +9,25 @@ export const paymentService = {
         const data = await payment_repository_1.paymentRepository.list(orgId, q);
         return { payments: data };
     },
+    async createManual(orgId, input) {
+        const row = {
+            organisation_id: orgId,
+            practice_id: input.practice_id,
+            contact_id: input.contact_id ?? null,
+            lead_id: input.lead_id ?? null,
+            amount_pence: input.amount_pence,
+            method: input.method ?? 'cash',
+            status: input.status ?? 'settled',
+            description: input.description ?? null,
+            processed_at: input.processed_at ?? new Date().toISOString(),
+            source: 'manual',
+        };
+        return payment_repository_1.paymentRepository.insertManual(row);
+    },
+    async sourceBreakdown(orgId, days = 30) {
+        const since = new Date(Date.now() - days * 86400000).toISOString();
+        return payment_repository_1.paymentRepository.sourceBreakdown(orgId, since);
+    },
     async createPaymentLink(orgId, input) {
         // NOTE: inline price_data.
         // Stripe's typings only accept a pre-created `price` on payment links, so we

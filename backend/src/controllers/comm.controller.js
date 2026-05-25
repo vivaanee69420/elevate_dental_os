@@ -3,7 +3,8 @@ import * as comm_model_1 from "../models/comm.model.js";
 export const commController = {
     async list(req, res) {
         const q = comm_model_1.commListQuerySchema.parse(req.query);
-        const communications = await comm_service_1.commService.list(req.user.organisation_id, q);
+        const viewer = { id: req.user.id, role: req.user.role };
+        const communications = await comm_service_1.commService.list(req.user.organisation_id, q, viewer);
         res.json({ communications });
     },
     async send(req, res) {

@@ -2,7 +2,46 @@
 import Link from 'next/link';
 import { Card, ProgressBar, progressTone } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
-import { useHealthProgress } from '../hooks';
+import { useHealth, useHealthProgress, useUpdateCadence } from '../hooks';
+
+function CadenceCard() {
+  const { data: health } = useHealth();
+  const update = useUpdateCadence();
+  const current: 'weekly' | 'monthly' = (health as any)?.snapshot_frequency ?? 'monthly';
+  return (
+    <div className="card-padded mb-5">
+      <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <div>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>Snapshot cadence</div>
+          <div className="text-ink-muted" style={{ fontSize: 11 }}>
+            How often we compute your business-health metrics from real data.
+          </div>
+        </div>
+        <div className="flex" style={{ gap: 4 }}>
+          {(['weekly', 'monthly'] as const).map((f) => (
+            <button
+              key={f}
+              onClick={() => update.mutate(f)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: '1px solid var(--border)',
+                background: current === f ? 'var(--brand)' : 'white',
+                color: current === f ? 'white' : 'var(--ink)',
+                textTransform: 'capitalize',
+              }}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function ProgressScreen() {
   const { data } = useHealthProgress();
@@ -34,6 +73,8 @@ export default function ProgressScreen() {
     <div className="max-w-7xl mx-auto">
       <h1 className="display text-3xl font-bold">Progress Tracker</h1>
       <p className="text-sm text-ink-muted mb-5">Baseline → current → target</p>
+
+      <CadenceCard />
 
       <div
         className="card-padded text-white mb-5"
