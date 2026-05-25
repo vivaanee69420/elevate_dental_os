@@ -35,6 +35,7 @@ import * as integrations_routes_1 from "./routes/integrations.routes.js";
 import * as oauth_routes_1 from "./routes/oauth.routes.js";
 import * as p4g_ai_routes_1 from "./routes/p4g-ai.routes.js";
 import * as analytics_routes_1 from "./routes/analytics.routes.js";
+import * as monthly_financials_routes_1 from "./routes/monthlyFinancials.routes.js";
 import * as permissions_routes_1 from "./routes/permissions.routes.js";
 import * as members_routes_1 from "./routes/members.routes.js";
 import * as memberships_routes_1 from "./routes/memberships.routes.js";
@@ -85,6 +86,8 @@ export function buildApp() {
     // Stripe webhook needs the raw body for signature verification.
     // Mount raw parser on that exact path BEFORE the global JSON parser.
     app.use('/webhooks/stripe', express_1.default.raw({ type: '*/*', limit: '10mb' }));
+    // Dentally webhook also needs the raw body for HMAC signature verification.
+    app.use('/webhooks/dentally', express_1.default.raw({ type: '*/*', limit: '10mb' }));
     // Global JSON parser for everything else.
     app.use(express_1.default.json({ limit: '10mb' }));
     app.use(express_1.default.urlencoded({ extended: true }));
@@ -187,6 +190,7 @@ export function buildApp() {
     api.use('/integrations', integrations_routes_1.default);
     api.use('/p4g-ai', p4g_ai_routes_1.default);
     api.use('/analytics', analytics_routes_1.default);
+    api.use('/monthly-financials', monthly_financials_routes_1.default);
     api.use('/memberships', memberships_routes_1.default);
     api.use('/reviews', reviews_routes_1.default);
     api.use('/admin/permissions', permissions_routes_1.default);

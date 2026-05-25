@@ -196,117 +196,98 @@ export const analyticsService = {
         );
         return { basis: 'baseline-projection', months: series };
     },
-    // Bucket settled-payment rows into REAL monthly revenue (pence) by
-    // processed_at. This is the real revenue source for the P&L — no projection.
-    _monthlyRevenueFromPayments(rows) {
+    // Bucket exact daily settled-receipt rows ([{day:'YYYY-MM-DD', pence}]) into
+    // REAL monthly revenue (pence). The day string's first 7 chars are YYYY-MM.
+    _monthlyRevenueFromDays(rows) {
         const m = new Map();
-        for (const p of Array.isArray(rows) ? rows : []) {
-            if (!p.processed_at) continue;
-            const d = new Date(p.processed_at);
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-            m.set(key, (m.get(key) || 0) + (p.amount_pence || 0));
+        for (const r of Array.isArray(rows) ? rows : []) {
+            const key = String(r.day).slice(0, 7);
+            if (key.length !== 7) continue;
+            m.set(key, (m.get(key) || 0) + Number(r.pence || 0));
         }
         return m;
     },
-    // 12-month consolidated P&L lines for /profit — REAL data only.
-    //   revenue  = real settled payments per month (Dentally/Stripe), OR the
-    //              monthly_financials revenue actual when one exists (Xero/manual).
-    //   costs    = monthly_financials actuals when present (real), else the
-    //              Business Health baseline cost_* applied to the REAL revenue
-    //              as a labelled ESTIMATE (per-row `estimated:true`). There is
-    //              no real cost source from Dentally — Xero will supply it.
-    // No fabricated revenue curve anywhere. `costsEstimated` flags the response
-    // when any row's costs are baseline-derived. basis: 'actuals' (all costs
-    // real), 'mixed', or 'actuals-revenue' (real revenue, estimated/no costs).
+    // 12-month consolidated P&L lines for /profit — EXACT data only, no estimate.
+    //   revenue = exact real settled payments per month (RPC sum; or the
+    //             monthly_financials revenue actual when one exists).
+    //   costs   = monthly_financials actuals when present (real). When there is
+    //             NO real cost source, cost lines AND profit are 0 (we do not
+    //             have them — never estimated from the baseline). `costsAvailable`
+    //             marks each row; `costsAvailable` (top) is true only when every
+    //             non-zero-revenue month has real costs.
+    // basis: 'actuals' (all real costs) | 'mixed' | 'revenue-only' (real revenue,
+    // costs/profit 0 — connect Xero for costs).
     async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null } = {}) {
         const ref = now();
         const startMonth = new Date(ref.getFullYear(), ref.getMonth() - (months - 1), 1);
         const sinceISO = startMonth.toISOString();
-        const [health, actuals, payRows] = await Promise.all([
-            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+        const [actuals, dayRows] = await Promise.all([
             this._actualsBundle(orgId, practiceId),
-            analytics_repository_1.analyticsRepository.settledPaymentsInRange(orgId, sinceISO, practiceId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId),
         ]);
-        const revByMonth = this._monthlyRevenueFromPayments(payRows);
-        // Org baseline cost_% used as a labelled ESTIMATE of costs against REAL
-        // revenue (org-wide and per-practice — there is no per-practice cost
-        // source). Flagged estimated per row.
-        const b = health?.baseline;
-        const hasCostModel = !!(b && b.revenue);
-        const pct = (k) => (b?.[k] || 0) / 100;
-        const assocPct = pct('cost_associates');
-        const staffPct = pct('cost_staff');
-        const labMatPct = pct('cost_lab') + pct('cost_materials');
-        const opexPct = pct('cost_property') + pct('cost_marketing') + pct('cost_other');
+        const revByMonth = this._monthlyRevenueFromDays(dayRows);
         const keys = [];
         for (let i = months - 1; i >= 0; i--) {
             const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
             keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
         }
         let actualCostMonths = 0;
-        let estimatedCostMonths = 0;
+        let revenueOnlyMonths = 0;
         const series = keys.map((month) => {
             // Real costs present (Xero/manual) → use them verbatim.
             if (actuals.byPeriod.has(month)) {
                 actualCostMonths++;
-                return { ...financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month)), estimated: false };
+                return { ...financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month)), costsAvailable: true };
             }
-            // Else real revenue from payments + baseline-estimated costs.
+            // No real cost source → exact revenue, costs and profit 0 (not estimated).
             const revenue = revByMonth.get(month) || 0;
-            const associatePay = Math.round(revenue * assocPct);
-            const staffCosts = Math.round(revenue * staffPct);
-            const labMaterials = Math.round(revenue * labMatPct);
-            const opex = Math.round(revenue * opexPct);
-            const estimated = revenue > 0 && hasCostModel;
-            if (estimated) estimatedCostMonths++;
+            if (revenue > 0) revenueOnlyMonths++;
             return {
                 month,
                 revenue,
-                associatePay,
-                staffCosts,
-                labMaterials,
-                opex,
-                profit: revenue - associatePay - staffCosts - labMaterials - opex,
-                estimated,
+                associatePay: 0,
+                staffCosts: 0,
+                labMaterials: 0,
+                opex: 0,
+                profit: 0,
+                costsAvailable: false,
             };
         });
-        const basis = estimatedCostMonths === 0 && actualCostMonths > 0 ? 'actuals'
-            : actualCostMonths > 0 && estimatedCostMonths > 0 ? 'mixed'
-            : 'actuals-revenue';
-        return { basis, costsEstimated: estimatedCostMonths > 0, months: series };
+        const basis = revenueOnlyMonths === 0 && actualCostMonths > 0 ? 'actuals'
+            : actualCostMonths > 0 && revenueOnlyMonths > 0 ? 'mixed'
+            : 'revenue-only';
+        return { basis, costsAvailable: revenueOnlyMonths === 0 && actualCostMonths > 0, months: series };
     },
-    // 13-week REAL cash view (backward-looking, no projection). Each week =
-    // sum of REAL settled payments received in that week (by processed_at),
-    // deduped by payment id (webhook re-delivery must not double-count) and
-    // skipping null processed_at. Opening = real bank balance (0 + flags if no
-    // bank / stale sync); closing is the running balance. There are no
-    // projected receipts and no cost line (Dentally has no cost source) — so
-    // the baseline weekly run-rate is returned separately as a comparison
-    // target only, never mixed into the real numbers. practiceId scopes the
-    // receipts to one practice. basis is always 'actuals'.
+    // 13-week REAL cash view (backward-looking, no projection, no baseline).
+    // Each week = EXACT settled receipts that week (RPC daily sums bucketed by
+    // week, all UTC-normalised). Opening = real bank balance (0 + flags if no
+    // bank / stale sync); closing is the running balance. No projected receipts,
+    // no cost line, no baseline comparison — only real money in. practiceId
+    // scopes the receipts to one practice. basis is always 'actuals'.
     async cashflow(orgId, { weeks = 13, now = () => new Date(), practiceId = null } = {}) {
-        const [bank, health] = await Promise.all([
-            analytics_repository_1.analyticsRepository.bankSummary(orgId),
-            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
-        ]);
         const ref = now();
         const DAY = 86400000, WEEK = 7 * DAY;
-        const refMid = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
-        const windowEnd = refMid + DAY; // include all of today
+        // All date math in local time, and day strings parsed as local midnight,
+        // so week bucketing is timezone-consistent (no UTC/local boundary skew).
+        const todayLocal = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
+        const windowEnd = todayLocal + DAY; // include all of today
         const startMs = windowEnd - weeks * WEEK; // backward window start
         const sinceISO = new Date(startMs).toISOString();
-        const realPayments = await analytics_repository_1.analyticsRepository.settledPaymentsForCashflow(orgId, sinceISO, practiceId);
-        // Dedupe by payment id, skip null processed_at, bucket by backward week.
-        const seenIds = new Set();
+        const [bank, dayRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.bankSummary(orgId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId),
+        ]);
+        const dayToMs = (s) => {
+            const [Y, M, D] = String(s).slice(0, 10).split('-').map(Number);
+            return new Date(Y, (M || 1) - 1, D || 1).getTime();
+        };
         const byWeek = new Map();
-        for (const p of realPayments) {
-            if (!p.processed_at || seenIds.has(p.id))
-                continue;
-            seenIds.add(p.id);
-            const wk = Math.floor((new Date(p.processed_at).getTime() - startMs) / WEEK);
-            if (wk < 0 || wk >= weeks)
-                continue;
-            byWeek.set(wk, (byWeek.get(wk) || 0) + (p.amount_pence || 0));
+        for (const r of dayRows) {
+            const dayMs = dayToMs(r.day);
+            if (Number.isNaN(dayMs)) continue;
+            const wk = Math.floor((dayMs - startMs) / WEEK);
+            if (wk < 0 || wk >= weeks) continue;
+            byWeek.set(wk, (byWeek.get(wk) || 0) + Number(r.pence || 0));
         }
         const openingStart = bank.totalPence || 0;
         let opening = openingStart;
@@ -324,7 +305,6 @@ export const analyticsService = {
             });
             opening = closingBalancePence;
         }
-        const b = health?.baseline;
         const STALE_MS = 7 * DAY;
         const bankStale = !bank.lastSyncedAt ||
             (ref.getTime() - new Date(bank.lastSyncedAt).getTime()) > STALE_MS;
@@ -335,90 +315,77 @@ export const analyticsService = {
             lastSyncedAt: bank.lastSyncedAt,
             openingBalancePence: openingStart,
             totalReceiptsPence: out.reduce((s, w) => s + w.receiptsPence, 0),
-            // Comparison target only — owner's Business Health run-rate, never
-            // mixed into the real receipts above.
-            baselineWeeklyRunRatePence: b?.revenue ? Math.round((b.revenue * 100) / 52) : null,
             weeks: out,
         };
     },
-    // /financial — Key Ratios + Balance Sheet. Margins are REAL (baseline
-    // P&L). The balance sheet has NO accounting source: every line is
-    // ESTIMATED from baseline + owner-supplied assumptions (DSO / payable
-    // days). Each estimated field carries estimated:true and the response
-    // carries basis:'estimated' so the UI can banner it and never present it
-    // as filed accounts.
+    // /financial — Key Ratios + Balance Sheet, EXACT data only (no baseline,
+    // no assumption-driven estimates). Revenue = exact settled-payment TTM (RPC)
+    // or monthly_financials actual. Costs/margins are REAL only when there is a
+    // cost source (monthly_financials); otherwise they are 0 (we do NOT have
+    // them — never estimated). Balance sheet shows only real bank cash; every
+    // other line is 0 until a real accounting source exists. Nothing is flagged
+    // `estimated` because nothing is estimated — it is real or zero.
     async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null, now = () => new Date() } = {}) {
         const since = new Date(now());
         since.setMonth(since.getMonth() - 12);
         const sinceISO = since.toISOString();
-        const [health, actuals, payRows] = await Promise.all([
-            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+        const [actuals, dayRows, bank] = await Promise.all([
             this._actualsBundle(orgId, practiceId),
-            analytics_repository_1.analyticsRepository.settledPaymentsInRange(orgId, sinceISO, practiceId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId),
+            practiceId ? Promise.resolve({ totalPence: 0, count: 0 }) : analytics_repository_1.analyticsRepository.bankSummary(orgId),
         ]);
-        const b = health?.baseline;
-        const realRevenuePence = (Array.isArray(payRows) ? payRows : [])
-            .reduce((s, p) => s + (p.amount_pence || 0), 0);
+        const realRevenuePence = (Array.isArray(dayRows) ? dayRows : [])
+            .reduce((s, r) => s + Number(r.pence || 0), 0);
         const useActuals = actuals.hasAny && (actuals.annual.revenue || 0) > 0;
-        // Per practice: never fall back to the org baseline as if it were the
-        // practice's. Real per-practice data (actuals or payments) or nothing.
-        if (practiceId && !useActuals && realRevenuePence === 0)
-            return { error: 'No data for this practice' };
-        // Revenue precedence: monthly_financials actuals (real costs too) >
-        // REAL settled payments TTM (costs estimated from baseline) > baseline
-        // revenue (legacy, only if no real data at all).
-        let revenuePence, costs, costsEstimated;
+        if (!useActuals && realRevenuePence === 0)
+            return { error: practiceId ? 'No data for this practice' : 'No revenue data' };
+        // Revenue: monthly_financials actual (real costs too) else exact payments.
+        let revenuePence, costs, costsAvailable;
         if (useActuals) {
             const inp = plInputFromBuckets(actuals.annual);
             revenuePence = inp.revenue;
             costs = inp.costs;
-            costsEstimated = false;
-        } else if (realRevenuePence > 0) {
-            revenuePence = realRevenuePence;
-            costs = b ? this._costsPence(b, realRevenuePence)
-                : { associates: 0, lab: 0, materials: 0, staff: 0, property: 0, marketing: 0, other: 0 };
-            costsEstimated = true; // margins not transaction-backed (no cost source)
-        } else if (b?.revenue) {
-            revenuePence = b.revenue * 100;
-            costs = this._costsPence(b, revenuePence);
-            costsEstimated = true;
+            costsAvailable = true;
         } else {
-            return { error: practiceId ? 'No data for this practice' : 'No baseline set' };
+            revenuePence = realRevenuePence;
+            costs = { associates: 0, lab: 0, materials: 0, staff: 0, property: 0, marketing: 0, other: 0 };
+            costsAvailable = false; // no real cost source → costs/profit/margins 0
         }
         const pl = (0, formulas_1.calculatePL)({ revenue: revenuePence, costs });
         const cogsPence = costs.associates + costs.lab + costs.materials;
-        const grossProfitPence = revenuePence - cogsPence;
-        const grossMarginPct = revenuePence > 0
-            ? Math.round((grossProfitPence / revenuePence) * 1000) / 10
+        // Margins are real only with a cost source; otherwise 0 (not 100%).
+        const grossMarginPct = costsAvailable && revenuePence > 0
+            ? Math.round(((revenuePence - cogsPence) / revenuePence) * 1000) / 10
             : 0;
-        // ESTIMATED balance sheet — driven by owner assumptions.
-        const cashPence = b?.cash != null ? b.cash * 100 : revenuePence;
-        const receivablesPence = Math.round((revenuePence / 365) * dsoDays);
-        const payablesPence = Math.round((pl.totalCosts / 365) * payableDays);
-        const currentAssetsPence = cashPence + receivablesPence;
-        const currentLiabilitiesPence = payablesPence;
-        const equityPence = currentAssetsPence - currentLiabilitiesPence;
+        const netMarginPct = costsAvailable ? pl.marginPct : 0;
+        // Balance sheet: ONLY real bank cash. No accounting source for the rest
+        // → 0 (no assumption-derived receivables/payables).
+        const cashPence = bank.totalPence || 0;
+        const currentAssetsPence = cashPence;
         const ratio = (n, d) => (d > 0 ? Math.round((n / d) * 100) / 100 : 0);
         const light = (v, amber, green) =>
             v >= green ? 'green' : v >= amber ? 'amber' : 'red';
+        const zero = { value: 0, estimated: false };
         return {
-            basis: 'estimated',
+            basis: costsAvailable ? 'actuals' : 'revenue-only',
+            costsAvailable,
+            revenuePence,
             assumptions: { dsoDays, payableDays },
             ratios: [
-                { key: 'grossMarginPct', value: grossMarginPct, estimated: costsEstimated, light: light(grossMarginPct, 30, 40) },
-                { key: 'netMarginPct', value: pl.marginPct, estimated: costsEstimated, light: light(pl.marginPct, 10, 18) },
-                { key: 'currentRatio', value: ratio(currentAssetsPence, currentLiabilitiesPence), estimated: true, light: light(ratio(currentAssetsPence, currentLiabilitiesPence), 1, 1.5) },
-                { key: 'quickRatio', value: ratio(currentAssetsPence, currentLiabilitiesPence), estimated: true, light: light(ratio(currentAssetsPence, currentLiabilitiesPence), 0.8, 1) },
-                { key: 'debtToEquity', value: ratio(currentLiabilitiesPence, equityPence), estimated: true, light: 'amber' },
-                { key: 'daysSalesOutstanding', value: dsoDays, estimated: true, light: light(60 - dsoDays, 10, 25) },
+                { key: 'grossMarginPct', value: grossMarginPct, estimated: false, light: light(grossMarginPct, 30, 40) },
+                { key: 'netMarginPct', value: netMarginPct, estimated: false, light: light(netMarginPct, 10, 18) },
+                { key: 'currentRatio', value: 0, estimated: false, light: 'red' },
+                { key: 'quickRatio', value: 0, estimated: false, light: 'red' },
+                { key: 'debtToEquity', value: 0, estimated: false, light: 'green' },
+                { key: 'daysSalesOutstanding', value: 0, estimated: false, light: 'red' },
             ],
             balanceSheet: {
-                cashPence: { value: cashPence, estimated: b?.cash == null },
-                receivablesPence: { value: receivablesPence, estimated: true },
-                currentAssetsPence: { value: currentAssetsPence, estimated: true },
-                payablesPence: { value: payablesPence, estimated: true },
-                currentLiabilitiesPence: { value: currentLiabilitiesPence, estimated: true },
-                equityPence: { value: equityPence, estimated: true },
+                cashPence: { value: cashPence, estimated: false },
+                receivablesPence: zero,
+                currentAssetsPence: { value: currentAssetsPence, estimated: false },
+                payablesPence: zero,
+                currentLiabilitiesPence: zero,
+                equityPence: { value: currentAssetsPence, estimated: false },
             },
         };
     },

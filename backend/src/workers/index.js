@@ -167,10 +167,14 @@ node_cron_1.default.schedule('* * * * *', async () => {
     }
 });
 // --------------------------------------------------------------------------
-// Dentally sync — every 30 min, pull patients/appointments/payments
-// for orgs with an active dentally integration.
+// Dentally sync — daily 03:00 RECONCILIATION backstop. Real-time updates now
+// arrive via the Dentally webhook (POST /webhooks/dentally/:token); this poll
+// only re-pulls the changed window to catch any missed/dropped webhook
+// deliveries (webhooks can be unreliable — see dentally-sync.js header).
+// First pull also happens on connect; owners can Refresh on demand via
+// POST /integrations/dentally/sync.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('*/30 * * * *', async () => {
+node_cron_1.default.schedule('0 3 * * *', async () => {
     try {
         const results = await dentally_sync_1.syncAllOrgs();
         if (results.length > 0) console.log(`[worker] Dentally sync: ${results.length} orgs`);
