@@ -6,13 +6,48 @@
 import * as analytics_repository_1 from "../repositories/analytics.repository.js";
 import * as formulas_1 from "../lib/formulas.js";
 import * as claude_1 from "../lib/claude.js";
+import * as monthlyFinancial_repository_1 from "../repositories/monthlyFinancial.repository.js";
+import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
 export const analyticsService = {
+    // Pull monthly_financials actuals and resolve Xero-overrides-manual
+    // precedence per period+bucket. Returns the per-period bucket map plus an
+    // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
+    // hasAny=false ⇒ callers fall back to the baseline projection unchanged.
+    async _actualsBundle(orgId, practiceId = null) {
+        const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId);
+        const rows = practiceId
+            ? (Array.isArray(all) ? all : []).filter((r) => r.practice_id === practiceId)
+            : all;
+        const byPeriod = bucketsByPeriod(rows);
+        const periods = [...byPeriod.keys()].sort();
+        const recent = periods.slice(-12);
+        const annual = {};
+        for (const p of recent) {
+            for (const [k, v] of Object.entries(byPeriod.get(p))) {
+                annual[k] = (annual[k] || 0) + v;
+            }
+        }
+        return { byPeriod, annual, hasAny: periods.length > 0, periodsCovered: recent.length };
+    },
     async dashboard(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
         const baseline = health?.baseline || {};
         return { baseline };
     },
-    async pl(orgId) {
+    async pl(orgId, { practiceId = null } = {}) {
+        // Prefer real actuals (Xero/manual) when present — trailing ≤12 months
+        // summed into an annual P&L. Falls back to the baseline projection.
+        // Per practice: actuals only (the org baseline is not per-practice).
+        const actuals = await this._actualsBundle(orgId, practiceId);
+        if (actuals.hasAny && (actuals.annual.revenue || 0) > 0) {
+            return {
+                ...(0, formulas_1.calculatePL)(plInputFromBuckets(actuals.annual)),
+                basis: 'actuals',
+                periodsCovered: actuals.periodsCovered,
+            };
+        }
+        if (practiceId)
+            return { error: 'No data for this practice' };
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
         const b = health?.baseline;
         if (!b?.revenue)
@@ -166,18 +201,45 @@ export const analyticsService = {
     // identical) with cost lines = baseline cost_* applied to each month's
     // projected revenue — same percentages `pl()` uses, just per month.
     // Grouping per brief 06: associate / staff / lab+materials / opex(rest).
-    async financeSeries(orgId, { months = 12, now = () => new Date() } = {}) {
-        const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
+    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null } = {}) {
+        const [health, actuals] = await Promise.all([
+            practiceId ? Promise.resolve(null) : analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            this._actualsBundle(orgId, practiceId),
+        ]);
+        // Per practice: actuals only (the org baseline is not per-practice).
+        if (practiceId) {
+            const periods = [...actuals.byPeriod.keys()].sort().slice(-months);
+            return {
+                basis: 'actuals',
+                months: periods.map((p) => financeSeriesRowFromBuckets(p, actuals.byPeriod.get(p))),
+            };
+        }
         const b = health?.baseline;
-        if (!b?.revenue)
-            return { error: 'No baseline set' };
+        // No baseline to project from: if actuals exist, emit them directly
+        // (most recent `months` periods); otherwise the original error.
+        if (!b?.revenue) {
+            if (!actuals.hasAny)
+                return { error: 'No baseline set' };
+            const periods = [...actuals.byPeriod.keys()].sort().slice(-months);
+            return {
+                basis: 'actuals',
+                months: periods.map((p) => financeSeriesRowFromBuckets(p, actuals.byPeriod.get(p))),
+            };
+        }
         const pct = (k) => (b[k] || 0) / 100;
         const assocPct = pct('cost_associates');
         const staffPct = pct('cost_staff');
         const labMatPct = pct('cost_lab') + pct('cost_materials');
         const opexPct = pct('cost_property') + pct('cost_marketing') + pct('cost_other');
+        // Project from baseline, then OVERLAY any month that has real actuals
+        // (Xero/manual). A month with actuals replaces the projected row.
+        let overlaidCount = 0;
         const series = this._projectMonthly(b.revenue * 100, months, now).map(
             ({ month, revenue }) => {
+                if (actuals.byPeriod.has(month)) {
+                    overlaidCount++;
+                    return financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month));
+                }
                 const associatePay = Math.round(revenue * assocPct);
                 const staffCosts = Math.round(revenue * staffPct);
                 const labMaterials = Math.round(revenue * labMatPct);
@@ -193,7 +255,9 @@ export const analyticsService = {
                 };
             },
         );
-        return { basis: 'baseline-projection', months: series };
+        const basis = overlaidCount === 0 ? 'baseline-projection'
+            : overlaidCount === series.length ? 'actuals' : 'mixed';
+        return { basis, months: series };
     },
     // 13-week rolling cash forecast. Opening = real bank balance (0 + flags
     // if no bank / stale sync). Weekly receipts/payments = baseline run-rate
@@ -264,13 +328,28 @@ export const analyticsService = {
     // days). Each estimated field carries estimated:true and the response
     // carries basis:'estimated' so the UI can banner it and never present it
     // as filed accounts.
-    async financial(orgId, { dsoDays = 45, payableDays = 30 } = {}) {
-        const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
+    async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null } = {}) {
+        const [health, actuals] = await Promise.all([
+            practiceId ? Promise.resolve(null) : analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            this._actualsBundle(orgId, practiceId),
+        ]);
         const b = health?.baseline;
-        if (!b?.revenue)
+        const useActuals = actuals.hasAny && (actuals.annual.revenue || 0) > 0;
+        if (practiceId && !useActuals)
+            return { error: 'No data for this practice' };
+        if (!useActuals && !b?.revenue)
             return { error: 'No baseline set' };
-        const revenuePence = b.revenue * 100;
-        const costs = this._costsPence(b, revenuePence);
+        // Margins from REAL actuals when present, else baseline cost_* model.
+        // Balance sheet stays ESTIMATED either way (no accounting source for it).
+        let revenuePence, costs;
+        if (useActuals) {
+            const inp = plInputFromBuckets(actuals.annual);
+            revenuePence = inp.revenue;
+            costs = inp.costs;
+        } else {
+            revenuePence = b.revenue * 100;
+            costs = this._costsPence(b, revenuePence);
+        }
         const pl = (0, formulas_1.calculatePL)({ revenue: revenuePence, costs });
         const cogsPence = costs.associates + costs.lab + costs.materials;
         const grossProfitPence = revenuePence - cogsPence;
@@ -278,7 +357,7 @@ export const analyticsService = {
             ? Math.round((grossProfitPence / revenuePence) * 1000) / 10
             : 0;
         // ESTIMATED balance sheet — driven by owner assumptions.
-        const cashPence = b.cash != null ? b.cash * 100 : revenuePence;
+        const cashPence = b?.cash != null ? b.cash * 100 : revenuePence;
         const receivablesPence = Math.round((revenuePence / 365) * dsoDays);
         const payablesPence = Math.round((pl.totalCosts / 365) * payableDays);
         const currentAssetsPence = cashPence + receivablesPence;
@@ -299,7 +378,7 @@ export const analyticsService = {
                 { key: 'daysSalesOutstanding', value: dsoDays, estimated: true, light: light(60 - dsoDays, 10, 25) },
             ],
             balanceSheet: {
-                cashPence: { value: cashPence, estimated: b.cash == null },
+                cashPence: { value: cashPence, estimated: b?.cash == null },
                 receivablesPence: { value: receivablesPence, estimated: true },
                 currentAssetsPence: { value: currentAssetsPence, estimated: true },
                 payablesPence: { value: payablesPence, estimated: true },
