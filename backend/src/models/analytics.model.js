@@ -7,6 +7,7 @@ import * as zod_1 from "zod";
 // for an unbounded loop. Coerced because query strings arrive as text.
 export const seriesQuerySchema = zod_1.z.object({
     months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
+    practice_id: zod_1.z.string().uuid().optional(),
 });
 
 // ai-insights ?days=30 — rolling window for the leads/payments rollups.
@@ -25,4 +26,5 @@ export const weeksQuerySchema = zod_1.z.object({
 export const financialQuerySchema = zod_1.z.object({
     dsoDays: zod_1.z.coerce.number().int().min(0).max(365).default(45),
     payableDays: zod_1.z.coerce.number().int().min(0).max(365).default(30),
+    practice_id: zod_1.z.string().uuid().optional(),
 });
