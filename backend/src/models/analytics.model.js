@@ -19,6 +19,7 @@ export const windowQuerySchema = zod_1.z.object({
 // cashflow ?weeks=13 — rolling forecast horizon, bounded.
 export const weeksQuerySchema = zod_1.z.object({
     weeks: zod_1.z.coerce.number().int().min(1).max(52).default(13),
+    practice_id: zod_1.z.string().uuid().optional(),
 });
 
 // /financial — owner-editable balance-sheet assumptions (the estimated BS is

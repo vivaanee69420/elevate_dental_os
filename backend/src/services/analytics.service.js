@@ -259,67 +259,70 @@ export const analyticsService = {
             : overlaidCount === series.length ? 'actuals' : 'mixed';
         return { basis, months: series };
     },
-    // 13-week rolling cash forecast. Opening = real bank balance (0 + flags
-    // if no bank / stale sync). Weekly receipts/payments = baseline run-rate
-    // seasonalised (NOT flat — same growth-family factor), with REAL settled
-    // payments overlaid by processed_at week, deduped by payment id (webhook
-    // re-delivery must not double-count) and skipping null processed_at.
-    // Closing/status come from formulas.calculateCashFlow (single source).
-    async cashflow(orgId, { weeks = 13, now = () => new Date() } = {}) {
-        const [health, bank] = await Promise.all([
-            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+    // 13-week REAL cash view (backward-looking, no projection). Each week =
+    // sum of REAL settled payments received in that week (by processed_at),
+    // deduped by payment id (webhook re-delivery must not double-count) and
+    // skipping null processed_at. Opening = real bank balance (0 + flags if no
+    // bank / stale sync); closing is the running balance. There are no
+    // projected receipts and no cost line (Dentally has no cost source) — so
+    // the baseline weekly run-rate is returned separately as a comparison
+    // target only, never mixed into the real numbers. practiceId scopes the
+    // receipts to one practice. basis is always 'actuals'.
+    async cashflow(orgId, { weeks = 13, now = () => new Date(), practiceId = null } = {}) {
+        const [bank, health] = await Promise.all([
             analytics_repository_1.analyticsRepository.bankSummary(orgId),
+            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
         ]);
-        const b = health?.baseline;
-        if (!b?.revenue)
-            return { error: 'No baseline set' };
         const ref = now();
-        const sinceISO = ref.toISOString();
-        const realPayments = await analytics_repository_1.analyticsRepository.settledPaymentsForCashflow(orgId, sinceISO);
-        const annualRevenuePence = b.revenue * 100;
-        const costs = this._costsPence(b, annualRevenuePence);
-        const totalCostsPence = Object.values(costs).reduce((a, c) => a + c, 0);
-        const weeklyReceipts = annualRevenuePence / 52;
-        const weeklyPayments = totalCostsPence / 52;
-        // Overlay: dedupe by payment id, skip null processed_at, bucket by week.
-        const seenIds = new Set();
-        const overlayByWeek = new Map();
+        const DAY = 86400000, WEEK = 7 * DAY;
         const refMid = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
+        const windowEnd = refMid + DAY; // include all of today
+        const startMs = windowEnd - weeks * WEEK; // backward window start
+        const sinceISO = new Date(startMs).toISOString();
+        const realPayments = await analytics_repository_1.analyticsRepository.settledPaymentsForCashflow(orgId, sinceISO, practiceId);
+        // Dedupe by payment id, skip null processed_at, bucket by backward week.
+        const seenIds = new Set();
+        const byWeek = new Map();
         for (const p of realPayments) {
             if (!p.processed_at || seenIds.has(p.id))
                 continue;
             seenIds.add(p.id);
-            const wk = Math.floor((new Date(p.processed_at).getTime() - refMid) / (7 * 86400000));
+            const wk = Math.floor((new Date(p.processed_at).getTime() - startMs) / WEEK);
             if (wk < 0 || wk >= weeks)
                 continue;
-            overlayByWeek.set(wk, (overlayByWeek.get(wk) || 0) + (p.amount_pence || 0));
+            byWeek.set(wk, (byWeek.get(wk) || 0) + (p.amount_pence || 0));
         }
         const openingStart = bank.totalPence || 0;
-        const input = [];
         let opening = openingStart;
+        const out = [];
         for (let wi = 0; wi < weeks; wi++) {
-            const factor = 0.94 + 0.012 * (wi % 12) + 0.02 * (wi % 3);
-            const d = new Date(refMid + wi * 7 * 86400000);
-            const receiptsPence = Math.round(weeklyReceipts * factor) + (overlayByWeek.get(wi) || 0);
-            const paymentsPence = Math.round(weeklyPayments * factor);
-            input.push({
+            const d = new Date(startMs + wi * WEEK);
+            const receiptsPence = byWeek.get(wi) || 0;
+            const closingBalancePence = opening + receiptsPence;
+            out.push({
                 weekStartDate: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
                 openingBalancePence: opening,
                 receiptsPence,
-                paymentsPence,
+                paymentsPence: 0,
+                closingBalancePence,
             });
-            opening = opening + receiptsPence - paymentsPence;
+            opening = closingBalancePence;
         }
-        const STALE_MS = 7 * 86400000;
+        const b = health?.baseline;
+        const STALE_MS = 7 * DAY;
         const bankStale = !bank.lastSyncedAt ||
             (ref.getTime() - new Date(bank.lastSyncedAt).getTime()) > STALE_MS;
         return {
-            basis: 'baseline-projection',
+            basis: 'actuals',
             bankConnected: bank.count > 0,
             bankStale,
             lastSyncedAt: bank.lastSyncedAt,
             openingBalancePence: openingStart,
-            weeks: (0, formulas_1.calculateCashFlow)(input),
+            totalReceiptsPence: out.reduce((s, w) => s + w.receiptsPence, 0),
+            // Comparison target only — owner's Business Health run-rate, never
+            // mixed into the real receipts above.
+            baselineWeeklyRunRatePence: b?.revenue ? Math.round((b.revenue * 100) / 52) : null,
+            weeks: out,
         };
     },
     // /financial — Key Ratios + Balance Sheet. Margins are REAL (baseline

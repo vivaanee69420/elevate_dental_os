@@ -6,6 +6,9 @@ export default defineConfig({
     globals: true,
     include: ['test/**/*.test.{js,mjs}'],
     setupFiles: ['./test/setup.js'],
+    // Runs in the main process before workers fork, so every fork inherits the
+    // dummy env at OS level before any module-load env capture (see file).
+    globalSetup: ['./test/global-setup.js'],
     clearMocks: true,
     // Dummy Supabase/secret env set BEFORE any test module imports, so a file
     // that imports lib/supabase.js at module-eval can't lose a race with
