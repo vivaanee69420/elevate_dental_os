@@ -16,6 +16,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useHealth } from '@/features/health/hooks';
 import { useLeads } from '@/features/leads/hooks';
+import { usePractices } from '@/features/practices/hooks';
 import {
   useDashboardSummary,
   useRevenueSeries,
@@ -112,10 +113,19 @@ export default function DashboardScreen() {
   const healthComplete = !!health?.setup_completed;
 
   const [range, setRange] = useState<DateRange>('ytd');
+  const [selected, setSelected] = useState<string>('All practices');
   const period = useMemo(() => rangeToDates(range), [range]);
 
-  const { data: summary, isLoading: sumLoading } = useDashboardSummary(period);
-  const { data: seriesResp, isLoading: seriesLoading } = useRevenueSeries(period);
+  // Practice selector drives the WHOLE dashboard. Resolve the chosen name → id
+  // (null = All) and feed it to the period-scoped summary + chart.
+  const { data: practicesData } = usePractices();
+  const allPractices: { id: string; name: string }[] = practicesData?.practices ?? [];
+  const selectedId = selected === 'All practices'
+    ? null
+    : allPractices.find((p) => p.name === selected)?.id ?? null;
+
+  const { data: summary, isLoading: sumLoading } = useDashboardSummary(period, selectedId);
+  const { data: seriesResp, isLoading: seriesLoading } = useRevenueSeries(period, selectedId);
   const { data: practiceResp, isLoading: practiceLoading } =
     usePracticeSummary();
   const { data: leadsResp, isLoading: leadsLoading } = useLeads();
@@ -127,15 +137,11 @@ export default function DashboardScreen() {
 
   const noBaseline = !!summary?.error;
 
-  const [selected, setSelected] = useState<string>('All practices');
   const [targetMargin, setTargetMargin] = useState<number>(
     DEFAULT_PL_TEMPLATE.targetMargin,
   );
 
-  const practiceNames = useMemo(
-    () => (practiceResp?.practices ?? []).map((p) => p.name),
-    [practiceResp],
-  );
+  const practiceNames = useMemo(() => allPractices.map((p) => p.name), [allPractices]);
   const practiceList = ['All practices', ...practiceNames];
 
   const v = useMemo(() => {
@@ -401,7 +407,7 @@ export default function DashboardScreen() {
             className="text-ink-muted font-bold uppercase"
             style={{ fontSize: 10 }}
           >
-            Funnel practice:
+            Practice:
           </span>
           {practiceList.map((p) => (
             <button

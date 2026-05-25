@@ -6,11 +6,11 @@ export const analyticsController = {
     },
     async dashboardSummary(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.dashboardSummary(req.user.organisation_id, { from: q.from, to: q.to }));
+        res.json(await analytics_service_1.analyticsService.dashboardSummary(req.user.organisation_id, { from: q.from, to: q.to, practiceId: q.practice_id }));
     },
     async revenueSeries(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.revenueSeries(req.user.organisation_id, { months: q.months, from: q.from, to: q.to }));
+        res.json(await analytics_service_1.analyticsService.revenueSeries(req.user.organisation_id, { months: q.months, from: q.from, to: q.to, practiceId: q.practice_id }));
     },
     async financeSeries(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
