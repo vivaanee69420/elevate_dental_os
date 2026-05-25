@@ -26,16 +26,21 @@ marginPct = netProfit / revenue × 100
 
 ### 1a. Real-data sourcing + bucket mapping
 
-Finance reads **real data first, no projected revenue curve**:
-- **Revenue** (`finance-series`, `financial`): real **settled `payments`**
-  (Dentally/Stripe) bucketed by `processed_at` month/TTM — or the
-  `monthly_financials` revenue actual when one exists for that period.
-- **Costs**: `monthly_financials` actuals (Xero P&L sync + manual entry) when
-  present (real); otherwise the Business Health **baseline cost_% applied to the
-  REAL revenue** as a labelled ESTIMATE (`estimated:true` per row / margin;
-  `finance-series.costsEstimated`). Dentally carries no cost data — Xero will.
-- **No baseline revenue projection.** The baseline supplies cost ratios for the
-  estimate and a comparison run-rate only; it is never shown as real revenue.
+Finance shows **real data or zero — never an estimate**:
+- **Revenue** (`finance-series`, `financial`, `cashflow`): **exact** settled
+  `payments`, summed in Postgres via the `settled_receipts_by_day` RPC (NOT by
+  fetching rows and summing in Node — that hit PostgREST's 1000-row read cap and
+  undercounted orgs with >1000 payments). Or the `monthly_financials` revenue
+  actual when one exists for that period.
+- **Costs / profit / margins**: `monthly_financials` actuals (Xero P&L sync +
+  manual entry) when present (real, `costsAvailable:true`). When there is **no
+  real cost source, cost lines, profit and margins are 0** — never estimated
+  from the baseline. Dentally carries no cost data; Xero will.
+- **Balance sheet** (`financial`): only **real bank cash** (Σ `bank_accounts`);
+  every other line (receivables/payables/liabilities/equity beyond cash) is **0**
+  — no assumption-driven estimates.
+- **No baseline projection or estimate anywhere** in the Finance section. The
+  baseline is used only by the Overview/Command-Centre screens.
 
 Actuals are stored per `dental_bucket`:
 `revenue, staff, lab, materials, overhead, tax, other`.
