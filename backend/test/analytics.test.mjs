@@ -96,47 +96,33 @@ describe('REGRESSION (CRITICAL) — revenueSeries byte-identical after _projectM
   });
 });
 
-describe('financeSeries — P&L lines, shares the curve with revenueSeries', () => {
-  it('{error} when no baseline', async () => {
-    supaRec.resultProvider = () => ({ data: { baseline: {} }, error: null });
-    expect(await svc.financeSeries(ORG_A)).toEqual({ error: 'No baseline set' });
+describe('financeSeries — real revenue from payments, no projected curve', () => {
+  const now = () => new Date(2026, 4, 15);
+
+  it('no baseline + no payments → 12 real zero months (no error)', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'payments' ? { data: [], error: null }
+      : q.table === 'monthly_financials' ? { data: [], error: null }
+      : { data: { baseline: {} }, error: null };
+    const r = await svc.financeSeries(ORG_A, { months: 12, now });
+    expect(r.basis).toBe('actuals-revenue');
+    expect(r.months).toHaveLength(12);
+    expect(r.months.every((m) => m.revenue === 0)).toBe(true);
   });
 
-  it('cost lines = baseline cost_* × projected revenue; revenue == revenueSeries', async () => {
-    supaRec.resultProvider = () => ({
-      data: {
-        baseline: {
-          revenue: 1_200_000,
-          profit: 300_000,
-          cost_associates: 40,
-          cost_staff: 18,
-          cost_lab: 8,
-          cost_materials: 5,
-          cost_property: 10,
-          cost_marketing: 4,
-          cost_other: 3,
-        },
-      },
-      error: null,
-    });
-    const now = () => new Date(2026, 4, 15);
+  it('revenue is the real settled payments per month; costs estimated from baseline', async () => {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'payments')
+        return { data: [{ amount_pence: 6_000_000, processed_at: '2026-05-02T00:00:00Z' }], error: null };
+      if (q.table === 'monthly_financials') return { data: [], error: null };
+      return { data: { baseline: { revenue: 1_200_000, cost_staff: 18 } }, error: null };
+    };
     const fs = await svc.financeSeries(ORG_A, { months: 12, now });
-    const rs = await svc.revenueSeries(ORG_A, { months: 12, now });
-    expect(fs.basis).toBe('baseline-projection');
-    expect(fs.months).toHaveLength(12);
-    // monthly revenue identical to revenueSeries (shared _projectMonthly)
-    expect(fs.months.map((m) => m.revenue)).toEqual(
-      rs.months.map((m) => m.revenue),
-    );
-    const m0 = fs.months[0];
-    const rev = m0.revenue;
-    expect(m0.associatePay).toBe(Math.round(rev * 0.4));
-    expect(m0.staffCosts).toBe(Math.round(rev * 0.18));
-    expect(m0.labMaterials).toBe(Math.round(rev * 0.13)); // 8+5
-    expect(m0.opex).toBe(Math.round(rev * 0.17)); // 10+4+3
-    expect(m0.profit).toBe(
-      rev - m0.associatePay - m0.staffCosts - m0.labMaterials - m0.opex,
-    );
+    const may = fs.months.find((m) => m.month === '2026-05');
+    expect(may.revenue).toBe(6_000_000); // real payment, not a projected curve
+    expect(may.staffCosts).toBe(Math.round(6_000_000 * 0.18)); // baseline % of REAL revenue
+    expect(may.estimated).toBe(true);
+    expect(fs.costsEstimated).toBe(true);
   });
 });
 

@@ -57,7 +57,9 @@ describe('callback', () => {
         const arg = integrationRepository.upsertSecrets.mock.calls[0][2];
         expect(arg.config.locationId).toBe('loc-9');
         expect(arg.status).toBe('active');
-        expect(Buffer.isBuffer(arg.secrets)).toBe(true); // encrypted blob, not plaintext
+        // Encrypted base64 blob (string, supabase-js-safe), not plaintext.
+        expect(typeof arg.secrets).toBe('string');
+        expect(arg.secrets).not.toContain('rt');
     });
 
     it('marks failed and throws on a non-2xx token response', async () => {

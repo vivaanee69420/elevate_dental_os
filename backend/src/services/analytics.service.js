@@ -196,68 +196,81 @@ export const analyticsService = {
         );
         return { basis: 'baseline-projection', months: series };
     },
-    // 12-month consolidated P&L lines for /profit. Deterministic projection
-    // (shares _projectMonthly with revenueSeries so monthly revenue is
-    // identical) with cost lines = baseline cost_* applied to each month's
-    // projected revenue — same percentages `pl()` uses, just per month.
-    // Grouping per brief 06: associate / staff / lab+materials / opex(rest).
+    // Bucket settled-payment rows into REAL monthly revenue (pence) by
+    // processed_at. This is the real revenue source for the P&L — no projection.
+    _monthlyRevenueFromPayments(rows) {
+        const m = new Map();
+        for (const p of Array.isArray(rows) ? rows : []) {
+            if (!p.processed_at) continue;
+            const d = new Date(p.processed_at);
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            m.set(key, (m.get(key) || 0) + (p.amount_pence || 0));
+        }
+        return m;
+    },
+    // 12-month consolidated P&L lines for /profit — REAL data only.
+    //   revenue  = real settled payments per month (Dentally/Stripe), OR the
+    //              monthly_financials revenue actual when one exists (Xero/manual).
+    //   costs    = monthly_financials actuals when present (real), else the
+    //              Business Health baseline cost_* applied to the REAL revenue
+    //              as a labelled ESTIMATE (per-row `estimated:true`). There is
+    //              no real cost source from Dentally — Xero will supply it.
+    // No fabricated revenue curve anywhere. `costsEstimated` flags the response
+    // when any row's costs are baseline-derived. basis: 'actuals' (all costs
+    // real), 'mixed', or 'actuals-revenue' (real revenue, estimated/no costs).
     async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null } = {}) {
-        const [health, actuals] = await Promise.all([
+        const ref = now();
+        const startMonth = new Date(ref.getFullYear(), ref.getMonth() - (months - 1), 1);
+        const sinceISO = startMonth.toISOString();
+        const [health, actuals, payRows] = await Promise.all([
             practiceId ? Promise.resolve(null) : analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             this._actualsBundle(orgId, practiceId),
+            analytics_repository_1.analyticsRepository.settledPaymentsInRange(orgId, sinceISO, practiceId),
         ]);
-        // Per practice: actuals only (the org baseline is not per-practice).
-        if (practiceId) {
-            const periods = [...actuals.byPeriod.keys()].sort().slice(-months);
-            return {
-                basis: 'actuals',
-                months: periods.map((p) => financeSeriesRowFromBuckets(p, actuals.byPeriod.get(p))),
-            };
-        }
+        const revByMonth = this._monthlyRevenueFromPayments(payRows);
         const b = health?.baseline;
-        // No baseline to project from: if actuals exist, emit them directly
-        // (most recent `months` periods); otherwise the original error.
-        if (!b?.revenue) {
-            if (!actuals.hasAny)
-                return { error: 'No baseline set' };
-            const periods = [...actuals.byPeriod.keys()].sort().slice(-months);
-            return {
-                basis: 'actuals',
-                months: periods.map((p) => financeSeriesRowFromBuckets(p, actuals.byPeriod.get(p))),
-            };
-        }
-        const pct = (k) => (b[k] || 0) / 100;
+        const hasCostModel = !!(b && b.revenue);
+        const pct = (k) => (b?.[k] || 0) / 100;
         const assocPct = pct('cost_associates');
         const staffPct = pct('cost_staff');
         const labMatPct = pct('cost_lab') + pct('cost_materials');
         const opexPct = pct('cost_property') + pct('cost_marketing') + pct('cost_other');
-        // Project from baseline, then OVERLAY any month that has real actuals
-        // (Xero/manual). A month with actuals replaces the projected row.
-        let overlaidCount = 0;
-        const series = this._projectMonthly(b.revenue * 100, months, now).map(
-            ({ month, revenue }) => {
-                if (actuals.byPeriod.has(month)) {
-                    overlaidCount++;
-                    return financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month));
-                }
-                const associatePay = Math.round(revenue * assocPct);
-                const staffCosts = Math.round(revenue * staffPct);
-                const labMaterials = Math.round(revenue * labMatPct);
-                const opex = Math.round(revenue * opexPct);
-                return {
-                    month,
-                    revenue,
-                    associatePay,
-                    staffCosts,
-                    labMaterials,
-                    opex,
-                    profit: revenue - associatePay - staffCosts - labMaterials - opex,
-                };
-            },
-        );
-        const basis = overlaidCount === 0 ? 'baseline-projection'
-            : overlaidCount === series.length ? 'actuals' : 'mixed';
-        return { basis, months: series };
+        const keys = [];
+        for (let i = months - 1; i >= 0; i--) {
+            const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
+            keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+        }
+        let actualCostMonths = 0;
+        let estimatedCostMonths = 0;
+        const series = keys.map((month) => {
+            // Real costs present (Xero/manual) → use them verbatim.
+            if (actuals.byPeriod.has(month)) {
+                actualCostMonths++;
+                return { ...financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month)), estimated: false };
+            }
+            // Else real revenue from payments + baseline-estimated costs.
+            const revenue = revByMonth.get(month) || 0;
+            const associatePay = Math.round(revenue * assocPct);
+            const staffCosts = Math.round(revenue * staffPct);
+            const labMaterials = Math.round(revenue * labMatPct);
+            const opex = Math.round(revenue * opexPct);
+            const estimated = revenue > 0 && hasCostModel;
+            if (estimated) estimatedCostMonths++;
+            return {
+                month,
+                revenue,
+                associatePay,
+                staffCosts,
+                labMaterials,
+                opex,
+                profit: revenue - associatePay - staffCosts - labMaterials - opex,
+                estimated,
+            };
+        });
+        const basis = estimatedCostMonths === 0 && actualCostMonths > 0 ? 'actuals'
+            : actualCostMonths > 0 && estimatedCostMonths > 0 ? 'mixed'
+            : 'actuals-revenue';
+        return { basis, costsEstimated: estimatedCostMonths > 0, months: series };
     },
     // 13-week REAL cash view (backward-looking, no projection). Each week =
     // sum of REAL settled payments received in that week (by processed_at),

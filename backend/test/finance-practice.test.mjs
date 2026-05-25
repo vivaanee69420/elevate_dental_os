@@ -56,21 +56,24 @@ describe('pl — per practice = actuals only, no baseline projection', () => {
   });
 });
 
-describe('financeSeries — per practice = actuals only', () => {
-  it('emits only the practice actual months (basis=actuals)', async () => {
+describe('financeSeries — per practice: real costs where present over the window', () => {
+  it('puts the practice actual month in the 12-month window (basis=actuals)', async () => {
     const now = () => new Date(2026, 4, 15);
     supaRec.resultProvider = withRows(ROWS);
     const r = await svc.financeSeries(ORG_A, { months: 12, now, practiceId: P1 });
-    expect(r.basis).toBe('actuals');
-    expect(r.months).toHaveLength(1);
-    expect(r.months[0]).toMatchObject({ month: '2026-01', revenue: 5_000_000, staffCosts: 1_000_000 });
+    expect(r.basis).toBe('actuals'); // costs from monthly_financials, no estimates
+    expect(r.months).toHaveLength(12);
+    const jan = r.months.find((m) => m.month === '2026-01');
+    expect(jan).toMatchObject({ revenue: 5_000_000, staffCosts: 1_000_000, estimated: false });
   });
 
-  it('practice with no actuals => empty months', async () => {
+  it('practice with no actuals/payments => 12 real zero months', async () => {
     const now = () => new Date(2026, 4, 15);
     supaRec.resultProvider = withRows(ROWS);
     const r = await svc.financeSeries(ORG_A, { months: 12, now, practiceId: 'prac-empty' });
-    expect(r).toEqual({ basis: 'actuals', months: [] });
+    expect(r.basis).toBe('actuals-revenue');
+    expect(r.months).toHaveLength(12);
+    expect(r.months.every((m) => m.revenue === 0)).toBe(true);
   });
 });
 
@@ -91,15 +94,15 @@ describe('financial — per practice margins from actuals', () => {
   });
 });
 
-describe('regression — org-wide finance unchanged', () => {
-  it('financeSeries with no practiceId still projects the baseline', async () => {
+describe('org-wide finance — real revenue, no projection', () => {
+  it('financeSeries with no practiceId returns the real-revenue window', async () => {
     const now = () => new Date(2026, 4, 15);
     supaRec.resultProvider = (q) =>
-      q.table === 'monthly_financials'
-        ? { data: [], error: null }
-        : { data: { baseline: { revenue: 1_200_000, cost_staff: 18 } }, error: null };
+      q.table === 'monthly_financials' ? { data: [], error: null }
+      : q.table === 'payments' ? { data: [], error: null }
+      : { data: { baseline: { revenue: 1_200_000, cost_staff: 18 } }, error: null };
     const r = await svc.financeSeries(ORG_A, { months: 12, now });
-    expect(r.basis).toBe('baseline-projection');
+    expect(r.basis).toBe('actuals-revenue');
     expect(r.months).toHaveLength(12);
   });
 });

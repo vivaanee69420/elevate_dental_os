@@ -113,6 +113,23 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return data || [];
     },
+    // Settled payments in a date window for REAL monthly revenue (Profit /
+    // Financial / Valuation). amount_pence + processed_at, practice-scoped when
+    // set. This is the real revenue source — no projection.
+    async settledPaymentsInRange(orgId, sinceISO, practiceId = null) {
+        let query = supabase_1.serviceClient
+            .from('payments')
+            .select('amount_pence, processed_at')
+            .eq('organisation_id', orgId)
+            .eq('status', 'settled')
+            .gte('processed_at', sinceISO);
+        if (practiceId)
+            query = query.eq('practice_id', practiceId);
+        const { data, error } = await query.limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        return data || [];
+    },
     // ------------------------------------------------------------------------
     // Business Hub sources — per-practice rollup across finance + ops + growth.
     async practicesFull(orgId) {
