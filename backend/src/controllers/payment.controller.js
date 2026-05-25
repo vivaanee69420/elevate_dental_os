@@ -17,4 +17,8 @@ export const paymentController = {
         const days = Number(req.query.days ?? 30) || 30;
         res.json(await payment_service_1.paymentService.sourceBreakdown(req.user.organisation_id, days));
     },
+    async summary(req, res) {
+        const practiceId = req.query.practice_id || undefined;
+        res.json(await payment_service_1.paymentService.summary(req.user.organisation_id, practiceId));
+    },
 };
