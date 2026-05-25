@@ -450,4 +450,97 @@ export const analyticsService = {
             return { basis: 'ai', insights: [], error: 'AI service unavailable' };
         }
     },
+    // ------------------------------------------------------------------------
+    // Business Hub — the "overview of the whole business": group totals + a
+    // per-practice comparison joining Finance (settled payments), Ops
+    // (appointments → utilisation/DNA), and Growth (leads → conversion). Group
+    // target/margin comes from the org's business_health baseline. All amounts
+    // integer pence. Zeroes are correct when a source hasn't been fed yet.
+    //
+    //   payments(settled) ─┐
+    //   appointments ──────┼─▶ group + per-practice rollup ─▶ Business Hub
+    //   leads ─────────────┘
+    //   business_health baseline ─▶ group revenue target + margin
+    async businessHub(orgId, { days = 90, now = () => new Date() } = {}) {
+        const sinceISO = new Date(now().getTime() - days * 86400000).toISOString();
+        const [practices, payments, appts, leads, health] = await Promise.all([
+            analytics_repository_1.analyticsRepository.practicesFull(orgId),
+            analytics_repository_1.analyticsRepository.settledPayments(orgId),
+            analytics_repository_1.analyticsRepository.appointmentsForHub(orgId, sinceISO),
+            analytics_repository_1.analyticsRepository.leadsForHub(orgId),
+            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+        ]);
+        const CONVERTED = new Set(['treatment_started', 'treatment_completed']);
+        const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
+
+        // Per-practice accumulators.
+        const acc = new Map();
+        const seed = () => ({ revenuePence: 0, appts: 0, completed: 0, noShows: 0, leads: 0, converted: 0 });
+        const get = (id) => { if (!acc.has(id)) acc.set(id, seed()); return acc.get(id); };
+        for (const p of payments) if (p.practice_id) get(p.practice_id).revenuePence += p.amount_pence || 0;
+        for (const a of appts) {
+            if (!a.practice_id) continue;
+            const r = get(a.practice_id);
+            r.appts += 1;
+            if (a.status === 'completed') r.completed += 1;
+            if (a.status === 'no_show') r.noShows += 1;
+        }
+        for (const l of leads) {
+            if (!l.practice_id) continue;
+            const r = get(l.practice_id);
+            r.leads += 1;
+            if (CONVERTED.has(l.status)) r.converted += 1;
+        }
+
+        const practiceRows = practices.map((p) => {
+            const r = acc.get(p.id) || seed();
+            return {
+                practiceId: p.id,
+                name: p.name,
+                chairs: p.chairs || 0,
+                revenuePence: r.revenuePence,
+                appointments: r.appts,
+                completed: r.completed,
+                noShows: r.noShows,
+                noShowRate: rate(r.noShows, r.appts),
+                leads: r.leads,
+                conversionRate: rate(r.converted, r.leads),
+            };
+        }).sort((a, b) => b.revenuePence - a.revenuePence);
+
+        // Group totals.
+        const sum = (k) => practiceRows.reduce((s, p) => s + p[k], 0);
+        const totalRevenue = sum('revenuePence');
+        const totalAppts = sum('appointments');
+        const totalNoShows = sum('noShows');
+        const totalLeads = sum('leads');
+        const totalConverted = practiceRows.reduce((s, p) => s + Math.round((p.conversionRate / 100) * p.leads), 0);
+
+        // Group target from baseline (org-level, not per-practice).
+        const b = health?.baseline || {};
+        let marginPct = 0;
+        let revenueTargetPence = 0;
+        if (b.revenue) {
+            const revenuePence = b.revenue * 100;
+            revenueTargetPence = revenuePence;
+            marginPct = formulas_1.calculatePL({ revenue: revenuePence, costs: this._costsPence(b, revenuePence) }).marginPct;
+        }
+        const LIMIT = analytics_repository_1.LIMIT_GUARD;
+        return {
+            period: { days, since: sinceISO },
+            group: {
+                practices: practiceRows.length,
+                revenuePence: totalRevenue,
+                revenueTargetPence,
+                marginPct,
+                appointments: totalAppts,
+                noShows: totalNoShows,
+                noShowRate: rate(totalNoShows, totalAppts),
+                leads: totalLeads,
+                conversionRate: rate(totalConverted, totalLeads),
+            },
+            practices: practiceRows,
+            truncated: payments.length >= LIMIT || appts.length >= LIMIT || leads.length >= LIMIT,
+        };
+    },
 };

@@ -42,4 +42,8 @@ export const analyticsController = {
     async kpis(req, res) {
         res.json(await analytics_service_1.analyticsService.kpis(req.user.organisation_id));
     },
+    async businessHub(req, res) {
+        const days = Number(req.query.days) || 90;
+        res.json(await analytics_service_1.analyticsService.businessHub(req.user.organisation_id, { days }));
+    },
 };
