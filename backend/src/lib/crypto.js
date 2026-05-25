@@ -12,12 +12,16 @@
 
 import crypto from 'node:crypto';
 
-const KEY = process.env.INTEGRATIONS_SECRET_KEY;
-if (!KEY && process.env.NODE_ENV === 'production') {
+if (!process.env.INTEGRATIONS_SECRET_KEY && process.env.NODE_ENV === 'production') {
     console.warn('[crypto] INTEGRATIONS_SECRET_KEY not set — integrations will fail to encrypt');
 }
 
+// Read the key at call time (not module-load) so the value is whatever the
+// process env holds when encrypt/decrypt actually runs. Capturing it in a
+// module-load const made tests flaky under parallel workers (the module could
+// evaluate before the test env was applied).
 function getKey() {
+    const KEY = process.env.INTEGRATIONS_SECRET_KEY;
     if (!KEY) throw new Error('INTEGRATIONS_SECRET_KEY missing');
     return crypto.createHash('sha256').update(KEY).digest();
 }

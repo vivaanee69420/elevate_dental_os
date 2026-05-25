@@ -30,74 +30,31 @@ beforeEach(() => {
   supaRec.rpcProvider = () => ({ data: [], error: null });
 });
 
-describe('revenueSeries — deterministic projection of the real baseline', () => {
-  it('returns {error} (not a throw) when no baseline revenue', async () => {
-    supaRec.resultProvider = () => ({ data: { baseline: {} }, error: null });
-    expect(await svc.revenueSeries(ORG_A)).toEqual({ error: 'No baseline set' });
-  });
+describe('revenueSeries — exact real monthly revenue (no projection)', () => {
+  const now = () => new Date(2026, 4, 15); // May 2026
 
-  it('builds 12 month-keys ending at the injected clock month', async () => {
-    supaRec.resultProvider = () => ({
-      data: { baseline: { revenue: 1_200_000, profit: 300_000, cash: 1_140_000 } },
-      error: null,
-    });
-    const now = () => new Date(2026, 4, 15); // May 2026
+  it('12 month keys ending at the clock month; revenue from RPC, profit/cash 0', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([
+      { day: '2026-05-03', pence: 7_000_000 },
+      { day: '2025-06-10', pence: 2_000_000 },
+    ]);
     const r = await svc.revenueSeries(ORG_A, { months: 12, now });
-    expect(r.basis).toBe('baseline-projection');
+    expect(r.basis).toBe('revenue-only');
     expect(r.months).toHaveLength(12);
     expect(r.months[0].month).toBe('2025-06');
     expect(r.months[11].month).toBe('2026-05');
+    expect(r.months[11].revenue).toBe(7_000_000);
+    expect(r.months[0].revenue).toBe(2_000_000);
+    expect(r.months.every((m) => m.profit === 0 && m.cash === 0)).toBe(true);
   });
 
-  it('is deterministic: identical baseline+clock → identical numbers', async () => {
-    supaRec.resultProvider = () => ({
-      data: { baseline: { revenue: 1_200_000, profit: 300_000, cash: 1_140_000 } },
-      error: null,
-    });
-    const now = () => new Date(2026, 4, 15);
-    // monthlyBase = 1,200,000*100/12 = 10,000,000; idx0 factor 0.94
-    const a = await svc.revenueSeries(ORG_A, { now });
-    const b = await svc.revenueSeries(ORG_A, { now });
-    expect(a.months[0]).toEqual({
-      month: '2025-06',
-      revenue: 9_400_000,
-      profit: 2_350_000, // marginFrac 300k/1.2m = .25
-      cash: 8_930_000, // cashFrac min(1, 1.14m/1.2m) = .95
-    });
-    expect(a).toEqual(b);
-  });
-});
-
-describe('REGRESSION (CRITICAL) — revenueSeries byte-identical after _projectMonthly extraction', () => {
-  it('full 12-month series matches the pre-refactor values exactly', async () => {
-    supaRec.resultProvider = () => ({
-      data: { baseline: { revenue: 1_200_000, profit: 300_000, cash: 1_140_000 } },
-      error: null,
-    });
-    const now = () => new Date(2026, 4, 15); // May 2026
-    const r = await svc.revenueSeries(ORG_A, { months: 12, now });
-    // monthlyBase = 120_000_000/12 = 10_000_000; factor = 0.94+0.012*idx+0.02*(idx%3)
-    // revenue=round(monthlyBase*factor); profit=round(rev*0.25); cash=round(rev*0.95)
-    const expected = Array.from({ length: 12 }, (_, idx) => {
-      const factor = 0.94 + 0.012 * idx + 0.02 * (idx % 3);
-      const revenue = Math.round(10_000_000 * factor);
-      const d = new Date(2026, 4 - (11 - idx), 1);
-      return {
-        month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
-        revenue,
-        profit: Math.round(revenue * 0.25),
-        cash: Math.round(revenue * 0.95),
-      };
-    });
-    expect(r).toEqual({ basis: 'baseline-projection', months: expected });
-  });
-
-  it('_projectMonthly exposes factor + revenue, reused by both callers', () => {
-    const now = () => new Date(2026, 4, 15);
-    const p = svc._projectMonthly(120_000_000, 12, now);
-    expect(p).toHaveLength(12);
-    expect(p[0]).toEqual({ month: '2025-06', factor: 0.94, revenue: 9_400_000 });
-    expect(p[11].month).toBe('2026-05');
+  it('no payments → 12 real zero months (no error, no baseline)', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
+    const r = await svc.revenueSeries(ORG_A, { now });
+    expect(r.months).toHaveLength(12);
+    expect(r.months.every((m) => m.revenue === 0)).toBe(true);
   });
 });
 
@@ -147,28 +104,42 @@ describe('financeSeries — exact real revenue, costs/profit real-or-zero', () =
   });
 });
 
-describe('dashboardSummary — KPIs from the real baseline', () => {
-  it('{error} when no baseline revenue', async () => {
-    supaRec.resultProvider = () => ({ data: { baseline: {} }, error: null });
-    expect(await svc.dashboardSummary(ORG_A)).toEqual({
-      error: 'No baseline set',
-    });
+describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
+  const now = () => new Date(2026, 4, 15);
+
+  it('no real costs → revenue real (payments), costs/profit/margin 0, cash = bank', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials' ? { data: [], error: null }
+      : q.table === 'bank_accounts' ? { data: [{ balance_pence: 3_000_000, last_synced_at: '2026-05-14T00:00:00Z' }], error: null }
+      : { data: { baseline: { revenue: 1_000_000, cost_associates: 30 } }, error: null }; // baseline IGNORED
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-03-01', pence: 100_000_000 }]);
+    const r = await svc.dashboardSummary(ORG_A, { now });
+    expect(r.basis).toBe('revenue-only');
+    expect(r.revenuePence).toBe(100_000_000); // exact real settled payments TTM
+    expect(r.totalCostsPence).toBe(0);
+    expect(r.netProfitPence).toBe(0);
+    expect(r.marginPct).toBe(0);
+    expect(r.cashCollectedPence).toBe(100_000_000);
+    expect(r.cashflowPence).toBe(3_000_000); // real bank balance
+    expect(r.reservePence).toBe(0);
+    expect(r.excessCashPence).toBe(3_000_000);
   });
 
-  it('computes profit/margin/cash from baseline cost_*', async () => {
-    supaRec.resultProvider = () => ({
-      data: { baseline: { revenue: 1_000_000, cost_associates: 30 } },
-      error: null,
-    });
-    const r = await svc.dashboardSummary(ORG_A);
-    expect(r.revenuePence).toBe(100_000_000);
-    expect(r.totalCostsPence).toBe(30_000_000);
-    expect(r.netProfitPence).toBe(70_000_000);
+  it('monthly_financials actuals → real profit/margin', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials'
+        ? { data: [
+            { period: '2026-01', dental_bucket: 'revenue', amount_pence: 10_000_000, source: 'xero' },
+            { period: '2026-01', dental_bucket: 'staff', amount_pence: 3_000_000, source: 'xero' },
+          ], error: null }
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([]);
+    const r = await svc.dashboardSummary(ORG_A, { now });
+    expect(r.basis).toBe('actuals');
+    expect(r.revenuePence).toBe(10_000_000);
+    expect(r.totalCostsPence).toBe(3_000_000);
+    expect(r.netProfitPence).toBe(7_000_000);
     expect(r.marginPct).toBe(70);
-    expect(r.cashCollectedPence).toBe(100_000_000); // no baseline.cash → full
-    expect(r.cashflowPence).toBe(70_000_000);
-    expect(r.reservePence).toBe(5_000_000); // (30m/12)*2
-    expect(r.excessCashPence).toBe(65_000_000);
   });
 });
 
@@ -472,56 +443,51 @@ describe('CROSS-ORG ISOLATION — dashboard queries pin org', () => {
   });
 });
 
-describe('businessHub — group + per-practice rollup over real tables', () => {
-  it('aggregates revenue/appointments/leads per practice and group, sorted by revenue', async () => {
-    supaRec.resultProvider = (q) => {
-      switch (q.table) {
-        case 'practices': return { data: [
-          { id: 'p1', name: 'Alpha', chairs: 4 },
-          { id: 'p2', name: 'Beta', chairs: 3 },
-        ], error: null };
-        case 'payments': return { data: [
-          { practice_id: 'p1', amount_pence: 100000 },
-          { practice_id: 'p2', amount_pence: 50000 },
-        ], error: null };
-        case 'appointments': return { data: [
-          { practice_id: 'p1', status: 'completed' },
-          { practice_id: 'p1', status: 'no_show' },
-          { practice_id: 'p2', status: 'completed' },
-        ], error: null };
-        case 'leads': return { data: [
-          { practice_id: 'p1', status: 'treatment_started' },
-          { practice_id: 'p1', status: 'new' },
-        ], error: null };
-        case 'business_health': return { data: { baseline: { revenue: 1000000, cost_associates: 40, cost_staff: 20 } }, error: null };
-        default: return { data: [], error: null };
-      }
-    };
+describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)', () => {
+  // RPC rollups: revenue / appointments / leads aggregated server-side.
+  const rollups = (fn) => {
+    if (fn === 'settled_revenue_by_practice')
+      return { data: [{ practice_id: 'p1', pence: 100000 }, { practice_id: 'p2', pence: 50000 }], error: null };
+    if (fn === 'appointments_rollup_by_practice')
+      return { data: [{ practice_id: 'p1', total: 2, completed: 1, no_shows: 1 }, { practice_id: 'p2', total: 1, completed: 1, no_shows: 0 }], error: null };
+    if (fn === 'leads_rollup_by_practice')
+      return { data: [{ practice_id: 'p1', total: 2, converted: 1 }], error: null };
+    return { data: [], error: null };
+  };
+
+  it('aggregates exact revenue/appointments/leads per practice + group, sorted by revenue', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }, { id: 'p2', name: 'Beta', chairs: 3 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: { revenue: 1000000 } }, error: null }
+      : { data: [], error: null }; // monthly_financials empty → margin 0
+    supaRec.rpcProvider = rollups;
     const res = await svc.businessHub(ORG_A, { days: 90, now: () => new Date('2026-05-25T00:00:00Z') });
 
     expect(res.group.revenuePence).toBe(150000);
     expect(res.group.appointments).toBe(3);
     expect(res.group.noShows).toBe(1);
     expect(res.group.leads).toBe(2);
-    expect(res.group.revenueTargetPence).toBe(100000000); // baseline.revenue * 100
-    expect(res.group.marginPct).toBeGreaterThan(0);       // 100 - 60 costs = 40% margin
+    expect(res.group.revenueTargetPence).toBe(100000000); // baseline.revenue * 100 (a target)
+    expect(res.group.marginPct).toBe(0);                  // no real cost source → 0, not estimated
+    expect(res.truncated).toBe(false);
 
-    // sorted by revenue desc → Alpha first
     expect(res.practices[0]).toMatchObject({
       name: 'Alpha', revenuePence: 100000, appointments: 2, noShows: 1, noShowRate: 50, leads: 2, conversionRate: 50,
     });
     expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 50000, appointments: 1 });
   });
 
-  it('every query is org-scoped (cross-org isolation on the service-client path)', async () => {
+  it('org-scoped: table queries + every rollup RPC pin the org', async () => {
     const tables = [];
     supaRec.resultProvider = (q) => {
       tables.push({ table: q.table, org: q.eqs.find((e) => e.col === 'organisation_id')?.val });
       return q.table === 'business_health' ? { data: { baseline: {} }, error: null } : { data: [], error: null };
     };
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    supaRec.rpcCalls = [];
     await svc.businessHub(ORG_B, { days: 90 });
-    // practices, payments, appointments, leads, business_health all filtered to ORG_B
     expect(tables.filter((t) => t.org === ORG_B).length).toBe(tables.length);
-    expect(tables.length).toBeGreaterThanOrEqual(5);
+    expect(supaRec.rpcCalls.length).toBeGreaterThanOrEqual(3);
+    expect(supaRec.rpcCalls.every((c) => c.params.p_org === ORG_B)).toBe(true);
   });
 });

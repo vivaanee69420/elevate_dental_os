@@ -148,53 +148,58 @@ export const analyticsService = {
         }
         return out;
     },
-    async dashboardSummary(orgId) {
-        const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
-        const b = health?.baseline;
-        if (!b?.revenue)
-            return { error: 'No baseline set' };
-        const revenuePence = b.revenue * 100;
-        const pl = (0, formulas_1.calculatePL)({
-            revenue: revenuePence,
-            costs: this._costsPence(b, revenuePence),
-        });
-        const cashCollectedPence = b.cash != null ? b.cash * 100 : revenuePence;
-        const cashflowPence = cashCollectedPence - pl.totalCosts;
-        const reservePence = Math.round((pl.totalCosts / 12) * 2);
-        const excessCashPence = Math.max(0, cashflowPence - reservePence);
+    // Command Centre summary — EXACT real data, real-or-zero (no baseline).
+    // revenue = monthly_financials actuals when present, else exact settled
+    // payments (TTM). Costs/profit/margin REAL only with a cost source, else 0.
+    // cashCollected = exact settled receipts (TTM); cashflow = real bank balance.
+    // reserve needs a cost run-rate we don't have → 0; excess = bank.
+    async dashboardSummary(orgId, { now = () => new Date() } = {}) {
+        const since = new Date(now());
+        since.setMonth(since.getMonth() - 12);
+        const [dayRows, actuals, bank] = await Promise.all([
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, since.toISOString()),
+            this._actualsBundle(orgId),
+            analytics_repository_1.analyticsRepository.bankSummary(orgId),
+        ]);
+        const paymentsTTM = (Array.isArray(dayRows) ? dayRows : []).reduce((s, r) => s + Number(r.pence || 0), 0);
+        const bankPence = bank.totalPence || 0;
+        const useActuals = actuals.hasAny && (actuals.annual.revenue || 0) > 0;
+        let revenuePence = paymentsTTM, totalCostsPence = 0, netProfitPence = 0, marginPct = 0;
+        if (useActuals) {
+            const inp = plInputFromBuckets(actuals.annual);
+            const pl = (0, formulas_1.calculatePL)(inp);
+            revenuePence = inp.revenue;
+            totalCostsPence = pl.totalCosts;
+            netProfitPence = pl.netProfit;
+            marginPct = pl.marginPct;
+        }
         return {
-            basis: 'baseline',
+            basis: useActuals ? 'actuals' : 'revenue-only',
             revenuePence,
-            netProfitPence: pl.netProfit,
-            marginPct: pl.marginPct,
-            totalCostsPence: pl.totalCosts,
-            cashCollectedPence,
-            cashflowPence,
-            reservePence,
-            excessCashPence,
+            netProfitPence,
+            marginPct,
+            totalCostsPence,
+            cashCollectedPence: paymentsTTM,
+            cashflowPence: bankPence,
+            reservePence: 0,
+            excessCashPence: bankPence,
         };
     },
-    // 12-month series as a DETERMINISTIC projection of the real baseline —
-    // not a hardcoded dataset and not "live" history (the app has no monthly
-    // ledger). Gentle growth + a 3-month ripple, centred so the trailing
-    // average tracks the baseline run-rate. Clock-injected for tests.
+    // 12-month revenue series — EXACT real settled payments per month (RPC), no
+    // projection. profit/cash are 0 (no real per-month source until Xero/bank
+    // history). Feeds the dashboard chart + AI-insights input.
     async revenueSeries(orgId, { months = 12, now = () => new Date() } = {}) {
-        const health = await analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
-        const b = health?.baseline;
-        if (!b?.revenue)
-            return { error: 'No baseline set' };
-        const revenuePence = b.revenue * 100;
-        const marginFrac = b.profit && b.revenue ? b.profit / b.revenue : 0.1;
-        const cashFrac = b.cash && b.revenue ? Math.min(1, b.cash / b.revenue) : 1;
-        const series = this._projectMonthly(revenuePence, months, now).map(
-            ({ month, revenue }) => ({
-                month,
-                revenue,
-                profit: Math.round(revenue * marginFrac),
-                cash: Math.round(revenue * cashFrac),
-            }),
-        );
-        return { basis: 'baseline-projection', months: series };
+        const ref = now();
+        const { keys, sinceISO, untilISO } = this._monthWindow(ref, months);
+        const dayRows = await analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO);
+        const revByMonth = this._monthlyRevenueFromDays(dayRows);
+        const series = keys.map((month) => ({
+            month,
+            revenue: revByMonth.get(month) || 0,
+            profit: 0,
+            cash: 0,
+        }));
+        return { basis: 'revenue-only', months: series };
     },
     // Resolve the month window: a custom [from,to] range (YYYY-MM-DD) overrides
     // the trailing `months` window. Returns month keys (YYYY-MM, capped at 36)
@@ -575,81 +580,63 @@ export const analyticsService = {
         }
     },
     // ------------------------------------------------------------------------
-    // Business Hub — the "overview of the whole business": group totals + a
-    // per-practice comparison joining Finance (settled payments), Ops
-    // (appointments → utilisation/DNA), and Growth (leads → conversion). Group
-    // target/margin comes from the org's business_health baseline. All amounts
-    // integer pence. Zeroes are correct when a source hasn't been fed yet.
-    //
-    //   payments(settled) ─┐
-    //   appointments ──────┼─▶ group + per-practice rollup ─▶ Business Hub
-    //   leads ─────────────┘
-    //   business_health baseline ─▶ group revenue target + margin
+    // Business Hub — group totals + per-practice comparison. EXACT per-practice
+    // rollups via Postgres GROUP BY RPCs (no 1000-row cap): revenue (settled
+    // payments), ops (appointments → completed/DNA), growth (leads → conversion).
+    // Group revenue target = business_health baseline (a goal). Group margin is
+    // REAL only when monthly_financials actuals exist, else 0 (never estimated).
     async businessHub(orgId, { days = 90, now = () => new Date() } = {}) {
         const sinceISO = new Date(now().getTime() - days * 86400000).toISOString();
-        const [practices, payments, appts, leads, health] = await Promise.all([
+        const [practices, revRows, apptRows, leadRows, actuals, health] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
-            analytics_repository_1.analyticsRepository.settledPayments(orgId),
-            analytics_repository_1.analyticsRepository.appointmentsForHub(orgId, sinceISO),
-            analytics_repository_1.analyticsRepository.leadsForHub(orgId),
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO),
+            analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO),
+            analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId),
+            this._actualsBundle(orgId),
             analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
         ]);
-        const CONVERTED = new Set(['treatment_started', 'treatment_completed']);
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
-
-        // Per-practice accumulators.
-        const acc = new Map();
-        const seed = () => ({ revenuePence: 0, appts: 0, completed: 0, noShows: 0, leads: 0, converted: 0 });
-        const get = (id) => { if (!acc.has(id)) acc.set(id, seed()); return acc.get(id); };
-        for (const p of payments) if (p.practice_id) get(p.practice_id).revenuePence += p.amount_pence || 0;
-        for (const a of appts) {
-            if (!a.practice_id) continue;
-            const r = get(a.practice_id);
-            r.appts += 1;
-            if (a.status === 'completed') r.completed += 1;
-            if (a.status === 'no_show') r.noShows += 1;
-        }
-        for (const l of leads) {
-            if (!l.practice_id) continue;
-            const r = get(l.practice_id);
-            r.leads += 1;
-            if (CONVERTED.has(l.status)) r.converted += 1;
-        }
+        const num = (v) => Number(v || 0);
+        const revBy = new Map(revRows.map((r) => [r.practice_id, num(r.pence)]));
+        const apBy = new Map(apptRows.map((r) => [r.practice_id, r]));
+        const ldBy = new Map(leadRows.map((r) => [r.practice_id, r]));
 
         const practiceRows = practices.map((p) => {
-            const r = acc.get(p.id) || seed();
+            const ap = apBy.get(p.id) || {};
+            const ld = ldBy.get(p.id) || {};
+            const appointments = num(ap.total);
+            const noShows = num(ap.no_shows);
+            const leads = num(ld.total);
+            const converted = num(ld.converted);
             return {
                 practiceId: p.id,
                 name: p.name,
                 chairs: p.chairs || 0,
-                revenuePence: r.revenuePence,
-                appointments: r.appts,
-                completed: r.completed,
-                noShows: r.noShows,
-                noShowRate: rate(r.noShows, r.appts),
-                leads: r.leads,
-                conversionRate: rate(r.converted, r.leads),
+                revenuePence: revBy.get(p.id) || 0,
+                appointments,
+                completed: num(ap.completed),
+                noShows,
+                noShowRate: rate(noShows, appointments),
+                leads,
+                conversionRate: rate(converted, leads),
             };
         }).sort((a, b) => b.revenuePence - a.revenuePence);
 
-        // Group totals.
+        // Group totals (sum of exact per-practice rows). totalConverted recomputed
+        // from raw rollups so it isn't lost to per-practice rounding.
         const sum = (k) => practiceRows.reduce((s, p) => s + p[k], 0);
         const totalRevenue = sum('revenuePence');
         const totalAppts = sum('appointments');
         const totalNoShows = sum('noShows');
         const totalLeads = sum('leads');
-        const totalConverted = practiceRows.reduce((s, p) => s + Math.round((p.conversionRate / 100) * p.leads), 0);
+        const totalConverted = leadRows.reduce((s, r) => s + num(r.converted), 0);
 
-        // Group target from baseline (org-level, not per-practice).
+        // Revenue target = baseline goal (owner-set). Margin REAL or 0.
         const b = health?.baseline || {};
-        let marginPct = 0;
-        let revenueTargetPence = 0;
-        if (b.revenue) {
-            const revenuePence = b.revenue * 100;
-            revenueTargetPence = revenuePence;
-            marginPct = formulas_1.calculatePL({ revenue: revenuePence, costs: this._costsPence(b, revenuePence) }).marginPct;
-        }
-        const LIMIT = analytics_repository_1.LIMIT_GUARD;
+        const revenueTargetPence = b.revenue ? b.revenue * 100 : 0;
+        const marginPct = (actuals.hasAny && (actuals.annual.revenue || 0) > 0)
+            ? formulas_1.calculatePL(plInputFromBuckets(actuals.annual)).marginPct
+            : 0;
         return {
             period: { days, since: sinceISO },
             group: {
@@ -664,7 +651,7 @@ export const analyticsService = {
                 conversionRate: rate(totalConverted, totalLeads),
             },
             practices: practiceRows,
-            truncated: payments.length >= LIMIT || appts.length >= LIMIT || leads.length >= LIMIT,
+            truncated: false, // exact SQL rollups — never truncated
         };
     },
 };
