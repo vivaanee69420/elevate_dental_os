@@ -4,20 +4,53 @@
 import * as supabase_1 from "../lib/supabase.js";
 export const paymentRepository = {
     async list(orgId, q) {
+        const limit = q.limit ?? 25;
+        const page = q.page ?? 1;
+        const from = (page - 1) * limit;
+        const to = from + limit - 1;
         let query = supabase_1.serviceClient
             .from('payments')
-            .select('*, contact:contacts(id, first_name, last_name), practice:practices(id, name)')
-            .eq('organisation_id', orgId)
-            .order('created_at', { ascending: false })
-            .limit(200);
+            .select('*, contact:contacts(id, first_name, last_name), practice:practices(id, name)', { count: 'exact' })
+            .eq('organisation_id', orgId);
         if (q.status)
             query = query.eq('status', q.status);
         if (q.since)
             query = query.gte('created_at', q.since);
-        const { data, error } = await query;
+        if (q.practice_id)
+            query = query.eq('practice_id', q.practice_id);
+        const { data, error, count } = await query
+            .order('created_at', { ascending: false })
+            .range(from, to);
         if (error)
             throw new Error(error.message);
-        return data;
+        return { rows: data ?? [], total: count ?? (data?.length ?? 0) };
+    },
+    // Aggregate stats over ALL payments (not just the current page), so the
+    // summary cards stay correct under pagination. settled = realised income.
+    async summary(orgId, practiceId) {
+        let query = supabase_1.serviceClient
+            .from('payments')
+            .select('amount_pence, status, processed_at, created_at')
+            .eq('organisation_id', orgId);
+        if (practiceId)
+            query = query.eq('practice_id', practiceId);
+        const { data, error } = await query.limit(20000);
+        if (error)
+            throw new Error(error.message);
+        const now = Date.now();
+        const within = (iso, ms) => iso && now - new Date(iso).getTime() <= ms;
+        const out = { today: 0, week: 0, month: 0, outstanding: 0 };
+        for (const p of data ?? []) {
+            const when = p.processed_at ?? p.created_at;
+            if (p.status === 'settled') {
+                if (within(when, 86400000)) out.today += p.amount_pence || 0;
+                if (within(when, 7 * 86400000)) out.week += p.amount_pence || 0;
+                if (within(when, 30 * 86400000)) out.month += p.amount_pence || 0;
+            } else if (p.status === 'pending') {
+                out.outstanding += p.amount_pence || 0;
+            }
+        }
+        return out;
     },
     async insertPending(row) {
         return supabase_1.serviceClient.from('payments').insert(row);
