@@ -13,6 +13,7 @@ import * as formulas_1 from "../lib/formulas.js";
 import * as snapshot_utils_1 from "../lib/snapshot-utils.js";
 import * as dentally_sync_1 from "../lib/integrations/dentally-sync.js";
 import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
+import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
 // --------------------------------------------------------------------------
 // Business-health snapshot — daily 02:00 UTC, decides per-org by cadence.
 // Phase 2: replaces stub baseline-copy with formula-driven calc against real
@@ -187,6 +188,18 @@ node_cron_1.default.schedule('0 * * * *', async () => {
         if (results.length > 0) console.log(`[worker] GoHighLevel sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] GoHighLevel sync failed', err);
+    }
+});
+// --------------------------------------------------------------------------
+// Xero P&L sync — daily 02:15, pull the month's Profit & Loss into
+// monthly_financials for orgs with an active xero integration.
+// --------------------------------------------------------------------------
+node_cron_1.default.schedule('15 2 * * *', async () => {
+    try {
+        const results = await xero_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] Xero sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] Xero sync failed', err);
     }
 });
 console.log('[workers] Started — cron schedules active');

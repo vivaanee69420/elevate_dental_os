@@ -67,13 +67,8 @@ function makeOauthStub({ id, label, category, scopes, authUrl, tokenUrl, clientI
     registerProvider({ id, label, authStyle: 'oauth', category }, impl);
 }
 
-makeOauthStub({
-    id: 'xero', label: 'Xero', category: 'accounting',
-    scopes: ['accounting.transactions', 'accounting.contacts'],
-    authUrl: 'https://login.xero.com/identity/connect/authorize',
-    tokenUrl: 'https://identity.xero.com/connect/token',
-    clientIdEnv: 'XERO_CLIENT_ID', clientSecretEnv: 'XERO_CLIENT_SECRET',
-});
+// Xero now has a real provider (xero-provider.js) — full OAuth + tenant
+// capture + token refresh + P&L sync. Registered separately, not a stub.
 
 makeOauthStub({
     id: 'quickbooks', label: 'QuickBooks', category: 'accounting',

@@ -5,3 +5,4 @@ import './stripe-provider.js';
 import './broker-provider.js';
 import './oauth-stub-providers.js';
 import './gohighlevel-provider.js';
+import './xero-provider.js';
