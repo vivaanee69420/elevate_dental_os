@@ -11,6 +11,7 @@ const P2 = 'prac-22222222';
 beforeEach(() => {
   supaRec.last = undefined;
   supaRec.resultProvider = () => ({ data: [], error: null });
+  supaRec.rpcProvider = () => ({ data: [], error: null }); // settled_receipts_by_day → empty
 });
 
 // monthly_financials rows for two practices + a baseline for the org.
@@ -64,14 +65,14 @@ describe('financeSeries — per practice: real costs where present over the wind
     expect(r.basis).toBe('actuals'); // costs from monthly_financials, no estimates
     expect(r.months).toHaveLength(12);
     const jan = r.months.find((m) => m.month === '2026-01');
-    expect(jan).toMatchObject({ revenue: 5_000_000, staffCosts: 1_000_000, estimated: false });
+    expect(jan).toMatchObject({ revenue: 5_000_000, staffCosts: 1_000_000, costsAvailable: true });
   });
 
   it('practice with no actuals/payments => 12 real zero months', async () => {
     const now = () => new Date(2026, 4, 15);
     supaRec.resultProvider = withRows(ROWS);
     const r = await svc.financeSeries(ORG_A, { months: 12, now, practiceId: 'prac-empty' });
-    expect(r.basis).toBe('actuals-revenue');
+    expect(r.basis).toBe('revenue-only');
     expect(r.months).toHaveLength(12);
     expect(r.months.every((m) => m.revenue === 0)).toBe(true);
   });
@@ -102,7 +103,7 @@ describe('org-wide finance — real revenue, no projection', () => {
       : q.table === 'payments' ? { data: [], error: null }
       : { data: { baseline: { revenue: 1_200_000, cost_staff: 18 } }, error: null };
     const r = await svc.financeSeries(ORG_A, { months: 12, now });
-    expect(r.basis).toBe('actuals-revenue');
+    expect(r.basis).toBe('revenue-only');
     expect(r.months).toHaveLength(12);
   });
 });

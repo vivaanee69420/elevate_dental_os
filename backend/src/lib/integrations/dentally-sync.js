@@ -31,8 +31,22 @@ const USER_AGENT = 'ElevateOS/1.0 (integrations@elevate.app)';
 const PER_PAGE = 100;
 const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
+const REQUEST_TIMEOUT_MS = 15000; // abort a hung Dentally request, never hang forever
+const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// fetch with an abort-based timeout so one stuck request can't block a sync
+// (and, on connect, the connect response) indefinitely.
+async function fetchWithTimeout(url, opts) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(url, { ...opts, signal: ac.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 function authHeader(secrets) {
     try {
@@ -45,7 +59,7 @@ function authHeader(secrets) {
 
 // Page through a Dentally collection endpoint. Honours 429 Retry-After and the
 // mandatory User-Agent + date filter. Returns the flat array of items.
-async function fetchAllPages(base, path, auth, params) {
+async function fetchAllPages(base, path, auth, params, onPage = null) {
     const out = [];
     let page = 1;
     for (;;) {
@@ -55,7 +69,7 @@ async function fetchAllPages(base, path, auth, params) {
         }
         let res;
         for (let attempt = 0; attempt < 4; attempt++) {
-            res = await fetch(url, {
+            res = await fetchWithTimeout(url, {
                 headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
             });
             if (res.status === 429) {
@@ -72,12 +86,68 @@ async function fetchAllPages(base, path, auth, params) {
         const items = key ? body[key] : [];
         out.push(...items);
         const totalPages = body.meta?.total_pages;
+        if (onPage) onPage(page, totalPages ? Math.min(totalPages, MAX_PAGES) : null);
         const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
         if (done) break;
+        if (page >= MAX_PAGES) { // bound a single run; cursor resumes next sync
+            console.warn(`[dentally] ${path}: hit ${MAX_PAGES}-page cap (${out.length} rows), stopping this run`);
+            break;
+        }
         page++;
         await sleep(RATE_DELAY_MS);
     }
     return out;
+}
+
+// Fetch a single page (for cheap site-id discovery — not a full paginate).
+async function fetchOnePage(base, path, auth, params) {
+    const url = new URL(`${base}${path}`);
+    for (const [k, v] of Object.entries({ ...params, page: 1, per_page: PER_PAGE })) {
+        url.searchParams.set(k, String(v));
+    }
+    const res = await fetchWithTimeout(url, {
+        headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error(`Dentally ${path} -> HTTP ${res.status}`);
+    const body = await res.json();
+    const key = Object.keys(body).find((k) => Array.isArray(body[k]));
+    return key ? body[key] : [];
+}
+
+// Sample Dentally and report the distinct site_ids it returns (with counts), so
+// the owner can map each practice without hunting in Dentally settings. Samples
+// one page each of patients/appointments/payments over the last year.
+export async function detectSiteIds(orgId, integration) {
+    const base = integration.config?.base_url ?? DEFAULT_BASE;
+    const auth = authHeader(integration.secrets);
+    if (!auth) return { error: 'no_auth', siteIds: [] };
+    const since = new Date(Date.now() - 365 * 86400000).toISOString();
+    const counts = new Map();
+    const tally = (items) => {
+        for (const it of items) {
+            const s = it?.site_id;
+            if (s != null) counts.set(String(s), (counts.get(String(s)) || 0) + 1);
+        }
+    };
+    // Sample records for site ids + fetch the sites list for human names so the
+    // owner sees "Ashford" not a raw UUID. /sites is the documented resource;
+    // fall back to /practices if a tenant exposes it under that name.
+    const [patients, appts, pays, sites, practices] = await Promise.all([
+        fetchOnePage(base, '/patients', auth, { updated_since: since }).catch(() => []),
+        fetchOnePage(base, '/appointments', auth, { updated_since: since }).catch(() => []),
+        fetchOnePage(base, '/payments', auth, { updated_since: since }).catch(() => []),
+        fetchOnePage(base, '/sites', auth, {}).catch(() => []),
+        fetchOnePage(base, '/practices', auth, {}).catch(() => []),
+    ]);
+    tally(patients); tally(appts); tally(pays);
+    const nameById = new Map();
+    for (const s of [...sites, ...practices]) {
+        if (s?.id != null) nameById.set(String(s.id), s.name ?? s.title ?? s.label ?? null);
+    }
+    const siteIds = [...counts.entries()]
+        .map(([site_id, count]) => ({ site_id, count, name: nameById.get(site_id) ?? null }))
+        .sort((a, b) => b.count - a.count);
+    return { siteIds };
 }
 
 // ---- field mappers (verify against sandbox) --------------------------------
@@ -118,12 +188,19 @@ function toPence(amount) {
 
 async function upsertChunked(table, rows, onConflict) {
     let synced = 0;
+    let failed = 0;
     for (let i = 0; i < rows.length; i += UPSERT_CHUNK) {
         const chunk = rows.slice(i, i + UPSERT_CHUNK);
         const { error } = await supabase_1.serviceClient.from(table).upsert(chunk, { onConflict });
-        if (error) throw new Error(`${table} upsert: ${error.message}`);
-        synced += chunk.length;
+        if (!error) { synced += chunk.length; continue; }
+        // One bad row must not drop a 500-row chunk or abort the whole sync —
+        // retry the chunk row-by-row, skipping only the offending rows.
+        for (const row of chunk) {
+            const { error: e2 } = await supabase_1.serviceClient.from(table).upsert([row], { onConflict });
+            if (e2) failed++; else synced++;
+        }
     }
+    if (failed) console.warn(`[dentally] ${table}: skipped ${failed} unstorable row(s)`);
     return synced;
 }
 
@@ -152,11 +229,13 @@ async function loadContactMap(orgId) {
     return map;
 }
 
-// ---- pulls ------------------------------------------------------------------
+// ---- row builders (shared by polling + webhooks) ----------------------------
+// One Dentally record -> one of our table rows. Pure (no I/O) so the poll and
+// the webhook receiver map IDENTICALLY. appointment/payment return null when the
+// site_id maps to no practice (those tables' practice_id is NOT NULL → skipped).
 
-async function pullPatients(orgId, base, auth, since, siteMap) {
-    const remote = await fetchAllPages(base, '/patients', auth, { updated_since: since });
-    const rows = remote.map((p) => ({
+export function patientRow(orgId, p, siteMap) {
+    return {
         organisation_id: orgId,
         source: 'dentally',
         pms_external_id: String(p.id),
@@ -167,59 +246,113 @@ async function pullPatients(orgId, base, auth, since, siteMap) {
         phone: p.mobile_phone ?? p.phone_number ?? null,
         date_of_birth: p.date_of_birth ?? null,
         practice_id: siteMap.get(String(p.site_id)) ?? null,
-    }));
+    };
+}
+
+export function appointmentRow(orgId, a, siteMap, contactMap) {
+    // Dentally appointments expose the site as `practitioner_site_id` (no plain
+    // `site_id`); fall back to site_id for other shapes. Verified against live API.
+    const practiceId = siteMap.get(String(a.practitioner_site_id ?? a.site_id));
+    if (!practiceId) return null;
+    // appointments.starts_at is NOT NULL — some Dentally rows (e.g. unscheduled)
+    // carry no start_time, so skip them rather than fail the whole upsert chunk.
+    const startsAt = a.start_time ?? a.start ?? null;
+    if (!startsAt) return null;
+    return {
+        organisation_id: orgId,
+        source: 'dentally',
+        pms_external_id: String(a.id),
+        practice_id: practiceId,
+        contact_id: contactMap.get(String(a.patient_id)) ?? null,
+        starts_at: startsAt,
+        ends_at: a.finish_time ?? a.finish ?? a.end_time ?? null,
+        status: mapAppointmentStatus(a.state ?? a.status),
+    };
+}
+
+export function paymentRow(orgId, p, siteMap, contactMap) {
+    const practiceId = siteMap.get(String(p.site_id));
+    if (!practiceId) return null;
+    return {
+        organisation_id: orgId,
+        source: 'dentally',
+        external_id: String(p.id),
+        practice_id: practiceId,
+        contact_id: contactMap.get(String(p.patient_id)) ?? null,
+        amount_pence: toPence(p.amount),
+        method: mapPaymentMethod(p.method ?? p.payment_method),
+        // Dentally payments date field is `dated_on`. Verified against live API.
+        status: mapPaymentStatus(p),
+        processed_at: p.dated_on ?? p.payment_date ?? p.paid_at ?? p.created_at ?? null,
+    };
+}
+
+// ---- pulls ------------------------------------------------------------------
+
+async function pullPatients(orgId, base, auth, since, siteMap, onPage) {
+    const remote = await fetchAllPages(base, '/patients', auth, { updated_since: since }, onPage);
+    const rows = remote.map((p) => patientRow(orgId, p, siteMap));
     const synced = await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
     return { synced };
 }
 
-async function pullAppointments(orgId, base, auth, since, siteMap, contactMap) {
-    const remote = await fetchAllPages(base, '/appointments', auth, { updated_since: since });
+async function pullAppointments(orgId, base, auth, since, siteMap, contactMap, onPage) {
+    const remote = await fetchAllPages(base, '/appointments', auth, { updated_since: since }, onPage);
     const rows = [];
     let skipped = 0;
     for (const a of remote) {
-        const practiceId = siteMap.get(String(a.site_id));
-        if (!practiceId) { skipped++; continue; } // appointments.practice_id is NOT NULL
-        rows.push({
-            organisation_id: orgId,
-            source: 'dentally',
-            pms_external_id: String(a.id),
-            practice_id: practiceId,
-            contact_id: contactMap.get(String(a.patient_id)) ?? null,
-            starts_at: a.start_time ?? a.start ?? null,
-            ends_at: a.finish_time ?? a.finish ?? a.end_time ?? null,
-            status: mapAppointmentStatus(a.state ?? a.status),
-        });
+        const row = appointmentRow(orgId, a, siteMap, contactMap);
+        if (!row) { skipped++; continue; } // appointments.practice_id is NOT NULL
+        rows.push(row);
     }
     const synced = await upsertChunked('appointments', rows, 'organisation_id,source,pms_external_id');
     return { synced, skipped };
 }
 
-async function pullPayments(orgId, base, auth, since, siteMap, contactMap) {
-    const remote = await fetchAllPages(base, '/payments', auth, { updated_since: since });
+async function pullPayments(orgId, base, auth, since, siteMap, contactMap, onPage) {
+    const remote = await fetchAllPages(base, '/payments', auth, { updated_since: since }, onPage);
     const rows = [];
     let skipped = 0;
     for (const p of remote) {
-        const practiceId = siteMap.get(String(p.site_id));
-        if (!practiceId) { skipped++; continue; } // payments.practice_id is NOT NULL
-        rows.push({
-            organisation_id: orgId,
-            source: 'dentally',
-            external_id: String(p.id),
-            practice_id: practiceId,
-            contact_id: contactMap.get(String(p.patient_id)) ?? null,
-            amount_pence: toPence(p.amount),
-            method: mapPaymentMethod(p.payment_method),
-            status: mapPaymentStatus(p),
-            processed_at: p.payment_date ?? p.paid_at ?? p.created_at ?? null,
-        });
+        const row = paymentRow(orgId, p, siteMap, contactMap);
+        if (!row) { skipped++; continue; } // payments.practice_id is NOT NULL
+        rows.push(row);
     }
     const synced = await upsertChunked('payments', rows, 'organisation_id,source,external_id');
     return { synced, skipped };
 }
 
+// ---- webhook apply (real-time, single record) -------------------------------
+// Map+upsert ONE record pushed by a Dentally webhook, reusing the row builders
+// above. resourceType ∈ patient|appointment|payment. create/update both upsert
+// (idempotent). Returns a small result for logging. Field/event shapes are the
+// documented v1 assumptions — verify against the live webhook during UAT.
+export async function applyWebhookEvent(orgId, resourceType, record) {
+    if (!record || record.id == null) return { ignored: 'no_record_id' };
+    const siteMap = await loadSiteMap(orgId);
+    if (resourceType === 'patient') {
+        await upsertChunked('contacts', [patientRow(orgId, record, siteMap)], 'organisation_id,source,pms_external_id');
+        return { table: 'contacts', applied: 1 };
+    }
+    const contactMap = await loadContactMap(orgId);
+    if (resourceType === 'appointment') {
+        const row = appointmentRow(orgId, record, siteMap, contactMap);
+        if (!row) return { skipped: 'unmatched_practice' };
+        await upsertChunked('appointments', [row], 'organisation_id,source,pms_external_id');
+        return { table: 'appointments', applied: 1 };
+    }
+    if (resourceType === 'payment') {
+        const row = paymentRow(orgId, record, siteMap, contactMap);
+        if (!row) return { skipped: 'unmatched_practice' };
+        await upsertChunked('payments', [row], 'organisation_id,source,external_id');
+        return { table: 'payments', applied: 1 };
+    }
+    return { ignored: resourceType };
+}
+
 // ---- orchestration ----------------------------------------------------------
 
-export async function syncOneOrg(orgId, integration) {
+export async function syncOneOrg(orgId, integration, onProgress = () => {}) {
     const base = integration.config?.base_url ?? DEFAULT_BASE;
     const auth = authHeader(integration.secrets);
     if (!auth) {
@@ -229,15 +362,21 @@ export async function syncOneOrg(orgId, integration) {
     // Incremental cursor: changed-since last successful sync (default 30d on first run).
     const since = integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString();
 
+    // 3 equal phases (patients → appointments → payments). Overall pct =
+    // (phaseIndex + page/totalPages) / 3. Pages run sequentially for a clean bar.
+    const PHASES = ['patients', 'appointments', 'payments'];
+    const reporter = (idx) => (page, totalPages) => {
+        const frac = totalPages ? Math.min(1, page / totalPages) : 0;
+        onProgress({ phase: PHASES[idx], pct: Math.round(((idx + frac) / PHASES.length) * 100), page, totalPages });
+    };
+
     try {
         const siteMap = await loadSiteMap(orgId);
         // Patients first so appointment/payment contact resolution sees fresh ids.
-        const patients = await pullPatients(orgId, base, auth, since, siteMap);
+        const patients = await pullPatients(orgId, base, auth, since, siteMap, reporter(0));
         const contactMap = await loadContactMap(orgId);
-        const [appts, pays] = await Promise.all([
-            pullAppointments(orgId, base, auth, since, siteMap, contactMap),
-            pullPayments(orgId, base, auth, since, siteMap, contactMap),
-        ]);
+        const appts = await pullAppointments(orgId, base, auth, since, siteMap, contactMap, reporter(1));
+        const pays = await pullPayments(orgId, base, auth, since, siteMap, contactMap, reporter(2));
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
             last_error: null,

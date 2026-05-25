@@ -7,6 +7,9 @@ import * as async_handler_1 from "../middleware/async-handler.js";
 import * as webhook_controller_1 from "../controllers/webhook.controller.js";
 const router = (0, express_1.Router)();
 router.post('/stripe', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.stripe));
+// Dentally real-time webhook. :token (signed) identifies the org; HMAC verified
+// in the service. Raw body parser mounted on /webhooks/dentally in app.js.
+router.post('/dentally/:token', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.dentally));
 router.post('/postmark/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.postmarkInbound));
 router.post('/twilio/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.twilioInbound));
 export default router;

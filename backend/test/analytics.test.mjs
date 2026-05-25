@@ -20,9 +20,14 @@ const ORG_A = 'org-aaaaaaaa';
 const ORG_B = 'org-bbbbbbbb';
 const orgFilter = (q) => q.eqs.find((e) => e.col === 'organisation_id');
 
+// Helper: stub the settled_receipts_by_day RPC with [{day, pence}] rows.
+const rpcReceipts = (rows = []) => (fn) =>
+  fn === 'settled_receipts_by_day' ? { data: rows, error: null } : { data: null, error: { message: `rpc ${fn} not stubbed` } };
+
 beforeEach(() => {
   supaRec.last = undefined;
   supaRec.resultProvider = () => ({ data: [], error: null });
+  supaRec.rpcProvider = () => ({ data: [], error: null });
 });
 
 describe('revenueSeries — deterministic projection of the real baseline', () => {
@@ -96,33 +101,35 @@ describe('REGRESSION (CRITICAL) — revenueSeries byte-identical after _projectM
   });
 });
 
-describe('financeSeries — real revenue from payments, no projected curve', () => {
+describe('financeSeries — exact real revenue, costs/profit real-or-zero', () => {
   const now = () => new Date(2026, 4, 15);
 
-  it('no baseline + no payments → 12 real zero months (no error)', async () => {
-    supaRec.resultProvider = (q) =>
-      q.table === 'payments' ? { data: [], error: null }
-      : q.table === 'monthly_financials' ? { data: [], error: null }
-      : { data: { baseline: {} }, error: null };
+  it('no payments + no actuals → 12 real zero months (no error)', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
     const r = await svc.financeSeries(ORG_A, { months: 12, now });
-    expect(r.basis).toBe('actuals-revenue');
+    expect(r.basis).toBe('revenue-only');
     expect(r.months).toHaveLength(12);
     expect(r.months.every((m) => m.revenue === 0)).toBe(true);
+    expect(r.costsAvailable).toBe(false);
   });
 
-  it('revenue is the real settled payments per month; costs estimated from baseline', async () => {
-    supaRec.resultProvider = (q) => {
-      if (q.table === 'payments')
-        return { data: [{ amount_pence: 6_000_000, processed_at: '2026-05-02T00:00:00Z' }], error: null };
-      if (q.table === 'monthly_financials') return { data: [], error: null };
-      return { data: { baseline: { revenue: 1_200_000, cost_staff: 18 } }, error: null };
-    };
+  it('revenue = EXACT settled receipts per month (RPC); costs & profit 0 (no cost source)', async () => {
+    supaRec.resultProvider = (q) => (q.table === 'monthly_financials' ? { data: [], error: null } : { data: { baseline: { revenue: 1_200_000, cost_staff: 18 } }, error: null });
+    // RPC daily rows summing to £60,000 in May, £30,000 in April
+    supaRec.rpcProvider = rpcReceipts([
+      { day: '2026-05-02', pence: 4_000_000 },
+      { day: '2026-05-20', pence: 2_000_000 },
+      { day: '2026-04-10', pence: 3_000_000 },
+    ]);
     const fs = await svc.financeSeries(ORG_A, { months: 12, now });
     const may = fs.months.find((m) => m.month === '2026-05');
-    expect(may.revenue).toBe(6_000_000); // real payment, not a projected curve
-    expect(may.staffCosts).toBe(Math.round(6_000_000 * 0.18)); // baseline % of REAL revenue
-    expect(may.estimated).toBe(true);
-    expect(fs.costsEstimated).toBe(true);
+    expect(may.revenue).toBe(6_000_000); // exact real, not baseline curve
+    expect(may.staffCosts).toBe(0); // no cost source → 0, NOT a baseline estimate
+    expect(may.profit).toBe(0); // unknown costs → profit 0
+    expect(may.costsAvailable).toBe(false);
+    expect(fs.months.find((m) => m.month === '2026-04').revenue).toBe(3_000_000);
+    expect(fs.costsAvailable).toBe(false);
   });
 });
 
@@ -185,129 +192,100 @@ describe('practiceSummary — real practices + settled payments', () => {
   });
 });
 
-describe('financial — real margins + estimated balance sheet', () => {
-  it('{error} when no baseline', async () => {
-    supaRec.resultProvider = () => ({ data: { baseline: {} }, error: null });
-    expect(await svc.financial(ORG_A)).toEqual({ error: 'No baseline set' });
+describe('financial — exact revenue, costs/balance-sheet real-or-zero', () => {
+  const now = () => new Date(2026, 4, 15);
+
+  it('{error} when no revenue and no actuals', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health' ? { data: { baseline: {} }, error: null } : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([]);
+    expect(await svc.financial(ORG_A, { now })).toEqual({ error: 'No revenue data' });
   });
 
-  it('no real costs → margins estimated from baseline; balance sheet flagged estimated', async () => {
-    // baseline only (no monthly_financials, no payments) → costs estimated.
-    supaRec.resultProvider = () => ({
-      data: {
-        baseline: {
-          revenue: 1_000_000,
-          cash: 200_000,
-          cost_associates: 30,
-          cost_lab: 5,
-          cost_materials: 5,
-          cost_staff: 15,
-        },
-      },
-      error: null,
-    });
-    const r = await svc.financial(ORG_A, { dsoDays: 45, payableDays: 30 });
-    expect(r.basis).toBe('estimated');
-    expect(r.assumptions).toEqual({ dsoDays: 45, payableDays: 30 });
-    const gross = r.ratios.find((x) => x.key === 'grossMarginPct');
-    const net = r.ratios.find((x) => x.key === 'netMarginPct');
-    // COGS = 30+5+5 = 40% → gross 60%; total costs 30+5+5+15 = 55% → net 45%
-    // No real cost source → margins flagged estimated.
-    expect(gross).toMatchObject({ value: 60, estimated: true });
-    expect(net).toMatchObject({ value: 45, estimated: true });
-    // every balance-sheet line flagged estimated (cash real here → false)
-    expect(r.balanceSheet.receivablesPence.estimated).toBe(true);
-    expect(r.balanceSheet.equityPence.estimated).toBe(true);
-    expect(r.balanceSheet.cashPence).toEqual({ value: 20_000_000, estimated: false });
-    // receivables = revenuePence/365*45
-    expect(r.balanceSheet.receivablesPence.value).toBe(
-      Math.round((100_000_000 / 365) * 45),
-    );
-    expect(r.ratios.find((x) => x.key === 'currentRatio').estimated).toBe(true);
-  });
-
-  it('uses REAL settled-payment revenue (TTM); costs estimated from baseline', async () => {
-    const now = () => new Date(2026, 4, 15);
+  it('real payment revenue, NO cost source → margins 0, balance sheet 0 except real bank', async () => {
     supaRec.resultProvider = (q) => {
       if (q.table === 'monthly_financials') return { data: [], error: null };
-      if (q.table === 'payments')
-        return { data: [{ amount_pence: 100_000_000, processed_at: '2026-03-01T00:00:00Z' }], error: null };
-      return {
-        data: { baseline: { revenue: 1_000_000, cost_associates: 30, cost_lab: 5, cost_materials: 5, cost_staff: 15 } },
-        error: null,
-      };
+      if (q.table === 'bank_accounts')
+        return { data: [{ balance_pence: 5_000_000, last_synced_at: '2026-05-14T00:00:00Z' }], error: null };
+      return { data: { baseline: { revenue: 1_000_000, cost_staff: 30 } }, error: null }; // baseline must be IGNORED
     };
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-03-01', pence: 100_000_000 }]);
     const r = await svc.financial(ORG_A, { dsoDays: 45, payableDays: 30, now });
-    // revenue = real £1,000,000 (100,000,000 pence); costs estimated from baseline
-    expect(r.ratios.find((x) => x.key === 'grossMarginPct')).toMatchObject({ value: 60, estimated: true });
-    expect(r.ratios.find((x) => x.key === 'netMarginPct')).toMatchObject({ value: 45, estimated: true });
-    // receivables derived from the REAL revenue, not the baseline
-    expect(r.balanceSheet.receivablesPence.value).toBe(Math.round((100_000_000 / 365) * 45));
+    expect(r.basis).toBe('revenue-only');
+    expect(r.revenuePence).toBe(100_000_000); // exact real revenue
+    expect(r.costsAvailable).toBe(false);
+    // No cost source → margins 0 (NOT 100%, NOT a baseline estimate)
+    expect(r.ratios.find((x) => x.key === 'grossMarginPct')).toMatchObject({ value: 0, estimated: false });
+    expect(r.ratios.find((x) => x.key === 'netMarginPct')).toMatchObject({ value: 0, estimated: false });
+    // Balance sheet: only real bank cash; everything else 0
+    expect(r.balanceSheet.cashPence).toEqual({ value: 5_000_000, estimated: false });
+    expect(r.balanceSheet.receivablesPence).toEqual({ value: 0, estimated: false });
+    expect(r.balanceSheet.currentLiabilitiesPence).toEqual({ value: 0, estimated: false });
+    expect(r.balanceSheet.equityPence).toEqual({ value: 5_000_000, estimated: false });
+  });
+
+  it('monthly_financials actuals → real margins (estimated:false)', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials'
+        ? { data: [
+            { period: '2026-01', dental_bucket: 'revenue', amount_pence: 10_000_000, source: 'xero' },
+            { period: '2026-01', dental_bucket: 'lab', amount_pence: 2_000_000, source: 'xero' },
+            { period: '2026-01', dental_bucket: 'staff', amount_pence: 3_000_000, source: 'xero' },
+          ], error: null }
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([]);
+    const r = await svc.financial(ORG_A, { now });
+    expect(r.basis).toBe('actuals');
+    expect(r.costsAvailable).toBe(true);
+    // COGS = lab 2m → gross 80%; total costs 5m → net 50%
+    expect(r.ratios.find((x) => x.key === 'grossMarginPct')).toMatchObject({ value: 80, estimated: false });
+    expect(r.ratios.find((x) => x.key === 'netMarginPct')).toMatchObject({ value: 50, estimated: false });
   });
 });
 
 describe('cashflow — backward real settled receipts (no projection)', () => {
   const now = () => new Date(2026, 4, 15); // Fri 15 May 2026
 
-  it('works with no baseline — cashflow is real; baseline only a comparison', async () => {
-    supaRec.resultProvider = (q) =>
-      q.table === 'business_health'
-        ? { data: { baseline: {} }, error: null }
-        : { data: [], error: null };
+  it('no receipts → 13 real zero weeks, opening 0', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
     const r = await svc.cashflow(ORG_A, { now });
     expect(r.basis).toBe('actuals');
     expect(r.weeks).toHaveLength(13);
     expect(r.openingBalancePence).toBe(0);
-    expect(r.baselineWeeklyRunRatePence).toBe(null);
-    // every week is real (no projected receipts) → all zero here
     expect(r.weeks.every((w) => w.receiptsPence === 0)).toBe(true);
     expect(r.totalReceiptsPence).toBe(0);
   });
 
-  it('opening = Σ bank; real receipts bucketed backward; dedupe + null skipped', async () => {
-    supaRec.resultProvider = (q) => {
-      if (q.table === 'business_health')
-        return { data: { baseline: { revenue: 1_040_000 } }, error: null };
-      if (q.table === 'bank_accounts')
-        return {
-          data: [
+  it('opening = Σ bank; exact receipts bucketed backward by week', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'bank_accounts'
+        ? { data: [
             { balance_pence: 400_000, last_synced_at: '2026-05-14T00:00:00Z' },
             { balance_pence: 100_000, last_synced_at: '2026-05-10T00:00:00Z' },
-          ],
-          error: null,
-        };
-      // settled payments: today twice (re-delivery → once), one a week back, one null date
-      return {
-        data: [
-          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-15T09:00:00Z' },
-          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-15T09:00:00Z' },
-          { id: 'pay3', amount_pence: 10_000, processed_at: '2026-05-08T09:00:00Z' },
-          { id: 'pay2', amount_pence: 9_999, processed_at: null },
-        ],
-        error: null,
-      };
-    };
+          ], error: null }
+        : { data: [], error: null };
+    // exact daily receipts: today £250 (latest week), a week back £100
+    supaRec.rpcProvider = rpcReceipts([
+      { day: '2026-05-15', pence: 25_000 },
+      { day: '2026-05-08', pence: 10_000 },
+    ]);
     const r = await svc.cashflow(ORG_A, { weeks: 13, now });
     expect(r.basis).toBe('actuals');
     expect(r.bankConnected).toBe(true);
-    expect(r.bankStale).toBe(false); // freshest sync 2026-05-14, ref 05-15
+    expect(r.bankStale).toBe(false);
     expect(r.openingBalancePence).toBe(500_000);
     expect(r.weeks).toHaveLength(13);
     expect(r.weeks[0].openingBalancePence).toBe(500_000);
-    // most recent week holds today's pay1, counted ONCE (not the re-delivery)
-    expect(r.weeks[12].receiptsPence).toBe(25_000);
-    // closing is the running balance: opening + all real receipts
+    expect(r.weeks[12].receiptsPence).toBe(25_000); // today in the latest week
     expect(r.weeks[12].closingBalancePence).toBe(500_000 + 10_000 + 25_000);
     expect(r.totalReceiptsPence).toBe(35_000);
-    // baseline run-rate exposed as a comparison only
-    expect(r.baselineWeeklyRunRatePence).toBe(Math.round((1_040_000 * 100) / 52));
+    expect(r).not.toHaveProperty('baselineWeeklyRunRatePence'); // no baseline anymore
   });
 
   it('no bank rows → opening 0, bankStale true, still 13 real weeks', async () => {
-    supaRec.resultProvider = (q) =>
-      q.table === 'business_health'
-        ? { data: { baseline: { revenue: 600_000 } }, error: null }
-        : { data: [], error: null };
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
     const r = await svc.cashflow(ORG_A, { now });
     expect(r.bankConnected).toBe(false);
     expect(r.bankStale).toBe(true);
@@ -315,12 +293,13 @@ describe('cashflow — backward real settled receipts (no projection)', () => {
     expect(r.weeks).toHaveLength(13);
   });
 
-  it('per-practice: practice_id reaches the payments query', async () => {
+  it('per-practice: practice_id is passed to the receipts RPC', async () => {
     supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
+    supaRec.rpcCalls = [];
     await svc.cashflow(ORG_A, { now, practiceId: 'prac-11111111' });
-    // the payments read is the last query in cashflow
-    expect(supaRec.last.table).toBe('payments');
-    expect(supaRec.last.eqs).toContainEqual({ col: 'practice_id', val: 'prac-11111111' });
+    const call = supaRec.rpcCalls.find((c) => c.fn === 'settled_receipts_by_day');
+    expect(call.params).toMatchObject({ p_org: ORG_A, p_practice: 'prac-11111111' });
   });
 });
 

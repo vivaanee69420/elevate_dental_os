@@ -97,38 +97,19 @@ export const analyticsRepository = {
             .pop() || null;
         return { totalPence, lastSyncedAt, count: rows.length };
     },
-    // Settled payments with a real processed_at, for the cashflow overlay.
-    // id is selected so the service can dedupe against webhook re-delivery.
-    async settledPaymentsForCashflow(orgId, sinceISO, practiceId = null) {
-        let query = supabase_1.serviceClient
-            .from('payments')
-            .select('id, amount_pence, processed_at')
-            .eq('organisation_id', orgId)
-            .eq('status', 'settled')
-            .gte('processed_at', sinceISO);
-        if (practiceId)
-            query = query.eq('practice_id', practiceId);
-        const { data, error } = await query.limit(LIMIT_GUARD);
+    // EXACT settled-payment revenue, summed in Postgres (RPC) so it is never
+    // truncated by the 1000-row read cap. Returns [{ day:'YYYY-MM-DD', pence }]
+    // for the window (<=366 rows); callers bucket days into months/weeks/TTM.
+    // practiceId scopes to one practice. Real revenue source — no projection.
+    async settledReceiptsByDay(orgId, sinceISO, practiceId = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('settled_receipts_by_day', {
+            p_org: orgId,
+            p_since: sinceISO,
+            p_practice: practiceId ?? null,
+        });
         if (error)
             throw new Error(error.message);
-        return data || [];
-    },
-    // Settled payments in a date window for REAL monthly revenue (Profit /
-    // Financial / Valuation). amount_pence + processed_at, practice-scoped when
-    // set. This is the real revenue source — no projection.
-    async settledPaymentsInRange(orgId, sinceISO, practiceId = null) {
-        let query = supabase_1.serviceClient
-            .from('payments')
-            .select('amount_pence, processed_at')
-            .eq('organisation_id', orgId)
-            .eq('status', 'settled')
-            .gte('processed_at', sinceISO);
-        if (practiceId)
-            query = query.eq('practice_id', practiceId);
-        const { data, error } = await query.limit(LIMIT_GUARD);
-        if (error)
-            throw new Error(error.message);
-        return data || [];
+        return Array.isArray(data) ? data : [];
     },
     // ------------------------------------------------------------------------
     // Business Hub sources — per-practice rollup across finance + ops + growth.

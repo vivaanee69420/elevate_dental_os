@@ -90,6 +90,20 @@ export const integrationRepository = {
             .eq('organisation_id', orgId)
             .eq('provider', provider);
     },
+    // Shallow-merge a patch into the JSONB config without clobbering other keys
+    // (e.g. set webhook_secret while preserving base_url).
+    async mergeConfig(orgId, provider, patch) {
+        const existing = await this.getByProvider(orgId, provider);
+        if (!existing) throw new Error(`${provider} not connected`);
+        const config = { ...(existing.config ?? {}), ...patch };
+        const { error } = await supabase_1.serviceClient
+            .from('integrations')
+            .update({ config })
+            .eq('organisation_id', orgId)
+            .eq('provider', provider);
+        if (error) throw new Error(error.message);
+        return config;
+    },
     async setSyncTime(orgId, provider) {
         await supabase_1.serviceClient
             .from('integrations')

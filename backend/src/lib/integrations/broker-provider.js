@@ -18,6 +18,10 @@ function makeBroker(id, label, category, pasteHint) {
                 secrets: encryptSecret(JSON.stringify({ apiKey })),
                 status: 'active',
                 verified_at: new Date().toISOString(),
+                // Broker keys are long-lived API tokens — never auto-expired or
+                // refreshed on our side. expires_at=null = treat as permanent;
+                // the token only stops working if revoked here or in Dentally.
+                expires_at: null,
             });
             return { ok: true };
         },

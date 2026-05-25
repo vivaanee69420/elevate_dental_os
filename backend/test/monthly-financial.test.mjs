@@ -21,9 +21,14 @@ const ORG_A = 'org-aaaaaaaa';
 const ORG_B = 'org-bbbbbbbb';
 const orgFilter = (q) => q.eqs.find((e) => e.col === 'organisation_id');
 
+// Stub the settled_receipts_by_day RPC with [{day, pence}] rows.
+const rpcReceipts = (rows = []) => (fn) =>
+  fn === 'settled_receipts_by_day' ? { data: rows, error: null } : { data: null, error: { message: `rpc ${fn} not stubbed` } };
+
 beforeEach(() => {
   supaRec.last = undefined;
   supaRec.resultProvider = () => ({ data: [], error: null });
+  supaRec.rpcProvider = () => ({ data: [], error: null });
 });
 
 describe('bucketsByPeriod — Xero overrides manual per period+bucket', () => {
@@ -114,8 +119,8 @@ describe('repository — tenant scoping on the service-client path', () => {
 describe('analytics read path — actuals surface on the finance screens', () => {
   // baseline + monthly_financials rows; synced (xero) overrides manual.
   const withActuals = (rows) => (q) =>
-    q.table === 'monthly_financials'
-      ? { data: rows, error: null }
+    q.table === 'monthly_financials' ? { data: rows, error: null }
+      : q.table === 'bank_accounts' ? { data: [], error: null }
       : { data: { baseline: { revenue: 1_200_000, profit: 300_000, cost_staff: 18 } }, error: null };
 
   it('pl uses actuals when present (basis=actuals)', async () => {
@@ -140,49 +145,40 @@ describe('analytics read path — actuals surface on the finance screens', () =>
     ]);
     const r = await svc.financeSeries(ORG_A, { months: 12, now });
     // Only May has real costs; other months have no payments → zero real
-    // revenue and no estimated costs ⇒ all-real ⇒ basis 'actuals'.
+    // revenue and no costs ⇒ all-real ⇒ basis 'actuals'.
     expect(r.basis).toBe('actuals');
-    expect(r.costsEstimated).toBe(false);
+    expect(r.costsAvailable).toBe(true);
     const may = r.months.find((m) => m.month === '2026-05');
     expect(may.revenue).toBe(7_777_777); // xero, not manual 1
     expect(may.staffCosts).toBe(1_000_000);
     expect(may.profit).toBe(7_777_777 - 1_000_000);
-    expect(may.estimated).toBe(false);
+    expect(may.costsAvailable).toBe(true);
   });
 
-  it('real revenue from settled payments + baseline-estimated costs (basis=actuals-revenue)', async () => {
+  it('real revenue from settled payments (exact RPC); costs & profit 0 (no cost source)', async () => {
     const now = () => new Date(2026, 4, 15);
-    supaRec.resultProvider = (q) => {
-      if (q.table === 'monthly_financials') return { data: [], error: null };
-      if (q.table === 'payments')
-        return {
-          data: [
-            { amount_pence: 5_000_000, processed_at: '2026-05-10T00:00:00Z' },
-            { amount_pence: 3_000_000, processed_at: '2026-04-10T00:00:00Z' },
-          ],
-          error: null,
-        };
-      return { data: { baseline: { revenue: 1_200_000, cost_staff: 20 } }, error: null };
-    };
+    supaRec.resultProvider = (q) => (q.table === 'monthly_financials' ? { data: [], error: null } : { data: { baseline: { revenue: 1_200_000, cost_staff: 20 } }, error: null });
+    supaRec.rpcProvider = rpcReceipts([
+      { day: '2026-05-10', pence: 5_000_000 },
+      { day: '2026-04-10', pence: 3_000_000 },
+    ]);
     const r = await svc.financeSeries(ORG_A, { months: 12, now });
-    expect(r.basis).toBe('actuals-revenue');
-    expect(r.costsEstimated).toBe(true);
+    expect(r.basis).toBe('revenue-only');
+    expect(r.costsAvailable).toBe(false);
     expect(r.months).toHaveLength(12);
     const may = r.months.find((m) => m.month === '2026-05');
-    expect(may.revenue).toBe(5_000_000); // real from payments, not projected
-    expect(may.staffCosts).toBe(1_000_000); // 20% of real revenue (baseline estimate)
-    expect(may.estimated).toBe(true);
+    expect(may.revenue).toBe(5_000_000); // exact real revenue
+    expect(may.staffCosts).toBe(0); // no cost source → 0 (not a baseline estimate)
+    expect(may.profit).toBe(0);
     expect(r.months.find((m) => m.month === '2026-04').revenue).toBe(3_000_000);
   });
 
-  it('no actuals + no payments → 12 real zero months (basis=actuals-revenue)', async () => {
+  it('no actuals + no payments → 12 real zero months (basis=revenue-only)', async () => {
     const now = () => new Date(2026, 4, 15);
-    supaRec.resultProvider = (q) =>
-      q.table === 'monthly_financials' ? { data: [], error: null }
-      : q.table === 'payments' ? { data: [], error: null }
-      : { data: { baseline: { revenue: 1_200_000, cost_staff: 18 } }, error: null };
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
     const r = await svc.financeSeries(ORG_A, { months: 12, now });
-    expect(r.basis).toBe('actuals-revenue');
+    expect(r.basis).toBe('revenue-only');
     expect(r.months).toHaveLength(12);
     expect(r.months.every((m) => m.revenue === 0)).toBe(true);
   });
