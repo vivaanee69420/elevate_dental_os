@@ -21,6 +21,7 @@ router.get('/dashboard', fin, (0, async_handler_1.asyncHandler)(analytics_contro
 router.get('/dashboard-summary', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dashboardSummary));
 router.get('/revenue-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.revenueSeries));
 router.get('/practice-summary', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.practiceSummary));
+router.get('/business-hub', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.businessHub));
 router.get('/ai-insights', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiInsights));
 router.post('/ai-insights/generate', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.generateInsights));
 router.get('/finance-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.financeSeries));

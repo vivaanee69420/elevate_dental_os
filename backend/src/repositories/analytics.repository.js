@@ -111,4 +111,39 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return data || [];
     },
+    // ------------------------------------------------------------------------
+    // Business Hub sources — per-practice rollup across finance + ops + growth.
+    async practicesFull(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('practices')
+            .select('id, name, chairs')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        return data || [];
+    },
+    // Appointments in a rolling window for utilisation / DNA per practice.
+    async appointmentsForHub(orgId, sinceISO) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('appointments')
+            .select('practice_id, status, starts_at')
+            .eq('organisation_id', orgId)
+            .gte('starts_at', sinceISO)
+            .limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        return data || [];
+    },
+    // All leads (any age) for conversion per practice.
+    async leadsForHub(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('leads')
+            .select('practice_id, status')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        return data || [];
+    },
 };

@@ -458,3 +458,57 @@ describe('CROSS-ORG ISOLATION — dashboard queries pin org', () => {
     ).toBe(false);
   });
 });
+
+describe('businessHub — group + per-practice rollup over real tables', () => {
+  it('aggregates revenue/appointments/leads per practice and group, sorted by revenue', async () => {
+    supaRec.resultProvider = (q) => {
+      switch (q.table) {
+        case 'practices': return { data: [
+          { id: 'p1', name: 'Alpha', chairs: 4 },
+          { id: 'p2', name: 'Beta', chairs: 3 },
+        ], error: null };
+        case 'payments': return { data: [
+          { practice_id: 'p1', amount_pence: 100000 },
+          { practice_id: 'p2', amount_pence: 50000 },
+        ], error: null };
+        case 'appointments': return { data: [
+          { practice_id: 'p1', status: 'completed' },
+          { practice_id: 'p1', status: 'no_show' },
+          { practice_id: 'p2', status: 'completed' },
+        ], error: null };
+        case 'leads': return { data: [
+          { practice_id: 'p1', status: 'treatment_started' },
+          { practice_id: 'p1', status: 'new' },
+        ], error: null };
+        case 'business_health': return { data: { baseline: { revenue: 1000000, cost_associates: 40, cost_staff: 20 } }, error: null };
+        default: return { data: [], error: null };
+      }
+    };
+    const res = await svc.businessHub(ORG_A, { days: 90, now: () => new Date('2026-05-25T00:00:00Z') });
+
+    expect(res.group.revenuePence).toBe(150000);
+    expect(res.group.appointments).toBe(3);
+    expect(res.group.noShows).toBe(1);
+    expect(res.group.leads).toBe(2);
+    expect(res.group.revenueTargetPence).toBe(100000000); // baseline.revenue * 100
+    expect(res.group.marginPct).toBeGreaterThan(0);       // 100 - 60 costs = 40% margin
+
+    // sorted by revenue desc → Alpha first
+    expect(res.practices[0]).toMatchObject({
+      name: 'Alpha', revenuePence: 100000, appointments: 2, noShows: 1, noShowRate: 50, leads: 2, conversionRate: 50,
+    });
+    expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 50000, appointments: 1 });
+  });
+
+  it('every query is org-scoped (cross-org isolation on the service-client path)', async () => {
+    const tables = [];
+    supaRec.resultProvider = (q) => {
+      tables.push({ table: q.table, org: q.eqs.find((e) => e.col === 'organisation_id')?.val });
+      return q.table === 'business_health' ? { data: { baseline: {} }, error: null } : { data: [], error: null };
+    };
+    await svc.businessHub(ORG_B, { days: 90 });
+    // practices, payments, appointments, leads, business_health all filtered to ORG_B
+    expect(tables.filter((t) => t.org === ORG_B).length).toBe(tables.length);
+    expect(tables.length).toBeGreaterThanOrEqual(5);
+  });
+});
