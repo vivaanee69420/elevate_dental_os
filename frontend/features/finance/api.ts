@@ -14,13 +14,16 @@ export interface FinanceMonth {
   profit: number;
 }
 
-export async function getFinanceSeries(): Promise<{
+export async function getFinanceSeries(practiceId?: string | null): Promise<{
   error?: string;
+  basis?: 'actuals' | 'mixed' | 'baseline-projection';
   months: FinanceMonth[];
 }> {
-  const r = await api('/api/analytics/finance-series?months=12');
+  const pp = practiceId ? `&practice_id=${practiceId}` : '';
+  const r = await api(`/api/analytics/finance-series?months=12${pp}`);
   if (r?.error) return { error: r.error, months: [] };
   return {
+    basis: r.basis,
     months: (r.months ?? []).map((m: any) => ({
       month: m.month,
       revenue: p(m.revenue),
@@ -83,6 +86,7 @@ export interface FinancialRatio {
 export async function getFinancial(
   dsoDays = 45,
   payableDays = 30,
+  practiceId?: string | null,
 ): Promise<{
   error?: string;
   basis?: string;
@@ -90,8 +94,9 @@ export async function getFinancial(
   ratios: FinancialRatio[];
   balanceSheet: Record<string, { value: number; estimated: boolean }>;
 }> {
+  const pp = practiceId ? `&practice_id=${practiceId}` : '';
   const r = await api(
-    `/api/analytics/financial?dsoDays=${dsoDays}&payableDays=${payableDays}`,
+    `/api/analytics/financial?dsoDays=${dsoDays}&payableDays=${payableDays}${pp}`,
   );
   if (r?.error)
     return {
@@ -174,4 +179,64 @@ export interface ManualPaymentInput {
 
 export async function recordManualPayment(input: ManualPaymentInput) {
   return api('/api/payments', { method: 'POST', body: JSON.stringify(input) });
+}
+
+// --- Manual P&L actuals (monthly_financials) --------------------------------
+// POST /api/monthly-financials — owner enters real P&L line items per period +
+// bucket. source='manual' set server-side. These surface on /profit + /financial
+// (Xero overrides manual for the same period+bucket; manual is the fallback).
+export type DentalBucket =
+  | 'revenue' | 'staff' | 'lab' | 'materials' | 'overhead' | 'tax' | 'other';
+
+export const DENTAL_BUCKET_LABELS: Record<DentalBucket, string> = {
+  revenue: 'Revenue',
+  staff: 'Staff costs',
+  lab: 'Lab',
+  materials: 'Materials',
+  overhead: 'Overhead',
+  tax: 'Tax',
+  other: 'Other',
+};
+
+export interface MonthlyFinancialInput {
+  period: string; // YYYY-MM
+  dental_bucket: DentalBucket;
+  amount_pence: number;
+  account_code?: string;
+  practice_id?: string | null;
+}
+
+export interface MonthlyFinancialRow {
+  id: string;
+  period: string;
+  account_code: string;
+  dental_bucket: DentalBucket;
+  amount_pence: number;
+  practice_id: string | null;
+  source: 'manual' | 'xero' | 'quickbooks';
+  updated_at: string;
+}
+
+export async function recordMonthlyFinancial(input: MonthlyFinancialInput) {
+  return api('/api/monthly-financials', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listMonthlyFinancials(params?: {
+  from?: string;
+  to?: string;
+  practice_id?: string | null;
+}): Promise<{ rows: MonthlyFinancialRow[] }> {
+  const qs = new URLSearchParams();
+  if (params?.from) qs.set('from', params.from);
+  if (params?.to) qs.set('to', params.to);
+  if (params?.practice_id) qs.set('practice_id', params.practice_id);
+  const q = qs.toString();
+  return api(`/api/monthly-financials${q ? `?${q}` : ''}`);
+}
+
+export async function deleteMonthlyFinancial(id: string) {
+  return api(`/api/monthly-financials/${id}`, { method: 'DELETE' });
 }
