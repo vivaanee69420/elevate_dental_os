@@ -11,26 +11,27 @@ import {
   deleteMonthlyFinancial,
   type ManualPaymentInput,
   type MonthlyFinancialInput,
+  type DateRange,
 } from './api';
 
-export function useFinanceSeries(practiceId: string | null = null) {
+export function useFinanceSeries(practiceId: string | null = null, range?: DateRange | null) {
   return useQuery({
-    queryKey: ['finance-series', practiceId],
-    queryFn: () => getFinanceSeries(practiceId),
+    queryKey: ['finance-series', practiceId, range?.from ?? null, range?.to ?? null],
+    queryFn: () => getFinanceSeries(practiceId, range),
   });
 }
 
-export function useCashflow(weeks = 13, practiceId: string | null = null) {
+export function useCashflow(weeks = 13, practiceId: string | null = null, range?: DateRange | null) {
   return useQuery({
-    queryKey: ['cashflow', weeks, practiceId],
-    queryFn: () => getCashflow(weeks, practiceId),
+    queryKey: ['cashflow', weeks, practiceId, range?.from ?? null, range?.to ?? null],
+    queryFn: () => getCashflow(weeks, practiceId, range),
   });
 }
 
-export function useFinancial(dsoDays = 45, payableDays = 30, practiceId: string | null = null) {
+export function useFinancial(dsoDays = 45, payableDays = 30, practiceId: string | null = null, range?: DateRange | null) {
   return useQuery({
-    queryKey: ['financial', dsoDays, payableDays, practiceId],
-    queryFn: () => getFinancial(dsoDays, payableDays, practiceId),
+    queryKey: ['financial', dsoDays, payableDays, practiceId, range?.from ?? null, range?.to ?? null],
+    queryFn: () => getFinancial(dsoDays, payableDays, practiceId, range),
   });
 }
 

@@ -20,6 +20,7 @@ import { useFinanceSeries } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
 import ManualPLModal from './ManualPLModal';
 import PracticeTabs from '@/features/practices/PracticeTabs';
+import DateRangeFilter, { type DateRange } from './DateRangeFilter';
 
 const BASIS_LABEL: Record<string, string> = {
   actuals: 'real actuals (Xero / manual entry)',
@@ -46,7 +47,8 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
 
 export default function ProfitScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const { data, isLoading, isError } = useFinanceSeries(practiceId);
+  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const { data, isLoading, isError } = useFinanceSeries(practiceId, range);
   const [plModalOpen, setPlModalOpen] = useState(false);
   const basisLabel = BASIS_LABEL[data?.basis ?? 'revenue-only'] ?? BASIS_LABEL['revenue-only'];
   const series = data?.months ?? [];
@@ -158,6 +160,7 @@ export default function ProfitScreen() {
       <ManualPLModal open={plModalOpen} onClose={() => setPlModalOpen(false)} practiceId={practiceId} />
 
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <DateRangeFilter value={range} onChange={setRange} />
 
       <FinanceToolbar />
 
