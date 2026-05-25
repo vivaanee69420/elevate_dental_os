@@ -224,21 +224,34 @@ Response:
 ### `GET /api/analytics/kpis` — 23-metric scorecard with traffic lights
 ### `GET /api/analytics/business-hub?days=90` — group + per-practice rollup (Business Hub): revenue (settled payments), appointments/no-show (appointments), conversion (leads), group margin/target from business_health baseline. finance.view.
 
-**Actuals read path:** `pl`, `finance-series`, and `financial` prefer real
-`monthly_financials` actuals (Xero sync + manual entry) when present, else fall
-back to the baseline projection. Responses carry `basis`:
-`actuals` | `mixed` (finance-series only, some months actual) | `baseline-projection`
-| `estimated` (financial balance sheet). Xero overrides manual for the same
-period+bucket (see FORMULAS.md §1a).
+**Real-data read path (no projection):**
+- `finance-series` — monthly **revenue is real**: settled `payments` per month
+  (or the `monthly_financials` revenue actual when present). Costs are the
+  `monthly_financials` actuals when present (real), else the Business Health
+  baseline cost_% applied to the REAL revenue as a labelled ESTIMATE. Each month
+  carries `estimated:true|false`; the response carries `costsEstimated`. `basis`:
+  `actuals` (all costs real) | `mixed` | `actuals-revenue` (real revenue,
+  estimated/no costs). No fabricated revenue curve. Always returns the full
+  12-month window.
+- `financial` — revenue is real (`monthly_financials` actual, else settled
+  payments TTM, else baseline as last resort). Margins flagged `estimated:true`
+  when costs come from the baseline. Balance sheet is always `basis:'estimated'`.
+- `cashflow` — **real backward 13-week view**: each week = settled payments
+  received that week (deduped, null-date skipped); opening = real bank balance;
+  closing = running balance. No projection. `baselineWeeklyRunRatePence` is
+  returned separately as a comparison target only. `basis:'actuals'`.
+- `pl` — annual P&L from `monthly_financials` actuals; baseline fallback when none.
 
-**Per-practice filtering:** `pl`, `finance-series`, and `financial` accept an
-optional `practice_id` (UUID) query param. When set, the response is **actuals
-only** (the org baseline is org-level and is NOT projected per practice); a
-practice with no actuals returns `{ "error": "No data for this practice" }`.
-Omitted = org-wide (baseline + actuals, unchanged). `GET /api/analytics/cashflow`
-is group-level only and ignores `practice_id` (the run-rate forecast has no
-per-practice source). Business Hub already returns per-practice rows in
-`practices[]`, so its per-practice view is client-side (no param).
+Xero overrides manual for the same period+bucket (see FORMULAS.md §1a).
+
+**Per-practice filtering:** `finance-series`, `financial`, and `cashflow` accept
+an optional `practice_id` (UUID) query param scoping to one practice's real data
+(payments/actuals). Costs remain a baseline-derived estimate (the baseline is
+org-level — flagged estimated). `financial` returns
+`{ "error": "No data for this practice" }` when a practice has no real data;
+`finance-series` returns its 12-month window with zero-revenue months. Omitted =
+org-wide. Business Hub already returns per-practice rows in `practices[]`, so its
+per-practice view is client-side (no param).
 
 ## Monthly financials (manual P&L actuals)
 
