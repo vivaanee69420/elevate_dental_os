@@ -14,11 +14,19 @@ import {
   useStartConnect,
   useSubmitBrokerKey,
   useRevoke,
+  useSyncIntegration,
+  useFinishSync,
 } from '@/features/integrations/hooks';
+
+// Providers with a real on-demand pull (Refresh button + first-connect sync).
+const SYNCABLE = new Set(['dentally', 'xero', 'gohighlevel']);
 import type {
   IntegrationRow,
   ProviderMeta,
 } from '@/features/integrations/api';
+import DentallyPracticeMapping from '@/features/integrations/components/DentallyPracticeMapping';
+import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
+import SyncOverlay from '@/features/integrations/components/SyncOverlay';
 
 function statusOf(provider: string, rows: IntegrationRow[]): IntegrationRow['status'] | null {
   return rows.find((r) => r.provider === provider)?.status ?? null;
@@ -45,6 +53,9 @@ export default function IntegrationsScreen() {
   const startConnect = useStartConnect();
   const submitKey = useSubmitBrokerKey();
   const revoke = useRevoke();
+  const sync = useSyncIntegration();
+  const finishSync = useFinishSync();
+  const [syncing, setSyncing] = useState<string | null>(null);
   const [brokerModal, setBrokerModal] = useState<{
     provider: string;
     hint: string;
@@ -54,6 +65,7 @@ export default function IntegrationsScreen() {
   const integrations = data?.integrations ?? [];
   const providers = data?.available ?? [];
   const connectedCount = integrations.filter((i) => i.status === 'active').length;
+  const dentallyConnected = statusOf('dentally', integrations) === 'active';
 
   // Group providers by category, preserving registration order.
   const groups: { category: string; items: ProviderMeta[] }[] = [];
@@ -74,13 +86,29 @@ export default function IntegrationsScreen() {
 
   async function handleBrokerSubmit() {
     if (!brokerModal) return;
+    // submitBrokerKey persists the token; the backend fires the first pull on
+    // connect (finishConnect → syncNow), so data lands without a manual refresh.
     await submitKey.mutateAsync({ provider: brokerModal.provider, apiKey: keyInput });
     setBrokerModal(null);
     setKeyInput('');
   }
 
+  async function handleRefresh(provider: string) {
+    setSyncing(provider);
+    // Fire-and-forget on the server (returns immediately); the overlay polls
+    // progress and clears itself via onDone. Full re-pull so rows skipped before
+    // mapping (no practice match) land now.
+    await sync.mutateAsync({ provider, full: true });
+  }
+
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
+      {syncing && (
+        <SyncOverlay
+          provider={syncing}
+          onDone={() => { finishSync(); setSyncing(null); }}
+        />
+      )}
       <div className="mb-6">
         <h1 className="display font-bold" style={{ fontSize: 28 }}>Integrations</h1>
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
@@ -93,6 +121,9 @@ export default function IntegrationsScreen() {
           Failed to load integrations: {(error as Error).message}
         </div>
       )}
+
+      {dentallyConnected && <DentallyPracticeMapping />}
+      {dentallyConnected && <DentallyWebhookPanel />}
 
       {groups.map((g) => (
         <div key={g.category} style={{ marginBottom: 20 }}>
@@ -123,13 +154,29 @@ export default function IntegrationsScreen() {
                     )}
                   </div>
                   {connected ? (
-                    <button
-                      onClick={() => revoke.mutate(p.id)}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                      title="Disconnect"
-                    >
-                      <Chip colour="emerald">Connected</Chip>
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {SYNCABLE.has(p.id) && (
+                        <button
+                          onClick={() => handleRefresh(p.id)}
+                          disabled={syncing === p.id}
+                          style={{
+                            background: 'none', border: '1px solid var(--border)',
+                            borderRadius: 6, padding: '4px 8px', fontSize: 11,
+                            cursor: syncing === p.id ? 'default' : 'pointer',
+                          }}
+                          title="Pull latest data now"
+                        >
+                          {syncing === p.id ? 'Refreshing…' : 'Refresh data'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => revoke.mutate(p.id)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                        title="Disconnect"
+                      >
+                        <Chip colour="emerald">Connected</Chip>
+                      </button>
+                    </div>
                   ) : (
                     <button
                       onClick={() => handleConnect(p)}
