@@ -12,18 +12,21 @@ export interface FinanceMonth {
   lab_materials: number;
   opex: number;
   profit: number;
+  estimated: boolean; // costs for this month are baseline-estimated, not real
 }
 
 export async function getFinanceSeries(practiceId?: string | null): Promise<{
   error?: string;
-  basis?: 'actuals' | 'mixed' | 'baseline-projection';
+  basis?: 'actuals' | 'mixed' | 'actuals-revenue';
+  costsEstimated: boolean;
   months: FinanceMonth[];
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
   const r = await api(`/api/analytics/finance-series?months=12${pp}`);
-  if (r?.error) return { error: r.error, months: [] };
+  if (r?.error) return { error: r.error, costsEstimated: false, months: [] };
   return {
     basis: r.basis,
+    costsEstimated: !!r.costsEstimated,
     months: (r.months ?? []).map((m: any) => ({
       month: m.month,
       revenue: p(m.revenue),
@@ -32,6 +35,7 @@ export async function getFinanceSeries(practiceId?: string | null): Promise<{
       lab_materials: p(m.labMaterials),
       opex: p(m.opex),
       profit: p(m.profit),
+      estimated: !!m.estimated,
     })),
   };
 }
