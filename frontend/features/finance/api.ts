@@ -40,38 +40,35 @@ export interface CashflowWeek {
   weekStartDate: string;
   opening: number;
   receipts: number;
-  payments: number;
   closing: number;
-  status: string;
 }
 
-export async function getCashflow(weeks = 13): Promise<{
-  error?: string;
+// Real backward 13-week cash view: each week = settled payments received that
+// week (no projection). baselineWeeklyRunRate is a comparison target only.
+export async function getCashflow(weeks = 13, practiceId?: string | null): Promise<{
   bankConnected: boolean;
   bankStale: boolean;
   lastSyncedAt: string | null;
+  openingBalance: number;
+  totalReceipts: number;
+  baselineWeeklyRunRate: number | null;
   weeks: CashflowWeek[];
 }> {
-  const r = await api(`/api/analytics/cashflow?weeks=${weeks}`);
-  if (r?.error)
-    return {
-      error: r.error,
-      bankConnected: false,
-      bankStale: true,
-      lastSyncedAt: null,
-      weeks: [],
-    };
+  const pp = practiceId ? `&practice_id=${practiceId}` : '';
+  const r = await api(`/api/analytics/cashflow?weeks=${weeks}${pp}`);
   return {
     bankConnected: !!r.bankConnected,
     bankStale: !!r.bankStale,
     lastSyncedAt: r.lastSyncedAt ?? null,
+    openingBalance: p(r.openingBalancePence),
+    totalReceipts: p(r.totalReceiptsPence),
+    baselineWeeklyRunRate:
+      r.baselineWeeklyRunRatePence != null ? p(r.baselineWeeklyRunRatePence) : null,
     weeks: (r.weeks ?? []).map((w: any) => ({
       weekStartDate: w.weekStartDate,
-      opening: p(w.opening),
-      receipts: p(w.receipts),
-      payments: p(w.payments),
-      closing: p(w.closing),
-      status: w.status,
+      opening: p(w.openingBalancePence),
+      receipts: p(w.receiptsPence),
+      closing: p(w.closingBalancePence),
     })),
   };
 }

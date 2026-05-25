@@ -20,10 +20,10 @@ export function useFinanceSeries(practiceId: string | null = null) {
   });
 }
 
-export function useCashflow(weeks = 13) {
+export function useCashflow(weeks = 13, practiceId: string | null = null) {
   return useQuery({
-    queryKey: ['cashflow', weeks],
-    queryFn: () => getCashflow(weeks),
+    queryKey: ['cashflow', weeks, practiceId],
+    queryFn: () => getCashflow(weeks, practiceId),
   });
 }
 
