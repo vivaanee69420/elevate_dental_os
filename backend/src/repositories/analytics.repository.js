@@ -99,14 +99,16 @@ export const analyticsRepository = {
     },
     // Settled payments with a real processed_at, for the cashflow overlay.
     // id is selected so the service can dedupe against webhook re-delivery.
-    async settledPaymentsForCashflow(orgId, sinceISO) {
-        const { data, error } = await supabase_1.serviceClient
+    async settledPaymentsForCashflow(orgId, sinceISO, practiceId = null) {
+        let query = supabase_1.serviceClient
             .from('payments')
             .select('id, amount_pence, processed_at')
             .eq('organisation_id', orgId)
             .eq('status', 'settled')
-            .gte('processed_at', sinceISO)
-            .limit(LIMIT_GUARD);
+            .gte('processed_at', sinceISO);
+        if (practiceId)
+            query = query.eq('practice_id', practiceId);
+        const { data, error } = await query.limit(LIMIT_GUARD);
         if (error)
             throw new Error(error.message);
         return data || [];

@@ -239,26 +239,28 @@ describe('financial — real margins + estimated balance sheet', () => {
   });
 });
 
-describe('cashflow — bank opening + run-rate + deduped real overlay', () => {
-  const now = () => new Date(2026, 4, 15);
+describe('cashflow — backward real settled receipts (no projection)', () => {
+  const now = () => new Date(2026, 4, 15); // Fri 15 May 2026
 
-  it('{error} when no baseline', async () => {
+  it('works with no baseline — cashflow is real; baseline only a comparison', async () => {
     supaRec.resultProvider = (q) =>
       q.table === 'business_health'
         ? { data: { baseline: {} }, error: null }
         : { data: [], error: null };
-    expect(await svc.cashflow(ORG_A, { now })).toEqual({
-      error: 'No baseline set',
-    });
+    const r = await svc.cashflow(ORG_A, { now });
+    expect(r.basis).toBe('actuals');
+    expect(r.weeks).toHaveLength(13);
+    expect(r.openingBalancePence).toBe(0);
+    expect(r.baselineWeeklyRunRatePence).toBe(null);
+    // every week is real (no projected receipts) → all zero here
+    expect(r.weeks.every((w) => w.receiptsPence === 0)).toBe(true);
+    expect(r.totalReceiptsPence).toBe(0);
   });
 
-  it('opening = Σ bank; webhook re-delivery counted once; null processed_at skipped', async () => {
+  it('opening = Σ bank; real receipts bucketed backward; dedupe + null skipped', async () => {
     supaRec.resultProvider = (q) => {
       if (q.table === 'business_health')
-        return {
-          data: { baseline: { revenue: 1_200_000, cost_staff: 20 } },
-          error: null,
-        };
+        return { data: { baseline: { revenue: 1_040_000 } }, error: null };
       if (q.table === 'bank_accounts')
         return {
           data: [
@@ -267,40 +269,51 @@ describe('cashflow — bank opening + run-rate + deduped real overlay', () => {
           ],
           error: null,
         };
-      // payments: same id twice (re-delivery) in week 0, + one null date
+      // settled payments: today twice (re-delivery → once), one a week back, one null date
       return {
         data: [
-          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-16T09:00:00Z' },
-          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-16T09:00:00Z' },
+          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-15T09:00:00Z' },
+          { id: 'pay1', amount_pence: 25_000, processed_at: '2026-05-15T09:00:00Z' },
+          { id: 'pay3', amount_pence: 10_000, processed_at: '2026-05-08T09:00:00Z' },
           { id: 'pay2', amount_pence: 9_999, processed_at: null },
         ],
         error: null,
       };
     };
     const r = await svc.cashflow(ORG_A, { weeks: 13, now });
-    expect(r.basis).toBe('baseline-projection');
+    expect(r.basis).toBe('actuals');
     expect(r.bankConnected).toBe(true);
     expect(r.bankStale).toBe(false); // freshest sync 2026-05-14, ref 05-15
     expect(r.openingBalancePence).toBe(500_000);
     expect(r.weeks).toHaveLength(13);
-    expect(r.weeks[0].opening).toBe(500_000);
-    // week 0 receipts = round(annualRev/52 * factor0(0.94)) + overlay 25_000 ONCE
-    const weeklyBase = (1_200_000 * 100) / 52;
-    expect(r.weeks[0].receipts).toBe(Math.round(weeklyBase * 0.94) + 25_000);
-    expect(r.weeks[0]).toHaveProperty('status');
+    expect(r.weeks[0].openingBalancePence).toBe(500_000);
+    // most recent week holds today's pay1, counted ONCE (not the re-delivery)
+    expect(r.weeks[12].receiptsPence).toBe(25_000);
+    // closing is the running balance: opening + all real receipts
+    expect(r.weeks[12].closingBalancePence).toBe(500_000 + 10_000 + 25_000);
+    expect(r.totalReceiptsPence).toBe(35_000);
+    // baseline run-rate exposed as a comparison only
+    expect(r.baselineWeeklyRunRatePence).toBe(Math.round((1_040_000 * 100) / 52));
   });
 
-  it('no bank rows → opening 0, bankStale true, still 13 weeks', async () => {
-    supaRec.resultProvider = (q) => {
-      if (q.table === 'business_health')
-        return { data: { baseline: { revenue: 600_000 } }, error: null };
-      return { data: [], error: null };
-    };
+  it('no bank rows → opening 0, bankStale true, still 13 real weeks', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health'
+        ? { data: { baseline: { revenue: 600_000 } }, error: null }
+        : { data: [], error: null };
     const r = await svc.cashflow(ORG_A, { now });
     expect(r.bankConnected).toBe(false);
     expect(r.bankStale).toBe(true);
     expect(r.openingBalancePence).toBe(0);
     expect(r.weeks).toHaveLength(13);
+  });
+
+  it('per-practice: practice_id reaches the payments query', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    await svc.cashflow(ORG_A, { now, practiceId: 'prac-11111111' });
+    // the payments read is the last query in cashflow
+    expect(supaRec.last.table).toBe('payments');
+    expect(supaRec.last.eqs).toContainEqual({ col: 'practice_id', val: 'prac-11111111' });
   });
 });
 

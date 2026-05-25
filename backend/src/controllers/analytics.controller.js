@@ -17,7 +17,7 @@ export const analyticsController = {
     },
     async cashflow(req, res) {
         const q = analytics_model_1.weeksQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks }));
+        res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks, practiceId: q.practice_id }));
     },
     async financial(req, res) {
         const q = analytics_model_1.financialQuerySchema.parse(req.query);
