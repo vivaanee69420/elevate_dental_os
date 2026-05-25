@@ -23,8 +23,8 @@ import PracticeTabs from '@/features/practices/PracticeTabs';
 
 const BASIS_LABEL: Record<string, string> = {
   actuals: 'real actuals (Xero / manual entry)',
-  mixed: 'actuals where entered, baseline projection elsewhere',
-  'baseline-projection': 'baseline projection (derived, not filed accounts)',
+  mixed: 'real costs where entered, baseline-estimated elsewhere',
+  'actuals-revenue': 'real revenue (settled payments) · costs estimated from baseline',
 };
 
 const BRAND = '#0E7C7B';
@@ -48,13 +48,16 @@ export default function ProfitScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const { data, isLoading, isError } = useFinanceSeries(practiceId);
   const [plModalOpen, setPlModalOpen] = useState(false);
-  const basisLabel = BASIS_LABEL[data?.basis ?? 'baseline-projection'] ?? BASIS_LABEL['baseline-projection'];
+  const basisLabel = BASIS_LABEL[data?.basis ?? 'actuals-revenue'] ?? BASIS_LABEL['actuals-revenue'];
   const series = data?.months ?? [];
-  const noBaseline = !!data?.error;
+  const costsEstimated = !!data?.costsEstimated;
   const hasData = series.length > 0;
   const annual = hasData
     ? annualTotal(series)
     : { revenue: 0, associate_pay: 0, staff_costs: 0, lab_materials: 0, opex: 0, profit: 0 };
+  // The series is real revenue per month; "has revenue" drives the empty state
+  // (a 12-month window of all-zero months means no real settled payments).
+  const hasRevenue = annual.revenue > 0;
   const latest = hasData ? series[series.length - 1] : null;
   const annualMargin =
     annual.revenue > 0 ? ((annual.profit / annual.revenue) * 100).toFixed(1) : '0';
@@ -166,22 +169,23 @@ export default function ProfitScreen() {
           </div>
         </div>
       )}
-      {noBaseline && !isError && (
+      {!hasRevenue && !isError && !isLoading && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
-          <div className="font-semibold">No baseline set</div>
+          <div className="font-semibold">No settled payments in the last 12 months</div>
           <div className="text-sm text-ink-muted">
-            The P&amp;L reads from your Business Health baseline. Complete setup
-            to populate it.
+            Revenue here is real settled payments
+            {practiceId ? ' for this practice' : ''}. Once Dentally/Stripe
+            payments land, the P&amp;L fills in automatically.
           </div>
         </div>
       )}
-      {practiceId && !hasData && !noBaseline && !isError && !isLoading && (
+      {costsEstimated && !isError && !isLoading && hasRevenue && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
-          <div className="font-semibold">No P&amp;L actuals for this practice</div>
+          <div className="font-semibold">Costs &amp; profit are estimated</div>
           <div className="text-sm text-ink-muted">
-            Per-practice P&amp;L shows real actuals only (the group baseline is not
-            split per practice). Use &ldquo;Enter actuals&rdquo; and pick this
-            practice, or connect Xero with practice tagging.
+            Revenue is real (settled payments). Cost and profit lines are
+            estimated from your Business Health baseline — Dentally has no cost
+            data. Connect Xero or enter P&amp;L actuals for real costs.
           </div>
         </div>
       )}
@@ -190,12 +194,12 @@ export default function ProfitScreen() {
         <Kpi
           label="Annual revenue"
           value={isLoading ? '…' : poundsCompact(annual.revenue)}
-          delta="12-month projection"
+          delta="Real · last 12 months"
         />
         <Kpi
-          label="Annual profit"
+          label={costsEstimated ? 'Annual profit (est.)' : 'Annual profit'}
           value={isLoading ? '…' : poundsCompact(annual.profit)}
-          delta={`${annualMargin}% margin`}
+          delta={`${annualMargin}% margin${costsEstimated ? ' · estimated' : ''}`}
         />
         <Kpi
           label="Avg monthly revenue"
@@ -215,11 +219,10 @@ export default function ProfitScreen() {
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
             Loading…
           </div>
-        ) : !hasData ? (
+        ) : !hasRevenue ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
-            {practiceId
-              ? 'No P&L actuals entered for this practice yet.'
-              : 'No data — set your Business Health baseline.'}
+            No settled payments in the last 12 months
+            {practiceId ? ' for this practice.' : '.'}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
