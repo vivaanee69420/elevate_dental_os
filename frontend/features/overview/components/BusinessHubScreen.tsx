@@ -7,9 +7,11 @@
 // Numbers are zero until data is fed (Dentally/CSV → payments/appointments,
 // GoHighLevel → leads). Group revenue target comes from the org baseline.
 
+import { useState } from 'react';
 import { Card, Chip } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice } from '../business-hub-api';
+import PracticeTabs from '@/features/practices/PracticeTabs';
 
 function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'good' | 'warn' | 'bad' }) {
   const colour = tone === 'good' ? 'var(--success)' : tone === 'warn' ? 'var(--warning)' : tone === 'bad' ? 'var(--danger)' : undefined;
@@ -36,6 +38,7 @@ function rateChip(value: number, kind: 'noShow' | 'conversion') {
 
 export default function BusinessHubScreen() {
   const { data, isLoading, error } = useBusinessHub(90);
+  const [practiceId, setPracticeId] = useState<string | null>(null);
 
   if (isLoading) {
     return <div className="container mx-auto text-ink-muted" style={{ maxWidth: 1400 }}>Loading business overview…</div>;
@@ -49,6 +52,11 @@ export default function BusinessHubScreen() {
   }
   const g = data!.group;
   const practices = data!.practices;
+  // When a practice tab is active, the headline strip reflects that practice's
+  // rollup row; "All practices" shows group totals (unchanged). Target + group
+  // margin are group-only (no per-practice baseline source).
+  const selected = practiceId ? practices.find((p) => p.practiceId === practiceId) ?? null : null;
+  const view = selected ?? g;
   const targetDelta = g.revenueTargetPence ? g.revenuePence - g.revenueTargetPence : 0;
   const hasData = g.revenuePence > 0 || g.appointments > 0 || g.leads > 0;
 
@@ -60,6 +68,8 @@ export default function BusinessHubScreen() {
           Group totals and per-practice comparison &middot; last {data!.period.days} days &middot; {g.practices} sites
         </p>
       </div>
+
+      <PracticeTabs value={practiceId} onChange={setPracticeId} />
 
       {!hasData && (
         <Card className="mb-4">
@@ -73,25 +83,31 @@ export default function BusinessHubScreen() {
       {/* Group KPI strip */}
       <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
         <Kpi
-          label="Group revenue"
-          value={formatPence(g.revenuePence)}
-          sub={g.revenueTargetPence
-            ? `${targetDelta >= 0 ? '+' : ''}${formatPence(targetDelta)} vs target`
-            : 'no target set'}
-          tone={g.revenueTargetPence ? (targetDelta >= 0 ? 'good' : 'warn') : undefined}
+          label={selected ? 'Practice revenue' : 'Group revenue'}
+          value={formatPence(view.revenuePence)}
+          sub={selected
+            ? selected.name
+            : g.revenueTargetPence
+              ? `${targetDelta >= 0 ? '+' : ''}${formatPence(targetDelta)} vs target`
+              : 'no target set'}
+          tone={selected ? undefined : g.revenueTargetPence ? (targetDelta >= 0 ? 'good' : 'warn') : undefined}
         />
-        <Kpi label="Group margin (baseline)" value={`${g.marginPct}%`} sub="from Business Health" />
+        <Kpi
+          label="Group margin (baseline)"
+          value={selected ? '—' : `${g.marginPct}%`}
+          sub={selected ? 'group-level only' : 'from Business Health'}
+        />
         <Kpi
           label="Appointments"
-          value={formatNumber(g.appointments)}
-          sub={`${g.noShowRate}% no-show`}
-          tone={g.noShowRate >= 15 ? 'bad' : g.noShowRate >= 8 ? 'warn' : 'good'}
+          value={formatNumber(view.appointments)}
+          sub={`${view.noShowRate}% no-show`}
+          tone={view.noShowRate >= 15 ? 'bad' : view.noShowRate >= 8 ? 'warn' : 'good'}
         />
         <Kpi
           label="Lead conversion"
-          value={`${g.conversionRate}%`}
-          sub={`${formatNumber(g.leads)} leads`}
-          tone={g.conversionRate >= 50 ? 'good' : g.conversionRate >= 30 ? 'warn' : 'bad'}
+          value={`${view.conversionRate}%`}
+          sub={`${formatNumber(view.leads)} leads`}
+          tone={view.conversionRate >= 50 ? 'good' : view.conversionRate >= 30 ? 'warn' : 'bad'}
         />
       </div>
 
