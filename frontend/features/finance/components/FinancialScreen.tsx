@@ -121,9 +121,11 @@ export default function FinancialScreen() {
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
           <div className="font-semibold">Estimated — not from filed accounts</div>
           <div className="text-sm text-ink-muted">
-            Margins are real (from your baseline P&amp;L). Balance-sheet lines
-            are estimated from your baseline and the assumptions below. Adjust
-            the assumptions to fit your practice.
+            Revenue is real (settled payments). Cost-based margins are estimated
+            from your Business Health baseline — Dentally has no cost data, so
+            connect Xero or enter P&amp;L actuals for real costs. Balance-sheet
+            lines are estimated from the assumptions below. &ldquo;Est.&rdquo;
+            badges mark every estimated figure.
           </div>
         </div>
       )}
@@ -197,7 +199,11 @@ export default function FinancialScreen() {
               ? '…'
               : `${ratios.find((r) => r.key === 'netMarginPct')?.value ?? 0}%`
           }
-          delta="Real (baseline P&L)"
+          delta={
+            ratios.find((r) => r.key === 'netMarginPct')?.estimated
+              ? 'Estimated (baseline costs)'
+              : 'Real (P&L actuals)'
+          }
         />
       </div>
 

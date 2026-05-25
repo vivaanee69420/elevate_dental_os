@@ -223,11 +223,14 @@ export const analyticsService = {
         const startMonth = new Date(ref.getFullYear(), ref.getMonth() - (months - 1), 1);
         const sinceISO = startMonth.toISOString();
         const [health, actuals, payRows] = await Promise.all([
-            practiceId ? Promise.resolve(null) : analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             this._actualsBundle(orgId, practiceId),
             analytics_repository_1.analyticsRepository.settledPaymentsInRange(orgId, sinceISO, practiceId),
         ]);
         const revByMonth = this._monthlyRevenueFromPayments(payRows);
+        // Org baseline cost_% used as a labelled ESTIMATE of costs against REAL
+        // revenue (org-wide and per-practice — there is no per-practice cost
+        // source). Flagged estimated per row.
         const b = health?.baseline;
         const hasCostModel = !!(b && b.revenue);
         const pct = (k) => (b?.[k] || 0) / 100;
@@ -344,27 +347,43 @@ export const analyticsService = {
     // days). Each estimated field carries estimated:true and the response
     // carries basis:'estimated' so the UI can banner it and never present it
     // as filed accounts.
-    async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null } = {}) {
-        const [health, actuals] = await Promise.all([
-            practiceId ? Promise.resolve(null) : analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+    async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null, now = () => new Date() } = {}) {
+        const since = new Date(now());
+        since.setMonth(since.getMonth() - 12);
+        const sinceISO = since.toISOString();
+        const [health, actuals, payRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             this._actualsBundle(orgId, practiceId),
+            analytics_repository_1.analyticsRepository.settledPaymentsInRange(orgId, sinceISO, practiceId),
         ]);
         const b = health?.baseline;
+        const realRevenuePence = (Array.isArray(payRows) ? payRows : [])
+            .reduce((s, p) => s + (p.amount_pence || 0), 0);
         const useActuals = actuals.hasAny && (actuals.annual.revenue || 0) > 0;
-        if (practiceId && !useActuals)
+        // Per practice: never fall back to the org baseline as if it were the
+        // practice's. Real per-practice data (actuals or payments) or nothing.
+        if (practiceId && !useActuals && realRevenuePence === 0)
             return { error: 'No data for this practice' };
-        if (!useActuals && !b?.revenue)
-            return { error: 'No baseline set' };
-        // Margins from REAL actuals when present, else baseline cost_* model.
-        // Balance sheet stays ESTIMATED either way (no accounting source for it).
-        let revenuePence, costs;
+        // Revenue precedence: monthly_financials actuals (real costs too) >
+        // REAL settled payments TTM (costs estimated from baseline) > baseline
+        // revenue (legacy, only if no real data at all).
+        let revenuePence, costs, costsEstimated;
         if (useActuals) {
             const inp = plInputFromBuckets(actuals.annual);
             revenuePence = inp.revenue;
             costs = inp.costs;
-        } else {
+            costsEstimated = false;
+        } else if (realRevenuePence > 0) {
+            revenuePence = realRevenuePence;
+            costs = b ? this._costsPence(b, realRevenuePence)
+                : { associates: 0, lab: 0, materials: 0, staff: 0, property: 0, marketing: 0, other: 0 };
+            costsEstimated = true; // margins not transaction-backed (no cost source)
+        } else if (b?.revenue) {
             revenuePence = b.revenue * 100;
             costs = this._costsPence(b, revenuePence);
+            costsEstimated = true;
+        } else {
+            return { error: practiceId ? 'No data for this practice' : 'No baseline set' };
         }
         const pl = (0, formulas_1.calculatePL)({ revenue: revenuePence, costs });
         const cogsPence = costs.associates + costs.lab + costs.materials;
@@ -386,8 +405,8 @@ export const analyticsService = {
             basis: 'estimated',
             assumptions: { dsoDays, payableDays },
             ratios: [
-                { key: 'grossMarginPct', value: grossMarginPct, estimated: false, light: light(grossMarginPct, 30, 40) },
-                { key: 'netMarginPct', value: pl.marginPct, estimated: false, light: light(pl.marginPct, 10, 18) },
+                { key: 'grossMarginPct', value: grossMarginPct, estimated: costsEstimated, light: light(grossMarginPct, 30, 40) },
+                { key: 'netMarginPct', value: pl.marginPct, estimated: costsEstimated, light: light(pl.marginPct, 10, 18) },
                 { key: 'currentRatio', value: ratio(currentAssetsPence, currentLiabilitiesPence), estimated: true, light: light(ratio(currentAssetsPence, currentLiabilitiesPence), 1, 1.5) },
                 { key: 'quickRatio', value: ratio(currentAssetsPence, currentLiabilitiesPence), estimated: true, light: light(ratio(currentAssetsPence, currentLiabilitiesPence), 0.8, 1) },
                 { key: 'debtToEquity', value: ratio(currentLiabilitiesPence, equityPence), estimated: true, light: 'amber' },
