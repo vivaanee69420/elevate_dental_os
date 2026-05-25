@@ -6,8 +6,13 @@ import * as payment_repository_1 from "../repositories/payment.repository.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 export const paymentService = {
     async list(orgId, q) {
-        const data = await payment_repository_1.paymentRepository.list(orgId, q);
-        return { payments: data };
+        const { rows, total } = await payment_repository_1.paymentRepository.list(orgId, q);
+        const limit = q.limit ?? 25;
+        const page = q.page ?? 1;
+        return { payments: rows, total, page, limit, pages: Math.max(1, Math.ceil(total / limit)) };
+    },
+    async summary(orgId, practiceId) {
+        return payment_repository_1.paymentRepository.summary(orgId, practiceId);
     },
     async createManual(orgId, input) {
         const row = {
