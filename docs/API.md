@@ -138,7 +138,8 @@ Returns counts + £ values per status (for pipeline header).
 
 ## Contacts
 
-### `GET /api/contacts?type=patient&search=smith&limit=200`
+### `GET /api/contacts?type=patient&search=smith&limit=200&practice_id=`
+Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide (incl. unassigned).
 ### `GET /api/contacts/:id` — full contact with related leads/comms/appointments
 ### `POST /api/contacts` — create
 ### `PATCH /api/contacts/:id` — update
@@ -165,7 +166,10 @@ Returns counts + £ values per status (for pipeline header).
 
 ## Payments
 
-### `GET /api/payments?status=settled&since=2026-01-01`
+### `GET /api/payments?status=settled&since=2026-01-01&page=1&limit=25&practice_id=`
+Paginated. Returns `{ payments, total, page, limit, pages }`. `limit` max 100, default 25. Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide.
+### `GET /api/payments/summary?practice_id=`
+Aggregate stat cards over ALL payments (not the current page): `{ today, week, month, outstanding }` in pence (settled for today/week/month, pending for outstanding). Optional `practice_id` (UUID) scopes to one practice.
 ### `POST /api/payments/create-payment-link` — generates Stripe link
 ```json
 Request:
@@ -220,6 +224,42 @@ Response:
 ### `GET /api/analytics/kpis` — 23-metric scorecard with traffic lights
 ### `GET /api/analytics/business-hub?days=90` — group + per-practice rollup (Business Hub): revenue (settled payments), appointments/no-show (appointments), conversion (leads), group margin/target from business_health baseline. finance.view.
 
+**Actuals read path:** `pl`, `finance-series`, and `financial` prefer real
+`monthly_financials` actuals (Xero sync + manual entry) when present, else fall
+back to the baseline projection. Responses carry `basis`:
+`actuals` | `mixed` (finance-series only, some months actual) | `baseline-projection`
+| `estimated` (financial balance sheet). Xero overrides manual for the same
+period+bucket (see FORMULAS.md §1a).
+
+**Per-practice filtering:** `pl`, `finance-series`, and `financial` accept an
+optional `practice_id` (UUID) query param. When set, the response is **actuals
+only** (the org baseline is org-level and is NOT projected per practice); a
+practice with no actuals returns `{ "error": "No data for this practice" }`.
+Omitted = org-wide (baseline + actuals, unchanged). `GET /api/analytics/cashflow`
+is group-level only and ignores `practice_id` (the run-rate forecast has no
+per-practice source). Business Hub already returns per-practice rows in
+`practices[]`, so its per-practice view is client-side (no param).
+
+## Monthly financials (manual P&L actuals)
+
+All `finance.view`. Money in integer pence. Mutations audited.
+
+### `GET /api/monthly-financials?from=YYYY-MM&to=YYYY-MM&practice_id=`
+List financial line items for the org (manual + synced). `{ rows: [...] }`.
+
+### `POST /api/monthly-financials`
+Enter/overwrite a manual P&L line. `source='manual'` set server-side; re-posting
+the same period+account_code(+practice) updates the amount in place.
+```json
+Request:
+{ "period": "2026-04", "dental_bucket": "revenue", "amount_pence": 4250000,
+  "account_code": "revenue", "practice_id": null }
+```
+`dental_bucket` ∈ `revenue|staff|lab|materials|overhead|tax|other`.
+
+### `DELETE /api/monthly-financials/:id`
+Delete a manual row (synced rows are not user-deletable).
+
 ## Files
 
 ### `POST /api/files/presign`
@@ -269,6 +309,15 @@ Validates `stripe-signature` header. Handles:
 - `customer.subscription.updated` → sync subscription_plan
 - `customer.subscription.deleted` → mark cancelled
 
+### `POST /webhooks/dentally/:token`
+Real-time Dentally events. `:token` is a stable HMAC-signed encoding of the org
+(no auth on this public route). Body HMAC-verified with the org's
+`integrations.config.webhook_secret` via `x-dentally-signature` (raw hex or
+`sha256=` prefixed). Maps `patient` / `appointment` / `payment` events through
+the same row builders as the poller (idempotent upsert). Unknown event types →
+`{received:true, ignored:true}`. The daily 03:00 poll reconciles missed
+deliveries. 401 on bad token/signature or unset secret.
+
 ### `POST /webhooks/postmark/inbound`
 Records inbound email as communication.
 
@@ -299,8 +348,34 @@ Forces an OAuth token refresh. For `gohighlevel`, guarded against concurrent
 refresh (single-use token) via the `refresh_in_progress_at` claim; a non-claiming
 caller returns `{ skipped: 'refresh_in_progress' }`.
 
+### `POST /api/integrations/:provider/sync`
+On-demand data pull for a connected provider (`dentally` | `xero` | `gohighlevel`).
+Runs the provider's `syncOneOrg` now and returns its counts. The same pull also
+fires automatically on connect (`finishConnect`), so a freshly-connected provider
+has data without a manual refresh. 409 if the provider is not connected.
+
+### `GET /api/integrations/:provider/webhook-info`
+Returns `{ provider, url, configured }` — the per-org Dentally webhook URL to
+paste into the provider, and whether a verifying secret is set. Owner only.
+
+### `POST /api/integrations/:provider/webhook-secret`
+Body `{ secret }` (min 8 chars) → stores the HMAC signing secret in
+`integrations.config.webhook_secret`. Owner only. (Currently plaintext in config
+— hardening candidate; the API token itself is AES-encrypted.)
+
+### `POST /api/integrations/:provider/refresh`
+Forces an OAuth token refresh. For `gohighlevel`, guarded against concurrent
+refresh (single-use token) via the `refresh_in_progress_at` claim; a non-claiming
+caller returns `{ skipped: 'refresh_in_progress' }`.
+
 ### `POST /api/integrations/:provider/revoke`
 Marks the integration `revoked` and clears stored secrets.
+
+**Connect styles.** `dentally` (and `soe`) are `broker_key`: connect returns
+`{ requiresKeyPaste, pasteHint }`; the owner pastes the Dentally Bearer token
+(encrypted at rest). Dentally is pull-only — the token authenticates our polling
+(`GET /v1/patients|appointments|payments`); Dentally does not push. Poll cadence:
+every 2h in `workers/index.js`, plus first-pull-on-connect and on-demand `/sync`.
 
 > GoHighLevel inbound sync (opportunities + contacts → leads/contacts) runs
 > hourly in `workers/index.js`; not an HTTP endpoint.
