@@ -7,10 +7,12 @@
 // persist in the URL (?dsoDays=&payableDays=) so the page is bookmarkable
 // (brief 06 hard rule).
 
+import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { annualTotal } from '../mock';
 import { useFinancial, useFinanceSeries } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
+import PracticeTabs from '@/features/practices/PracticeTabs';
 
 function fmt(n: number): string {
   return '£' + Math.round(n).toLocaleString('en-GB');
@@ -70,8 +72,9 @@ export default function FinancialScreen() {
     router.replace(`?${next.toString()}`);
   }
 
-  const { data, isLoading, isError } = useFinancial(dsoDays, payableDays);
-  const { data: seriesData } = useFinanceSeries();
+  const [practiceId, setPracticeId] = useState<string | null>(null);
+  const { data, isLoading, isError } = useFinancial(dsoDays, payableDays, practiceId);
+  const { data: seriesData } = useFinanceSeries(practiceId);
   const noBaseline = !!data?.error;
   const ratios = data?.ratios ?? [];
   const bs = data?.balanceSheet ?? {};
@@ -94,6 +97,8 @@ export default function FinancialScreen() {
         <FinanceToolbar />
       </div>
 
+      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+
       {isError && (
         <div className="card-padded mb-4">
           <div className="font-semibold">Could not load financials</div>
@@ -102,10 +107,13 @@ export default function FinancialScreen() {
       )}
       {noBaseline && !isError && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
-          <div className="font-semibold">No baseline set</div>
+          <div className="font-semibold">
+            {practiceId ? 'No P&L actuals for this practice' : 'No baseline set'}
+          </div>
           <div className="text-sm text-ink-muted">
-            Financials read from your Business Health baseline. Complete setup
-            to populate them.
+            {practiceId
+              ? 'Per-practice financials show real actuals only (the group baseline is not split per practice). Enter P&L actuals for this practice on the Profit screen, or connect Xero with practice tagging.'
+              : 'Financials read from your Business Health baseline. Complete setup to populate them.'}
           </div>
         </div>
       )}
