@@ -195,8 +195,10 @@ railway domain  # e.g., elevate-api-production.up.railway.app
 
 Create a SECOND service for workers in the same project:
 1. Railway dashboard → New Service → from same repo
-2. Set start command: `node dist/workers/index.js`
-3. Use same env vars
+2. Set start command: `node src/workers/index.js`
+3. Use same env vars — in particular `INTEGRATIONS_SECRET_KEY` MUST be identical
+   to the web service's value, or the worker cannot decrypt stored integration
+   tokens (Dentally/Xero) and every poll fails with `no_auth`.
 
 ## 9. Deploy frontend (Railway)
 
