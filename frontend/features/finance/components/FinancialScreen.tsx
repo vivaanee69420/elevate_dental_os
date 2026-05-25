@@ -117,15 +117,14 @@ export default function FinancialScreen() {
           </div>
         </div>
       )}
-      {!noBaseline && !isError && (
+      {!noBaseline && !isError && !data?.costsAvailable && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
-          <div className="font-semibold">Estimated — not from filed accounts</div>
+          <div className="font-semibold">Revenue is real · costs &amp; balance sheet are £0</div>
           <div className="text-sm text-ink-muted">
-            Revenue is real (settled payments). Cost-based margins are estimated
-            from your Business Health baseline — Dentally has no cost data, so
-            connect Xero or enter P&amp;L actuals for real costs. Balance-sheet
-            lines are estimated from the assumptions below. &ldquo;Est.&rdquo;
-            badges mark every estimated figure.
+            Revenue is real (settled payments). We have no cost or accounting
+            data — Dentally doesn&rsquo;t provide it — so margins, the balance
+            sheet (except real bank cash) and ratios are £0, not estimated.
+            Connect Xero / open banking for the rest.
           </div>
         </div>
       )}
@@ -200,11 +199,7 @@ export default function FinancialScreen() {
               ? '…'
               : `${ratios.find((r) => r.key === 'netMarginPct')?.value ?? 0}%`
           }
-          delta={
-            ratios.find((r) => r.key === 'netMarginPct')?.estimated
-              ? 'Estimated (baseline costs)'
-              : 'Real (P&L actuals)'
-          }
+          delta={data?.costsAvailable ? 'Real (P&L actuals)' : 'No cost data (£0)'}
         />
       </div>
 
@@ -283,7 +278,7 @@ export default function FinancialScreen() {
           <h2 className="display text-lg font-semibold mb-4">
             Annual P&amp;L summary
             <span className="text-xs text-ink-muted font-normal" style={{ marginLeft: 8 }}>
-              · revenue real (settled payments){seriesData?.costsEstimated ? ' · costs estimated from baseline' : ''}
+              · revenue real (settled payments){seriesData && !seriesData.costsAvailable ? ' · costs £0 (no cost source)' : ''}
             </span>
           </h2>
           <table className="w-full" style={{ fontSize: 13, margin: '-16px 0 0' }}>

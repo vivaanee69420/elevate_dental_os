@@ -23,8 +23,8 @@ import PracticeTabs from '@/features/practices/PracticeTabs';
 
 const BASIS_LABEL: Record<string, string> = {
   actuals: 'real actuals (Xero / manual entry)',
-  mixed: 'real costs where entered, baseline-estimated elsewhere',
-  'actuals-revenue': 'real revenue (settled payments) · costs estimated from baseline',
+  mixed: 'real costs where entered, £0 elsewhere (no cost source)',
+  'revenue-only': 'real revenue (settled payments) · costs/profit £0 until Xero',
 };
 
 const BRAND = '#0E7C7B';
@@ -48,9 +48,9 @@ export default function ProfitScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const { data, isLoading, isError } = useFinanceSeries(practiceId);
   const [plModalOpen, setPlModalOpen] = useState(false);
-  const basisLabel = BASIS_LABEL[data?.basis ?? 'actuals-revenue'] ?? BASIS_LABEL['actuals-revenue'];
+  const basisLabel = BASIS_LABEL[data?.basis ?? 'revenue-only'] ?? BASIS_LABEL['revenue-only'];
   const series = data?.months ?? [];
-  const costsEstimated = !!data?.costsEstimated;
+  const costsAvailable = !!data?.costsAvailable;
   const hasData = series.length > 0;
   const annual = hasData
     ? annualTotal(series)
@@ -179,13 +179,13 @@ export default function ProfitScreen() {
           </div>
         </div>
       )}
-      {costsEstimated && !isError && !isLoading && hasRevenue && (
+      {!costsAvailable && !isError && !isLoading && hasRevenue && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
-          <div className="font-semibold">Costs &amp; profit are estimated</div>
+          <div className="font-semibold">Costs &amp; profit shown as £0</div>
           <div className="text-sm text-ink-muted">
-            Revenue is real (settled payments). Cost and profit lines are
-            estimated from your Business Health baseline — Dentally has no cost
-            data. Connect Xero or enter P&amp;L actuals for real costs.
+            Revenue is real (settled payments). We have no cost data — Dentally
+            doesn&rsquo;t provide it — so cost and profit lines are £0, not
+            estimated. Connect Xero or enter P&amp;L actuals for real costs.
           </div>
         </div>
       )}
@@ -197,9 +197,9 @@ export default function ProfitScreen() {
           delta="Real · last 12 months"
         />
         <Kpi
-          label={costsEstimated ? 'Annual profit (est.)' : 'Annual profit'}
+          label="Annual profit"
           value={isLoading ? '…' : poundsCompact(annual.profit)}
-          delta={`${annualMargin}% margin${costsEstimated ? ' · estimated' : ''}`}
+          delta={costsAvailable ? `${annualMargin}% margin` : 'no cost data (£0)'}
         />
         <Kpi
           label="Avg monthly revenue"

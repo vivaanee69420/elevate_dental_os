@@ -12,21 +12,21 @@ export interface FinanceMonth {
   lab_materials: number;
   opex: number;
   profit: number;
-  estimated: boolean; // costs for this month are baseline-estimated, not real
+  costsAvailable: boolean; // true only when this month's costs are real (Xero/manual)
 }
 
 export async function getFinanceSeries(practiceId?: string | null): Promise<{
   error?: string;
-  basis?: 'actuals' | 'mixed' | 'actuals-revenue';
-  costsEstimated: boolean;
+  basis?: 'actuals' | 'mixed' | 'revenue-only';
+  costsAvailable: boolean;
   months: FinanceMonth[];
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
   const r = await api(`/api/analytics/finance-series?months=12${pp}`);
-  if (r?.error) return { error: r.error, costsEstimated: false, months: [] };
+  if (r?.error) return { error: r.error, costsAvailable: false, months: [] };
   return {
     basis: r.basis,
-    costsEstimated: !!r.costsEstimated,
+    costsAvailable: !!r.costsAvailable,
     months: (r.months ?? []).map((m: any) => ({
       month: m.month,
       revenue: p(m.revenue),
@@ -35,7 +35,7 @@ export async function getFinanceSeries(practiceId?: string | null): Promise<{
       lab_materials: p(m.labMaterials),
       opex: p(m.opex),
       profit: p(m.profit),
-      estimated: !!m.estimated,
+      costsAvailable: !!m.costsAvailable,
     })),
   };
 }
@@ -55,7 +55,6 @@ export async function getCashflow(weeks = 13, practiceId?: string | null): Promi
   lastSyncedAt: string | null;
   openingBalance: number;
   totalReceipts: number;
-  baselineWeeklyRunRate: number | null;
   weeks: CashflowWeek[];
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
@@ -66,8 +65,6 @@ export async function getCashflow(weeks = 13, practiceId?: string | null): Promi
     lastSyncedAt: r.lastSyncedAt ?? null,
     openingBalance: p(r.openingBalancePence),
     totalReceipts: p(r.totalReceiptsPence),
-    baselineWeeklyRunRate:
-      r.baselineWeeklyRunRatePence != null ? p(r.baselineWeeklyRunRatePence) : null,
     weeks: (r.weeks ?? []).map((w: any) => ({
       weekStartDate: w.weekStartDate,
       opening: p(w.openingBalancePence),
@@ -91,6 +88,8 @@ export async function getFinancial(
 ): Promise<{
   error?: string;
   basis?: string;
+  costsAvailable: boolean;
+  revenue: number;
   assumptions: { dsoDays: number; payableDays: number };
   ratios: FinancialRatio[];
   balanceSheet: Record<string, { value: number; estimated: boolean }>;
@@ -102,6 +101,8 @@ export async function getFinancial(
   if (r?.error)
     return {
       error: r.error,
+      costsAvailable: false,
+      revenue: 0,
       assumptions: { dsoDays, payableDays },
       ratios: [],
       balanceSheet: {},
@@ -114,6 +115,8 @@ export async function getFinancial(
   }
   return {
     basis: r.basis,
+    costsAvailable: !!r.costsAvailable,
+    revenue: p(r.revenuePence),
     assumptions: r.assumptions ?? { dsoDays, payableDays },
     ratios: r.ratios ?? [],
     balanceSheet: bs,

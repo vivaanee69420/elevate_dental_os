@@ -21,7 +21,6 @@ import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 
 const BRAND = '#0E7C7B';
-const TARGET = '#94A3B8';
 
 function Kpi({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
@@ -50,13 +49,10 @@ export default function CashflowScreen() {
   const opening = data?.openingBalance ?? 0;
   const closing = hasData ? weeks[weeks.length - 1].closing : opening;
   const totalReceipts = data?.totalReceipts ?? 0;
-  const runRate = data?.baselineWeeklyRunRate ?? null;
-  // Real closing line + a dotted "target" line = opening + run-rate accrued each
-  // week (comparison only; null when no baseline). Never blended into Closing.
-  const chartData = weeks.map((w, i) => ({
+  // Real closing balance only — no projection, no comparison line.
+  const chartData = weeks.map((w) => ({
     week: shortWeek(w.weekStartDate),
     Closing: w.closing,
-    Target: runRate != null ? opening + runRate * (i + 1) : undefined,
   }));
 
   return (
@@ -119,11 +115,6 @@ export default function CashflowScreen() {
       <div className="card-padded mb-4">
         <h2 className="display text-lg font-semibold mb-5">
           Closing balance — last 13 weeks
-          {runRate != null && (
-            <span className="text-xs text-ink-muted font-normal" style={{ marginLeft: 8 }}>
-              · dotted line = Business Health run-rate (target, not real)
-            </span>
-          )}
         </h2>
         {isLoading ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
@@ -151,16 +142,6 @@ export default function CashflowScreen() {
                 contentStyle={{ fontSize: 12, borderRadius: 8 }}
               />
               <Line type="monotone" dataKey="Closing" stroke={BRAND} strokeWidth={2} dot={false} />
-              {runRate != null && (
-                <Line
-                  type="monotone"
-                  dataKey="Target"
-                  stroke={TARGET}
-                  strokeWidth={1.5}
-                  strokeDasharray="4 4"
-                  dot={false}
-                />
-              )}
             </LineChart>
           </ResponsiveContainer>
         )}
