@@ -191,7 +191,8 @@ describe('financial — real margins + estimated balance sheet', () => {
     expect(await svc.financial(ORG_A)).toEqual({ error: 'No baseline set' });
   });
 
-  it('margins real (estimated:false); balance sheet flagged estimated', async () => {
+  it('no real costs → margins estimated from baseline; balance sheet flagged estimated', async () => {
+    // baseline only (no monthly_financials, no payments) → costs estimated.
     supaRec.resultProvider = () => ({
       data: {
         baseline: {
@@ -211,8 +212,9 @@ describe('financial — real margins + estimated balance sheet', () => {
     const gross = r.ratios.find((x) => x.key === 'grossMarginPct');
     const net = r.ratios.find((x) => x.key === 'netMarginPct');
     // COGS = 30+5+5 = 40% → gross 60%; total costs 30+5+5+15 = 55% → net 45%
-    expect(gross).toMatchObject({ value: 60, estimated: false });
-    expect(net).toMatchObject({ value: 45, estimated: false });
+    // No real cost source → margins flagged estimated.
+    expect(gross).toMatchObject({ value: 60, estimated: true });
+    expect(net).toMatchObject({ value: 45, estimated: true });
     // every balance-sheet line flagged estimated (cash real here → false)
     expect(r.balanceSheet.receivablesPence.estimated).toBe(true);
     expect(r.balanceSheet.equityPence.estimated).toBe(true);
@@ -222,6 +224,25 @@ describe('financial — real margins + estimated balance sheet', () => {
       Math.round((100_000_000 / 365) * 45),
     );
     expect(r.ratios.find((x) => x.key === 'currentRatio').estimated).toBe(true);
+  });
+
+  it('uses REAL settled-payment revenue (TTM); costs estimated from baseline', async () => {
+    const now = () => new Date(2026, 4, 15);
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'monthly_financials') return { data: [], error: null };
+      if (q.table === 'payments')
+        return { data: [{ amount_pence: 100_000_000, processed_at: '2026-03-01T00:00:00Z' }], error: null };
+      return {
+        data: { baseline: { revenue: 1_000_000, cost_associates: 30, cost_lab: 5, cost_materials: 5, cost_staff: 15 } },
+        error: null,
+      };
+    };
+    const r = await svc.financial(ORG_A, { dsoDays: 45, payableDays: 30, now });
+    // revenue = real £1,000,000 (100,000,000 pence); costs estimated from baseline
+    expect(r.ratios.find((x) => x.key === 'grossMarginPct')).toMatchObject({ value: 60, estimated: true });
+    expect(r.ratios.find((x) => x.key === 'netMarginPct')).toMatchObject({ value: 45, estimated: true });
+    // receivables derived from the REAL revenue, not the baseline
+    expect(r.balanceSheet.receivablesPence.value).toBe(Math.round((100_000_000 / 365) * 45));
   });
 });
 
