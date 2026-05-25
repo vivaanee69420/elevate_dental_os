@@ -2,7 +2,10 @@
 import { useMemo, useState } from 'react';
 import { PageHeader, DataTable, StatusBadge, type Column } from '@/components/ui';
 import { formatPence, formatDate } from '@/lib/format';
-import { usePayments, useCreatePaymentLink } from '../hooks';
+import { usePayments, usePaymentSummary, useCreatePaymentLink } from '../hooks';
+import PracticeTabs from '@/features/practices/PracticeTabs';
+
+const PAGE_SIZE = 25;
 
 const columns: Column<any>[] = [
   { header: 'Date', render: (p) => <span className="text-ink-muted">{formatDate(p.created_at)}</span> },
@@ -32,9 +35,14 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 export default function PaymentsScreen() {
-  const { data } = usePayments();
+  const [page, setPage] = useState(1);
+  const [practiceId, setPracticeId] = useState<string | null>(null);
+  const { data, isFetching } = usePayments(page, PAGE_SIZE, practiceId);
+  const { data: summary } = usePaymentSummary(practiceId);
   const createLink = useCreatePaymentLink();
   const payments: any[] = useMemo(() => data?.payments ?? [], [data]);
+  const total = data?.total ?? 0;
+  const pages = data?.pages ?? 1;
 
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState('');
@@ -42,19 +50,13 @@ export default function PaymentsScreen() {
   const [url, setUrl] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const stats = useMemo(() => {
-    const now = Date.now();
-    const inWin = (iso: string, ms: number) =>
-      iso && now - new Date(iso).getTime() <= ms;
-    const settled = payments.filter((p) => p.status === 'settled');
-    const sum = (a: any[]) => a.reduce((s, p) => s + (p.amount_pence || 0), 0);
-    return {
-      today: sum(settled.filter((p) => inWin(p.created_at, 86400000))),
-      week: sum(settled.filter((p) => inWin(p.created_at, 7 * 86400000))),
-      month: sum(settled.filter((p) => inWin(p.created_at, 30 * 86400000))),
-      outstanding: sum(payments.filter((p) => p.status === 'pending')),
-    };
-  }, [payments]);
+  // Stats come from the server summary (all rows), not the current 25-row page.
+  const stats = {
+    today: summary?.today ?? 0,
+    week: summary?.week ?? 0,
+    month: summary?.month ?? 0,
+    outstanding: summary?.outstanding ?? 0,
+  };
 
   async function submit() {
     setErr(null);
@@ -99,6 +101,8 @@ export default function PaymentsScreen() {
         </button>
       </div>
 
+      <PracticeTabs value={practiceId} onChange={(id) => { setPracticeId(id); setPage(1); }} />
+
       <div className="grid gap-4 my-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <Stat label="Today" value={formatPence(stats.today)} />
         <Stat label="This week" value={formatPence(stats.week)} />
@@ -107,6 +111,42 @@ export default function PaymentsScreen() {
       </div>
 
       <DataTable columns={columns} rows={payments} rowKey={(p) => p.id} />
+
+      {total > 0 && (
+        <div className="flex items-center justify-between mt-3" style={{ fontSize: 13 }}>
+          <span className="text-ink-muted">
+            {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
+            {isFetching && ' · loading…'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1 || isFetching}
+              style={{
+                padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border)',
+                background: 'white', cursor: page <= 1 ? 'default' : 'pointer',
+                opacity: page <= 1 ? 0.5 : 1,
+              }}
+            >
+              Prev
+            </button>
+            <span className="text-ink-muted" style={{ padding: '6px 4px' }}>Page {page} of {pages}</span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(pages, p + 1))}
+              disabled={page >= pages || isFetching}
+              style={{
+                padding: '6px 12px', borderRadius: 6, border: '1px solid var(--border)',
+                background: 'white', cursor: page >= pages ? 'default' : 'pointer',
+                opacity: page >= pages ? 0.5 : 1,
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
 
       {open && (
         <div
