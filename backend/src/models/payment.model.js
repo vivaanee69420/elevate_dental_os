@@ -12,3 +12,13 @@ export const paymentLinkCreateSchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),
     lead_id: zod_1.z.string().uuid().optional(),
 });
+export const paymentManualCreateSchema = zod_1.z.object({
+    practice_id: zod_1.z.string().uuid(),
+    contact_id: zod_1.z.string().uuid().optional(),
+    lead_id: zod_1.z.string().uuid().optional(),
+    amount_pence: zod_1.z.number().int().positive(),
+    method: zod_1.z.enum(['card', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'direct_debit', 'finance', 'card_on_file', 'pay_link']).optional(),
+    status: zod_1.z.enum(['pending', 'processing', 'settled', 'failed', 'refunded', 'disputed']).default('settled'),
+    description: zod_1.z.string().optional(),
+    processed_at: zod_1.z.string().optional(),
+});

@@ -100,7 +100,67 @@ async function rollbackAuthIdentity(authId, email) {
     }
 }
 
+/**
+ * Create an org + its owner in one shot (auth identity, organisation, owner
+ * users row, seed plans + RBAC matrix), with full rollback if any step fails.
+ * Shared by public signup (status 'pending', awaiting platform approval) and
+ * platform-admin org creation (status 'active', login-ready immediately).
+ *
+ *   reclaim orphan ─► createAuthUser ─► createOrganisation
+ *        └─ on failure: deleteOrganisation + rollbackAuthIdentity
+ *   ─► createUser(role=owner, status) ─► seed plans ─► seed role_permissions
+ *
+ * @param {{email,password,full_name,organisation_name}} body
+ * @param {'pending'|'active'} status  owner row status to insert
+ * @returns {Promise<{organisation_id:string, owner_id:string}>}
+ */
+export async function provisionOrgOwner(body, status) {
+    await reclaimOrphanAuthIdentity(
+        body.email,
+        'An account with this email already exists',
+    );
+    // Create auth user (email pre-confirmed — owner can log in once active).
+    const { data: authData, error: authError } =
+        await auth_repository_1.authRepository.createAuthUser(body.email, body.password);
+    if (authError)
+        throw new errors_1.AppError(authError.message, 400);
+    // Create organisation
+    const slug = body.organisation_name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 40);
+    const { data: org, error: orgError } =
+        await auth_repository_1.authRepository.createOrganisation(body.organisation_name, slug);
+    if (orgError) {
+        await rollbackAuthIdentity(authData.user.id, body.email);
+        throw new errors_1.AppError(orgError.message, 400);
+    }
+    // Create user record (as owner) with the caller-supplied status.
+    const { error: userError } = await auth_repository_1.authRepository.createUser({
+        id: authData.user.id,
+        organisation_id: org.id,
+        email: body.email,
+        full_name: body.full_name,
+        role: 'owner',
+        status,
+    });
+    if (userError) {
+        await auth_repository_1.authRepository.deleteOrganisation(org.id);
+        await rollbackAuthIdentity(authData.user.id, body.email);
+        throw new errors_1.AppError(userError.message, 400);
+    }
+    // Seed default membership plans
+    await auth_repository_1.authRepository.seedMembershipPlans([
+        { organisation_id: org.id, name: 'Smile Club Essential', monthly_price_pence: 1495,
+            benefits: ['2 hygiene visits/year', 'Annual exam', '10% off treatments'] },
+        { organisation_id: org.id, name: 'Smile Club Plus', monthly_price_pence: 2495,
+            benefits: ['4 hygiene visits/year', 'Annual exam', '15% off treatments', 'Emergency cover'] },
+    ]);
+    // Seed the dynamic-RBAC default permission matrix for this org.
+    await auth_repository_1.authRepository.seedRolePermissions(org.id);
+    return { organisation_id: org.id, owner_id: authData.user.id };
+}
+
 export const authService = {
+    provisionOrgOwner,
+
     // Org name for /auth/me (topbar). Null if the row is missing — the
     // controller must not 500 just because the header label can't resolve.
     async organisationName(orgId) {
@@ -108,48 +168,16 @@ export const authService = {
         return data?.name ?? null;
     },
 
+    // Public self-signup: owner lands 'pending' and CANNOT log in until a
+    // platform admin approves. The response says so explicitly.
     async signup(body) {
-        await reclaimOrphanAuthIdentity(
-            body.email,
-            'An account with this email already exists',
-        );
-        // Create auth user
-        const { data: authData, error: authError } =
-            await auth_repository_1.authRepository.createAuthUser(body.email, body.password);
-        if (authError)
-            throw new errors_1.AppError(authError.message, 400);
-        // Create organisation
-        const slug = body.organisation_name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 40);
-        const { data: org, error: orgError } =
-            await auth_repository_1.authRepository.createOrganisation(body.organisation_name, slug);
-        if (orgError) {
-            await rollbackAuthIdentity(authData.user.id, body.email);
-            throw new errors_1.AppError(orgError.message, 400);
-        }
-        // Create user record (as owner)
-        const { error: userError } = await auth_repository_1.authRepository.createUser({
-            id: authData.user.id,
-            organisation_id: org.id,
-            email: body.email,
-            full_name: body.full_name,
-            role: 'owner',
-            status: 'active', // signup owner is immediately active
-        });
-        if (userError) {
-            await auth_repository_1.authRepository.deleteOrganisation(org.id);
-            await rollbackAuthIdentity(authData.user.id, body.email);
-            throw new errors_1.AppError(userError.message, 400);
-        }
-        // Seed default membership plans
-        await auth_repository_1.authRepository.seedMembershipPlans([
-            { organisation_id: org.id, name: 'Smile Club Essential', monthly_price_pence: 1495,
-                benefits: ['2 hygiene visits/year', 'Annual exam', '10% off treatments'] },
-            { organisation_id: org.id, name: 'Smile Club Plus', monthly_price_pence: 2495,
-                benefits: ['4 hygiene visits/year', 'Annual exam', '15% off treatments', 'Emergency cover'] },
-        ]);
-        // Seed the dynamic-RBAC default permission matrix for this org.
-        await auth_repository_1.authRepository.seedRolePermissions(org.id);
-        return { success: true, organisation_id: org.id };
+        const { organisation_id } = await provisionOrgOwner(body, 'pending');
+        return {
+            success: true,
+            organisation_id,
+            status: 'pending',
+            message: 'Account created. Awaiting approval before you can log in.',
+        };
     },
 
     async login(body) {
@@ -159,10 +187,25 @@ export const authService = {
             throw new errors_1.AppError('Invalid email or password', 401);
         // Provisioning gate: a valid Supabase auth identity is NOT enough.
         // There must be a public.users row (admin-provisioned) for this id.
-        const { data: row } =
+        const { data: row, error: lookupError } =
             await auth_repository_1.authRepository.getUserById(data.user.id);
+        // A query ERROR (PostgREST 5xx, the schema-cache reload window after a
+        // `NOTIFY pgrst` / DDL, a transient network blip) is NOT the same as a
+        // missing row. Conflating them reported "Account not provisioned" and
+        // locked out fully-provisioned accounts until the blip passed. Surface
+        // a retryable 503 instead — the credentials were already validated.
+        if (lookupError) {
+            throw new errors_1.AppError('Sign in temporarily unavailable. Please try again.', 503);
+        }
         if (!row) {
             throw new errors_1.AppError('Account not provisioned. Contact your administrator.', 403);
+        }
+        // Approval gate: a self-signup owner cannot log in until approved.
+        if (row.status === 'pending') {
+            throw new errors_1.AppError('Your account is awaiting approval.', 403);
+        }
+        if (row.status === 'rejected') {
+            throw new errors_1.AppError('Your account was not approved.', 403);
         }
         // First successful password login after an invite flips the member
         // from 'invited' to 'active' (they have now set their password).

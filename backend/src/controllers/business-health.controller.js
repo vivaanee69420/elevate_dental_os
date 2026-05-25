@@ -21,4 +21,8 @@ export const businessHealthController = {
     async progress(req, res) {
         res.json(await business_health_service_1.businessHealthService.progress(req.user.organisation_id));
     },
+    async updateCadence(req, res) {
+        const body = business_health_model_1.cadenceUpdateSchema.parse(req.body);
+        res.json(await business_health_service_1.businessHealthService.updateCadence(req.user.organisation_id, req.user.role, body));
+    },
 };

@@ -3,16 +3,27 @@
 @tailwind utilities;
 
 :root {
+  /* Theme matched to elevate-dental-os.html prototype :root */
+  --bg: #F6F7F9;
+  --surface: #FFFFFF;
+  --card: #FFFFFF;
+  --ink: #0F172A;
+  --ink-muted: #64748B;
+  --ink-soft: #94A3B8;
   --brand: #0E7C7B;
-  --brand-50: #E6F2F2;
+  --brand-50: #E6F4F4;
+  --brand-100: #C2E5E4;
+  --brand-600: #0B6968;
   --accent: #FFB547;
   --success: #10B981;
+  --warning: #F59E0B;
   --danger: #EF4444;
-  --ink: #1F2937;
-  --ink-muted: #6B7280;
-  --bg: #F9FAFB;
-  --card: #FFFFFF;
+  --info: #3B82F6;
+  --gold: #B8860B;
   --border: #E5E7EB;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .04);
 }
 
 body { font-family: var(--font-sans), system-ui, sans-serif; }

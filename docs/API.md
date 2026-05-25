@@ -12,7 +12,9 @@ Returns `{ status: 'ok', timestamp, version }`. No auth required.
 ## Authentication
 
 ### `POST /auth/signup`
-Creates organisation + owner user.
+Public self-registration. Creates organisation + owner user, but the owner is
+created **`pending`** and CANNOT log in until a platform admin approves them
+(see `POST /api/platform/signups/:id/approve`). Rate-limited 5/min/IP.
 ```json
 Request:
 {
@@ -23,8 +25,26 @@ Request:
 }
 
 Response:
-{ "success": true, "organisation_id": "uuid" }
+{ "success": true, "organisation_id": "uuid", "status": "pending",
+  "message": "Account created. Awaiting approval before you can log in." }
 ```
+
+### `POST /auth/login`
+Validates credentials + the provisioning/approval gate, returns a Supabase
+session. Rate-limited 5/min/IP.
+```json
+Request:  { "email": "...", "password": "..." }
+Response: { "access_token": "...", "refresh_token": "...", "expires_at": 0 }
+```
+Gate responses (403): `pending` → "Your account is awaiting approval.";
+`rejected` → "Your account was not approved."; no `users` row → "Account not
+provisioned."
+
+> **Unified login (frontend):** the single `/login` page posts to the Next
+> route `POST /auth/login`, which calls this endpoint first; on a plain `401`
+> it falls back to `POST /api/platform/login` and, on success, sets the
+> separate `platform_token` cookie. Tenants land on `/dashboard`, platform
+> superadmins on `/platform/overview`. The two token systems stay isolated.
 
 ### `GET /auth/me`
 Returns current user info (used by sidebar).
@@ -254,6 +274,36 @@ Records inbound email as communication.
 ### `POST /webhooks/twilio/inbound`
 Records inbound SMS as communication.
 
+## Public OAuth callbacks (no auth — signed state)
+
+### `GET /oauth/:provider/callback`
+OAuth redirect target for integration providers. Public (mounted outside `/api`)
+because the browser redirect carries no JWT. The org is recovered from the
+HMAC-signed `state` param (`lib/oauth-state.js`), never `req.user`. On success
+exchanges the `code` for tokens and redirects to `${FRONTEND_URL}/integrations?connected=<provider>`;
+on failure redirects with `?error=<message>&provider=<provider>`. Used by GoHighLevel
+(`gohighlevel`) and the OAuth provider stubs.
+
+Requires env: `OAUTH_STATE_SECRET`, `BACKEND_PUBLIC_URL`, plus per-provider
+`GHL_CLIENT_ID` / `GHL_CLIENT_SECRET`.
+
+## Integrations (authenticated — owner only)
+
+### `POST /api/integrations/connect`
+Body `{ provider }`. For OAuth providers returns `{ redirectUrl }` (frontend
+sends the browser there). GoHighLevel → `marketplace.leadconnectorhq.com/oauth/chooselocation`.
+
+### `POST /api/integrations/:provider/refresh`
+Forces an OAuth token refresh. For `gohighlevel`, guarded against concurrent
+refresh (single-use token) via the `refresh_in_progress_at` claim; a non-claiming
+caller returns `{ skipped: 'refresh_in_progress' }`.
+
+### `POST /api/integrations/:provider/revoke`
+Marks the integration `revoked` and clears stored secrets.
+
+> GoHighLevel inbound sync (opportunities + contacts → leads/contacts) runs
+> hourly in `workers/index.js`; not an HTTP endpoint.
+
 ## Error responses
 
 All errors return:
@@ -271,6 +321,99 @@ Status codes:
 
 ## Rate limits
 
-- 100 requests/minute per user (general)
+- 100 requests/minute per IP (global, public routes)
+- 50 requests/minute per authenticated user (`/api/*`, keyed by verified user id)
+- 5 requests/minute per IP for `/auth/login`, `/auth/signup`, `/api/platform/login` (credential endpoints)
 - 10 requests/minute for `/api/p4g-ai/chat` (AI)
 - 20 requests/minute for `/api/files/presign` (uploads)
+
+---
+
+## Platform-admin surface (`/api/platform/*`)
+
+**Auth model is completely separate from tenant auth.** Platform endpoints
+authenticate against `platform_admins` using a dedicated JWT signed with
+`PLATFORM_ADMIN_JWT_SECRET` (NOT the Supabase JWT). A tenant Supabase JWT will
+be rejected with `401` here; a platform JWT will be rejected with `401` on
+every tenant `/api/*` route. Every authenticated request writes one row to
+`platform_audit_log` (fail-closed — a log error fails the request).
+
+All endpoints accept `Authorization: Bearer <platform_jwt>` and respond JSON.
+
+### `POST /api/platform/login`
+Public, rate-limited to 5/min/IP. Returns a platform JWT + admin profile.
+Reached via the unified `/login` page (see `POST /auth/login`), not a separate
+admin login screen.
+```json
+Request:  { "email": "...", "password": "..." }
+Response: { "token": "...", "admin": { "id", "email", "full_name", "role", "must_change_password" } }
+```
+
+### `POST /api/platform/orgs` *(superadmin)*
+Creates a tenant organisation + owner directly (auto-approved, owner `active`).
+Generates a one-time temp password returned ONCE (never persisted or audited).
+```json
+Request:  { "email": "...", "full_name": "...", "organisation_name": "..." }
+Response: { "organisation_id": "uuid", "owner_id": "uuid", "email": "...", "temp_password": "..." }
+```
+
+### `GET /api/platform/signups`
+Self-signup owners awaiting approval (status `pending`), with org name. Any admin.
+
+### `POST /api/platform/signups/:id/approve` *(superadmin)*
+Approves a pending owner → `active` (can now log in). `404` if `:id` is not an
+owner, `409` if not `pending`. Audited.
+
+### `POST /api/platform/signups/:id/reject` *(superadmin)*
+Rejects a pending owner → `rejected` (row kept; login permanently blocked).
+Same `404`/`409` guards. Audited.
+
+### `POST /api/platform/change-password`
+Authenticated. Verifies `current_password`, sets `new_password` (min 12 chars),
+clears `must_change_password`.
+
+### `GET /api/platform/me`
+Returns the current platform admin record.
+
+### `GET /api/platform/orgs?q=&limit=&offset=`
+Lists all organisations (cross-tenant). Returns `{ rows, total }`.
+
+### `GET /api/platform/orgs/:id`
+Single org with `user_count`.
+
+### `GET /api/platform/orgs/:id/users`
+Users in that org (no RLS — service-client read).
+
+### `GET /api/platform/orgs/:id/activity`
+Tenant `audit_log` rows for that org, newest first.
+
+### `GET /api/platform/users?q=&limit=`
+Global user search by email substring (min 1 char from frontend; backend caps `limit` at 200).
+
+### `GET /api/platform/metrics/overview?days=`
+Cross-tenant counts and N-day deltas. Default `days=30`, max `365`.
+
+### `GET /api/platform/metrics/integrations`
+Per-provider connected/error/total counts across tenants.
+
+### `GET /api/platform/audit?organisation_id=&user_id=&action=&limit=&offset=`
+Cross-tenant tenant audit log.
+
+### `GET /api/platform/audit/platform?limit=&offset=`
+Platform-side audit log (who-did-what on `/api/platform/*`). Requires `superadmin` role.
+
+### Roles
+- `superadmin` — every endpoint, including `/audit/platform`, `POST /orgs`, and
+  signup approve/reject.
+- `support`    — read endpoints + `/me` + `/change-password`; NOT `/orgs`,
+  signup approve/reject, or `/audit/platform`.
+- `readonly`   — read endpoints only.
+
+A platform admin with `must_change_password=true` is blocked (403) on every
+route except `/me` and `/change-password` until they rotate their password.
+
+### Env vars
+- `PLATFORM_ADMIN_JWT_SECRET` (required at runtime, ≥32 chars)
+- `PLATFORM_ADMIN_BOOTSTRAP_EMAIL` + `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` — when both set
+  AND the `platform_admins` table is empty, server boot creates the first
+  superadmin with `must_change_password=true`. Idempotent thereafter.

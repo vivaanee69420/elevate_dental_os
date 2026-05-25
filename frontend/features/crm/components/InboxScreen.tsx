@@ -1,21 +1,17 @@
 'use client';
-// CRM Inbox — pixel-faithful port of preview/elevate-dental-os-v2.html
-// (effective PAGES.inbox at ~line 7916). A unified multichannel inbox:
-// left thread list (search + channel filter chips), right conversation view.
+// CRM Inbox — wired to GET /api/comms.
 //
-// Data flow:
-//   INBOX_THREADS -> filter by channel/unread + search -> list
-//   selected thread -> THREAD_MESSAGES[id] -> conversation bubbles
-// All client-side state (filter, search, selection) is local — no API.
+// Server returns a flat list of `communications` rows scoped to the caller's
+// organisation_id. This component groups them client-side into "threads" by
+// (contact_id || lead_id || channel+address), picks the latest message per
+// thread for the list view, and renders the full message history for the
+// selected thread. UI is pixel-identical to the prototype; only the data
+// source moved from mock fixtures to the real endpoint.
 
 import { useMemo, useState } from 'react';
-import {
-  INBOX_THREADS,
-  THREAD_MESSAGES,
-  CRM_NAVY,
-  agoLabel,
-  type InboxThread,
-} from '../data';
+import { useCommunications } from '../hooks';
+import { type Communication } from '../api';
+import { CRM_NAVY, agoLabel } from '../data';
 
 // Per-channel accent colour (emoji indicators dropped per rule 7).
 const CHANNEL_COLOUR: Record<string, string> = {
@@ -23,28 +19,130 @@ const CHANNEL_COLOUR: Record<string, string> = {
   email: '#3B82F6',
   whatsapp: '#25D366',
   voice_ai: '#8B5CF6',
+  call: '#8B5CF6',
+  in_person: '#64748B',
 };
 const CHANNEL_LABEL: Record<string, string> = {
   sms: 'SMS',
   email: 'Email',
   whatsapp: 'WhatsApp',
   voice_ai: 'Voice AI',
+  call: 'Call',
+  in_person: 'In person',
 };
 
-/** CRM unified-inbox screen. */
+interface DerivedThread {
+  id: string;                 // synthetic thread key (contact_id || lead_id || channel+address)
+  name: string;
+  initials: string;
+  channel: Communication['channel'];
+  unread: number;
+  subject?: string;
+  lastSnippet: string;
+  minutesAgo: number;
+  tag: string;
+  messages: Communication[];  // ordered oldest → newest within thread
+}
+
+function counterpartyAddress(c: Communication): string {
+  if (c.direction === 'inbound') return c.from_address ?? c.to_address ?? '';
+  return c.to_address ?? c.from_address ?? '';
+}
+
+function deriveDisplayName(addr: string, fallback: string): string {
+  if (!addr) return fallback;
+  // Strip "Name <email>" angle-bracket form if present.
+  const m = addr.match(/^([^<]+)<[^>]+>$/);
+  if (m) return m[1].trim();
+  return addr;
+}
+
+function initialsOf(name: string): string {
+  const parts = name.replace(/[<>@]/g, ' ').trim().split(/\s+/).slice(0, 2);
+  if (parts.length === 0) return '??';
+  return parts
+    .map((p) => p[0] ?? '')
+    .join('')
+    .toUpperCase() || '??';
+}
+
+function minutesAgoFrom(iso: string): number {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return 0;
+  return Math.max(0, Math.floor((Date.now() - t) / 60_000));
+}
+
+// Group flat communications into threads. Key precedence:
+// contact_id > lead_id > (channel + counterparty address).
+function groupIntoThreads(rows: Communication[]): DerivedThread[] {
+  const buckets = new Map<string, Communication[]>();
+
+  for (const c of rows) {
+    const key =
+      c.contact_id
+        ? `c:${c.contact_id}`
+        : c.lead_id
+          ? `l:${c.lead_id}`
+          : `a:${c.channel}:${counterpartyAddress(c)}`;
+    const list = buckets.get(key);
+    if (list) list.push(c);
+    else buckets.set(key, [c]);
+  }
+
+  const threads: DerivedThread[] = [];
+  for (const [id, msgs] of buckets) {
+    // Sort oldest → newest within thread for natural conversation reading.
+    msgs.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const latest = msgs[msgs.length - 1];
+    const addr = counterpartyAddress(latest);
+    const displayName = deriveDisplayName(
+      addr,
+      id.startsWith('c:')
+        ? `Contact ${id.slice(2, 10)}`
+        : id.startsWith('l:')
+          ? `Lead ${id.slice(2, 10)}`
+          : 'Unknown sender',
+    );
+    threads.push({
+      id,
+      name: displayName,
+      initials: initialsOf(displayName),
+      channel: latest.channel,
+      unread: msgs.filter((m) => m.direction === 'inbound' && !m.read_at).length,
+      subject: latest.subject ?? undefined,
+      lastSnippet: latest.body ?? '(no content)',
+      minutesAgo: minutesAgoFrom(latest.created_at),
+      tag: '',
+      messages: msgs,
+    });
+  }
+
+  // Newest activity first in the list.
+  threads.sort((a, b) => a.minutesAgo - b.minutesAgo);
+  return threads;
+}
+
+/** CRM unified-inbox screen — backed by GET /api/comms. */
 export default function InboxScreen() {
   const [filter, setFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState<string>(INBOX_THREADS[0].id);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const { data, isLoading, error } = useCommunications();
+
+  const threads = useMemo(
+    () => groupIntoThreads(data?.communications ?? []),
+    [data?.communications],
+  );
 
   const totalUnread = useMemo(
-    () => INBOX_THREADS.reduce((s, t) => s + t.unread, 0),
-    [],
+    () => threads.reduce((s, t) => s + t.unread, 0),
+    [threads],
   );
 
   // Filtered thread list: channel/unread chip + free-text search.
   const filtered = useMemo(() => {
-    let list: InboxThread[] = INBOX_THREADS;
+    let list = threads;
     if (filter === 'unread') list = list.filter((t) => t.unread > 0);
     else if (filter !== 'all') list = list.filter((t) => t.channel === filter);
     if (search) {
@@ -54,19 +152,19 @@ export default function InboxScreen() {
       );
     }
     return list;
-  }, [filter, search]);
+  }, [threads, filter, search]);
 
   const selected =
-    INBOX_THREADS.find((t) => t.id === selectedId) || filtered[0] || null;
-  const messages = selected ? THREAD_MESSAGES[selected.id] || [] : [];
+    threads.find((t) => t.id === selectedId) ?? filtered[0] ?? null;
+  const messages = selected?.messages ?? [];
 
   const filterChips = [
-    { k: 'all', l: 'All', c: INBOX_THREADS.length },
+    { k: 'all', l: 'All', c: threads.length },
     { k: 'unread', l: 'Unread', c: totalUnread },
-    { k: 'sms', l: 'SMS', c: INBOX_THREADS.filter((t) => t.channel === 'sms').length },
-    { k: 'email', l: 'Email', c: INBOX_THREADS.filter((t) => t.channel === 'email').length },
-    { k: 'whatsapp', l: 'WhatsApp', c: INBOX_THREADS.filter((t) => t.channel === 'whatsapp').length },
-    { k: 'voice_ai', l: 'Voice', c: INBOX_THREADS.filter((t) => t.channel === 'voice_ai').length },
+    { k: 'sms', l: 'SMS', c: threads.filter((t) => t.channel === 'sms').length },
+    { k: 'email', l: 'Email', c: threads.filter((t) => t.channel === 'email').length },
+    { k: 'whatsapp', l: 'WhatsApp', c: threads.filter((t) => t.channel === 'whatsapp').length },
+    { k: 'call', l: 'Call', c: threads.filter((t) => t.channel === 'call').length },
   ];
 
   return (
@@ -86,11 +184,28 @@ export default function InboxScreen() {
             Inbox
           </h1>
           <p className="text-ink-muted" style={{ fontSize: 13 }}>
-            {INBOX_THREADS.length} conversations · {totalUnread} unread · SMS,
-            Email, WhatsApp, Voice AI all in one place
+            {isLoading
+              ? 'Loading conversations…'
+              : `${threads.length} conversations · ${totalUnread} unread · SMS, Email, WhatsApp, Voice AI all in one place`}
           </p>
         </div>
       </div>
+
+      {error && (
+        <div
+          className="card"
+          style={{
+            padding: 12,
+            marginBottom: 12,
+            background: '#FEF2F2',
+            border: '1px solid #FECACA',
+            color: '#991B1B',
+            fontSize: 12,
+          }}
+        >
+          Failed to load communications: {(error as Error).message}
+        </div>
+      )}
 
       <div
         style={{
@@ -110,9 +225,7 @@ export default function InboxScreen() {
             padding: 0,
           }}
         >
-          <div
-            style={{ padding: 10, borderBottom: '1px solid var(--border)' }}
-          >
+          <div style={{ padding: 10, borderBottom: '1px solid var(--border)' }}>
             <input
               type="text"
               value={search}
@@ -158,12 +271,21 @@ export default function InboxScreen() {
             ))}
           </div>
           <div style={{ overflowY: 'auto', flex: 1, maxHeight: 700 }}>
-            {filtered.length === 0 ? (
+            {isLoading ? (
               <div
                 className="text-ink-muted text-center"
                 style={{ padding: '30px 20px', fontSize: 12 }}
               >
-                No conversations
+                Loading…
+              </div>
+            ) : filtered.length === 0 ? (
+              <div
+                className="text-ink-muted text-center"
+                style={{ padding: '30px 20px', fontSize: 12 }}
+              >
+                {threads.length === 0
+                  ? 'No conversations yet — outbound sends will appear here.'
+                  : 'No conversations match this filter.'}
               </div>
             ) : (
               filtered.map((t) => (
@@ -182,7 +304,7 @@ export default function InboxScreen() {
                     border: 'none',
                     borderLeft:
                       selected && selected.id === t.id
-                        ? `3px solid ${CHANNEL_COLOUR[t.channel]}`
+                        ? `3px solid ${CHANNEL_COLOUR[t.channel] ?? CRM_NAVY}`
                         : '3px solid transparent',
                   }}
                 >
@@ -259,30 +381,15 @@ export default function InboxScreen() {
                           style={{
                             fontSize: 9,
                             padding: '1px 6px',
-                            background: `${CHANNEL_COLOUR[t.channel]}20`,
-                            color: CHANNEL_COLOUR[t.channel],
+                            background: `${CHANNEL_COLOUR[t.channel] ?? '#64748B'}20`,
+                            color: CHANNEL_COLOUR[t.channel] ?? '#64748B',
                             borderRadius: 3,
                             fontWeight: 700,
                             textTransform: 'uppercase',
                           }}
                         >
-                          {CHANNEL_LABEL[t.channel]}
+                          {CHANNEL_LABEL[t.channel] ?? t.channel}
                         </span>
-                        {t.tag && (
-                          <span
-                            className="text-ink-muted"
-                            style={{
-                              fontSize: 9,
-                              padding: '1px 6px',
-                              background: 'var(--bg)',
-                              borderRadius: 3,
-                              fontWeight: 700,
-                              textTransform: 'uppercase',
-                            }}
-                          >
-                            {t.tag}
-                          </span>
-                        )}
                         {t.unread > 0 && (
                           <span
                             style={{
@@ -322,7 +429,11 @@ export default function InboxScreen() {
               className="text-ink-muted text-center"
               style={{ padding: '60px 20px', fontSize: 13 }}
             >
-              Select a conversation to view messages
+              {isLoading
+                ? 'Loading…'
+                : threads.length === 0
+                  ? 'No conversations yet.'
+                  : 'Select a conversation to view messages'}
             </div>
           ) : (
             <>
@@ -346,8 +457,7 @@ export default function InboxScreen() {
                     className="text-ink-muted"
                     style={{ fontSize: 11 }}
                   >
-                    {CHANNEL_LABEL[selected.channel]} ·{' '}
-                    {selected.tag || 'no tag'}
+                    {CHANNEL_LABEL[selected.channel] ?? selected.channel}
                   </div>
                 </div>
               </div>
@@ -368,13 +478,13 @@ export default function InboxScreen() {
                     No messages yet
                   </div>
                 ) : (
-                  messages.map((m, i) => (
+                  messages.map((m) => (
                     <div
-                      key={i}
+                      key={m.id}
                       className="flex"
                       style={{
                         justifyContent:
-                          m.dir === 'out' ? 'flex-end' : 'flex-start',
+                          m.direction === 'outbound' ? 'flex-end' : 'flex-start',
                         marginBottom: 8,
                       }}
                     >
@@ -383,31 +493,29 @@ export default function InboxScreen() {
                           maxWidth: '70%',
                           padding: '8px 12px',
                           borderRadius:
-                            m.dir === 'out'
+                            m.direction === 'outbound'
                               ? '12px 12px 0 12px'
                               : '12px 12px 12px 0',
                           background:
-                            m.dir === 'out'
-                              ? `${CHANNEL_COLOUR[selected.channel]}22`
+                            m.direction === 'outbound'
+                              ? `${CHANNEL_COLOUR[m.channel] ?? '#64748B'}22`
                               : 'white',
                           border: '1px solid var(--border)',
                           fontSize: 13,
                         }}
                       >
-                        {m.text}
-                        {m.template && (
+                        {m.subject && m.channel === 'email' && (
                           <div
                             style={{
-                              fontSize: 9,
-                              color: CHANNEL_COLOUR[selected.channel],
+                              fontSize: 11,
                               fontWeight: 700,
-                              marginTop: 4,
-                              textTransform: 'uppercase',
+                              marginBottom: 4,
                             }}
                           >
-                            via template: {m.template}
+                            {m.subject}
                           </div>
                         )}
+                        {m.body ?? '(empty)'}
                         <div
                           className="text-ink-muted"
                           style={{
@@ -416,7 +524,7 @@ export default function InboxScreen() {
                             textAlign: 'right',
                           }}
                         >
-                          {agoLabel(m.minutesAgo)}
+                          {agoLabel(minutesAgoFrom(m.created_at))}
                         </div>
                       </div>
                     </div>
@@ -433,7 +541,7 @@ export default function InboxScreen() {
               >
                 <input
                   type="text"
-                  placeholder={`Reply via ${CHANNEL_LABEL[selected.channel]}…`}
+                  placeholder={`Reply via ${CHANNEL_LABEL[selected.channel] ?? selected.channel}…`}
                   style={{
                     flex: 1,
                     padding: '8px 10px',
@@ -445,7 +553,7 @@ export default function InboxScreen() {
                 <button
                   style={{
                     padding: '8px 14px',
-                    background: CHANNEL_COLOUR[selected.channel],
+                    background: CHANNEL_COLOUR[selected.channel] ?? CRM_NAVY,
                     color: 'white',
                     border: 'none',
                     borderRadius: 6,

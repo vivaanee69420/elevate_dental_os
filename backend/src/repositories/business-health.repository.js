@@ -60,4 +60,11 @@ export const businessHealthRepository = {
             .single();
         return data;
     },
+    async updateCadence(orgId, frequency) {
+        const { error } = await supabase_1.serviceClient
+            .from('business_health')
+            .update({ snapshot_frequency: frequency })
+            .eq('organisation_id', orgId);
+        if (error) throw new Error(error.message);
+    },
 };

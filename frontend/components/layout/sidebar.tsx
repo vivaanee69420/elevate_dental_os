@@ -3,6 +3,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { canAccessRoute, type Permissions } from '@/lib/permissions';
+import { NAV, type NavItem, type NavSection } from '@/lib/nav';
 import { useMe } from '@/hooks/useMe';
 
 // Sidebar — the app shell's primary navigation.
@@ -17,89 +18,6 @@ import { useMe } from '@/hooks/useMe';
 // shared lib/permissions module; an item shows only when its key is true.
 // Overview routes have no key and are always visible. If /auth/me fails we
 // treat the user as having no permissions (only Overview shows).
-
-type NavItem = {
-  id: string;
-  label: string;
-};
-type NavSection = {
-  label: string;
-  items: NavItem[];
-};
-
-const NAV: NavSection[] = [
-  { label: 'Overview', items: [
-    { id: 'dashboard', label: 'Command Centre' },
-    { id: 'ai-insights', label: 'AI Insights' },
-    { id: 'p4g-ai', label: 'Plan4Growth AI' },
-    { id: 'mobile', label: 'Mobile App' },
-  ]},
-  { label: 'Finance', items: [
-    { id: 'cashflow', label: 'Cash Flow' },
-    { id: 'profit', label: 'Profit & Loss' },
-    { id: 'financial', label: 'Financial' },
-    { id: 'payments', label: 'Patient Payments' },
-    { id: 'valuation', label: 'Valuation' },
-  ]},
-  { label: 'Business Health', items: [
-    { id: 'health-setup', label: 'Setup & Targets' },
-    { id: 'progress', label: 'Progress Tracker' },
-    { id: 'kpiscorecard', label: 'KPI Scorecard' },
-  ]},
-  { label: 'Operations', items: [
-    { id: 'associates', label: 'Associates' },
-    { id: 'staff', label: 'Staff Scheduling' },
-    { id: 'pay', label: 'Associate Pay' },
-    { id: 'chair', label: 'Chair Utilisation' },
-    { id: 'treatments', label: 'Treatments' },
-    { id: 'uda', label: 'UDA Tracker' },
-  ]},
-  { label: 'Intelligence', items: [
-    { id: 'scenarios', label: 'Scenarios' },
-    { id: 'tax', label: 'Tax (MTD)' },
-    { id: 'debt', label: 'Debt Recovery' },
-    { id: 'alerts', label: 'Alerts' },
-  ]},
-  { label: 'Growth', items: [
-    { id: 'patients', label: 'Patients' },
-    { id: 'marketing', label: 'Marketing' },
-    { id: 'loyalty', label: 'Loyalty & Members' },
-    { id: 'reviews', label: 'Reviews' },
-    { id: 'booking', label: 'Online Booking' },
-    { id: 'benchmark', label: 'Benchmark' },
-  ]},
-  { label: 'Elevate CRM', items: [
-    { id: 'crm-today', label: 'Today' },
-    { id: 'inbox', label: 'Inbox' },
-    { id: 'pipeline', label: 'Pipeline' },
-    { id: 'leads', label: 'Leads' },
-    { id: 'crm-enquiries', label: 'Enquiries' },
-    { id: 'contacts', label: 'Contacts' },
-    { id: 'crm-sequences', label: 'Nurturing' },
-    { id: 'crm-templates', label: 'Templates' },
-    { id: 'crm-reports', label: 'CRM Reports' },
-    { id: 'crm-settings', label: 'CRM Settings' },
-    { id: 'workflows', label: 'Automations' },
-    { id: 'pages', label: 'Landing Pages' },
-  ]},
-  { label: 'Wealth', items: [
-    { id: 'wealth-net', label: 'Net Worth' },
-    { id: 'wealth-prop', label: 'Property' },
-    { id: 'wealth-pen', label: 'Pensions' },
-    { id: 'wealth-fire', label: 'FIRE Plan' },
-  ]},
-  { label: 'Training', items: [
-    { id: 'training-library', label: 'Module Library' },
-    { id: 'training-my', label: 'My Modules' },
-    { id: 'training-mentorship', label: 'Mentorship Calls' },
-    { id: 'training-onetoone', label: '1-to-1 Coaching' },
-  ]},
-  { label: 'System', items: [
-    { id: 'integrations', label: 'Integrations' },
-    { id: 'team-permissions', label: 'Team Permissions' },
-    { id: 'settings', label: 'Settings' },
-  ]},
-];
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -179,13 +97,19 @@ export function Sidebar() {
                     <Link
                       key={item.id}
                       href={`/${item.id}`}
-                      className={`block px-6 py-2 text-sm rounded-lg mx-2 transition ${
+                      aria-current={active ? 'page' : undefined}
+                      className={`flex items-center gap-2 px-6 py-2 text-sm rounded-lg mx-2 transition ${
                         active
                           ? 'bg-brand-50 text-brand font-medium'
                           : 'text-ink-muted hover:bg-bg hover:text-ink'
                       }`}
                     >
-                      {item.label}
+                      <span>{item.label}</span>
+                      {item.isNew && (
+                        <span className="text-[9px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded px-1 py-0.5">
+                          New
+                        </span>
+                      )}
                     </Link>
                   );
                 })}

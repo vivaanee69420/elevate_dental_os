@@ -38,8 +38,12 @@ export const authRepository = {
         return supabase_1.serviceClient.auth.admin.inviteUserByEmail(email);
     },
     // Password sign-in — returns a Supabase session (access/refresh tokens).
+    // Uses authClient, NOT serviceClient: a successful sign-in persists the
+    // user's session on the client and would otherwise hijack every later
+    // serviceClient query's Authorization header (dropping the RLS bypass and
+    // breaking the provisioning lookup). See lib/supabase.js.
     signInWithPassword(email, password) {
-        return supabase_1.serviceClient.auth.signInWithPassword({ email, password });
+        return supabase_1.authClient.auth.signInWithPassword({ email, password });
     },
     // Admin sets/overwrites a user's password (provision-with-password reset).
     updateUserPassword(id, password) {

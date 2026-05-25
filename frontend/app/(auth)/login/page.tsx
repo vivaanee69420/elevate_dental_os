@@ -19,12 +19,14 @@ export default function LoginPage() {
       body: JSON.stringify({ email, password }),
     });
     setLoading(false);
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const data = await res.json().catch(() => ({ error: 'Sign in failed' }));
       setError(data.error || 'Sign in failed');
       return;
     }
-    router.push('/dashboard');
+    // The route decides the destination: /dashboard for tenants,
+    // /platform/overview for a platform superadmin.
+    router.push(data.redirect || '/dashboard');
     router.refresh();
   }
 

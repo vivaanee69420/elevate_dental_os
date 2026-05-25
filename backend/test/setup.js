@@ -16,6 +16,11 @@ import { vi } from 'vitest';
 process.env.SUPABASE_URL ||= 'http://localhost:54321';
 process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'test-service-role-key';
 process.env.SUPABASE_ANON_KEY ||= 'test-anon-key';
+// lib/crypto.js captures the key at module load, so it must be set before any
+// test imports it. lib/oauth-state.js reads its secret per-call (set here too
+// for convenience; individual tests may override).
+process.env.INTEGRATIONS_SECRET_KEY ||= 'test-integrations-key';
+process.env.OAUTH_STATE_SECRET ||= 'test-state-secret';
 
 const h = vi.hoisted(() => {
   const supaRec = {
@@ -44,7 +49,10 @@ const h = vi.hoisted(() => {
       insert(vals) {
         q.op = 'insert';
         q.insertVals = vals;
-        return settle();
+        // Return the builder (not a settled promise) so both terminal
+        // `await from(t).insert(v)` (via .then) and chained
+        // `from(t).insert(v).select().single()` (createOrganisation) work.
+        return builder;
       },
       delete() {
         q.op = 'delete';
@@ -83,6 +91,22 @@ const h = vi.hoisted(() => {
         q.limitN = n;
         return builder;
       },
+      range(from, to) {
+        q.range = { from, to };
+        return settle();
+      },
+      ilike(col, val) {
+        (q.ilikes ||= []).push({ col, val });
+        return builder;
+      },
+      or(expr) {
+        (q.ors ||= []).push(expr);
+        return builder;
+      },
+      not(col, op, val) {
+        (q.nots ||= []).push({ col, op, val });
+        return builder;
+      },
       maybeSingle: () => settle(),
       single: () => settle(),
       then: (resolve, reject) => settle().then(resolve, reject),
@@ -104,6 +128,16 @@ const h = vi.hoisted(() => {
   function makeClient() {
     return {
       from: makeFrom,
+      // RPC recorder. Default returns an ERROR result so callers that treat
+      // RPC as optional (auth middleware's auth_bootstrap fast path) fall back
+      // to their query path, matching pre-RPC behaviour. Tests that want a
+      // specific RPC outcome set supaRec.rpcProvider(fn, params).
+      rpc: async (fn, params) => {
+        (supaRec.rpcCalls ||= []).push({ fn, params });
+        return supaRec.rpcProvider
+          ? supaRec.rpcProvider(fn, params)
+          : { data: null, error: { message: `rpc ${fn} not stubbed` } };
+      },
       auth: {
         getUser: async () =>
           supaRec.authUser

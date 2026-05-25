@@ -5,20 +5,21 @@
 // ============================================================================
 import * as comm_repository_1 from "../repositories/comm.repository.js";
 import * as errors_1 from "../middleware/errors.js";
-import * as postmark_1 from "../lib/postmark.js";
-import * as twilio_1 from "../lib/twilio.js";
+import * as messaging_1 from "../lib/messaging.js";
 export const commService = {
-    list(orgId, q) {
-        return comm_repository_1.commRepository.list(orgId, q);
+    list(orgId, q, viewer) {
+        return comm_repository_1.commRepository.list(orgId, q, viewer);
     },
     async send(orgId, input, log) {
         let externalId;
         try {
             if (input.channel === 'email') {
-                externalId = await (0, postmark_1.sendEmail)({ to: input.to, subject: input.subject || '', body: input.body });
+                const r = await messaging_1.sendEmail({ orgId, to: input.to, subject: input.subject || '', body: input.body });
+                externalId = r.external_id;
             }
             else if (input.channel === 'sms') {
-                externalId = await (0, twilio_1.sendSMS)({ to: input.to, body: input.body });
+                const r = await messaging_1.sendSMS({ orgId, to: input.to, body: input.body });
+                externalId = r.external_id;
             }
         }
         catch (err) {

@@ -12,3 +12,6 @@ export const snapshotCreateSchema = zod_1.z.object({
     label: zod_1.z.string().optional(),
     metrics: zod_1.z.record(zod_1.z.any()),
 });
+export const cadenceUpdateSchema = zod_1.z.object({
+    snapshot_frequency: zod_1.z.enum(['weekly', 'monthly']),
+});

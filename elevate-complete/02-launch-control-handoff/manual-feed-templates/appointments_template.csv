@@ -1,0 +1,2 @@
+appointment_id,entity_code,practice_code,patient_external_id,patient_name,practitioner_external_id,room_external_id,start_time,end_time,status,cancelled_reason,treatment_description,treatment_code,booked_channel,estimated_value,source_system,source_updated_at
+APT-10001,GM_DENTAL_GROUP,ASHFORD,PAT-20011,Sarah Morgan,PRAC-17,ROOM-2,2026-05-25T09:00:00+01:00,2026-05-25T10:00:00+01:00,completed,,Implant consultation,IMPLANT-CONSULT,phone,250,DENTALLY_MANUAL,2026-05-25T18:10:00+01:00

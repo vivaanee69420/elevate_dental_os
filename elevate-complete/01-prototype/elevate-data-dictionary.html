@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Elevate Dental OS · Data Dictionary</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',-apple-system,system-ui,sans-serif;background:#F8FAFC;color:#0F172A;line-height:1.55;padding:0}
+.hero{background:linear-gradient(135deg,#0E7C7B,#0F766E);color:#fff;padding:48px 32px 36px}
+.hero-inner{max-width:1280px;margin:0 auto}
+.hero h1{font-size:36px;font-weight:700;letter-spacing:-.025em;margin:0 0 10px}
+.hero p{font-size:15px;opacity:.92;max-width:780px;line-height:1.55}
+.badges{display:flex;gap:8px;margin-top:20px;flex-wrap:wrap}
+.badge{padding:6px 12px;background:rgba(255,255,255,.18);border-radius:6px;font-size:12px;font-weight:600;backdrop-filter:blur(4px)}
+.container{max-width:1280px;margin:0 auto;padding:32px}
+.toc{background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:20px 24px;margin-bottom:28px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.toc h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748B;margin:0 0 12px}
+.toc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.toc a{display:block;padding:8px 12px;background:#F1F5F9;border-radius:6px;text-decoration:none;color:#0F172A;font-size:12.5px;font-weight:600;transition:.15s}
+.toc a:hover{background:#0E7C7B;color:#fff}
+.section{background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:28px;margin-bottom:24px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.section h2{font-size:22px;font-weight:700;color:#0F172A;letter-spacing:-.015em;margin:0 0 6px}
+.section .desc{color:#64748B;font-size:13.5px;margin-bottom:20px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:0}
+thead{background:linear-gradient(to bottom,#F8FAFC,#F1F5F9)}
+th{text-align:left;padding:11px 12px;font-weight:700;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid #E5E7EB}
+td{padding:11px 12px;border-bottom:1px solid #F1F5F9;vertical-align:top}
+tbody tr:hover{background:#F8FAFC}
+.pill{display:inline-block;padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;letter-spacing:.02em}
+.pill-auto{background:#ECFDF5;color:#065F46}
+.pill-manual{background:#FEF3C7;color:#92400E}
+.pill-hybrid{background:#DBEAFE;color:#1E40AF}
+.pill-xero{background:#13B5EA20;color:#0891B2;border:1px solid #13B5EA40}
+.pill-dentally{background:#7C3AED20;color:#7C3AED;border:1px solid #7C3AED40}
+.pill-stripe{background:#635BFF20;color:#5B4FE0;border:1px solid #635BFF40}
+.pill-banking{background:#10B98120;color:#065F46;border:1px solid #10B98140}
+.pill-nhs{background:#EF444420;color:#991B1B;border:1px solid #EF444440}
+.pill-bsa{background:#F59E0B20;color:#92400E;border:1px solid #F59E0B40}
+code{background:#F1F5F9;padding:2px 6px;border-radius:4px;font-size:11.5px;color:#0F172A;font-family:'JetBrains Mono',Monaco,monospace}
+.formula{background:linear-gradient(135deg,#FEF3C7,#FDE68A);border:1px solid #F59E0B;border-radius:8px;padding:14px 16px;font-family:'JetBrains Mono',Monaco,monospace;font-size:12.5px;color:#78350F;margin:14px 0;line-height:1.7}
+.callout{background:#F0FDFA;border-left:4px solid #0E7C7B;padding:14px 18px;border-radius:8px;font-size:13px;color:#0F172A;line-height:1.55;margin:14px 0}
+.callout-warn{background:#FEF3C7;border-left-color:#F59E0B;color:#92400E}
+.callout-danger{background:#FEE2E2;border-left-color:#EF4444;color:#991B1B}
+.print-btn{position:fixed;bottom:24px;right:24px;background:#0E7C7B;color:#fff;border:none;padding:12px 20px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(14,124,123,.4);z-index:100}
+.print-btn:hover{background:#0F766E}
+.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+.summary-card{background:#fff;border:1px solid #E5E7EB;border-radius:12px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.summary-card .lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748B}
+.summary-card .val{font-size:28px;font-weight:700;color:#0F172A;letter-spacing:-.02em;margin:6px 0 4px}
+.summary-card .sub{font-size:11.5px;color:#64748B}
+@media print{
+  .print-btn{display:none}
+  .hero{background:#0E7C7B!important;-webkit-print-color-adjust:exact}
+  .section{box-shadow:none;page-break-inside:avoid}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="hero-inner">
+    <h1>Elevate Dental OS · Data Dictionary</h1>
+    <p>Comprehensive reference of every metric, calculation, and KPI in the platform. Shows the data source for each field — whether auto-synced from Xero / Dentally / Stripe / Open Banking, or input manually. Use this as the single source of truth for data integration planning.</p>
+    <div class="badges">
+      <span class="badge">📊 200+ data points</span>
+      <span class="badge">🔌 11 integration sources</span>
+      <span class="badge">✅ 78% auto-synced</span>
+      <span class="badge">📝 22% manual / one-time</span>
+      <span class="badge">📅 Updated: 24 May 2026</span>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+<div class="summary-grid">
+  <div class="summary-card"><div class="lbl">Data Sources</div><div class="val">11</div><div class="sub">Xero · Dentally · Stripe · banking · NHS · manual</div></div>
+  <div class="summary-card"><div class="lbl">Auto-Synced Fields</div><div class="val">156</div><div class="sub">refreshed every 15min – 24h</div></div>
+  <div class="summary-card"><div class="lbl">Manual / One-Off</div><div class="val">44</div><div class="sub">org config, targets, settings</div></div>
+  <div class="summary-card"><div class="lbl">Hybrid Fields</div><div class="val">28</div><div class="sub">auto + manual override</div></div>
+</div>
+
+<div class="toc">
+  <h2>🧭 Sections</h2>
+  <div class="toc-grid">
+    <a href="#legend">1. Legend & Conventions</a>
+    <a href="#sources">2. Data Sources Map</a>
+    <a href="#org">3. Organisation Setup</a>
+    <a href="#associates">4. Associates</a>
+    <a href="#treatments">5. Treatments</a>
+    <a href="#chairs">6. Chair Configuration</a>
+    <a href="#nhs">7. NHS UDA</a>
+    <a href="#financial">8. Financial Data</a>
+    <a href="#cashflow">9. Cash Flow</a>
+    <a href="#patient">10. Patient & Clinical</a>
+    <a href="#kpis">11. Calculated KPIs</a>
+    <a href="#benchmarks">12. Benchmark Data</a>
+    <a href="#peers">13. Peer Benchmarking</a>
+    <a href="#wealth">14. Wealth & Investments</a>
+    <a href="#compliance">15. Compliance</a>
+    <a href="#hr">16. HR & People</a>
+    <a href="#marketing">17. Marketing</a>
+    <a href="#sync">18. Sync Frequency</a>
+    <a href="#priorities">19. Implementation Priority</a>
+    <a href="#runbook">20. Setup Runbook</a>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div id="legend" class="section">
+<h2>1. Legend & Conventions</h2>
+<div class="desc">How to read this document.</div>
+<table>
+<thead><tr><th style="width:160px">Tag</th><th>Meaning</th><th>Sync Behaviour</th></tr></thead>
+<tbody>
+<tr><td><span class="pill pill-auto">AUTO</span></td><td>Fully automated · no manual input required</td><td>Pulled on schedule from external system</td></tr>
+<tr><td><span class="pill pill-manual">MANUAL</span></td><td>Input by user in settings / profile / config screen</td><td>One-time setup or periodic update</td></tr>
+<tr><td><span class="pill pill-hybrid">HYBRID</span></td><td>Auto-synced with manual override capability</td><td>Auto by default, user can correct</td></tr>
+<tr><td><span class="pill pill-xero">XERO</span></td><td>From Xero Accounting API</td><td>OAuth 2.0 · webhook + scheduled sync</td></tr>
+<tr><td><span class="pill pill-dentally">DENTALLY</span></td><td>From Dentally PMS API</td><td>Bearer token · 15-min sync</td></tr>
+<tr><td><span class="pill pill-stripe">STRIPE</span></td><td>Stripe API</td><td>Webhook · real-time</td></tr>
+<tr><td><span class="pill pill-banking">BANKING</span></td><td>Open Banking · Plaid / TrueLayer</td><td>Daily refresh</td></tr>
+<tr><td><span class="pill pill-nhs">NHS</span></td><td>NHS BSA</td><td>CSV upload (monthly) until API available</td></tr>
+<tr><td><span class="pill pill-bsa">SEED</span></td><td>Pre-seeded reference data</td><td>Updated quarterly via patches</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="sources" class="section">
+<h2>2. Data Sources Map</h2>
+<div class="desc">Every external system that feeds Elevate Dental OS and what it provides.</div>
+<table>
+<thead><tr><th>System</th><th>Auth</th><th>What it provides</th><th>Update frequency</th><th>Required?</th></tr></thead>
+<tbody>
+<tr><td><b>Xero</b></td><td>OAuth 2.0 + PKCE</td><td>Invoices, bills, P&L, balance sheet, chart of accounts, bank transactions, contacts</td><td>Webhook + 1h scheduled</td><td>YES (or QB)</td></tr>
+<tr><td><b>QuickBooks Online</b></td><td>Intuit OAuth 2.0</td><td>Same as Xero · alternative</td><td>Webhook + 1h scheduled</td><td>YES (or Xero)</td></tr>
+<tr><td><b>Dentally</b></td><td>Bearer (API key)</td><td>Patients, appointments, treatments invoiced, practitioners, sites, plans</td><td>15-min poll</td><td>YES</td></tr>
+<tr><td><b>Software of Excellence (SOE / Dentrix)</b></td><td>Local agent</td><td>Same as Dentally · alternative PMS</td><td>Daily export</td><td>Alt to Dentally</td></tr>
+<tr><td><b>Stripe</b></td><td>API key + webhook secret</td><td>Patient payments, subscription billing, refunds</td><td>Real-time webhook</td><td>Recommended</td></tr>
+<tr><td><b>Plaid / TrueLayer</b></td><td>OAuth 2.0</td><td>Bank balance, recent transactions when not in Xero</td><td>Daily refresh</td><td>Optional</td></tr>
+<tr><td><b>NHS BSA UDA Service</b></td><td>CSV upload</td><td>UDA targets, performance, schedule statements</td><td>Monthly</td><td>NHS practices only</td></tr>
+<tr><td><b>SendGrid / Mailgun</b></td><td>API key</td><td>Transactional email (invitations, alerts, digests)</td><td>On event</td><td>Required</td></tr>
+<tr><td><b>Twilio</b></td><td>API key</td><td>SMS payment reminders, appointment confirms</td><td>On event</td><td>Optional</td></tr>
+<tr><td><b>Companies House</b></td><td>Public API</td><td>Company info, accounts filing reminders</td><td>Daily</td><td>Optional</td></tr>
+<tr><td><b>HMRC MTD / VAT</b></td><td>OAuth (HMRC)</td><td>VAT submissions, MTD digital records</td><td>On event</td><td>Optional</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="org" class="section">
+<h2>3. Organisation Setup (One-Off Manual)</h2>
+<div class="desc">Foundational tenant config · entered once at onboarding, updated rarely.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th><th>Required?</th></tr></thead>
+<tbody>
+<tr><td>Practice Name</td><td><span class="pill pill-manual">MANUAL</span></td><td>Every screen header, branding, reports</td><td>YES</td></tr>
+<tr><td>Country / Region</td><td><span class="pill pill-manual">MANUAL</span></td><td>Tax rules, currency, benchmarks</td><td>YES</td></tr>
+<tr><td>Currency (ISO 4217)</td><td><span class="pill pill-manual">MANUAL</span></td><td>All financial displays · default GBP</td><td>YES</td></tr>
+<tr><td>Financial Year Start Month</td><td><span class="pill pill-manual">MANUAL</span></td><td>YTD calculations, tax year alignment · UK default = April</td><td>YES</td></tr>
+<tr><td>Address (lines, city, postcode)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Invoices, statements, CQC paperwork</td><td>YES</td></tr>
+<tr><td>Company Registration No</td><td><span class="pill pill-manual">MANUAL</span></td><td>Compliance reports, Companies House lookup</td><td>YES</td></tr>
+<tr><td>VAT Number (if registered)</td><td><span class="pill pill-manual">MANUAL</span></td><td>VAT calc, tax reporting</td><td>If VAT-reg</td></tr>
+<tr><td>UTR (Unique Tax Reference)</td><td><span class="pill pill-manual">MANUAL</span></td><td>HMRC integration, tax reports</td><td>YES</td></tr>
+<tr><td>GDC Practice Reg No</td><td><span class="pill pill-manual">MANUAL</span></td><td>Compliance pack</td><td>Recommended</td></tr>
+<tr><td>CQC Provider ID</td><td><span class="pill pill-manual">MANUAL</span></td><td>CQC dashboard, inspection prep</td><td>Recommended</td></tr>
+<tr><td>NHS Contract Number(s)</td><td><span class="pill pill-manual">MANUAL</span></td><td>UDA tracker, BSA reconciliation</td><td>NHS only</td></tr>
+<tr><td>Number of Sites</td><td><span class="pill pill-manual">MANUAL</span></td><td>Multi-site comparison, group rollup</td><td>YES</td></tr>
+<tr><td>Site List (name, address, manager)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Site-level dashboards, allocations</td><td>YES per site</td></tr>
+</tbody>
+</table>
+<div class="callout">⏱ <b>Setup time:</b> ~15 minutes for a single-site, ~45 minutes for multi-site group. Most can be filled from existing Companies House / HMRC docs.</div>
+</div>
+
+<!-- ============================================================ -->
+<div id="associates" class="section">
+<h2>4. Associates · Per-Person Data</h2>
+<div class="desc">Used in: Per-Associate P&L · UDA Tracker · Profit Goals · Chair Allocation.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th></tr></thead>
+<tbody>
+<tr><td>Name, Email, Phone</td><td><span class="pill pill-manual">MANUAL</span></td><td>Profile, comms, login invitation</td></tr>
+<tr><td>GDC Number</td><td><span class="pill pill-manual">MANUAL</span></td><td>Compliance, indemnity tracking</td></tr>
+<tr><td>Primary Chair Assignment</td><td><span class="pill pill-manual">MANUAL</span></td><td>Chair utilisation, OCPSPA allocation</td></tr>
+<tr><td>Associate Split % (fee share)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Profit calculation per associate</td></tr>
+<tr><td>Associate Lab Split %</td><td><span class="pill pill-manual">MANUAL</span></td><td>Lab cost split between principal and associate</td></tr>
+<tr><td>Employment Type (Associate / Employed / Hygienist)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Pay model, NI status, pension</td></tr>
+<tr><td>Joining Date</td><td><span class="pill pill-manual">MANUAL</span></td><td>Anniversary, tenure analytics</td></tr>
+<tr><td>Leaving Date (if applicable)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Removes from active calcs after this date</td></tr>
+<tr><td>Indemnity Provider + Number</td><td><span class="pill pill-manual">MANUAL</span></td><td>Compliance Pro · indemnity tracker</td></tr>
+<tr><td>Indemnity Renewal Date</td><td><span class="pill pill-manual">MANUAL</span></td><td>Renewal alerts</td></tr>
+<tr><td><b>Net Production (monthly £)</b></td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Driver of all per-associate calcs</td></tr>
+<tr><td><b>Working Hours per Month</b></td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Productivity per hour calculations</td></tr>
+<tr><td><b>Treatments performed (line items)</b></td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Treatment-level profitability per associate</td></tr>
+<tr><td>Manual production override (when PMS missing)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Allows correction if Dentally syncing wrong</td></tr>
+<tr><td>UDA Target (annual)</td><td><span class="pill pill-manual">MANUAL</span></td><td>NHS performance tracker</td></tr>
+<tr><td>UDA Target (monthly distribution)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Pacing analysis</td></tr>
+<tr><td>UDA Completed (actual)</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>UDA performance tracker</td></tr>
+</tbody>
+</table>
+<div class="callout">⚠ <b>Critical dependency:</b> Per-associate P&L requires Dentally connection. Without it, you must manually upload monthly production via CSV. This is the #1 blocker if PMS sync is broken.</div>
+</div>
+
+<!-- ============================================================ -->
+<div id="treatments" class="section">
+<h2>5. Treatments · 97 BSA Codes Pre-Seeded</h2>
+<div class="desc">Treatment Master shipped with 97 default BSA codes. Each can be edited or new ones added.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th></tr></thead>
+<tbody>
+<tr><td>Case Code (e.g. C, EXT, RCT, I-DI)</td><td><span class="pill pill-bsa">SEED</span></td><td>Treatment Master · 97 BSA codes shipped</td></tr>
+<tr><td>Treatment Description</td><td><span class="pill pill-bsa">SEED</span></td><td>Per-treatment P&L</td></tr>
+<tr><td>Default Treatment Value (£)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Editable per practice (private rates)</td></tr>
+<tr><td>Dentist Time (mins)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Chair efficiency, profit per hour calc</td></tr>
+<tr><td>Therapist/Hygienist Time (mins)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Per-treatment cost calc</td></tr>
+<tr><td>Lab Bill £ (per case)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>True profitability calc</td></tr>
+<tr><td>Lab Discount % (volume discount)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Lab cost adjustment</td></tr>
+<tr><td>Material Cost £</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Per-treatment cost</td></tr>
+<tr><td>Associate Pay % (override default)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Treatment-specific split if different</td></tr>
+<tr><td>Therapist Pay Rate £/hr</td><td><span class="pill pill-manual">MANUAL</span></td><td>Hygienist cost calc</td></tr>
+<tr><td>Finance Fee % (if patient finance)</td><td><span class="pill pill-manual">MANUAL</span></td><td>True profit after Tabeo/Chrysalis fees</td></tr>
+<tr><td>Operating Cost per Surgery per Hour £</td><td><span class="pill pill-auto">AUTO</span></td><td>Computed from OCPSPD ÷ working hours</td></tr>
+<tr><td>Completion Time Used (mins)</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Actual vs planned time (efficiency)</td></tr>
+<tr><td>Treatment Group (1 of 11)</td><td><span class="pill pill-bsa">SEED</span></td><td>Reporting · Prosthodontics, Restorative, etc.</td></tr>
+<tr><td><b>Invoice Lines (per-treatment performed)</b></td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Volume × profit feeds revenue reports</td></tr>
+</tbody>
+</table>
+<div class="callout">💡 <b>Quick win:</b> Even without Dentally, the 97 seeded treatments + a manually-entered private price list lets you run Per-Treatment P&L analysis. Volume can be entered monthly as an Excel upload.</div>
+</div>
+
+<!-- ============================================================ -->
+<div id="chairs" class="section">
+<h2>6. Chair Configuration</h2>
+<div class="desc">Drives OCPSPD, chair utilisation, lost revenue recovery.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th></tr></thead>
+<tbody>
+<tr><td>Number of Chairs / Surgeries</td><td><span class="pill pill-manual">MANUAL</span></td><td>OCPSPD denominator · capacity calc</td></tr>
+<tr><td>Opening Hours per Day</td><td><span class="pill pill-manual">MANUAL</span></td><td>Total chair-hours available</td></tr>
+<tr><td>Working Weeks per Year (e.g. 46)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Annual capacity</td></tr>
+<tr><td>Working Days per Week (e.g. 5)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Surgery-days/year derived</td></tr>
+<tr><td>Industry Benchmark Occupancy % (UK ~80%)</td><td><span class="pill pill-bsa">SEED</span></td><td>Variance reporting</td></tr>
+<tr><td>Benchmark Revenue per Chair Hour (£280 UK)</td><td><span class="pill pill-bsa">SEED</span></td><td>Lost revenue potential calc</td></tr>
+<tr><td><b>Actual Chair Time Occupied (hrs)</b></td><td><span class="pill pill-dentally">DENTALLY</span></td><td>From appointment durations</td></tr>
+<tr><td>Per-chair revenue allocation</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>If chair-tagged invoices supported</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="nhs" class="section">
+<h2>7. NHS UDA Data</h2>
+<div class="desc">NHS-specific tracking for mixed and NHS-heavy practices.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th></tr></thead>
+<tbody>
+<tr><td>NHS Contract Value (annual £)</td><td><span class="pill pill-manual">MANUAL</span></td><td>From NHS contract document</td></tr>
+<tr><td>Total UDA Obligation (annual)</td><td><span class="pill pill-manual">MANUAL</span></td><td>From NHS contract</td></tr>
+<tr><td>UDA Rate (£ per UDA)</td><td><span class="pill pill-auto">AUTO</span></td><td>Contract Value ÷ UDA Obligation</td></tr>
+<tr><td>Financial Year (NHS)</td><td><span class="pill pill-manual">MANUAL</span></td><td>April-March cycle</td></tr>
+<tr><td>UDA Target per Associate (annual)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Group target distribution</td></tr>
+<tr><td>UDA Target per Associate (monthly)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Auto-split or custom seasonality</td></tr>
+<tr><td><b>UDAs Completed (actual)</b></td><td><span class="pill pill-nhs">NHS</span></td><td>BSA upload monthly · or from Dentally</td></tr>
+<tr><td>NHS Schedule Statement (monthly £)</td><td><span class="pill pill-nhs">NHS</span></td><td>Reconciliation with bank receipts</td></tr>
+<tr><td>NHS Bank Receipts</td><td><span class="pill pill-xero">XERO</span></td><td>Cross-checked with NHS statement</td></tr>
+<tr><td>Clawback Risk Threshold (typically 96%)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Alert when delivery falls below</td></tr>
+<tr><td>Late NHS Payment Tracking</td><td><span class="pill pill-auto">AUTO</span></td><td>From schedule vs receipt date</td></tr>
+</tbody>
+</table>
+<div class="callout callout-warn">⚠ <b>NHS API limitation:</b> BSA does not yet offer a public API. UDA performance must be uploaded via CSV monthly until they release one. Dentally integration provides UDAs done in real-time though.</div>
+</div>
+
+<!-- ============================================================ -->
+<div id="financial" class="section">
+<h2>8. Financial Data (from Xero / QuickBooks)</h2>
+<div class="desc">The accounting backbone. Every P&L, balance sheet, ratio comes from here.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th></tr></thead>
+<tbody>
+<tr><td><b>Chart of Accounts</b></td><td><span class="pill pill-xero">XERO</span></td><td>Seeded on first sync · mapped to categories</td></tr>
+<tr><td><b>Revenue (by ledger account)</b></td><td><span class="pill pill-xero">XERO</span></td><td>Sales, NHS income, Private income, Membership</td></tr>
+<tr><td><b>Direct Costs</b></td><td><span class="pill pill-xero">XERO</span></td><td>Lab fees, materials, associate fees, dental products</td></tr>
+<tr><td><b>Overheads</b></td><td><span class="pill pill-xero">XERO</span></td><td>Rent, salaries, marketing, utilities, insurance, etc.</td></tr>
+<tr><td><b>Invoices (Accounts Receivable)</b></td><td><span class="pill pill-xero">XERO</span></td><td>AR management screen · aging</td></tr>
+<tr><td><b>Bills (Accounts Payable)</b></td><td><span class="pill pill-xero">XERO</span></td><td>AP management screen</td></tr>
+<tr><td><b>Credit Notes</b></td><td><span class="pill pill-xero">XERO</span></td><td>Refunds, adjustments</td></tr>
+<tr><td><b>Bank Transactions</b></td><td><span class="pill pill-xero">XERO</span></td><td>Cash inflow / outflow monitoring</td></tr>
+<tr><td><b>Bank Account Balances</b></td><td><span class="pill pill-xero">XERO</span></td><td>Closing cash position · daily</td></tr>
+<tr><td><b>P&L Statement</b></td><td><span class="pill pill-xero">XERO</span></td><td>Variance analysis, ratios</td></tr>
+<tr><td><b>Balance Sheet</b></td><td><span class="pill pill-xero">XERO</span></td><td>Working capital, equity, debt</td></tr>
+<tr><td>Tax Provisions</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>From Xero + manual planned tax</td></tr>
+<tr><td>Asset Register (CapEx items)</td><td><span class="pill pill-xero">XERO</span></td><td>Investment appraisal · depreciation</td></tr>
+<tr><td>Loan / Finance Agreements</td><td><span class="pill pill-manual">MANUAL</span></td><td>Loan tracker (Wealth Builder)</td></tr>
+<tr><td>Loan Outstanding Balances</td><td><span class="pill pill-xero">XERO</span></td><td>From liability accounts</td></tr>
+<tr><td>Owner Drawings / Dividends</td><td><span class="pill pill-xero">XERO</span></td><td>Capital allocation tracking</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="cashflow" class="section">
+<h2>9. Cash Flow Data</h2>
+<div class="desc">Past / Present / Future cash intelligence.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th></tr></thead>
+<tbody>
+<tr><td>Opening Bank Balance (per month)</td><td><span class="pill pill-xero">XERO</span></td><td>Cash matrix start point</td></tr>
+<tr><td>Money IN (per category)</td><td><span class="pill pill-xero">XERO</span></td><td>Cash received from operations / investing / financing</td></tr>
+<tr><td>Money OUT (per category)</td><td><span class="pill pill-xero">XERO</span></td><td>Direct costs, overheads, tax, debt repayment</td></tr>
+<tr><td>Internal Transfers</td><td><span class="pill pill-xero">XERO</span></td><td>Excluded from net cashflow</td></tr>
+<tr><td>Planned Cash Inflow (forward)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Cash flow projection wizard</td></tr>
+<tr><td>Planned Cash Outflow (forward)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Future commitments</td></tr>
+<tr><td>Closing Net Cash Flow Target</td><td><span class="pill pill-manual">MANUAL</span></td><td>Goal-setting</td></tr>
+<tr><td>Minimum Cash Buffer (£)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Run-out detector trigger</td></tr>
+<tr><td>Planned Tax Payments (CT, VAT, PAYE)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Tax reserve building</td></tr>
+<tr><td>One-Off Outflows (equipment, balloon)</td><td><span class="pill pill-manual">MANUAL</span></td><td>FCF calc + cash matrix</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="patient" class="section">
+<h2>10. Patient & Clinical Data</h2>
+<div class="desc">Powers Patient module (when launched), appointments, clinical KPIs.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Where it's used</th></tr></thead>
+<tbody>
+<tr><td><b>Patient List</b></td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Patient module, LTV calc</td></tr>
+<tr><td><b>Appointments (date/time/clinician/chair/treatment/duration)</b></td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Chair utilisation, productivity, no-show tracking</td></tr>
+<tr><td>No-shows / FTAs</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Lost revenue, leak finder</td></tr>
+<tr><td>Treatment Plans (proposed)</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Win/loss analysis</td></tr>
+<tr><td>Treatment Plans (accepted)</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Conversion rate, win rate</td></tr>
+<tr><td>Recall Status</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Recall compliance %</td></tr>
+<tr><td>Membership Plan Holders</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>MRR, plan revenue</td></tr>
+<tr><td>Marketing Source (per patient)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>LTV by channel · multi-touch attribution</td></tr>
+<tr><td>Patient Outstanding Balance</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Patient AR · debt management</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="kpis" class="section">
+<h2>11. Calculated KPIs (Derived, Not Input)</h2>
+<div class="desc">Everything computed from the data above. No manual entry needed.</div>
+
+<h3 style="margin-top:20px;font-size:14px;color:#0F172A">Core dental analytics</h3>
+<div class="formula">
+OCPSPD = OperatingCostsPerYear ÷ (WeeksOpen × DaysPerWeek × NumberOfSurgeries)<br>
+TotalProduction (associate) = AvgDailyProduction × AssocDaysPerYear<br>
+AssociateProfit = TotalProduction − Fees − Labs − Materials − (OCPSPD × Days)<br>
+ChairOccupancy% = CurrentChairTimeOccupied ÷ TotalChairHoursAvailable × 100<br>
+LostRevenuePotential = EmptyChairHours × BenchmarkRevenuePerChairHour
+</div>
+
+<h3 style="margin-top:20px;font-size:14px;color:#0F172A">Treatment P&L</h3>
+<div class="formula">
+PerJourneyProfit = TreatmentValue − AssociateCost − TherapistCost − OperatingCost − FinanceCost − Materials − LabAdjusted<br>
+ProfitPerHour = PerJourneyProfit ÷ (TotalMinutes ÷ 60)
+</div>
+
+<h3 style="margin-top:20px;font-size:14px;color:#0F172A">Cash flow</h3>
+<div class="formula">
+FCF = CashFromOps − CapEx − OneOffTax − DebtRepayments<br>
+ExcessCash = ClosingCashBalance − (3 × AvgMonthlyOpex) − PlannedTaxes<br>
+RunOutDate = FirstMonth(ClosingProjectedBalance &lt; MinimumCashBuffer)
+</div>
+
+<h3 style="margin-top:20px;font-size:14px;color:#0F172A">Variance &amp; benchmarking</h3>
+<div class="formula">
+VariancePct = (ActualExpensePct − BenchmarkPct)<br>
+Status: ≤-3% Fantastic · -1↔-3% Slight · -1↔1% Stable · 1↔3% Warning · >3% Take Action
+</div>
+</div>
+
+<!-- ============================================================ -->
+<div id="benchmarks" class="section">
+<h2>12. Benchmark Reference Data (Pre-Seeded)</h2>
+<div class="desc">UK dental industry medians · refreshed quarterly.</div>
+<table>
+<thead><tr><th style="width:300px">Benchmark</th><th style="width:140px">Source</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Dentist Costs % of Revenue</td><td><span class="pill pill-bsa">SEED</span></td><td>45%</td></tr>
+<tr><td>Staff Costs % of Revenue</td><td><span class="pill pill-bsa">SEED</span></td><td>18%</td></tr>
+<tr><td>Lab + Material % of Revenue</td><td><span class="pill pill-bsa">SEED</span></td><td>15%</td></tr>
+<tr><td>Other Fixed Costs % of Revenue</td><td><span class="pill pill-bsa">SEED</span></td><td>12%</td></tr>
+<tr><td>Target Net Profit %</td><td><span class="pill pill-bsa">SEED</span></td><td>10%</td></tr>
+<tr><td>Chair Occupancy %</td><td><span class="pill pill-bsa">SEED</span></td><td>80%</td></tr>
+<tr><td>Revenue per Chair Hour</td><td><span class="pill pill-bsa">SEED</span></td><td>£280</td></tr>
+<tr><td>Average UDA Rate (UK 2026)</td><td><span class="pill pill-bsa">SEED</span></td><td>£30.51</td></tr>
+<tr><td>DSO Target (days)</td><td><span class="pill pill-bsa">SEED</span></td><td>28</td></tr>
+<tr><td>No-Show Rate Target</td><td><span class="pill pill-bsa">SEED</span></td><td>&lt; 5%</td></tr>
+<tr><td>Recall Compliance Target</td><td><span class="pill pill-bsa">SEED</span></td><td>&gt; 80%</td></tr>
+<tr><td>EBITDA Margin Target</td><td><span class="pill pill-bsa">SEED</span></td><td>25-30%</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="peers" class="section">
+<h2>13. Peer Benchmarking Data</h2>
+<div class="desc">Anonymous, aggregated data from 800+ UK practices in the Elevate network.</div>
+<table>
+<thead><tr><th style="width:280px">Metric</th><th style="width:140px">Source</th><th>Granularity</th></tr></thead>
+<tbody>
+<tr><td>Operating Margin (P25 / Median / P75)</td><td><span class="pill pill-bsa">SEED</span></td><td>By practice size, region, NHS/private mix</td></tr>
+<tr><td>EBITDA Margin</td><td><span class="pill pill-bsa">SEED</span></td><td>By practice size</td></tr>
+<tr><td>Revenue per Chair Hour</td><td><span class="pill pill-bsa">SEED</span></td><td>By region</td></tr>
+<tr><td>CAC by Channel</td><td><span class="pill pill-bsa">SEED</span></td><td>Meta / Google / Referral / SEO</td></tr>
+<tr><td>Patient LTV (12mo)</td><td><span class="pill pill-bsa">SEED</span></td><td>By treatment mix</td></tr>
+<tr><td>New Patients / Month</td><td><span class="pill pill-bsa">SEED</span></td><td>By practice size</td></tr>
+<tr><td>Recall Compliance %</td><td><span class="pill pill-bsa">SEED</span></td><td>Industry-wide</td></tr>
+<tr><td>No-Show Rate %</td><td><span class="pill pill-bsa">SEED</span></td><td>Industry-wide</td></tr>
+<tr><td>Lab + Materials % of Revenue</td><td><span class="pill pill-bsa">SEED</span></td><td>By treatment mix</td></tr>
+<tr><td>DSO Days</td><td><span class="pill pill-bsa">SEED</span></td><td>Industry-wide</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="wealth" class="section">
+<h2>14. Wealth & Investment Data</h2>
+<div class="desc">Owner-level wealth · separate from practice finances.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>SIPP / Pension Balance</td><td><span class="pill pill-manual">MANUAL</span></td><td>Updated monthly from provider statement</td></tr>
+<tr><td>ISA Balance (S&S / Cash / LISA)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Per account</td></tr>
+<tr><td>GIA Holdings (per position)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Or CSV import from broker</td></tr>
+<tr><td>Property Portfolio (per BTL)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Address, valuation, mortgage, rent</td></tr>
+<tr><td>Crypto Holdings</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Manual or wallet integration</td></tr>
+<tr><td>Premium Bonds</td><td><span class="pill pill-manual">MANUAL</span></td><td>NS&I</td></tr>
+<tr><td>Other Assets (art, gold)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Valuation date tracking</td></tr>
+<tr><td>Family Investment Company assets</td><td><span class="pill pill-manual">MANUAL</span></td><td>FIC holdings, shareholding structure</td></tr>
+<tr><td>Estate Documents (will, LPA, trust)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Status flags only — not full docs</td></tr>
+<tr><td>7-Year Gifts Register</td><td><span class="pill pill-manual">MANUAL</span></td><td>Amount, date, recipient</td></tr>
+<tr><td>Insurance Policies (life, CI, IP)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Provider, sum assured, premium</td></tr>
+<tr><td>Beneficiary Register</td><td><span class="pill pill-manual">MANUAL</span></td><td>Per account / policy</td></tr>
+<tr><td>Asset Class Targets (allocation %)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Drift analysis</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="compliance" class="section">
+<h2>15. Compliance Data</h2>
+<div class="desc">CQC, IRMER, HTM 01-05, IG Toolkit, COSHH, fire.</div>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>CQC KLOE Self-Assessment Scores</td><td><span class="pill pill-manual">MANUAL</span></td><td>Quarterly review · evidence linked</td></tr>
+<tr><td>Adverse Incident Log</td><td><span class="pill pill-manual">MANUAL</span></td><td>Date, severity, RCA, CAPA</td></tr>
+<tr><td>Patient Complaints</td><td><span class="pill pill-manual">MANUAL</span></td><td>Days open, resolution, outcome</td></tr>
+<tr><td>IRMER Records (X-ray dose audits)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Quarterly random sample</td></tr>
+<tr><td>Equipment Service Logs (autoclave, X-ray)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Service date, next due, certificate</td></tr>
+<tr><td>HTM 01-05 Decontamination Logs</td><td><span class="pill pill-manual">MANUAL</span></td><td>Daily test, weekly Bowie-Dick</td></tr>
+<tr><td>IG / DSP Toolkit Submission</td><td><span class="pill pill-manual">MANUAL</span></td><td>Annual NHS requirement</td></tr>
+<tr><td>Policy Register (version, review date)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Document store + metadata</td></tr>
+<tr><td>Safeguarding Training Matrix</td><td><span class="pill pill-manual">MANUAL</span></td><td>Per staff, L1/L2/L3, expiry</td></tr>
+<tr><td>Waste Consignment Notes</td><td><span class="pill pill-manual">MANUAL</span></td><td>3-year retention</td></tr>
+<tr><td>Fire Safety Log (alarm test, drill)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Weekly alarm, annual drill</td></tr>
+<tr><td>COSHH Register (substances)</td><td><span class="pill pill-manual">MANUAL</span></td><td>SDS sheets linked</td></tr>
+<tr><td>Whistleblowing Log</td><td><span class="pill pill-manual">MANUAL</span></td><td>Confidential · restricted access</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="hr" class="section">
+<h2>16. HR & People Data</h2>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Staff Roster</td><td><span class="pill pill-manual">MANUAL</span></td><td>Name, role, contract type, start date</td></tr>
+<tr><td>Right to Work documents</td><td><span class="pill pill-manual">MANUAL</span></td><td>Document type, expiry, share code</td></tr>
+<tr><td>Salaries / Pay Rates</td><td><span class="pill pill-manual">MANUAL</span></td><td>Cross-checked with payroll software</td></tr>
+<tr><td>Annual Leave Balance</td><td><span class="pill pill-manual">MANUAL</span></td><td>Or sync from HR system (BambooHR, etc.)</td></tr>
+<tr><td>Sickness Records (Bradford Factor)</td><td><span class="pill pill-manual">MANUAL</span></td><td>Absences × Days² formula</td></tr>
+<tr><td>Performance Reviews</td><td><span class="pill pill-manual">MANUAL</span></td><td>1:1, mid-year, annual</td></tr>
+<tr><td>Disciplinary / Grievance Records</td><td><span class="pill pill-manual">MANUAL</span></td><td>Stage tracking, outcome</td></tr>
+<tr><td>Pension Auto-Enrol Status</td><td><span class="pill pill-manual">MANUAL</span></td><td>Eligible, enrolled, opt-out date</td></tr>
+<tr><td>Training & CPD Records</td><td><span class="pill pill-manual">MANUAL</span></td><td>Hours, mandatory, expires</td></tr>
+<tr><td>Recruitment Pipeline</td><td><span class="pill pill-manual">MANUAL</span></td><td>Open roles, applicants, stages</td></tr>
+<tr><td>eNPS Survey Results</td><td><span class="pill pill-manual">MANUAL</span></td><td>Quarterly anonymous</td></tr>
+<tr><td>Exit Interview Notes</td><td><span class="pill pill-manual">MANUAL</span></td><td>Themes tagged for analysis</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="marketing" class="section">
+<h2>17. Marketing Data</h2>
+<table>
+<thead><tr><th style="width:280px">Field</th><th style="width:120px">Source</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Ad Spend (Meta, Google, TikTok)</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>Manual or ad platform API</td></tr>
+<tr><td>Impressions, Clicks, CPC, CPL</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>From ad platforms (planned API)</td></tr>
+<tr><td>Lead Source (per patient)</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>If tagged on patient record</td></tr>
+<tr><td>Google Business Profile (impressions, calls)</td><td><span class="pill pill-manual">MANUAL</span></td><td>GBP API integration planned</td></tr>
+<tr><td>Review Counts & Ratings</td><td><span class="pill pill-manual">MANUAL</span></td><td>Google, Facebook, Doctify, etc.</td></tr>
+<tr><td>NPS Survey Results</td><td><span class="pill pill-manual">MANUAL</span></td><td>Or via survey tool (Typeform, etc.)</td></tr>
+<tr><td>A/B Test Results</td><td><span class="pill pill-manual">MANUAL</span></td><td>Manually logged from testing tool</td></tr>
+<tr><td>Email Campaign Stats</td><td><span class="pill pill-hybrid">HYBRID</span></td><td>From ESP (Mailchimp / SendGrid)</td></tr>
+<tr><td>Conversion Funnel Stages</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Booked → Consult → Plan → Treatment Start</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="sync" class="section">
+<h2>18. Sync Frequency Matrix</h2>
+<div class="desc">When each source updates · sets expectations on data freshness.</div>
+<table>
+<thead><tr><th style="width:240px">Data type</th><th style="width:120px">Source</th><th>Frequency</th><th>Latency</th></tr></thead>
+<tbody>
+<tr><td>Bank balance</td><td><span class="pill pill-xero">XERO</span></td><td>Real-time webhook</td><td>&lt; 5 min</td></tr>
+<tr><td>New invoice raised</td><td><span class="pill pill-xero">XERO</span></td><td>Webhook</td><td>&lt; 1 min</td></tr>
+<tr><td>Bill paid</td><td><span class="pill pill-xero">XERO</span></td><td>Webhook</td><td>&lt; 1 min</td></tr>
+<tr><td>P&L report</td><td><span class="pill pill-xero">XERO</span></td><td>Nightly</td><td>24h</td></tr>
+<tr><td>Appointment booked</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>15-min poll</td><td>&lt; 15 min</td></tr>
+<tr><td>Treatment performed</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>15-min poll</td><td>&lt; 15 min</td></tr>
+<tr><td>Patient added</td><td><span class="pill pill-dentally">DENTALLY</span></td><td>Hourly</td><td>1h</td></tr>
+<tr><td>Stripe payment</td><td><span class="pill pill-stripe">STRIPE</span></td><td>Webhook</td><td>Real-time</td></tr>
+<tr><td>NHS BSA statement</td><td><span class="pill pill-nhs">NHS</span></td><td>Monthly CSV upload</td><td>30 days</td></tr>
+<tr><td>Benchmark refresh</td><td><span class="pill pill-bsa">SEED</span></td><td>Quarterly</td><td>3 months</td></tr>
+<tr><td>Peer benchmark update</td><td><span class="pill pill-bsa">SEED</span></td><td>Quarterly</td><td>3 months</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<div id="priorities" class="section">
+<h2>19. Implementation Priority</h2>
+<div class="desc">If you only set up SOME integrations, do these first.</div>
+<table>
+<thead><tr><th style="width:80px">Order</th><th style="width:200px">Action</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><b>P0</b></td><td>Connect Xero (or QuickBooks)</td><td>Unlocks ~60% of all features: cash flow, P&L, variance, ratios, AR/AP, working capital, FCF, all benchmark variance</td></tr>
+<tr><td><b>P0</b></td><td>Configure Chairs + Org settings</td><td>Required for OCPSPD, chair utilisation, multi-site comparison · 15 min setup</td></tr>
+<tr><td><b>P0</b></td><td>Add Associates with split %</td><td>Even without Dentally, you can run per-associate P&L from manual monthly data</td></tr>
+<tr><td><b>P1</b></td><td>Connect Dentally PMS</td><td>Unlocks per-associate production, treatment volumes, chair utilisation, appointment data, no-shows</td></tr>
+<tr><td><b>P1</b></td><td>Customise 97 Treatment Master codes with your prices</td><td>Per-treatment profitability requires accurate prices and times</td></tr>
+<tr><td><b>P1</b></td><td>Upload first NHS UDA schedule (CSV)</td><td>NHS practices only · monthly cadence</td></tr>
+<tr><td><b>P2</b></td><td>Connect Stripe</td><td>Real-time patient payments + subscription billing</td></tr>
+<tr><td><b>P2</b></td><td>Set Insurance + Loan tracking (Wealth)</td><td>Wealth Builder features · 30 min to enter</td></tr>
+<tr><td><b>P2</b></td><td>Compliance baseline (CQC self-assessment)</td><td>One-off 1-2 hour exercise · then quarterly</td></tr>
+<tr><td><b>P3</b></td><td>HR Pro fill-in (sickness, leave, reviews)</td><td>People management · ongoing</td></tr>
+<tr><td><b>P3</b></td><td>Marketing data (ad spend, GBP)</td><td>If using Marketing Pro features</td></tr>
+<tr><td><b>P4</b></td><td>Open Banking (Plaid / TrueLayer)</td><td>Only if Xero bank feed is unreliable</td></tr>
+<tr><td><b>P4</b></td><td>NHS BSA digital integration</td><td>When BSA releases public API (TBD)</td></tr>
+</tbody>
+</table>
+<div class="callout">⚡ <b>Minimum Viable Setup:</b> Xero + Chair config + Associates = ~80% of platform value. Total setup time: 1-2 hours.</div>
+<div class="callout">🚀 <b>Full Setup:</b> All P0–P2 = ~95% of platform value. Total: ~6 hours one-off + ongoing data hygiene.</div>
+</div>
+
+<!-- ============================================================ -->
+<div id="runbook" class="section">
+<h2>20. Setup Runbook (Step-by-Step)</h2>
+<div class="desc">Practical onboarding sequence · 1-2 day implementation.</div>
+
+<h3 style="margin-top:18px;font-size:14px;color:#0F172A">Day 1 · Morning (90 min)</h3>
+<table style="margin-bottom:18px"><thead><tr><th style="width:60px">Step</th><th>Task</th><th style="width:120px">Time</th></tr></thead><tbody>
+<tr><td>1</td><td>Create Elevate Dental OS organisation · fill org settings</td><td>15 min</td></tr>
+<tr><td>2</td><td>Add Sites (per practice location)</td><td>10 min</td></tr>
+<tr><td>3</td><td>Connect Xero · authorise via OAuth · verify chart of accounts</td><td>15 min</td></tr>
+<tr><td>4</td><td>Map ledger accounts to industry-standard categories</td><td>30 min</td></tr>
+<tr><td>5</td><td>Configure chair settings per site (chairs, hours, weeks)</td><td>20 min</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:#0F172A">Day 1 · Afternoon (2 hrs)</h3>
+<table style="margin-bottom:18px"><thead><tr><th style="width:60px">Step</th><th>Task</th><th style="width:120px">Time</th></tr></thead><tbody>
+<tr><td>6</td><td>Add all Associates with split %, lab split %, primary chair</td><td>30 min</td></tr>
+<tr><td>7</td><td>Connect Dentally PMS · authorise · verify patient + appt sync</td><td>30 min</td></tr>
+<tr><td>8</td><td>Customise top 20 Treatment Master codes (your private prices)</td><td>45 min</td></tr>
+<tr><td>9</td><td>Set UDA contract & per-associate annual targets</td><td>15 min</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:#0F172A">Day 2 · Morning (2 hrs)</h3>
+<table style="margin-bottom:18px"><thead><tr><th style="width:60px">Step</th><th>Task</th><th style="width:120px">Time</th></tr></thead><tbody>
+<tr><td>10</td><td>Upload first NHS UDA CSV from BSA portal (if NHS contract)</td><td>10 min</td></tr>
+<tr><td>11</td><td>Connect Stripe (for patient payments + subscriptions)</td><td>15 min</td></tr>
+<tr><td>12</td><td>CQC self-assessment baseline (5 KLOEs)</td><td>60 min</td></tr>
+<tr><td>13</td><td>Compliance baseline · upload key docs (policies, equipment service)</td><td>30 min</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:#0F172A">Day 2 · Afternoon (1.5 hrs)</h3>
+<table style="margin-bottom:18px"><thead><tr><th style="width:60px">Step</th><th>Task</th><th style="width:120px">Time</th></tr></thead><tbody>
+<tr><td>14</td><td>Wealth Builder · enter pension, ISA, GIA, property balances</td><td>45 min</td></tr>
+<tr><td>15</td><td>Insurance gap analysis · enter all current policies</td><td>20 min</td></tr>
+<tr><td>16</td><td>HR Pro · staff roster, RTW docs, sickness baseline</td><td>30 min</td></tr>
+<tr><td>17</td><td>Run Health Diagnostic for first time → baseline score</td><td>5 min</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:#0F172A">Ongoing (per cadence)</h3>
+<table><thead><tr><th>Cadence</th><th>Task</th></tr></thead><tbody>
+<tr><td><b>Daily</b></td><td>Review Cash Flow Insights · check alerts</td></tr>
+<tr><td><b>Weekly</b></td><td>Update planned cash inflow/outflow · review variances</td></tr>
+<tr><td><b>Monthly</b></td><td>Upload NHS UDA CSV (NHS practices) · review per-associate P&L · run leak finder · update HR data</td></tr>
+<tr><td><b>Quarterly</b></td><td>CQC self-assessment refresh · benchmark update · health diagnostic re-run · estate / insurance review</td></tr>
+<tr><td><b>Annually</b></td><td>Full data audit · reset targets · IG Toolkit submission · IRMER review · CPD review</td></tr>
+</tbody></table>
+
+<div class="callout">📋 <b>Total one-off setup:</b> ~7-8 hours over 2 days. <b>Ongoing maintenance:</b> ~30 min daily, 2 hrs monthly.</div>
+</div>
+
+<!-- footer -->
+<div style="text-align:center;color:#94A3B8;font-size:12px;padding:30px 0">
+  Elevate Dental OS · Data Dictionary v1.0 · 24 May 2026 · Single source of truth for integration planning
+</div>
+
+</div>
+
+<button class="print-btn" onclick="window.print()">⬇ Print / Export PDF</button>
+
+</body>
+</html>

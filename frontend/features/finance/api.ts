@@ -147,3 +147,31 @@ export async function getValuationBase(): Promise<{
 export async function getValuationFallback(): Promise<any> {
   return api('/api/analytics/valuation');
 }
+
+// --- Source breakdown (where the money came from) ---------------------------
+// Returns counts + pence per source over last N days. Drives provenance widget.
+export interface SourceBreakdown {
+  [source: string]: { count: number; pence: number };
+}
+
+export async function getPaymentSourceBreakdown(days = 30): Promise<SourceBreakdown> {
+  return api<SourceBreakdown>(`/api/payments/source-breakdown?days=${days}`);
+}
+
+// --- Manual payment entry ---------------------------------------------------
+// POST /api/payments — owner records payments that didn't come through any
+// connected app. source='manual' set server-side.
+export interface ManualPaymentInput {
+  practice_id: string;
+  contact_id?: string;
+  lead_id?: string;
+  amount_pence: number;
+  method?: 'card' | 'apple_pay' | 'google_pay' | 'bank_transfer' | 'cash' | 'direct_debit' | 'finance' | 'card_on_file' | 'pay_link';
+  status?: 'pending' | 'processing' | 'settled' | 'failed' | 'refunded' | 'disputed';
+  description?: string;
+  processed_at?: string;
+}
+
+export async function recordManualPayment(input: ManualPaymentInput) {
+  return api('/api/payments', { method: 'POST', body: JSON.stringify(input) });
+}

@@ -10,6 +10,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { annualTotal } from '../mock';
 import { useFinancial, useFinanceSeries } from '../hooks';
+import FinanceToolbar from './FinanceToolbar';
 
 function fmt(n: number): string {
   return '£' + Math.round(n).toLocaleString('en-GB');
@@ -90,6 +91,7 @@ export default function FinancialScreen() {
         <p className="text-sm text-ink-muted">
           Key ratios · Balance sheet · Annual summary
         </p>
+        <FinanceToolbar />
       </div>
 
       {isError && (

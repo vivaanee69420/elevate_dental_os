@@ -12,4 +12,5 @@ router.get('/insights', (0, async_handler_1.asyncHandler)(business_health_contro
 router.get('/snapshots', (0, async_handler_1.asyncHandler)(business_health_controller_1.businessHealthController.listSnapshots));
 router.post('/snapshots', (0, async_handler_1.asyncHandler)(business_health_controller_1.businessHealthController.createSnapshot));
 router.get('/progress', (0, async_handler_1.asyncHandler)(business_health_controller_1.businessHealthController.progress));
+router.patch('/cadence', (0, async_handler_1.asyncHandler)(business_health_controller_1.businessHealthController.updateCadence));
 export default router;
