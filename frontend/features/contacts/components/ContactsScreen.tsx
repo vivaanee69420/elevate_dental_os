@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { PageHeader, DataTable, StatusBadge, type Column } from '@/components/ui';
 import { useContacts } from '../hooks';
+import PracticeTabs from '@/features/practices/PracticeTabs';
 
 const columns: Column<any>[] = [
   {
@@ -20,10 +21,12 @@ const columns: Column<any>[] = [
 
 export default function ContactsScreen() {
   const [search, setSearch] = useState('');
-  const { data } = useContacts(search);
+  const [practiceId, setPracticeId] = useState<string | null>(null);
+  const { data } = useContacts(search, practiceId);
   return (
     <div className="max-w-7xl mx-auto">
       <PageHeader title="Contacts" subtitle="All leads, patients, lapsed" />
+      <PracticeTabs value={practiceId} onChange={setPracticeId} />
       <input
         type="text"
         placeholder="Search name, email, phone..."
