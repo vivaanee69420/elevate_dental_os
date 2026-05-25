@@ -45,7 +45,22 @@ const RANGES: { k: DateRange; l: string }[] = [
   { k: 'ytd', l: 'YTD' },
 ];
 
-const RANGE_N: Record<DateRange, number> = { mtd: 1, qtd: 3, '6m': 6, ytd: 12 };
+// MTD/QTD/6M/YTD → concrete [from,to] (YYYY-MM-DD) so the period drives the
+// whole dashboard (KPIs + chart), not just a client-side chart slice.
+const pad = (n: number) => String(n).padStart(2, '0');
+const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+function rangeToDates(range: DateRange): { from: string; to: string } {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const to = ymd(now);
+  let from: Date;
+  if (range === 'mtd') from = new Date(y, m, 1);
+  else if (range === 'qtd') from = new Date(y, Math.floor(m / 3) * 3, 1);
+  else if (range === '6m') from = new Date(y, m - 5, 1);
+  else from = new Date(y, 0, 1); // ytd
+  return { from: ymd(from), to };
+}
 
 // Seed the editable P&L model from the org's real Business Health baseline
 // where set; otherwise the template. The P&L stays a client what-if tool —
@@ -96,8 +111,11 @@ export default function DashboardScreen() {
   const { data: health } = useHealth();
   const healthComplete = !!health?.setup_completed;
 
-  const { data: summary, isLoading: sumLoading } = useDashboardSummary();
-  const { data: seriesResp, isLoading: seriesLoading } = useRevenueSeries();
+  const [range, setRange] = useState<DateRange>('ytd');
+  const period = useMemo(() => rangeToDates(range), [range]);
+
+  const { data: summary, isLoading: sumLoading } = useDashboardSummary(period);
+  const { data: seriesResp, isLoading: seriesLoading } = useRevenueSeries(period);
   const { data: practiceResp, isLoading: practiceLoading } =
     usePracticeSummary();
   const { data: leadsResp, isLoading: leadsLoading } = useLeads();
@@ -110,7 +128,6 @@ export default function DashboardScreen() {
   const noBaseline = !!summary?.error;
 
   const [selected, setSelected] = useState<string>('All practices');
-  const [range, setRange] = useState<DateRange>('ytd');
   const [targetMargin, setTargetMargin] = useState<number>(
     DEFAULT_PL_TEMPLATE.targetMargin,
   );
@@ -138,9 +155,8 @@ export default function DashboardScreen() {
     const targetProfit = rev * TM;
     const targetGap = targetProfit - profit;
 
-    // Chart: baseline projection windowed by the range selector.
-    const allMonths = seriesResp?.months ?? [];
-    const win = allMonths.slice(-RANGE_N[range]);
+    // Chart: real monthly revenue for the selected period (server-scoped).
+    const win = seriesResp?.months ?? [];
     const chartSeries = win.map((m) => ({
       month: m.month,
       revenue: m.revenue,
@@ -176,7 +192,7 @@ export default function DashboardScreen() {
         icon: '📈',
         label: 'Turnover',
         value: ccPounds(rev),
-        sub: `${rangeLabel(range)} projection · annual baseline`,
+        sub: `${rangeLabel(range)} · real settled payments`,
         colour: POS,
         link: '/cashflow',
       },
@@ -348,7 +364,7 @@ export default function DashboardScreen() {
               className="text-ink-muted font-bold uppercase"
               style={{ fontSize: 10, letterSpacing: '0.05em' }}
             >
-              Annual turnover (baseline)
+              {rangeLabel(range)} turnover (real)
             </div>
             <div
               className="display font-bold text-brand"
@@ -814,7 +830,7 @@ export default function DashboardScreen() {
               Revenue · Cash · Profit — {rangeLabel(range)}
             </h2>
             <p className="text-ink-muted" style={{ fontSize: 11 }}>
-              Baseline projection (derived from your baseline, not live ledger)
+              Real settled payments · {rangeLabel(range)} (profit/cash £0 until Xero)
             </p>
           </div>
           <div className="flex gap-3" style={{ fontSize: 11 }}>
@@ -857,7 +873,7 @@ export default function DashboardScreen() {
             className="text-ink-muted"
             style={{ fontSize: 12, padding: '40px 0' }}
           >
-            No projection — set your Business Health baseline.
+            No settled payments in this period.
           </div>
         ) : (
           <div
@@ -1025,13 +1041,13 @@ export default function DashboardScreen() {
             className="display font-bold"
             style={{ fontSize: 14, marginBottom: 4 }}
           >
-            Cash position — annual baseline
+            Cash position — {rangeLabel(range)}
           </h2>
           <p
             className="text-ink-muted"
             style={{ fontSize: 11, marginBottom: 10 }}
           >
-            Group-wide · from Business Health baseline
+            Group-wide · real settled payments (costs £0 until Xero)
           </p>
           <table style={{ width: '100%', fontSize: 12 }}>
             <tbody>

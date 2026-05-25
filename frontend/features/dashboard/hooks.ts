@@ -5,15 +5,20 @@ import {
   getPracticeSummary,
 } from './api';
 
-export function useDashboardSummary() {
+export interface PeriodRange { from: string | null; to: string | null }
+
+export function useDashboardSummary(range?: PeriodRange) {
   return useQuery({
-    queryKey: ['dashboard-summary'],
-    queryFn: getDashboardSummary,
+    queryKey: ['dashboard-summary', range?.from ?? null, range?.to ?? null],
+    queryFn: () => getDashboardSummary(range),
   });
 }
 
-export function useRevenueSeries() {
-  return useQuery({ queryKey: ['revenue-series'], queryFn: getRevenueSeries });
+export function useRevenueSeries(range?: PeriodRange) {
+  return useQuery({
+    queryKey: ['revenue-series', range?.from ?? null, range?.to ?? null],
+    queryFn: () => getRevenueSeries(range),
+  });
 }
 
 export function usePracticeSummary() {

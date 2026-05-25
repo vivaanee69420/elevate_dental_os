@@ -30,8 +30,13 @@ export interface PracticeRow {
 
 const p = (pence: number) => Math.round((pence || 0) / 100);
 
-export async function getDashboardSummary(): Promise<DashboardSummary> {
-  const r = await api('/api/analytics/dashboard-summary');
+export interface PeriodRange { from: string | null; to: string | null }
+// from/to only take effect when BOTH are set (else default trailing window).
+const rangeQS = (r?: PeriodRange | null) =>
+  r && r.from && r.to ? `&from=${r.from}&to=${r.to}` : '';
+
+export async function getDashboardSummary(range?: PeriodRange): Promise<DashboardSummary> {
+  const r = await api(`/api/analytics/dashboard-summary?months=12${rangeQS(range)}`);
   if (r?.error) return { error: r.error } as DashboardSummary;
   return {
     basis: r.basis,
@@ -46,12 +51,12 @@ export async function getDashboardSummary(): Promise<DashboardSummary> {
   };
 }
 
-export async function getRevenueSeries(): Promise<{
+export async function getRevenueSeries(range?: PeriodRange): Promise<{
   error?: string;
   basis?: string;
   months: SeriesMonth[];
 }> {
-  const r = await api('/api/analytics/revenue-series?months=12');
+  const r = await api(`/api/analytics/revenue-series?months=12${rangeQS(range)}`);
   if (r?.error) return { error: r.error, months: [] };
   return {
     basis: r.basis,
