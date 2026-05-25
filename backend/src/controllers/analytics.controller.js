@@ -13,7 +13,7 @@ export const analyticsController = {
     },
     async financeSeries(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months }));
+        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months, practiceId: q.practice_id }));
     },
     async cashflow(req, res) {
         const q = analytics_model_1.weeksQuerySchema.parse(req.query);
@@ -21,7 +21,7 @@ export const analyticsController = {
     },
     async financial(req, res) {
         const q = analytics_model_1.financialQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.financial(req.user.organisation_id, { dsoDays: q.dsoDays, payableDays: q.payableDays }));
+        res.json(await analytics_service_1.analyticsService.financial(req.user.organisation_id, { dsoDays: q.dsoDays, payableDays: q.payableDays, practiceId: q.practice_id }));
     },
     async practiceSummary(req, res) {
         res.json(await analytics_service_1.analyticsService.practiceSummary(req.user.organisation_id));
@@ -34,7 +34,8 @@ export const analyticsController = {
         res.json(await analytics_service_1.analyticsService.generateInsights(req.user.organisation_id));
     },
     async pl(req, res) {
-        res.json(await analytics_service_1.analyticsService.pl(req.user.organisation_id));
+        const practiceId = req.query.practice_id || undefined;
+        res.json(await analytics_service_1.analyticsService.pl(req.user.organisation_id, { practiceId }));
     },
     async valuation(req, res) {
         res.json(await analytics_service_1.analyticsService.valuation(req.user.organisation_id));
