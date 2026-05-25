@@ -180,12 +180,13 @@ export default function FinancialScreen() {
 
       <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <Kpi
-          label="Total assets (est.)"
-          value={isLoading ? '…' : fmt(cell('currentAssetsPence'))}
+          label="Revenue (TTM)"
+          value={isLoading ? '…' : fmt(annual.revenue)}
+          delta="Real · settled payments"
         />
         <Kpi
-          label="Liabilities (est.)"
-          value={isLoading ? '…' : fmt(cell('currentLiabilitiesPence'))}
+          label="Total assets (est.)"
+          value={isLoading ? '…' : fmt(cell('currentAssetsPence'))}
         />
         <Kpi
           label="Equity (est.)"
@@ -280,7 +281,10 @@ export default function FinancialScreen() {
       {series.length > 0 && (
         <div className="card-padded">
           <h2 className="display text-lg font-semibold mb-4">
-            Annual P&amp;L summary (baseline projection)
+            Annual P&amp;L summary
+            <span className="text-xs text-ink-muted font-normal" style={{ marginLeft: 8 }}>
+              · revenue real (settled payments){seriesData?.costsEstimated ? ' · costs estimated from baseline' : ''}
+            </span>
           </h2>
           <table className="w-full" style={{ fontSize: 13, margin: '-16px 0 0' }}>
             <thead>
