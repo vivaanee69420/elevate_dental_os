@@ -1,9 +1,9 @@
 'use client';
-// Cash Flow — real-data wired. 13-week rolling forecast from
-// GET /api/analytics/cashflow: opening = real bank balance (flags if no
-// bank / stale sync), weekly receipts/payments = baseline run-rate
-// seasonalised + real settled payments overlaid. basis: baseline-projection
-// (NOT a guaranteed forecast). Closing/status from formulas.calculateCashFlow.
+// Cash Flow — REAL data only. Backward 13-week view from
+// GET /api/analytics/cashflow: each week = settled payments actually received
+// that week (Dentally/Stripe), opening = real bank balance, closing = running
+// balance. NO projection. The Business Health run-rate is drawn only as a
+// dotted comparison target, never mixed into the real line. Per-practice tab.
 
 import {
   LineChart,
@@ -14,16 +14,14 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import { useState } from 'react';
 import { poundsCompact } from '../mock';
 import { useCashflow } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
+import PracticeTabs from '@/features/practices/PracticeTabs';
 
 const BRAND = '#0E7C7B';
-const STATUS_COLOUR: Record<string, string> = {
-  healthy: '#10B981',
-  warning: '#F59E0B',
-  critical: '#EF4444',
-};
+const TARGET = '#94A3B8';
 
 function Kpi({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
@@ -45,16 +43,20 @@ function shortWeek(d: string) {
 }
 
 export default function CashflowScreen() {
-  const { data, isLoading, isError } = useCashflow(13);
+  const [practiceId, setPracticeId] = useState<string | null>(null);
+  const { data, isLoading, isError } = useCashflow(13, practiceId);
   const weeks = data?.weeks ?? [];
-  const noBaseline = !!data?.error;
   const hasData = weeks.length > 0;
-  const opening = hasData ? weeks[0].opening : 0;
-  const closing = hasData ? weeks[weeks.length - 1].closing : 0;
-  const net = closing - opening;
-  const chartData = weeks.map((w) => ({
+  const opening = data?.openingBalance ?? 0;
+  const closing = hasData ? weeks[weeks.length - 1].closing : opening;
+  const totalReceipts = data?.totalReceipts ?? 0;
+  const runRate = data?.baselineWeeklyRunRate ?? null;
+  // Real closing line + a dotted "target" line = opening + run-rate accrued each
+  // week (comparison only; null when no baseline). Never blended into Closing.
+  const chartData = weeks.map((w, i) => ({
     week: shortWeek(w.weekStartDate),
     Closing: w.closing,
+    Target: runRate != null ? opening + runRate * (i + 1) : undefined,
   }));
 
   return (
@@ -62,11 +64,12 @@ export default function CashflowScreen() {
       <div className="mb-6">
         <h1 className="display text-3xl font-bold">Cash Flow</h1>
         <p className="text-sm text-ink-muted">
-          13-week rolling forecast · baseline projection + real payments
-          overlaid (not a guaranteed forecast)
+          Real cash received · last 13 weeks of settled payments (not a forecast)
         </p>
         <FinanceToolbar />
       </div>
+
+      <PracticeTabs value={practiceId} onChange={setPracticeId} />
 
       {isError && (
         <div className="card-padded mb-4">
@@ -74,25 +77,16 @@ export default function CashflowScreen() {
           <div className="text-sm text-ink-muted">Refresh to retry.</div>
         </div>
       )}
-      {noBaseline && !isError && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
-          <div className="font-semibold">No baseline set</div>
-          <div className="text-sm text-ink-muted">
-            The forecast run-rate reads from your Business Health baseline.
-            Complete setup to populate it.
-          </div>
-        </div>
-      )}
-      {hasData && !data?.bankConnected && (
+      {!isError && !data?.bankConnected && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
           <div className="font-semibold">No bank account connected</div>
           <div className="text-sm text-ink-muted">
             Opening balance is £0 — connect open banking for a real starting
-            position. Projection still shows the run-rate.
+            position. Weekly receipts below are real settled payments.
           </div>
         </div>
       )}
-      {hasData && data?.bankConnected && data?.bankStale && (
+      {!isError && data?.bankConnected && data?.bankStale && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
           <div className="font-semibold">Bank balance may be stale</div>
           <div className="text-sm text-ink-muted">
@@ -109,24 +103,27 @@ export default function CashflowScreen() {
         <Kpi
           label="Opening balance"
           value={isLoading ? '…' : poundsCompact(opening)}
-          delta="All bank accounts"
+          delta="Real bank balance"
         />
         <Kpi
-          label="Projected closing (13wk)"
+          label="Cash in (13 wks)"
+          value={isLoading ? '…' : poundsCompact(totalReceipts)}
+          delta="Settled payments received"
+        />
+        <Kpi
+          label="Closing balance"
           value={isLoading ? '…' : poundsCompact(closing)}
-          delta={net >= 0 ? `+${poundsCompact(net)}` : poundsCompact(net)}
-        />
-        <Kpi
-          label="Avg weekly net"
-          value={
-            isLoading ? '…' : poundsCompact(Math.round(net / Math.max(1, weeks.length)))
-          }
         />
       </div>
 
       <div className="card-padded mb-4">
         <h2 className="display text-lg font-semibold mb-5">
-          Closing balance — next 13 weeks
+          Closing balance — last 13 weeks
+          {runRate != null && (
+            <span className="text-xs text-ink-muted font-normal" style={{ marginLeft: 8 }}>
+              · dotted line = Business Health run-rate (target, not real)
+            </span>
+          )}
         </h2>
         {isLoading ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
@@ -134,7 +131,8 @@ export default function CashflowScreen() {
           </div>
         ) : !hasData ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
-            No forecast — set your Business Health baseline.
+            No settled payments in the last 13 weeks
+            {practiceId ? ' for this practice.' : '.'}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
@@ -149,10 +147,20 @@ export default function CashflowScreen() {
                 width={56}
               />
               <Tooltip
-                formatter={(v: number) => [poundsCompact(v), 'Closing']}
+                formatter={(v: number, name: string) => [poundsCompact(v), name]}
                 contentStyle={{ fontSize: 12, borderRadius: 8 }}
               />
               <Line type="monotone" dataKey="Closing" stroke={BRAND} strokeWidth={2} dot={false} />
+              {runRate != null && (
+                <Line
+                  type="monotone"
+                  dataKey="Target"
+                  stroke={TARGET}
+                  strokeWidth={1.5}
+                  strokeDasharray="4 4"
+                  dot={false}
+                />
+              )}
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -160,15 +168,13 @@ export default function CashflowScreen() {
 
       {hasData && (
         <div className="card-padded">
-          <h2 className="display text-lg font-semibold mb-4">13-week detail</h2>
+          <h2 className="display text-lg font-semibold mb-4">Weekly receipts (real)</h2>
           <table className="w-full" style={{ fontSize: 13, margin: '-16px 0 0' }}>
             <thead>
               <tr className="text-ink-muted" style={{ textAlign: 'left' }}>
                 <th style={{ padding: '10px 8px' }}>Week of</th>
                 <th className="text-right" style={{ padding: '10px 8px' }}>Opening</th>
-                <th className="text-right" style={{ padding: '10px 8px' }}>Receipts</th>
-                <th className="text-right" style={{ padding: '10px 8px' }}>Payments</th>
-                <th className="text-right" style={{ padding: '10px 8px' }}>Net</th>
+                <th className="text-right" style={{ padding: '10px 8px' }}>Received</th>
                 <th className="text-right" style={{ padding: '10px 8px' }}>Closing</th>
               </tr>
             </thead>
@@ -184,16 +190,7 @@ export default function CashflowScreen() {
                   <td className="text-right" style={{ padding: '10px 8px', color: 'var(--success)' }}>
                     +{poundsCompact(w.receipts)}
                   </td>
-                  <td className="text-right" style={{ padding: '10px 8px', color: 'var(--danger)' }}>
-                    −{poundsCompact(w.payments)}
-                  </td>
                   <td className="text-right font-semibold" style={{ padding: '10px 8px' }}>
-                    {poundsCompact(w.receipts - w.payments)}
-                  </td>
-                  <td
-                    className="text-right font-semibold"
-                    style={{ padding: '10px 8px', color: STATUS_COLOUR[w.status] ?? 'inherit' }}
-                  >
                     {poundsCompact(w.closing)}
                   </td>
                 </tr>
