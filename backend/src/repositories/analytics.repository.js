@@ -112,6 +112,26 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
+    // Exact per-practice rollups (Postgres GROUP BY via RPC — no 1000-row cap).
+    async settledRevenueByPractice(orgId, sinceISO, untilISO = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('settled_revenue_by_practice', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
+    async appointmentsRollupByPractice(orgId, sinceISO) {
+        const { data, error } = await supabase_1.serviceClient.rpc('appointments_rollup_by_practice', {
+            p_org: orgId, p_since: sinceISO,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
+    async leadsRollupByPractice(orgId) {
+        const { data, error } = await supabase_1.serviceClient.rpc('leads_rollup_by_practice', { p_org: orgId });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
     // ------------------------------------------------------------------------
     // Business Hub sources — per-practice rollup across finance + ops + growth.
     async practicesFull(orgId) {
