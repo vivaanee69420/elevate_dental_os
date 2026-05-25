@@ -125,6 +125,19 @@ describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
     expect(r.excessCashPence).toBe(3_000_000);
   });
 
+  it('custom range scopes revenue to the period (KPIs follow MTD/QTD/etc.)', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-05-10', pence: 4_200_000 }]);
+    supaRec.rpcCalls = [];
+    const r = await svc.dashboardSummary(ORG_A, { now, from: '2026-05-01', to: '2026-05-25' });
+    expect(r.basis).toBe('revenue-only');
+    expect(r.revenuePence).toBe(4_200_000);       // only the period's settled payments
+    expect(r.cashCollectedPence).toBe(4_200_000);
+    expect(r.totalCostsPence).toBe(0);            // costs not period-sliceable → 0
+    const call = supaRec.rpcCalls.find((c) => c.fn === 'settled_receipts_by_day');
+    expect(call.params.p_until).not.toBeNull();   // upper bound applied
+  });
+
   it('monthly_financials actuals → real profit/margin', async () => {
     supaRec.resultProvider = (q) =>
       q.table === 'monthly_financials'
