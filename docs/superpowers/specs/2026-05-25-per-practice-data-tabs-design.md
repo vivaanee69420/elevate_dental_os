@@ -47,10 +47,21 @@ exists. Dentally sync maps via `practices.pms_site_id` → `practice_id` in
 Practices CRUD lives inline in `backend/src/routes/practices.routes.js` (no dedicated
 controller/service/repo); `GET /api/practices` already lists practices for pickers.
 
+## What "practice" means here
+
+A practice is a row in the `practices` table linked to a Dentally site via
+`practices.pms_site_id` (the site UUID) on the Integrations → Dentally practice mapping
+screen — e.g. *GM Dental & Implant Centre Ashford*, *…Rochester*. Tabs are generated
+**dynamically** from `GET /api/practices` (this same list); adding/renaming a practice or
+changing its site mapping updates the tabs with no code change. The Dentally sync resolves
+`site_id → practice_id` at sync time, so filtering stored rows by `practice_id` is exactly
+filtering by the Dentally site link — no live Dentally call per page view.
+
 ## Decisions
 
 1. **Tab pattern**: per-page tabs (each page renders its own `All | Practice A | …`
-   row). Selection is independent per page, resets to All on navigation.
+   row), generated dynamically from `GET /api/practices`. Selection is independent per
+   page, resets to All on navigation.
 2. **Default / All view**: "All practices" = current org-wide totals (param omitted),
    includes unassigned rows. Each practice tab shows only its own rows.
 3. **Unassigned data**: folds into All only; no dedicated "Unassigned" tab.
