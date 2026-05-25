@@ -153,7 +153,7 @@ export const analyticsService = {
     // payments (TTM). Costs/profit/margin REAL only with a cost source, else 0.
     // cashCollected = exact settled receipts (TTM); cashflow = real bank balance.
     // reserve needs a cost run-rate we don't have → 0; excess = bank.
-    async dashboardSummary(orgId, { now = () => new Date(), from = null, to = null } = {}) {
+    async dashboardSummary(orgId, { now = () => new Date(), from = null, to = null, practiceId = null } = {}) {
         // Period: a custom [from,to] range (MTD/QTD/6M/YTD from the UI) overrides
         // the trailing 12-month window. Revenue/cash are scoped to the period.
         let sinceISO, untilISO, ranged = false;
@@ -170,9 +170,10 @@ export const analyticsService = {
             untilISO = null;
         }
         const [dayRows, actuals, bank] = await Promise.all([
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO),
-            this._actualsBundle(orgId),
-            analytics_repository_1.analyticsRepository.bankSummary(orgId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
+            this._actualsBundle(orgId, practiceId),
+            // Bank balance is org-level (not per practice) → only used for "All".
+            practiceId ? Promise.resolve({ totalPence: 0 }) : analytics_repository_1.analyticsRepository.bankSummary(orgId),
         ]);
         const periodRevenue = (Array.isArray(dayRows) ? dayRows : []).reduce((s, r) => s + Number(r.pence || 0), 0);
         const bankPence = bank.totalPence || 0;
@@ -203,10 +204,10 @@ export const analyticsService = {
     // 12-month revenue series — EXACT real settled payments per month (RPC), no
     // projection. profit/cash are 0 (no real per-month source until Xero/bank
     // history). Feeds the dashboard chart + AI-insights input.
-    async revenueSeries(orgId, { months = 12, now = () => new Date(), from = null, to = null } = {}) {
+    async revenueSeries(orgId, { months = 12, now = () => new Date(), from = null, to = null, practiceId = null } = {}) {
         const ref = now();
         const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
-        const dayRows = await analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO);
+        const dayRows = await analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO);
         const revByMonth = this._monthlyRevenueFromDays(dayRows);
         const series = keys.map((month) => ({
             month,

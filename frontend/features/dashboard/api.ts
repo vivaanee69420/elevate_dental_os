@@ -35,8 +35,10 @@ export interface PeriodRange { from: string | null; to: string | null }
 const rangeQS = (r?: PeriodRange | null) =>
   r && r.from && r.to ? `&from=${r.from}&to=${r.to}` : '';
 
-export async function getDashboardSummary(range?: PeriodRange): Promise<DashboardSummary> {
-  const r = await api(`/api/analytics/dashboard-summary?months=12${rangeQS(range)}`);
+const practiceQS = (id?: string | null) => (id ? `&practice_id=${id}` : '');
+
+export async function getDashboardSummary(range?: PeriodRange, practiceId?: string | null): Promise<DashboardSummary> {
+  const r = await api(`/api/analytics/dashboard-summary?months=12${rangeQS(range)}${practiceQS(practiceId)}`);
   if (r?.error) return { error: r.error } as DashboardSummary;
   return {
     basis: r.basis,
@@ -51,12 +53,12 @@ export async function getDashboardSummary(range?: PeriodRange): Promise<Dashboar
   };
 }
 
-export async function getRevenueSeries(range?: PeriodRange): Promise<{
+export async function getRevenueSeries(range?: PeriodRange, practiceId?: string | null): Promise<{
   error?: string;
   basis?: string;
   months: SeriesMonth[];
 }> {
-  const r = await api(`/api/analytics/revenue-series?months=12${rangeQS(range)}`);
+  const r = await api(`/api/analytics/revenue-series?months=12${rangeQS(range)}${practiceQS(practiceId)}`);
   if (r?.error) return { error: r.error, months: [] };
   return {
     basis: r.basis,
