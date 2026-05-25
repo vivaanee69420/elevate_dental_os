@@ -124,4 +124,19 @@ describe('syncOneOrg', () => {
         expect(res.error).toBe('no_auth');
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
+
+    it('full backfill uses a far-back updated_since (all history), not the 30d/last_sync window', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        const seen = [];
+        global.fetch = vi.fn(async (url) => {
+            seen.push(new URL(url.toString()).searchParams.get('updated_since'));
+            return page({ patients: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { full: true });
+        // every resource pull asked for everything since ~2005, ignoring last_sync_at
+        expect(seen.length).toBeGreaterThan(0);
+        for (const s of seen) expect(s.startsWith('2005-')).toBe(true);
+    });
 });

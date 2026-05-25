@@ -33,6 +33,8 @@ const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
 const REQUEST_TIMEOUT_MS = 15000; // abort a hung Dentally request, never hang forever
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
+const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls all history
+const BACKFILL_SINCE = '2005-01-01T00:00:00.000Z'; // far-back updated_since so a full pull sees all records (API requires the param)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -59,7 +61,7 @@ function authHeader(secrets) {
 
 // Page through a Dentally collection endpoint. Honours 429 Retry-After and the
 // mandatory User-Agent + date filter. Returns the flat array of items.
-async function fetchAllPages(base, path, auth, params, onPage = null) {
+async function fetchAllPages(base, path, auth, params, onPage = null, maxPages = MAX_PAGES) {
     const out = [];
     let page = 1;
     for (;;) {
@@ -86,11 +88,11 @@ async function fetchAllPages(base, path, auth, params, onPage = null) {
         const items = key ? body[key] : [];
         out.push(...items);
         const totalPages = body.meta?.total_pages;
-        if (onPage) onPage(page, totalPages ? Math.min(totalPages, MAX_PAGES) : null);
+        if (onPage) onPage(page, totalPages ? Math.min(totalPages, maxPages) : null);
         const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
         if (done) break;
-        if (page >= MAX_PAGES) { // bound a single run; cursor resumes next sync
-            console.warn(`[dentally] ${path}: hit ${MAX_PAGES}-page cap (${out.length} rows), stopping this run`);
+        if (page >= maxPages) { // bound a single run; cursor resumes next sync
+            console.warn(`[dentally] ${path}: hit ${maxPages}-page cap (${out.length} rows), stopping this run`);
             break;
         }
         page++;
@@ -217,15 +219,25 @@ async function loadSiteMap(orgId) {
 }
 
 // Build { dentally patient id -> contacts.id } for the org (source='dentally').
+// Paginated: PostgREST caps a select at 1000 rows, so without ranging the map
+// would silently drop patients beyond the first 1000 and their payments/appts
+// would never link a contact.
 async function loadContactMap(orgId) {
-    const { data } = await supabase_1.serviceClient
-        .from('contacts')
-        .select('id, pms_external_id')
-        .eq('organisation_id', orgId)
-        .eq('source', 'dentally')
-        .not('pms_external_id', 'is', null);
     const map = new Map();
-    for (const c of data ?? []) map.set(String(c.pms_external_id), c.id);
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('contacts')
+            .select('id, pms_external_id')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .not('pms_external_id', 'is', null)
+            .range(from, from + PAGE - 1);
+        if (error) throw new Error(error.message);
+        const rows = data ?? [];
+        for (const c of rows) map.set(String(c.pms_external_id), c.id);
+        if (rows.length < PAGE) break;
+    }
     return map;
 }
 
@@ -289,15 +301,15 @@ export function paymentRow(orgId, p, siteMap, contactMap) {
 
 // ---- pulls ------------------------------------------------------------------
 
-async function pullPatients(orgId, base, auth, since, siteMap, onPage) {
-    const remote = await fetchAllPages(base, '/patients', auth, { updated_since: since }, onPage);
+async function pullPatients(orgId, base, auth, since, siteMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/patients', auth, { updated_since: since }, onPage, maxPages);
     const rows = remote.map((p) => patientRow(orgId, p, siteMap));
     const synced = await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
     return { synced };
 }
 
-async function pullAppointments(orgId, base, auth, since, siteMap, contactMap, onPage) {
-    const remote = await fetchAllPages(base, '/appointments', auth, { updated_since: since }, onPage);
+async function pullAppointments(orgId, base, auth, since, siteMap, contactMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/appointments', auth, { updated_since: since }, onPage, maxPages);
     const rows = [];
     let skipped = 0;
     for (const a of remote) {
@@ -309,8 +321,8 @@ async function pullAppointments(orgId, base, auth, since, siteMap, contactMap, o
     return { synced, skipped };
 }
 
-async function pullPayments(orgId, base, auth, since, siteMap, contactMap, onPage) {
-    const remote = await fetchAllPages(base, '/payments', auth, { updated_since: since }, onPage);
+async function pullPayments(orgId, base, auth, since, siteMap, contactMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/payments', auth, { updated_since: since }, onPage, maxPages);
     const rows = [];
     let skipped = 0;
     for (const p of remote) {
@@ -352,15 +364,20 @@ export async function applyWebhookEvent(orgId, resourceType, record) {
 
 // ---- orchestration ----------------------------------------------------------
 
-export async function syncOneOrg(orgId, integration, onProgress = () => {}) {
+export async function syncOneOrg(orgId, integration, onProgress = () => {}, { full = false } = {}) {
     const base = integration.config?.base_url ?? DEFAULT_BASE;
     const auth = authHeader(integration.secrets);
     if (!auth) {
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
     }
-    // Incremental cursor: changed-since last successful sync (default 30d on first run).
-    const since = integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString();
+    // Incremental cursor: changed-since last successful sync (default 30d on first
+    // run). A FULL backfill pulls all history (far-back since) with a lifted page
+    // cap so nothing is truncated.
+    const since = full
+        ? BACKFILL_SINCE
+        : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
+    const maxPages = full ? BACKFILL_MAX_PAGES : MAX_PAGES;
 
     // 3 equal phases (patients → appointments → payments). Overall pct =
     // (phaseIndex + page/totalPages) / 3. Pages run sequentially for a clean bar.
@@ -373,10 +390,10 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}) {
     try {
         const siteMap = await loadSiteMap(orgId);
         // Patients first so appointment/payment contact resolution sees fresh ids.
-        const patients = await pullPatients(orgId, base, auth, since, siteMap, reporter(0));
+        const patients = await pullPatients(orgId, base, auth, since, siteMap, reporter(0), maxPages);
         const contactMap = await loadContactMap(orgId);
-        const appts = await pullAppointments(orgId, base, auth, since, siteMap, contactMap, reporter(1));
-        const pays = await pullPayments(orgId, base, auth, since, siteMap, contactMap, reporter(2));
+        const appts = await pullAppointments(orgId, base, auth, since, siteMap, contactMap, reporter(1), maxPages);
+        const pays = await pullPayments(orgId, base, auth, since, siteMap, contactMap, reporter(2), maxPages);
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
             last_error: null,

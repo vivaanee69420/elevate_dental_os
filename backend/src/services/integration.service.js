@@ -76,11 +76,13 @@ export const integrationService = {
         const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
         if (!integration || integration.status === 'revoked' || !integration.secrets)
             throw new errors_1.AppError(`${provider} is not connected`, 409);
-        // full pull: shim the cursor so the syncer uses its default (wide) window.
+        // full pull: shim the cursor (for providers that key off last_sync_at)
+        // AND pass { full } so the syncer can widen its window + lift row caps
+        // for a true historical backfill.
         const arg = full ? { ...integration, last_sync_at: null } : integration;
         setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null });
         try {
-            const result = await syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }));
+            const result = await syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }), { full });
             setProgress(orgId, provider, { running: false, pct: 100, done: true });
             return { ok: true, provider, full, ...result };
         } catch (err) {
