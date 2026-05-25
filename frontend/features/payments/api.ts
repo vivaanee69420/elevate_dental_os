@@ -8,9 +8,20 @@ export interface PaymentsPage {
   pages: number;
 }
 
-export function listPayments(page = 1, limit = 25, practiceId?: string | null) {
-  const pp = practiceId ? `&practice_id=${practiceId}` : '';
-  return api<PaymentsPage>(`/api/payments?page=${page}&limit=${limit}${pp}`);
+export interface PaymentFilters {
+  practiceId?: string | null;
+  status?: string | null; // settled | pending | processing | failed | refunded | disputed
+  since?: string | null; // YYYY-MM-DD (created_at >=)
+  until?: string | null; // YYYY-MM-DD (created_at <=)
+}
+
+export function listPayments(page = 1, limit = 25, f: PaymentFilters = {}) {
+  const qs = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (f.practiceId) qs.set('practice_id', f.practiceId);
+  if (f.status) qs.set('status', f.status);
+  if (f.since) qs.set('since', f.since);
+  if (f.until) qs.set('until', f.until);
+  return api<PaymentsPage>(`/api/payments?${qs.toString()}`);
 }
 
 export interface PaymentSummary {

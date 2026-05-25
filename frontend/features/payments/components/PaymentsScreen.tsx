@@ -4,6 +4,9 @@ import { PageHeader, DataTable, StatusBadge, type Column } from '@/components/ui
 import { formatPence, formatDate } from '@/lib/format';
 import { usePayments, usePaymentSummary, useCreatePaymentLink } from '../hooks';
 import PracticeTabs from '@/features/practices/PracticeTabs';
+import DateRangeFilter, { type DateRange } from '@/features/finance/components/DateRangeFilter';
+
+const STATUSES = ['settled', 'pending', 'processing', 'failed', 'refunded', 'disputed'];
 
 const PAGE_SIZE = 25;
 
@@ -37,7 +40,14 @@ function Stat({ label, value }: { label: string; value: string }) {
 export default function PaymentsScreen() {
   const [page, setPage] = useState(1);
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const { data, isFetching } = usePayments(page, PAGE_SIZE, practiceId);
+  const [status, setStatus] = useState<string | null>(null);
+  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const { data, isFetching } = usePayments(page, PAGE_SIZE, {
+    practiceId,
+    status,
+    since: range.from,
+    until: range.to,
+  });
   const { data: summary } = usePaymentSummary(practiceId);
   const createLink = useCreatePaymentLink();
   const payments: any[] = useMemo(() => data?.payments ?? [], [data]);
@@ -102,6 +112,20 @@ export default function PaymentsScreen() {
       </div>
 
       <PracticeTabs value={practiceId} onChange={(id) => { setPracticeId(id); setPage(1); }} />
+
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+        <select
+          value={status ?? ''}
+          onChange={(e) => { setStatus(e.target.value || null); setPage(1); }}
+          style={{ padding: '6px 9px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 7, fontWeight: 600 }}
+        >
+          <option value="">All statuses</option>
+          {STATUSES.map((s) => (
+            <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>
+          ))}
+        </select>
+        <DateRangeFilter value={range} onChange={(r) => { setRange(r); setPage(1); }} />
+      </div>
 
       <div className="grid gap-4 my-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <Stat label="Today" value={formatPence(stats.today)} />

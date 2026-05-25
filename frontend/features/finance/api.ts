@@ -4,6 +4,12 @@ import { api } from '@/lib/api';
 // (matches the prototype arithmetic + ../mock formatters). Convert here only.
 const p = (pence: number) => Math.round((pence || 0) / 100);
 
+export interface DateRange { from: string | null; to: string | null }
+// from/to only take effect when BOTH are set (backend overrides its rolling
+// window only then); otherwise an empty string → default window.
+const rangeQS = (r?: DateRange | null) =>
+  r && r.from && r.to ? `&from=${r.from}&to=${r.to}` : '';
+
 export interface FinanceMonth {
   month: string;
   revenue: number;
@@ -15,14 +21,14 @@ export interface FinanceMonth {
   costsAvailable: boolean; // true only when this month's costs are real (Xero/manual)
 }
 
-export async function getFinanceSeries(practiceId?: string | null): Promise<{
+export async function getFinanceSeries(practiceId?: string | null, range?: DateRange | null): Promise<{
   error?: string;
   basis?: 'actuals' | 'mixed' | 'revenue-only';
   costsAvailable: boolean;
   months: FinanceMonth[];
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
-  const r = await api(`/api/analytics/finance-series?months=12${pp}`);
+  const r = await api(`/api/analytics/finance-series?months=12${pp}${rangeQS(range)}`);
   if (r?.error) return { error: r.error, costsAvailable: false, months: [] };
   return {
     basis: r.basis,
@@ -49,7 +55,7 @@ export interface CashflowWeek {
 
 // Real backward 13-week cash view: each week = settled payments received that
 // week (no projection). baselineWeeklyRunRate is a comparison target only.
-export async function getCashflow(weeks = 13, practiceId?: string | null): Promise<{
+export async function getCashflow(weeks = 13, practiceId?: string | null, range?: DateRange | null): Promise<{
   bankConnected: boolean;
   bankStale: boolean;
   lastSyncedAt: string | null;
@@ -58,7 +64,7 @@ export async function getCashflow(weeks = 13, practiceId?: string | null): Promi
   weeks: CashflowWeek[];
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
-  const r = await api(`/api/analytics/cashflow?weeks=${weeks}${pp}`);
+  const r = await api(`/api/analytics/cashflow?weeks=${weeks}${pp}${rangeQS(range)}`);
   return {
     bankConnected: !!r.bankConnected,
     bankStale: !!r.bankStale,
@@ -85,6 +91,7 @@ export async function getFinancial(
   dsoDays = 45,
   payableDays = 30,
   practiceId?: string | null,
+  range?: DateRange | null,
 ): Promise<{
   error?: string;
   basis?: string;
@@ -96,7 +103,7 @@ export async function getFinancial(
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
   const r = await api(
-    `/api/analytics/financial?dsoDays=${dsoDays}&payableDays=${payableDays}${pp}`,
+    `/api/analytics/financial?dsoDays=${dsoDays}&payableDays=${payableDays}${pp}${rangeQS(range)}`,
   );
   if (r?.error)
     return {

@@ -19,6 +19,7 @@ import { poundsCompact } from '../mock';
 import { useCashflow } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
+import DateRangeFilter, { type DateRange } from './DateRangeFilter';
 
 const BRAND = '#0E7C7B';
 
@@ -43,7 +44,8 @@ function shortWeek(d: string) {
 
 export default function CashflowScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const { data, isLoading, isError } = useCashflow(13, practiceId);
+  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const { data, isLoading, isError } = useCashflow(13, practiceId, range);
   const weeks = data?.weeks ?? [];
   const hasData = weeks.length > 0;
   const opening = data?.openingBalance ?? 0;
@@ -66,6 +68,7 @@ export default function CashflowScreen() {
       </div>
 
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <DateRangeFilter value={range} onChange={setRange} />
 
       {isError && (
         <div className="card-padded mb-4">

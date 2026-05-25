@@ -13,6 +13,7 @@ import { annualTotal } from '../mock';
 import { useFinancial, useFinanceSeries } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
+import DateRangeFilter, { type DateRange } from './DateRangeFilter';
 
 function fmt(n: number): string {
   return '£' + Math.round(n).toLocaleString('en-GB');
@@ -73,8 +74,9 @@ export default function FinancialScreen() {
   }
 
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const { data, isLoading, isError } = useFinancial(dsoDays, payableDays, practiceId);
-  const { data: seriesData } = useFinanceSeries(practiceId);
+  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const { data, isLoading, isError } = useFinancial(dsoDays, payableDays, practiceId, range);
+  const { data: seriesData } = useFinanceSeries(practiceId, range);
   const noBaseline = !!data?.error;
   const ratios = data?.ratios ?? [];
   const bs = data?.balanceSheet ?? {};
@@ -98,6 +100,7 @@ export default function FinancialScreen() {
       </div>
 
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <DateRangeFilter value={range} onChange={setRange} />
 
       {isError && (
         <div className="card-padded mb-4">

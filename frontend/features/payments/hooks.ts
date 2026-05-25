@@ -1,10 +1,11 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listPayments, getPaymentSummary, createPaymentLink } from './api';
+import { listPayments, getPaymentSummary, createPaymentLink, type PaymentFilters } from './api';
 
-export function usePayments(page = 1, limit = 25, practiceId: string | null = null) {
+export function usePayments(page = 1, limit = 25, filters: PaymentFilters = {}) {
+  const { practiceId = null, status = null, since = null, until = null } = filters;
   return useQuery({
-    queryKey: ['payments', page, limit, practiceId],
-    queryFn: () => listPayments(page, limit, practiceId),
+    queryKey: ['payments', page, limit, practiceId, status, since, until],
+    queryFn: () => listPayments(page, limit, filters),
     placeholderData: keepPreviousData, // keep old page visible while next loads
   });
 }
