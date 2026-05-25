@@ -24,6 +24,45 @@ marginPct = netProfit / revenue × 100
 - Top quartile: 20%+
 - Below 10%: concerning
 
+### 1a. Real-data sourcing + bucket mapping
+
+Finance reads **real data first, no projected revenue curve**:
+- **Revenue** (`finance-series`, `financial`): real **settled `payments`**
+  (Dentally/Stripe) bucketed by `processed_at` month/TTM — or the
+  `monthly_financials` revenue actual when one exists for that period.
+- **Costs**: `monthly_financials` actuals (Xero P&L sync + manual entry) when
+  present (real); otherwise the Business Health **baseline cost_% applied to the
+  REAL revenue** as a labelled ESTIMATE (`estimated:true` per row / margin;
+  `finance-series.costsEstimated`). Dentally carries no cost data — Xero will.
+- **No baseline revenue projection.** The baseline supplies cost ratios for the
+  estimate and a comparison run-rate only; it is never shown as real revenue.
+
+Actuals are stored per `dental_bucket`:
+`revenue, staff, lab, materials, overhead, tax, other`.
+
+**Precedence (per period + bucket):** synced accounting actuals
+(`source = xero|quickbooks`) **override** manual entries (`source = manual`).
+Manual is the fallback when no synced row exists for that period+bucket.
+(`bucketsByPeriod` in `services/monthlyFinancial.service.js`.)
+
+**Bucket → `calculatePL` cost lines** (`plInputFromBuckets`):
+```
+revenue          = bucket.revenue
+costs.staff      = bucket.staff
+costs.lab        = bucket.lab
+costs.materials  = bucket.materials
+costs.other      = bucket.overhead + bucket.other
+costs.associates = costs.property = costs.marketing = 0   (no actuals bucket)
+tax → EXCLUDED from operating costs (below the operating line; the baseline
+      P&L has no tax cost line, so excluding it keeps actuals comparable)
+```
+Actuals carry no separate associate/property/marketing bucket — those sit inside
+`staff`/`overhead` depending on how the org books them. `finance-series` groups
+the same buckets as `{ associatePay:0, staffCosts:staff, labMaterials:lab+materials,
+opex:overhead+other }` (`financeSeriesRowFromBuckets`).
+
+Annual P&L (`pl`) sums the trailing ≤12 entered periods.
+
 ---
 
 ## 2. Practice Valuation
@@ -82,17 +121,23 @@ net = gross - labDeduction + prev_balance_pence
 
 ---
 
-## 4. Cash Flow Forecast (13-week rolling)
+## 4. Cash Flow (13-week, REAL backward view)
 
-For each week:
+Not a forecast. Each of the last 13 weeks shows **real cash received** — settled
+`payments` bucketed by the week of `processed_at` (deduped by payment id; null
+`processed_at` skipped). Opening = real bank balance (Σ `bank_accounts`, £0 +
+flagged when none connected). There is no projected receipts line and no cost
+line (Dentally has no outflow source).
 ```
-closing_balance = opening_balance + receipts - payments
+opening_week0   = Σ bank_accounts.balance_pence
+receipts_week   = Σ settled payments with processed_at in that week
+closing_week    = opening_week + receipts_week        (running balance)
+opening_week+1  = closing_week
 ```
-
-Status flags:
-- **Healthy**: closing > 50% of opening
-- **Warning**: closing > 0 but < 50% of opening
-- **Critical**: closing ≤ 0
+`baselineWeeklyRunRatePence = round(baseline.revenue × 100 / 52)` is returned
+**separately** as a comparison target (the owner's Business Health run-rate) and
+is never added into the real receipts. `practice_id` scopes receipts to one
+practice. (`analyticsService.cashflow`.)
 
 ---
 
