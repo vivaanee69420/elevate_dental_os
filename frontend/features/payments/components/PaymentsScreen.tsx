@@ -11,7 +11,7 @@ const STATUSES = ['settled', 'pending', 'processing', 'failed', 'refunded', 'dis
 const PAGE_SIZE = 25;
 
 const columns: Column<any>[] = [
-  { header: 'Date', render: (p) => <span className="text-ink-muted">{formatDate(p.created_at)}</span> },
+  { header: 'Date', render: (p) => <span className="text-ink-muted">{formatDate(p.processed_at ?? p.created_at)}</span> },
   { header: 'Patient', render: (p) => `${p.contact?.first_name ?? ''} ${p.contact?.last_name ?? ''}` },
   { header: 'Description', render: (p) => <span className="text-ink-muted">{p.description}</span> },
   {
