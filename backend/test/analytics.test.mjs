@@ -131,6 +131,20 @@ describe('financeSeries — exact real revenue, costs/profit real-or-zero', () =
     expect(fs.months.find((m) => m.month === '2026-04').revenue).toBe(3_000_000);
     expect(fs.costsAvailable).toBe(false);
   });
+
+  it('custom from/to range overrides the rolling window + bounds the RPC', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-02-15', pence: 1_000_000 }]);
+    supaRec.rpcCalls = [];
+    const fs = await svc.financeSeries(ORG_A, { now, from: '2026-01-01', to: '2026-03-31' });
+    // exactly the 3 months in range, in order
+    expect(fs.months.map((m) => m.month)).toEqual(['2026-01', '2026-02', '2026-03']);
+    expect(fs.months.find((m) => m.month === '2026-02').revenue).toBe(1_000_000);
+    // RPC received both bounds (open-ended trailing window would pass p_until null)
+    const call = supaRec.rpcCalls.find((c) => c.fn === 'settled_receipts_by_day');
+    expect(typeof call.params.p_since).toBe('string');
+    expect(call.params.p_until).not.toBeNull();
+  });
 });
 
 describe('dashboardSummary — KPIs from the real baseline', () => {

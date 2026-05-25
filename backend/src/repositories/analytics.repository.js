@@ -101,11 +101,12 @@ export const analyticsRepository = {
     // truncated by the 1000-row read cap. Returns [{ day:'YYYY-MM-DD', pence }]
     // for the window (<=366 rows); callers bucket days into months/weeks/TTM.
     // practiceId scopes to one practice. Real revenue source — no projection.
-    async settledReceiptsByDay(orgId, sinceISO, practiceId = null) {
+    async settledReceiptsByDay(orgId, sinceISO, practiceId = null, untilISO = null) {
         const { data, error } = await supabase_1.serviceClient.rpc('settled_receipts_by_day', {
             p_org: orgId,
             p_since: sinceISO,
             p_practice: practiceId ?? null,
+            p_until: untilISO ?? null,
         });
         if (error)
             throw new Error(error.message);

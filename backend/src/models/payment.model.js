@@ -5,6 +5,7 @@ import * as zod_1 from "zod";
 export const paymentListQuerySchema = zod_1.z.object({
     status: zod_1.z.string().optional(),
     since: zod_1.z.string().optional(),
+    until: zod_1.z.string().optional(),
     practice_id: zod_1.z.string().uuid().optional(),
     page: zod_1.z.coerce.number().int().min(1).default(1),
     limit: zod_1.z.coerce.number().int().min(1).max(100).default(25),
