@@ -31,30 +31,25 @@ export const paymentRepository = {
     },
     // Aggregate stats over ALL payments (not just the current page), so the
     // summary cards stay correct under pagination. settled = realised income.
-    async summary(orgId, practiceId) {
-        let query = supabase_1.serviceClient
-            .from('payments')
-            .select('amount_pence, status, processed_at, created_at')
-            .eq('organisation_id', orgId);
-        if (practiceId)
-            query = query.eq('practice_id', practiceId);
-        const { data, error } = await query.limit(20000);
+    // Exact summary via RPC (no 1000-row cap), scoped to practice + date range.
+    // received/refunded/count are range-scoped (processed_at); outstanding is
+    // ALL pending for the practice (a running total).
+    async summary(orgId, { practiceId = null, since = null, until = null } = {}) {
+        const { data, error } = await supabase_1.serviceClient.rpc('payment_summary', {
+            p_org: orgId,
+            p_since: since ?? null,
+            p_until: until ?? null,
+            p_practice: practiceId ?? null,
+        });
         if (error)
             throw new Error(error.message);
-        const now = Date.now();
-        const within = (iso, ms) => iso && now - new Date(iso).getTime() <= ms;
-        const out = { today: 0, week: 0, month: 0, outstanding: 0 };
-        for (const p of data ?? []) {
-            const when = p.processed_at ?? p.created_at;
-            if (p.status === 'settled') {
-                if (within(when, 86400000)) out.today += p.amount_pence || 0;
-                if (within(when, 7 * 86400000)) out.week += p.amount_pence || 0;
-                if (within(when, 30 * 86400000)) out.month += p.amount_pence || 0;
-            } else if (p.status === 'pending') {
-                out.outstanding += p.amount_pence || 0;
-            }
-        }
-        return out;
+        const row = (Array.isArray(data) ? data[0] : data) || {};
+        return {
+            received: Number(row.received_pence || 0),
+            outstanding: Number(row.outstanding_pence || 0),
+            refunded: Number(row.refunded_pence || 0),
+            count: Number(row.txn_count || 0),
+        };
     },
     async insertPending(row) {
         return supabase_1.serviceClient.from('payments').insert(row);

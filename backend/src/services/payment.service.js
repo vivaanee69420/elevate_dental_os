@@ -11,8 +11,8 @@ export const paymentService = {
         const page = q.page ?? 1;
         return { payments: rows, total, page, limit, pages: Math.max(1, Math.ceil(total / limit)) };
     },
-    async summary(orgId, practiceId) {
-        return payment_repository_1.paymentRepository.summary(orgId, practiceId);
+    async summary(orgId, filters = {}) {
+        return payment_repository_1.paymentRepository.summary(orgId, filters);
     },
     async createManual(orgId, input) {
         const row = {
