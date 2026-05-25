@@ -14,14 +14,16 @@ export const paymentRepository = {
             .eq('organisation_id', orgId);
         if (q.status)
             query = query.eq('status', q.status);
+        // Filter + order by processed_at (the REAL payment date). created_at is
+        // the sync insert time (≈ today for a backfill) and must not drive dates.
         if (q.since)
-            query = query.gte('created_at', q.since);
+            query = query.gte('processed_at', q.since);
         if (q.until)
-            query = query.lte('created_at', q.until);
+            query = query.lte('processed_at', q.until);
         if (q.practice_id)
             query = query.eq('practice_id', q.practice_id);
         const { data, error, count } = await query
-            .order('created_at', { ascending: false })
+            .order('processed_at', { ascending: false, nullsFirst: false })
             .range(from, to);
         if (error)
             throw new Error(error.message);
