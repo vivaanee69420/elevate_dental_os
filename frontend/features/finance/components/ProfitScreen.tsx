@@ -14,9 +14,18 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
+import { useState } from 'react';
 import { annualTotal, poundsCompact, monthLabel, monthShort } from '../mock';
 import { useFinanceSeries } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
+import ManualPLModal from './ManualPLModal';
+import PracticeTabs from '@/features/practices/PracticeTabs';
+
+const BASIS_LABEL: Record<string, string> = {
+  actuals: 'real actuals (Xero / manual entry)',
+  mixed: 'actuals where entered, baseline projection elsewhere',
+  'baseline-projection': 'baseline projection (derived, not filed accounts)',
+};
 
 const BRAND = '#0E7C7B';
 const ACCENT = '#FFB547';
@@ -36,7 +45,10 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
 }
 
 export default function ProfitScreen() {
-  const { data, isLoading, isError } = useFinanceSeries();
+  const [practiceId, setPracticeId] = useState<string | null>(null);
+  const { data, isLoading, isError } = useFinanceSeries(practiceId);
+  const [plModalOpen, setPlModalOpen] = useState(false);
+  const basisLabel = BASIS_LABEL[data?.basis ?? 'baseline-projection'] ?? BASIS_LABEL['baseline-projection'];
   const series = data?.months ?? [];
   const noBaseline = !!data?.error;
   const hasData = series.length > 0;
@@ -70,7 +82,7 @@ export default function ProfitScreen() {
       .join('');
     const html = `<!doctype html><html><head><meta charset=utf-8><title>P&L — ${new Date().toLocaleDateString(
       'en-GB',
-    )}</title><style>body{font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:32px}h1{font-size:20px;margin:0}.sub{color:#6B7280;font-size:11px;margin:4px 0 20px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 10px;border-bottom:1px solid #E5E7EB;text-align:left}.r{text-align:right}tfoot td{font-weight:700;border-top:2px solid #1F2937}.f{color:#9CA3AF;font-size:10px;margin-top:18px}@media print{body{margin:14mm}}</style></head><body><h1>Profit &amp; Loss</h1><div class=sub>12-month rolling P&amp;L · baseline projection (derived, not filed accounts) · ${esc(
+    )}</title><style>body{font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:32px}h1{font-size:20px;margin:0}.sub{color:#6B7280;font-size:11px;margin:4px 0 20px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 10px;border-bottom:1px solid #E5E7EB;text-align:left}.r{text-align:right}tfoot td{font-weight:700;border-top:2px solid #1F2937}.f{color:#9CA3AF;font-size:10px;margin-top:18px}@media print{body{margin:14mm}}</style></head><body><h1>Profit &amp; Loss</h1><div class=sub>12-month rolling P&amp;L · ${esc(basisLabel)} · ${esc(
       new Date().toLocaleString('en-GB'),
     )}</div><table><thead><tr><th>Month</th><th class=r>Revenue</th><th class=r>Associate</th><th class=r>Staff</th><th class=r>Lab/mat</th><th class=r>OpEx</th><th class=r>Profit</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td>TOTAL</td><td class=r>${poundsCompact(
       annual.revenue,
@@ -100,28 +112,49 @@ export default function ProfitScreen() {
         <div>
           <h1 className="display text-3xl font-bold">Profit &amp; Loss</h1>
           <p className="text-sm text-ink-muted">
-            12-month rolling P&amp;L · baseline projection (derived, not filed
-            accounts)
+            12-month rolling P&amp;L · {basisLabel}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={exportPdf}
-          disabled={!hasData}
-          className="font-semibold"
-          style={{
-            padding: '9px 16px',
-            fontSize: 13,
-            border: '1px solid var(--border)',
-            borderRadius: 6,
-            background: 'white',
-            opacity: hasData ? 1 : 0.5,
-            cursor: hasData ? 'pointer' : 'default',
-          }}
-        >
-          Export to PDF
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => setPlModalOpen(true)}
+            className="font-semibold"
+            style={{
+              padding: '9px 16px',
+              fontSize: 13,
+              border: 'none',
+              borderRadius: 6,
+              background: '#0E7C7B',
+              color: 'white',
+              cursor: 'pointer',
+            }}
+          >
+            Enter actuals
+          </button>
+          <button
+            type="button"
+            onClick={exportPdf}
+            disabled={!hasData}
+            className="font-semibold"
+            style={{
+              padding: '9px 16px',
+              fontSize: 13,
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              background: 'white',
+              opacity: hasData ? 1 : 0.5,
+              cursor: hasData ? 'pointer' : 'default',
+            }}
+          >
+            Export to PDF
+          </button>
+        </div>
       </div>
+
+      <ManualPLModal open={plModalOpen} onClose={() => setPlModalOpen(false)} practiceId={practiceId} />
+
+      <PracticeTabs value={practiceId} onChange={setPracticeId} />
 
       <FinanceToolbar />
 
@@ -139,6 +172,16 @@ export default function ProfitScreen() {
           <div className="text-sm text-ink-muted">
             The P&amp;L reads from your Business Health baseline. Complete setup
             to populate it.
+          </div>
+        </div>
+      )}
+      {practiceId && !hasData && !noBaseline && !isError && !isLoading && (
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+          <div className="font-semibold">No P&amp;L actuals for this practice</div>
+          <div className="text-sm text-ink-muted">
+            Per-practice P&amp;L shows real actuals only (the group baseline is not
+            split per practice). Use &ldquo;Enter actuals&rdquo; and pick this
+            practice, or connect Xero with practice tagging.
           </div>
         </div>
       )}
@@ -174,7 +217,9 @@ export default function ProfitScreen() {
           </div>
         ) : !hasData ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
-            No data — set your Business Health baseline.
+            {practiceId
+              ? 'No P&L actuals entered for this practice yet.'
+              : 'No data — set your Business Health baseline.'}
           </div>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
