@@ -166,8 +166,8 @@ Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide (incl. 
 
 ## Payments
 
-### `GET /api/payments?status=settled&since=2026-01-01&page=1&limit=25&practice_id=`
-Paginated. Returns `{ payments, total, page, limit, pages }`. `limit` max 100, default 25. Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide.
+### `GET /api/payments?status=settled&since=2026-01-01&until=2026-03-31&page=1&limit=25&practice_id=`
+Paginated. Returns `{ payments, total, page, limit, pages }`. `limit` max 100, default 25. Filters: `status` (settled|pending|processing|failed|refunded|disputed), `since`/`until` (created_at date range, YYYY-MM-DD), `practice_id` (UUID). All optional; omitted = org-wide / all.
 ### `GET /api/payments/summary?practice_id=`
 Aggregate stat cards over ALL payments (not the current page): `{ today, week, month, outstanding }` in pence (settled for today/week/month, pending for outstanding). Optional `practice_id` (UUID) scopes to one practice.
 ### `POST /api/payments/create-payment-link` — generates Stripe link
@@ -243,6 +243,11 @@ Response:
 - `pl` — annual P&L from `monthly_financials` actuals; baseline fallback when none.
 
 Xero overrides manual for the same period+bucket (see FORMULAS.md §1a).
+
+**Custom date range:** `finance-series`, `financial`, and `cashflow` accept
+optional `from`/`to` (YYYY-MM-DD). When both are set they override the rolling
+window — finance-series returns the months in range, cashflow the weeks spanning
+it (capped 53), financial sums the range. A single day = `from==to`.
 
 **Per-practice filtering:** `finance-series`, `financial`, and `cashflow` accept
 an optional `practice_id` (UUID) scoping to one practice's real data. `financial`
