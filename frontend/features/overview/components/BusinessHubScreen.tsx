@@ -93,9 +93,9 @@ export default function BusinessHubScreen() {
           tone={selected ? undefined : g.revenueTargetPence ? (targetDelta >= 0 ? 'good' : 'warn') : undefined}
         />
         <Kpi
-          label="Group margin (baseline)"
-          value={selected ? '—' : `${g.marginPct}%`}
-          sub={selected ? 'group-level only' : 'from Business Health'}
+          label="Group margin"
+          value={selected ? '—' : g.marginPct ? `${g.marginPct}%` : '—'}
+          sub={selected ? 'group-level only' : g.marginPct ? 'real (P&L actuals)' : 'no cost data'}
         />
         <Kpi
           label="Appointments"
