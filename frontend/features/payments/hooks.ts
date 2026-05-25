@@ -10,10 +10,11 @@ export function usePayments(page = 1, limit = 25, filters: PaymentFilters = {}) 
   });
 }
 
-export function usePaymentSummary(practiceId: string | null = null) {
+export function usePaymentSummary(filters: PaymentFilters = {}) {
+  const { practiceId = null, since = null, until = null } = filters;
   return useQuery({
-    queryKey: ['payment-summary', practiceId],
-    queryFn: () => getPaymentSummary(practiceId),
+    queryKey: ['payment-summary', practiceId, since, until],
+    queryFn: () => getPaymentSummary(filters),
   });
 }
 

@@ -25,15 +25,20 @@ export function listPayments(page = 1, limit = 25, f: PaymentFilters = {}) {
 }
 
 export interface PaymentSummary {
-  today: number;
-  week: number;
-  month: number;
-  outstanding: number;
+  received: number; // settled in range (pence)
+  outstanding: number; // all pending (pence)
+  refunded: number; // refunded in range (pence)
+  count: number; // transactions in range
 }
 
-export function getPaymentSummary(practiceId?: string | null) {
-  const pp = practiceId ? `?practice_id=${practiceId}` : '';
-  return api<PaymentSummary>(`/api/payments/summary${pp}`);
+// Summary follows the same practice + date filter as the list (status ignored).
+export function getPaymentSummary(f: PaymentFilters = {}) {
+  const qs = new URLSearchParams();
+  if (f.practiceId) qs.set('practice_id', f.practiceId);
+  if (f.since) qs.set('since', f.since);
+  if (f.until) qs.set('until', f.until);
+  const q = qs.toString();
+  return api<PaymentSummary>(`/api/payments/summary${q ? `?${q}` : ''}`);
 }
 
 export interface CreateLinkInput {
