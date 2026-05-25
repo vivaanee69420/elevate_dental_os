@@ -48,7 +48,7 @@ export default function PaymentsScreen() {
     since: range.from,
     until: range.to,
   });
-  const { data: summary } = usePaymentSummary(practiceId);
+  const { data: summary } = usePaymentSummary({ practiceId, since: range.from, until: range.to });
   const createLink = useCreatePaymentLink();
   const payments: any[] = useMemo(() => data?.payments ?? [], [data]);
   const total = data?.total ?? 0;
@@ -60,12 +60,12 @@ export default function PaymentsScreen() {
   const [url, setUrl] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  // Stats come from the server summary (all rows), not the current 25-row page.
+  // Exact server summary, scoped to the same practice + date range as the list.
   const stats = {
-    today: summary?.today ?? 0,
-    week: summary?.week ?? 0,
-    month: summary?.month ?? 0,
+    received: summary?.received ?? 0,
     outstanding: summary?.outstanding ?? 0,
+    refunded: summary?.refunded ?? 0,
+    count: summary?.count ?? 0,
   };
 
   async function submit() {
@@ -128,10 +128,10 @@ export default function PaymentsScreen() {
       </div>
 
       <div className="grid gap-4 my-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <Stat label="Today" value={formatPence(stats.today)} />
-        <Stat label="This week" value={formatPence(stats.week)} />
-        <Stat label="This month" value={formatPence(stats.month)} />
+        <Stat label="Received" value={formatPence(stats.received)} />
         <Stat label="Outstanding" value={formatPence(stats.outstanding)} />
+        <Stat label="Refunded" value={formatPence(stats.refunded)} />
+        <Stat label="Transactions" value={String(stats.count)} />
       </div>
 
       <DataTable columns={columns} rows={payments} rowKey={(p) => p.id} />
