@@ -23,6 +23,13 @@ describe('payment repository — practice filter', () => {
     expect(supaRec.last.eqs.some((e) => e.col === 'practice_id')).toBe(false);
   });
 
+  it('list applies since (gte) + until (lte) + status date filters', async () => {
+    await repo.list(ORG_A, { status: 'pending', since: '2026-01-01', until: '2026-03-31' });
+    expect(supaRec.last.eqs).toContainEqual({ col: 'status', val: 'pending' });
+    expect(supaRec.last.gtes).toContainEqual({ col: 'created_at', val: '2026-01-01' });
+    expect(supaRec.last.ltes).toContainEqual({ col: 'created_at', val: '2026-03-31' });
+  });
+
   it('summary adds practice_id eq when provided', async () => {
     await repo.summary(ORG_A, PRACTICE_1);
     expect(supaRec.last.table).toBe('payments');

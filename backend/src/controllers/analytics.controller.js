@@ -13,15 +13,15 @@ export const analyticsController = {
     },
     async financeSeries(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months, practiceId: q.practice_id }));
+        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months, practiceId: q.practice_id, from: q.from, to: q.to }));
     },
     async cashflow(req, res) {
         const q = analytics_model_1.weeksQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks, practiceId: q.practice_id }));
+        res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks, practiceId: q.practice_id, from: q.from, to: q.to }));
     },
     async financial(req, res) {
         const q = analytics_model_1.financialQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.financial(req.user.organisation_id, { dsoDays: q.dsoDays, payableDays: q.payableDays, practiceId: q.practice_id }));
+        res.json(await analytics_service_1.analyticsService.financial(req.user.organisation_id, { dsoDays: q.dsoDays, payableDays: q.payableDays, practiceId: q.practice_id, from: q.from, to: q.to }));
     },
     async practiceSummary(req, res) {
         res.json(await analytics_service_1.analyticsService.practiceSummary(req.user.organisation_id));

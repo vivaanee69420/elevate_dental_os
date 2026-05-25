@@ -16,6 +16,8 @@ export const paymentRepository = {
             query = query.eq('status', q.status);
         if (q.since)
             query = query.gte('created_at', q.since);
+        if (q.until)
+            query = query.lte('created_at', q.until);
         if (q.practice_id)
             query = query.eq('practice_id', q.practice_id);
         const { data, error, count } = await query

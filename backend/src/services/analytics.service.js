@@ -196,6 +196,34 @@ export const analyticsService = {
         );
         return { basis: 'baseline-projection', months: series };
     },
+    // Resolve the month window: a custom [from,to] range (YYYY-MM-DD) overrides
+    // the trailing `months` window. Returns month keys (YYYY-MM, capped at 36)
+    // plus the RPC since/until bounds. untilISO null = open (trailing window).
+    _monthWindow(ref, months, from, to) {
+        const pad = (n) => String(n).padStart(2, '0');
+        if (from && to) {
+            const [fy, fm] = from.split('-').map(Number);
+            const [ty, tm] = to.split('-').map(Number);
+            const keys = [];
+            let y = fy, m = fm;
+            while ((y < ty || (y === ty && m <= tm)) && keys.length < 36) {
+                keys.push(`${y}-${pad(m)}`);
+                m++; if (m > 12) { m = 1; y++; }
+            }
+            return {
+                keys,
+                sinceISO: new Date(fy, fm - 1, 1).toISOString(),
+                untilISO: new Date(ty, tm, 0, 23, 59, 59).toISOString(), // last day of `to` month
+            };
+        }
+        const keys = [];
+        for (let i = months - 1; i >= 0; i--) {
+            const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
+            keys.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`);
+        }
+        const startMonth = new Date(ref.getFullYear(), ref.getMonth() - (months - 1), 1);
+        return { keys, sinceISO: startMonth.toISOString(), untilISO: null };
+    },
     // Bucket exact daily settled-receipt rows ([{day:'YYYY-MM-DD', pence}]) into
     // REAL monthly revenue (pence). The day string's first 7 chars are YYYY-MM.
     _monthlyRevenueFromDays(rows) {
@@ -217,20 +245,14 @@ export const analyticsService = {
     //             non-zero-revenue month has real costs.
     // basis: 'actuals' (all real costs) | 'mixed' | 'revenue-only' (real revenue,
     // costs/profit 0 — connect Xero for costs).
-    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null } = {}) {
+    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null } = {}) {
         const ref = now();
-        const startMonth = new Date(ref.getFullYear(), ref.getMonth() - (months - 1), 1);
-        const sinceISO = startMonth.toISOString();
+        const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
         const [actuals, dayRows] = await Promise.all([
             this._actualsBundle(orgId, practiceId),
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
         ]);
         const revByMonth = this._monthlyRevenueFromDays(dayRows);
-        const keys = [];
-        for (let i = months - 1; i >= 0; i--) {
-            const d = new Date(ref.getFullYear(), ref.getMonth() - i, 1);
-            keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-        }
         let actualCostMonths = 0;
         let revenueOnlyMonths = 0;
         const series = keys.map((month) => {
@@ -264,18 +286,30 @@ export const analyticsService = {
     // bank / stale sync); closing is the running balance. No projected receipts,
     // no cost line, no baseline comparison — only real money in. practiceId
     // scopes the receipts to one practice. basis is always 'actuals'.
-    async cashflow(orgId, { weeks = 13, now = () => new Date(), practiceId = null } = {}) {
+    async cashflow(orgId, { weeks = 13, now = () => new Date(), practiceId = null, from = null, to = null } = {}) {
         const ref = now();
         const DAY = 86400000, WEEK = 7 * DAY;
         // All date math in local time, and day strings parsed as local midnight,
         // so week bucketing is timezone-consistent (no UTC/local boundary skew).
-        const todayLocal = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
-        const windowEnd = todayLocal + DAY; // include all of today
-        const startMs = windowEnd - weeks * WEEK; // backward window start
+        let startMs, windowEnd, untilISO;
+        if (from && to) {
+            const [fy, fm, fd] = from.split('-').map(Number);
+            const [ty, tm, td] = to.split('-').map(Number);
+            startMs = new Date(fy, fm - 1, fd).getTime();
+            const endMs = new Date(ty, tm - 1, td).getTime() + DAY;
+            weeks = Math.min(53, Math.max(1, Math.ceil((endMs - startMs) / WEEK)));
+            windowEnd = startMs + weeks * WEEK;
+            untilISO = new Date(endMs).toISOString();
+        } else {
+            const todayLocal = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
+            windowEnd = todayLocal + DAY; // include all of today
+            startMs = windowEnd - weeks * WEEK; // backward window start
+            untilISO = null;
+        }
         const sinceISO = new Date(startMs).toISOString();
         const [bank, dayRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.bankSummary(orgId),
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
         ]);
         const dayToMs = (s) => {
             const [Y, M, D] = String(s).slice(0, 10).split('-').map(Number);
@@ -325,13 +359,22 @@ export const analyticsService = {
     // them — never estimated). Balance sheet shows only real bank cash; every
     // other line is 0 until a real accounting source exists. Nothing is flagged
     // `estimated` because nothing is estimated — it is real or zero.
-    async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null, now = () => new Date() } = {}) {
-        const since = new Date(now());
-        since.setMonth(since.getMonth() - 12);
-        const sinceISO = since.toISOString();
+    async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null, now = () => new Date(), from = null, to = null } = {}) {
+        let sinceISO, untilISO;
+        if (from && to) {
+            const [fy, fm, fd] = from.split('-').map(Number);
+            const [ty, tm, td] = to.split('-').map(Number);
+            sinceISO = new Date(fy, fm - 1, fd).toISOString();
+            untilISO = new Date(ty, tm - 1, td, 23, 59, 59).toISOString();
+        } else {
+            const since = new Date(now());
+            since.setMonth(since.getMonth() - 12);
+            sinceISO = since.toISOString();
+            untilISO = null;
+        }
         const [actuals, dayRows, bank] = await Promise.all([
             this._actualsBundle(orgId, practiceId),
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             practiceId ? Promise.resolve({ totalPence: 0, count: 0 }) : analytics_repository_1.analyticsRepository.bankSummary(orgId),
         ]);
         const realRevenuePence = (Array.isArray(dayRows) ? dayRows : [])
