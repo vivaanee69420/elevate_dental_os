@@ -99,6 +99,7 @@ export interface SyncProgress {
   error?: string | null;
   page?: number;
   totalPages?: number | null;
+  count?: number; // records fetched so far in the current phase
 }
 
 export function getSyncProgress(provider: string) {

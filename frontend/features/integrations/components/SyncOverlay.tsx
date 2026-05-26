@@ -71,9 +71,14 @@ export default function SyncOverlay({
           />
         </div>
         <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 12 }}>
-          {data?.totalPages
-            ? `Page ${data.page ?? 0} of ${data.totalPages}`
-            : 'Pulling from Dentally — large practices take a little longer.'}
+          {/* Live record count is the clearest "what's happening" signal —
+              Dentally usually omits total_pages, so we lead with records pulled,
+              fall back to page-of-total when present, then a generic message. */}
+          {data?.count
+            ? `${data.count.toLocaleString('en-GB')} ${(PHASE_LABEL[data?.phase ?? ''] ?? 'records').toLowerCase()} pulled so far`
+            : data?.totalPages
+              ? `Page ${data.page ?? 0} of ${data.totalPages}`
+              : 'Pulling from Dentally — large practices take a little longer.'}
         </div>
         {!errored && (
           <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 6 }}>
