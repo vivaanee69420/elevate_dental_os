@@ -422,6 +422,7 @@ CREATE TABLE invoices (
   created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE TRIGGER invoices_updated_at BEFORE UPDATE ON invoices FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE UNIQUE INDEX uq_invoices_src_ext ON invoices(organisation_id, source, external_id);
 CREATE INDEX idx_invoices_org_practice ON invoices(organisation_id, practice_id);
 
