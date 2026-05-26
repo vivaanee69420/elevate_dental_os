@@ -1,2 +1,0 @@
-treatment_plan_id,entity_code,practice_code,patient_external_id,plan_created_at,plan_sent_at,plan_status,treatment_interest,quoted_value,deposit_value,finance_provider,lead_source,owner_user,source_system,source_updated_at
-TP-41008,GM_DENTAL_GROUP,ASHFORD,PAT-20011,2026-05-20,2026-05-21,accepted_not_booked,Implants,6200,500,Tabeo,Meta Ads,Nadia,DENTALLY_MANUAL,2026-05-25T18:12:00+01:00
