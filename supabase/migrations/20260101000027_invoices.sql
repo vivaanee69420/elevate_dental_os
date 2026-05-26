@@ -29,6 +29,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_src_ext
 CREATE INDEX IF NOT EXISTS idx_invoices_org_practice
   ON invoices(organisation_id, practice_id);
 
+-- Keep updated_at fresh on upsert, like every other table.
+DROP TRIGGER IF EXISTS invoices_updated_at ON invoices;
+CREATE TRIGGER invoices_updated_at BEFORE UPDATE ON invoices
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "invoices_read" ON invoices;
