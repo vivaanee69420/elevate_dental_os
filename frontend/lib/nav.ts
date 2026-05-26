@@ -43,6 +43,7 @@ export const NAV: NavSection[] = [
     { id: 'kpiscorecard', label: 'KPI Scorecard' },
   ]},
   { label: 'Operations', items: [
+    { id: 'appointments', label: 'Appointments', isNew: true },
     { id: 'associates', label: 'Associates' },
     { id: 'staff', label: 'Staff Scheduling' },
     { id: 'pay', label: 'Associate Pay' },
