@@ -284,6 +284,7 @@ CREATE TABLE appointments (
   deposit_pence INTEGER DEFAULT 0,
   deposit_paid BOOLEAN DEFAULT FALSE,
   pms_external_id TEXT,
+  pms_patient_id TEXT, -- raw Dentally patient id, so contact_id can be relinked across syncs
   source TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

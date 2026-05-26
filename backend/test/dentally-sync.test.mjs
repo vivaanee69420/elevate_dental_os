@@ -117,6 +117,8 @@ describe('syncOneOrg', () => {
         });
         expect(payUpsert.upsertOpts.onConflict).toBe('organisation_id,source,external_id');
         expect(integrationRepository.upsert).toHaveBeenCalled();   // last_sync_at advanced
+        // contact relink runs after the pulls so cross-run / pre-column nulls get backfilled
+        expect((supaRec.rpcCalls ?? []).some((c) => c.fn === 'relink_dentally_appointment_contacts')).toBe(true);
     });
 
     it('marks the integration failed when the API key is missing', async () => {
@@ -125,7 +127,7 @@ describe('syncOneOrg', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
-    it('recent mode: patients/payments pull the last ~24 months; appointments pull only upcoming (open) via `after`', async () => {
+    it('recent mode: patients pull ALL history, payments the last ~24 months, appointments only upcoming (open) via `after`', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const seen = [];
@@ -138,17 +140,24 @@ describe('syncOneOrg', () => {
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { recent: true });
 
         const expected24 = Date.now() - 24 * 30 * 86400000; // RECENT_MONTHS
-        const nonAppt = seen.filter((s) => !s.path.includes('/appointments'));
-        const appt = seen.filter((s) => s.path.includes('/appointments'));
-        expect(nonAppt.length).toBeGreaterThan(0);
-        expect(appt.length).toBeGreaterThan(0);
-        // patients + payments: updated_since ~24mo ago, never an `after` filter
-        for (const s of nonAppt) {
+        const patients = seen.filter((s) => s.path.includes('/patients'));
+        const payments = seen.filter((s) => s.path.includes('/payments'));
+        const appts = seen.filter((s) => s.path.includes('/appointments'));
+        expect(patients.length).toBeGreaterThan(0);
+        expect(payments.length).toBeGreaterThan(0);
+        expect(appts.length).toBeGreaterThan(0);
+        // patients: ALL history so dormant-patient recalls resolve a contact
+        for (const s of patients) {
+            expect(s.after).toBeNull();
+            expect(s.updated_since.startsWith('2005-')).toBe(true);
+        }
+        // payments: recent ~24mo window
+        for (const s of payments) {
             expect(s.after).toBeNull();
             expect(Math.abs(new Date(s.updated_since).getTime() - expected24)).toBeLessThan(86400000);
         }
         // appointments: forward `after` filter ~now, no updated_since window
-        for (const s of appt) {
+        for (const s of appts) {
             expect(s.updated_since).toBeNull();
             expect(Math.abs(new Date(s.after).getTime() - Date.now())).toBeLessThan(86400000);
         }

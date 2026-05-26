@@ -5,9 +5,12 @@
 import * as supabase_1 from "../lib/supabase.js";
 export const appointmentRepository = {
     async list(orgId, q) {
+        const page = q.page ?? 1;
+        const perPage = q.per_page ?? 25;
+        const offset = (page - 1) * perPage;
         let query = supabase_1.serviceClient
             .from('appointments')
-            .select('*, contact:contacts(id, first_name, last_name), associate:associates(id, full_name), practice:practices(id, name)')
+            .select('*, contact:contacts(id, first_name, last_name), associate:associates(id, full_name), practice:practices(id, name)', { count: 'exact' })
             .eq('organisation_id', orgId)
             .order('starts_at', { ascending: true });
         if (q.from)
@@ -18,10 +21,11 @@ export const appointmentRepository = {
             query = query.eq('practice_id', q.practice_id);
         if (q.associate_id)
             query = query.eq('associate_id', q.associate_id);
-        const { data, error } = await query;
+        query = query.range(offset, offset + perPage - 1);
+        const { data, error, count } = await query;
         if (error)
             throw new Error(error.message);
-        return data;
+        return { rows: data ?? [], total: count ?? 0 };
     },
     async create(row) {
         return supabase_1.serviceClient.from('appointments').insert(row).select().single();

@@ -7,6 +7,9 @@ export const appointmentListQuerySchema = zod_1.z.object({
     to: zod_1.z.string().optional(),
     practice_id: zod_1.z.string().uuid().optional(),
     associate_id: zod_1.z.string().uuid().optional(),
+    // Pagination. Query params arrive as strings, so coerce; default 25/page.
+    page: zod_1.z.coerce.number().int().min(1).optional().default(1),
+    per_page: zod_1.z.coerce.number().int().min(1).max(100).optional().default(25),
 });
 export const appointmentCreateSchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid(),

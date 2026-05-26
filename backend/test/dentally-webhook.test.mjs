@@ -53,6 +53,14 @@ describe('row builders — shared by poll + webhook', () => {
     const siteMap = new Map(); // no mapping
     expect(appointmentRow(ORG, { id: 1, site_id: 99 }, siteMap, new Map())).toBeNull();
   });
+  it('appointmentRow persists pms_patient_id (and null for patient-less diary blocks)', () => {
+    const siteMap = new Map([['5', 'p1']]);
+    const withPatient = appointmentRow(ORG, { id: 1, practitioner_site_id: 5, patient_id: 7, start_time: 't' }, siteMap, new Map());
+    expect(withPatient.pms_patient_id).toBe('7');
+    const block = appointmentRow(ORG, { id: 2, practitioner_site_id: 5, start_time: 't' }, siteMap, new Map());
+    expect(block.pms_patient_id).toBeNull();
+  });
+
   it('patientRow maps regardless of practice mapping', () => {
     const row = patientRow(ORG, { id: 7, first_name: 'A', site_id: 5 }, new Map());
     expect(row).toMatchObject({ source: 'dentally', pms_external_id: '7', practice_id: null });
