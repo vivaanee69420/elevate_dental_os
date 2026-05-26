@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseRoute } from '@/lib/supabase-server';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,12 +44,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: data.error || 'Signup failed' }, { status: res.status });
   }
 
-  // 2. Sign in server-side → httpOnly session cookies.
-  const supabase = getSupabaseRoute();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 401 });
-  }
-
-  return NextResponse.json({ success: true });
+  // 2. Do NOT sign in. A public signup creates an owner with status 'pending'
+  // (backend), and login is hard-blocked (403) until a platform superadmin
+  // approves. Auto-signing-in here would mint a Supabase session and hand the
+  // user the dashboard, bypassing the entire approval gate. Instead we return
+  // 'pending' so the UI shows a "waiting for approval" screen.
+  return NextResponse.json({ success: true, pending: true, status: data.status ?? 'pending' });
 }

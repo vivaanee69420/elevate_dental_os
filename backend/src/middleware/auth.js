@@ -48,7 +48,7 @@ async function loadAuthContext(authUserId, log) {
     log?.warn({ err: rpcErr }, 'auth_bootstrap RPC unavailable; using fallback queries');
     const { data: user, error } = await serviceClient
       .from('users')
-      .select('id, email, organisation_id, role, permissions')
+      .select('id, email, organisation_id, role, permissions, status')
       .eq('id', authUserId)
       .single();
     if (error || !user) return null;
@@ -85,6 +85,22 @@ export async function authenticate(req, res, next) {
       return res.status(403).json({ error: 'User not found in any organisation' });
     }
     const { user, permissions } = ctx;
+
+    // Approval gate (defence in depth). /auth/login already blocks these, but a
+    // user could obtain a Supabase session another way (e.g. signing in against
+    // Supabase directly with the anon key). Block them here too so a session
+    // alone never grants /api access. Only explicit pending/rejected are
+    // blocked — active, invited and any legacy NULL status pass, so this never
+    // locks out existing users. (status is absent on a stale auth_bootstrap RPC
+    // → undefined → falls through and allows, which is the safe default.)
+    if (user.status === 'pending' || user.status === 'rejected') {
+      return res.status(403).json({
+        error: user.status === 'pending'
+          ? 'Your account is awaiting approval.'
+          : 'Your account access has been declined.',
+        status: user.status,
+      });
+    }
 
     req.user = {
       id: user.id,
