@@ -117,3 +117,21 @@ Done and committed on `main` (now in sync with `origin/main` — pushed). Note: 
 - Backend wiring: ~50 screens still mock — replace `features/*/data.ts`/`mock.ts` with real API per domain (separate slices).
 - Frontend has no test framework; recharts not code-split (bundle); `frontend/src/` move still deferred (`TODOS.md`).
 - **Enable the Custom Access Token Hook on hosted (rule 8)**: the `public.custom_access_token_hook` function now EXISTS on hosted (000004 applied this session) + is granted to `supabase_auth_admin`, but it still must be turned ON in Supabase → Authentication → Hooks → Custom Access Token (or via the Management API) — that toggle is GoTrue config, not SQL, so the MCP can't set it. Low impact today (repos use `serviceClient` + manual org filters, not the RLS/`req.db` path), but required before anything relies on `tenantClient`/RLS or on `organisation_id`/`role` JWT claims.
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
