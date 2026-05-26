@@ -38,6 +38,7 @@ ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bank_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bank_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chair_utilisation ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================================
 -- ORGANISATIONS
@@ -292,4 +293,10 @@ CREATE POLICY xero_account_map_org ON xero_account_map
 CREATE POLICY csv_import_batches_org ON csv_import_batches
   USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
 CREATE POLICY csv_import_rows_org ON csv_import_rows
+  USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
+
+-- ============================================================================
+-- CHAIR UTILISATION (migration 20260101000024) — tenant isolation
+-- ============================================================================
+CREATE POLICY chair_utilisation_org ON chair_utilisation
   USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
