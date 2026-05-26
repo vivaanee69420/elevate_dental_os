@@ -320,6 +320,10 @@ export function appointmentRow(orgId, a, siteMap, contactMap) {
         organisation_id: orgId,
         source: 'dentally',
         pms_external_id: String(a.id),
+        // Raw Dentally patient id, persisted so contact_id can be relinked later
+        // (relink_dentally_appointment_contacts) when the patient is pulled in a
+        // different run. null for patient-less diary blocks.
+        pms_patient_id: a.patient_id != null ? String(a.patient_id) : null,
         practice_id: practiceId,
         contact_id: contactMap.get(String(a.patient_id)) ?? null,
         starts_at: startsAt,
@@ -459,7 +463,13 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     const apptParams = openAppointments
         ? { after: new Date().toISOString() }
         : { updated_since: since };
-    const restParams = { updated_since: since };
+    // On the first pull, fetch ALL patients (not just the recent window) so an
+    // upcoming appointment for a dormant patient (a recall booked years after
+    // their last visit) still resolves a contact_id instead of "Unknown
+    // patient". Patients are a fraction of the page count of full appointment
+    // history, so this stays fast. Payments keep the recent window.
+    const patientParams = openAppointments ? { updated_since: BACKFILL_SINCE } : { updated_since: since };
+    const payParams = { updated_since: since };
 
     // Page-weighted progress. The 3 resources are very unequal (a practice can
     // have ~5x more appointments than patients), so weighting each phase as a
@@ -471,9 +481,9 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // wasted page/resource — negligible against hundreds).
     const PHASES = ['patients', 'appointments', 'payments'];
     const [patientPages, apptPages, payPages] = await Promise.all([
-        fetchPageCount(base, '/patients', auth, restParams, maxPages),
+        fetchPageCount(base, '/patients', auth, patientParams, maxPages),
         fetchPageCount(base, '/appointments', auth, apptParams, maxPages),
-        fetchPageCount(base, '/payments', auth, restParams, maxPages),
+        fetchPageCount(base, '/payments', auth, payParams, maxPages),
     ]);
     const phaseTotals = [patientPages, apptPages, payPages];
     const reporter = (idx) => (page, totalPages) => {
@@ -483,10 +493,20 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     try {
         const siteMap = await loadSiteMap(orgId);
         // Patients first so appointment/payment contact resolution sees fresh ids.
-        const patients = await pullPatients(orgId, base, auth, restParams, siteMap, reporter(0), maxPages);
+        const patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
         const contactMap = await loadContactMap(orgId);
         const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { openOnly: openAppointments });
-        const pays = await pullPayments(orgId, base, auth, restParams, siteMap, contactMap, reporter(2), maxPages);
+        const pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
+        // Backfill contact_id for any appointment that has a Dentally patient id
+        // but no linked contact yet (patient pulled in another run, or a row
+        // from before this column existed). Set-based; cheap; never cross-tenant.
+        let relinked = 0;
+        try {
+            const { data } = await supabase_1.serviceClient.rpc('relink_dentally_appointment_contacts', { p_org: orgId });
+            relinked = typeof data === 'number' ? data : 0;
+        } catch (err) {
+            console.warn(`[dentally] relink contacts skipped: ${err?.message || err}`);
+        }
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
             last_error: null,
@@ -498,6 +518,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             payments: pays.synced,
             skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0),
             skipped_closed_appointments: appts.skippedClosed ?? 0,
+            relinked_appointment_contacts: relinked,
         };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'dentally', String(err.message).slice(0, 500));

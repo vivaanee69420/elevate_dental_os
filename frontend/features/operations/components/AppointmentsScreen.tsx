@@ -4,9 +4,11 @@
 // GET /api/appointments?from=<today> (backend orders by starts_at asc), so it
 // shows the same open appointments the first Dentally pull brings in.
 
-import { useQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+
+const PER_PAGE = 25;
 
 type Appointment = {
   id: string;
@@ -34,10 +36,18 @@ const STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> = 
 const dayFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 const timeFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' });
 
+// A patient-less diary block (no linked contact) shows a dash, not a fake name.
 function patientName(a: Appointment): string {
   const n = [a.contact?.first_name, a.contact?.last_name].filter(Boolean).join(' ').trim();
-  return n || 'Unknown patient';
+  return n || '—';
 }
+
+type AppointmentsResponse = {
+  appointments: Appointment[];
+  total: number;
+  page: number;
+  per_page: number;
+};
 
 export default function AppointmentsScreen() {
   // Midnight today, so an appointment earlier today still shows.
@@ -46,14 +56,21 @@ export default function AppointmentsScreen() {
     d.setHours(0, 0, 0, 0);
     return d.toISOString();
   }, []);
+  const [page, setPage] = useState(1);
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['appointments', 'upcoming', from],
-    queryFn: () => api<{ appointments: Appointment[] }>(`/api/appointments?from=${encodeURIComponent(from)}`),
+  const { data, isLoading, isError, error, isFetching } = useQuery({
+    queryKey: ['appointments', 'upcoming', from, page],
+    queryFn: () =>
+      api<AppointmentsResponse>(
+        `/api/appointments?from=${encodeURIComponent(from)}&page=${page}&per_page=${PER_PAGE}`,
+      ),
     staleTime: 30_000,
+    placeholderData: keepPreviousData, // keep the current page visible while the next loads
   });
 
   const appointments = data?.appointments ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
@@ -122,6 +139,42 @@ export default function AppointmentsScreen() {
               })}
             </tbody>
           </table>
+        )}
+
+        {!isError && total > 0 && (
+          <div
+            className="flex items-center justify-between"
+            style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #E5E7EB', fontSize: 12 }}
+          >
+            <span className="text-ink-muted">
+              {(() => {
+                const start = (page - 1) * PER_PAGE + 1;
+                const end = Math.min(page * PER_PAGE, total);
+                return `${start.toLocaleString('en-GB')}–${end.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')}`;
+              })()}
+            </span>
+            <div className="flex items-center" style={{ gap: 8 }}>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={page <= 1 || isFetching}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                style={{ padding: '4px 12px', fontSize: 12, border: '1px solid #E5E7EB', opacity: page <= 1 || isFetching ? 0.5 : 1 }}
+              >
+                Previous
+              </button>
+              <span className="text-ink-muted">Page {page} of {totalPages.toLocaleString('en-GB')}</span>
+              <button
+                type="button"
+                className="btn-ghost"
+                disabled={page >= totalPages || isFetching}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                style={{ padding: '4px 12px', fontSize: 12, border: '1px solid #E5E7EB', opacity: page >= totalPages || isFetching ? 0.5 : 1 }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>

@@ -160,7 +160,8 @@ Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide (incl. 
 
 ## Appointments
 
-### `GET /api/appointments?from=...&to=...`
+### `GET /api/appointments?from=...&to=...&page=1&per_page=25`
+Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ appointments, total, page, per_page }`. Optional `practice_id` / `associate_id` filters. Each appointment includes joined `contact`/`practice`/`associate`.
 ### `POST /api/appointments` — create
 ### `PATCH /api/appointments/:id` — reschedule/cancel
 
