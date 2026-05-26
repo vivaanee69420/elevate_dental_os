@@ -37,6 +37,11 @@ const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) 
 const BACKFILL_SINCE = '2005-01-01T00:00:00.000Z'; // far-back updated_since so a full pull sees all records (API requires the param)
 const RECENT_MONTHS = 24;        // on-connect bootstrap window: last 24 months (dashboards are TTM; the cron + full-history button deepen the rest)
 const BOOTSTRAP_MAX_PAGES = 600; // ~60k rows/resource cap for the on-connect pull, so onboarding finishes in a couple of minutes
+// On the FIRST pull we only want live work — upcoming, not-yet-closed
+// appointments — so onboarding is fast and the Operations view is immediately
+// useful. These states are "closed" and dropped from the open pull; the
+// full-history button + nightly cron backfill them later.
+const CLOSED_APPT_STATES = new Set(['cancelled', 'completed', 'no_show']);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -318,7 +323,10 @@ export function appointmentRow(orgId, a, siteMap, contactMap) {
         practice_id: practiceId,
         contact_id: contactMap.get(String(a.patient_id)) ?? null,
         starts_at: startsAt,
-        ends_at: a.finish_time ?? a.finish ?? a.end_time ?? null,
+        // appointments.ends_at is NOT NULL; some Dentally rows omit a finish
+        // time. Fall back to starts_at so the row stores instead of failing the
+        // upsert and being silently dropped.
+        ends_at: a.finish_time ?? a.finish ?? a.end_time ?? startsAt,
         status: mapAppointmentStatus(a.state ?? a.status),
     };
 }
@@ -342,28 +350,39 @@ export function paymentRow(orgId, p, siteMap, contactMap) {
 
 // ---- pulls ------------------------------------------------------------------
 
-async function pullPatients(orgId, base, auth, since, siteMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/patients', auth, { updated_since: since }, onPage, maxPages);
+async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/patients', auth, params, onPage, maxPages);
     const rows = remote.map((p) => patientRow(orgId, p, siteMap));
     const synced = await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
     return { synced };
 }
 
-async function pullAppointments(orgId, base, auth, since, siteMap, contactMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/appointments', auth, { updated_since: since }, onPage, maxPages);
+// openOnly (the first pull): keep only upcoming + not-yet-closed appointments.
+// Even when the server-side `after` filter narrows the set, enforce it here too
+// so correctness never depends on a remote filter we can't unit-test.
+export function isOpenAppointment(row, now = Date.now()) {
+    if (CLOSED_APPT_STATES.has(row.status)) return false;
+    return new Date(row.starts_at).getTime() >= now;
+}
+
+async function pullAppointments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages, { openOnly = false } = {}) {
+    const remote = await fetchAllPages(base, '/appointments', auth, params, onPage, maxPages);
+    const now = Date.now();
     const rows = [];
-    let skipped = 0;
+    let skipped = 0;       // unmatched practice (NOT NULL practice_id) — a data-mapping gap
+    let skippedClosed = 0; // dropped by the first-pull open filter — expected, not a gap
     for (const a of remote) {
         const row = appointmentRow(orgId, a, siteMap, contactMap);
         if (!row) { skipped++; continue; } // appointments.practice_id is NOT NULL
+        if (openOnly && !isOpenAppointment(row, now)) { skippedClosed++; continue; }
         rows.push(row);
     }
     const synced = await upsertChunked('appointments', rows, 'organisation_id,source,pms_external_id');
-    return { synced, skipped };
+    return { synced, skipped, skippedClosed };
 }
 
-async function pullPayments(orgId, base, auth, since, siteMap, contactMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/payments', auth, { updated_since: since }, onPage, maxPages);
+async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/payments', auth, params, onPage, maxPages);
     const rows = [];
     let skipped = 0;
     for (const p of remote) {
@@ -426,6 +445,22 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
     const maxPages = full ? BACKFILL_MAX_PAGES : recent ? BOOTSTRAP_MAX_PAGES : MAX_PAGES;
 
+    // The first pull (recent/bootstrap) fetches only OPEN appointments: filter
+    // server-side on start_time (`after=now`) so we page through upcoming work
+    // only — a handful of pages instead of years of completed history — and the
+    // onboarding sync finishes fast. Patients/payments keep the recent window.
+    // full + incremental pull all appointments by `updated_since` as before.
+    // `after` is Dentally's documented appointment start-time filter
+    // (developer.dentally.co). No `before` cap: the future book is naturally
+    // small (no years-of-history volume ahead), and a cap would miss 6-12mo
+    // recall bookings. pullAppointments still enforces open-only client-side,
+    // so the stored set is correct even if the remote filter ever changes.
+    const openAppointments = recent;
+    const apptParams = openAppointments
+        ? { after: new Date().toISOString() }
+        : { updated_since: since };
+    const restParams = { updated_since: since };
+
     // Page-weighted progress. The 3 resources are very unequal (a practice can
     // have ~5x more appointments than patients), so weighting each phase as a
     // flat 1/3 made the bar pace wildly and the headline % disagree with the
@@ -436,9 +471,9 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // wasted page/resource — negligible against hundreds).
     const PHASES = ['patients', 'appointments', 'payments'];
     const [patientPages, apptPages, payPages] = await Promise.all([
-        fetchPageCount(base, '/patients', auth, { updated_since: since }, maxPages),
-        fetchPageCount(base, '/appointments', auth, { updated_since: since }, maxPages),
-        fetchPageCount(base, '/payments', auth, { updated_since: since }, maxPages),
+        fetchPageCount(base, '/patients', auth, restParams, maxPages),
+        fetchPageCount(base, '/appointments', auth, apptParams, maxPages),
+        fetchPageCount(base, '/payments', auth, restParams, maxPages),
     ]);
     const phaseTotals = [patientPages, apptPages, payPages];
     const reporter = (idx) => (page, totalPages) => {
@@ -448,10 +483,10 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     try {
         const siteMap = await loadSiteMap(orgId);
         // Patients first so appointment/payment contact resolution sees fresh ids.
-        const patients = await pullPatients(orgId, base, auth, since, siteMap, reporter(0), maxPages);
+        const patients = await pullPatients(orgId, base, auth, restParams, siteMap, reporter(0), maxPages);
         const contactMap = await loadContactMap(orgId);
-        const appts = await pullAppointments(orgId, base, auth, since, siteMap, contactMap, reporter(1), maxPages);
-        const pays = await pullPayments(orgId, base, auth, since, siteMap, contactMap, reporter(2), maxPages);
+        const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { openOnly: openAppointments });
+        const pays = await pullPayments(orgId, base, auth, restParams, siteMap, contactMap, reporter(2), maxPages);
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
             last_error: null,
@@ -462,6 +497,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             appointments: appts.synced,
             payments: pays.synced,
             skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0),
+            skipped_closed_appointments: appts.skippedClosed ?? 0,
         };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'dentally', String(err.message).slice(0, 500));
@@ -535,4 +571,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, fetchPageCount, weightedPct, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader };
+export const __test = { fetchAllPages, fetchPageCount, weightedPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader };

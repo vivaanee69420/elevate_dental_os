@@ -55,6 +55,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   kpiscorecard: 'businesshealth.manage',
 
   // Operations
+  appointments: 'operations.view',
   associates: 'operations.view',
   staff: 'operations.view',
   pay: 'operations.view',
