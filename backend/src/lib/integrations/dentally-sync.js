@@ -283,6 +283,19 @@ async function loadSiteMap(orgId) {
     return map;
 }
 
+// Build { dentally practitioner id -> associates.id } for an org so appointments
+// resolve an associate_id. Populated by pullPractitioners before the appointment pull.
+async function loadPractitionerMap(orgId) {
+    const { data } = await supabase_1.serviceClient
+        .from('associates')
+        .select('id, pms_external_id')
+        .eq('organisation_id', orgId)
+        .not('pms_external_id', 'is', null);
+    const map = new Map();
+    for (const a of data ?? []) map.set(String(a.pms_external_id), a.id);
+    return map;
+}
+
 // Build { dentally patient id -> contacts.id } for the org (source='dentally').
 // Paginated: PostgREST caps a select at 1000 rows, so without ranging the map
 // would silently drop patients beyond the first 1000 and their payments/appts
@@ -326,7 +339,21 @@ export function patientRow(orgId, p, siteMap) {
     };
 }
 
-export function appointmentRow(orgId, a, siteMap, contactMap) {
+export function practitionerRow(orgId, p, siteMap) {
+    const name = p.name
+        || [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
+        || `Practitioner ${p.id}`;
+    return {
+        organisation_id: orgId,
+        pms_external_id: String(p.id),
+        full_name: name,
+        email: p.email_address ?? p.email ?? null,
+        primary_practice_id: siteMap.get(String(p.site_id)) ?? null,
+        active: p.active !== false,
+    };
+}
+
+export function appointmentRow(orgId, a, siteMap, contactMap, practitionerMap = new Map()) {
     // Dentally appointments expose the site as `practitioner_site_id` (no plain
     // `site_id`); fall back to site_id for other shapes. Verified against live API.
     const practiceId = siteMap.get(String(a.practitioner_site_id ?? a.site_id));
@@ -351,6 +378,10 @@ export function appointmentRow(orgId, a, siteMap, contactMap) {
         // upsert and being silently dropped.
         ends_at: a.finish_time ?? a.finish ?? a.end_time ?? startsAt,
         status: mapAppointmentStatus(a.state ?? a.status),
+        // Dentally appointments carry a practitioner_id; resolve it to an
+        // associate (null if the practitioner hasn't been pulled/mapped yet).
+        // Verify the field name against the sandbox during UAT.
+        associate_id: practitionerMap.get(String(a.practitioner_id)) ?? null,
     };
 }
 
