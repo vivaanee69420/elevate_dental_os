@@ -10,7 +10,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: { upsert: vi.fn(), markFailed: vi.fn() },
 }));
 
-const { syncOneOrg, __test } = await import('../src/lib/integrations/dentally-sync.js');
+const { syncOneOrg, bootstrapOnConnect, __test } = await import('../src/lib/integrations/dentally-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 describe('dentally mappers', () => {
@@ -121,6 +121,74 @@ describe('syncOneOrg', () => {
 
     it('marks the integration failed when the API key is missing', async () => {
         const res = await syncOneOrg('org-1', { secrets: 'garbage', config: {} });
+        expect(res.error).toBe('no_auth');
+        expect(integrationRepository.markFailed).toHaveBeenCalled();
+    });
+
+    it('recent mode pulls the last ~24 months (not all history, not the incremental cursor)', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        const seen = [];
+        global.fetch = vi.fn(async (url) => {
+            seen.push(new URL(url.toString()).searchParams.get('updated_since'));
+            return page({ patients: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { recent: true });
+        const expected = Date.now() - 24 * 30 * 86400000; // RECENT_MONTHS
+        for (const s of seen) {
+            const age = Math.abs(new Date(s).getTime() - expected);
+            expect(age).toBeLessThan(86400000); // within a day of 24mo ago
+        }
+    });
+});
+
+describe('bootstrapOnConnect (first-connect automation)', () => {
+    beforeEach(() => {
+        integrationRepository.upsert.mockReset();
+        integrationRepository.markFailed.mockReset();
+    });
+
+    // The regression: the old first-connect sync ran with an EMPTY siteMap
+    // (practices not mapped yet), so every appointment/payment was skipped and
+    // the dashboard showed all zeros. bootstrapOnConnect must detect the site,
+    // create the practice, and THEN pull — so the appointment resolves a
+    // practice instead of being skipped.
+    it('creates a practice per detected site BEFORE pulling, so appointments are not skipped', async () => {
+        const created = []; // practices that exist "now" — empty until insert runs
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'practices' && q.op === 'insert') {
+                created.push({ id: `prac-${q.insertVals.pms_site_id}`, pms_site_id: String(q.insertVals.pms_site_id) });
+                return { data: null, error: null };
+            }
+            if (q.table === 'practices' && q.op === 'select') return { data: created.slice(), error: null };
+            if (q.table === 'contacts' && q.op === 'select') return { data: [{ id: 'c1', pms_external_id: 'P1' }], error: null };
+            return { data: [], error: null };
+        };
+        global.fetch = vi.fn(async (url) => {
+            const u = url.toString();
+            // patients/payments expose site_id; appointments expose practitioner_site_id (real Dentally shapes)
+            if (u.includes('/patients')) return page({ patients: [{ id: 'P1', first_name: 'A', site_id: 'S1' }], meta: { total_pages: 1 } });
+            if (u.includes('/appointments')) return page({ appointments: [
+                { id: 'A1', patient_id: 'P1', practitioner_site_id: 'S1', start_time: 't1', finish_time: 't2', state: 'completed' },
+            ], meta: { total_pages: 1 } });
+            if (u.includes('/payments')) return page({ payments: [
+                { id: 'PAY1', patient_id: 'P1', site_id: 'S1', amount: 10, method: 'card', paid: true, dated_on: 'd' },
+            ], meta: { total_pages: 1 } });
+            return page({}); // /sites, /practices -> no array key -> []
+        });
+
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        const res = await bootstrapOnConnect('org-1', { secrets, config: {}, status: 'active' });
+
+        expect(res.practicesCreated).toBe(1);            // S1 detected + auto-created
+        expect(res.appointments).toBe(1);                // resolved, NOT skipped
+        expect(res.skipped_unmatched_practice).toBe(0);
+        expect(res.payments).toBe(1);
+    });
+
+    it('no_auth when the key is missing (does not crash the connect path)', async () => {
+        const res = await bootstrapOnConnect('org-1', { secrets: 'garbage', config: {} });
         expect(res.error).toBe('no_auth');
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });

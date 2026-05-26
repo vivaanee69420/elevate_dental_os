@@ -54,17 +54,26 @@ export const integrationService = {
         } catch (err) {
             throw new errors_1.AppError(err.message || 'Connect failed', 400);
         }
-        // First-connect pull: kick off an immediate sync, but DO NOT await it —
-        // the pull can be slow (paginated 30-day window) or hang, and blocking
-        // the connect response leaves the UI stuck on "Saving…". Fire-and-forget:
-        // the syncer records last_sync_at/last_error on the row, which the UI
-        // reflects on the next integrations refresh.
-        if (ON_DEMAND_SYNCERS[provider]) {
+        // First-connect pull: kick off immediately, but DO NOT await it — the
+        // pull can be slow or hang, and blocking the connect response leaves the
+        // UI stuck on "Saving…". Fire-and-forget; progress is polled by the UI
+        // overlay and last_sync_at/last_error land on the row.
+        //
+        // Dentally needs the full bootstrap (detect sites -> auto-create+map
+        // practices -> pull) so appointments/payments resolve a practice instead
+        // of being skipped. A plain syncNow here would run with an empty siteMap
+        // and store zero appointments/payments (the all-zeros bug).
+        if (provider === 'dentally') {
+            this.bootstrapDentally(orgId).catch((err) => {
+                console.error('[integrations] dentally bootstrap failed:', err?.message || err);
+            });
+        } else if (ON_DEMAND_SYNCERS[provider]) {
             this.syncNow(orgId, provider).catch((err) => {
                 console.error(`[integrations] first-sync ${provider} failed:`, err?.message || err);
             });
         }
-        return { ok: true, ...result, firstSyncStarted: !!ON_DEMAND_SYNCERS[provider] };
+        const firstSyncStarted = provider === 'dentally' || !!ON_DEMAND_SYNCERS[provider];
+        return { ok: true, ...result, firstSyncStarted };
     },
     // On-demand pull for a connected provider (Refresh button + first-connect).
     // full=true ignores the incremental cursor (re-pulls the default window) so a
@@ -99,6 +108,36 @@ export const integrationService = {
             const result = await syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }), { full });
             setProgress(orgId, provider, { running: false, pct: 100, done: true });
             return { ok: true, provider, full, ...result };
+        } catch (err) {
+            setProgress(orgId, provider, { running: false, done: true, error: err.message });
+            throw err;
+        }
+    },
+    // Dentally first-connect automation: detect sites -> auto-create+map
+    // practices -> pull the recent window, as ONE sequential run sharing the
+    // same progress key + concurrency guard as syncNow. This is what makes
+    // "connect + paste key" the only manual step.
+    async bootstrapDentally(orgId) {
+        const provider = 'dentally';
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('dentally is not connected', 409);
+        // Same guard as syncNow: never run two pulls for one org in parallel
+        // (their progress counters would fight). A stale flag is ignored.
+        const active = getProgress(orgId, provider);
+        const SYNC_STALE_MS = 10 * 60 * 1000;
+        if (active?.running && active.at && Date.now() - active.at < SYNC_STALE_MS) {
+            return { ok: true, provider, alreadyRunning: true };
+        }
+        setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null, page: 0, totalPages: null });
+        try {
+            const result = await dentally_sync_1.bootstrapOnConnect(
+                orgId,
+                integration,
+                (p) => setProgress(orgId, provider, { running: true, ...p }),
+            );
+            setProgress(orgId, provider, { running: false, pct: 100, done: true });
+            return { ok: true, provider, ...result };
         } catch (err) {
             setProgress(orgId, provider, { running: false, done: true, error: err.message });
             throw err;
