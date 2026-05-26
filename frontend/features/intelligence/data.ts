@@ -101,27 +101,6 @@ export const SCENARIOS: Scenario[] = [
   },
 ];
 
-/** A single outstanding debtor row shown on the Debt Recovery screen. */
-export interface Debtor {
-  name: string;
-  practice: string;
-  tx: string;
-  amount: number;
-  age: number;
-}
-
-/** Outstanding debtors, verbatim from PAGES.debt. */
-export const DEBTORS: Debtor[] = [
-  { name: 'Mr R. Sutton', practice: 'Warwick Lodge', tx: 'All-on-4', amount: 4250, age: 145 },
-  { name: 'Mrs S. Patel', practice: 'Ashford', tx: 'Invisalign', amount: 1800, age: 92 },
-  { name: 'Mr J. Wallace', practice: 'Rochester', tx: 'Implant', amount: 2950, age: 68 },
-  { name: 'Ms L. Cooper', practice: 'Bexleyheath', tx: 'Bonding', amount: 800, age: 45 },
-  { name: 'Dr M. Singh', practice: 'Barnet', tx: 'Veneers x 6', amount: 4800, age: 38 },
-  { name: 'Mrs A. Johnson', practice: 'Ashford', tx: 'Multiple', amount: 1450, age: 22 },
-  { name: 'Mr D. Hill', practice: 'Warwick Lodge', tx: 'All-on-4', amount: 3200, age: 12 },
-  { name: 'Mrs E. Thomas', practice: 'Rochester', tx: 'Whitening', amount: 320, age: 8 },
-];
-
 /** A configurable alert-threshold definition shown on the Alerts screen. */
 export interface AlertThreshold {
   id: string;
