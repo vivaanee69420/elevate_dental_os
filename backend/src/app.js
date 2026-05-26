@@ -44,6 +44,7 @@ import * as growth_routes_1 from "./routes/growth.routes.js";
 import * as wealth_routes_1 from "./routes/wealth.routes.js";
 import * as training_routes_1 from "./routes/training.routes.js";
 import * as practices_routes_1 from "./routes/practices.routes.js";
+import * as debt_routes_1 from "./routes/debt.routes.js";
 import platformAdminRouter from "./routes/platform-admin.routes.js";
 const CORS_ALLOWED = [
     'http://localhost:3000',
@@ -182,6 +183,7 @@ export function buildApp() {
     api.use('/tasks', tasks_routes_1.default);
     api.use('/comms', comms_routes_1.default);
     api.use('/payments', payments_routes_1.default);
+    api.use('/debt', debt_routes_1.default);
     api.use('/pay-runs', pay_runs_routes_1.default);
     api.use('/workflows', workflows_routes_1.default);
     api.use('/files', files_routes_1.default);
