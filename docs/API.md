@@ -180,6 +180,25 @@ Response:
 { "url": "https://buy.stripe.com/..." }
 ```
 
+## Debt Recovery
+
+### `GET /api/debt?practice_id=`
+Aged debt view from unpaid Dentally invoices (`invoices` where `amount_outstanding_pence > 0`). Auth required; org-scoped. Optional `practice_id` (UUID) filters to one practice; omitted = org-wide. No route-level role gate (matches `/api/payments`); finance/Reception visibility is enforced at the frontend nav layer. Aging is days since `due_on` (falling back to `dated_on`); not-yet-due invoices count as 0 days.
+```json
+Response:
+{
+  "outstanding_pence": 605000,
+  "overdue90_pence": 425000,
+  "bands": [
+    { "key": "0-30", "label": "0-30 days", "count": 1, "total_pence": 180000 }
+  ],
+  "debtors": [
+    { "name": "R Sutton", "practice": "Warwick Lodge", "treatment": "All-on-4", "amount_pence": 425000, "age_days": 176 }
+  ]
+}
+```
+`bands` always has the five fixed keys (`0-30`, `31-60`, `61-90`, `91-120`, `120+`). `debtors` is sorted oldest-first; `name` falls back to the invoice `patient_name`, then "Unknown patient", when no contact is linked. Money in integer pence.
+
 ## Pay Runs *(owner-only)*
 
 ### `GET /api/pay-runs`
