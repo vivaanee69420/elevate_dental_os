@@ -411,6 +411,17 @@ async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages
     return { synced };
 }
 
+async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages) {
+    const remote = await fetchAllPages(base, '/practitioners', auth, params, null, maxPages);
+    const rows = remote
+        .filter((p) => p && p.id != null)
+        .map((p) => practitionerRow(orgId, p, siteMap));
+    // Upsert on the new (organisation_id, pms_external_id) arbiter. pay_pct /
+    // lab_split_pct are NOT in the payload, so owner-set values are preserved.
+    const synced = await upsertChunked('associates', rows, 'organisation_id,pms_external_id');
+    return { synced };
+}
+
 // openOnly (the first pull): keep only upcoming + not-yet-closed appointments.
 // Even when the server-side `after` filter narrows the set, enforce it here too
 // so correctness never depends on a remote filter we can't unit-test.
@@ -419,14 +430,14 @@ export function isOpenAppointment(row, now = Date.now()) {
     return new Date(row.starts_at).getTime() >= now;
 }
 
-async function pullAppointments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages, { openOnly = false } = {}) {
+async function pullAppointments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages, { openOnly = false, practitionerMap = new Map() } = {}) {
     const remote = await fetchAllPages(base, '/appointments', auth, params, onPage, maxPages);
     const now = Date.now();
     const rows = [];
     let skipped = 0;       // unmatched practice (NOT NULL practice_id) — a data-mapping gap
     let skippedClosed = 0; // dropped by the first-pull open filter — expected, not a gap
     for (const a of remote) {
-        const row = appointmentRow(orgId, a, siteMap, contactMap);
+        const row = appointmentRow(orgId, a, siteMap, contactMap, practitionerMap);
         if (!row) { skipped++; continue; } // appointments.practice_id is NOT NULL
         if (openOnly && !isOpenAppointment(row, now)) { skippedClosed++; continue; }
         rows.push(row);
@@ -462,7 +473,8 @@ export async function applyWebhookEvent(orgId, resourceType, record) {
     }
     const contactMap = await loadContactMap(orgId);
     if (resourceType === 'appointment') {
-        const row = appointmentRow(orgId, record, siteMap, contactMap);
+        const practitionerMap = await loadPractitionerMap(orgId);
+        const row = appointmentRow(orgId, record, siteMap, contactMap, practitionerMap);
         if (!row) return { skipped: 'unmatched_practice' };
         await upsertChunked('appointments', [row], 'organisation_id,source,pms_external_id');
         return { table: 'appointments', applied: 1 };
@@ -546,10 +558,21 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
 
     try {
         const siteMap = await loadSiteMap(orgId);
+        // Practitioners first (cheap, no separate progress phase) so the
+        // appointment pull can resolve associate_id. Use the same updated_since
+        // window as patients (BACKFILL_SINCE on full/bootstrap so all staff are
+        // captured; incremental cursor for routine syncs).
+        let practitioners = { synced: 0 };
+        try {
+            practitioners = await pullPractitioners(orgId, base, auth, patientParams, siteMap, maxPages);
+        } catch (err) {
+            console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
+        }
+        const practitionerMap = await loadPractitionerMap(orgId);
         // Patients first so appointment/payment contact resolution sees fresh ids.
         const patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
         const contactMap = await loadContactMap(orgId);
-        const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { openOnly: openAppointments });
+        const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { openOnly: openAppointments, practitionerMap });
         const pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
@@ -567,6 +590,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             status: 'active',
         });
         return {
+            practitioners: practitioners.synced,
             patients: patients.synced,
             appointments: appts.synced,
             payments: pays.synced,
