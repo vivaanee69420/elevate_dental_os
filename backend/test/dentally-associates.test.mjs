@@ -42,4 +42,33 @@ describe('appointmentRow practitioner linkage', () => {
         const row = appointmentRow(ORG, { ...base, practitioner_id: 55 }, siteMap, contactMap);
         expect(row.associate_id).toBeNull();
     });
+    it('persists pms_practitioner_id for later relink, even when unmapped', () => {
+        const row = appointmentRow(ORG, { ...base, practitioner_id: 999 }, siteMap, contactMap, new Map());
+        expect(row.associate_id).toBeNull();
+        expect(row.pms_practitioner_id).toBe('999');
+    });
+    it('pms_practitioner_id is null when the appointment carries no practitioner', () => {
+        expect(appointmentRow(ORG, base, siteMap, contactMap).pms_practitioner_id).toBeNull();
+    });
+});
+
+describe('appointmentRow treatment type', () => {
+    const contactMap = new Map();
+    const base = { id: 1, practitioner_site_id: 7, start_time: '2026-05-01T09:00:00Z', finish_time: '2026-05-01T09:30:00Z', state: 'confirmed' };
+    it('maps an explicit appointment_type', () => {
+        const row = appointmentRow(ORG, { ...base, appointment_type: 'Invisalign' }, siteMap, contactMap);
+        expect(row.appointment_type).toBe('Invisalign');
+    });
+    it('falls back to the free-text reason', () => {
+        const row = appointmentRow(ORG, { ...base, reason: 'Composite Bonding' }, siteMap, contactMap);
+        expect(row.appointment_type).toBe('Composite Bonding');
+    });
+    it('prefers appointment_type over reason when both present', () => {
+        const row = appointmentRow(ORG, { ...base, appointment_type: 'Implant', reason: 'check-up' }, siteMap, contactMap);
+        expect(row.appointment_type).toBe('Implant');
+    });
+    it('null when neither is present', () => {
+        const row = appointmentRow(ORG, base, siteMap, contactMap);
+        expect(row.appointment_type).toBeNull();
+    });
 });

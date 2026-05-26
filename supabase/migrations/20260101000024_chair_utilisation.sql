@@ -27,3 +27,5 @@ ALTER TABLE chair_utilisation ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS chair_utilisation_org ON chair_utilisation;
 CREATE POLICY chair_utilisation_org ON chair_utilisation
   USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
+
+NOTIFY pgrst, 'reload schema';

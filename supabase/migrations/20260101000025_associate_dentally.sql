@@ -30,3 +30,5 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 grant execute on function public.associate_appointment_stats(uuid, timestamptz) to service_role, authenticated;
+
+NOTIFY pgrst, 'reload schema';

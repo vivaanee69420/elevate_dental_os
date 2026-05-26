@@ -33,6 +33,38 @@ describe('associateService.list', () => {
         });
     });
 
+    it('defaults to a 52-week window and passes the since cutoff to the stats RPC', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.resultProvider = (q) =>
+            q.table === 'associates'
+                ? { data: [{ id: 'a1', full_name: 'Dr A', active: true, practice: null }], error: null }
+                : { data: [], error: null };
+        supaRec.rpcProvider = () => ({ data: [], error: null });
+        const before = Date.now() - 52 * 7 * 86400000;
+        await svc.list(ORG, {});
+        const call = supaRec.rpcCalls.find((c) => c.fn === 'associate_appointment_stats');
+        expect(call).toBeTruthy();
+        const since = new Date(call.params.p_since).getTime();
+        // within a minute of the expected 52-week cutoff (test wall-clock drift)
+        expect(Math.abs(since - before)).toBeLessThan(60000);
+    });
+
+    it('falls back to a paginated appointment scan when the stats RPC is absent', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'associates'
+                ? { data: [{ id: 'a1', full_name: 'Dr A', active: true, practice: null }], error: null }
+                : q.table === 'appointments'
+                    ? { data: [
+                        { associate_id: 'a1', status: 'completed' },
+                        { associate_id: 'a1', status: 'no_show' },
+                        { associate_id: 'a1', status: 'confirmed' },
+                    ], error: null }
+                    : { data: [], error: null };
+        supaRec.rpcProvider = () => ({ data: null, error: { message: 'rpc missing' } });
+        const rows = await svc.list(ORG, { weeks: 12 });
+        expect(rows[0]).toMatchObject({ appointments_total: 3, treatments: 1, no_shows: 1, completion_pct: 33 });
+    });
+
     it('associate with no appointments -> zeros and review status', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'associates'
