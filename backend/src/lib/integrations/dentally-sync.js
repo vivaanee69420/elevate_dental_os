@@ -118,6 +118,45 @@ async function fetchOnePage(base, path, auth, params) {
     return key ? body[key] : [];
 }
 
+// Cheap page-count probe used to size the progress bar BEFORE pulling: one
+// page-1 request per resource yields meta.total_pages. MUST use the same
+// per_page as the real pull (total_pages = ceil(total / per_page), so a
+// different per_page would give a mismatched count). Bounded by maxPages so the
+// estimate matches what the pull will actually fetch. Returns 0 on any error so
+// a single failing resource can't break the overall weighting.
+// Overall progress %, weighted by each resource's real page count. phaseTotals =
+// [patientPages, apptPages, payPages] probed up front. idx = current phase,
+// page = current 1-based page within it. Held at 99 until the caller marks the
+// whole sync done, so the bar never shows a premature 100.
+export function weightedPct(idx, page, phaseTotals) {
+    const grandTotal = Math.max(1, phaseTotals.reduce((a, b) => a + b, 0));
+    let done = 0;
+    for (let i = 0; i < idx; i++) done += phaseTotals[i];   // fully-completed phases
+    done += Math.min(page, phaseTotals[idx]);               // progress in this phase (0 if phase has no pages)
+    return Math.min(99, Math.round((done / grandTotal) * 100));
+}
+
+async function fetchPageCount(base, path, auth, params, maxPages = MAX_PAGES) {
+    try {
+        const url = new URL(`${base}${path}`);
+        for (const [k, v] of Object.entries({ ...params, page: 1, per_page: PER_PAGE })) {
+            url.searchParams.set(k, String(v));
+        }
+        const res = await fetchWithTimeout(url, {
+            headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
+        });
+        if (!res.ok) return 0;
+        const body = await res.json();
+        const total = Number(body.meta?.total_pages);
+        if (Number.isFinite(total) && total > 0) return Math.min(total, maxPages);
+        // No total_pages in meta: at least one page if the first page has rows.
+        const key = Object.keys(body).find((k) => Array.isArray(body[k]));
+        return key && body[key].length ? 1 : 0;
+    } catch {
+        return 0;
+    }
+}
+
 // Sample Dentally and report the distinct site_ids it returns (with counts), so
 // the owner can map each practice without hunting in Dentally settings. Samples
 // one page each of patients/appointments/payments over the last year.
@@ -387,12 +426,23 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
     const maxPages = full ? BACKFILL_MAX_PAGES : recent ? BOOTSTRAP_MAX_PAGES : MAX_PAGES;
 
-    // 3 equal phases (patients → appointments → payments). Overall pct =
-    // (phaseIndex + page/totalPages) / 3. Pages run sequentially for a clean bar.
+    // Page-weighted progress. The 3 resources are very unequal (a practice can
+    // have ~5x more appointments than patients), so weighting each phase as a
+    // flat 1/3 made the bar pace wildly and the headline % disagree with the
+    // visible "page X of Y". Instead probe total_pages for all 3 resources up
+    // front (one cheap request each), sum to a grand total, and report overall
+    // pct = cumulative-pages-done / grand-total. The number now matches reality
+    // and moves smoothly. The page-1 probe rows are re-fetched by the pull (one
+    // wasted page/resource — negligible against hundreds).
     const PHASES = ['patients', 'appointments', 'payments'];
+    const [patientPages, apptPages, payPages] = await Promise.all([
+        fetchPageCount(base, '/patients', auth, { updated_since: since }, maxPages),
+        fetchPageCount(base, '/appointments', auth, { updated_since: since }, maxPages),
+        fetchPageCount(base, '/payments', auth, { updated_since: since }, maxPages),
+    ]);
+    const phaseTotals = [patientPages, apptPages, payPages];
     const reporter = (idx) => (page, totalPages) => {
-        const frac = totalPages ? Math.min(1, page / totalPages) : 0;
-        onProgress({ phase: PHASES[idx], pct: Math.round(((idx + frac) / PHASES.length) * 100), page, totalPages });
+        onProgress({ phase: PHASES[idx], pct: weightedPct(idx, page, phaseTotals), page, totalPages });
     };
 
     try {
@@ -485,4 +535,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader };
+export const __test = { fetchAllPages, fetchPageCount, weightedPct, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader };
