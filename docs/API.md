@@ -174,6 +174,18 @@ Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ app
 - `PATCH /api/chair-utilisation/:id` — partial update (practice_id immutable).
 - `DELETE /api/chair-utilisation/:id`.
 
+## Associates  — owner / practice_manager
+
+### Associates  — owner / practice_manager
+
+- `GET /api/associates?practice_id=<uuid>&weeks=52` — roster merged with Dentally
+  appointment stats. Each row: `{ id, full_name, practice, pay_pct, joined_date, active,
+  treatments, appointments_total, no_shows, completion_pct, no_show_pct, status }`.
+  `ttm_production`, `ttm_uda`, `conversion` are always `null` (not in the Dentally feed).
+  Associates are created/linked by the Dentally sync (`/practitioners` → `associates`,
+  `practitioner_id` → `appointments.associate_id`). A full re-sync backfills `associate_id`
+  on historical appointments.
+
 ## Payments
 
 ### `GET /api/payments?status=settled&since=2026-01-01&until=2026-03-31&page=1&limit=25&practice_id=`
