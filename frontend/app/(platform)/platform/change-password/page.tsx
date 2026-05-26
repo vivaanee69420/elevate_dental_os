@@ -78,7 +78,7 @@ export default function PlatformChangePasswordPage() {
         <button
           type="submit"
           disabled={busy}
-          className="px-4 py-2 rounded text-sm font-semibold bg-primary text-white disabled:opacity-50"
+          className="px-4 py-2 rounded text-sm font-semibold bg-brand text-white disabled:opacity-50"
         >
           {busy ? 'Saving…' : 'Update password'}
         </button>
