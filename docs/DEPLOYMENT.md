@@ -262,7 +262,7 @@ Before announcing launch:
 - [ ] GDPR data export endpoint tested
 - [ ] Cookie banner on marketing site
 - [ ] Status page set up (e.g., statuspage.io or BetterStack)
-- [ ] On-call rotation set up between Maryam, Nikhil, Ruhith
+- [ ] On-call coverage set up (Ruhith)
 
 ## 12. Rollback procedure
 

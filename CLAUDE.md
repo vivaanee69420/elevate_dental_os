@@ -92,7 +92,7 @@ React Query for server state, Tailwind + `class-variance-authority` for UI, `rec
 
 ## Branch / deploy model
 
-`develop` → staging.elevate.app (auto), `main` → app.elevate.app (auto, manual approval gate). Merge to `main` requires green CI + Maryam approval; new endpoint → update `docs/API.md`. Deploy scripts in `scripts/`. Deeper detail in `docs/`: `ARCHITECTURE.md`, `API.md`, `FORMULAS.md`, `DEPLOYMENT.md`, `TESTING.md`, `DAILY_TASKS.md`.
+`develop` → staging.elevate.app (auto), `main` → app.elevate.app (auto). Solo developer owns the repo — push straight to `main`; keep CI green and update `docs/API.md` for any new endpoint. Deploy scripts in `scripts/`. Deeper detail in `docs/`: `ARCHITECTURE.md`, `API.md`, `FORMULAS.md`, `DEPLOYMENT.md`, `TESTING.md`, `DAILY_TASKS.md`.
 
 ## Current state (working session)
 
@@ -113,7 +113,7 @@ Done and committed on `main` (now in sync with `origin/main` — pushed). Note: 
 ### Next TODOs
 - **Migrations on hosted Supabase**: all through `…000020` are now applied on project `Dental Os` (`mkfhpzjbijbachoonytt`). The original schema (`000001-000003`, `000005-000006`, `000009`) was set up directly without the migration ledger; this session backfilled the gaps via the Supabase MCP — `000004_access_token_hook`, `000007_business_health_cadence`, `000008_integrations` (only the `integrations` table pre-existed), plus `000010_auth_bootstrap_rpc` and `000011_signup_approval`. All idempotent; they re-apply cleanly on the next local `supabase db reset`. Reminder: after any hosted DDL run `NOTIFY pgrst, 'reload schema';` (PostgREST cache goes stale — recurring gotcha).
 - **Clear pre-existing orphan auth users**: Supabase → Authentication → Users (rows with no matching `public.users`). Future removes via Team UI won't orphan.
-- **Branch model**: `main` is in sync with `origin/main`. Direct push to `main` bypasses the CI/Maryam approval gate — use branch+PR per the branch model. Open feature branches: `feat/gohighlevel-integration`, `fix/auth-middleware-405`, `fix/signup-backend-url-500`.
+- **Branch model**: solo developer — push straight to `main` (in sync with `origin/main`). Open feature branches: `feat/gohighlevel-integration`, `fix/auth-middleware-405`, `fix/signup-backend-url-500`.
 - Backend wiring: ~50 screens still mock — replace `features/*/data.ts`/`mock.ts` with real API per domain (separate slices).
 - Frontend has no test framework; recharts not code-split (bundle); `frontend/src/` move still deferred (`TODOS.md`).
 - **Enable the Custom Access Token Hook on hosted (rule 8)**: the `public.custom_access_token_hook` function now EXISTS on hosted (000004 applied this session) + is granted to `supabase_auth_admin`, but it still must be turned ON in Supabase → Authentication → Hooks → Custom Access Token (or via the Management API) — that toggle is GoTrue config, not SQL, so the MCP can't set it. Low impact today (repos use `serviceClient` + manual org filters, not the RLS/`req.db` path), but required before anything relies on `tenantClient`/RLS or on `organisation_id`/`role` JWT claims.

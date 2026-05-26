@@ -79,15 +79,13 @@ elevate-handoff/
 | Person | Role | Owns |
 |---|---|---|
 | **Gaurav Mehta** | Owner / CEO | Product vision, customer feedback, GM Dental tenant |
-| **Maryam** | Tech lead | Backend, Supabase, integrations, architecture decisions |
-| **Nikhil** | Frontend + DevOps | All Next.js pages, Railway, design polish |
-| **Ruhith** | Backend + AWS | API endpoints, workers, S3/KMS, monitoring |
+| **Ruhith** | Sole developer | Everything: backend, frontend, Supabase, integrations, AWS, architecture decisions |
 | **Abhishek** | Design | Brand assets, marketing site, UI polish — non-technical |
 | **Sona** | Content | Copy, marketing emails, social — non-technical |
 | **Shishir Khadka FCCA** | Accountant | Review FORMULAS.md before launch |
 | **Nadia Reinolds** | Co-founder | Strategy, partnerships (not coding) |
 
-## Day-1 setup (for Maryam, 19 May 2026)
+## Day-1 setup
 
 ```bash
 # 1. Clone repo
@@ -121,9 +119,8 @@ cd frontend && npm run dev  # http://localhost:3000
 
 ## Quality gates
 
-**Cannot merge to `main` unless:**
+**Before merging to `main`:**
 - CI green (typecheck, lint, tests, build all pass)
-- PR reviewed + approved by Maryam
 - If new endpoint: API.md updated
 - If new formula: FORMULAS.md updated + unit test added
 - If new UI: matches design tokens + responsive on mobile
@@ -167,7 +164,6 @@ cd frontend && npm run dev  # http://localhost:3000
 
 ## When stuck
 
-- **Architecture question** → ask Maryam
 - **Money/accounting question** → ask Shishir
 - **Product/UX question** → ask Gaurav
 - **Design question** → ask Abhishek
