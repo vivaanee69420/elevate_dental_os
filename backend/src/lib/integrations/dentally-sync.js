@@ -95,7 +95,10 @@ async function fetchAllPages(base, path, auth, params, onPage = null, maxPages =
         const items = key ? body[key] : [];
         out.push(...items);
         const totalPages = body.meta?.total_pages;
-        if (onPage) onPage(page, totalPages ? Math.min(totalPages, maxPages) : null);
+        // out.length = records fetched so far this phase, so the UI can show
+        // "1,247 records pulled" live (Dentally often omits total_pages, so a
+        // running count is the clearest signal of what's happening).
+        if (onPage) onPage(page, totalPages ? Math.min(totalPages, maxPages) : null, out.length);
         const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
         if (done) break;
         if (page >= maxPages) { // bound a single run; cursor resumes next sync
@@ -139,6 +142,22 @@ export function weightedPct(idx, page, phaseTotals) {
     for (let i = 0; i < idx; i++) done += phaseTotals[i];   // fully-completed phases
     done += Math.min(page, phaseTotals[idx]);               // progress in this phase (0 if phase has no pages)
     return Math.min(99, Math.round((done / grandTotal) * 100));
+}
+
+// Update the live progress weighting for one reported page and return the pct.
+// The up-front probe (fetchPageCount) UNDER-counts a phase when Dentally omits
+// meta.total_pages (it falls back to 1 page) or when the probe times out (0).
+// On the bootstrap pull that hits the patients phase, which pulls ALL patients
+// (updated_since=2005) — the longest phase — so weighting it as ~1 page made
+// weightedPct's Math.min(page, total) clamp the bar near 0% for the entire
+// phase: it looked frozen even though the pull was running. Grow the phase's
+// total from the live pull (the real total_pages when present, and never below
+// the page we've actually reached) so the probe can't freeze the bar. Mutates
+// phaseTotals in place; earlier phases keep their grown totals so completed
+// phases still contribute their true page counts.
+export function reportPct(phaseTotals, idx, page, totalPages) {
+    phaseTotals[idx] = Math.max(phaseTotals[idx] || 0, totalPages || 0, page);
+    return weightedPct(idx, page, phaseTotals);
 }
 
 async function fetchPageCount(base, path, auth, params, maxPages = MAX_PAGES) {
@@ -486,8 +505,12 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         fetchPageCount(base, '/payments', auth, payParams, maxPages),
     ]);
     const phaseTotals = [patientPages, apptPages, payPages];
-    const reporter = (idx) => (page, totalPages) => {
-        onProgress({ phase: PHASES[idx], pct: weightedPct(idx, page, phaseTotals), page, totalPages });
+    const reporter = (idx) => (page, totalPages, count) => {
+        // reportPct grows phaseTotals from the live pull so an under-counting
+        // probe (no meta.total_pages -> 1, or a timed-out probe -> 0) can't
+        // freeze the bar at 0% for a whole phase. See reportPct's comment.
+        // count = records fetched so far this phase, surfaced live in the UI.
+        onProgress({ phase: PHASES[idx], pct: reportPct(phaseTotals, idx, page, totalPages), page, totalPages, count });
     };
 
     try {
@@ -592,4 +615,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, fetchPageCount, weightedPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader };
+export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader };
