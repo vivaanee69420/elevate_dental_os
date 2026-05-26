@@ -147,6 +147,7 @@ CREATE TABLE associates (
   lab_split_pct INTEGER NOT NULL DEFAULT 5000, -- 50%
   gdc_number TEXT,
   specialty TEXT,
+  pms_external_id TEXT,
   active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -154,6 +155,7 @@ CREATE TABLE associates (
 CREATE TRIGGER associates_updated_at BEFORE UPDATE ON associates FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE INDEX idx_associates_org ON associates(organisation_id);
 CREATE INDEX idx_associates_practice ON associates(primary_practice_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_associates_org_pms ON associates(organisation_id, pms_external_id);
 
 -- ============================================================================
 -- STAFF (non-clinical)
