@@ -10,3 +10,13 @@ export function formatNumber(n: number | null | undefined): string {
 export function formatDate(value: string | number | Date): string {
   return new Date(value).toLocaleDateString('en-GB');
 }
+
+/** Format a 24h "HH:MM" string as 12-hour, e.g. "08:00" -> "8:00am". */
+export function formatTime12h(hhmm: string): string {
+  const [hStr, mStr] = hhmm.split(':');
+  let h = Number(hStr);
+  const m = mStr ?? '00';
+  const ampm = h >= 12 ? 'pm' : 'am';
+  h = h % 12 || 12;
+  return `${h}:${m}${ampm}`;
+}
