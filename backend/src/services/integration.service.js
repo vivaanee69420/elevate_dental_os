@@ -80,7 +80,21 @@ export const integrationService = {
         // AND pass { full } so the syncer can widen its window + lift row caps
         // for a true historical backfill.
         const arg = full ? { ...integration, last_sync_at: null } : integration;
-        setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null });
+        // Concurrency guard: only ONE sync per org+provider may run at a time.
+        // A second trigger (Refresh during the first-connect pull, a backfill
+        // after practice-mapping, or a double click) must NOT start a parallel
+        // run — both runs write the same in-memory progress key with their own
+        // independent page counters, so the polled UI bar jumps backwards
+        // (e.g. page 300 -> 120 -> 302). Skip when a run is active and fresh.
+        // A stale flag (process died mid-run, but the Map survived) is ignored
+        // so a crashed sync never wedges future syncs.
+        const active = getProgress(orgId, provider);
+        const SYNC_STALE_MS = 10 * 60 * 1000; // a live sync stamps progress far more often than this
+        if (active?.running && active.at && Date.now() - active.at < SYNC_STALE_MS) {
+            return { ok: true, provider, full, alreadyRunning: true };
+        }
+        // Reset page/totalPages too so a new run never briefly shows the prior run's page number.
+        setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null, page: 0, totalPages: null });
         try {
             const result = await syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }), { full });
             setProgress(orgId, provider, { running: false, pct: 100, done: true });
