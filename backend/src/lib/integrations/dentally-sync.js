@@ -35,6 +35,8 @@ const REQUEST_TIMEOUT_MS = 15000; // abort a hung Dentally request, never hang f
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
 const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls all history
 const BACKFILL_SINCE = '2005-01-01T00:00:00.000Z'; // far-back updated_since so a full pull sees all records (API requires the param)
+const RECENT_MONTHS = 24;        // on-connect bootstrap window: last 24 months (dashboards are TTM; the cron + full-history button deepen the rest)
+const BOOTSTRAP_MAX_PAGES = 600; // ~60k rows/resource cap for the on-connect pull, so onboarding finishes in a couple of minutes
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -364,20 +366,26 @@ export async function applyWebhookEvent(orgId, resourceType, record) {
 
 // ---- orchestration ----------------------------------------------------------
 
-export async function syncOneOrg(orgId, integration, onProgress = () => {}, { full = false } = {}) {
+export async function syncOneOrg(orgId, integration, onProgress = () => {}, { full = false, recent = false } = {}) {
     const base = integration.config?.base_url ?? DEFAULT_BASE;
     const auth = authHeader(integration.secrets);
     if (!auth) {
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
     }
-    // Incremental cursor: changed-since last successful sync (default 30d on first
-    // run). A FULL backfill pulls all history (far-back since) with a lifted page
-    // cap so nothing is truncated.
+    // Window selection:
+    //  - full   : all history (far-back since) with a lifted page cap.
+    //  - recent : the on-connect bootstrap window (last RECENT_MONTHS) so
+    //             dashboards (TTM) populate fast; the cron + full-history button
+    //             deepen the rest.
+    //  - else   : incremental cursor — changed-since last successful sync
+    //             (default 30d on first run).
     const since = full
         ? BACKFILL_SINCE
-        : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
-    const maxPages = full ? BACKFILL_MAX_PAGES : MAX_PAGES;
+        : recent
+            ? new Date(Date.now() - RECENT_MONTHS * 30 * 86400000).toISOString()
+            : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
+    const maxPages = full ? BACKFILL_MAX_PAGES : recent ? BOOTSTRAP_MAX_PAGES : MAX_PAGES;
 
     // 3 equal phases (patients → appointments → payments). Overall pct =
     // (phaseIndex + page/totalPages) / 3. Pages run sequentially for a clean bar.
@@ -409,6 +417,52 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         await integrationRepository.markFailed(orgId, 'dentally', String(err.message).slice(0, 500));
         throw err;
     }
+}
+
+// First-connect automation. The ONLY manual step is connect + paste API key;
+// everything below runs automatically, in order, so the user never touches
+// site detection or practice mapping:
+//   1. detect the Dentally site_ids this account returns,
+//   2. auto-create one practice per still-unmapped site (so its site_id
+//      resolves a practice_id), THEN
+//   3. pull the recent window.
+// Order matters: the siteMap MUST be populated before the pull, otherwise every
+// appointment/payment is skipped as unmatched-practice and the dashboard shows
+// all zeros (the bug this replaces — the old blind first-connect sync ran with
+// an empty siteMap, and the later backfill was swallowed by the concurrency
+// guard against that still-running sync).
+export async function bootstrapOnConnect(orgId, integration, onProgress = () => {}) {
+    const auth = authHeader(integration.secrets);
+    if (!auth) {
+        await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
+        return { error: 'no_auth' };
+    }
+    // 1. detect sites + 2. create a practice for each unmapped site.
+    const { siteIds = [] } = await detectSiteIds(orgId, integration);
+    let practicesCreated = 0;
+    if (siteIds.length) {
+        const { data: existing } = await supabase_1.serviceClient
+            .from('practices')
+            .select('pms_site_id')
+            .eq('organisation_id', orgId)
+            .not('pms_site_id', 'is', null);
+        const mapped = new Set((existing ?? []).map((p) => String(p.pms_site_id)));
+        const toCreate = siteIds.filter((s) => !mapped.has(String(s.site_id)));
+        for (const s of toCreate) {
+            const { error } = await supabase_1.serviceClient.from('practices').insert({
+                organisation_id: orgId,
+                name: s.name || `Dentally site ${String(s.site_id).slice(0, 8)}`,
+                pms_site_id: s.site_id,
+            });
+            // A duplicate (re-connect, or a concurrent map) is not fatal — the
+            // site is already mapped, which is all the pull needs.
+            if (error) console.warn(`[dentally] bootstrap: practice for site ${s.site_id} not created: ${error.message}`);
+            else practicesCreated++;
+        }
+    }
+    // 3. pull the recent window with the now-populated siteMap.
+    const result = await syncOneOrg(orgId, integration, onProgress, { recent: true });
+    return { sitesDetected: siteIds.length, practicesCreated, ...result };
 }
 
 export async function syncAllOrgs() {
