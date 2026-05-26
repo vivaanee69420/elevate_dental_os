@@ -165,6 +165,15 @@ Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ app
 ### `POST /api/appointments` — create
 ### `PATCH /api/appointments/:id` — reschedule/cancel
 
+## Chair utilisation (manual)  — owner / practice_manager
+
+- `GET  /api/chair-utilisation?practice_id=<uuid>` — list manual records.
+- `GET  /api/chair-utilisation/grid?practice_id=<uuid>` — aggregated weekday×slot heatmap
+  `{ days:[1..7], slots:['morning','midday','afternoon','evening'], grid, kpis }`.
+- `POST /api/chair-utilisation` — body `{ practice_id, chair_name, weekday(1-7), slot, booked_minutes, available_minutes, notes? }`.
+- `PATCH /api/chair-utilisation/:id` — partial update (practice_id immutable).
+- `DELETE /api/chair-utilisation/:id`.
+
 ## Payments
 
 ### `GET /api/payments?status=settled&since=2026-01-01&until=2026-03-31&page=1&limit=25&practice_id=`
@@ -256,6 +265,39 @@ returns `{ "error": "No data for this practice" }` when a practice has no real
 revenue/actuals; `finance-series` returns its 12-month window with zero-revenue
 months. Omitted = org-wide. Business Hub returns per-practice rows in
 `practices[]`, so its per-practice view is client-side (no param).
+
+## Growth
+
+Read-only aggregator over existing tables (mounted at `/api/growth`). The
+practice / booking / patient endpoints are Dentally-sourced (contacts,
+appointments, settled payments); 30-day windows. Loyalty reads `memberships`;
+`benchmark` is a placeholder until a benchmarking partner integrates.
+
+All three take optional `?from=YYYY-MM-DD&to=YYYY-MM-DD&practice_id=` filters (mirrors finance). `from`/`to` override the rolling 30-day window only when **both** are set (`to` = inclusive end of day); `practice_id` scopes to one practice.
+
+### `GET /api/growth/practice-performance?from=&to=&practice_id=`
+Per-practice rollup over the window. `{ practices: [{ practice_id, name, new_patients_30d, appts_30d, completed_30d, no_show_30d, revenue_pence_30d }] }`. Consults / lead-conversion are intentionally absent — those are CRM/lead concepts, not PMS data.
+
+### `GET /api/growth/practice-patients?practice_id=&page=1&per_page=10&search=`
+Paginated patient roster for one practice (`contacts` of type `patient`, most-recent first). NOT window-scoped — the practice's full roster. `{ patients: [{ id, name, email, phone, created_at }], total, page, per_page }`. `practice_id` required (empty → empty result). Optional `search` matches name/email/phone. Backs the expandable list under each card on the Practices & Patients screen.
+
+### `GET /api/growth/booking?from=&to=&practice_id=`
+Appointment-derived booking KPIs over the window. `{ booked_30d, completed_30d, no_show_30d, today, this_week, this_month, no_show_rate }`. `today` = calendar today (00:00–23:59), `this_week` = current Mon–Sun — both bounded BOTH ends and intersected with the window, so future-dated appts can't inflate them. `this_month`/`booked_30d` = the full window total.
+
+### `GET /api/growth/recent-bookings?from=&to=&practice_id=&page=1&per_page=10`
+Paginated appointments in the window (most-recent `starts_at` first). `{ bookings: [{ id, starts_at, status, service, deposit_pence, deposit_paid, patient, practice }], total, page, per_page }`. `service` (appointment_type), `deposit_pence`/`deposit_paid` are null/0/false for Dentally-synced rows (the PMS sends none). `patient` is null when the appointment has no linked contact.
+
+### `GET /api/growth/patients`
+`{ new_patients_30d, new_leads_30d, by_source }`.
+
+### `GET /api/growth/marketing`
+`{ leads_30d, revenue_pence_30d, by_provider }` (revenue = settled payments).
+
+### `GET /api/growth/loyalty`
+`{ active, total }` over `memberships`.
+
+### `GET /api/growth/benchmark`
+Placeholder industry medians. `{ industry_median_conversion, industry_median_response_min, ... }`.
 
 ## Monthly financials (manual P&L actuals)
 

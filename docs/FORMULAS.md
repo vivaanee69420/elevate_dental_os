@@ -267,6 +267,19 @@ If conversion improves from 11.5% → 15%:
 
 ---
 
+## Chair utilisation (manual)
+
+Per (weekday, slot) cell, summed across all chairs of the selected practice:
+
+    bookedMin    = Σ booked_minutes
+    availableMin = Σ available_minutes
+    utilPct      = availableMin > 0 ? min(100, round(100 * bookedMin / availableMin)) : null  (null = no capacity)
+
+KPIs: `avgUtilPct` = mean of non-null cell %s; `peakSlot`/`lowestSlot` = max/min non-null cells;
+`idleChairHours` = Σ max(0, availableMin − bookedMin) / 60, rounded to 1dp.
+Source of truth: `backend/src/lib/chair-utilisation.js` (`aggregateGrid`), unit-tested in
+`backend/test/chair-utilisation.test.mjs`.
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:
