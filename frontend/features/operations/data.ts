@@ -98,26 +98,6 @@ export const STAFF: StaffMember[] = [
   { name: 'Daniel (Nurse)', role: 'Dental nurse', practice: 'Rochester', hours_week: 38, rate: 13.8, scheduled: 38, attendance: 100 },
 ];
 
-/** Chair-utilisation heatmap: rows = day, cols = slot index. */
-export const CHAIR_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const;
-export const CHAIR_SLOTS = ['Morning', 'Midday', 'Afternoon', 'Evening'] as const;
-/** baseUtil[dayIndex][slotIndex] — verbatim from the prototype. */
-export const CHAIR_UTIL: number[][] = [
-  [85, 92, 78, 65],
-  [88, 95, 82, 70],
-  [75, 88, 80, 68],
-  [82, 90, 85, 72],
-  [78, 85, 70, 50],
-];
-
-/** Map a utilisation percent to its heatmap colour (prototype thresholds). */
-export function chairUtilColour(pct: number): string {
-  if (pct >= 90) return '#10B981';
-  if (pct >= 75) return '#0E7C7B';
-  if (pct >= 60) return '#F59E0B';
-  return '#EF4444';
-}
-
 /** One NHS-contracted practice's UDA delivery (UDA Tracker screen). */
 export interface PracticeUda {
   name: string;
