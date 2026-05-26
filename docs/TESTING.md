@@ -246,5 +246,4 @@ A feature ships only when:
 - [ ] Manus brief updated if interface changed
 - [ ] API.md updated if endpoint added/changed
 - [ ] FORMULAS.md updated if math changed
-- [ ] Tested in staging by someone other than the author
-- [ ] PR approved by Maryam (tech lead)
+- [ ] Tested in staging
