@@ -100,4 +100,48 @@ describe('authenticate', () => {
     expect(res.status).toHaveBeenCalledWith(403);
     expect(next).not.toHaveBeenCalled();
   });
+
+  // Approval gate (defence in depth): a valid session for a non-active user
+  // must not reach /api. /auth/login blocks these too, but a session could be
+  // obtained by signing in against Supabase directly.
+  for (const status of ['pending', 'rejected']) {
+    it(`403s a ${status} user even with a valid session (does not call next)`, async () => {
+      supaRec.authUser = { id: 'u-gate' };
+      supaRec.rpcProvider = (fn) =>
+        fn === 'auth_bootstrap'
+          ? {
+              data: {
+                user: { id: 'u-gate', email: 'g@x', organisation_id: 'o1', role: 'owner', permissions: {}, status },
+                role_permissions: [],
+              },
+              error: null,
+            }
+          : { data: null, error: null };
+      const res = mockRes();
+      const next = vi.fn();
+      await authenticate({ ...BEARER }, res, next);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ status }));
+      expect(next).not.toHaveBeenCalled();
+    });
+  }
+
+  it('allows an explicitly active user through', async () => {
+    supaRec.authUser = { id: 'u-active' };
+    supaRec.rpcProvider = (fn) =>
+      fn === 'auth_bootstrap'
+        ? {
+            data: {
+              user: { id: 'u-active', email: 'a@x', organisation_id: 'o1', role: 'owner', permissions: {}, status: 'active' },
+              role_permissions: [],
+            },
+            error: null,
+          }
+        : { data: null, error: null };
+    const req = { ...BEARER };
+    const next = vi.fn();
+    await authenticate(req, mockRes(), next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user.id).toBe('u-active');
+  });
 });
