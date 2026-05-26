@@ -108,10 +108,10 @@ export default function AssociatesScreen() {
           <table className="w-full" style={{ fontSize: 13 }}>
             <thead className="bg-bg" style={{ borderBottom: '1px solid #E5E7EB' }}>
               <tr>
-                {['Associate', 'Practice', 'Pay %', 'Production', 'UDAs', 'Conv.', 'Treatments', 'Completion', 'No-show', 'Status'].map((h, i) => (
+                {['Associate', 'Practice', 'Pay %', 'Production', 'UDAs', 'Conv.', 'Treatments', 'Appts', 'Completion', 'No-show', 'Status'].map((h, i) => (
                   <th
                     key={h}
-                    className={i >= 2 && i <= 8 ? 'text-right' : 'text-left'}
+                    className={i >= 2 && i <= 9 ? 'text-right' : 'text-left'}
                     style={{ padding: '12px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6B7280', fontWeight: 600 }}
                   >
                     {h}
@@ -154,10 +154,13 @@ export default function AssociatesScreen() {
                       {formatNumber(a.treatments)}
                     </td>
                     <td className="text-right" style={{ padding: '12px 16px' }}>
+                      {formatNumber(a.appointments_total)}
+                    </td>
+                    <td className="text-right" style={{ padding: '12px 16px' }}>
                       {a.completion_pct != null ? `${a.completion_pct}%` : '—'}
                     </td>
                     <td className="text-right" style={{ padding: '12px 16px' }}>
-                      {a.no_show_pct != null ? `${a.no_show_pct}%` : '—'}
+                      {a.no_show_pct != null ? `${a.no_show_pct}% (${formatNumber(a.no_shows)})` : '—'}
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       <span className={`chip ${chip}`}>{label}</span>
