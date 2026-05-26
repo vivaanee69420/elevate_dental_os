@@ -1,2 +1,0 @@
-lead_id,entity_code,practice_code,created_at,channel,campaign,treatment_interest,estimated_value,contact_name,email,phone,stage,consult_booked_at,consult_attended_at,treatment_started_at,source_system,source_updated_at
-LEAD-52001,GM_DENTAL_GROUP,ASHFORD,2026-05-24T14:32:00+01:00,Meta Ads,Implant Open Day,Implants,6200,Sarah Morgan,sarah@example.com,+447700900123,consult_booked,2026-05-28T10:00:00+01:00,,,GHL_MANUAL,2026-05-25T18:13:00+01:00
