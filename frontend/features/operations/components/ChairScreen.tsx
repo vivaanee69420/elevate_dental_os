@@ -175,6 +175,12 @@ export default function ChairScreen() {
               </button>
             )}
           </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Field label="Notes">
+              <input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                placeholder="Optional notes" style={inputStyle} />
+            </Field>
+          </div>
         </form>
 
         {records.length > 0 && (
