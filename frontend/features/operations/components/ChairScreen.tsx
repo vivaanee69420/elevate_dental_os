@@ -1,233 +1,249 @@
 'use client';
-// Chair Utilisation — pixel-faithful port of preview/elevate-dental-os-v2.html
-// (PAGES.chair). Booked-vs-available chair time as a day x slot heatmap.
-//
-// Data flow:
-//   avgUtil     = mean of every cell in CHAIR_UTIL
-//   lostRevenue = round( 245000 * (100 - avgUtil)/100 * 0.5 )
-//                 (idle-chair revenue at 50% recovery, prototype formula)
-//
-// Fed by ../data CHAIR_UTIL; swap to a real /chair-utilisation endpoint later.
-import { useMemo } from 'react';
+// Chair Utilisation — manual, owner-managed. Records (practice + chair +
+// weekday + slot, booked vs available minutes) drive a weekday x slot heatmap.
+// All data is entered here; nothing comes from Dentally.
+
+import { useMemo, useState } from 'react';
+import { usePractices } from '@/features/integrations/hooks';
+import { formatNumber } from '@/lib/format';
 import {
-  CHAIR_DAYS,
-  CHAIR_SLOTS,
-  CHAIR_UTIL,
-  chairUtilColour,
-  formatPoundsCompact,
-} from '../data';
+  SLOT_KEYS, SLOT_LABEL, slotTimeLabel, WEEKDAYS, WEEKDAY_LABEL, chairUtilColour,
+  type SlotKey,
+} from '../chair-util';
+import {
+  useChairRecords, useChairGrid, useCreateChairRecord, useUpdateChairRecord, useDeleteChairRecord,
+} from '../chair-hooks';
+import type { ChairRecord } from '../chair-api';
 
-const POS = '#10B981';
+type FormState = {
+  id: string | null;
+  chair_name: string;
+  weekday: number;
+  slot: SlotKey;
+  booked_hours: string;     // entered in hours; converted to minutes on submit
+  available_hours: string;
+  notes: string;
+};
 
-// Static recommendation list (verbatim from the prototype).
-const RECOMMENDATIONS = [
-  {
-    dot: 'var(--success)',
-    title: 'Move Friday evening clinic to Tuesday evening',
-    detail: 'Tue 88% vs Fri PM 50%. Est. uplift £6-8k/month.',
-  },
-  {
-    dot: 'var(--brand)',
-    title: 'Open Wednesday early-morning slots at Warwick Lodge',
-    detail:
-      'Implant consult demand exceeds capacity on Tue/Thu. Wed 8-10am closed.',
-  },
-  {
-    dot: 'var(--brand)',
-    title: 'Reduce Barnet Friday hours by 50%',
-    detail:
-      'Lowest utilised on Fridays. Save staff cost, reallocate clinician days.',
-  },
-];
+const EMPTY_FORM: FormState = {
+  id: null, chair_name: '', weekday: 1, slot: 'morning',
+  booked_hours: '', available_hours: '', notes: '',
+};
 
-// Heatmap colour legend (verbatim from the prototype).
-const LEGEND = [
-  { c: '#10B981', l: '≥90% Excellent' },
-  { c: '#0E7C7B', l: '75-89% Good' },
-  { c: '#F59E0B', l: '60-74% Underused' },
-  { c: '#EF4444', l: '<60% Action' },
-];
-
-/** Chair Utilisation screen. */
 export default function ChairScreen() {
-  // Average utilisation + estimated lost revenue (prototype arithmetic).
-  const { avgUtil, lostRevenue } = useMemo(() => {
-    const flat = CHAIR_UTIL.flat();
-    const avg = flat.reduce((s, n) => s + n, 0) / flat.length;
-    return {
-      avgUtil: avg,
-      lostRevenue: Math.round((245000 * (100 - avg)) / 100 * 0.5),
+  const { data: practicesData } = usePractices();
+  const practices = practicesData?.practices ?? [];
+  const [practiceId, setPracticeId] = useState<string>('');
+  const selected = practiceId || practices[0]?.id || '';
+
+  const { data: grid } = useChairGrid(selected || undefined);
+  const { data: recordsData } = useChairRecords(selected || undefined);
+  const records = recordsData?.records ?? [];
+
+  const create = useCreateChairRecord(selected || undefined);
+  const update = useUpdateChairRecord(selected || undefined);
+  const del = useDeleteChairRecord(selected || undefined);
+
+  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const editing = form.id != null;
+
+  const kpis = grid?.kpis;
+  const slotKeyOf = (s: string) => s as SlotKey;
+
+  const peakLabel = useMemo(() => {
+    if (!kpis?.peakSlot) return '—';
+    return `${WEEKDAY_LABEL[kpis.peakSlot.weekday]} ${SLOT_LABEL[slotKeyOf(kpis.peakSlot.slot)]}`;
+  }, [kpis]);
+  const lowestLabel = useMemo(() => {
+    if (!kpis?.lowestSlot) return '—';
+    return `${WEEKDAY_LABEL[kpis.lowestSlot.weekday]} ${SLOT_LABEL[slotKeyOf(kpis.lowestSlot.slot)]}`;
+  }, [kpis]);
+
+  function startEdit(r: ChairRecord) {
+    setForm({
+      id: r.id, chair_name: r.chair_name, weekday: r.weekday, slot: r.slot,
+      booked_hours: String(r.booked_minutes / 60),
+      available_hours: String(r.available_minutes / 60),
+      notes: r.notes ?? '',
+    });
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
+    const booked_minutes = Math.round(Number(form.booked_hours || 0) * 60);
+    const available_minutes = Math.round(Number(form.available_hours || 0) * 60);
+    const base = {
+      chair_name: form.chair_name.trim(), weekday: form.weekday, slot: form.slot,
+      booked_minutes, available_minutes, notes: form.notes.trim() || undefined,
     };
-  }, []);
+    if (editing && form.id) {
+      update.mutate({ id: form.id, patch: base }, { onSuccess: () => setForm(EMPTY_FORM) });
+    } else {
+      create.mutate({ practice_id: selected, ...base }, { onSuccess: () => setForm(EMPTY_FORM) });
+    }
+  }
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="display font-bold" style={{ fontSize: 28 }}>
-          Chair Utilisation
-        </h1>
-        <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          Booked vs available chair time · last 30 days
-        </p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="display font-bold" style={{ fontSize: 28 }}>Chair Utilisation</h1>
+          <p className="text-ink-muted" style={{ fontSize: 13 }}>
+            Manual booked vs available chair time · weekday × slot
+          </p>
+        </div>
+        <select
+          value={selected}
+          onChange={(e) => setPracticeId(e.target.value)}
+          style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}
+        >
+          {practices.length === 0 && <option value="">No practices</option>}
+          {practices.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
       </div>
 
-      {/* 4 KPIs */}
+      {/* KPIs */}
       <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <div className="card-padded">
-          <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>
-            Avg utilisation
-          </div>
-          <div className="display font-bold" style={{ fontSize: 28, marginTop: 4 }}>
-            {avgUtil.toFixed(0)}%
-          </div>
-          <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: POS }}>
-            UK avg: 72%
-          </div>
-        </div>
-        <div className="card-padded">
-          <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>
-            Peak slot
-          </div>
-          <div className="display font-bold" style={{ fontSize: 28, marginTop: 4 }}>
-            Tue AM
-          </div>
-          <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: POS }}>
-            95% utilised
-          </div>
-        </div>
-        <div className="card-padded">
-          <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>
-            Lowest slot
-          </div>
-          <div className="display font-bold" style={{ fontSize: 28, marginTop: 4 }}>
-            Fri PM
-          </div>
-          <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: '#EF4444' }}>
-            50% utilised
-          </div>
-        </div>
-        <div className="card-padded">
-          <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>
-            Est. lost revenue
-          </div>
-          <div className="display font-bold" style={{ fontSize: 28, marginTop: 4 }}>
-            {formatPoundsCompact(lostRevenue)}
-          </div>
-          <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: '#EF4444' }}>
-            /month
-          </div>
-        </div>
+        <Kpi label="Avg utilisation" value={kpis?.avgUtilPct != null ? `${kpis.avgUtilPct}%` : '—'} sub="UK avg: 72%" subColor="#10B981" />
+        <Kpi label="Peak slot" value={peakLabel} sub={kpis?.peakSlot ? `${kpis.peakSlot.pct}% utilised` : ''} subColor="#10B981" />
+        <Kpi label="Lowest slot" value={lowestLabel} sub={kpis?.lowestSlot ? `${kpis.lowestSlot.pct}% utilised` : ''} subColor="#EF4444" />
+        <Kpi label="Idle chair-hours" value={kpis ? formatNumber(kpis.idleChairHours) : '—'} sub="/week" subColor="#EF4444" />
       </div>
 
       {/* Heatmap */}
       <div className="card-padded mb-4">
-        <h2 className="display font-bold" style={{ fontSize: 17, marginBottom: 16 }}>
-          Group-wide heatmap
-        </h2>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '80px repeat(5, 1fr)',
-            gap: 6,
-            maxWidth: 700,
-          }}
-        >
-          <div />
-          {CHAIR_DAYS.map((d) => (
-            <div
-              key={d}
-              className="text-center text-ink-muted font-bold"
-              style={{ fontSize: 12 }}
-            >
-              {d}
-            </div>
-          ))}
-          {CHAIR_SLOTS.map((slot, slotIdx) => (
-            <FragmentRow key={slot} slot={slot} slotIdx={slotIdx} />
-          ))}
-        </div>
-        <div
-          className="flex text-ink-muted"
-          style={{ gap: 14, marginTop: 16, fontSize: 11 }}
-        >
-          {LEGEND.map((x) => (
-            <div key={x.l} className="flex items-center" style={{ gap: 4 }}>
-              <div style={{ width: 12, height: 12, background: x.c, borderRadius: 3 }} />
-              {x.l}
-            </div>
-          ))}
-        </div>
+        <h2 className="display font-bold" style={{ fontSize: 17, marginBottom: 16 }}>Heatmap</h2>
+        {!grid && <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading…</div>}
+        {grid && records.length === 0 && (
+          <div className="text-ink-muted" style={{ fontSize: 13 }}>
+            No utilisation records yet. Add chairs and hours below to build the heatmap.
+          </div>
+        )}
+        {grid && records.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: `120px repeat(${WEEKDAYS.length}, 1fr)`, gap: 6, maxWidth: 900 }}>
+            <div />
+            {WEEKDAYS.map((d) => (
+              <div key={d} className="text-center text-ink-muted font-bold" style={{ fontSize: 12 }}>
+                {WEEKDAY_LABEL[d]}
+              </div>
+            ))}
+            {SLOT_KEYS.map((slot, slotIdx) => (
+              <FragmentRow key={slot} slot={slot} slotIdx={slotIdx} grid={grid.grid} />
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Recommendations */}
+      {/* Records management */}
       <div className="card-padded">
         <h2 className="display font-bold" style={{ fontSize: 17, marginBottom: 16 }}>
-          Recommendations
+          {editing ? 'Edit record' : 'Add record'}
         </h2>
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {RECOMMENDATIONS.map((r, i) => (
-            <li
-              key={r.title}
-              className="flex"
-              style={{
-                gap: 12,
-                padding: '10px 0',
-                borderBottom:
-                  i < RECOMMENDATIONS.length - 1 ? '1px solid #E5E7EB' : 'none',
-              }}
-            >
-              <div
-                style={{
-                  width: 6,
-                  height: 6,
-                  background: r.dot,
-                  borderRadius: '50%',
-                  marginTop: 8,
-                  flexShrink: 0,
-                }}
-              />
-              <div>
-                <strong>{r.title}</strong>
-                <div className="text-ink-muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  {r.detail}
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <form onSubmit={submit} className="grid gap-3" style={{ gridTemplateColumns: 'repeat(6, 1fr)', alignItems: 'end', marginBottom: 16 }}>
+          <Field label="Chair">
+            <input required value={form.chair_name} onChange={(e) => setForm({ ...form, chair_name: e.target.value })}
+              placeholder="Surgery 1" style={inputStyle} />
+          </Field>
+          <Field label="Weekday">
+            <select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })} style={inputStyle}>
+              {WEEKDAYS.map((d) => <option key={d} value={d}>{WEEKDAY_LABEL[d]}</option>)}
+            </select>
+          </Field>
+          <Field label="Slot">
+            <select value={form.slot} onChange={(e) => setForm({ ...form, slot: e.target.value as SlotKey })} style={inputStyle}>
+              {SLOT_KEYS.map((s) => <option key={s} value={s}>{SLOT_LABEL[s]} ({slotTimeLabel(s)})</option>)}
+            </select>
+          </Field>
+          <Field label="Booked (hrs)">
+            <input required type="number" min="0" step="0.25" value={form.booked_hours}
+              onChange={(e) => setForm({ ...form, booked_hours: e.target.value })} style={inputStyle} />
+          </Field>
+          <Field label="Available (hrs)">
+            <input required type="number" min="0" step="0.25" value={form.available_hours}
+              onChange={(e) => setForm({ ...form, available_hours: e.target.value })} style={inputStyle} />
+          </Field>
+          <div className="flex" style={{ gap: 8 }}>
+            <button type="submit" className="btn-primary" style={{ padding: '8px 16px', fontSize: 13 }} disabled={!selected || create.isPending || update.isPending}>
+              {editing ? 'Save' : 'Add'}
+            </button>
+            {editing && (
+              <button type="button" className="btn-ghost" style={{ padding: '8px 12px', fontSize: 13, border: '1px solid #E5E7EB' }} onClick={() => setForm(EMPTY_FORM)}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </form>
+
+        {records.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em', textAlign: 'left' }}>
+                <th style={{ padding: '8px 12px 8px 0' }}>Chair</th>
+                <th style={{ padding: '8px 12px' }}>Weekday</th>
+                <th style={{ padding: '8px 12px' }}>Slot</th>
+                <th style={{ padding: '8px 12px' }}>Booked</th>
+                <th style={{ padding: '8px 12px' }}>Available</th>
+                <th style={{ padding: '8px 0 8px 12px' }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {records.map((r) => (
+                <tr key={r.id} style={{ borderTop: '1px solid #E5E7EB' }}>
+                  <td style={{ padding: '10px 12px 10px 0' }}>{r.chair_name}</td>
+                  <td style={{ padding: '10px 12px' }}>{WEEKDAY_LABEL[r.weekday]}</td>
+                  <td style={{ padding: '10px 12px' }}>{SLOT_LABEL[r.slot]}</td>
+                  <td style={{ padding: '10px 12px' }}>{(r.booked_minutes / 60).toFixed(2)}h</td>
+                  <td style={{ padding: '10px 12px' }}>{(r.available_minutes / 60).toFixed(2)}h</td>
+                  <td style={{ padding: '10px 0 10px 12px', whiteSpace: 'nowrap' }}>
+                    <button type="button" className="btn-ghost" style={{ fontSize: 12, marginRight: 8 }} onClick={() => startEdit(r)}>Edit</button>
+                    <button type="button" className="btn-ghost" style={{ fontSize: 12, color: '#991B1B' }} onClick={() => del.mutate(r.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
 }
 
-/**
- * One heatmap row: the slot label cell plus a coloured cell per day.
- * Split out so the slot/day grid stays a flat CSS grid (matches prototype).
- */
-function FragmentRow({ slot, slotIdx }: { slot: string; slotIdx: number }) {
+const inputStyle: React.CSSProperties = { border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 10px', fontSize: 13, width: '100%' };
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{ display: 'block' }}>
+      <span className="text-ink-muted font-bold uppercase" style={{ fontSize: 10, letterSpacing: '0.05em', display: 'block', marginBottom: 4 }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function Kpi({ label, value, sub, subColor }: { label: string; value: string; sub: string; subColor: string }) {
+  return (
+    <div className="card-padded">
+      <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>{label}</div>
+      <div className="display font-bold" style={{ fontSize: 22, marginTop: 4 }}>{value}</div>
+      {sub && <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: subColor }}>{sub}</div>}
+    </div>
+  );
+}
+
+function FragmentRow({ slot, slotIdx, grid }: { slot: SlotKey; slotIdx: number; grid: { pct: number | null }[][] }) {
   return (
     <>
-      <div
-        className="text-ink-muted text-right"
-        style={{ fontSize: 11, paddingRight: 8, alignSelf: 'center' }}
-      >
-        {slot}
+      <div className="text-ink-muted text-right" style={{ fontSize: 11, paddingRight: 8, alignSelf: 'center' }}>
+        {SLOT_LABEL[slot]}
       </div>
-      {CHAIR_DAYS.map((_, dayIdx) => {
-        const pct = CHAIR_UTIL[dayIdx][slotIdx];
+      {WEEKDAYS.map((_, dayIdx) => {
+        const pct = grid[slotIdx]?.[dayIdx]?.pct ?? null;
         return (
-          <div
-            key={dayIdx}
-            className="text-center text-white font-bold"
-            style={{
-              background: chairUtilColour(pct),
-              borderRadius: 6,
-              padding: '14px 8px',
-              fontSize: 13,
-            }}
-          >
-            {pct}%
+          <div key={dayIdx} className="text-center text-white font-bold"
+            style={{ background: chairUtilColour(pct), borderRadius: 6, padding: '14px 8px', fontSize: 13 }}>
+            {pct == null ? '—' : `${pct}%`}
           </div>
         );
       })}
