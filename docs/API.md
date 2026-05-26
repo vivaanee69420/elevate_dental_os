@@ -176,8 +176,6 @@ Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ app
 
 ## Associates  — owner / practice_manager
 
-### Associates  — owner / practice_manager
-
 - `GET /api/associates?practice_id=<uuid>&weeks=52` — roster merged with Dentally
   appointment stats. Each row: `{ id, full_name, practice, pay_pct, joined_date, active,
   treatments, appointments_total, no_shows, completion_pct, no_show_pct, status }`.
