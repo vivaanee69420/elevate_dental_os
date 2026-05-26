@@ -1,22 +1,24 @@
 'use client';
 // Practice → Dentally site-id mapping. Shown on the Integrations screen once
-// Dentally is connected. Synced appointments/payments resolve their practice
-// via practices.pms_site_id = Dentally site_id; unmapped practices mean those
-// rows are skipped (patients still sync). Owner-only on the backend.
+// Dentally is connected.
+//
+// On connect, the backend already detects the Dentally sites, auto-creates a
+// practice for each, maps the site_id, and pulls the last 24 months — so this
+// panel is normally just a confirmation/correction view. Synced
+// appointments/payments resolve their practice via practices.pms_site_id =
+// Dentally site_id; an unmapped practice means those rows are skipped (patients
+// still sync). Owner-only on the backend.
 
 import { useEffect, useState } from 'react';
 import {
   usePractices,
   useSetPracticeSiteId,
-  useDetectSiteIds,
-  useCreatePractice,
   useSyncIntegration,
   useFinishSync,
 } from '../hooks';
-import type { DetectedSiteId } from '../api';
 import SyncOverlay from './SyncOverlay';
 
-function Row({ id, name, current, detected }: { id: string; name: string; current: string | null; detected: DetectedSiteId[] }) {
+function Row({ id, name, current }: { id: string; name: string; current: string | null }) {
   const save = useSetPracticeSiteId();
   const [value, setValue] = useState(current ?? '');
   useEffect(() => { setValue(current ?? ''); }, [current]);
@@ -30,19 +32,11 @@ function Row({ id, name, current, detected }: { id: string; name: string; curren
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="Dentally site id"
-          list={detected.length ? `siteids-${id}` : undefined}
           style={{
             width: '100%', padding: '6px 8px', fontSize: 12,
             border: '1px solid var(--border)', borderRadius: 6,
           }}
         />
-        {detected.length > 0 && (
-          <datalist id={`siteids-${id}`}>
-            {detected.map((d) => (
-              <option key={d.site_id} value={d.site_id}>{`site ${d.site_id} (${d.count} records)`}</option>
-            ))}
-          </datalist>
-        )}
       </td>
       <td style={{ padding: '8px 4px', width: 78 }}>
         <button
@@ -64,29 +58,15 @@ function Row({ id, name, current, detected }: { id: string; name: string; curren
 
 export default function DentallyPracticeMapping() {
   const { data, isLoading } = usePractices();
-  const detect = useDetectSiteIds('dentally');
-  const create = useCreatePractice();
   const sync = useSyncIntegration();
   const finishSync = useFinishSync();
   const [syncing, setSyncing] = useState(false);
-  const detected = detect.data?.siteIds ?? [];
   const practices = data?.practices ?? [];
   const unmapped = practices.filter((p) => !p.pms_site_id).length;
 
-  // Site ids returned by Dentally that aren't yet attached to any practice.
-  const mappedSiteIds = new Set(practices.map((p) => p.pms_site_id).filter(Boolean));
-  const unprovisioned = detected.filter((d) => !mappedSiteIds.has(d.site_id));
-
-  // Build one practice per detected-but-unmapped site (real Dentally name when
-  // known), pms_site_id pre-set, then immediately re-pull so the now-mapped
-  // appointments/payments land without a separate Refresh click.
-  async function provisionFromSites() {
-    for (const d of unprovisioned) {
-      await create.mutateAsync({
-        name: d.name || `Dentally site ${d.site_id.slice(0, 8)}`,
-        pms_site_id: d.site_id,
-      });
-    }
+  // Pull all history (full backfill). The on-connect pull only fetches the last
+  // 24 months; this re-pulls everything for practices that want the full record.
+  async function pullFullHistory() {
     setSyncing(true);
     await sync.mutateAsync({ provider: 'dentally', full: true });
   }
@@ -103,9 +83,11 @@ export default function DentallyPracticeMapping() {
         Dentally practice mapping
       </h2>
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-        Match each practice to its Dentally site id. Without it, synced
-        appointments and payments for that practice are skipped (patients still
-        sync). Find the site id in Dentally → Settings → Sites.
+        Your practices were detected and mapped automatically on connect. We pull
+        the last 24 months straight away; older history syncs overnight, or you
+        can pull it all now. Each practice must stay matched to its Dentally site
+        id — without it, that practice&apos;s appointments and payments are
+        skipped (patients still sync).
         {unmapped > 0 && (
           <span style={{ color: 'var(--danger)' }}> {unmapped} unmapped.</span>
         )}
@@ -113,36 +95,19 @@ export default function DentallyPracticeMapping() {
 
       <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
-          onClick={() => detect.mutate()}
-          disabled={detect.isPending}
+          onClick={pullFullHistory}
+          disabled={syncing}
           style={{
-            padding: '6px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6,
-            border: '1px solid var(--border)', background: 'white', cursor: 'pointer',
+            padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+            border: 'none', background: '#0E7C7B', color: 'white',
+            cursor: syncing ? 'default' : 'pointer',
           }}
         >
-          {detect.isPending ? 'Detecting…' : 'Detect site IDs'}
+          {syncing ? 'Pulling…' : 'Pull full history'}
         </button>
-        {unprovisioned.length > 0 && (
-          <button
-            onClick={provisionFromSites}
-            disabled={create.isPending || syncing}
-            style={{
-              padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-              border: 'none', background: '#0E7C7B', color: 'white', cursor: 'pointer',
-            }}
-          >
-            {create.isPending ? 'Creating…' : syncing ? 'Syncing…'
-              : `Create ${unprovisioned.length} practice${unprovisioned.length > 1 ? 's' : ''} + sync`}
-          </button>
-        )}
-        {detect.isSuccess && detected.length === 0 && (
-          <span className="text-ink-muted" style={{ fontSize: 11 }}>No site ids in the sampled data.</span>
-        )}
-        {detected.map((d) => (
-          <span key={d.site_id} className="chip" style={{ fontSize: 11 }}>
-            {d.name || `site ${d.site_id.slice(0, 8)}`} · {d.count}
-          </span>
-        ))}
+        <span className="text-ink-muted" style={{ fontSize: 11 }}>
+          Optional — pulls all-time data, can take a few minutes.
+        </span>
       </div>
 
       {isLoading ? (
@@ -160,7 +125,7 @@ export default function DentallyPracticeMapping() {
           </thead>
           <tbody>
             {practices.map((p) => (
-              <Row key={p.id} id={p.id} name={p.name} current={p.pms_site_id} detected={detected} />
+              <Row key={p.id} id={p.id} name={p.name} current={p.pms_site_id} />
             ))}
           </tbody>
         </table>

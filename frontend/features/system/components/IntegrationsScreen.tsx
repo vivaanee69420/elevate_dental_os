@@ -86,19 +86,24 @@ export default function IntegrationsScreen() {
 
   async function handleBrokerSubmit() {
     if (!brokerModal) return;
-    // submitBrokerKey persists the token; the backend fires the first pull on
-    // connect (finishConnect → syncNow), so data lands without a manual refresh.
-    await submitKey.mutateAsync({ provider: brokerModal.provider, apiKey: keyInput });
+    const provider = brokerModal.provider;
+    // submitBrokerKey persists the token; the backend then runs the first pull
+    // automatically (Dentally: detect sites → auto-create+map practices → pull
+    // the last 24 months). Show the progress overlay so the user sees it land —
+    // connecting + pasting the key is the only manual step.
+    await submitKey.mutateAsync({ provider, apiKey: keyInput });
     setBrokerModal(null);
     setKeyInput('');
+    if (SYNCABLE.has(provider)) setSyncing(provider);
   }
 
   async function handleRefresh(provider: string) {
     setSyncing(provider);
     // Fire-and-forget on the server (returns immediately); the overlay polls
-    // progress and clears itself via onDone. Full re-pull so rows skipped before
-    // mapping (no practice match) land now.
-    await sync.mutateAsync({ provider, full: true });
+    // progress and clears itself via onDone. Incremental pull (latest changes
+    // since the last sync) — full history is the separate button on the
+    // Dentally mapping panel.
+    await sync.mutateAsync({ provider, full: false });
   }
 
   return (
