@@ -287,6 +287,7 @@ CREATE TABLE appointments (
   deposit_paid BOOLEAN DEFAULT FALSE,
   pms_external_id TEXT,
   pms_patient_id TEXT, -- raw Dentally patient id, so contact_id can be relinked across syncs
+  pms_practitioner_id TEXT, -- raw Dentally practitioner id, so associate_id can be relinked across syncs
   source TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -296,6 +297,9 @@ CREATE INDEX idx_appts_org_date ON appointments(organisation_id, starts_at);
 CREATE INDEX idx_appts_associate ON appointments(associate_id, starts_at);
 CREATE INDEX idx_appts_practice ON appointments(practice_id, starts_at);
 CREATE INDEX idx_appts_status ON appointments(status);
+-- relink indexes for raw Dentally ids (partial: only synced rows carry them)
+CREATE INDEX idx_appts_pms_patient_id ON appointments(organisation_id, pms_patient_id) WHERE pms_patient_id IS NOT NULL;
+CREATE INDEX idx_appts_pms_practitioner_id ON appointments(organisation_id, pms_practitioner_id) WHERE pms_practitioner_id IS NOT NULL;
 
 -- ============================================================================
 -- CHAIR UTILISATION (manual owner-entered booked vs available minutes)

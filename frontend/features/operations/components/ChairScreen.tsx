@@ -36,7 +36,7 @@ export default function ChairScreen() {
   const [practiceId, setPracticeId] = useState<string>('');
   const selected = practiceId || practices[0]?.id || '';
 
-  const { data: grid } = useChairGrid(selected || undefined);
+  const { data: grid, isError: gridError } = useChairGrid(selected || undefined);
   const { data: recordsData } = useChairRecords(selected || undefined);
   const records = recordsData?.records ?? [];
 
@@ -116,7 +116,8 @@ export default function ChairScreen() {
       {/* Heatmap */}
       <div className="card-padded mb-4">
         <h2 className="display font-bold" style={{ fontSize: 17, marginBottom: 16 }}>Heatmap</h2>
-        {!grid && <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading…</div>}
+        {!grid && gridError && <div className="text-ink-muted" style={{ fontSize: 13 }}>Could not load chair utilisation. Please try again.</div>}
+        {!grid && !gridError && <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading…</div>}
         {grid && records.length === 0 && (
           <div className="text-ink-muted" style={{ fontSize: 13 }}>
             No utilisation records yet. Add chairs and hours below to build the heatmap.

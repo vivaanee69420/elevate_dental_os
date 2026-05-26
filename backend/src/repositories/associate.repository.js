@@ -42,6 +42,10 @@ export const associateRepository = {
                 .eq('organisation_id', orgId)
                 .not('associate_id', 'is', null)
                 .gte('starts_at', since)
+                // Stable order is required: without it PostgREST gives no row-order
+                // guarantee across .range() windows, so rows could be skipped or
+                // double-counted between pages (silently wrong per-associate stats).
+                .order('id', { ascending: true })
                 .range(from, from + PAGE - 1);
             if (error) throw new Error(error.message);
             const rows = data ?? [];

@@ -370,6 +370,10 @@ export function appointmentRow(orgId, a, siteMap, contactMap, practitionerMap = 
         // (relink_dentally_appointment_contacts) when the patient is pulled in a
         // different run. null for patient-less diary blocks.
         pms_patient_id: a.patient_id != null ? String(a.patient_id) : null,
+        // Raw Dentally practitioner id, persisted so associate_id can be relinked
+        // later (relink_dentally_appointment_associates) when practitioners are
+        // pulled/mapped in a different run — without re-pulling appointments.
+        pms_practitioner_id: a.practitioner_id != null ? String(a.practitioner_id) : null,
         practice_id: practiceId,
         contact_id: contactMap.get(String(a.patient_id)) ?? null,
         starts_at: startsAt,
@@ -378,6 +382,11 @@ export function appointmentRow(orgId, a, siteMap, contactMap, practitionerMap = 
         // upsert and being silently dropped.
         ends_at: a.finish_time ?? a.finish ?? a.end_time ?? startsAt,
         status: mapAppointmentStatus(a.state ?? a.status),
+        // Treatment label for the Treatment Mix view. Dentally exposes the
+        // appointment's purpose as free-text `reason`; some shapes carry an
+        // explicit `appointment_type`. Null when neither is present. Verify the
+        // field name against the sandbox during UAT.
+        appointment_type: a.appointment_type ?? a.reason ?? null,
         // Dentally appointments carry a practitioner_id; resolve it to an
         // associate (null if the practitioner hasn't been pulled/mapped yet).
         // Verify the field name against the sandbox during UAT.
@@ -584,6 +593,17 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         } catch (err) {
             console.warn(`[dentally] relink contacts skipped: ${err?.message || err}`);
         }
+        // Same pattern for associate_id: appointments persist pms_practitioner_id,
+        // so a practitioner pulled/mapped after the appointment was synced (or a
+        // /practitioners pull that only succeeds on a later run) backfills
+        // associate_id without a full appointment re-pull.
+        let relinkedAssociates = 0;
+        try {
+            const { data } = await supabase_1.serviceClient.rpc('relink_dentally_appointment_associates', { p_org: orgId });
+            relinkedAssociates = typeof data === 'number' ? data : 0;
+        } catch (err) {
+            console.warn(`[dentally] relink associates skipped: ${err?.message || err}`);
+        }
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
             last_error: null,
@@ -597,6 +617,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0),
             skipped_closed_appointments: appts.skippedClosed ?? 0,
             relinked_appointment_contacts: relinked,
+            relinked_appointment_associates: relinkedAssociates,
         };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'dentally', String(err.message).slice(0, 500));
