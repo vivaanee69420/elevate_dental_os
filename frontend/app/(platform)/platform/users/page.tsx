@@ -72,7 +72,7 @@ export default function PlatformUsersPage() {
     { header: 'Role',   render: (r) => r.role },
     { header: 'Status', render: (r) => r.status ?? '—' },
     { header: 'Organisation', render: (r) => (
-      <Link href={`/platform/orgs/${r.organisation_id}`} className="text-primary hover:underline font-mono text-xs">
+      <Link href={`/platform/orgs/${r.organisation_id}`} className="text-brand hover:underline font-mono text-xs">
         {r.organisation_id.slice(0, 8)}…
       </Link>
     )},
@@ -92,7 +92,7 @@ export default function PlatformUsersPage() {
         />
         <button
           onClick={() => { setShowForm((s) => !s); setCreated(null); setFormError(null); }}
-          className="px-3 py-2 rounded text-sm font-semibold bg-primary text-white"
+          className="px-3 py-2 rounded text-sm font-semibold bg-brand text-white"
         >
           {showForm ? 'Cancel' : 'New user'}
         </button>
@@ -140,7 +140,7 @@ export default function PlatformUsersPage() {
           <button
             type="submit"
             disabled={creating}
-            className="px-4 py-2 rounded text-sm font-semibold bg-primary text-white disabled:opacity-50"
+            className="px-4 py-2 rounded text-sm font-semibold bg-brand text-white disabled:opacity-50"
           >
             {creating ? 'Creating…' : 'Create user'}
           </button>

@@ -57,7 +57,7 @@ export default function PlatformSignupsPage() {
         <button
           onClick={() => act(r.id, 'approve')}
           disabled={busy === r.id}
-          className="px-3 py-1 rounded text-xs font-semibold bg-primary text-white disabled:opacity-50"
+          className="px-3 py-1 rounded text-xs font-semibold bg-brand text-white disabled:opacity-50"
         >
           Approve
         </button>

@@ -64,7 +64,7 @@ export default function PlatformOrgsPage() {
 
   const columns: Column<Org>[] = [
     { header: 'Name', render: (r) => (
-      <Link href={`/platform/orgs/${r.id}`} className="text-primary hover:underline">{r.name}</Link>
+      <Link href={`/platform/orgs/${r.id}`} className="text-brand hover:underline">{r.name}</Link>
     )},
     { header: 'Slug', render: (r) => <span className="text-ink-muted">{r.slug}</span> },
     { header: 'Plan', render: (r) => r.plan ?? '—' },
@@ -85,7 +85,7 @@ export default function PlatformOrgsPage() {
         />
         <button
           onClick={() => { setShowForm((s) => !s); setCreated(null); setFormError(null); }}
-          className="px-3 py-2 rounded text-sm font-semibold bg-primary text-white"
+          className="px-3 py-2 rounded text-sm font-semibold bg-brand text-white"
         >
           {showForm ? 'Cancel' : 'New owner + org'}
         </button>
@@ -132,7 +132,7 @@ export default function PlatformOrgsPage() {
           <button
             type="submit"
             disabled={creating}
-            className="px-4 py-2 rounded text-sm font-semibold bg-primary text-white disabled:opacity-50"
+            className="px-4 py-2 rounded text-sm font-semibold bg-brand text-white disabled:opacity-50"
           >
             {creating ? 'Creating…' : 'Create owner'}
           </button>
