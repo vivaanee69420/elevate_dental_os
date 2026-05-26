@@ -175,7 +175,20 @@ export const integrationService = {
             throw new errors_1.AppError(`${provider} does not support webhooks`, 400);
         }
         const base = process.env.BACKEND_PUBLIC_URL || process.env.APP_URL || 'http://localhost:8080';
-        const token = signWebhookToken(orgId);
+        let token;
+        try {
+            token = signWebhookToken(orgId);
+        } catch (err) {
+            // signWebhookToken throws when OAUTH_STATE_SECRET is unset on the
+            // server. That's an operator/config problem, not a crash — surface a
+            // clear 501 (matching startConnect) so the UI shows "not configured"
+            // instead of an opaque 500.
+            const msg = err.message || 'webhook signing failed';
+            if (/OAUTH_STATE_SECRET/i.test(msg)) {
+                throw new errors_1.AppError(`${provider} webhooks are not configured on this server. ${msg}`, 501);
+            }
+            throw err;
+        }
         const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
         return {
             provider,

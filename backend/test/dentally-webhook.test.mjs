@@ -10,6 +10,7 @@ const { signWebhookToken, verifyWebhookToken } = await import('../src/lib/webhoo
 const { applyWebhookEvent, appointmentRow, patientRow } =
   await import('../src/lib/integrations/dentally-sync.js');
 const { webhookService } = await import('../src/services/webhook.service.js');
+const { integrationService } = await import('../src/services/integration.service.js');
 
 const ORG = 'org-aaaaaaaa';
 
@@ -26,6 +27,24 @@ describe('webhook-token — stable signed org token', () => {
     const t = signWebhookToken(ORG);
     expect(() => verifyWebhookToken(t.slice(0, -2) + 'xy')).toThrow();
     expect(() => verifyWebhookToken('garbage')).toThrow();
+  });
+});
+
+describe('integrationService.webhookInfo — config-error handling', () => {
+  it('throws a clear 501 (not an opaque 500) when OAUTH_STATE_SECRET is unset', async () => {
+    const saved = process.env.OAUTH_STATE_SECRET;
+    delete process.env.OAUTH_STATE_SECRET;
+    try {
+      await expect(integrationService.webhookInfo(ORG, 'dentally'))
+        .rejects.toMatchObject({ statusCode: 501 });
+    } finally {
+      process.env.OAUTH_STATE_SECRET = saved;
+    }
+  });
+
+  it('rejects a provider that does not support webhooks (400)', async () => {
+    await expect(integrationService.webhookInfo(ORG, 'xero'))
+      .rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
