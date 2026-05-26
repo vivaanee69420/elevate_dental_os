@@ -3,7 +3,7 @@
 // in-memory progress (~1/s) while mounted, and calls onDone when the sync
 // finishes so the parent can refresh data + unmount the overlay.
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useSyncProgress } from '../hooks';
 
 const PHASE_LABEL: Record<string, string> = {
@@ -28,7 +28,14 @@ export default function SyncOverlay({
     if (done) onDone?.();
   }, [done]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pct = Math.min(100, Math.max(0, data?.pct ?? 0));
+  // High-water mark: progress polls can briefly arrive out of order (e.g. a
+  // phase boundary, or a slow/overlapping poll), so never let the bar visibly
+  // retreat. Resets naturally — this component mounts fresh per sync. On error
+  // we still want to render whatever pct we had, so the guard sits on the raw.
+  const maxPct = useRef(0);
+  const rawPct = Math.min(100, Math.max(0, data?.pct ?? 0));
+  if (rawPct > maxPct.current) maxPct.current = rawPct;
+  const pct = maxPct.current;
   const phase = PHASE_LABEL[data?.phase ?? 'starting'] ?? data?.phase ?? 'Working…';
   const errored = !!data?.error;
 
@@ -68,6 +75,11 @@ export default function SyncOverlay({
             ? `Page ${data.page ?? 0} of ${data.totalPages}`
             : 'Pulling from Dentally — large practices take a little longer.'}
         </div>
+        {!errored && (
+          <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 6 }}>
+            Sit back for a few minutes while we pull your data — you can leave this open, it will finish on its own.
+          </div>
+        )}
       </div>
     </div>
   );
