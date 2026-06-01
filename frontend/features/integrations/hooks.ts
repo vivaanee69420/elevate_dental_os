@@ -12,6 +12,8 @@ import {
   createPractice,
   getWebhookInfo,
   setWebhookSecret,
+  detectPipelines,
+  setStageMappings,
   type ConnectInput,
 } from './api';
 
@@ -32,8 +34,8 @@ export function useStartConnect() {
 export function useSubmitBrokerKey() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ provider, apiKey, baseUrl }: { provider: string; apiKey: string; baseUrl?: string }) =>
-      submitBrokerKey(provider, { apiKey, baseUrl }),
+    mutationFn: ({ provider, apiKey, baseUrl, locationId }: { provider: string; apiKey: string; baseUrl?: string; locationId?: string }) =>
+      submitBrokerKey(provider, { apiKey, baseUrl, locationId }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
   });
 }
@@ -122,5 +124,23 @@ export function useSetWebhookSecret(provider: string) {
   return useMutation({
     mutationFn: (secret: string) => setWebhookSecret(provider, secret),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['webhook-info', provider] }),
+  });
+}
+
+// GoHighLevel pipelines + stages (drives the stage-mapping UI).
+export function usePipelines(provider: string, enabled = true) {
+  return useQuery({
+    queryKey: ['ghl-pipelines', provider],
+    queryFn: () => detectPipelines(provider),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+export function useSetStageMappings(provider: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mappings: Record<string, string>) => setStageMappings(provider, mappings),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
   });
 }

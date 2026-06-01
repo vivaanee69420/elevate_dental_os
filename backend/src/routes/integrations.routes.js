@@ -14,6 +14,8 @@ router.post('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_h
 router.post('/:provider/refresh', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.refresh));
 router.post('/:provider/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.sync));
 router.get('/:provider/site-ids', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.siteIds));
+router.get('/:provider/pipelines', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.pipelines));
+router.post('/:provider/stage-mappings', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setStageMappings));
 router.get('/:provider/sync-progress', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.syncProgress));
 router.get('/:provider/webhook-info', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.webhookInfo));
 router.post('/:provider/webhook-secret', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setWebhookSecret));

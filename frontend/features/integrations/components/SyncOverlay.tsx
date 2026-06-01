@@ -18,7 +18,17 @@ const PHASE_LABEL: Record<string, string> = {
   patients: 'Patients',
   appointments: 'Appointments',
   payments: 'Payments',
+  contacts: 'Contacts',
+  opportunities: 'Opportunities',
   idle: 'Working…',
+};
+
+// Human provider name for the overlay copy (the sync feeds different resources
+// per provider, so the title/subtitle shouldn't hard-code "Dentally").
+const PROVIDER_LABEL: Record<string, string> = {
+  dentally: 'Dentally',
+  gohighlevel: 'GoHighLevel',
+  xero: 'Xero',
 };
 
 // No change to the polled payload for this long (and not done) => treat as
@@ -67,8 +77,9 @@ export default function SyncOverlay({
   if (rawPct > maxPct.current) maxPct.current = rawPct;
   const pct = maxPct.current;
   const phase = PHASE_LABEL[data?.phase ?? 'starting'] ?? data?.phase ?? 'Working…';
+  const providerLabel = PROVIDER_LABEL[provider] ?? provider;
 
-  const title = errored ? 'Sync failed' : stalled ? 'Still importing in the background' : 'Syncing Dentally data';
+  const title = errored ? 'Sync failed' : stalled ? 'Still importing in the background' : `Syncing ${providerLabel} data`;
   const subtitle = errored
     ? data?.error
     : stalled
@@ -129,7 +140,7 @@ export default function SyncOverlay({
             ? `${data.count.toLocaleString('en-GB')} ${(PHASE_LABEL[data?.phase ?? ''] ?? 'records').toLowerCase()} pulled so far`
             : data?.totalPages
               ? `Page ${data.page ?? 0} of ${data.totalPages}`
-              : 'Pulling from Dentally — large practices take a little longer.'}
+              : `Pulling from ${providerLabel} — large accounts take a little longer.`}
         </div>
         {!errored && !stalled && (
           <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 6 }}>
