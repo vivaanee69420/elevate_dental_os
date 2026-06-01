@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { METRIC_CATALOG, METRIC_BY_KEY } from '../src/lib/health-metrics.js';
 
 describe('health metric catalog', () => {
@@ -24,5 +24,63 @@ describe('health metric catalog', () => {
     expect(auto).toEqual(
       ['annual_revenue', 'cash_at_bank', 'fta_no_show_rate', 'lead_to_treatment', 'net_profit', 'net_profit_margin'].sort(),
     );
+  });
+});
+
+import { vi } from 'vitest';
+
+// Stub analytics so the resolver is tested in isolation from rollup SQL.
+vi.mock('../src/services/analytics.service.js', () => ({
+  analyticsService: {
+    dashboardSummary: vi.fn(async () => ({
+      basis: 'actuals', revenuePence: 120000000, netProfitPence: 18000000,
+      marginPct: 15, cashflowPence: 5000000,
+    })),
+    businessHub: vi.fn(async () => ({
+      group: { conversionRate: 11.5, noShowRate: 4.2 },
+    })),
+  },
+}));
+
+const { supaRec } = await import('./setup.js');
+const svc = (await import('../src/services/business-health.service.js')).businessHealthService;
+const ORG = 'org-hhhhhhhh';
+
+describe('businessHealthService.metrics', () => {
+  beforeEach(() => {
+    supaRec.last = undefined;
+    supaRec.resultProvider = () => ({ data: [], error: null });
+  });
+
+  it('resolves auto metrics from live actuals and manual from the JSONB column', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health'
+        ? { data: { baseline: { annual_revenue: 1000000, nps: 50 }, targets: {}, manual: { nps: { value: 64, asof: '2026-06-01' } } }, error: null }
+        : { data: [], error: null };
+
+    const { metrics } = await svc.metrics(ORG, 'owner');
+    const rev = metrics.find((m) => m.key === 'annual_revenue');
+    expect(rev.current).toBe(1200000);          // 120000000 pence / 100
+    expect(rev.source).toBe('actuals');
+    const nps = metrics.find((m) => m.key === 'nps');
+    expect(nps.current).toBe(64);
+    expect(nps.source).toBe('manual');
+    expect(nps.asof).toBe('2026-06-01');
+  });
+
+  it('flags unset manual metrics with needsInput and null current', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health'
+        ? { data: { baseline: {}, targets: {}, manual: {} }, error: null }
+        : { data: [], error: null };
+    const { metrics } = await svc.metrics(ORG, 'owner');
+    const recall = metrics.find((m) => m.key === 'recall_compliance');
+    expect(recall.current).toBeNull();
+    expect(recall.needsInput).toBe(true);
+  });
+
+  it('reception gets an empty stub (CRM-only rule)', async () => {
+    const out = await svc.metrics(ORG, 'reception');
+    expect(out).toEqual({ metrics: [] });
   });
 });
