@@ -22,6 +22,14 @@ export interface Communication {
   external_id: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
+  // Joined contact (when linked) — used to show the real name in the Inbox
+  // instead of the contact id.
+  contact?: {
+    id: string;
+    first_name: string | null;
+    last_name: string | null;
+    email: string | null;
+  } | null;
 }
 
 export interface CommunicationsListResponse {
