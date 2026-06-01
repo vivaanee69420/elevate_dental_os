@@ -1,7 +1,7 @@
 // Dentally sync — practitioner mapper + appointment->associate linkage.
 import { describe, it, expect } from 'vitest';
 import './setup.js';
-import { practitionerRow, appointmentRow } from '../src/lib/integrations/dentally-sync.js';
+import { practitionerRow, appointmentRow, treatmentPlanRow } from '../src/lib/integrations/dentally-sync.js';
 
 const ORG = 'org-aaaaaaaa';
 const siteMap = new Map([['7', 'prac-7']]);
@@ -79,5 +79,33 @@ describe('appointmentRow treatment type', () => {
     it('null when neither is present', () => {
         const row = appointmentRow(ORG, base, siteMap, contactMap);
         expect(row.appointment_type).toBeNull();
+    });
+});
+
+describe('treatmentPlanRow (production)', () => {
+    const assocMap = new Map([['189834', 'assoc-x']]);
+    const contactMap = new Map([['9354', 'cont-x']]);
+    const tp = {
+        id: 67920, practitioner_id: 189834, patient_id: 9354,
+        private_treatment_value: '850.5', nhs_uda_value: '3.0', nhs_completed_uda_value: null,
+        completed: true, completed_at: '2026-06-01T11:15:54.814+01:00',
+        start_date: '2026-06-01', end_date: '2026-06-01',
+    };
+    it('maps production to integer pence and resolves associate + contact', () => {
+        const row = treatmentPlanRow(ORG, tp, assocMap, contactMap);
+        expect(row).toMatchObject({
+            organisation_id: ORG, source: 'dentally', pms_external_id: '67920',
+            pms_practitioner_id: '189834', pms_patient_id: '9354',
+            associate_id: 'assoc-x', contact_id: 'cont-x',
+            private_value_pence: 85050, nhs_uda_value: 3, completed: true,
+        });
+    });
+    it('null associate/contact when unmapped; nhs values null-safe', () => {
+        const row = treatmentPlanRow(ORG, { id: 1, practitioner_id: 7, patient_id: 8, private_treatment_value: '0.0' });
+        expect(row.associate_id).toBeNull();
+        expect(row.contact_id).toBeNull();
+        expect(row.private_value_pence).toBe(0);
+        expect(row.nhs_uda_value).toBeNull();
+        expect(row.pms_practitioner_id).toBe('7'); // persisted for later relink
     });
 });

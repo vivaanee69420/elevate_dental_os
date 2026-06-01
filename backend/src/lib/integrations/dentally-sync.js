@@ -441,6 +441,33 @@ export function paymentRow(orgId, p, siteMap, contactMap) {
     };
 }
 
+// Treatment plan = per-practitioner production (the figure the Associate Pay
+// Run needs; absent from the appointment/payment feeds). Verified shape against
+// the live API: { id, practitioner_id, patient_id, private_treatment_value,
+// nhs_uda_value, nhs_completed_uda_value, completed, completed_at, start_date,
+// end_date }. private_treatment_value is money -> integer pence; UDA values are
+// units, kept numeric. associate_id/contact_id resolved via the existing maps;
+// raw ids persisted so they can be relinked on a later run.
+export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap = new Map()) {
+    const numOrNull = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+    return {
+        organisation_id: orgId,
+        source: 'dentally',
+        pms_external_id: String(tp.id),
+        pms_practitioner_id: tp.practitioner_id != null ? String(tp.practitioner_id) : null,
+        pms_patient_id: tp.patient_id != null ? String(tp.patient_id) : null,
+        associate_id: associateMap.get(String(tp.practitioner_id)) ?? null,
+        contact_id: contactMap.get(String(tp.patient_id)) ?? null,
+        private_value_pence: toPence(tp.private_treatment_value),
+        nhs_uda_value: numOrNull(tp.nhs_uda_value),
+        nhs_completed_uda_value: numOrNull(tp.nhs_completed_uda_value),
+        completed: tp.completed === true,
+        completed_at: tp.completed_at ?? null,
+        start_date: tp.start_date ?? null,
+        end_date: tp.end_date ?? null,
+    };
+}
+
 // ---- pulls ------------------------------------------------------------------
 
 async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
@@ -496,6 +523,15 @@ async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPa
     }
     const synced = await upsertChunked('payments', rows, 'organisation_id,source,external_id');
     return { synced, skipped };
+}
+
+async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/treatment_plans', auth, params, onPage, maxPages);
+    const rows = remote
+        .filter((tp) => tp && tp.id != null)
+        .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap));
+    const synced = await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
+    return { synced };
 }
 
 // ---- webhook apply (real-time, single record) -------------------------------
@@ -624,6 +660,16 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             }
         }
         const pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
+        // Treatment plans = production per practitioner (for the Associate Pay
+        // Run). Same window as payments; reuse the practitioner + contact maps to
+        // resolve associate_id / contact_id. No separate progress phase (like
+        // practitioners); never fail the whole sync if this resource errors.
+        let treatmentPlans = { synced: 0 };
+        try {
+            treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_since: since }, practitionerMap, contactMap, null, maxPages);
+        } catch (err) {
+            console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
+        }
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
         // from before this column existed). Set-based; cheap; never cross-tenant.
@@ -656,6 +702,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             appointments: appts.synced,
             appointments_upcoming: upcomingSynced,
             payments: pays.synced,
+            treatment_plans: treatmentPlans.synced,
             skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0),
             skipped_closed_appointments: appts.skippedClosed ?? 0,
             relinked_appointment_contacts: relinked,
@@ -733,4 +780,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader };
+export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow };
