@@ -20,6 +20,7 @@ const PHASE_LABEL: Record<string, string> = {
   payments: 'Payments',
   contacts: 'Contacts',
   opportunities: 'Opportunities',
+  conversations: 'Conversations',
   idle: 'Working…',
 };
 
