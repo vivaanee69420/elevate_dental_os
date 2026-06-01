@@ -74,6 +74,33 @@ describe('fetchAllPages', () => {
         expect(out).toEqual([{ id: 9 }]);
         vi.useRealTimers();
     });
+
+    it('retries a thrown network error (one slow page no longer fails the sync)', async () => {
+        vi.useFakeTimers();
+        global.fetch = vi.fn()
+            .mockRejectedValueOnce(new Error('socket hang up'))
+            .mockResolvedValueOnce(page({ patients: [{ id: 7 }] }));
+        const p = __test.fetchAllPages('https://b', '/patients', 'Bearer k', {});
+        await vi.advanceTimersByTimeAsync(1000); // first backoff
+        const out = await p;
+        expect(out).toEqual([{ id: 7 }]);
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        vi.useRealTimers();
+    });
+
+    it('surfaces an actionable timeout, not the opaque "This operation was aborted"', async () => {
+        vi.useFakeTimers();
+        const abortErr = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+        global.fetch = vi.fn().mockRejectedValue(abortErr);
+        const p = __test.fetchAllPages('https://b', '/patients', 'Bearer k', {}).catch((e) => e);
+        await vi.advanceTimersByTimeAsync(1000 + 2000 + 3000); // exhaust the 4 attempts
+        const err = await p;
+        expect(err).toBeInstanceOf(Error);
+        expect(err.message).toMatch(/timed out after 30s/);
+        expect(err.message).not.toMatch(/operation was aborted/);
+        expect(global.fetch).toHaveBeenCalledTimes(4);
+        vi.useRealTimers();
+    });
 });
 
 describe('syncOneOrg', () => {
