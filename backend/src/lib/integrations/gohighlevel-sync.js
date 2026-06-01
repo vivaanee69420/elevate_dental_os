@@ -329,6 +329,15 @@ export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = sup
         ?? (stageNameMap && opp.pipelineStageId ? stageNameMap.get(String(opp.pipelineStageId)) : null)
         ?? null;
     const status = mapStage(opp.pipelineStageId, stageName, stageMappings);
+    // Real GHL creation date — without this, leads.created_at defaults to the
+    // sync time, so "new leads today" counts everything pulled today, not what
+    // GHL actually created today.
+    const rawCreated = opp.createdAt ?? opp.dateAdded ?? opp.created_at ?? null;
+    let createdIso = null;
+    if (rawCreated != null) {
+        const d = new Date(rawCreated);
+        if (!Number.isNaN(d.getTime())) createdIso = d.toISOString();
+    }
     const { error } = await db.from('leads').upsert({
         organisation_id: orgId,
         contact_id: contactId,
@@ -342,6 +351,7 @@ export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = sup
         status,
         sync_status: 'synced',
         source: 'gohighlevel',
+        ...(createdIso ? { created_at: createdIso } : {}),
     }, { onConflict: 'organisation_id,ghl_opportunity_id' });
     if (error) return { ok: false, error: error.message };
     return { ok: true };
