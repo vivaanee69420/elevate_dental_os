@@ -100,6 +100,7 @@ export interface SyncProgress {
   page?: number;
   totalPages?: number | null;
   count?: number; // records fetched so far in the current phase
+  at?: number; // server epoch ms of the last progress write — used to detect a stalled/lost sync
 }
 
 export function getSyncProgress(provider: string) {
