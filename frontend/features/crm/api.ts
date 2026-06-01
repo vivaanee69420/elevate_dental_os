@@ -68,3 +68,16 @@ export function sendCommunication(input: SendCommunicationInput) {
     body: JSON.stringify(input),
   });
 }
+
+// GoHighLevel automations (workflows) — id/name/status only (GHL's API doesn't
+// expose per-workflow sent/conversion).
+export interface GhlWorkflow {
+  id: string;
+  name: string;
+  status: string | null;
+  updatedAt: string | null;
+}
+
+export function fetchGhlWorkflows() {
+  return api<{ workflows: GhlWorkflow[] }>('/api/workflows/ghl');
+}
