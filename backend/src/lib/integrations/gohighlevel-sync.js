@@ -30,6 +30,7 @@
 import { integrationRepository } from '../../repositories/integration.repository.js';
 import { decryptSecret } from '../crypto.js';
 import { GoHighLevelProvider } from './gohighlevel-provider.js';
+import { syncConversations } from './gohighlevel-conversations.js';
 import * as supabase_1 from '../supabase.js';
 
 const API_BASE = 'https://services.leadconnectorhq.com';
@@ -393,12 +394,22 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
             const r = await upsertOpportunity(orgId, opp, stageMappings);
             if (r.ok) synced++;
         }
+        // Conversations -> communications (Inbox). Runs after contacts so the
+        // ghl_contact_id -> contact map is fresh. Non-fatal: a failure here must
+        // not abort the contacts/opportunities sync.
+        let conversations = { conversations: 0, messages: 0 };
+        try {
+            onProgress({ phase: 'conversations', pct: 99, page: 0, totalPages: null, count: 0 });
+            conversations = await syncConversations(orgId, integration);
+        } catch (err) {
+            console.warn(`[gohighlevel] conversations sync skipped: ${err?.message || err}`);
+        }
         await integrationRepository.upsert(orgId, 'gohighlevel', {
             last_sync_at: new Date().toISOString(),
             last_error: null,
             status: 'active',
         });
-        return { contacts: contactsSynced, opportunities: synced, total: opportunities.length };
+        return { contacts: contactsSynced, opportunities: synced, total: opportunities.length, messages: conversations.messages };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'gohighlevel', String(err.message).slice(0, 500));
         throw err;

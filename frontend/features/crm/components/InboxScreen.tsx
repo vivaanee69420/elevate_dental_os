@@ -9,7 +9,7 @@
 // source moved from mock fixtures to the real endpoint.
 
 import { useMemo, useState } from 'react';
-import { useCommunications } from '../hooks';
+import { useCommunications, useSendCommunication } from '../hooks';
 import { type Communication } from '../api';
 import { CRM_NAVY, agoLabel } from '../data';
 
@@ -41,6 +41,8 @@ interface DerivedThread {
   lastSnippet: string;
   minutesAgo: number;
   tag: string;
+  contactId: string | null;   // our contact uuid, for replying
+  toAddress: string;          // counterparty email/phone, for native send + display
   messages: Communication[];  // ordered oldest → newest within thread
 }
 
@@ -113,6 +115,8 @@ function groupIntoThreads(rows: Communication[]): DerivedThread[] {
       lastSnippet: latest.body ?? '(no content)',
       minutesAgo: minutesAgoFrom(latest.created_at),
       tag: '',
+      contactId: latest.contact_id ?? null,
+      toAddress: addr,
       messages: msgs,
     });
   }
@@ -127,6 +131,8 @@ export default function InboxScreen() {
   const [filter, setFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [reply, setReply] = useState('');
+  const sendMsg = useSendCommunication();
 
   const { data, isLoading, error } = useCommunications();
 
@@ -157,6 +163,22 @@ export default function InboxScreen() {
   const selected =
     threads.find((t) => t.id === selectedId) ?? filtered[0] ?? null;
   const messages = selected?.messages ?? [];
+
+  // Only sms/email/whatsapp are sendable (call/in_person are log-only).
+  const canSend =
+    !!selected && ['sms', 'email', 'whatsapp'].includes(selected.channel);
+
+  async function handleSend() {
+    if (!selected || !canSend || !reply.trim() || sendMsg.isPending) return;
+    await sendMsg.mutateAsync({
+      contact_id: selected.contactId ?? undefined,
+      channel: selected.channel as 'sms' | 'email' | 'whatsapp',
+      to: selected.toAddress,
+      body: reply.trim(),
+      ...(selected.channel === 'email' && selected.subject ? { subject: selected.subject } : {}),
+    });
+    setReply('');
+  }
 
   const filterChips = [
     { k: 'all', l: 'All', c: threads.length },
@@ -541,7 +563,15 @@ export default function InboxScreen() {
               >
                 <input
                   type="text"
-                  placeholder={`Reply via ${CHANNEL_LABEL[selected.channel] ?? selected.channel}…`}
+                  value={reply}
+                  onChange={(e) => setReply(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSend(); }}
+                  disabled={!canSend || sendMsg.isPending}
+                  placeholder={
+                    canSend
+                      ? `Reply via ${CHANNEL_LABEL[selected.channel] ?? selected.channel}…`
+                      : `${CHANNEL_LABEL[selected.channel] ?? selected.channel} is not sendable`
+                  }
                   style={{
                     flex: 1,
                     padding: '8px 10px',
@@ -551,18 +581,20 @@ export default function InboxScreen() {
                   }}
                 />
                 <button
+                  onClick={handleSend}
+                  disabled={!canSend || !reply.trim() || sendMsg.isPending}
                   style={{
                     padding: '8px 14px',
-                    background: CHANNEL_COLOUR[selected.channel] ?? CRM_NAVY,
+                    background: canSend && reply.trim() ? (CHANNEL_COLOUR[selected.channel] ?? CRM_NAVY) : '#9CA3AF',
                     color: 'white',
                     border: 'none',
                     borderRadius: 6,
                     fontSize: 12,
                     fontWeight: 700,
-                    cursor: 'pointer',
+                    cursor: canSend && reply.trim() && !sendMsg.isPending ? 'pointer' : 'default',
                   }}
                 >
-                  Send
+                  {sendMsg.isPending ? 'Sending…' : 'Send'}
                 </button>
               </div>
             </>
