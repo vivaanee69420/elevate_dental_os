@@ -46,6 +46,19 @@ interface DerivedThread {
   messages: Communication[];  // ordered oldest → newest within thread
 }
 
+// GHL emails append an unsubscribe footer + tracking/unsubscribe links
+// (e.g. "…you may unsubscribe [https://services.msgsndr.com/…]"). Strip that
+// noise so the Inbox shows just the message.
+function cleanBody(s: string | null | undefined): string {
+  if (!s) return '';
+  return s
+    .replace(/If you no longer wish to receive these emails[\s\S]*$/i, '')
+    .replace(/\[https?:\/\/[^\]]+\]/g, '')
+    .replace(/https?:\/\/services\.msgsndr\.com\/\S+/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 function counterpartyAddress(c: Communication): string {
   if (c.direction === 'inbound') return c.from_address ?? c.to_address ?? '';
   return c.to_address ?? c.from_address ?? '';
@@ -117,7 +130,7 @@ function groupIntoThreads(rows: Communication[]): DerivedThread[] {
       channel: latest.channel,
       unread: msgs.filter((m) => m.direction === 'inbound' && !m.read_at).length,
       subject: latest.subject ?? undefined,
-      lastSnippet: latest.body ?? '(no content)',
+      lastSnippet: cleanBody(latest.body) || '(no content)',
       minutesAgo: minutesAgoFrom(latest.created_at),
       tag: '',
       contactId: latest.contact_id ?? null,
@@ -542,7 +555,7 @@ export default function InboxScreen() {
                             {m.subject}
                           </div>
                         )}
-                        {m.body ?? '(empty)'}
+                        {cleanBody(m.body) || '(empty)'}
                         <div
                           className="text-ink-muted"
                           style={{

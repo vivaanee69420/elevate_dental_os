@@ -45,6 +45,8 @@ export interface Lead {
     email: string | null;
     phone: string | null;
   } | null;
+  // Optional joined practice (id + name) when backend returns it.
+  practice?: { id: string; name: string } | null;
 }
 
 export interface LeadsListResponse {
