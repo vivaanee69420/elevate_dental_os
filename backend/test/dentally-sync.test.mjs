@@ -154,7 +154,7 @@ describe('syncOneOrg', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
-    it('recent mode: patients pull ALL history, payments the last ~24 months, appointments only upcoming (open) via `after`', async () => {
+    it('recent mode: all three resources pull the same ~24-month updated_since window (no open-only `after`)', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const seen = [];
@@ -173,20 +173,12 @@ describe('syncOneOrg', () => {
         expect(patients.length).toBeGreaterThan(0);
         expect(payments.length).toBeGreaterThan(0);
         expect(appts.length).toBeGreaterThan(0);
-        // patients: ALL history so dormant-patient recalls resolve a contact
-        for (const s of patients) {
-            expect(s.after).toBeNull();
-            expect(s.updated_since.startsWith('2005-')).toBe(true);
-        }
-        // payments: recent ~24mo window
-        for (const s of payments) {
+        // Every resource pulls the bounded 2-year window via updated_since, and
+        // NONE uses the old upcoming-only `after` filter — so completed
+        // appointments land too (Associates / Treatment Mix / Pay need them).
+        for (const s of [...patients, ...payments, ...appts]) {
             expect(s.after).toBeNull();
             expect(Math.abs(new Date(s.updated_since).getTime() - expected24)).toBeLessThan(86400000);
-        }
-        // appointments: forward `after` filter ~now, no updated_since window
-        for (const s of appts) {
-            expect(s.updated_since).toBeNull();
-            expect(Math.abs(new Date(s.after).getTime() - Date.now())).toBeLessThan(86400000);
         }
     });
 });
@@ -233,7 +225,9 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
             // patients/payments expose site_id; appointments expose practitioner_site_id (real Dentally shapes)
             if (u.includes('/patients')) return page({ patients: [{ id: 'P1', first_name: 'A', site_id: 'S1' }], meta: { total_pages: 1 } });
             if (u.includes('/appointments')) return page({ appointments: [
-                // upcoming + open -> kept; the closed/past one -> dropped by the first-pull open filter
+                // bootstrap now keeps the full 2-year window: BOTH the upcoming
+                // booking AND the completed/past visit are stored (the latter
+                // feeds Associates / Treatment Mix / Pay).
                 { id: 'A1', patient_id: 'P1', practitioner_site_id: 'S1', start_time: future, finish_time: future, state: 'booked' },
                 { id: 'A2', patient_id: 'P1', practitioner_site_id: 'S1', start_time: past, finish_time: past, state: 'completed' },
             ], meta: { total_pages: 1 } });
@@ -247,9 +241,9 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
         const res = await bootstrapOnConnect('org-1', { secrets, config: {}, status: 'active' });
 
         expect(res.practicesCreated).toBe(1);            // S1 detected + auto-created
-        expect(res.appointments).toBe(1);                // A1 resolved+open; A2 dropped (closed/past)
+        expect(res.appointments).toBe(2);                // A1 + A2 both resolved + stored (2-year window)
         expect(res.skipped_unmatched_practice).toBe(0);  // neither was an unmatched practice
-        expect(res.skipped_closed_appointments).toBe(1); // A2 dropped by the first-pull open filter
+        expect(res.skipped_closed_appointments).toBe(0); // open-only filter no longer applied on bootstrap
         expect(res.payments).toBe(1);
     });
 

@@ -529,11 +529,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
     }
-    // Window selection:
-    //  - full   : all history (far-back since) with a lifted page cap.
-    //  - recent : the on-connect bootstrap window (last RECENT_MONTHS) so
-    //             dashboards (TTM) populate fast; the cron + full-history button
-    //             deepen the rest.
+    // Window selection — ONE window, shared by patients / appointments /
+    // payments (all filtered by `updated_since`):
+    //  - full   : all history (BACKFILL_SINCE) with a lifted page cap.
+    //  - recent : the on-connect bootstrap — last RECENT_MONTHS (2 years). A
+    //             fresh org lands a complete, bounded 2-year dataset including
+    //             COMPLETED appointments, so Associates / Treatment Mix / Pay
+    //             have the historical rows they need (not just the upcoming
+    //             diary).
     //  - else   : incremental cursor — changed-since last successful sync
     //             (default 30d on first run).
     const since = full
@@ -543,26 +546,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
     const maxPages = full ? BACKFILL_MAX_PAGES : recent ? BOOTSTRAP_MAX_PAGES : MAX_PAGES;
 
-    // The first pull (recent/bootstrap) fetches only OPEN appointments: filter
-    // server-side on start_time (`after=now`) so we page through upcoming work
-    // only — a handful of pages instead of years of completed history — and the
-    // onboarding sync finishes fast. Patients/payments keep the recent window.
-    // full + incremental pull all appointments by `updated_since` as before.
-    // `after` is Dentally's documented appointment start-time filter
-    // (developer.dentally.co). No `before` cap: the future book is naturally
-    // small (no years-of-history volume ahead), and a cap would miss 6-12mo
-    // recall bookings. pullAppointments still enforces open-only client-side,
-    // so the stored set is correct even if the remote filter ever changes.
-    const openAppointments = recent;
-    const apptParams = openAppointments
-        ? { after: new Date().toISOString() }
-        : { updated_since: since };
-    // On the first pull, fetch ALL patients (not just the recent window) so an
-    // upcoming appointment for a dormant patient (a recall booked years after
-    // their last visit) still resolves a contact_id instead of "Unknown
-    // patient". Patients are a fraction of the page count of full appointment
-    // history, so this stays fast. Payments keep the recent window.
-    const patientParams = openAppointments ? { updated_since: BACKFILL_SINCE } : { updated_since: since };
+    // All three resources pull the same `updated_since` window. The earlier
+    // bootstrap fetched upcoming-only appointments (`after=now`) + all-history
+    // patients for a fast first paint, but that left every completed appointment
+    // — and therefore associate_id / appointment_type / production analytics —
+    // empty. A bounded 2-year historical pull is the deliberate trade: a few
+    // more pages on connect for a dataset every module can actually use.
+    const apptParams = { updated_since: since };
+    const patientParams = { updated_since: since };
     const payParams = { updated_since: since };
 
     // Page-weighted progress. The 3 resources are very unequal (a practice can
@@ -604,7 +595,9 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // Patients first so appointment/payment contact resolution sees fresh ids.
         const patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
         const contactMap = await loadContactMap(orgId);
-        const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { openOnly: openAppointments, practitionerMap });
+        // openOnly defaults false: store every appointment in the window
+        // (completed history included), not just upcoming diary blocks.
+        const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { practitionerMap });
         const pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
