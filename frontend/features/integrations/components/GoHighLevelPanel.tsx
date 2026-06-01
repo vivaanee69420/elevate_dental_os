@@ -13,6 +13,7 @@ import {
   useSetStageMappings,
   useSyncIntegration,
   useFinishSync,
+  useSubmitBrokerKey,
 } from '../hooks';
 import SyncOverlay from './SyncOverlay';
 
@@ -31,20 +32,39 @@ const ELEVATE_STATUSES: { value: string; label: string }[] = [
 
 export default function GoHighLevelPanel({
   initialMappings = {},
+  locationId = null,
 }: {
   initialMappings?: Record<string, string>;
+  locationId?: string | null;
 }) {
   const { data, isLoading, error } = usePipelines('gohighlevel');
   const saveMappings = useSetStageMappings('gohighlevel');
   const sync = useSyncIntegration();
   const finishSync = useFinishSync();
+  const submitKey = useSubmitBrokerKey();
 
   const [syncing, setSyncing] = useState(false);
   // Working copy of stage -> status, seeded from the saved config.
   const [mappings, setMappings] = useState<Record<string, string>>(initialMappings);
   const [saved, setSaved] = useState(false);
 
+  // Reconnect / replace-credentials form (API keys are write-only — never
+  // returned by the API — so we show the Location ID + a masked indicator and
+  // let the owner paste a fresh token + location to re-link).
+  const [showReconnect, setShowReconnect] = useState(false);
+  const [keyInput, setKeyInput] = useState('');
+  const [locInput, setLocInput] = useState(locationId ?? '');
+
   const pipelines = data?.pipelines ?? [];
+
+  // Replace the stored API key + Location ID, then bootstrap-pull.
+  async function reconnect() {
+    if (!keyInput.trim() || !locInput.trim()) return;
+    await submitKey.mutateAsync({ provider: 'gohighlevel', apiKey: keyInput.trim(), locationId: locInput.trim() });
+    setKeyInput('');
+    setShowReconnect(false);
+    setSyncing(true); // overlay polls the bootstrap the backend kicks off
+  }
 
   // Incremental: pull new/changed contacts + opportunities since last sync.
   async function syncNew() {
@@ -90,6 +110,61 @@ export default function GoHighLevelPanel({
         synced opportunities land in the right column — unmapped stages fall back
         to a best-guess from the stage name.
       </p>
+
+      {/* Connection — view current Location ID + replace credentials. */}
+      <div style={{ marginBottom: 16, padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#F8FAFC' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 12 }}>
+            <div><span className="text-ink-muted">API key:</span> <span style={{ fontFamily: 'monospace' }}>•••••••• set</span></div>
+            <div><span className="text-ink-muted">Location ID:</span>{' '}
+              <span style={{ fontFamily: 'monospace' }}>{locationId || '—'}</span>
+            </div>
+          </div>
+          <button
+            onClick={() => { setShowReconnect((v) => !v); setLocInput(locationId ?? ''); }}
+            style={{
+              padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+              border: '1px solid var(--border)', background: 'white', cursor: 'pointer',
+            }}
+          >
+            {showReconnect ? 'Cancel' : 'Reconnect / replace key'}
+          </button>
+        </div>
+        {showReconnect && (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 420 }}>
+            <input
+              type="password"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              placeholder="New Private Integration Token (pit-…)"
+              style={{ padding: '8px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6 }}
+            />
+            <input
+              type="text"
+              value={locInput}
+              onChange={(e) => setLocInput(e.target.value)}
+              placeholder="Location ID"
+              style={{ padding: '8px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6 }}
+            />
+            <div>
+              <button
+                onClick={reconnect}
+                disabled={!keyInput.trim() || !locInput.trim() || submitKey.isPending}
+                style={{
+                  padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', color: 'white',
+                  background: keyInput.trim() && locInput.trim() ? '#0E7C7B' : '#9CA3AF',
+                  cursor: keyInput.trim() && locInput.trim() && !submitKey.isPending ? 'pointer' : 'default',
+                }}
+              >
+                {submitKey.isPending ? 'Saving…' : 'Save & re-sync'}
+              </button>
+              <span className="text-ink-muted" style={{ fontSize: 10, marginLeft: 10 }}>
+                The token must be created inside the same GHL sub-account as the Location ID.
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
