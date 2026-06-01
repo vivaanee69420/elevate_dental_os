@@ -143,7 +143,7 @@ export default function IntegrationsScreen() {
 
       {dentallyConnected && <DentallyPracticeMapping />}
       {dentallyConnected && <DentallyWebhookPanel />}
-      {ghlConnected && <GoHighLevelPanel initialMappings={ghlMappings} />}
+      {ghlConnected && <GoHighLevelPanel initialMappings={ghlMappings} locationId={(rowOf('gohighlevel', integrations)?.config?.locationId as string) ?? null} />}
 
       {groups.map((g) => (
         <div key={g.category} style={{ marginBottom: 20 }}>
