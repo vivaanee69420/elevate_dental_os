@@ -18,6 +18,15 @@ describe('practitionerRow', () => {
             active: true,
         });
     });
+    it('reads the real name from the nested user object (live Dentally shape)', () => {
+        const row = practitionerRow(ORG, {
+            id: 102519, site_id: 7, active: false,
+            user: { first_name: 'Gaurav', last_name: 'Mehta', title: 'Dr', email: 'g@x.co' },
+        }, siteMap);
+        expect(row.full_name).toBe('Dr Gaurav Mehta');
+        expect(row.email).toBe('g@x.co');
+        expect(row.active).toBe(false);
+    });
     it('falls back to a name when only an id is present, and null practice for unmapped site', () => {
         const row = practitionerRow(ORG, { id: 9, site_id: 999 }, siteMap);
         expect(row.full_name).toBe('Practitioner 9');

@@ -363,14 +363,21 @@ export function patientRow(orgId, p, siteMap) {
 }
 
 export function practitionerRow(orgId, p, siteMap) {
-    const name = p.name
+    // Dentally nests the human name under `user` (verified against live API):
+    // practitioner.user.{title,first_name,last_name,email}. The practitioner
+    // record itself carries no name, which is why the old top-level guesses fell
+    // through to "Practitioner <id>". Prefer user.*, then any legacy top-level
+    // fields, then the id fallback.
+    const u = p.user ?? {};
+    const name = [u.title, u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+        || p.name
         || [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
         || `Practitioner ${p.id}`;
     return {
         organisation_id: orgId,
         pms_external_id: String(p.id),
         full_name: name,
-        email: p.email_address ?? p.email ?? null,
+        email: u.email ?? p.email_address ?? p.email ?? null,
         primary_practice_id: siteMap.get(String(p.site_id)) ?? null,
         active: p.active !== false,
     };
