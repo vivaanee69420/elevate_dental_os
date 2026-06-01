@@ -31,7 +31,7 @@ const USER_AGENT = 'ElevateOS/1.0 (integrations@elevate.app)';
 const PER_PAGE = 100;
 const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
-const REQUEST_TIMEOUT_MS = 15000; // abort a hung Dentally request, never hang forever
+const REQUEST_TIMEOUT_MS = 30000; // abort a hung Dentally request, never hang forever
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
 const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls all history
 const BACKFILL_SINCE = '2005-01-01T00:00:00.000Z'; // far-back updated_since so a full pull sees all records (API requires the param)
@@ -52,6 +52,16 @@ async function fetchWithTimeout(url, opts) {
     const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
     try {
         return await fetch(url, { ...opts, signal: ac.signal });
+    } catch (err) {
+        // AbortController throws a generic DOMException whose message is
+        // "This operation was aborted" — opaque when it lands in
+        // integrations.last_error and shows on the Connect card. Translate our
+        // own timeout into an actionable message; re-throw real network errors
+        // (DNS, ECONNREFUSED, TLS) untouched so callers can retry/surface them.
+        if (err?.name === 'AbortError') {
+            throw new Error(`Dentally request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+        }
+        throw err;
     } finally {
         clearTimeout(timer);
     }
@@ -76,11 +86,23 @@ async function fetchAllPages(base, path, auth, params, onPage = null, maxPages =
         for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) {
             url.searchParams.set(k, String(v));
         }
-        let res;
+        let res = null;
+        let lastErr = null;
         for (let attempt = 0; attempt < 4; attempt++) {
-            res = await fetchWithTimeout(url, {
-                headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
-            });
+            try {
+                res = await fetchWithTimeout(url, {
+                    headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
+                });
+            } catch (err) {
+                // A timeout or transient network blip on ONE page used to throw
+                // straight out and fail the whole sync (the "This operation was
+                // aborted" failures). Retry with linear backoff before giving up
+                // so a single slow page can't abandon a multi-thousand-row pull.
+                lastErr = err;
+                res = null;
+                if (attempt < 3) { await sleep(1000 * (attempt + 1)); continue; }
+                throw err;
+            }
             if (res.status === 429) {
                 const retryAfter = Number(res.headers.get('retry-after')) || 2;
                 await sleep(retryAfter * 1000);
@@ -88,6 +110,7 @@ async function fetchAllPages(base, path, auth, params, onPage = null, maxPages =
             }
             break;
         }
+        if (!res) throw lastErr ?? new Error(`Dentally ${path}: no response`);
         if (!res.ok) throw new Error(`Dentally ${path} -> HTTP ${res.status}`);
         const body = await res.json();
         // Dentally wraps the collection in a key (e.g. { patients: [...], meta }).
