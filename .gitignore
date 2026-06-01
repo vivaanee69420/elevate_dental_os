@@ -4,3 +4,7 @@ preview
 *node_modules
 *dist/
 .gstack/
+
+# temp one-off scripts/logs (GHL probes, re-sync)
+backend/_*.mjs
+backend/_*.log

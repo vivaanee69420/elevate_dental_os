@@ -13,6 +13,9 @@ export const leadListQuerySchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid().optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
     since: zod_1.z.string().optional(),
+    // Filter to one GoHighLevel pipeline (drives the Pipeline screen — fetch only
+    // the selected pipeline's leads server-side instead of slicing client-side).
+    ghl_pipeline_id: zod_1.z.string().optional(),
     limit: zod_1.z.coerce.number().default(100),
 });
 export const leadCreateSchema = zod_1.z.object({
