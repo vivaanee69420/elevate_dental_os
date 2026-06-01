@@ -21,6 +21,13 @@ export const businessHealthController = {
     async progress(req, res) {
         res.json(await business_health_service_1.businessHealthService.progress(req.user.organisation_id));
     },
+    async metrics(req, res) {
+        res.json(await business_health_service_1.businessHealthService.metrics(req.user.organisation_id, req.user.role));
+    },
+    async updateMetric(req, res) {
+        const { value } = business_health_model_1.manualMetricSchema.parse(req.body);
+        res.json(await business_health_service_1.businessHealthService.updateMetric(req.user.organisation_id, req.user.role, req.params.key, value));
+    },
     async updateCadence(req, res) {
         const body = business_health_model_1.cadenceUpdateSchema.parse(req.body);
         res.json(await business_health_service_1.businessHealthService.updateCadence(req.user.organisation_id, req.user.role, body));

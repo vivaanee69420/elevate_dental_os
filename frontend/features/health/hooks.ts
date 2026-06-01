@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getHealth, updateHealth, getHealthProgress, getHealthInsights,
-  updateCadence, listSnapshots, type SnapshotFrequency,
+  updateCadence, listSnapshots, getMetrics, updateMetric, type SnapshotFrequency,
 } from './api';
 
 export function useHealth() {
@@ -34,4 +34,16 @@ export function useUpdateCadence() {
 
 export function useSnapshots() {
   return useQuery({ queryKey: ['health-snapshots'], queryFn: listSnapshots });
+}
+
+export function useMetrics() {
+  return useQuery({ queryKey: ['health-metrics'], queryFn: getMetrics });
+}
+
+export function useUpdateMetric() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ key, value }: { key: string; value: number }) => updateMetric(key, value),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['health-metrics'] }),
+  });
 }
