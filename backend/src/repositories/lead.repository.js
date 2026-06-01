@@ -22,6 +22,8 @@ export const leadRepository = {
             query = query.eq('practice_id', q.practice_id);
         if (q.assigned_to)
             query = query.eq('assigned_to', q.assigned_to);
+        if (q.ghl_pipeline_id)
+            query = query.eq('ghl_pipeline_id', q.ghl_pipeline_id);
         if (q.since)
             query = query.gte('created_at', q.since);
         const { data, error } = await query;
