@@ -4,6 +4,9 @@ export const workflowController = {
     async list(req, res) {
         res.json(await workflow_service_1.workflowService.list(req.user.organisation_id));
     },
+    async ghl(req, res) {
+        res.json(await workflow_service_1.workflowService.ghl(req.user.organisation_id));
+    },
     async create(req, res) {
         const body = workflow_model_1.workflowCreateSchema.parse(req.body);
         res.json(await workflow_service_1.workflowService.create(req.user.organisation_id, body));

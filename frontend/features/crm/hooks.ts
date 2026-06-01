@@ -2,9 +2,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCommunications,
   sendCommunication,
+  fetchGhlWorkflows,
   type CommunicationsListFilters,
   type SendCommunicationInput,
 } from './api';
+
+export function useGhlWorkflows() {
+  return useQuery({
+    queryKey: ['ghl-workflows'],
+    queryFn: fetchGhlWorkflows,
+    staleTime: 60_000,
+  });
+}
 
 export function useCommunications(filters: CommunicationsListFilters = {}) {
   return useQuery({
