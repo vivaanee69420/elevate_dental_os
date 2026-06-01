@@ -12,3 +12,10 @@ export const payRunCalculateSchema = zod_1.z.object({
         prev_balance_pence: zod_1.z.number().int().optional(),
     })),
 });
+
+// Draft (preview) pay run: production is derived from treatment_plans for the
+// period — the client supplies only the window. Dates are YYYY-MM-DD.
+export const payRunDraftQuerySchema = zod_1.z.object({
+    period_start: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    period_end: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});

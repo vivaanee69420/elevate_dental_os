@@ -170,11 +170,22 @@ CREATE TABLE staff (
   weekly_hours INTEGER,
   start_date DATE,
   active BOOLEAN DEFAULT TRUE,
+  -- Dentally sync fields (migration 000029). `/users` is the team roster; HR
+  -- data (rate/hours) is not in Dentally and stays owner-entered.
+  source TEXT,
+  pms_external_id TEXT,
+  pms_role TEXT, -- raw Dentally role string, e.g. "Dentist" / "Receptionist"
+  email TEXT,
+  phone TEXT,
+  title TEXT,
+  last_login_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE TRIGGER staff_updated_at BEFORE UPDATE ON staff FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE INDEX idx_staff_org ON staff(organisation_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_staff_src_ext
+  ON staff(organisation_id, source, pms_external_id);
 
 -- ============================================================================
 -- CONTACTS (unified: leads + patients + lapsed)

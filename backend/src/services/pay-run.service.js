@@ -60,6 +60,52 @@ export const payRunService = {
         });
         return { pay_run_id: payRun.id, totals, lines };
     },
+    // Draft preview (not persisted): production per associate derived from
+    // treatment_plans for the period, run through calculateAssociatePay.
+    // Lab cost has no feed yet (no lab-invoice import) -> 0, so net == gross.
+    // NHS UDA production is excluded (paid in units, no per-UDA rate stored).
+    async draft(orgId, { period_start, period_end }) {
+        const start = `${period_start}T00:00:00.000Z`;
+        const end = `${period_end}T23:59:59.999Z`;
+        const [roster, production] = await Promise.all([
+            pay_run_repository_1.payRunRepository.rosterForDraft(orgId),
+            pay_run_repository_1.payRunRepository.productionByAssociate(orgId, { start, end }),
+        ]);
+        const rows = roster.map((a) => {
+            const productionPence = production.get(a.id) ?? 0;
+            const calc = (0, formulas_1.calculateAssociatePay)({
+                productionPence,
+                labCostPence: 0,
+                payPct: a.pay_pct,
+                labSplitPct: a.lab_split_pct,
+                prevBalancePence: 0,
+            });
+            return {
+                associate_id: a.id,
+                full_name: a.full_name,
+                practice: a.practice?.name ?? null,
+                pay_pct: a.pay_pct,
+                lab_split_pct: a.lab_split_pct,
+                production_pence: productionPence,
+                lab_cost_pence: 0,
+                gross_pence: calc.grossPence,
+                lab_deduction_pence: calc.labDeductionPence,
+                prev_balance_pence: 0,
+                net_pence: calc.netPence,
+            };
+        });
+        const totals = rows.reduce((acc, r) => ({
+            production: acc.production + r.production_pence,
+            gross: acc.gross + r.gross_pence,
+            lab: acc.lab + r.lab_deduction_pence,
+            net: acc.net + r.net_pence,
+        }), { production: 0, gross: 0, lab: 0, net: 0 });
+        return {
+            period_start, period_end, status: 'draft',
+            rows, totals,
+            pct_of_production: totals.production ? Math.round((1000 * totals.gross) / totals.production) / 10 : 0,
+        };
+    },
     async approve(orgId, id, approvedBy) {
         const { error } = await pay_run_repository_1.payRunRepository.approve(orgId, id, {
             status: 'approved',

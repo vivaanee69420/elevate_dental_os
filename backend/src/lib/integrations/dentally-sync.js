@@ -383,6 +383,45 @@ export function practitionerRow(orgId, p, siteMap) {
     };
 }
 
+// Coarse-bucket a free-text Dentally role into the staff.role enum. The exact
+// PMS label is preserved separately in pms_role for display; this is only for
+// the constrained column. Unknown/clinical roles (e.g. "Dentist") -> 'other'.
+export function mapDentallyRole(raw) {
+    const r = String(raw || '').toLowerCase();
+    if (r.includes('recept')) return 'reception';
+    if (r.includes('nurse')) return 'nurse';
+    if (r.includes('hygien')) return 'hygienist';
+    if (r.includes('therap')) return 'therapist';
+    if (r.includes('coordinator') || r === 'tco') return 'tco';
+    if (r.includes('manager')) return 'manager';
+    return 'other';
+}
+
+// Dentally `/users` = the practice team roster. Verified live fields:
+// { id, title, first_name, last_name, email, mobile_phone, role, site_id,
+//   practice_id, last_login }. HR data (rate/hours/attendance) is NOT in
+// Dentally, so those staff columns stay null/owner-entered.
+export function staffRow(orgId, u, siteMap) {
+    const name = [u.title, u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+        || [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+        || `User ${u.id}`;
+    return {
+        organisation_id: orgId,
+        source: 'dentally',
+        pms_external_id: String(u.id),
+        full_name: name,
+        role: mapDentallyRole(u.role),
+        pms_role: u.role ?? null,
+        email: u.email ?? null,
+        phone: u.mobile_phone ?? null,
+        title: u.title ?? null,
+        last_login_at: u.last_login ?? null,
+        // Resolve the Dentally site to a practice (same map as practitioners).
+        practice_id: siteMap.get(String(u.site_id)) ?? null,
+        active: true,
+    };
+}
+
 export function appointmentRow(orgId, a, siteMap, contactMap, practitionerMap = new Map()) {
     // Dentally appointments expose the site as `practitioner_site_id` (no plain
     // `site_id`); fall back to site_id for other shapes. Verified against live API.
@@ -485,6 +524,17 @@ async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages) {
     // Upsert on the new (organisation_id, pms_external_id) arbiter. pay_pct /
     // lab_split_pct are NOT in the payload, so owner-set values are preserved.
     const synced = await upsertChunked('associates', rows, 'organisation_id,pms_external_id');
+    return { synced };
+}
+
+// Dentally `/users` -> staff roster. Small set (whole-practice team), so one
+// unfiltered pull each sync; upsert is idempotent on (org, source, pms id).
+async function pullUsers(orgId, base, auth, params, siteMap, maxPages) {
+    const remote = await fetchAllPages(base, '/users', auth, params, null, maxPages);
+    const rows = remote
+        .filter((u) => u && u.id != null)
+        .map((u) => staffRow(orgId, u, siteMap));
+    const synced = await upsertChunked('staff', rows, 'organisation_id,source,pms_external_id');
     return { synced };
 }
 
@@ -635,6 +685,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
         }
         const practitionerMap = await loadPractitionerMap(orgId);
+        // Team roster from /users (cheap, no progress phase). Non-fatal: a
+        // failure here must not abort the whole sync. Populates the Staff screen.
+        let staff = { synced: 0 };
+        try {
+            staff = await pullUsers(orgId, base, auth, {}, siteMap, maxPages);
+        } catch (err) {
+            console.warn(`[dentally] users pull skipped: ${err?.message || err}`);
+        }
         // Patients first so appointment/payment contact resolution sees fresh ids.
         const patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
         const contactMap = await loadContactMap(orgId);
@@ -698,6 +756,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         });
         return {
             practitioners: practitioners.synced,
+            staff: staff.synced,
             patients: patients.synced,
             appointments: appts.synced,
             appointments_upcoming: upcomingSynced,
