@@ -39,13 +39,16 @@ function displayName(l: Lead): string {
 
 /** Pipeline kanban screen. */
 export default function PipelineScreen() {
-  const { data, isLoading, error } = useLeads();
   const { data: pData } = usePipelines();
-  const leads: Lead[] = data?.leads ?? [];
   const pipelines = pData?.pipelines ?? [];
-
   const [picked, setPicked] = useState<string | null>(null);
   const selectedId = picked ?? pipelines[0]?.id ?? null;
+  // Fetch the selected pipeline's leads server-side (a pipeline can have 300+
+  // leads, so client-side slicing of a 100-row page would drop most).
+  const { data, isLoading, error } = useLeads(
+    selectedId ? { ghl_pipeline_id: selectedId, limit: 500 } : { limit: 500 },
+  );
+  const leads: Lead[] = data?.leads ?? [];
   const selectedPipeline = pipelines.find((p) => p.id === selectedId) ?? null;
   const dynamic = !!selectedPipeline;
 
