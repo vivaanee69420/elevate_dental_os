@@ -97,7 +97,12 @@ function groupIntoThreads(rows: Communication[]): DerivedThread[] {
     msgs.sort((a, b) => a.created_at.localeCompare(b.created_at));
     const latest = msgs[msgs.length - 1];
     const addr = counterpartyAddress(latest);
-    const displayName = deriveDisplayName(
+    // Prefer the joined contact's real name; fall back to the address, then the id.
+    const withContact = msgs.find((m) => m.contact?.first_name || m.contact?.last_name);
+    const contactName = withContact
+      ? `${withContact.contact?.first_name ?? ''} ${withContact.contact?.last_name ?? ''}`.trim()
+      : '';
+    const displayName = contactName || deriveDisplayName(
       addr,
       id.startsWith('c:')
         ? `Contact ${id.slice(2, 10)}`

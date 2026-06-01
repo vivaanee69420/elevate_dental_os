@@ -11,7 +11,7 @@ export const commRepository = {
     async list(orgId, q, viewer = null) {
         let query = supabase_1.serviceClient
             .from('communications')
-            .select('*')
+            .select('*, contact:contacts(id, first_name, last_name, email)')
             .eq('organisation_id', orgId)
             .order('created_at', { ascending: false })
             .limit(200);
