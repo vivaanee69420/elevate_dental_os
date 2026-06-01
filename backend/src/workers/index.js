@@ -51,8 +51,11 @@ node_cron_1.default.schedule('0 2 * * *', async () => {
                     .gte('starts_at', from.toISOString()),
             ]);
 
+            const pl = formulas_1.calculatePL?.(payments.data ?? [], bh.baseline ?? {}) ?? null;
             const metrics = {
-                pl: formulas_1.calculatePL?.(payments.data ?? [], bh.baseline ?? {}) ?? null,
+                pl,
+                revenue: Math.round((pl?.revenue || 0) / 100),
+                profit: Math.round((pl?.netProfit || 0) / 100),
                 ltv: formulas_1.calculateLTV?.(payments.data ?? [], appointments.data ?? []) ?? null,
                 marketingROI: formulas_1.calculateMarketingROI?.(leads.data ?? [], payments.data ?? []) ?? null,
                 window: { from: from.toISOString(), to: today.toISOString() },
