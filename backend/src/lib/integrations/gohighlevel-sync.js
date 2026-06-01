@@ -315,11 +315,15 @@ async function ensureFreshToken(orgId, integration) {
 
 // Map+upsert ONE GHL opportunity -> a lead (match-or-create its contact first).
 // Shared by the poll AND the webhook so both stay consistent. Idempotent on
-// (organisation_id, ghl_opportunity_id). db is injectable for tests.
-export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = supabase_1.serviceClient) {
+// (organisation_id, ghl_opportunity_id). db is injectable for tests. contactMap
+// (ghl_contact_id -> our id), when supplied, resolves the contact in O(1) from
+// the already-synced contact book instead of 3 lookups per opportunity — only
+// opps whose contact isn't found fall back to match-or-create.
+export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = supabase_1.serviceClient, contactMap = null) {
     if (!opp || opp.id == null) return { ok: false, skipped: 'no_opportunity_id' };
     const contact = extractContact(opp);
-    const contactId = await matchOrCreateContact(orgId, contact, db);
+    let contactId = contactMap && contact.ghl_contact_id ? (contactMap.get(String(contact.ghl_contact_id)) ?? null) : null;
+    if (!contactId) contactId = await matchOrCreateContact(orgId, contact, db);
     const status = mapStage(opp.pipelineStageId, opp.stageName ?? opp.pipelineStageName, stageMappings);
     const { error } = await db.from('leads').upsert({
         organisation_id: orgId,
@@ -450,9 +454,12 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
             arrayKey: 'opportunities', locationParam: 'location_id', maxPages,
             onPage: (page, totalPages, count) => onProgress({ phase: 'opportunities', pct: phasePct(oppIdx, nPhases, page, totalPages), page, totalPages, count }),
         });
+        // Resolve opp contacts from the already-synced contact book (one scan)
+        // instead of 3 lookups per opportunity.
+        const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
         let synced = 0;
         for (const opp of opportunities) {
-            const r = await upsertOpportunity(orgId, opp, stageMappings);
+            const r = await upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap);
             if (r.ok) synced++;
         }
         // Conversations -> communications (Inbox). Runs after contacts so the
