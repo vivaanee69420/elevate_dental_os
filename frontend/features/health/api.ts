@@ -30,3 +30,31 @@ export function listSnapshots() {
     '/api/health/snapshots',
   );
 }
+
+export interface HealthMetric {
+  key: string;
+  label: string;
+  cat: 'Financial' | 'Patient' | 'Conversion' | 'Operational';
+  unit: '£' | '%' | 'min' | '';
+  better: 'higher' | 'lower';
+  sourceType: 'auto' | 'manual';
+  source: string;
+  asof: string | null;
+  needsInput: boolean;
+  baseline: number | null;
+  current: number | null;
+  target: number | null;
+  progressPct: number;
+  deltaFromBaselinePct: number;
+}
+
+export function getMetrics() {
+  return api<{ metrics: HealthMetric[] }>('/api/health/metrics');
+}
+
+export function updateMetric(key: string, value: number) {
+  return api<{ value: number; asof: string }>(`/api/health/metrics/${key}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ value }),
+  });
+}
