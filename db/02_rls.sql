@@ -300,3 +300,12 @@ CREATE POLICY csv_import_rows_org ON csv_import_rows
 -- ============================================================================
 CREATE POLICY chair_utilisation_org ON chair_utilisation
   USING (organisation_id = current_org_id()) WITH CHECK (organisation_id = current_org_id());
+
+-- ============================================================================
+-- TREATMENT PLANS (production) — finance data; same boundary as payments
+-- ============================================================================
+ALTER TABLE treatment_plans ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "treatment_plans_read" ON treatment_plans
+  FOR SELECT USING (organisation_id = current_org_id() AND current_user_role() != 'reception');
+CREATE POLICY "treatment_plans_write" ON treatment_plans
+  FOR ALL USING (organisation_id = current_org_id() AND current_user_role() != 'reception');

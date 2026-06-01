@@ -674,4 +674,29 @@ CREATE TABLE IF NOT EXISTS csv_import_rows (
 );
 CREATE INDEX IF NOT EXISTS idx_csv_rows_batch ON csv_import_rows (batch_id);
 
+-- Dentally treatment plans = per-practitioner production (see migration 000027).
+CREATE TABLE IF NOT EXISTS treatment_plans (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  source TEXT NOT NULL DEFAULT 'dentally',
+  pms_external_id TEXT NOT NULL,
+  pms_practitioner_id TEXT,
+  pms_patient_id TEXT,
+  associate_id UUID REFERENCES associates(id),
+  contact_id UUID REFERENCES contacts(id),
+  practice_id UUID REFERENCES practices(id),
+  private_value_pence INTEGER NOT NULL DEFAULT 0,
+  nhs_uda_value NUMERIC,
+  nhs_completed_uda_value NUMERIC,
+  completed BOOLEAN DEFAULT false,
+  completed_at TIMESTAMPTZ,
+  start_date DATE,
+  end_date DATE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_treatment_plans_src_ext ON treatment_plans(organisation_id, source, pms_external_id);
+CREATE INDEX IF NOT EXISTS idx_treatment_plans_org ON treatment_plans(organisation_id);
+CREATE INDEX IF NOT EXISTS idx_treatment_plans_assoc ON treatment_plans(organisation_id, associate_id);
+
 COMMENT ON SCHEMA public IS 'Elevate Dental OS — Production schema v1.0';
