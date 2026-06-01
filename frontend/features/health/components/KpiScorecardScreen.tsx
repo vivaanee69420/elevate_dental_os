@@ -1,176 +1,134 @@
 'use client';
-// KPI Scorecard — 23-metric traffic-lighted performance dashboard.
-// Pixel-faithful port of preview/elevate-dental-os-v2.html PAGES.kpiscorecard.
-//
-// Data flow:
-//   KPIS (static targets/actuals)
-//     -> statusOf()  : green | amber | red per metric
-//     -> summary KPI strip (counts by status)
-//     -> grouped by category -> metric cards (value, target, progress bar)
-//
-// Mock-only, no API. British English, no emojis (rule 7), £ via formatPounds.
+// KPI Scorecard — 23-metric traffic-lighted dashboard, live from /api/health/metrics.
+// Auto metrics show a source chip; manual metrics show an owner-only inline edit.
+// British English, no emojis (rule 7), £ via formatPounds, no fabricated numbers.
 
+import { useState } from 'react';
 import { formatPounds } from '@/features/_mock';
-
-type Better = 'higher' | 'lower';
-type Unit = '%' | '£' | 'min' | '';
-
-interface Kpi {
-  cat: string;
-  name: string;
-  actual: number;
-  target: number;
-  unit: Unit;
-  better: Better;
-}
-
-// The 23 tracked KPIs across four categories (prototype values verbatim).
-const KPIS: Kpi[] = [
-  { cat: 'Financial', name: 'Net profit margin', actual: 10.0, target: 18, unit: '%', better: 'higher' },
-  { cat: 'Financial', name: 'EBITDA margin', actual: 14.0, target: 22, unit: '%', better: 'higher' },
-  { cat: 'Financial', name: 'Revenue per chair (monthly)', actual: 20400, target: 25000, unit: '£', better: 'higher' },
-  { cat: 'Financial', name: 'Collections rate', actual: 96.8, target: 98, unit: '%', better: 'higher' },
-  { cat: 'Financial', name: 'Aged debtors >90 days', actual: 0.3, target: 0.5, unit: '%', better: 'lower' },
-  { cat: 'Financial', name: 'Lab cost % revenue', actual: 16.0, target: 15, unit: '%', better: 'lower' },
-  { cat: 'Financial', name: 'Staff cost % revenue', actual: 17.0, target: 16, unit: '%', better: 'lower' },
-  { cat: 'Patient', name: 'New patients per month', actual: 187, target: 220, unit: '', better: 'higher' },
-  { cat: 'Patient', name: 'Active patient base', actual: 14820, target: 16000, unit: '', better: 'higher' },
-  { cat: 'Patient', name: 'Patient retention (12mo)', actual: 94, target: 92, unit: '%', better: 'higher' },
-  { cat: 'Patient', name: 'Lifetime value (private)', actual: 1850, target: 2200, unit: '£', better: 'higher' },
-  { cat: 'Patient', name: 'Recall compliance', actual: 82, target: 90, unit: '%', better: 'higher' },
-  { cat: 'Patient', name: 'Net Promoter Score', actual: 64, target: 60, unit: '', better: 'higher' },
-  { cat: 'Conversion', name: 'Lead-to-consult rate', actual: 38, target: 50, unit: '%', better: 'higher' },
-  { cat: 'Conversion', name: 'Consult-to-treatment rate', actual: 64, target: 75, unit: '%', better: 'higher' },
-  { cat: 'Conversion', name: 'Overall lead-to-treatment', actual: 11.5, target: 18, unit: '%', better: 'higher' },
-  { cat: 'Conversion', name: 'Average case value', actual: 2850, target: 3200, unit: '£', better: 'higher' },
-  { cat: 'Operational', name: 'Chair utilisation', actual: 78, target: 88, unit: '%', better: 'higher' },
-  { cat: 'Operational', name: 'FTA / no-show rate', actual: 4.2, target: 5, unit: '%', better: 'lower' },
-  { cat: 'Operational', name: 'Same-day appointment fill', actual: 65, target: 80, unit: '%', better: 'higher' },
-  { cat: 'Operational', name: 'Lead response time (min)', actual: 22, target: 5, unit: 'min', better: 'lower' },
-  { cat: 'Operational', name: 'UDA delivery vs contract', actual: 96, target: 100, unit: '%', better: 'higher' },
-  { cat: 'Operational', name: 'Production per associate / mo', actual: 35200, target: 42000, unit: '£', better: 'higher' },
-];
+import { useMe } from '@/hooks/useMe';
+import { useMetrics, useUpdateMetric } from '../hooks';
+import type { HealthMetric } from '../api';
 
 type Status = 'green' | 'amber' | 'red';
-
-const STATUS_COLOUR: Record<Status, string> = {
-  green: '#10B981',
-  amber: '#F59E0B',
-  red: '#EF4444',
-};
-
+const STATUS_COLOUR: Record<Status, string> = { green: '#10B981', amber: '#F59E0B', red: '#EF4444' };
 const CATEGORIES = ['Financial', 'Patient', 'Conversion', 'Operational'] as const;
 
-/**
- * Traffic-light a KPI: green on/above target, amber within 10%, red beyond.
- * Direction-aware via `better` (some metrics are better when lower).
- */
-function statusOf(k: Kpi): Status {
-  if (k.better === 'higher') {
-    if (k.actual >= k.target) return 'green';
-    if (k.actual >= k.target * 0.9) return 'amber';
+function statusOf(m: HealthMetric): Status {
+  if (m.current == null || m.target == null) return 'amber';
+  if (m.better === 'higher') {
+    if (m.current >= m.target) return 'green';
+    if (m.current >= m.target * 0.9) return 'amber';
     return 'red';
   }
-  if (k.actual <= k.target) return 'green';
-  if (k.actual <= k.target * 1.1) return 'amber';
+  if (m.current <= m.target) return 'green';
+  if (m.current <= m.target * 1.1) return 'amber';
   return 'red';
 }
 
-/** Format a metric value per its unit (£ grouped, %, minutes, or plain). */
-function fmt(n: number, unit: Unit): string {
+function fmt(n: number | null, unit: HealthMetric['unit']): string {
+  if (n == null) return '—';
   if (unit === '£') return formatPounds(n);
   if (unit === '%') return n + '%';
   if (unit === 'min') return n + 'm';
   return n.toLocaleString('en-GB');
 }
 
-/** Progress toward target as a 0-100% bar width (direction-aware). */
-function progressPct(k: Kpi): number {
-  const raw =
-    k.better === 'higher'
-      ? (k.actual / k.target) * 100
-      : (k.target / k.actual) * 100;
-  return Math.min(100, raw);
+function progressPct(m: HealthMetric): number {
+  if (m.current == null || m.target == null || m.target === 0 || m.current === 0) return 0;
+  const raw = m.better === 'higher' ? (m.current / m.target) * 100 : (m.target / m.current) * 100;
+  return Math.min(100, Math.max(0, raw));
 }
 
-/** One metric card: name, actual vs target, status-coloured progress bar. */
-function MetricCard({ k }: { k: Kpi }) {
-  const st = statusOf(k);
+function MetricCard({ m, canEdit }: { m: HealthMetric; canEdit: boolean }) {
+  const st = statusOf(m);
+  const update = useUpdateMetric();
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState('');
+  const editable = canEdit && m.sourceType === 'manual';
+
   return (
-    <div
-      className="bg-bg"
-      style={{
-        borderLeft: `4px solid ${STATUS_COLOUR[st]}`,
-        padding: '10px 12px',
-        borderRadius: '0 6px 6px 0',
-      }}
-    >
-      <div className="text-[11px] text-ink-muted mb-0.5">{k.name}</div>
+    <div className="bg-bg" style={{ borderLeft: `4px solid ${STATUS_COLOUR[st]}`, padding: '10px 12px', borderRadius: '0 6px 6px 0' }}>
+      <div className="flex justify-between items-center mb-0.5">
+        <div className="text-[11px] text-ink-muted">{m.label}</div>
+        <span className="text-[9px] uppercase tracking-wide text-ink-muted">
+          {m.sourceType === 'auto' ? m.source : m.needsInput ? 'no data' : `manual${m.asof ? ` · ${m.asof}` : ''}`}
+        </span>
+      </div>
       <div className="flex justify-between items-baseline">
-        <div className="display text-xl font-bold">{fmt(k.actual, k.unit)}</div>
-        <div className="text-[11px] text-ink-muted">
-          Target: {fmt(k.target, k.unit)}
+        <div className="display text-xl font-bold">{m.needsInput ? '—' : fmt(m.current, m.unit)}</div>
+        <div className="text-[11px] text-ink-muted">Target: {fmt(m.target, m.unit)}</div>
+      </div>
+      <div className="mt-1.5 overflow-hidden" style={{ height: 4, background: 'rgba(0,0,0,0.05)', borderRadius: 2 }}>
+        <div style={{ height: '100%', width: `${progressPct(m)}%`, background: STATUS_COLOUR[st] }} />
+      </div>
+      {editable && !editing && (
+        <button className="text-[10px] text-brand mt-1.5" onClick={() => { setEditing(true); setVal(m.current?.toString() ?? ''); }}>
+          {m.needsInput ? 'Enter value' : 'Edit'}
+        </button>
+      )}
+      {editable && editing && (
+        <div className="flex gap-1 mt-1.5">
+          <input
+            type="number" value={val} onChange={(e) => setVal(e.target.value)}
+            className="border border-border rounded px-1.5 py-0.5 text-xs w-20"
+            aria-label={`Set ${m.label}`}
+          />
+          <button
+            className="text-[10px] text-white bg-brand rounded px-2"
+            disabled={update.isPending || val === ''}
+            onClick={() => update.mutate({ key: m.key, value: Number(val) }, { onSuccess: () => setEditing(false) })}
+          >Save</button>
+          <button className="text-[10px] text-ink-muted px-1" onClick={() => setEditing(false)}>Cancel</button>
         </div>
-      </div>
-      <div
-        className="mt-1.5 overflow-hidden"
-        style={{ height: 4, background: 'rgba(0,0,0,0.05)', borderRadius: 2 }}
-      >
-        <div
-          style={{
-            height: '100%',
-            width: `${progressPct(k)}%`,
-            background: STATUS_COLOUR[st],
-          }}
-        />
-      </div>
+      )}
     </div>
   );
 }
 
-/** Summary tile in the top status strip. */
 function SummaryTile({ label, value, colour }: { label: string; value: number; colour?: string }) {
   return (
     <div className="card-padded">
       <div className="text-xs text-ink-muted uppercase">{label}</div>
-      <div className="display text-2xl font-bold mt-1" style={colour ? { color: colour } : undefined}>
-        {value}
-      </div>
+      <div className="display text-2xl font-bold mt-1" style={colour ? { color: colour } : undefined}>{value}</div>
     </div>
   );
 }
 
-/** KPI Scorecard screen: summary strip + four category panels. */
 export default function KpiScorecardScreen() {
-  const green = KPIS.filter((k) => statusOf(k) === 'green').length;
-  const amber = KPIS.filter((k) => statusOf(k) === 'amber').length;
-  const red = KPIS.filter((k) => statusOf(k) === 'red').length;
+  const { data } = useMetrics();
+  const { data: me } = useMe();
+  const canEdit = me?.role === 'owner';
+
+  if (!data) return <div>Loading…</div>;
+  const metrics = data.metrics;
+  const green = metrics.filter((m) => statusOf(m) === 'green').length;
+  const amber = metrics.filter((m) => statusOf(m) === 'amber').length;
+  const red = metrics.filter((m) => statusOf(m) === 'red').length;
 
   return (
     <div className="max-w-7xl mx-auto">
       <div className="mb-4">
         <h1 className="display text-3xl font-bold">KPI Scorecard</h1>
         <p className="text-sm text-ink-muted">
-          Stage 4 of the Mastery roadmap — performance management · 23 KPIs traffic-lighted
+          Performance management · {metrics.length} KPIs traffic-lighted · live from your connected data
         </p>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <SummaryTile label="Total KPIs tracked" value={KPIS.length} />
+        <SummaryTile label="Total KPIs tracked" value={metrics.length} />
         <SummaryTile label="On / above target" value={green} colour="var(--success)" />
         <SummaryTile label="Watching" value={amber} colour="var(--accent)" />
         <SummaryTile label="Below target" value={red} colour="var(--danger)" />
       </div>
 
       {CATEGORIES.map((cat) => {
-        const items = KPIS.filter((k) => k.cat === cat);
+        const items = metrics.filter((m) => m.cat === cat);
+        if (!items.length) return null;
         return (
           <div key={cat} className="card card-padded mb-3.5">
             <h2 className="display text-[17px] font-semibold mb-3.5">{cat} KPIs</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-              {items.map((k) => (
-                <MetricCard key={k.name} k={k} />
-              ))}
+              {items.map((m) => <MetricCard key={m.key} m={m} canEdit={canEdit} />)}
             </div>
           </div>
         );
