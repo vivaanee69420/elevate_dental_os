@@ -26,6 +26,7 @@ import type {
 } from '@/features/integrations/api';
 import DentallyPracticeMapping from '@/features/integrations/components/DentallyPracticeMapping';
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
+import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
 import SyncOverlay from '@/features/integrations/components/SyncOverlay';
 
 function statusOf(provider: string, rows: IntegrationRow[]): IntegrationRow['status'] | null {
@@ -59,13 +60,17 @@ export default function IntegrationsScreen() {
   const [brokerModal, setBrokerModal] = useState<{
     provider: string;
     hint: string;
+    requiresLocationId?: boolean;
   } | null>(null);
   const [keyInput, setKeyInput] = useState('');
+  const [locInput, setLocInput] = useState('');
 
   const integrations = data?.integrations ?? [];
   const providers = data?.available ?? [];
   const connectedCount = integrations.filter((i) => i.status === 'active').length;
   const dentallyConnected = statusOf('dentally', integrations) === 'active';
+  const ghlConnected = statusOf('gohighlevel', integrations) === 'active';
+  const ghlMappings = (rowOf('gohighlevel', integrations)?.config?.stage_mappings ?? {}) as Record<string, string>;
 
   // Group providers by category, preserving registration order.
   const groups: { category: string; items: ProviderMeta[] }[] = [];
@@ -80,20 +85,29 @@ export default function IntegrationsScreen() {
     if (res.redirectUrl) {
       window.location.href = res.redirectUrl;
     } else if (res.requiresKeyPaste) {
-      setBrokerModal({ provider: p.id, hint: res.pasteHint ?? 'Paste your API key.' });
+      setBrokerModal({
+        provider: p.id,
+        hint: res.pasteHint ?? 'Paste your API key.',
+        requiresLocationId: res.requiresLocationId,
+      });
     }
   }
 
   async function handleBrokerSubmit() {
     if (!brokerModal) return;
     const provider = brokerModal.provider;
-    // submitBrokerKey persists the token; the backend then runs the first pull
-    // automatically (Dentally: detect sites → auto-create+map practices → pull
-    // the last 24 months). Show the progress overlay so the user sees it land —
-    // connecting + pasting the key is the only manual step.
-    await submitKey.mutateAsync({ provider, apiKey: keyInput });
+    // submitBrokerKey persists the key; the backend then runs the first pull
+    // automatically (Dentally: detect sites → map practices → pull; GHL: pull
+    // contacts + opportunities). Show the progress overlay so the user sees it
+    // land — pasting the key (+ Location ID for GHL) is the only manual step.
+    await submitKey.mutateAsync({
+      provider,
+      apiKey: keyInput,
+      locationId: brokerModal.requiresLocationId ? locInput : undefined,
+    });
     setBrokerModal(null);
     setKeyInput('');
+    setLocInput('');
     if (SYNCABLE.has(provider)) setSyncing(provider);
   }
 
@@ -129,6 +143,7 @@ export default function IntegrationsScreen() {
 
       {dentallyConnected && <DentallyPracticeMapping />}
       {dentallyConnected && <DentallyWebhookPanel />}
+      {ghlConnected && <GoHighLevelPanel initialMappings={ghlMappings} />}
 
       {groups.map((g) => (
         <div key={g.category} style={{ marginBottom: 20 }}>
@@ -229,6 +244,19 @@ export default function IntegrationsScreen() {
                 fontSize: 13, marginBottom: 12,
               }}
             />
+            {brokerModal.requiresLocationId && (
+              <input
+                type="text"
+                value={locInput}
+                onChange={(e) => setLocInput(e.target.value)}
+                placeholder="Location ID"
+                style={{
+                  width: '100%', padding: '8px 10px',
+                  border: '1px solid var(--border)', borderRadius: 6,
+                  fontSize: 13, marginBottom: 12,
+                }}
+              />
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button
                 onClick={() => setBrokerModal(null)}
@@ -241,7 +269,7 @@ export default function IntegrationsScreen() {
               </button>
               <button
                 onClick={handleBrokerSubmit}
-                disabled={!keyInput || submitKey.isPending}
+                disabled={!keyInput || (brokerModal.requiresLocationId && !locInput) || submitKey.isPending}
                 style={{
                   padding: '8px 14px', background: 'var(--brand)',
                   color: 'white', border: 'none', borderRadius: 6,

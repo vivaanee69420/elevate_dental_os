@@ -64,6 +64,14 @@ export const integrationController = {
     async siteIds(req, res) {
         res.json(await integration_service_1.integrationService.detectSiteIds(req.user.organisation_id, req.params.provider));
     },
+    // GoHighLevel pipelines + stages, to drive the stage-mapping UI.
+    async pipelines(req, res) {
+        res.json(await integration_service_1.integrationService.detectPipelines(req.user.organisation_id, req.params.provider));
+    },
+    // Persist the GHL stage -> Elevate status mapping.
+    async setStageMappings(req, res) {
+        res.json(await integration_service_1.integrationService.setStageMappings(req.user.organisation_id, req.params.provider, req.body?.mappings));
+    },
     // Real-time webhook config (URL to paste into the provider + secret setter).
     async webhookInfo(req, res) {
         res.json(await integration_service_1.integrationService.webhookInfo(req.user.organisation_id, req.params.provider));
