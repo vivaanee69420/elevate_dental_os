@@ -5,11 +5,15 @@
 //   • Recent messages      (inbound communications, newest first)
 // Replaces the mock task generator.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useLeads } from '@/features/leads/hooks';
 import { useCommunications } from '../hooks';
 import type { Lead } from '@/features/leads/api';
+import type { Communication } from '../api';
 import { agoLabel } from '../data';
+import { formatPence } from '@/lib/format';
+
+type Selected = { kind: 'lead'; lead: Lead } | { kind: 'msg'; comm: Communication };
 
 const OPEN_FOLLOWUP: Lead['status'][] = ['new', 'contact_attempted', 'contact_made'];
 const CLOSED: Lead['status'][] = ['not_proceeding', 'treatment_completed', 'failed_to_attend'];
@@ -35,6 +39,7 @@ export default function TodayScreen() {
   const { data: commData } = useCommunications();
   const leads: Lead[] = leadData?.leads ?? [];
   const comms = commData?.communications ?? [];
+  const [selected, setSelected] = useState<Selected | null>(null);
 
   const { newLeads, followUps, messages, activeCount } = useMemo(() => {
     const start = new Date(); start.setHours(0, 0, 0, 0);
@@ -82,12 +87,12 @@ export default function TodayScreen() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <Section title="New leads today" empty="No new leads today.">
           {newLeads.map((l) => (
-            <Row key={l.id} title={nameOf(l)} sub={l.treatment} tag={l.source ?? undefined} ago={agoLabel(minsSince(l.created_at))} />
+            <Row key={l.id} title={nameOf(l)} sub={l.treatment} tag={l.source ?? undefined} ago={agoLabel(minsSince(l.created_at))} onClick={() => setSelected({ kind: 'lead', lead: l })} />
           ))}
         </Section>
         <Section title="Needs follow-up" empty="Nothing to follow up.">
           {followUps.map((l) => (
-            <Row key={l.id} title={nameOf(l)} sub={`${l.treatment} · ${l.status.replace(/_/g, ' ')}`} ago={agoLabel(minsSince(l.created_at))} />
+            <Row key={l.id} title={nameOf(l)} sub={`${l.treatment} · ${l.status.replace(/_/g, ' ')}`} ago={agoLabel(minsSince(l.created_at))} onClick={() => setSelected({ kind: 'lead', lead: l })} />
           ))}
         </Section>
       </div>
@@ -101,9 +106,66 @@ export default function TodayScreen() {
               sub={stripJunk(m.body)}
               tag={m.channel}
               ago={agoLabel(minsSince(m.created_at))}
+              onClick={() => setSelected({ kind: 'msg', comm: m })}
             />
           ))}
         </Section>
+      </div>
+
+      {selected && <DetailModal selected={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: React.ReactNode }) {
+  if (value == null || value === '') return null;
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
+      <span className="text-ink-muted">{label}</span>
+      <span style={{ fontWeight: 600, textAlign: 'right' }}>{value}</span>
+    </div>
+  );
+}
+
+function DetailModal({ selected, onClose }: { selected: Selected; onClose: () => void }) {
+  const isLead = selected.kind === 'lead';
+  const l = isLead ? selected.lead : null;
+  const m = !isLead ? selected.comm : null;
+  const title = isLead
+    ? nameOf(l!)
+    : `${m!.contact?.first_name ?? ''} ${m!.contact?.last_name ?? ''}`.trim() || 'Unknown';
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+    >
+      <div className="card-padded" onClick={(e) => e.stopPropagation()} style={{ background: 'white', maxWidth: 520, width: '92%', maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}>
+        <button onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: 10, right: 12, border: 'none', background: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink-muted)' }}>×</button>
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>{title}</h3>
+        {isLead ? (
+          <div>
+            <Field label="Email" value={l!.contact?.email} />
+            <Field label="Phone" value={l!.contact?.phone} />
+            <Field label="Treatment" value={l!.treatment} />
+            <Field label="Stage" value={l!.ghl_stage_name ?? l!.status.replace(/_/g, ' ')} />
+            <Field label="Status" value={l!.status.replace(/_/g, ' ')} />
+            <Field label="Value" value={l!.estimated_value_pence ? formatPence(l!.estimated_value_pence) : null} />
+            <Field label="Source" value={l!.source} />
+            <Field label="Created" value={new Date(l!.created_at).toLocaleString('en-GB')} />
+            <Field label="Synced from" value={l!.sync_status === 'synced' ? 'GoHighLevel' : 'Manual'} />
+          </div>
+        ) : (
+          <div>
+            <Field label="Email" value={m!.contact?.email} />
+            <Field label="Channel" value={m!.channel} />
+            <Field label="Direction" value={m!.direction} />
+            <Field label="Received" value={new Date(m!.created_at).toLocaleString('en-GB')} />
+            <div style={{ marginTop: 12 }}>
+              <div className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Message</div>
+              <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{stripJunk(m!.body) || '(empty)'}</div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -121,9 +183,12 @@ function Section({ title, empty, children }: { title: string; empty: string; chi
   );
 }
 
-function Row({ title, sub, tag, ago }: { title: string; sub?: string; tag?: string; ago: string }) {
+function Row({ title, sub, tag, ago, onClick }: { title: string; sub?: string; tag?: string; ago: string; onClick?: () => void }) {
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+    <div
+      onClick={onClick}
+      style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 8, cursor: onClick ? 'pointer' : 'default' }}
+    >
       <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <strong style={{ fontSize: 13 }}>{title}</strong>
         <span className="text-ink-muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>{ago}</span>
