@@ -173,12 +173,25 @@ describe('syncOneOrg', () => {
         expect(patients.length).toBeGreaterThan(0);
         expect(payments.length).toBeGreaterThan(0);
         expect(appts.length).toBeGreaterThan(0);
-        // Every resource pulls the bounded 2-year window via updated_since, and
-        // NONE uses the old upcoming-only `after` filter — so completed
-        // appointments land too (Associates / Treatment Mix / Pay need them).
-        for (const s of [...patients, ...payments, ...appts]) {
+        // Patients + payments pull the bounded 2-year window via updated_since.
+        for (const s of [...patients, ...payments]) {
             expect(s.after).toBeNull();
             expect(Math.abs(new Date(s.updated_since).getTime() - expected24)).toBeLessThan(86400000);
+        }
+        // Appointments are pulled BOTH ways on bootstrap: the 2-year history via
+        // updated_since (for Associates / Treatment Mix / Pay) AND the upcoming
+        // book via `after=now` (for the live Appointments diary — a separate
+        // query so years of history can't crowd future bookings out under the
+        // page cap).
+        const apptHistory = appts.filter((s) => s.updated_since != null);
+        const apptUpcoming = appts.filter((s) => s.after != null);
+        expect(apptHistory.length).toBeGreaterThan(0);
+        expect(apptUpcoming.length).toBeGreaterThan(0);
+        for (const s of apptHistory) {
+            expect(Math.abs(new Date(s.updated_since).getTime() - expected24)).toBeLessThan(86400000);
+        }
+        for (const s of apptUpcoming) {
+            expect(Math.abs(new Date(s.after).getTime() - Date.now())).toBeLessThan(86400000);
         }
     });
 });

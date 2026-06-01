@@ -36,7 +36,7 @@ const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k ro
 const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls all history
 const BACKFILL_SINCE = '2005-01-01T00:00:00.000Z'; // far-back updated_since so a full pull sees all records (API requires the param)
 const RECENT_MONTHS = 24;        // on-connect bootstrap window: last 24 months (dashboards are TTM; the cron + full-history button deepen the rest)
-const BOOTSTRAP_MAX_PAGES = 600; // ~60k rows/resource cap for the on-connect pull, so onboarding finishes in a couple of minutes
+const BOOTSTRAP_MAX_PAGES = 900; // ~90k rows/resource cap for the on-connect pull — headroom for a busy multi-site group's full 2-year appointment history (~80k) so the pull reaches recent + upcoming, not just old history
 // On the FIRST pull we only want live work — upcoming, not-yet-closed
 // appointments — so onboarding is fast and the Operations view is immediately
 // useful. These states are "closed" and dropped from the open pull; the
@@ -598,6 +598,24 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // openOnly defaults false: store every appointment in the window
         // (completed history included), not just upcoming diary blocks.
         const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { practitionerMap });
+        // The historical `updated_since` pull above is ordered oldest-first and
+        // can exhaust the page cap before reaching today — so future bookings
+        // (exactly what the Appointments diary screen shows) may never land.
+        // Pull the upcoming book explicitly: `after=now` is a small, separate
+        // query that can't be crowded out by years of history, guaranteeing the
+        // live diary populates. Upserts dedupe against the historical rows.
+        // Only needed for the bootstrap (recent): full/incremental either lift
+        // the cap (full) or ride the changed-since cursor (incremental), so they
+        // already capture future bookings.
+        let upcomingSynced = 0;
+        if (recent) {
+            try {
+                const upcoming = await pullAppointments(orgId, base, auth, { after: new Date().toISOString() }, siteMap, contactMap, null, maxPages, { practitionerMap });
+                upcomingSynced = upcoming.synced ?? 0;
+            } catch (err) {
+                console.warn(`[dentally] upcoming appointments pull skipped: ${err?.message || err}`);
+            }
+        }
         const pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
@@ -629,6 +647,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             practitioners: practitioners.synced,
             patients: patients.synced,
             appointments: appts.synced,
+            appointments_upcoming: upcomingSynced,
             payments: pays.synced,
             skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0),
             skipped_closed_appointments: appts.skippedClosed ?? 0,
