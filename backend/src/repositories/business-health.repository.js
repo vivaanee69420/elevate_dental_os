@@ -60,6 +60,28 @@ export const businessHealthRepository = {
             .single();
         return data;
     },
+    async getMetricsData(orgId) {
+        const { data } = await supabase_1.serviceClient
+            .from('business_health')
+            .select('baseline, targets, manual')
+            .eq('organisation_id', orgId)
+            .maybeSingle();
+        return data;
+    },
+    async setManualMetric(orgId, key, entry) {
+        const { data } = await supabase_1.serviceClient
+            .from('business_health')
+            .select('manual')
+            .eq('organisation_id', orgId)
+            .maybeSingle();
+        const manual = { ...(data?.manual || {}), [key]: entry };
+        const { error } = await supabase_1.serviceClient
+            .from('business_health')
+            .update({ manual })
+            .eq('organisation_id', orgId);
+        if (error) throw new Error(error.message);
+        return manual[key];
+    },
     async updateCadence(orgId, frequency) {
         const { error } = await supabase_1.serviceClient
             .from('business_health')
