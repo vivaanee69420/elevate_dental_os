@@ -116,6 +116,7 @@ CREATE TABLE business_health (
   setup_completed_at TIMESTAMPTZ,
   baseline JSONB NOT NULL DEFAULT '{}',
   targets JSONB NOT NULL DEFAULT '{}',
+  manual          JSONB NOT NULL DEFAULT '{}',
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE TRIGGER health_updated_at BEFORE UPDATE ON business_health FOR EACH ROW EXECUTE FUNCTION set_updated_at();
