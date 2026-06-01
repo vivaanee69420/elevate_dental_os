@@ -184,6 +184,27 @@ Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ app
   `practitioner_id` → `appointments.associate_id`). A full re-sync backfills `associate_id`
   on historical appointments.
 
+## Staff  — owner / practice_manager
+
+- `GET /api/staff?practice_id=<uuid>` — team roster, sourced from the Dentally
+  `/users` sync. Returns `{ staff: [{ id, full_name, role, practice, email, phone,
+  last_login_at, recently_active }], total_staff, distinct_roles, practices_covered,
+  active_count }`, sorted by name. `role` is the raw Dentally label ("Dentist",
+  "Receptionist", …); `recently_active` / `active_count` = logged in within 90 days.
+  HR data (hourly rate, weekly hours, scheduled hours, attendance) is **not in
+  Dentally** and is intentionally absent. Staff are created/linked by the Dentally
+  sync (`/users` → `staff`, upsert on `organisation_id,source,pms_external_id`).
+
+## Treatments  — owner / practice_manager
+
+- `GET /api/treatments?practice_id=<uuid>&weeks=52` — Treatment Mix: appointment
+  **volume** grouped by `appointment_type` over the window. Returns
+  `{ treatments: [{ type, volume, share_pct }], total_volume, distinct_types,
+  top_treatment, window_weeks }`, sorted by volume desc. This is volume only —
+  Dentally appointments carry no price, so there is no revenue/margin here.
+  NULL `appointment_type` collapses to `"Unspecified"`. Backed by the
+  `treatment_mix_stats` RPC with a paginated fallback scan.
+
 ## Payments
 
 ### `GET /api/payments?status=settled&since=2026-01-01&until=2026-03-31&page=1&limit=25&practice_id=`
@@ -202,6 +223,16 @@ Response:
 ## Pay Runs *(owner-only)*
 
 ### `GET /api/pay-runs`
+### `GET /api/pay-runs/draft?period_start=2026-05-01&period_end=2026-05-31`
+Draft preview (not persisted). Production per active associate is summed from
+completed `treatment_plans` for the period and run through `calculateAssociatePay`.
+Dates are `YYYY-MM-DD`. Returns
+`{ period_start, period_end, status: "draft", rows: [{ associate_id, full_name,
+practice, pay_pct, lab_split_pct, production_pence, lab_cost_pence, gross_pence,
+lab_deduction_pence, prev_balance_pence, net_pence }], totals: { production, gross,
+lab, net }, pct_of_production }`. Lab cost is `0` (no lab-invoice feed yet) so
+`net == gross`; NHS UDA production is excluded. Backed by the `associate_production`
+RPC with a paginated fallback scan. See `docs/FORMULAS.md` §3.
 ### `POST /api/pay-runs/calculate`
 ```json
 {

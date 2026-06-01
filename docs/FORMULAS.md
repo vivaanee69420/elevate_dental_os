@@ -124,6 +124,21 @@ net = gross - labDeduction + prev_balance_pence
 - UDA pay: separate formula, calculated as `uda_count × uda_rate_pence × pay_pct / 10000`
 - Hygiene therapist pay: same formula, different default pay_pct (typically 4000 = 40%)
 
+**Production source (draft pay run, `GET /api/pay-runs/draft`)**: `production_pence`
+is summed from **`treatment_plans.private_value_pence`** for rows where
+`completed = true` and `completed_at` falls in the period (the Dentally
+`/treatment_plans` feed — appointments and payments carry no per-associate
+production). Caveats, surfaced in the UI:
+- **Lab cost has no feed yet** (no lab-invoice import) → `labCost_pence = 0`, so
+  `labDeduction = 0` and `net == gross`. Lab invoices are entered/uploaded
+  separately (the persisted `POST /api/pay-runs/calculate` path still takes a
+  real `lab_cost_pence` per line).
+- **NHS UDA production is excluded** from `production_pence`: it is paid in UDA
+  units (`treatment_plans.nhs_completed_uda_value`) with no per-UDA rate stored,
+  so it cannot be converted to pence here (see the UDA-pay edge case above).
+- `prev_balance_pence = 0` in the draft (carry-forward is applied at persist time).
+- `pay_pct` / `lab_split_pct` come from the `associates` row (basis points).
+
 ---
 
 ## 4. Cash Flow (13-week, REAL backward view)

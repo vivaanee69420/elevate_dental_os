@@ -276,8 +276,11 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
         });
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { full: true });
-        // every resource pull asked for everything since ~2005, ignoring last_sync_at
-        expect(seen.length).toBeGreaterThan(0);
-        for (const s of seen) expect(s.startsWith('2005-')).toBe(true);
+        // every WINDOWED resource pull asked for everything since ~2005, ignoring
+        // last_sync_at. The /users roster pull is deliberately unwindowed (full
+        // team every sync), so it carries no updated_since (null) — skip it.
+        const windowed = seen.filter(Boolean);
+        expect(windowed.length).toBeGreaterThan(0);
+        for (const s of windowed) expect(s.startsWith('2005-')).toBe(true);
     });
 });
