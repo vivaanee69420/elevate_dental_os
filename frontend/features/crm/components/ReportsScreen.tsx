@@ -11,66 +11,54 @@
 //         -> group by treatment-> treatment value cards
 
 import { useMemo } from 'react';
-import {
-  LEADS,
-  SOURCES,
-  PRACTICES,
-  TREATMENTS,
-  formatCurrency,
-} from '../data';
+import { useLeads } from '@/features/leads/hooks';
+import type { Lead } from '@/features/leads/api';
+import { formatPence as formatCurrency } from '@/lib/format';
 
-/** CRM Reports screen. */
+/** CRM Reports screen — live, derived from GET /api/leads. */
 export default function ReportsScreen() {
+  const { data, isLoading } = useLeads({ limit: 1000 });
+  const leads: Lead[] = data?.leads ?? [];
+
   const model = useMemo(() => {
-    const totalLeads = LEADS.length;
-    const contacted = LEADS.filter((l) => l.status !== 'new').length;
-    const consultBooked = LEADS.filter((l) =>
-      ['consultation_booked', 'consultation_attended', 'treatment_started'].includes(
-        l.status,
-      ),
+    const val = (l: Lead) => l.estimated_value_pence ?? 0;
+    const totalLeads = leads.length;
+    const contacted = leads.filter((l) => l.status !== 'new').length;
+    const consultBooked = leads.filter((l) =>
+      ['consultation_booked', 'consultation_attended', 'treatment_started'].includes(l.status),
     ).length;
-    const consultAttended = LEADS.filter((l) =>
+    const consultAttended = leads.filter((l) =>
       ['consultation_attended', 'treatment_started'].includes(l.status),
     ).length;
-    const treatmentStarted = LEADS.filter(
-      (l) => l.status === 'treatment_started',
-    ).length;
+    const treatmentStarted = leads.filter((l) => l.status === 'treatment_started').length;
 
-    const sourceBreakdown = SOURCES.map((s) => {
-      const sl = LEADS.filter((l) => l.source === s);
-      const converted = sl.filter(
-        (l) => l.status === 'treatment_started',
-      );
+    const sources = [...new Set(leads.map((l) => l.source).filter(Boolean))] as string[];
+    const sourceBreakdown = sources.map((s) => {
+      const sl = leads.filter((l) => l.source === s);
+      const converted = sl.filter((l) => l.status === 'treatment_started');
       return {
         name: s,
         leads: sl.length,
         conversionRate: sl.length ? (converted.length / sl.length) * 100 : 0,
-        value: converted.reduce((sum, l) => sum + l.value, 0),
+        value: converted.reduce((sum, l) => sum + val(l), 0),
       };
     }).sort((a, b) => b.leads - a.leads);
 
-    const practiceBreakdown = PRACTICES.map((p) => {
-      const pl = LEADS.filter((l) => l.practice === p);
-      const converted = pl.filter(
-        (l) => l.status === 'treatment_started',
-      ).length;
-      return {
-        name: p,
-        leads: pl.length,
-        conversionRate: pl.length ? (converted / pl.length) * 100 : 0,
-      };
+    const practices = [...new Set(leads.map((l) => l.practice?.name).filter(Boolean))] as string[];
+    const practiceBreakdown = practices.map((p) => {
+      const pl = leads.filter((l) => l.practice?.name === p);
+      const converted = pl.filter((l) => l.status === 'treatment_started').length;
+      return { name: p, leads: pl.length, conversionRate: pl.length ? (converted / pl.length) * 100 : 0 };
     }).sort((a, b) => b.leads - a.leads);
 
-    const treatmentBreakdown = TREATMENTS.map((t) => {
-      const tl = LEADS.filter((l) => l.treatment === t);
-      return {
-        name: t,
-        leads: tl.length,
-        value: tl.reduce((s, l) => s + l.value, 0),
-      };
+    const treatments = [...new Set(leads.map((l) => l.treatment).filter(Boolean))] as string[];
+    const treatmentBreakdown = treatments.map((t) => {
+      const tl = leads.filter((l) => l.treatment === t);
+      return { name: t, leads: tl.length, value: tl.reduce((s, l) => s + val(l), 0) };
     })
       .filter((t) => t.leads > 0)
-      .sort((a, b) => b.value - a.value);
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 24); // top treatments by value
 
     const funnel = [
       { label: 'Leads received', value: totalLeads, colour: '#3B82F6' },
@@ -80,20 +68,25 @@ export default function ReportsScreen() {
       { label: 'Treatment started', value: treatmentStarted, colour: '#10B981' },
     ];
 
-    const pipelineValue = LEADS.filter(
-      (l) => l.status !== 'not_proceeding',
-    ).reduce((s, l) => s + l.value, 0);
+    const pipelineValue = leads
+      .filter((l) => l.status !== 'not_proceeding')
+      .reduce((s, l) => s + val(l), 0);
+
+    const contactTimes = leads
+      .map((l) => l.last_response_minutes)
+      .filter((m): m is number => typeof m === 'number');
+    const avgFirstContact = contactTimes.length
+      ? Math.round(contactTimes.reduce((a, b) => a + b, 0) / contactTimes.length)
+      : null;
+    const ftaRate = totalLeads
+      ? (leads.filter((l) => l.status === 'failed_to_attend').length / totalLeads) * 100
+      : 0;
 
     return {
-      totalLeads,
-      treatmentStarted,
-      sourceBreakdown,
-      practiceBreakdown,
-      treatmentBreakdown,
-      funnel,
-      pipelineValue,
+      totalLeads, treatmentStarted, sourceBreakdown, practiceBreakdown,
+      treatmentBreakdown, funnel, pipelineValue, avgFirstContact, ftaRate,
     };
-  }, []);
+  }, [leads]);
 
   const maxFunnel = model.totalLeads || 1;
 
@@ -105,7 +98,9 @@ export default function ReportsScreen() {
           CRM Reports
         </h1>
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          Conversion funnel · source ROI · practice performance · response times
+          {isLoading
+            ? 'Loading…'
+            : `${model.totalLeads.toLocaleString('en-GB')} leads · conversion funnel · source ROI · practice performance`}
         </p>
       </div>
 
@@ -145,7 +140,7 @@ export default function ReportsScreen() {
             className="display font-bold"
             style={{ fontSize: 28, color: '#10B981', marginTop: 4 }}
           >
-            47m
+            {model.avgFirstContact != null ? `${model.avgFirstContact}m` : '—'}
           </div>
           <div className="text-ink-muted" style={{ fontSize: 10 }}>
             SLA: under 1 hour
@@ -162,7 +157,7 @@ export default function ReportsScreen() {
             className="display font-bold"
             style={{ fontSize: 28, color: '#F59E0B', marginTop: 4 }}
           >
-            4.2%
+            {model.ftaRate.toFixed(1)}%
           </div>
           <div className="text-ink-muted" style={{ fontSize: 10 }}>
             UK avg 8% · target under 5%
