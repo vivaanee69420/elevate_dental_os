@@ -84,3 +84,32 @@ describe('businessHealthService.metrics', () => {
     expect(out).toEqual({ metrics: [] });
   });
 });
+
+describe('businessHealthService.updateMetric', () => {
+  beforeEach(() => {
+    supaRec.last = undefined;
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health' ? { data: { manual: {} }, error: null } : { data: [], error: null };
+  });
+
+  it('owner can set a manual metric; write is org-scoped', async () => {
+    const out = await svc.updateMetric(ORG, 'owner', 'nps', 64);
+    expect(out.value).toBe(64);
+    expect(typeof out.asof).toBe('string');
+    const upd = supaRec.last; // last op is the update on business_health
+    expect(upd.eqs.find((e) => e.col === 'organisation_id')).toEqual({ col: 'organisation_id', val: ORG });
+  });
+
+  it('reception/PM cannot write (403)', async () => {
+    await expect(svc.updateMetric(ORG, 'reception', 'nps', 64)).rejects.toMatchObject({ status: 403 });
+    await expect(svc.updateMetric(ORG, 'practice_manager', 'nps', 64)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('rejects an unknown key (400)', async () => {
+    await expect(svc.updateMetric(ORG, 'owner', 'not_a_metric', 1)).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('rejects an auto-sourced key (400 — not manually editable)', async () => {
+    await expect(svc.updateMetric(ORG, 'owner', 'annual_revenue', 1)).rejects.toMatchObject({ status: 400 });
+  });
+});

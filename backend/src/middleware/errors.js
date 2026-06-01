@@ -7,6 +7,11 @@ export class AppError extends Error {
         super(message);
         this.statusCode = statusCode;
     }
+    // Alias: some call-sites/tests refer to `.status`; keep it in sync with
+    // the canonical `statusCode` so both spellings resolve to the same code.
+    get status() {
+        return this.statusCode;
+    }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
