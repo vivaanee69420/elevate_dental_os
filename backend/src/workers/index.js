@@ -186,17 +186,18 @@ node_cron_1.default.schedule('0 3 * * *', async () => {
     }
 });
 // --------------------------------------------------------------------------
-// GoHighLevel inbound sync — hourly, pull opportunities/contacts into
-// leads/contacts for orgs with an active gohighlevel integration.
+// GoHighLevel inbound sync — nightly at 22:00 UK time, pull
+// contacts/opportunities/conversations + refresh pipeline & workflow caches for
+// orgs with an active gohighlevel integration.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('0 * * * *', async () => {
+node_cron_1.default.schedule('0 22 * * *', async () => {
     try {
         const results = await gohighlevel_sync_1.syncAllOrgs();
-        if (results.length > 0) console.log(`[worker] GoHighLevel sync: ${results.length} orgs`);
+        if (results.length > 0) console.log(`[worker] GoHighLevel nightly sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] GoHighLevel sync failed', err);
     }
-});
+}, { timezone: 'Europe/London' });
 // --------------------------------------------------------------------------
 // Xero P&L sync — daily 02:15, pull the month's Profit & Loss into
 // monthly_financials for orgs with an active xero integration.
