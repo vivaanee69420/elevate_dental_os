@@ -33,6 +33,8 @@ export interface Lead {
   sync_status: 'synced' | 'manual' | 'pending_sync';
   ghl_opportunity_id: string | null;
   ghl_pipeline_id: string | null;
+  ghl_pipeline_stage_id: string | null;
+  ghl_stage_name: string | null;
   created_at: string;
   updated_at: string;
   // Optional joined contact details when backend returns them
@@ -65,6 +67,22 @@ export function listLeads(filters: LeadsListFilters = {}): Promise<LeadsListResp
   if (filters.since) params.set('since', filters.since);
   params.set('limit', String(filters.limit ?? 100));
   return api<LeadsListResponse>(`/api/leads?${params.toString()}`);
+}
+
+// GoHighLevel pipeline definitions (cached from the sync) — drives the dynamic
+// Pipeline-screen columns + the pipeline selector.
+export interface GhlPipelineStage {
+  id: string;
+  name: string;
+}
+export interface GhlPipeline {
+  id: string;
+  name: string;
+  stages: GhlPipelineStage[];
+}
+
+export function listPipelines() {
+  return api<{ pipelines: GhlPipeline[] }>('/api/leads/pipelines');
 }
 
 export interface LeadUpdateInput {

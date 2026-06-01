@@ -3,8 +3,8 @@ import * as contact_model_1 from "../models/contact.model.js";
 export const contactController = {
     async list(req, res) {
         const q = contact_model_1.contactListQuerySchema.parse(req.query);
-        const contacts = await contact_service_1.contactService.list(req.user.organisation_id, q);
-        res.json({ contacts });
+        const r = await contact_service_1.contactService.list(req.user.organisation_id, q);
+        res.json({ contacts: r.rows, total: r.total, page: r.page, limit: r.limit });
     },
     async getById(req, res) {
         const data = await contact_service_1.contactService.getById(req.user.organisation_id, req.params.id);

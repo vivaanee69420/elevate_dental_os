@@ -11,6 +11,7 @@ export const contactListQuerySchema = zod_1.z.object({
     // of sources grows as integrations are added.
     source: zod_1.z.string().optional(),
     limit: zod_1.z.coerce.number().default(100),
+    page: zod_1.z.coerce.number().min(1).default(1),
 });
 export const contactCreateSchema = zod_1.z.object({
     type: zod_1.z.enum(['lead', 'patient', 'lapsed']).default('lead'),
