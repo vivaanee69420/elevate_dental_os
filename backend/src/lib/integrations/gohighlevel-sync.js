@@ -319,17 +319,24 @@ async function ensureFreshToken(orgId, integration) {
 // (ghl_contact_id -> our id), when supplied, resolves the contact in O(1) from
 // the already-synced contact book instead of 3 lookups per opportunity — only
 // opps whose contact isn't found fall back to match-or-create.
-export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = supabase_1.serviceClient, contactMap = null) {
+export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = supabase_1.serviceClient, contactMap = null, stageNameMap = null) {
     if (!opp || opp.id == null) return { ok: false, skipped: 'no_opportunity_id' };
     const contact = extractContact(opp);
     let contactId = contactMap && contact.ghl_contact_id ? (contactMap.get(String(contact.ghl_contact_id)) ?? null) : null;
     if (!contactId) contactId = await matchOrCreateContact(orgId, contact, db);
-    const status = mapStage(opp.pipelineStageId, opp.stageName ?? opp.pipelineStageName, stageMappings);
+    // Stage name: prefer the payload, else resolve the id from the pipeline map.
+    const stageName = opp.stageName ?? opp.pipelineStageName
+        ?? (stageNameMap && opp.pipelineStageId ? stageNameMap.get(String(opp.pipelineStageId)) : null)
+        ?? null;
+    const status = mapStage(opp.pipelineStageId, stageName, stageMappings);
     const { error } = await db.from('leads').upsert({
         organisation_id: orgId,
         contact_id: contactId,
         ghl_opportunity_id: opp.id,
         ghl_pipeline_id: opp.pipelineId ?? null,
+        // Raw GHL stage — lets the Pipeline screen render real GHL stages dynamically.
+        ghl_pipeline_stage_id: opp.pipelineStageId ?? null,
+        ghl_stage_name: stageName,
         treatment: opp.name ?? 'Enquiry',
         estimated_value_pence: toPence(opp.monetaryValue),
         status,
@@ -454,12 +461,26 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
             arrayKey: 'opportunities', locationParam: 'location_id', maxPages,
             onPage: (page, totalPages, count) => onProgress({ phase: 'opportunities', pct: phasePct(oppIdx, nPhases, page, totalPages), page, totalPages, count }),
         });
+        // Cache the pipeline definitions (id/name + ordered stages) on the
+        // integration config so the Pipeline screen can render them dynamically,
+        // and build a stageId -> name map to stamp on each lead. Non-fatal.
+        let stageNameMap = null;
+        try {
+            const { pipelines = [] } = await detectPipelines(orgId, integration);
+            if (pipelines.length) {
+                await integrationRepository.mergeConfig(orgId, 'gohighlevel', { pipelines });
+                stageNameMap = new Map();
+                for (const p of pipelines) for (const s of p.stages ?? []) stageNameMap.set(String(s.id), s.name);
+            }
+        } catch (err) {
+            console.warn(`[gohighlevel] pipelines fetch skipped: ${err?.message || err}`);
+        }
         // Resolve opp contacts from the already-synced contact book (one scan)
         // instead of 3 lookups per opportunity.
         const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
         let synced = 0;
         for (const opp of opportunities) {
-            const r = await upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap);
+            const r = await upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap);
             if (r.ok) synced++;
         }
         // Conversations -> communications (Inbox). Runs after contacts so the

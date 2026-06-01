@@ -36,15 +36,29 @@ const columns: Column<any>[] = [
   { header: 'Source', render: (c) => <span className="text-ink-muted">{SOURCE_LABEL[c.source] ?? c.source ?? '—'}</span> },
 ];
 
+const PAGE_SIZE = 50;
+
 export default function ContactsScreen() {
   const [search, setSearch] = useState('');
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const [source, setSource] = useState<string | null>(null);
-  const { data } = useContacts(search, practiceId, source);
+  const [page, setPage] = useState(1);
+  const { data } = useContacts(search, practiceId, source, page, PAGE_SIZE);
+
+  // Any filter/search change resets to page 1.
+  function changeSource(key: string | null) { setSource(key); setPage(1); }
+  function changePractice(id: string | null) { setPracticeId(id); setPage(1); }
+  function changeSearch(v: string) { setSearch(v); setPage(1); }
+
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const from = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const to = Math.min(page * PAGE_SIZE, total);
+
   return (
     <div className="max-w-7xl mx-auto">
       <PageHeader title="Contacts" subtitle="All leads, patients, lapsed" />
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <PracticeTabs value={practiceId} onChange={changePractice} />
 
       {/* Source tabs — view the Dentally-synced and GHL-synced books separately. */}
       <div className="flex gap-2 mb-4 flex-wrap">
@@ -54,7 +68,7 @@ export default function ContactsScreen() {
             <button
               key={t.label}
               type="button"
-              onClick={() => setSource(t.key)}
+              onClick={() => changeSource(t.key)}
               className={
                 active
                   ? 'rounded-lg px-4 py-2 text-sm font-semibold bg-[#0E7C7B] text-white'
@@ -71,10 +85,36 @@ export default function ContactsScreen() {
         type="text"
         placeholder="Search name, email, phone..."
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
+        onChange={(e) => changeSearch(e.target.value)}
         className="input w-full mb-4 max-w-md"
       />
       <DataTable columns={columns} rows={data?.contacts} rowKey={(c) => c.id} />
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between mt-4" style={{ fontSize: 13 }}>
+        <span className="text-ink-muted">
+          {total === 0 ? 'No contacts' : `${from.toLocaleString('en-GB')}–${to.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')}`}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="rounded-md px-3 py-1.5 text-sm font-semibold border border-[var(--border)] bg-white disabled:opacity-40"
+          >
+            Previous
+          </button>
+          <span className="text-ink-muted">Page {page} of {totalPages}</span>
+          <button
+            type="button"
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages}
+            className="rounded-md px-3 py-1.5 text-sm font-semibold border border-[var(--border)] bg-white disabled:opacity-40"
+          >
+            Next
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
