@@ -46,6 +46,7 @@ export interface HealthMetric {
   target: number | null;
   progressPct: number;
   deltaFromBaselinePct: number;
+  remainingToTarget: number | null;
 }
 
 export function getMetrics() {
