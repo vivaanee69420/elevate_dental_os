@@ -5,9 +5,18 @@
 import * as lead_repository_1 from "../repositories/lead.repository.js";
 import * as errors_1 from "../middleware/errors.js";
 import * as lead_model_1 from "../models/lead.model.js";
+import { integrationRepository } from "../repositories/integration.repository.js";
 export const leadService = {
     list(orgId, q) {
         return lead_repository_1.leadRepository.list(orgId, q);
+    },
+    // GoHighLevel pipeline definitions (id/name + ordered stages), cached on the
+    // integration config by the sync. Drives the dynamic Pipeline-screen columns.
+    // CRM-accessible (reception/staff use the Pipeline screen), so it lives here
+    // rather than the owner-only integrations routes.
+    async pipelines(orgId) {
+        const integration = await integrationRepository.getByProvider(orgId, 'gohighlevel');
+        return { pipelines: integration?.config?.pipelines ?? [] };
     },
     async getById(orgId, id) {
         const { data, error } = await lead_repository_1.leadRepository.getById(orgId, id);
