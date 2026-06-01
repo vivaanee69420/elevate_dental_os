@@ -116,7 +116,10 @@ export default function ProgressScreen() {
         {data.metrics.map((m: any) => (
           <div key={m.key} className="py-3 border-b border-border last:border-0">
             <div className="grid grid-cols-[2fr,1fr,1fr,1fr,80px,200px] gap-3 items-center">
-              <strong className="text-sm">{m.label}</strong>
+              <div>
+                <strong className="text-sm">{m.label}</strong>
+                <div className="text-[10px] text-ink-muted uppercase">{m.source === 'baseline' ? 'baseline (no live source)' : m.source}</div>
+              </div>
               <div className="text-center">
                 <div className="text-[10px] text-ink-muted uppercase">Baseline</div>
                 <div className="font-semibold">{formatNumber(m.baseline)}</div>
