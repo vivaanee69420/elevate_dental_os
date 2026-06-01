@@ -336,20 +336,81 @@ export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = sup
     return { ok: true };
 }
 
-// Pull the contact book (paginated) and dedup-upsert each. Per-contact
-// match-or-merge (upsertContact) instead of a bulk upsert so a GHL contact that
-// already exists from another source (Dentally/manual/CSV) is linked, not
-// duplicated.
+// Load the org's existing-contact dedup maps in ONE paginated scan, so the
+// contact pull can classify thousands of contacts in memory instead of issuing
+// 3 lookups per contact (which made an 8k-contact pull take ~an hour).
+async function loadContactDedupMaps(orgId) {
+    const byGhl = new Map();   // ghl_contact_id -> our id
+    const byEmail = new Map(); // lower(email)   -> { id, ghl }
+    const byPhone = new Map(); // normphone      -> { id, ghl }
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+        const { data } = await supabase_1.serviceClient
+            .from('contacts').select('id, ghl_contact_id, email, phone')
+            .eq('organisation_id', orgId).range(from, from + PAGE - 1);
+        const rows = data ?? [];
+        for (const c of rows) {
+            if (c.ghl_contact_id) byGhl.set(String(c.ghl_contact_id), c.id);
+            const e = c.email ? String(c.email).toLowerCase() : null;
+            if (e && !byEmail.has(e)) byEmail.set(e, { id: c.id, ghl: c.ghl_contact_id });
+            const np = normalizePhone(c.phone);
+            if (np && !byPhone.has(np)) byPhone.set(np, { id: c.id, ghl: c.ghl_contact_id });
+        }
+        if (rows.length < PAGE) break;
+    }
+    return { byGhl, byEmail, byPhone };
+}
+
+// Pull the contact book (paginated) and reconcile in BULK. Classify each remote
+// contact against the preloaded maps: already-GHL or brand-new -> bulk upsert on
+// (org, ghl_contact_id); matches an existing Dentally/manual/CSV contact by
+// email/phone -> link the GHL id onto that row (dedup, no duplicate). This keeps
+// the same dedup guarantee as upsertContact but at a few dozen queries instead
+// of ~3 per contact — an 8k pull goes from ~an hour to seconds.
 async function pullContacts(orgId, accessToken, locationId, onPage, maxPages) {
     const remote = await ghlFetchAll('/contacts/', accessToken, locationId, {
         arrayKey: 'contacts', locationParam: 'locationId', maxPages, onPage,
     });
-    let synced = 0;
-    let failed = 0;
+    const { byGhl, byEmail, byPhone } = await loadContactDedupMaps(orgId);
+    const toUpsert = [];
+    const toLink = []; // { id, ghl_contact_id } — existing non-GHL row to relink
     for (const rc of remote) {
         if (!rc || rc.id == null) continue;
-        const r = await upsertContact(orgId, contactRow(orgId, rc));
-        if (r.error) failed++; else synced++;
+        const r = contactRow(orgId, rc);
+        const g = String(r.ghl_contact_id);
+        if (byGhl.has(g)) { toUpsert.push(r); continue; } // already linked -> refresh
+        const e = r.email ? String(r.email).toLowerCase() : null;
+        if (e && byEmail.has(e)) {
+            const ex = byEmail.get(e);
+            if (String(ex.ghl ?? '') !== g) { toLink.push({ id: ex.id, ghl_contact_id: g }); byGhl.set(g, ex.id); }
+            continue;
+        }
+        const np = normalizePhone(r.phone);
+        if (np && byPhone.has(np)) {
+            const ex = byPhone.get(np);
+            if (String(ex.ghl ?? '') !== g) { toLink.push({ id: ex.id, ghl_contact_id: g }); byGhl.set(g, ex.id); }
+            continue;
+        }
+        toUpsert.push(r); // new
+    }
+    let synced = 0;
+    let failed = 0;
+    for (let i = 0; i < toUpsert.length; i += UPSERT_CHUNK) {
+        const chunk = toUpsert.slice(i, i + UPSERT_CHUNK);
+        const { error } = await supabase_1.serviceClient.from('contacts').upsert(chunk, { onConflict: 'organisation_id,ghl_contact_id' });
+        if (!error) { synced += chunk.length; }
+        else {
+            for (const row of chunk) {
+                const { error: e2 } = await supabase_1.serviceClient.from('contacts').upsert([row], { onConflict: 'organisation_id,ghl_contact_id' });
+                if (e2) failed++; else synced++;
+            }
+        }
+        if (onPage) onPage(i + chunk.length, toUpsert.length, synced); // progress during the write phase
+    }
+    for (const lk of toLink) {
+        const { error } = await supabase_1.serviceClient.from('contacts')
+            .update({ ghl_contact_id: lk.ghl_contact_id }).eq('id', lk.id).eq('organisation_id', orgId);
+        if (!error) synced++;
     }
     if (failed) console.warn(`[gohighlevel] contacts: skipped ${failed} unstorable row(s)`);
     return synced;
