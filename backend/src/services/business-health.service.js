@@ -205,6 +205,22 @@ export const businessHealthService = {
         });
         return { metrics };
     },
+    async updateMetric(orgId, role, key, value) {
+        if (role !== 'owner') {
+            throw new errors_1.AppError('Only owners can edit metrics', 403);
+        }
+        const meta = METRIC_BY_KEY[key];
+        if (!meta) {
+            throw new errors_1.AppError(`Unknown metric: ${key}`, 400);
+        }
+        if (meta.sourceType !== 'manual') {
+            throw new errors_1.AppError(`Metric ${key} is computed automatically and cannot be set manually`, 400);
+        }
+        const asof = new Date().toISOString().split('T')[0];
+        const entry = { value, asof };
+        await business_health_repository_1.businessHealthRepository.setManualMetric(orgId, key, entry);
+        return entry;
+    },
     async updateCadence(orgId, role, body) {
         if (role !== 'owner') {
             throw new errors_1.AppError('Only owners can change snapshot cadence', 403);
