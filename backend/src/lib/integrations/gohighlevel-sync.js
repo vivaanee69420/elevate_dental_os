@@ -475,6 +475,17 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
         } catch (err) {
             console.warn(`[gohighlevel] pipelines fetch skipped: ${err?.message || err}`);
         }
+        // Cache the GHL workflows (Automations screen) — id/name/status only;
+        // GHL's API doesn't expose sent/conversion per workflow. Non-fatal.
+        try {
+            const wf = await ghlFetch('/workflows/', access_token, locationId, 'locationId');
+            const workflows = (wf.workflows ?? []).map((w) => ({
+                id: w.id, name: w.name ?? w.id, status: w.status ?? null, updatedAt: w.updatedAt ?? null,
+            }));
+            await integrationRepository.mergeConfig(orgId, 'gohighlevel', { workflows });
+        } catch (err) {
+            console.warn(`[gohighlevel] workflows fetch skipped: ${err?.message || err}`);
+        }
         // Resolve opp contacts from the already-synced contact book (one scan)
         // instead of 3 lookups per opportunity.
         const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
