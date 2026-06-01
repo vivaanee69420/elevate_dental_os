@@ -45,6 +45,7 @@ export interface ConnectResponse {
   redirectUrl?: string;
   pasteHint?: string;
   requiresKeyPaste?: boolean;
+  requiresLocationId?: boolean; // GHL: prompt for a Location ID alongside the key
   dnsRecords?: Array<{ host: string; type: string; value: string }>;
 }
 
@@ -55,7 +56,7 @@ export function startConnect(input: ConnectInput) {
   });
 }
 
-export function submitBrokerKey(provider: string, body: { apiKey: string; baseUrl?: string }) {
+export function submitBrokerKey(provider: string, body: { apiKey: string; baseUrl?: string; locationId?: string }) {
   return api<{ ok: boolean }>(`/api/integrations/${provider}/callback`, {
     method: 'POST',
     body: JSON.stringify(body),
@@ -150,5 +151,31 @@ export function setWebhookSecret(provider: string, secret: string) {
   return api<{ ok: boolean; configured: boolean }>(
     `/api/integrations/${provider}/webhook-secret`,
     { method: 'POST', body: JSON.stringify({ secret }) },
+  );
+}
+
+// --- GoHighLevel pipeline stage mapping -------------------------------------
+// The owner maps each GHL pipeline stage -> an Elevate lead status; until set,
+// the sync falls back to a name heuristic (see backend mapStage).
+export interface GhlStage {
+  id: string;
+  name: string;
+}
+export interface GhlPipeline {
+  id: string;
+  name: string;
+  stages: GhlStage[];
+}
+
+export function detectPipelines(provider: string) {
+  return api<{ pipelines: GhlPipeline[]; error?: string }>(
+    `/api/integrations/${provider}/pipelines`,
+  );
+}
+
+export function setStageMappings(provider: string, mappings: Record<string, string>) {
+  return api<{ ok: boolean; stage_mappings: Record<string, string> }>(
+    `/api/integrations/${provider}/stage-mappings`,
+    { method: 'POST', body: JSON.stringify({ mappings }) },
   );
 }
