@@ -55,6 +55,10 @@ function cleanBody(s: string | null | undefined): string {
     .replace(/If you no longer wish to receive these emails[\s\S]*$/i, '')
     .replace(/\[https?:\/\/[^\]]+\]/g, '')
     .replace(/https?:\/\/services\.msgsndr\.com\/\S+/g, '')
+    // Empty GHL merge fields render as the literal "undefined"/"null"
+    // (e.g. "Appointment Notes: undefined") — show "N/A" instead.
+    .replace(/:\s*(undefined|null)\b/gi, ': N/A')
+    .replace(/\b(undefined|null)\b/g, 'N/A')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
