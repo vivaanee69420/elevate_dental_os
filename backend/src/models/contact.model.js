@@ -6,6 +6,10 @@ export const contactListQuerySchema = zod_1.z.object({
     type: zod_1.z.enum(['lead', 'patient', 'lapsed']).optional(),
     search: zod_1.z.string().optional(),
     practice_id: zod_1.z.string().uuid().optional(),
+    // Filter by integration origin, e.g. 'dentally' | 'gohighlevel' (drives the
+    // Dentally / GHL contact tabs on the Contacts screen). Free string — the set
+    // of sources grows as integrations are added.
+    source: zod_1.z.string().optional(),
     limit: zod_1.z.coerce.number().default(100),
 });
 export const contactCreateSchema = zod_1.z.object({

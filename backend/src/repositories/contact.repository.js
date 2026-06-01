@@ -15,6 +15,8 @@ export const contactRepository = {
             query = query.eq('type', q.type);
         if (q.practice_id)
             query = query.eq('practice_id', q.practice_id);
+        if (q.source)
+            query = query.eq('source', q.source);
         if (q.search) {
             query = query.or(`first_name.ilike.%${q.search}%,last_name.ilike.%${q.search}%,email.ilike.%${q.search}%,phone.ilike.%${q.search}%`);
         }

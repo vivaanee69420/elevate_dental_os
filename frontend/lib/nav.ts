@@ -66,12 +66,8 @@ export const NAV: NavSection[] = [
     { id: 'leads', label: 'Leads' },
     { id: 'crm-enquiries', label: 'Enquiries' },
     { id: 'contacts', label: 'Contacts' },
-    { id: 'crm-sequences', label: 'Nurturing' },
-    { id: 'crm-templates', label: 'Templates' },
     { id: 'crm-reports', label: 'CRM Reports' },
-    { id: 'crm-settings', label: 'CRM Settings' },
     { id: 'workflows', label: 'Automations' },
-    { id: 'pages', label: 'Landing Pages' },
   ]},
   { label: 'Wealth', items: [
     { id: 'wealth-net', label: 'Net Worth' },

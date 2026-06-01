@@ -67,12 +67,18 @@ export const integrationService = {
             this.bootstrapDentally(orgId).catch((err) => {
                 console.error('[integrations] dentally bootstrap failed:', err?.message || err);
             });
+        } else if (provider === 'gohighlevel') {
+            // GHL bootstrap = full-history pull of contacts + opportunities with
+            // progress (no sites to detect). Same fire-and-forget + overlay path.
+            this.bootstrapGohighlevel(orgId).catch((err) => {
+                console.error('[integrations] gohighlevel bootstrap failed:', err?.message || err);
+            });
         } else if (ON_DEMAND_SYNCERS[provider]) {
             this.syncNow(orgId, provider).catch((err) => {
                 console.error(`[integrations] first-sync ${provider} failed:`, err?.message || err);
             });
         }
-        const firstSyncStarted = provider === 'dentally' || !!ON_DEMAND_SYNCERS[provider];
+        const firstSyncStarted = provider === 'dentally' || provider === 'gohighlevel' || !!ON_DEMAND_SYNCERS[provider];
         return { ok: true, ...result, firstSyncStarted };
     },
     // On-demand pull for a connected provider (Refresh button + first-connect).
@@ -143,8 +149,59 @@ export const integrationService = {
             throw err;
         }
     },
+    // GoHighLevel first-connect automation: full-history pull of contacts +
+    // opportunities as ONE run sharing the same progress key + concurrency guard
+    // as syncNow (so the connect overlay shows it land). GHL has no sites to map.
+    async bootstrapGohighlevel(orgId) {
+        const provider = 'gohighlevel';
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('gohighlevel is not connected', 409);
+        const active = getProgress(orgId, provider);
+        const SYNC_STALE_MS = 10 * 60 * 1000;
+        if (active?.running && active.at && Date.now() - active.at < SYNC_STALE_MS) {
+            return { ok: true, provider, alreadyRunning: true };
+        }
+        setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null, page: 0, totalPages: null });
+        try {
+            const result = await gohighlevel_sync_1.bootstrapOnConnect(
+                orgId,
+                integration,
+                (p) => setProgress(orgId, provider, { running: true, ...p }),
+            );
+            setProgress(orgId, provider, { running: false, pct: 100, done: true });
+            return { ok: true, provider, ...result };
+        } catch (err) {
+            setProgress(orgId, provider, { running: false, done: true, error: err.message });
+            throw err;
+        }
+    },
     syncProgress(orgId, provider) {
         return getProgress(orgId, provider) ?? { running: false, pct: 0, phase: 'idle' };
+    },
+    // List GoHighLevel pipelines + stages, to drive the stage-mapping UI.
+    async detectPipelines(orgId, provider) {
+        if (provider !== 'gohighlevel')
+            throw new errors_1.AppError(`${provider} does not support pipeline detection`, 400);
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('gohighlevel is not connected', 409);
+        return gohighlevel_sync_1.detectPipelines(orgId, integration);
+    },
+    // Persist the owner's GHL stage -> Elevate status mapping (config.stage_mappings).
+    // Validated against ELEVATE_STATUSES so a bad value can't poison mapStage.
+    async setStageMappings(orgId, provider, mappings) {
+        if (provider !== 'gohighlevel')
+            throw new errors_1.AppError(`${provider} does not support stage mappings`, 400);
+        if (!mappings || typeof mappings !== 'object' || Array.isArray(mappings))
+            throw new errors_1.AppError('mappings must be an object of { stageId: status }', 400);
+        const allowed = new Set(gohighlevel_sync_1.ELEVATE_STATUSES);
+        const clean = {};
+        for (const [stageId, status] of Object.entries(mappings)) {
+            if (status && allowed.has(status)) clean[String(stageId)] = status;
+        }
+        await integration_repository_1.integrationRepository.mergeConfig(orgId, provider, { stage_mappings: clean });
+        return { ok: true, stage_mappings: clean };
     },
     // Sample Dentally for the distinct site_ids it returns, to drive practice mapping.
     async detectSiteIds(orgId, provider) {
