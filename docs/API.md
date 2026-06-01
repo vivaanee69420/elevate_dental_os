@@ -113,6 +113,14 @@ Historical snapshots ordered chronologically.
 ### `POST /api/health/snapshots` *(owner-only)*
 Manually capture a snapshot.
 
+### `GET /api/health/metrics`
+Returns the unified business-health metric array. Each item:
+`{ key, label, cat, unit, better, sourceType, source, asof, needsInput, baseline, current, target, progressPct, deltaFromBaselinePct }`.
+`current` is live-computed for `sourceType: auto` (revenue/profit/margin/cash from analytics actuals; conversion/no-show from rollups) and read from the manual store for `sourceType: manual`. Reception receives `{ metrics: [] }`.
+
+### `PATCH /api/health/metrics/:key` *(owner-only)*
+Body `{ value: number }`. Sets a manual metric value (`business_health.manual[key] = { value, asof }`). 400 if the key is unknown or auto-sourced; 403 for non-owners. Audited.
+
 ## Leads
 
 ### `GET /api/leads?status=new&practice_id=...&limit=100`
