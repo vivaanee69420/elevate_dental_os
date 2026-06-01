@@ -9,6 +9,7 @@ import * as lead_controller_1 from "../controllers/lead.controller.js";
 const router = (0, express_1.Router)();
 router.get('/', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.list));
 router.get('/funnel', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.funnel));
+router.get('/pipelines', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.pipelines));
 router.get('/:id', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.getById));
 router.post('/', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.create));
 router.patch('/:id', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.update));

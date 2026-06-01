@@ -9,6 +9,9 @@ export const leadController = {
     async funnel(req, res) {
         res.json(await lead_service_1.leadService.funnel(req.user.organisation_id));
     },
+    async pipelines(req, res) {
+        res.json(await lead_service_1.leadService.pipelines(req.user.organisation_id));
+    },
     async getById(req, res) {
         const data = await lead_service_1.leadService.getById(req.user.organisation_id, req.params.id);
         res.json(data);
