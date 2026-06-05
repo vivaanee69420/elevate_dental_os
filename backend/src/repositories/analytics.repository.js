@@ -32,10 +32,24 @@ export const analyticsRepository = {
     // select; if we ever hit the cap the aggregate would be quietly wrong,
     // so we fetch up to the cap and let the service flag truncation.
     async practicesList(orgId) {
+        // kind='practice' (T2): exclude academy/lab from clinical rollups.
         const { data, error } = await supabase_1.serviceClient
             .from('practices')
             .select('id, name')
             .eq('organisation_id', orgId)
+            .eq('kind', 'practice')
+            .limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        return data || [];
+    },
+    // Entities of a given kind ('practice'|'academy'|'lab') for scope resolution.
+    async entitiesByKind(orgId, kind) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('practices')
+            .select('id, name, kind')
+            .eq('organisation_id', orgId)
+            .eq('kind', kind)
             .limit(LIMIT_GUARD);
         if (error)
             throw new Error(error.message);
@@ -135,10 +149,12 @@ export const analyticsRepository = {
     // ------------------------------------------------------------------------
     // Business Hub sources — per-practice rollup across finance + ops + growth.
     async practicesFull(orgId) {
+        // kind='practice' (T2): exclude academy/lab (no chairs) from chair/util rollups.
         const { data, error } = await supabase_1.serviceClient
             .from('practices')
             .select('id, name, chairs')
             .eq('organisation_id', orgId)
+            .eq('kind', 'practice')
             .limit(LIMIT_GUARD);
         if (error)
             throw new Error(error.message);

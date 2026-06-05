@@ -3,27 +3,31 @@
 @tailwind utilities;
 
 :root {
-  /* Theme matched to elevate-dental-os.html prototype :root */
-  --bg: #F6F7F9;
+  /* Green/gold system — see DESIGN.md. Adopted app-wide 2026-06-05.
+     Token names unchanged from the prior teal/amber theme so existing
+     screens re-skin centrally; only values changed. */
+  --bg: #EEF3EF;
   --surface: #FFFFFF;
   --card: #FFFFFF;
-  --ink: #0F172A;
-  --ink-muted: #64748B;
-  --ink-soft: #94A3B8;
-  --brand: #0E7C7B;
-  --brand-50: #E6F4F4;
-  --brand-100: #C2E5E4;
-  --brand-600: #0B6968;
-  --accent: #FFB547;
-  --success: #10B981;
-  --warning: #F59E0B;
-  --danger: #EF4444;
-  --info: #3B82F6;
-  --gold: #B8860B;
-  --border: #E5E7EB;
-  --radius: 10px;
-  --radius-sm: 6px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .04);
+  --ink: #15241E;
+  --ink-muted: #566B62;
+  --ink-soft: #5F7268;        /* darkened from prototype #84958C to pass WCAG 4.5:1 (D4) */
+  --brand: #1D6E5F;
+  --brand-50: #E2EFE9;
+  --brand-100: #C7E0D6;
+  --brand-600: #175C50;
+  --accent: #C6A253;
+  --success: #2E9E6A;
+  --warning: #BF8A22;
+  --danger: #C25F4D;
+  --info: #2B7A8C;
+  --gold: #C6A253;
+  --border: #DCE4DF;
+  --line-2: #EBF0EC;          /* decorative hairline only */
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow-sm: 0 6px 18px rgba(20, 60, 46, .07);
+  --shadow: 0 18px 48px rgba(20, 60, 46, .10);
 }
 
 body { font-family: var(--font-sans), system-ui, sans-serif; }
