@@ -134,7 +134,12 @@ export function PracticeDeepDiveScreen() {
           {/* Chair economics — full */}
           {chairRow && (
             <div>
-              <h3 className="display text-lg mb-2">Chair economics</h3>
+              <div className="flex items-baseline justify-between mb-2">
+                <h3 className="display text-lg">Chair economics</h3>
+                {chairRow.utilAssumed && (
+                  <span className="text-[11px] text-warning font-semibold">occupancy assumed ({chairRow.occupancyPct}%) — not live</span>
+                )}
+              </div>
               <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
                 <KpiTile label="Cost of empty chairs" value={formatPence(chairRow.lostPotentialYrPence)} delta={`${chairRow.emptyHrsYr.toLocaleString('en-GB')} empty hrs/yr`} deltaTone="down" />
                 <KpiTile label="Recoverable to benchmark" value={formatPence(chairRow.recoverRevYrPence)} delta={`${chairRow.recoverableToBenchHrsYr.toLocaleString('en-GB')} hrs at own yield`} deltaTone="up" />
