@@ -32,7 +32,7 @@ Branch: `feat/intelligence-os-phase0`
 | T5 Workbench → ProfitScreen (pure debounced compute endpoint) | [x] | FULL VERTICAL DONE: computeServiceEconomics + DEFAULT_SERVICE_MODELS (pence, 11 tests, FORMULAS.md §12) → POST /api/analytics/compute/treatment-economics + GET .../treatment-models (finance.view, **audit-exempt /compute/ path**) → TreatmentWorkbench UI (treatment tabs, £↔pence inputs, debounced sliders, money-flow + components + principal-vs-associate planning) on /profit. Establishes the Arch#3 compute pattern. Suite 376 green; tsc+lint clean. Persisted overrides = later slice |
 | T6 3-buyer Valuation + Sale Planner → ValuationScreen | [ ] | driver-based; EBITDA reconciled; versioned |
 | T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [x] | FULL VERTICAL DONE: formulas (+15 tests, FORMULAS.md §11) → migration 000036 (applied hosted) → chairAnalytics service (+2 tests) → GET /api/analytics/chair (finance.view) → ChairEfficiencyScreen UI + ScopePeriodBar wired into /chair (tsc+lint clean). FIRST end-to-end slice — proves the formulas→endpoint→UI pattern. Remaining: OCPSPD + profit-per-chair-hr (deferred, need opex/treatment-minute sourcing) |
-| Group Overview rollup (Academy+Lab) + Decision Lens | [ ] | |
+| Group Overview rollup + Decision Lens | [x] | GroupOverviewScreen on /business-hub — REAL business-hub data, scope-aware (practice narrows; academy/lab note), KPI strip + per-practice table + client-computed Decision Lens (AlertRow). tsc+lint clean. Academy/Lab entity revenue rollup = later (needs entity_revenue_lines wiring) |
 **Exit:** Tier-1 new UI, scope/period reactive. — `[ ]`
 
 ## Phase 2 — Tier-2 (new UI + extended compute)
