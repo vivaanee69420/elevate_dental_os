@@ -36,10 +36,10 @@ import {
   type PLModel,
 } from '../mock';
 
-const POS = '#10B981';
-const NEG = '#EF4444';
-const AMB = '#F59E0B';
-const BRAND = '#0E7C7B';
+const POS = 'var(--success)';
+const NEG = 'var(--danger)';
+const AMB = 'var(--warning)';
+const BRAND = 'var(--brand)';
 
 const RANGES: { k: DateRange; l: string }[] = [
   { k: 'mtd', l: 'MTD' },
@@ -327,7 +327,7 @@ export default function DashboardScreen() {
         <div
           className="text-white flex items-center gap-4 mb-4"
           style={{
-            background: 'linear-gradient(135deg, #0E7C7B 0%, #085857 100%)',
+            background: 'linear-gradient(135deg, var(--brand) 0%, #085857 100%)',
             padding: '16px 22px',
             borderRadius: 12,
           }}
@@ -421,7 +421,7 @@ export default function DashboardScreen() {
                 padding: '6px 11px',
                 borderRadius: 5,
                 fontSize: 11,
-                border: `1px solid ${selected === p ? BRAND : '#E5E7EB'}`,
+                border: `1px solid ${selected === p ? BRAND : 'var(--border)'}`,
                 background: selected === p ? BRAND : 'white',
                 color: selected === p ? 'white' : '#1F2937',
               }}
@@ -433,7 +433,7 @@ export default function DashboardScreen() {
 
         <div
           className="flex gap-1 items-center"
-          style={{ borderLeft: '1px solid #E5E7EB', paddingLeft: 14 }}
+          style={{ borderLeft: '1px solid var(--border)', paddingLeft: 14 }}
         >
           <span
             className="text-ink-muted font-bold uppercase"
@@ -450,7 +450,7 @@ export default function DashboardScreen() {
                 padding: '6px 11px',
                 borderRadius: 5,
                 fontSize: 11,
-                border: `1px solid ${range === r.k ? BRAND : '#E5E7EB'}`,
+                border: `1px solid ${range === r.k ? BRAND : 'var(--border)'}`,
                 background: range === r.k ? BRAND : 'white',
                 color: range === r.k ? 'white' : '#1F2937',
               }}
@@ -462,7 +462,7 @@ export default function DashboardScreen() {
 
         <div
           className="flex gap-1.5 items-center"
-          style={{ borderLeft: '1px solid #E5E7EB', paddingLeft: 14 }}
+          style={{ borderLeft: '1px solid var(--border)', paddingLeft: 14 }}
         >
           <span
             className="text-ink-muted font-bold uppercase"
@@ -484,7 +484,7 @@ export default function DashboardScreen() {
             style={{
               width: 60,
               padding: '5px 8px',
-              border: '1px solid #E5E7EB',
+              border: '1px solid var(--border)',
               borderRadius: 5,
               fontSize: 12,
             }}
@@ -499,7 +499,7 @@ export default function DashboardScreen() {
               padding: '6px 11px',
               borderRadius: 5,
               fontSize: 11,
-              border: '1px solid #E5E7EB',
+              border: '1px solid var(--border)',
               background: 'white',
               color: '#1F2937',
             }}
@@ -601,7 +601,7 @@ export default function DashboardScreen() {
               padding: '7px 12px',
               borderRadius: 6,
               fontSize: 11,
-              border: '1px solid #E5E7EB',
+              border: '1px solid var(--border)',
               background: 'white',
             }}
           >
@@ -792,7 +792,7 @@ export default function DashboardScreen() {
                 className="text-left"
                 style={{
                   padding: 12,
-                  border: `1px solid ${selected === p.name ? BRAND : '#E5E7EB'}`,
+                  border: `1px solid ${selected === p.name ? BRAND : 'var(--border)'}`,
                   borderRadius: 8,
                   background: 'white',
                 }}
@@ -1078,7 +1078,7 @@ export default function DashboardScreen() {
           </p>
           <table style={{ width: '100%', fontSize: 12 }}>
             <tbody>
-              <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 0' }}>Turnover</td>
                 <td
                   className="text-right font-bold"
@@ -1087,7 +1087,7 @@ export default function DashboardScreen() {
                   {ccPoundsFull(v.rev)}
                 </td>
               </tr>
-              <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 0' }}>Cash collected</td>
                 <td
                   className="text-right font-bold"
@@ -1096,7 +1096,7 @@ export default function DashboardScreen() {
                   {ccPoundsFull(v.cash)}
                 </td>
               </tr>
-              <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 0' }}>Less: costs</td>
                 <td
                   className="text-right"
@@ -1116,7 +1116,7 @@ export default function DashboardScreen() {
                   {ccPoundsFull(v.cashflow)}
                 </td>
               </tr>
-              <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 0' }}>Less: 2mo cost reserve</td>
                 <td
                   className="text-right"

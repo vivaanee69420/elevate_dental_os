@@ -52,7 +52,7 @@ export default function TemplatesScreen() {
           <div
             key={t.id}
             className="card-padded"
-            style={{ borderLeft: '3px solid #10B981' }}
+            style={{ borderLeft: '3px solid var(--success)' }}
           >
             <div
               className="display font-bold"

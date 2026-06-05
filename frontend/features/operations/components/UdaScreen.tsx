@@ -68,7 +68,7 @@ export default function UdaScreen() {
           </div>
           <div
             className="font-bold"
-            style={{ fontSize: 12, marginTop: 4, color: v.variance_pct >= 0 ? '#10B981' : '#EF4444' }}
+            style={{ fontSize: 12, marginTop: 4, color: v.variance_pct >= 0 ? 'var(--success)' : 'var(--danger)' }}
           >
             {v.variance_pct >= 0 ? '+' : ''}
             {v.variance_pct.toFixed(1)}% vs target
@@ -86,7 +86,7 @@ export default function UdaScreen() {
             style={{
               fontSize: 12,
               marginTop: 4,
-              color: v.projected_year_end >= TOTAL_CONTRACT ? '#10B981' : '#EF4444',
+              color: v.projected_year_end >= TOTAL_CONTRACT ? 'var(--success)' : 'var(--danger)',
             }}
           >
             {((v.projected_year_end / TOTAL_CONTRACT) * 100).toFixed(0)}% of target
@@ -101,7 +101,7 @@ export default function UdaScreen() {
           </div>
           <div
             className="font-bold"
-            style={{ fontSize: 12, marginTop: 4, color: v.clawback_risk > 0 ? '#EF4444' : '#10B981' }}
+            style={{ fontSize: 12, marginTop: 4, color: v.clawback_risk > 0 ? 'var(--danger)' : 'var(--success)' }}
           >
             {v.clawback_risk > 0 ? `${v.clawback_risk.toFixed(0)} UDAs short` : 'On track'}
           </div>

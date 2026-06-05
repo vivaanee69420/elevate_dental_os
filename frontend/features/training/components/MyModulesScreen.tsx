@@ -20,7 +20,7 @@ import {
 
 const PURPLE = '#9333EA';
 const PURPLE_DARK = '#6D28D9';
-const GREEN = '#10B981';
+const GREEN = 'var(--success)';
 
 /** Short uppercase tag for a module's track tile (no emojis). */
 function trackTag(track: string): string {
@@ -330,7 +330,7 @@ export default function MyModulesScreen() {
                   borderRadius: 6,
                   background:
                     m.access === 'free'
-                      ? 'linear-gradient(135deg, #10B981, #059669)'
+                      ? 'linear-gradient(135deg, var(--success), #059669)'
                       : `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`,
                   display: 'flex',
                   alignItems: 'center',

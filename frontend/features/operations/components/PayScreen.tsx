@@ -11,8 +11,8 @@ import { useMemo } from 'react';
 import { formatPounds } from '@/features/_mock';
 import { useDraftPayRun, lastCompleteMonth, type PayDraftRow } from '../pay-api';
 
-const NEG = '#EF4444';
-const BRAND = '#0E7C7B';
+const NEG = 'var(--danger)';
+const BRAND = 'var(--brand)';
 
 // pence -> whole pounds (formatPounds expects pounds); basis points -> percent.
 const gbp = (pence: number) => Math.round(pence / 100);
@@ -30,7 +30,7 @@ export default function PayScreen() {
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
-    color: '#6B7280',
+    color: 'var(--ink-muted)',
     fontWeight: 600,
   };
 
@@ -89,7 +89,7 @@ export default function PayScreen() {
               <div className="display font-bold" style={{ fontSize: 28, marginTop: 4 }}>
                 {formatPounds(gbp(totals.lab))}
               </div>
-              <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: '#6B7280' }}>
+              <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: 'var(--ink-muted)' }}>
                 No lab-invoice feed yet
               </div>
             </div>
@@ -115,7 +115,7 @@ export default function PayScreen() {
           <div className="card" style={{ overflow: 'hidden' }}>
             <div
               className="flex justify-between items-center"
-              style={{ padding: '14px 20px', borderBottom: '1px solid #E5E7EB' }}
+              style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}
             >
               <h2 className="display font-bold" style={{ fontSize: 17 }}>
                 {period.label} pay run
@@ -129,7 +129,7 @@ export default function PayScreen() {
               </p>
             ) : (
               <table className="w-full" style={{ fontSize: 13 }}>
-                <thead className="bg-bg" style={{ borderBottom: '1px solid #E5E7EB' }}>
+                <thead className="bg-bg" style={{ borderBottom: '1px solid var(--border)' }}>
                   <tr>
                     <th className="text-left" style={th}>
                       Associate
@@ -148,7 +148,7 @@ export default function PayScreen() {
                 </thead>
                 <tbody>
                   {rows.map((a) => (
-                    <tr key={a.associate_id} style={{ borderBottom: '1px solid #E5E7EB' }}>
+                    <tr key={a.associate_id} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '12px 16px' }}>
                         <strong>{a.full_name}</strong>
                       </td>
@@ -172,7 +172,7 @@ export default function PayScreen() {
                       </td>
                       <td
                         className="text-right"
-                        style={{ padding: '12px 16px', color: a.prev_balance_pence < 0 ? NEG : '#6B7280' }}
+                        style={{ padding: '12px 16px', color: a.prev_balance_pence < 0 ? NEG : 'var(--ink-muted)' }}
                       >
                         {a.prev_balance_pence === 0 ? '—' : formatPounds(gbp(a.prev_balance_pence))}
                       </td>

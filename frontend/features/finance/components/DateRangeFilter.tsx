@@ -44,7 +44,7 @@ export default function DateRangeFilter({ value, onChange }: Props) {
     fontWeight: 600,
     borderRadius: 7,
     border: '1px solid var(--border)',
-    background: active ? '#0E7C7B' : 'white',
+    background: active ? 'var(--brand)' : 'white',
     color: active ? 'white' : 'var(--ink)',
     cursor: 'pointer',
     whiteSpace: 'nowrap',

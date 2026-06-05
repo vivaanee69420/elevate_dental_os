@@ -17,7 +17,7 @@ export default function TreatmentsScreen() {
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
-    color: '#6B7280',
+    color: 'var(--ink-muted)',
     fontWeight: 600,
   };
 
@@ -40,7 +40,7 @@ export default function TreatmentsScreen() {
       )}
 
       {isError && (
-        <div className="card-padded" style={{ fontSize: 13, color: '#EF4444' }}>
+        <div className="card-padded" style={{ fontSize: 13, color: 'var(--danger)' }}>
           Could not load treatment mix: {(error as Error)?.message ?? 'unknown error'}
         </div>
       )}
@@ -94,7 +94,7 @@ export default function TreatmentsScreen() {
               </p>
             ) : (
               <table className="w-full" style={{ fontSize: 13, margin: -16, width: 'calc(100% + 32px)' }}>
-                <thead className="bg-bg" style={{ borderBottom: '1px solid #E5E7EB' }}>
+                <thead className="bg-bg" style={{ borderBottom: '1px solid var(--border)' }}>
                   <tr>
                     <th className="text-left" style={th}>
                       Treatment
@@ -109,7 +109,7 @@ export default function TreatmentsScreen() {
                 </thead>
                 <tbody>
                   {treatments.map((t) => (
-                    <tr key={t.type} style={{ borderBottom: '1px solid #E5E7EB' }}>
+                    <tr key={t.type} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '12px 16px' }}>
                         <strong>{t.type}</strong>
                       </td>
@@ -121,7 +121,7 @@ export default function TreatmentsScreen() {
                           <div
                             style={{
                               height: '100%',
-                              background: '#0E7C7B',
+                              background: 'var(--brand)',
                               width: `${t.share_pct}%`,
                               borderRadius: 4,
                             }}

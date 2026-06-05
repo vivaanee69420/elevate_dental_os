@@ -104,7 +104,7 @@ export default function SequencesScreen() {
                         fontSize: 10,
                         padding: '2px 6px',
                         background: active ? '#D1FAE5' : '#F3F4F6',
-                        color: active ? '#059669' : '#6B7280',
+                        color: active ? '#059669' : 'var(--ink-muted)',
                         borderRadius: 4,
                         fontWeight: 700,
                         textTransform: 'uppercase',
@@ -132,7 +132,7 @@ export default function SequencesScreen() {
                     borderRadius: 22,
                     border: 'none',
                     cursor: 'pointer',
-                    background: active ? '#10B981' : '#cbd5e0',
+                    background: active ? 'var(--success)' : '#cbd5e0',
                     flexShrink: 0,
                   }}
                 >
@@ -161,9 +161,9 @@ export default function SequencesScreen() {
                 }}
               >
                 {[
-                  { v: seq.steps.length, l: 'Steps', c: '#0E7C7B' },
+                  { v: seq.steps.length, l: 'Steps', c: 'var(--brand)' },
                   { v: seq.enrolled, l: 'Active', c: '#3B82F6' },
-                  { v: seq.completed, l: 'Completed', c: '#10B981' },
+                  { v: seq.completed, l: 'Completed', c: 'var(--success)' },
                 ].map((x) => (
                   <div
                     key={x.l}

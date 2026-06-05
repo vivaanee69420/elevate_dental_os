@@ -30,7 +30,7 @@ export default function FinanceToolbar() {
           style={{
             padding: '8px 14px', fontSize: 13,
             border: 'none', borderRadius: 6,
-            background: '#0E7C7B', color: 'white',
+            background: 'var(--brand)', color: 'white',
             opacity: practices.length === 0 ? 0.5 : 1,
             cursor: practices.length === 0 ? 'default' : 'pointer',
           }}

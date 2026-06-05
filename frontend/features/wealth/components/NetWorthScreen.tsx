@@ -39,7 +39,7 @@ export default function NetWorthScreen() {
       <div
         className="card-padded"
         style={{
-          background: 'linear-gradient(135deg, #0E7C7B 0%, #085857 100%)',
+          background: 'linear-gradient(135deg, var(--brand) 0%, #085857 100%)',
           color: 'white',
           border: 'none',
           textAlign: 'center',
@@ -92,7 +92,7 @@ export default function NetWorthScreen() {
               {ASSETS.map((a) => (
                 <tr
                   key={a.name}
-                  style={{ borderBottom: '1px solid #E5E7EB' }}
+                  style={{ borderBottom: '1px solid var(--border)' }}
                 >
                   <td style={{ padding: '10px 0' }}>
                     <strong>{a.name}</strong>
@@ -134,7 +134,7 @@ export default function NetWorthScreen() {
               {LIABILITIES.map((l) => (
                 <tr
                   key={l.name}
-                  style={{ borderBottom: '1px solid #E5E7EB' }}
+                  style={{ borderBottom: '1px solid var(--border)' }}
                 >
                   <td style={{ padding: '10px 0' }}>
                     <strong>{l.name}</strong>

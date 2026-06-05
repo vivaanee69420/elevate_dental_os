@@ -28,8 +28,8 @@ const INSIGHT_TONE: Record<
   Insight['type'],
   { bg: string; border: string; glyph: string }
 > = {
-  positive: { bg: '#D1FAE5', border: '#10B981', glyph: '✓' },
-  warning: { bg: '#FEF3C7', border: '#F59E0B', glyph: '!' },
+  positive: { bg: '#D1FAE5', border: 'var(--success)', glyph: '✓' },
+  warning: { bg: '#FEF3C7', border: 'var(--warning)', glyph: '!' },
   info: { bg: '#DBEAFE', border: '#3B82F6', glyph: 'i' },
 };
 
@@ -142,15 +142,15 @@ export default function AiInsightsScreen() {
       <style>
         body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:40px;}
         h1{font-size:22px;margin:0 0 4px;}
-        .sub{color:#6B7280;font-size:12px;margin-bottom:24px;}
-        .card{border:1px solid #E5E7EB;border-left-width:4px;border-radius:8px;padding:14px 16px;margin-bottom:12px;}
-        .card.positive{border-left-color:#10B981;}
-        .card.warning{border-left-color:#F59E0B;}
+        .sub{color:var(--ink-muted);font-size:12px;margin-bottom:24px;}
+        .card{border:1px solid var(--border);border-left-width:4px;border-radius:8px;padding:14px 16px;margin-bottom:12px;}
+        .card.positive{border-left-color:var(--success);}
+        .card.warning{border-left-color:var(--warning);}
         .card.info{border-left-color:#3B82F6;}
         .t{font-weight:600;margin-bottom:4px;}
         .d{color:#374151;font-size:13px;}
-        .a{color:#6B7280;font-size:12px;margin-top:6px;}
-        .f{color:#9CA3AF;font-size:11px;margin-top:24px;border-top:1px solid #E5E7EB;padding-top:10px;}
+        .a{color:var(--ink-muted);font-size:12px;margin-top:6px;}
+        .f{color:#9CA3AF;font-size:11px;margin-top:24px;border-top:1px solid var(--border);padding-top:10px;}
         @media print{body{margin:16mm;}}
       </style></head><body>
       <h1>AI Insights</h1>
@@ -440,15 +440,15 @@ export default function AiInsightsScreen() {
                 data={chartData}
                 margin={{ top: 20, right: 20, bottom: 10, left: 0 }}
               >
-                <CartesianGrid stroke="#E5E7EB" vertical={false} />
+                <CartesianGrid stroke="var(--border)" vertical={false} />
                 <XAxis
                   dataKey="name"
-                  tick={{ fontSize: 10, fill: '#94A3B8' }}
+                  tick={{ fontSize: 10, fill: 'var(--ink-soft)' }}
                   axisLine={false}
                   tickLine={false}
                 />
                 <YAxis
-                  tick={{ fontSize: 10, fill: '#94A3B8' }}
+                  tick={{ fontSize: 10, fill: 'var(--ink-soft)' }}
                   axisLine={false}
                   tickLine={false}
                   tickFormatter={(val: number) => formatPoundsCompact(val)}
@@ -458,8 +458,8 @@ export default function AiInsightsScreen() {
                   formatter={(val: number, n: string) => [formatPounds(val), n]}
                   contentStyle={{ fontSize: 12 }}
                 />
-                <Bar dataKey="Revenue" fill="#0E7C7B" radius={[2, 2, 0, 0]} />
-                <Bar dataKey="Profit" fill="#FFB547" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="Revenue" fill="var(--brand)" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="Profit" fill="var(--accent)" radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

@@ -78,7 +78,7 @@ export default function ProgressScreen() {
 
       <div
         className="card-padded text-white mb-5"
-        style={{ background: 'linear-gradient(135deg, #0E7C7B, #085857)' }}
+        style={{ background: 'linear-gradient(135deg, var(--brand), #085857)' }}
       >
         <div className="grid grid-cols-3 gap-6">
           <div>

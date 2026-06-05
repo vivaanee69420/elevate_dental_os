@@ -16,15 +16,15 @@ import { CRM_TEAL, agoLabel } from '../data';
 // Fallback columns (no GHL pipeline) — verbatim from the prototype.
 const FALLBACK_STAGES: { key: string; label: string; colour: string; byStatus: LeadStatus }[] = [
   { key: 'new', label: 'New', colour: '#3B82F6', byStatus: 'new' },
-  { key: 'contact_attempted', label: 'Contact attempt', colour: '#F59E0B', byStatus: 'contact_attempted' },
+  { key: 'contact_attempted', label: 'Contact attempt', colour: 'var(--warning)', byStatus: 'contact_attempted' },
   { key: 'contact_made', label: 'Contact made', colour: '#8B5CF6', byStatus: 'contact_made' },
   { key: 'consultation_booked', label: 'Consult booked', colour: '#06B6D4', byStatus: 'consultation_booked' },
   { key: 'consultation_attended', label: 'Consult attended', colour: '#0891B2', byStatus: 'consultation_attended' },
-  { key: 'treatment_started', label: 'In treatment', colour: '#10B981', byStatus: 'treatment_started' },
+  { key: 'treatment_started', label: 'In treatment', colour: 'var(--success)', byStatus: 'treatment_started' },
 ];
 
 // Colour palette cycled across dynamic GHL stages.
-const STAGE_COLOURS = ['#3B82F6', '#F59E0B', '#8B5CF6', '#06B6D4', '#0891B2', '#10B981', '#64748B', '#DC2626', '#7C3AED', '#EA580C'];
+const STAGE_COLOURS = ['#3B82F6', 'var(--warning)', '#8B5CF6', '#06B6D4', '#0891B2', 'var(--success)', 'var(--ink-muted)', '#DC2626', '#7C3AED', '#EA580C'];
 
 function minutesSince(iso: string): number {
   const t = new Date(iso).getTime();

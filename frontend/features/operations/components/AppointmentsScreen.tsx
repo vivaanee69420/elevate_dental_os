@@ -26,7 +26,7 @@ type Appointment = {
 // one before this view reloads).
 const STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
   scheduled: { bg: '#EEF2FF', fg: '#3730A3', label: 'Scheduled' },
-  confirmed: { bg: '#E6F4F1', fg: '#0E7C7B', label: 'Confirmed' },
+  confirmed: { bg: '#E6F4F1', fg: 'var(--brand)', label: 'Confirmed' },
   in_progress: { bg: '#FEF3C7', fg: '#92400E', label: 'In progress' },
   completed: { bg: '#DCFCE7', fg: '#166534', label: 'Completed' },
   cancelled: { bg: '#FEE2E2', fg: '#991B1B', label: 'Cancelled' },
@@ -118,7 +118,7 @@ export default function AppointmentsScreen() {
                 const start = new Date(a.starts_at);
                 const s = STATUS_STYLE[a.status] ?? { bg: '#F3F4F6', fg: '#374151', label: a.status };
                 return (
-                  <tr key={a.id} style={{ borderTop: '1px solid #E5E7EB' }}>
+                  <tr key={a.id} style={{ borderTop: '1px solid var(--border)' }}>
                     <td style={{ padding: '10px 12px 10px 0', whiteSpace: 'nowrap' }}>
                       <strong>{dayFmt.format(start)}</strong>
                       <span className="text-ink-muted"> · {timeFmt.format(start)}</span>
@@ -144,7 +144,7 @@ export default function AppointmentsScreen() {
         {!isError && total > 0 && (
           <div
             className="flex items-center justify-between"
-            style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #E5E7EB', fontSize: 12 }}
+            style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 12 }}
           >
             <span className="text-ink-muted">
               {(() => {
@@ -159,7 +159,7 @@ export default function AppointmentsScreen() {
                 className="btn-ghost"
                 disabled={page <= 1 || isFetching}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                style={{ padding: '4px 12px', fontSize: 12, border: '1px solid #E5E7EB', opacity: page <= 1 || isFetching ? 0.5 : 1 }}
+                style={{ padding: '4px 12px', fontSize: 12, border: '1px solid var(--border)', opacity: page <= 1 || isFetching ? 0.5 : 1 }}
               >
                 Previous
               </button>
@@ -169,7 +169,7 @@ export default function AppointmentsScreen() {
                 className="btn-ghost"
                 disabled={page >= totalPages || isFetching}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                style={{ padding: '4px 12px', fontSize: 12, border: '1px solid #E5E7EB', opacity: page >= totalPages || isFetching ? 0.5 : 1 }}
+                style={{ padding: '4px 12px', fontSize: 12, border: '1px solid var(--border)', opacity: page >= totalPages || isFetching ? 0.5 : 1 }}
               >
                 Next
               </button>

@@ -26,7 +26,7 @@ export default function StaffScreen() {
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
-    color: '#6B7280',
+    color: 'var(--ink-muted)',
     fontWeight: 600,
   };
 
@@ -63,7 +63,7 @@ export default function StaffScreen() {
       )}
 
       {isError && (
-        <div className="card-padded" style={{ fontSize: 13, color: '#EF4444' }}>
+        <div className="card-padded" style={{ fontSize: 13, color: 'var(--danger)' }}>
           Could not load staff: {(error as Error)?.message ?? 'unknown error'}
         </div>
       )}
@@ -86,7 +86,7 @@ export default function StaffScreen() {
               </p>
             ) : (
               <table className="w-full" style={{ fontSize: 13 }}>
-                <thead className="bg-bg" style={{ borderBottom: '1px solid #E5E7EB' }}>
+                <thead className="bg-bg" style={{ borderBottom: '1px solid var(--border)' }}>
                   <tr>
                     <th className="text-left" style={th}>Staff member</th>
                     <th className="text-left" style={th}>Role</th>
@@ -98,7 +98,7 @@ export default function StaffScreen() {
                 </thead>
                 <tbody>
                   {staff.map((p) => (
-                    <tr key={p.id} style={{ borderBottom: '1px solid #E5E7EB' }}>
+                    <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '12px 16px' }}>
                         <strong>{p.full_name}</strong>
                       </td>

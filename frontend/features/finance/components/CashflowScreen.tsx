@@ -21,7 +21,7 @@ import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import DateRangeFilter, { type DateRange } from './DateRangeFilter';
 
-const BRAND = '#0E7C7B';
+const BRAND = 'var(--brand)';
 
 function Kpi({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
@@ -29,7 +29,7 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
       <div className="text-xs text-ink-muted uppercase">{label}</div>
       <div className="display text-2xl font-bold mt-1">{value}</div>
       {delta && (
-        <div className="text-xs font-semibold mt-1" style={{ color: '#10B981' }}>
+        <div className="text-xs font-semibold mt-1" style={{ color: 'var(--success)' }}>
           {delta}
         </div>
       )}
@@ -77,7 +77,7 @@ export default function CashflowScreen() {
         </div>
       )}
       {!isError && !data?.bankConnected && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">No bank account connected</div>
           <div className="text-sm text-ink-muted">
             Opening balance is £0 — connect open banking for a real starting
@@ -86,7 +86,7 @@ export default function CashflowScreen() {
         </div>
       )}
       {!isError && data?.bankConnected && data?.bankStale && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">Bank balance may be stale</div>
           <div className="text-sm text-ink-muted">
             Last synced{' '}
@@ -131,10 +131,10 @@ export default function CashflowScreen() {
         ) : (
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-              <CartesianGrid stroke="#E5E7EB" vertical={false} />
-              <XAxis dataKey="week" tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} />
+              <CartesianGrid stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="week" tick={{ fontSize: 10, fill: 'var(--ink-muted)' }} axisLine={false} tickLine={false} />
               <YAxis
-                tick={{ fontSize: 10, fill: '#94A3B8' }}
+                tick={{ fontSize: 10, fill: 'var(--ink-soft)' }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={(v: number) => poundsCompact(v)}

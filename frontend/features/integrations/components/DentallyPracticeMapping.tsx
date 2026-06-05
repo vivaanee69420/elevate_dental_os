@@ -45,7 +45,7 @@ function Row({ id, name, current }: { id: string; name: string; current: string 
           style={{
             padding: '6px 10px', fontSize: 11, fontWeight: 700, borderRadius: 6,
             border: 'none', color: 'white',
-            background: dirty ? '#0E7C7B' : '#9CA3AF',
+            background: dirty ? 'var(--brand)' : '#9CA3AF',
             cursor: dirty && !save.isPending ? 'pointer' : 'default',
           }}
         >
@@ -99,7 +99,7 @@ export default function DentallyPracticeMapping() {
           disabled={syncing}
           style={{
             padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-            border: 'none', background: '#0E7C7B', color: 'white',
+            border: 'none', background: 'var(--brand)', color: 'white',
             cursor: syncing ? 'default' : 'pointer',
           }}
         >

@@ -152,7 +152,7 @@ export default function GoHighLevelPanel({
                 disabled={!keyInput.trim() || !locInput.trim() || submitKey.isPending}
                 style={{
                   padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', color: 'white',
-                  background: keyInput.trim() && locInput.trim() ? '#0E7C7B' : '#9CA3AF',
+                  background: keyInput.trim() && locInput.trim() ? 'var(--brand)' : '#9CA3AF',
                   cursor: keyInput.trim() && locInput.trim() && !submitKey.isPending ? 'pointer' : 'default',
                 }}
               >
@@ -172,7 +172,7 @@ export default function GoHighLevelPanel({
           disabled={syncing}
           style={{
             padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-            border: 'none', background: '#0E7C7B', color: 'white',
+            border: 'none', background: 'var(--brand)', color: 'white',
             cursor: syncing ? 'default' : 'pointer',
           }}
         >
@@ -251,7 +251,7 @@ export default function GoHighLevelPanel({
               disabled={saveMappings.isPending}
               style={{
                 padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-                border: 'none', color: 'white', background: '#0E7C7B',
+                border: 'none', color: 'white', background: 'var(--brand)',
                 cursor: saveMappings.isPending ? 'default' : 'pointer',
               }}
             >

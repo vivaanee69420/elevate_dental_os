@@ -20,7 +20,7 @@ import {
 
 const PURPLE = '#9333EA';
 const PURPLE_DARK = '#6D28D9';
-const AMBER = '#FFB547';
+const AMBER = 'var(--accent)';
 
 /** 1-to-1 Coaching screen. */
 export default function OneToOneCoachingScreen() {

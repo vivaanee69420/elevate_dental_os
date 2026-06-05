@@ -20,7 +20,7 @@ export default function PracticeTabs({ value, onChange }: Props) {
     fontWeight: 600,
     borderRadius: 8,
     border: '1px solid var(--border)',
-    background: active ? '#0E7C7B' : 'white',
+    background: active ? 'var(--brand)' : 'white',
     color: active ? 'white' : 'var(--ink)',
     cursor: 'pointer',
     whiteSpace: 'nowrap',

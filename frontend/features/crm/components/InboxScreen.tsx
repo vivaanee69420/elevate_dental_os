@@ -15,12 +15,12 @@ import { CRM_NAVY, agoLabel } from '../data';
 
 // Per-channel accent colour (emoji indicators dropped per rule 7).
 const CHANNEL_COLOUR: Record<string, string> = {
-  sms: '#F59E0B',
+  sms: 'var(--warning)',
   email: '#3B82F6',
   whatsapp: '#25D366',
   voice_ai: '#8B5CF6',
   call: '#8B5CF6',
-  in_person: '#64748B',
+  in_person: 'var(--ink-muted)',
 };
 const CHANNEL_LABEL: Record<string, string> = {
   sms: 'SMS',
@@ -425,8 +425,8 @@ export default function InboxScreen() {
                           style={{
                             fontSize: 9,
                             padding: '1px 6px',
-                            background: `${CHANNEL_COLOUR[t.channel] ?? '#64748B'}20`,
-                            color: CHANNEL_COLOUR[t.channel] ?? '#64748B',
+                            background: `${CHANNEL_COLOUR[t.channel] ?? 'var(--ink-muted)'}20`,
+                            color: CHANNEL_COLOUR[t.channel] ?? 'var(--ink-muted)',
                             borderRadius: 3,
                             fontWeight: 700,
                             textTransform: 'uppercase',
@@ -438,7 +438,7 @@ export default function InboxScreen() {
                           <span
                             style={{
                               marginLeft: 'auto',
-                              background: '#EF4444',
+                              background: 'var(--danger)',
                               color: 'white',
                               fontSize: 10,
                               fontWeight: 700,
@@ -542,7 +542,7 @@ export default function InboxScreen() {
                               : '12px 12px 12px 0',
                           background:
                             m.direction === 'outbound'
-                              ? `${CHANNEL_COLOUR[m.channel] ?? '#64748B'}22`
+                              ? `${CHANNEL_COLOUR[m.channel] ?? 'var(--ink-muted)'}22`
                               : 'white',
                           border: '1px solid var(--border)',
                           fontSize: 13,

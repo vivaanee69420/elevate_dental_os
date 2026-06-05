@@ -7,7 +7,7 @@
 // (a small leading brand bullet replaces the list glyph). No data layer
 // needed for this screen.
 
-const BRAND = '#0E7C7B';
+const BRAND = 'var(--brand)';
 
 /** One capability listed in the "what you can do on mobile" card. */
 interface Capability {

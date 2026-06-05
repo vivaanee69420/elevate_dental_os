@@ -455,7 +455,7 @@ function TeamMembers() {
 }
 
 const PM_BLUE = '#3B82F6';
-const REC_GREEN = '#10B981';
+const REC_GREEN = 'var(--success)';
 
 /**
  * Visual grouping of catalogue permission keys into the prototype's coloured
@@ -629,7 +629,7 @@ export default function TeamPermissionsScreen() {
       <div
         className="card-padded"
         style={{
-          background: 'linear-gradient(135deg, #0E7C7B 0%, #085857 100%)',
+          background: 'linear-gradient(135deg, var(--brand) 0%, #085857 100%)',
           color: 'white',
           border: 'none',
           marginBottom: 16,
@@ -705,7 +705,7 @@ export default function TeamPermissionsScreen() {
         const rows = grouped[sectionName] || [];
         if (rows.length === 0) return null;
         const meta = SECTION_COLOURS[sectionName] || {
-          colour: '#6B7280',
+          colour: 'var(--ink-muted)',
           bg: '#F3F4F6',
         };
 

@@ -54,7 +54,7 @@ export default function FirePlanScreen() {
       <div
         className="card-padded"
         style={{
-          background: 'linear-gradient(135deg, #0E7C7B 0%, #085857 100%)',
+          background: 'linear-gradient(135deg, var(--brand) 0%, #085857 100%)',
           color: 'white',
           border: 'none',
           textAlign: 'center',
@@ -99,7 +99,7 @@ export default function FirePlanScreen() {
             </div>
             <div
               className="display font-bold"
-              style={{ fontSize: 32, margin: '6px 0', color: '#FFB547' }}
+              style={{ fontSize: 32, margin: '6px 0', color: 'var(--accent)' }}
             >
               {formatPoundsCompact(FIRE_NUMBER)}
             </div>
@@ -144,7 +144,7 @@ export default function FirePlanScreen() {
             <div
               style={{
                 height: '100%',
-                background: '#FFB547',
+                background: 'var(--accent)',
                 width: `${progressPct.toFixed(1)}%`,
                 borderRadius: 7,
               }}
@@ -215,7 +215,7 @@ export default function FirePlanScreen() {
                   padding: '10px 0',
                   borderBottom:
                     i < EXIT_OPTIONS.length - 1
-                      ? '1px solid #E5E7EB'
+                      ? '1px solid var(--border)'
                       : 'none',
                 }}
               >

@@ -23,11 +23,11 @@ const TOTAL = DEBTORS.reduce((s, d) => s + d.amount, 0);
 
 // Aged-debtor buckets keyed by overdue-day band (prototype order).
 const BUCKETS: { label: string; items: Debtor[]; colour: string }[] = [
-  { label: '0-30', items: DEBTORS.filter((d) => d.age <= 30), colour: '#10B981' },
-  { label: '31-60', items: DEBTORS.filter((d) => d.age > 30 && d.age <= 60), colour: '#0E7C7B' },
-  { label: '61-90', items: DEBTORS.filter((d) => d.age > 60 && d.age <= 90), colour: '#F59E0B' },
-  { label: '91-120', items: DEBTORS.filter((d) => d.age > 90 && d.age <= 120), colour: '#EF4444' },
-  { label: '120+', items: DEBTORS.filter((d) => d.age > 120), colour: '#EF4444' },
+  { label: '0-30', items: DEBTORS.filter((d) => d.age <= 30), colour: 'var(--success)' },
+  { label: '31-60', items: DEBTORS.filter((d) => d.age > 30 && d.age <= 60), colour: 'var(--brand)' },
+  { label: '61-90', items: DEBTORS.filter((d) => d.age > 60 && d.age <= 90), colour: 'var(--warning)' },
+  { label: '91-120', items: DEBTORS.filter((d) => d.age > 90 && d.age <= 120), colour: 'var(--danger)' },
+  { label: '120+', items: DEBTORS.filter((d) => d.age > 120), colour: 'var(--danger)' },
 ];
 
 // Amount overdue by 90+ days (the two oldest buckets) — highest collection risk.
