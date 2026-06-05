@@ -10,6 +10,7 @@ export interface ChairPracticeRow {
   chairs: number;
   occupancyPct: number;
   utilAssumed: boolean;
+  occupancySource: 'manual' | 'assumption';
   annualRevenuePence: number;
   capHrsYr: number;
   bookedHrsYr: number;

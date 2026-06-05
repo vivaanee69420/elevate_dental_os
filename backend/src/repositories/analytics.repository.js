@@ -127,6 +127,17 @@ export const analyticsRepository = {
         return Array.isArray(data) ? data : [];
     },
     // Exact per-practice rollups (Postgres GROUP BY via RPC — no 1000-row cap).
+    // Manual chair-utilisation grid rows (the intentional, owner-maintained
+    // occupancy source). Small table; aggregated per practice in the service.
+    async chairUtilisationRows(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('chair_utilisation')
+            .select('practice_id, booked_minutes, available_minutes')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
     async settledRevenueByPractice(orgId, sinceISO, untilISO = null) {
         const { data, error } = await supabase_1.serviceClient.rpc('settled_revenue_by_practice', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,

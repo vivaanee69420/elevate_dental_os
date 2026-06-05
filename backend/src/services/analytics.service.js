@@ -30,11 +30,16 @@ export const analyticsService = {
     // Chair Efficiency view (GM Intelligence OS). Per-practice chair economics:
     // occupancy, cost-of-empty-chairs, recoverable-to-benchmark, plus a group
     // recovery projection. Single fetch + in-memory join (no N+1, Perf #1).
-    // Revenue is REAL (trailing-12mo settled receipts per practice). utilPct is
-    // an owner-editable assumption (practices.assumed_util_pct; defaults to
-    // DEFAULT_UTIL_PCT when unset, flagged utilAssumed=true).
-    // OCPSPD + profit-per-chair-hour are deferred (need per-practice opex +
-    // treatment-minute sourcing) — formulas exist + tested, wiring pending.
+    //
+    // DATA LINEAGE:
+    //   revenue   = REAL (trailing-12mo settled receipts per practice).
+    //   occupancy = the MANUAL chair-utilisation grid (booked/available minutes,
+    //               owner-maintained — intentional single source of truth).
+    //               No grid data for a practice -> fall back to assumed_util_pct
+    //               (or 80%) and flag occupancySource='assumption'.
+    //   occupancySource: 'manual' (grid) | 'assumption'.
+    // Cost-of-empty / recoverable are modelled off occupancy + chair capacity.
+    // OCPSPD + profit-per-chair-hour still deferred.
     async chairAnalytics(orgId, { scope = 'all', recoverPctPoints = 10, now = () => new Date() } = {}) {
         const DEFAULT_UTIL_PCT = 80;
         const resolved = await this.resolveScope(orgId, scope);
@@ -46,18 +51,35 @@ export const analyticsService = {
         if (resolved.mode === 'entity')
             practices = practices.filter((p) => resolved.practiceIds.includes(p.id));
 
-        // Trailing 12 months of settled receipts = annual revenue per practice.
+        // Revenue (trailing 12mo) + the manual chair-utilisation grid. One query
+        // each, aggregated in memory (no N+1).
         const since = new Date(now());
         since.setUTCFullYear(since.getUTCFullYear() - 1);
-        const revRows = await analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since.toISOString());
+        const [revRows, gridRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since.toISOString()),
+            analytics_repository_1.analyticsRepository.chairUtilisationRows(orgId),
+        ]);
         const revByPractice = new Map(revRows.map((r) => [r.practice_id, Number(r.pence) || 0]));
+        // Per-practice manual occupancy = Σ booked / Σ available.
+        const grid = new Map(); // practiceId -> { booked, available }
+        for (const g of gridRows) {
+            const a = grid.get(g.practice_id) || { booked: 0, available: 0 };
+            a.booked += g.booked_minutes || 0;
+            a.available += g.available_minutes || 0;
+            grid.set(g.practice_id, a);
+        }
 
         const rows = practices.map((p) => {
-            const utilAssumed = p.assumed_util_pct == null;
-            const utilPct = utilAssumed ? DEFAULT_UTIL_PCT : p.assumed_util_pct;
             const annualRevenuePence = revByPractice.get(p.id) || 0;
+            const gm = grid.get(p.id);
+            const hasManual = !!gm && gm.available > 0;
+            const occupancySource = hasManual ? 'manual' : 'assumption';
+            const utilAssumed = !hasManual;
+            const utilPct = hasManual
+                ? Math.min(100, Math.round((gm.booked / gm.available) * 1000) / 10)
+                : (p.assumed_util_pct == null ? DEFAULT_UTIL_PCT : p.assumed_util_pct);
             const stats = (0, formulas_1.calculateChairStats)({ chairs: p.chairs || 0, utilPct, annualRevenuePence });
-            return { id: p.id, name: p.name, utilAssumed, annualRevenuePence, ...stats };
+            return { id: p.id, name: p.name, utilAssumed, occupancySource, annualRevenuePence, ...stats };
         });
 
         // Group rollup — sum hours/£, blended occupancy + yield/hr.
