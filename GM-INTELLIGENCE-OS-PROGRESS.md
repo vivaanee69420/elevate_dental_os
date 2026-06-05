@@ -38,7 +38,7 @@ Branch: `feat/intelligence-os-phase0`
 - Treatment Workbench (/profit) ✅ full vertical incl. pure compute endpoint
 - Group Overview (/business-hub) ✅ real business-hub data
 - Lead Funnel (/leads) ✅ real business-hub data
-- Practice Deep Dive (/deep-dive, NEW route + nav) ✅ real (business-hub + chair endpoint), scope-driven
+- Practice Deep Dive (/deep-dive, NEW route + nav) ✅ real (business-hub + chair + treatments + revenue-series), scope-driven. Enriched: 8-stat hero, 8 chair-economics KPIs, treatment-mix bar chart + 12mo turnover area chart (recharts, green/gold). All existing endpoints, no new backend.
 
 Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (d91514f).
 
