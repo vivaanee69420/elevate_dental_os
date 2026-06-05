@@ -22,7 +22,7 @@ Branch: `feat/intelligence-os-phase0`
 **Exit:** scope/period works; Academy/Lab selectable; no rollup regressions. — `[x]` DONE. Backend: 348 tests green. Frontend: tsc+lint clean.
 
 ### Phase 0 exit notes
-- Migration 000035 NOT yet applied to hosted (apply on next `supabase db reset`, or via MCP apply_migration + `NOTIFY pgrst`). `kind` defaults to 'practice' so existing data + filters are safe before Academy/Lab exist.
+- Migration 000035 APPLIED to hosted (project Dental Os `mkfhpzjbijbachoonytt`) via Supabase MCP 2026-06-05 + `NOTIFY pgrst`. `entity_revenue_lines` confirmed (RLS on, 0 rows); `practices.kind` defaults 'practice' (25 existing rows unaffected). Re-applies cleanly on local `supabase db reset`.
 - Per-org Academy/Lab rows: create via app/seed (they need an organisation_id); ScopePeriodBar already offers the options.
 - ScopePeriodBar is built but not yet rendered on any screen — wired per-screen in Phase 1.
 
@@ -31,7 +31,7 @@ Branch: `feat/intelligence-os-phase0`
 |---|---|---|
 | T5 Workbench → ProfitScreen (pure debounced compute endpoint) | [ ] | golden ± tolerance; audit-exempt |
 | T6 3-buyer Valuation + Sale Planner → ValuationScreen | [ ] | driver-based; EBITDA reconciled; versioned |
-| T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [ ] | |
+| T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [~] | formulas DONE (calculateChairStats/Ocpspd/profitPerChairHour/chairRecovery, pence) + 15 tests + FORMULAS.md §11. NEXT: service+endpoint+UI (utilPct data-lineage decision pending) |
 | Group Overview rollup (Academy+Lab) + Decision Lens | [ ] | |
 **Exit:** Tier-1 new UI, scope/period reactive. — `[ ]`
 
