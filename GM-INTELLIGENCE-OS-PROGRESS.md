@@ -33,7 +33,7 @@ Branch: `feat/intelligence-os-phase0`
 | T6 3-buyer Valuation + Sale Planner → ValuationScreen | [ ] | driver-based; EBITDA reconciled; versioned |
 | T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [x] | FULL VERTICAL DONE: formulas (+15 tests, FORMULAS.md §11) → migration 000036 (applied hosted) → chairAnalytics service (+2 tests) → GET /api/analytics/chair (finance.view) → ChairEfficiencyScreen UI + ScopePeriodBar wired into /chair (tsc+lint clean). FIRST end-to-end slice — proves the formulas→endpoint→UI pattern. Remaining: OCPSPD + profit-per-chair-hr (deferred, need opex/treatment-minute sourcing) |
 | Group Overview rollup + Decision Lens | [x] | GroupOverviewScreen on /business-hub — REAL business-hub data, scope-aware (practice narrows; academy/lab note), KPI strip + per-practice table + client-computed Decision Lens (AlertRow). tsc+lint clean. Academy/Lab entity revenue rollup = later (needs entity_revenue_lines wiring) |
-**Exit:** Tier-1 new UI, scope/period reactive. — `[ ]`
+**Exit:** Tier-1 new UI, scope/period reactive. — `[~]` 4 views built fresh on the new tokens/primitives/ScopePeriodBar: Chair (✅ vertical), Workbench (✅ vertical incl. compute endpoint), Group Overview (✅ real business-hub), Lead Funnel (✅ real business-hub). Commits e393809→edd5763. Remaining views split: backend-gated (Valuation T6, Treatment-Mix RPC, OCPSPD) vs existing-screens-needing-reskin (P&L/Cashflow/Marketing/Clinicians) vs new-UI-on-existing-endpoint (AI Analyst Ask, Practice Deep Dive).
 
 ## Phase 2 — Tier-2 (new UI + extended compute)
 | Task | Status | Notes / commit |
