@@ -303,7 +303,12 @@ Response:
   `actuals` | `revenue-only`.
 - `cashflow` — **real backward 13-week view**: each week = exact settled payments
   received that week (RPC); opening = real bank balance; closing = running
-  balance. No projection, no baseline comparison. `basis:'actuals'`.
+  balance. No projection, no baseline comparison. `basis:'actuals'`. Also returns a
+  `runway` block (Intelligence OS — Cashflow & Runway, `formulas.calculateRunway`,
+  FORMULAS.md §14): `freeCashPence` (bank balance), `monthlyReceiptsPence` (window
+  rate), `monthlyCostsPence` (P&L cost base — actuals or baseline), `monthlyNetPence`,
+  `monthlyBurnPence`, `runwayMonths` (null when cash-positive), `cashPositive`,
+  `status`, `costsAvailable`/`costsBasis`, and `billsToPlanPence:null` (no payables source).
 - `pl` — annual P&L from `monthly_financials` actuals; baseline fallback when none.
 
 Xero overrides manual for the same period+bucket (see FORMULAS.md §1a).
