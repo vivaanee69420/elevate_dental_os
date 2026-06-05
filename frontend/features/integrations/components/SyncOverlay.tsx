@@ -86,7 +86,7 @@ export default function SyncOverlay({
     : stalled
       ? 'No update for a while — the server may have restarted mid-import, or the connection dropped. Your data keeps importing on the server; close this and check back shortly.'
       : `${phase} · ${pct}%`;
-  const barColour = errored ? 'var(--danger, #DC2626)' : stalled ? '#D97706' : '#0E7C7B';
+  const barColour = errored ? 'var(--danger, #DC2626)' : stalled ? '#D97706' : 'var(--brand)';
 
   return (
     <div
@@ -112,7 +112,7 @@ export default function SyncOverlay({
           style={{
             position: 'absolute', top: 8, right: 10, background: 'none',
             border: 'none', cursor: 'pointer', fontSize: 18, lineHeight: 1,
-            color: 'var(--ink-muted, #6B7280)',
+            color: 'var(--ink-muted, var(--ink-muted))',
           }}
         >
           ×
@@ -124,7 +124,7 @@ export default function SyncOverlay({
           {subtitle}
         </div>
         {/* progress track */}
-        <div style={{ height: 8, width: '100%', background: '#E5E7EB', borderRadius: 999, overflow: 'hidden' }}>
+        <div style={{ height: 8, width: '100%', background: 'var(--border)', borderRadius: 999, overflow: 'hidden' }}>
           <div
             style={{
               height: '100%', width: `${pct}%`,

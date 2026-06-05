@@ -99,7 +99,7 @@ export default function ModuleLibraryScreen() {
         style={{
           background: status.active
             ? `linear-gradient(135deg, ${PURPLE} 0%, ${PURPLE_DARK} 100%)`
-            : 'linear-gradient(135deg, #6B7280 0%, #4B5563 100%)',
+            : 'linear-gradient(135deg, var(--ink-muted) 0%, #4B5563 100%)',
           color: 'white',
           border: 'none',
           marginBottom: 16,
@@ -222,7 +222,7 @@ export default function ModuleLibraryScreen() {
                   height: 100,
                   background:
                     m.access === 'free'
-                      ? 'linear-gradient(135deg, #10B981, #059669)'
+                      ? 'linear-gradient(135deg, var(--success), #059669)'
                       : `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`,
                   position: 'relative',
                   display: 'flex',

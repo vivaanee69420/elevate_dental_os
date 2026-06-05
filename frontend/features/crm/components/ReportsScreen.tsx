@@ -65,7 +65,7 @@ export default function ReportsScreen() {
       { label: 'Contacted', value: contacted, colour: '#7C3AED' },
       { label: 'Consultation booked', value: consultBooked, colour: '#6366F1' },
       { label: 'Consultation attended', value: consultAttended, colour: '#0891B2' },
-      { label: 'Treatment started', value: treatmentStarted, colour: '#10B981' },
+      { label: 'Treatment started', value: treatmentStarted, colour: 'var(--success)' },
     ];
 
     const pipelineValue = leads
@@ -118,7 +118,7 @@ export default function ReportsScreen() {
           </div>
           <div
             className="display font-bold"
-            style={{ fontSize: 28, color: '#10B981', marginTop: 4 }}
+            style={{ fontSize: 28, color: 'var(--success)', marginTop: 4 }}
           >
             {model.totalLeads
               ? ((model.treatmentStarted / model.totalLeads) * 100).toFixed(1)
@@ -138,7 +138,7 @@ export default function ReportsScreen() {
           </div>
           <div
             className="display font-bold"
-            style={{ fontSize: 28, color: '#10B981', marginTop: 4 }}
+            style={{ fontSize: 28, color: 'var(--success)', marginTop: 4 }}
           >
             {model.avgFirstContact != null ? `${model.avgFirstContact}m` : '—'}
           </div>
@@ -155,7 +155,7 @@ export default function ReportsScreen() {
           </div>
           <div
             className="display font-bold"
-            style={{ fontSize: 28, color: '#F59E0B', marginTop: 4 }}
+            style={{ fontSize: 28, color: 'var(--warning)', marginTop: 4 }}
           >
             {model.ftaRate.toFixed(1)}%
           </div>
@@ -172,7 +172,7 @@ export default function ReportsScreen() {
           </div>
           <div
             className="display font-bold"
-            style={{ fontSize: 28, color: '#0E7C7B', marginTop: 4 }}
+            style={{ fontSize: 28, color: 'var(--brand)', marginTop: 4 }}
           >
             {formatCurrency(model.pipelineValue)}
           </div>
@@ -293,7 +293,7 @@ export default function ReportsScreen() {
                     style={{
                       padding: '8px 0',
                       textAlign: 'right',
-                      color: s.conversionRate > 15 ? '#10B981' : 'var(--ink)',
+                      color: s.conversionRate > 15 ? 'var(--success)' : 'var(--ink)',
                     }}
                   >
                     {s.conversionRate.toFixed(0)}%
@@ -303,7 +303,7 @@ export default function ReportsScreen() {
                       padding: '8px 0',
                       textAlign: 'right',
                       fontWeight: 700,
-                      color: '#0E7C7B',
+                      color: 'var(--brand)',
                     }}
                   >
                     {formatCurrency(s.value)}
@@ -349,7 +349,7 @@ export default function ReportsScreen() {
                     style={{
                       padding: '8px 0',
                       textAlign: 'right',
-                      color: p.conversionRate > 15 ? '#10B981' : 'var(--ink)',
+                      color: p.conversionRate > 15 ? 'var(--success)' : 'var(--ink)',
                     }}
                   >
                     {p.conversionRate.toFixed(0)}%
@@ -388,7 +388,7 @@ export default function ReportsScreen() {
               <div style={{ fontSize: 12, fontWeight: 600 }}>{t.name}</div>
               <div
                 className="display font-bold"
-                style={{ fontSize: 20, color: '#0E7C7B', marginTop: 4 }}
+                style={{ fontSize: 20, color: 'var(--brand)', marginTop: 4 }}
               >
                 {formatCurrency(t.value)}
               </div>

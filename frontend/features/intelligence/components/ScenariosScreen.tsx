@@ -7,8 +7,8 @@
 import { Card } from '@/components/ui';
 import { SCENARIOS, formatPoundsCompact, type Scenario } from '../data';
 
-const POS = '#10B981';
-const NEG = '#EF4444';
+const POS = 'var(--success)';
+const NEG = 'var(--danger)';
 
 // Status -> chip colour + label, mirroring the prototype's chip mapping.
 const STATUS_CHIP: Record<Scenario['status'], { colour: string; label: string }> = {

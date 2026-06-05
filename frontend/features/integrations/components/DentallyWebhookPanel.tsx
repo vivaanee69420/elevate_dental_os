@@ -86,7 +86,7 @@ export default function DentallyWebhookPanel() {
           style={{
             padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6,
             border: 'none', color: 'white',
-            background: secret.trim().length >= 8 ? '#0E7C7B' : '#9CA3AF',
+            background: secret.trim().length >= 8 ? 'var(--brand)' : '#9CA3AF',
             cursor: secret.trim().length >= 8 && !save.isPending ? 'pointer' : 'default',
           }}
         >

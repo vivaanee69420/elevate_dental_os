@@ -39,23 +39,23 @@ type Member = {
 };
 
 const TEAM: Member[] = [
-  { id: 'gaurav', name: 'Owner', role: 'CEO · Owner', avatar: 'O', colour: '#0E7C7B', email: 'owner@company.com' },
+  { id: 'gaurav', name: 'Owner', role: 'CEO · Owner', avatar: 'O', colour: 'var(--brand)', email: 'owner@company.com' },
   { id: 'nadia', name: 'Co-founder', role: 'Co-founder · Mastermind Academy', avatar: 'CF', colour: '#EC4899', email: 'cofounder@company.com' },
   { id: 'nikhil', name: 'Tech Lead', role: 'Paid Ads · Technical', avatar: 'TL', colour: '#3B82F6', email: 'nikhil@team.com' },
   { id: 'ruhith', name: 'Infrastructure', role: 'AWS · DNS · Technical', avatar: 'IF', colour: '#8B5CF6', email: 'ruhith@team.com' },
-  { id: 'abhishek', name: 'Designer', role: 'Visual Design · Canva', avatar: 'DS', colour: '#F59E0B', email: 'abhishek@team.com' },
+  { id: 'abhishek', name: 'Designer', role: 'Visual Design · Canva', avatar: 'DS', colour: 'var(--warning)', email: 'abhishek@team.com' },
   { id: 'sona', name: 'Content Lead', role: 'Content · Copy · Admin', avatar: 'CO', colour: '#06B6D4', email: 'sona@team.com' },
-  { id: 'philippa', name: 'Accountant', role: 'PracticeBooks', avatar: 'AC', colour: '#10B981', email: 'accountant@company.com' },
+  { id: 'philippa', name: 'Accountant', role: 'PracticeBooks', avatar: 'AC', colour: 'var(--success)', email: 'accountant@company.com' },
   { id: 'john', name: 'Clinical Director', role: 'Clinical Director · BioWell', avatar: 'CD', colour: '#6366F1', email: 'clinical@company.com' },
 ];
 
 type Business = { id: string; name: string; colour: string };
 
 const BUSINESSES: Business[] = [
-  { id: 'gm', name: 'Crestwell Dental Group', colour: '#0E7C7B' },
+  { id: 'gm', name: 'Crestwell Dental Group', colour: 'var(--brand)' },
   { id: 'lab', name: 'PrecisionLab', colour: '#7C3AED' },
   { id: 'p4g', name: 'Mastermind Academy', colour: '#EC4899' },
-  { id: 'bio', name: 'BioWell Dental', colour: '#10B981' },
+  { id: 'bio', name: 'BioWell Dental', colour: 'var(--success)' },
   { id: 'elevate', name: 'PracticeBooks', colour: '#3B82F6' },
 ];
 
@@ -100,16 +100,16 @@ const SEED_TASKS: Task[] = [
 ];
 
 const PRIORITY_COLOURS: Record<Priority, string> = {
-  urgent: '#EF4444',
-  high: '#F59E0B',
+  urgent: 'var(--danger)',
+  high: 'var(--warning)',
   medium: '#3B82F6',
-  low: '#64748B',
+  low: 'var(--ink-muted)',
 };
 const STATUS_COLOURS: Record<Status, string> = {
-  'not-started': '#94A3B8',
+  'not-started': 'var(--ink-soft)',
   'in-progress': '#3B82F6',
-  done: '#10B981',
-  blocked: '#EF4444',
+  done: 'var(--success)',
+  blocked: 'var(--danger)',
 };
 const STATUS_LABELS: Record<Status, string> = {
   'not-started': 'Not Started',
@@ -154,9 +154,9 @@ function TaskRow({
   onDelete: (id: string) => void;
 }) {
   const member =
-    TEAM.find((m) => m.id === t.assignee) ?? { name: 'Unassigned', colour: '#94A3B8', avatar: '??' };
+    TEAM.find((m) => m.id === t.assignee) ?? { name: 'Unassigned', colour: 'var(--ink-soft)', avatar: '??' };
   const business =
-    BUSINESSES.find((b) => b.id === t.business) ?? { name: '—', colour: '#94A3B8' };
+    BUSINESSES.find((b) => b.id === t.business) ?? { name: '—', colour: 'var(--ink-soft)' };
   const overdue = isOverdue(t, today);
   const done = t.status === 'done';
   const dueDateFormatted = new Date(t.dueDate).toLocaleDateString('en-GB', {
@@ -198,7 +198,7 @@ function TaskRow({
           style={{
             fontWeight: 600,
             fontSize: 14,
-            color: done ? '#94A3B8' : 'var(--ink)',
+            color: done ? 'var(--ink-soft)' : 'var(--ink)',
             textDecoration: done ? 'line-through' : 'none',
           }}
         >
@@ -207,7 +207,7 @@ function TaskRow({
         <div
           style={{
             fontSize: 12,
-            color: '#64748B',
+            color: 'var(--ink-muted)',
             marginTop: 2,
             display: 'flex',
             gap: 10,
@@ -295,7 +295,7 @@ function TaskRow({
             style={{
               background: '#FEF3C7',
               color: '#92400E',
-              border: '1px solid #F59E0B',
+              border: '1px solid var(--warning)',
               padding: '4px 9px',
               borderRadius: 6,
               fontSize: 11,
@@ -312,7 +312,7 @@ function TaskRow({
           style={{
             background: 'none',
             border: 'none',
-            color: '#94A3B8',
+            color: 'var(--ink-soft)',
             cursor: 'pointer',
             fontSize: 14,
             padding: 4,
@@ -449,7 +449,7 @@ export default function TaskManagerScreen() {
     fontSize: 11,
     fontWeight: 600,
     textTransform: 'uppercase',
-    color: '#64748B',
+    color: 'var(--ink-muted)',
     letterSpacing: '.04em',
     display: 'block',
     marginBottom: 4,
@@ -492,7 +492,7 @@ export default function TaskManagerScreen() {
         <div
           style={{
             background: '#FEE2E2',
-            border: '1px solid #EF4444',
+            border: '1px solid var(--danger)',
             borderRadius: 10,
             padding: '14px 18px',
             marginBottom: 18,
@@ -674,7 +674,7 @@ export default function TaskManagerScreen() {
                   border: 'none',
                   background: 'none',
                   borderBottom: `2px solid ${active ? 'var(--brand)' : 'transparent'}`,
-                  color: active ? 'var(--brand)' : '#64748B',
+                  color: active ? 'var(--brand)' : 'var(--ink-muted)',
                   fontSize: 13,
                   fontWeight: 600,
                   cursor: 'pointer',
@@ -692,7 +692,7 @@ export default function TaskManagerScreen() {
         (tasks.length > 0 ? (
           tasks.map((t) => <TaskRow key={t.id} t={t} {...rowProps} />)
         ) : (
-          <div style={{ textAlign: 'center', padding: 48, color: '#64748B' }}>
+          <div style={{ textAlign: 'center', padding: 48, color: 'var(--ink-muted)' }}>
             No tasks yet. Add one above.
           </div>
         ))}
@@ -748,7 +748,7 @@ export default function TaskManagerScreen() {
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--ink)' }}>{m.name}</div>
-                  <div style={{ fontSize: 11.5, color: '#64748B' }}>{m.role}</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--ink-muted)' }}>{m.role}</div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, fontSize: 12 }}>
                   <span
@@ -783,7 +783,7 @@ export default function TaskManagerScreen() {
                 <div
                   style={{
                     padding: '8px 12px',
-                    color: '#94A3B8',
+                    color: 'var(--ink-soft)',
                     fontSize: 12.5,
                     fontStyle: 'italic',
                   }}
@@ -840,7 +840,7 @@ export default function TaskManagerScreen() {
                 <div
                   style={{
                     padding: '8px 12px',
-                    color: '#94A3B8',
+                    color: 'var(--ink-soft)',
                     fontSize: 12.5,
                     fontStyle: 'italic',
                   }}
@@ -873,7 +873,7 @@ export default function TaskManagerScreen() {
               >
                 <div>
                   <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--ink)' }}>{r.n}</div>
-                  <div style={{ fontSize: 12, color: '#64748B', marginTop: 3 }}>{r.d}</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-muted)', marginTop: 3 }}>{r.d}</div>
                 </div>
                 <div
                   style={{
@@ -903,7 +903,7 @@ export default function TaskManagerScreen() {
               style={{
                 padding: 14,
                 background: '#FEF3C7',
-                borderLeft: '3px solid #F59E0B',
+                borderLeft: '3px solid var(--warning)',
                 borderRadius: 6,
                 fontSize: 12.5,
                 color: '#92400E',

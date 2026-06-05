@@ -19,9 +19,9 @@ function fmt(n: number): string {
   return '£' + Math.round(n).toLocaleString('en-GB');
 }
 const LIGHT: Record<string, string> = {
-  green: '#10B981',
-  amber: '#F59E0B',
-  red: '#EF4444',
+  green: 'var(--success)',
+  amber: 'var(--warning)',
+  red: 'var(--danger)',
 };
 const RATIO_LABEL: Record<string, string> = {
   grossMarginPct: 'Gross margin',
@@ -38,7 +38,7 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
       <div className="text-xs text-ink-muted uppercase">{label}</div>
       <div className="display text-2xl font-bold mt-1">{value}</div>
       {delta && (
-        <div className="text-xs font-semibold mt-1" style={{ color: '#10B981' }}>
+        <div className="text-xs font-semibold mt-1" style={{ color: 'var(--success)' }}>
           {delta}
         </div>
       )}
@@ -109,7 +109,7 @@ export default function FinancialScreen() {
         </div>
       )}
       {noBaseline && !isError && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">
             {practiceId ? 'No P&L actuals for this practice' : 'No baseline set'}
           </div>
@@ -121,7 +121,7 @@ export default function FinancialScreen() {
         </div>
       )}
       {!noBaseline && !isError && !data?.costsAvailable && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">Revenue is real · costs &amp; balance sheet are £0</div>
           <div className="text-sm text-ink-muted">
             Revenue is real (settled payments). We have no cost or accounting
@@ -154,7 +154,7 @@ export default function FinancialScreen() {
             style={{
               width: 64,
               padding: '5px 8px',
-              border: '1px solid #E5E7EB',
+              border: '1px solid var(--border)',
               borderRadius: 5,
             }}
           />
@@ -173,7 +173,7 @@ export default function FinancialScreen() {
             style={{
               width: 64,
               padding: '5px 8px',
-              border: '1px solid #E5E7EB',
+              border: '1px solid var(--border)',
               borderRadius: 5,
             }}
           />

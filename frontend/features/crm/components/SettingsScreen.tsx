@@ -138,7 +138,7 @@ export default function SettingsScreen() {
               <span>{i.n}</span>
               <span
                 style={{
-                  color: i.connected ? '#10B981' : 'var(--ink-muted)',
+                  color: i.connected ? 'var(--success)' : 'var(--ink-muted)',
                   fontWeight: 600,
                 }}
               >
@@ -214,7 +214,7 @@ function Pill({ text }: { text: string }) {
     <div
       style={{
         padding: 8,
-        background: '#0E7C7B',
+        background: 'var(--brand)',
         color: 'white',
         borderRadius: 6,
         fontSize: 12,

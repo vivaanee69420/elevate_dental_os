@@ -10,7 +10,7 @@ import { useMetrics, useUpdateMetric } from '../hooks';
 import type { HealthMetric } from '../api';
 
 type Status = 'green' | 'amber' | 'red';
-const STATUS_COLOUR: Record<Status, string> = { green: '#10B981', amber: '#F59E0B', red: '#EF4444' };
+const STATUS_COLOUR: Record<Status, string> = { green: 'var(--success)', amber: 'var(--warning)', red: 'var(--danger)' };
 const CATEGORIES = ['Financial', 'Patient', 'Conversion', 'Operational'] as const;
 
 function statusOf(m: HealthMetric): Status {

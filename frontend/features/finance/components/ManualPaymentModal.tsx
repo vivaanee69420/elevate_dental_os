@@ -120,7 +120,7 @@ export default function ManualPaymentModal({ open, onClose, practices }: Props) 
           <button
             onClick={submit}
             disabled={!practiceId || !amount || mut.isPending}
-            style={{ padding: '8px 14px', background: '#0E7C7B', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+            style={{ padding: '8px 14px', background: 'var(--brand)', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
           >{mut.isPending ? 'Saving…' : 'Record payment'}</button>
         </div>
         <p className="text-ink-muted" style={{ fontSize: 10, marginTop: 10 }}>

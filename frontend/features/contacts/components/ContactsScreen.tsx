@@ -71,7 +71,7 @@ export default function ContactsScreen() {
               onClick={() => changeSource(t.key)}
               className={
                 active
-                  ? 'rounded-lg px-4 py-2 text-sm font-semibold bg-[#0E7C7B] text-white'
+                  ? 'rounded-lg px-4 py-2 text-sm font-semibold bg-[var(--brand)] text-white'
                   : 'rounded-lg px-4 py-2 text-sm font-semibold bg-white text-ink-muted border border-[var(--border)] hover:bg-slate-50'
               }
             >

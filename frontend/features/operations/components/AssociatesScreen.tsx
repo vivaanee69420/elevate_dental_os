@@ -106,13 +106,13 @@ export default function AssociatesScreen() {
         )}
         {!isLoading && !isError && associates.length > 0 && (
           <table className="w-full" style={{ fontSize: 13 }}>
-            <thead className="bg-bg" style={{ borderBottom: '1px solid #E5E7EB' }}>
+            <thead className="bg-bg" style={{ borderBottom: '1px solid var(--border)' }}>
               <tr>
                 {['Associate', 'Practice', 'Pay %', 'Production', 'UDAs', 'Conv.', 'Treatments', 'Appts', 'Completion', 'No-show', 'Status'].map((h, i) => (
                   <th
                     key={h}
                     className={i >= 2 && i <= 9 ? 'text-right' : 'text-left'}
-                    style={{ padding: '12px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#6B7280', fontWeight: 600 }}
+                    style={{ padding: '12px 16px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-muted)', fontWeight: 600 }}
                   >
                     {h}
                   </th>
@@ -126,7 +126,7 @@ export default function AssociatesScreen() {
                   ? new Date(a.joined_date).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
                   : null;
                 return (
-                  <tr key={a.id} style={{ borderBottom: '1px solid #E5E7EB' }}>
+                  <tr key={a.id} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={{ padding: '12px 16px' }}>
                       <strong>{a.full_name}</strong>
                       {joined && (

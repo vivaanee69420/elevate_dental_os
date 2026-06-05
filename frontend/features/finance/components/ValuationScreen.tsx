@@ -45,7 +45,7 @@ import {
   type RegionKey,
 } from '../mock';
 
-const BRAND = '#0E7C7B';
+const BRAND = 'var(--brand)';
 const SUCCESS = 'var(--success)';
 const DANGER = 'var(--danger)';
 
@@ -221,7 +221,7 @@ export default function ValuationScreen() {
       </div>
 
       {baseMissing && !baseLoading && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">No baseline — valuation base is £0</div>
           <div className="text-sm text-ink-muted">
             TTM revenue + EBITDA come from your Business Health baseline.
@@ -363,7 +363,7 @@ function CurrentTab({
       <div
         className="card-padded mb-4"
         style={{
-          background: 'linear-gradient(135deg, #0E7C7B 0%, #085857 100%)',
+          background: 'linear-gradient(135deg, var(--brand) 0%, #085857 100%)',
           color: 'white',
           border: 'none',
         }}
@@ -391,7 +391,7 @@ function CurrentTab({
               sub: 'PE / corporate consolidator · EBITDA × premium multiple',
               value: poundsCompact(result.dsoValuation),
               detail: `${poundsCompact(result.associateEbitda)} × ${state.dsoMultiple.toFixed(2)}x × growth`,
-              colour: '#FFB547',
+              colour: 'var(--accent)',
               border: false,
             },
           ].map((c) => (
@@ -429,7 +429,7 @@ function CurrentTab({
                     position: 'absolute',
                     top: -8,
                     right: 0,
-                    background: '#FFB547',
+                    background: 'var(--accent)',
                     color: '#78350F',
                     fontSize: 9,
                     fontWeight: 700,
@@ -473,7 +473,7 @@ function CurrentTab({
             </div>
             <div
               className="display"
-              style={{ fontSize: 26, fontWeight: 700, color: '#FFB547', marginTop: 4 }}
+              style={{ fontSize: 26, fontWeight: 700, color: 'var(--accent)', marginTop: 4 }}
             >
               {poundsCompact(result.strategic)}
             </div>
@@ -1347,7 +1347,7 @@ function PlannerTab({
   }
   if (cards.length === 0) {
     cards.push({
-      colour: '#10B981',
+      colour: 'var(--success)',
       bg: '#D1FAE5',
       title: 'On track',
       headline: 'Your model already hits the target',
@@ -1450,7 +1450,7 @@ function PlannerTab({
       <div
         className="card-padded mb-4"
         style={{
-          background: 'linear-gradient(135deg, #0E7C7B 0%, #085857 100%)',
+          background: 'linear-gradient(135deg, var(--brand) 0%, #085857 100%)',
           color: 'white',
           border: 'none',
         }}
@@ -1471,7 +1471,7 @@ function PlannerTab({
               fontSize: 11,
               padding: '4px 10px',
               borderRadius: 14,
-              background: onTarget ? '#10B981' : 'rgba(220,38,38,0.85)',
+              background: onTarget ? 'var(--success)' : 'rgba(220,38,38,0.85)',
               fontWeight: 700,
             }}
           >

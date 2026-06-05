@@ -23,7 +23,7 @@ function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: 
       <div className="text-xs text-ink-muted uppercase">{label}</div>
       <div
         className="display text-2xl font-bold mt-1"
-        style={tone === 'warn' ? { color: 'var(--warning, #F59E0B)' } : undefined}
+        style={tone === 'warn' ? { color: 'var(--warning, var(--warning))' } : undefined}
       >
         {value}
       </div>
@@ -66,7 +66,7 @@ export default function CorporationTaxScreen() {
             <tbody>
               <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Annual profit (per management accounts)</td><td style={{ textAlign: 'right' }}>{formatPounds(ANNUAL_PROFIT)}</td></tr>
               <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Add back: non-deductible</td><td style={{ textAlign: 'right' }}>£0</td></tr>
-              <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Less: capital allowances (AIA)</td><td style={{ textAlign: 'right', color: 'var(--danger, #EF4444)' }}>-{formatPounds(AIA)}</td></tr>
+              <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Less: capital allowances (AIA)</td><td style={{ textAlign: 'right', color: 'var(--danger, var(--danger))' }}>-{formatPounds(AIA)}</td></tr>
               <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600 }}><td style={{ padding: '8px 0' }}>Taxable profit</td><td style={{ textAlign: 'right' }}>{formatPounds(TAXABLE)}</td></tr>
               <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Small profits band (£0-£250k @ 19%)</td><td style={{ textAlign: 'right' }}>{formatPounds(SMALL_BAND)}</td></tr>
               <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Main rate (over £250k @ 25%)</td><td style={{ textAlign: 'right' }}>{formatPounds(MAIN_RATE)}</td></tr>
@@ -84,7 +84,7 @@ export default function CorporationTaxScreen() {
               <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Total quarterly revenue</td><td style={{ textAlign: 'right' }}>£920,000</td></tr>
               <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Exempt (dental services)</td><td style={{ textAlign: 'right' }}>£809,600</td></tr>
               <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Standard rated (cosmetic, retail)</td><td style={{ textAlign: 'right' }}>£110,400</td></tr>
-              <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Input VAT reclaim</td><td style={{ textAlign: 'right', color: 'var(--danger, #EF4444)' }}>-£6,420</td></tr>
+              <tr><td className="text-ink-muted" style={{ padding: '6px 0' }}>Input VAT reclaim</td><td style={{ textAlign: 'right', color: 'var(--danger, var(--danger))' }}>-£6,420</td></tr>
               <tr style={{ borderTop: '1px solid var(--border)', fontWeight: 600 }}><td style={{ padding: '8px 0' }}>VAT due (20%)</td><td style={{ textAlign: 'right', color: 'var(--brand)', fontWeight: 700 }}>£15,660</td></tr>
             </tbody>
           </table>
@@ -106,7 +106,7 @@ export default function CorporationTaxScreen() {
             {LEVERS.map((l) => (
               <tr key={l.lever}>
                 <td>{l.lever}</td>
-                <td className="right" style={{ color: 'var(--success, #10B981)' }}>{formatPounds(l.saving)}</td>
+                <td className="right" style={{ color: 'var(--success, var(--success))' }}>{formatPounds(l.saving)}</td>
                 <td>{l.impl}</td>
                 <td>{l.deadline}</td>
                 <td><span className={`chip ${l.chip}`}>{l.status}</span></td>

@@ -96,7 +96,7 @@ export default function ChairScreen() {
         <select
           value={selected}
           onChange={(e) => setPracticeId(e.target.value)}
-          style={{ border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}
+          style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}
         >
           {practices.length === 0 && <option value="">No practices</option>}
           {practices.map((p) => (
@@ -107,10 +107,10 @@ export default function ChairScreen() {
 
       {/* KPIs */}
       <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <Kpi label="Avg utilisation" value={kpis?.avgUtilPct != null ? `${kpis.avgUtilPct}%` : '—'} sub="UK avg: 72%" subColor="#10B981" />
-        <Kpi label="Peak slot" value={peakLabel} sub={kpis?.peakSlot ? `${kpis.peakSlot.pct}% utilised` : ''} subColor="#10B981" />
-        <Kpi label="Lowest slot" value={lowestLabel} sub={kpis?.lowestSlot ? `${kpis.lowestSlot.pct}% utilised` : ''} subColor="#EF4444" />
-        <Kpi label="Idle chair-hours" value={kpis ? formatNumber(kpis.idleChairHours) : '—'} sub="/week" subColor="#EF4444" />
+        <Kpi label="Avg utilisation" value={kpis?.avgUtilPct != null ? `${kpis.avgUtilPct}%` : '—'} sub="UK avg: 72%" subColor="var(--success)" />
+        <Kpi label="Peak slot" value={peakLabel} sub={kpis?.peakSlot ? `${kpis.peakSlot.pct}% utilised` : ''} subColor="var(--success)" />
+        <Kpi label="Lowest slot" value={lowestLabel} sub={kpis?.lowestSlot ? `${kpis.lowestSlot.pct}% utilised` : ''} subColor="var(--danger)" />
+        <Kpi label="Idle chair-hours" value={kpis ? formatNumber(kpis.idleChairHours) : '—'} sub="/week" subColor="var(--danger)" />
       </div>
 
       {/* Heatmap */}
@@ -171,7 +171,7 @@ export default function ChairScreen() {
               {editing ? 'Save' : 'Add'}
             </button>
             {editing && (
-              <button type="button" className="btn-ghost" style={{ padding: '8px 12px', fontSize: 13, border: '1px solid #E5E7EB' }} onClick={() => setForm(EMPTY_FORM)}>
+              <button type="button" className="btn-ghost" style={{ padding: '8px 12px', fontSize: 13, border: '1px solid var(--border)' }} onClick={() => setForm(EMPTY_FORM)}>
                 Cancel
               </button>
             )}
@@ -198,7 +198,7 @@ export default function ChairScreen() {
             </thead>
             <tbody>
               {records.map((r) => (
-                <tr key={r.id} style={{ borderTop: '1px solid #E5E7EB' }}>
+                <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
                   <td style={{ padding: '10px 12px 10px 0' }}>{r.chair_name}</td>
                   <td style={{ padding: '10px 12px' }}>{WEEKDAY_LABEL[r.weekday]}</td>
                   <td style={{ padding: '10px 12px' }}>{SLOT_LABEL[r.slot]}</td>
@@ -218,7 +218,7 @@ export default function ChairScreen() {
   );
 }
 
-const inputStyle: React.CSSProperties = { border: '1px solid #E5E7EB', borderRadius: 8, padding: '8px 10px', fontSize: 13, width: '100%' };
+const inputStyle: React.CSSProperties = { border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', fontSize: 13, width: '100%' };
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

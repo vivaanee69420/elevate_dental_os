@@ -28,8 +28,8 @@ const BASIS_LABEL: Record<string, string> = {
   'revenue-only': 'real revenue (settled payments) · costs/profit £0 until Xero',
 };
 
-const BRAND = '#0E7C7B';
-const ACCENT = '#FFB547';
+const BRAND = 'var(--brand)';
+const ACCENT = 'var(--accent)';
 
 function Kpi({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
@@ -37,7 +37,7 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
       <div className="text-xs text-ink-muted uppercase">{label}</div>
       <div className="display text-2xl font-bold mt-1">{value}</div>
       {delta && (
-        <div className="text-xs font-semibold mt-1" style={{ color: '#10B981' }}>
+        <div className="text-xs font-semibold mt-1" style={{ color: 'var(--success)' }}>
           {delta}
         </div>
       )}
@@ -87,7 +87,7 @@ export default function ProfitScreen() {
       .join('');
     const html = `<!doctype html><html><head><meta charset=utf-8><title>P&L — ${new Date().toLocaleDateString(
       'en-GB',
-    )}</title><style>body{font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:32px}h1{font-size:20px;margin:0}.sub{color:#6B7280;font-size:11px;margin:4px 0 20px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 10px;border-bottom:1px solid #E5E7EB;text-align:left}.r{text-align:right}tfoot td{font-weight:700;border-top:2px solid #1F2937}.f{color:#9CA3AF;font-size:10px;margin-top:18px}@media print{body{margin:14mm}}</style></head><body><h1>Profit &amp; Loss</h1><div class=sub>12-month rolling P&amp;L · ${esc(basisLabel)} · ${esc(
+    )}</title><style>body{font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:32px}h1{font-size:20px;margin:0}.sub{color:var(--ink-muted);font-size:11px;margin:4px 0 20px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 10px;border-bottom:1px solid var(--border);text-align:left}.r{text-align:right}tfoot td{font-weight:700;border-top:2px solid #1F2937}.f{color:#9CA3AF;font-size:10px;margin-top:18px}@media print{body{margin:14mm}}</style></head><body><h1>Profit &amp; Loss</h1><div class=sub>12-month rolling P&amp;L · ${esc(basisLabel)} · ${esc(
       new Date().toLocaleString('en-GB'),
     )}</div><table><thead><tr><th>Month</th><th class=r>Revenue</th><th class=r>Associate</th><th class=r>Staff</th><th class=r>Lab/mat</th><th class=r>OpEx</th><th class=r>Profit</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td>TOTAL</td><td class=r>${poundsCompact(
       annual.revenue,
@@ -130,7 +130,7 @@ export default function ProfitScreen() {
               fontSize: 13,
               border: 'none',
               borderRadius: 6,
-              background: '#0E7C7B',
+              background: 'var(--brand)',
               color: 'white',
               cursor: 'pointer',
             }}
@@ -173,7 +173,7 @@ export default function ProfitScreen() {
         </div>
       )}
       {!hasRevenue && !isError && !isLoading && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">No settled payments in the last 12 months</div>
           <div className="text-sm text-ink-muted">
             Revenue here is real settled payments
@@ -183,7 +183,7 @@ export default function ProfitScreen() {
         </div>
       )}
       {!costsAvailable && !isError && !isLoading && hasRevenue && (
-        <div className="card-padded mb-4" style={{ borderLeft: '4px solid #F59E0B' }}>
+        <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">Costs &amp; profit shown as £0</div>
           <div className="text-sm text-ink-muted">
             Revenue is real (settled payments). We have no cost data — Dentally
@@ -230,10 +230,10 @@ export default function ProfitScreen() {
         ) : (
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-              <CartesianGrid stroke="#E5E7EB" vertical={false} />
-              <XAxis dataKey="month" tick={{ fontSize: 10, fill: '#64748B' }} axisLine={false} tickLine={false} />
+              <CartesianGrid stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 10, fill: 'var(--ink-muted)' }} axisLine={false} tickLine={false} />
               <YAxis
-                tick={{ fontSize: 10, fill: '#94A3B8' }}
+                tick={{ fontSize: 10, fill: 'var(--ink-soft)' }}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={(v: number) => poundsCompact(v)}

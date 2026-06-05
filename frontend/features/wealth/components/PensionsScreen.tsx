@@ -39,7 +39,7 @@ export default function PensionsScreen() {
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: '0.05em',
-    color: '#6B7280',
+    color: 'var(--ink-muted)',
     fontWeight: 600,
   };
 
@@ -119,7 +119,7 @@ export default function PensionsScreen() {
           <table className="w-full" style={{ fontSize: 13 }}>
             <thead
               className="bg-bg"
-              style={{ borderBottom: '1px solid #E5E7EB' }}
+              style={{ borderBottom: '1px solid var(--border)' }}
             >
               <tr>
                 <th className="text-left" style={th}>
@@ -139,7 +139,7 @@ export default function PensionsScreen() {
               {PENSIONS.map((p) => (
                 <tr
                   key={p.name}
-                  style={{ borderBottom: '1px solid #E5E7EB' }}
+                  style={{ borderBottom: '1px solid var(--border)' }}
                 >
                   <td style={{ padding: '12px 16px' }}>
                     <strong>{p.name}</strong>

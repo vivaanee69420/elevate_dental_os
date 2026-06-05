@@ -129,7 +129,7 @@ export default function ManualPLModal({ open, onClose, practiceId = null }: Prop
           <button
             onClick={submit}
             disabled={!amount || record.isPending}
-            style={{ padding: '8px 14px', background: '#0E7C7B', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+            style={{ padding: '8px 14px', background: 'var(--brand)', color: 'white', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
           >{record.isPending ? 'Saving…' : 'Add line'}</button>
         </div>
 

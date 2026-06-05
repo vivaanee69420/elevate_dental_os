@@ -15,7 +15,7 @@ import { useRef, useState } from 'react';
 import { P4G_STARTERS } from '../data';
 import { sendP4gChat, type ChatTurn } from '../api';
 
-const BRAND = '#0E7C7B';
+const BRAND = 'var(--brand)';
 
 /** One chat turn. */
 interface Message {

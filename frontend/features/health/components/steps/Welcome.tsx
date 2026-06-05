@@ -3,7 +3,7 @@ export function Welcome({ onNext }: { onNext: () => void }) {
     <>
       <div
         className="card-padded text-white mb-4"
-        style={{ background: 'linear-gradient(135deg, #0E7C7B, #085857)' }}
+        style={{ background: 'linear-gradient(135deg, var(--brand), #085857)' }}
       >
         <h2 className="display text-3xl font-bold mb-3">Welcome to Business Health</h2>
         <p className="opacity-95 mb-5">

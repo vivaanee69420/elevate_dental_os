@@ -15,9 +15,9 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 const PROVIDER_COLOUR: Record<string, string> = {
-  manual: '#64748B',
+  manual: 'var(--ink-muted)',
   stripe: '#635BFF',
-  dentally: '#0E7C7B',
+  dentally: 'var(--brand)',
   soe: '#0891B2',
   xero: '#13B5EA',
   quickbooks: '#2CA01C',
@@ -71,7 +71,7 @@ export default function SourceBreakdownCard({ days = 30 }: { days?: number }) {
                       style={{
                         width: `${pct}%`,
                         height: '100%',
-                        background: PROVIDER_COLOUR[source] ?? '#64748B',
+                        background: PROVIDER_COLOUR[source] ?? 'var(--ink-muted)',
                       }}
                     />
                   </div>

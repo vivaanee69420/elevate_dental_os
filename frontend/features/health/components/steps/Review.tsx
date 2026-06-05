@@ -11,7 +11,7 @@ export function Review({ baseline, targets, onBack, onComplete }: any) {
     <>
       <div
         className="card-padded text-white mb-4"
-        style={{ background: 'linear-gradient(135deg, #0E7C7B, #085857)' }}
+        style={{ background: 'linear-gradient(135deg, var(--brand), #085857)' }}
       >
         <h2 className="display text-3xl font-bold mb-2">✓ Your business health is captured</h2>
         <p className="opacity-90 mb-5">

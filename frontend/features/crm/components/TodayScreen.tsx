@@ -61,9 +61,9 @@ export default function TodayScreen() {
 
   const counters = [
     { label: 'New leads today', value: newLeads.length, colour: '#3B82F6' },
-    { label: 'Needs follow-up', value: followUps.length, colour: '#F59E0B' },
+    { label: 'Needs follow-up', value: followUps.length, colour: 'var(--warning)' },
     { label: 'Recent messages', value: messages.length, colour: '#8B5CF6' },
-    { label: 'Active leads', value: activeCount, colour: '#10B981' },
+    { label: 'Active leads', value: activeCount, colour: 'var(--success)' },
   ];
 
   return (

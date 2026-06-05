@@ -24,7 +24,7 @@ import {
 /** Render a 0-5 star rating as filled/hollow glyphs. */
 function Stars({ rating }: { rating: number }) {
   return (
-    <span style={{ color: rating >= 4 ? '#F59E0B' : '#94A3B8' }}>
+    <span style={{ color: rating >= 4 ? 'var(--warning)' : 'var(--ink-soft)' }}>
       {'★'.repeat(rating)}
       {'☆'.repeat(5 - rating)}
     </span>
