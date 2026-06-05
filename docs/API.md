@@ -310,6 +310,12 @@ Response:
   `monthlyBurnPence`, `runwayMonths` (null when cash-positive), `cashPositive`,
   `status`, `costsAvailable`/`costsBasis`, and `billsToPlanPence:null` (no payables source).
 - `pl` — annual P&L from `monthly_financials` actuals; baseline fallback when none.
+- `cashflow-outlook` — `?months=4&forward=2` — Cashflow & Runway OUTLOOK (Intelligence
+  OS): month-by-month `months[]` (in = real settled receipts, out = P&L cost base,
+  net, opening/closing), forward months `projected:true`, balances anchored to today's
+  real bank (`balancesReconstructed` flags reconstructed historicals), `lowestProjectedPence`,
+  `runway` (FORMULAS §14), `bills` (corp-tax estimate, FORMULAS §15) + `billsNote`,
+  `decision` (free-cash, FORMULAS §15). `costsAvailable`/`costsBasis` flag the OUT source.
 
 Xero overrides manual for the same period+bucket (see FORMULAS.md §1a).
 

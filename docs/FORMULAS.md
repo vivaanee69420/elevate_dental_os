@@ -488,6 +488,39 @@ is `null` and the burn is the P&L cost base — never fabricated future bills. (
 payables feed exists, bills-to-plan becomes a real line and runway can net committed
 outflows.)
 
+## 15. Cashflow Outlook — tax bills + free-cash decision (Intelligence OS)
+
+Source: `backend/src/lib/formulas.js` (`estimateCorporationTax`, `freeCashDecision`);
+tested in `backend/test/formulas-runway.test.mjs`. Powers `GET /api/analytics/cashflow-outlook`
+(the month-by-month cash-in-vs-out trail, "will I run out?" projection, bills-to-plan,
+and free-cash decision). Integer pence.
+
+**Corporation Tax (UK FY2024/25) — a planning ESTIMATE.** Assumes no reliefs,
+allowances, group or associated-company adjustments; the accountant's figure is
+authoritative. Applied to an annualised profit (real, from `monthly_financials`; else
+baseline-derived; else not shown).
+
+    profit <= £50,000    -> 19%                                   (small profits rate)
+    profit >= £250,000   -> 25%                                   (main rate)
+    in between           -> profit*25% - (£250,000 - profit) * 3/200   (marginal relief)
+
+VAT is **not** estimated — UK dental treatment income is largely VAT-exempt — and there
+is no payables/scheduled-bill feed, so committed bills (VAT, PAYE, supplier invoices)
+are surfaced as a gap, never fabricated.
+
+**Free-cash decision.** Buffer = `bufferWeeks` of monthly outgoings; cash is only "free"
+once the LOWEST projected closing balance still clears that buffer.
+
+    buffer       = monthlyCosts * (12/52) * bufferWeeks          (default 2 weeks)
+    freeCash     = max(0, cashOnHand - buffer)
+    sweepable    = lowestProjected >= buffer ? max(0, lowestProjected - buffer) : 0
+    action       = !lowClearsBuffer ? build_buffer : sweepable>0 ? sweep : hold
+
+Outlook honesty: IN = real settled receipts/month; OUT = P&L cost base/month (accrual
+proxy, flagged; 0 when no source); forward months are run-rate PROJECTIONS; closing
+balances are anchored to today's real bank balance (current month closes there, earlier
+months reconstructed, later months projected).
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:

@@ -104,6 +104,43 @@ export function calculateRunway({ cashOnHandPence = 0, monthlyReceiptsPence = 0,
     };
 }
 
+// UK Corporation Tax estimate on annual profit (FY2024/25 rates). A planning
+// ESTIMATE only — assumes no reliefs/allowances/group adjustments; the
+// accountant's figure is authoritative. Small-profits 19% ≤ £50k; main 25% ≥
+// £250k; marginal relief (3/200) between. Input/output integer pence.
+const CT_SMALL_RATE = 0.19;
+const CT_MAIN_RATE = 0.25;
+const CT_LOWER_LIMIT_PENCE = 50_000_00;
+const CT_UPPER_LIMIT_PENCE = 250_000_00;
+const CT_MARGINAL_FRACTION = 3 / 200;
+export function estimateCorporationTax(annualProfitPence = 0) {
+    const profit = Math.max(0, Math.round(annualProfitPence));
+    if (profit <= CT_LOWER_LIMIT_PENCE) return pence(profit * CT_SMALL_RATE);
+    if (profit >= CT_UPPER_LIMIT_PENCE) return pence(profit * CT_MAIN_RATE);
+    // Marginal relief band.
+    return pence(profit * CT_MAIN_RATE - (CT_UPPER_LIMIT_PENCE - profit) * CT_MARGINAL_FRACTION);
+}
+
+// Free-cash decision — how much sits above a prudent operating buffer and is
+// therefore deployable. Buffer = `bufferWeeks` of monthly outgoings. Pure pence.
+// `lowestProjectedPence` is the lowest closing balance over the forecast; cash
+// is only "free" once that low point clears the buffer.
+export function freeCashDecision({ cashOnHandPence = 0, monthlyCostsPence = 0, lowestProjectedPence = null, bufferWeeks = 2 } = {}) {
+    const bufferPence = pence((monthlyCostsPence * 12 / 52) * bufferWeeks);
+    const freeAbsPence = Math.max(0, cashOnHandPence - bufferPence);
+    const low = lowestProjectedPence == null ? cashOnHandPence : lowestProjectedPence;
+    const lowClearsBuffer = low >= bufferPence;
+    // Sweepable now only if the LOWEST projected point still clears the buffer.
+    const sweepablePence = lowClearsBuffer ? Math.max(0, low - bufferPence) : 0;
+    return {
+        bufferPence,
+        freeCashPence: freeAbsPence,
+        sweepablePence,
+        lowClearsBuffer,
+        action: !lowClearsBuffer ? 'build_buffer' : sweepablePence > 0 ? 'sweep' : 'hold',
+    };
+}
+
 export function calculateCashFlow(weeks) {
     return weeks.map(w => {
         const closing = w.openingBalancePence + w.receiptsPence - w.paymentsPence;
