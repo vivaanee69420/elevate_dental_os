@@ -16,10 +16,13 @@ import * as supabase_1 from "../lib/supabase.js";
 const router = (0, express_1.Router)();
 
 router.get('/', (0, async_handler_1.asyncHandler)(async (req, res) => {
+    // kind='practice' (T2): the clinical practice list (Dentally mapping, scope
+    // dropdown). Academy/Lab are separate scope options, not practices here.
     const { data, error } = await supabase_1.serviceClient
         .from('practices')
         .select('id, name, chairs, postcode, pms_site_id')
         .eq('organisation_id', req.user.organisation_id)
+        .eq('kind', 'practice')
         .order('created_at', { ascending: true });
     if (error) throw new Error(error.message);
     res.json({ practices: data ?? [] });

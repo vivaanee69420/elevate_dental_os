@@ -9,6 +9,22 @@ import * as zod_1 from "zod";
 // rolling window. A single day = from==to; a month = its 1st..last.
 const dateStr = zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional();
 
+// Scope + Period — the global analytics selector (GM Intelligence OS). scope is
+// 'all' | 'practices' | 'academy' | 'lab' | <practice UUID>; resolved to a
+// concrete entity filter by analyticsService.resolveScope. period 'day' means
+// cash-collected-by-day (settled receipts), not production. pk = 'YYYY-MM' or
+// 'YYYY-MM-DD'. Validating here stops a tampered scope reaching the repo.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SCOPE_LITERALS = ['all', 'practices', 'academy', 'lab'];
+export const scopeQuerySchema = zod_1.z.object({
+    scope: zod_1.z.string().trim().default('all').refine(
+        (s) => SCOPE_LITERALS.includes(s) || UUID_RE.test(s),
+        { message: 'scope must be all|practices|academy|lab or a practice UUID' },
+    ),
+    period: zod_1.z.enum(['month', 'day']).default('month'),
+    pk: zod_1.z.string().trim().regex(/^\d{4}-\d{2}(-\d{2})?$/).optional(),
+});
+
 export const seriesQuerySchema = zod_1.z.object({
     months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
     practice_id: zod_1.z.string().uuid().optional(),

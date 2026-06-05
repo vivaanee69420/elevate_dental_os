@@ -9,6 +9,24 @@ import * as claude_1 from "../lib/claude.js";
 import * as monthlyFinancial_repository_1 from "../repositories/monthlyFinancial.repository.js";
 import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
 export const analyticsService = {
+    // Turn a validated scope param into a concrete entity filter. Single source
+    // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
+    // academy/lab need a DB lookup (to resolve their entity ids) — one query,
+    // never a per-entity loop (Perf #1). Returns:
+    //   { mode, practiceIds, kinds, isAggregate, entities? }
+    // practiceIds === null means "no id filter" (all rows of the given kinds).
+    async resolveScope(orgId, scope = 'all') {
+        if (scope === 'all')
+            return { mode: 'all', practiceIds: null, kinds: ['practice', 'academy', 'lab'], isAggregate: true };
+        if (scope === 'practices')
+            return { mode: 'practices', practiceIds: null, kinds: ['practice'], isAggregate: true };
+        if (scope === 'academy' || scope === 'lab') {
+            const entities = await analytics_repository_1.analyticsRepository.entitiesByKind(orgId, scope);
+            return { mode: scope, practiceIds: entities.map((e) => e.id), kinds: [scope], isAggregate: false, entities };
+        }
+        // Otherwise a specific practice UUID (already shape-validated by scopeQuerySchema).
+        return { mode: 'entity', practiceIds: [scope], kinds: ['practice'], isAggregate: false };
+    },
     // Pull monthly_financials actuals and resolve Xero-overrides-manual
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
