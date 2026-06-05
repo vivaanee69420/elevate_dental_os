@@ -48,4 +48,9 @@ export const analyticsController = {
         const days = Number(req.query.days) || 90;
         res.json(await analytics_service_1.analyticsService.businessHub(req.user.organisation_id, { days }));
     },
+    async chair(req, res) {
+        const q = analytics_model_1.scopeQuerySchema.parse(req.query);
+        const recoverPctPoints = Math.max(0, Math.min(40, Number(req.query.recover) || 10));
+        res.json(await analytics_service_1.analyticsService.chairAnalytics(req.user.organisation_id, { scope: q.scope, recoverPctPoints }));
+    },
 };

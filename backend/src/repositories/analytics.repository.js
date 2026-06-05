@@ -152,7 +152,7 @@ export const analyticsRepository = {
         // kind='practice' (T2): exclude academy/lab (no chairs) from chair/util rollups.
         const { data, error } = await supabase_1.serviceClient
             .from('practices')
-            .select('id, name, chairs')
+            .select('id, name, chairs, assumed_util_pct')
             .eq('organisation_id', orgId)
             .eq('kind', 'practice')
             .limit(LIMIT_GUARD);
