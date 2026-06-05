@@ -345,24 +345,30 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     const fromDate = fromISO.slice(0, 10);
     const toDate = (toISO ?? new Date().toISOString()).slice(0, 10);
     const toEndISO = toISO ?? new Date().toISOString();
+    // Optional per-practice scope (Practice Deep Dive). ad_metrics/leads/contacts/
+    // payments all carry practice_id; business_health is org-level (baseline).
+    const pid = typeof req.query.practice_id === 'string'
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.query.practice_id)
+        ? req.query.practice_id : null;
+    const withPid = (q) => (pid ? q.eq('practice_id', pid) : q);
 
     const [adR, leadsR, contactsR, paymentsR, healthR] = await Promise.all([
-        supabase_1.serviceClient.from('ad_metrics')
+        withPid(supabase_1.serviceClient.from('ad_metrics')
             .select('provider, spend_pence, impressions, clicks, conversions')
             .eq('organisation_id', orgId)
-            .gte('metric_date', fromDate).lte('metric_date', toDate),
-        supabase_1.serviceClient.from('leads')
+            .gte('metric_date', fromDate).lte('metric_date', toDate)),
+        withPid(supabase_1.serviceClient.from('leads')
             .select('source, utm_source, utm_medium, created_at')
             .eq('organisation_id', orgId)
-            .gte('created_at', fromISO).lte('created_at', toEndISO),
-        supabase_1.serviceClient.from('contacts')
+            .gte('created_at', fromISO).lte('created_at', toEndISO)),
+        withPid(supabase_1.serviceClient.from('contacts')
             .select('id, created_at')
             .eq('organisation_id', orgId)
-            .gte('created_at', fromISO).lte('created_at', toEndISO),
-        supabase_1.serviceClient.from('payments')
+            .gte('created_at', fromISO).lte('created_at', toEndISO)),
+        withPid(supabase_1.serviceClient.from('payments')
             .select('amount_pence, status, processed_at')
             .eq('organisation_id', orgId)
-            .gte('processed_at', fromISO).lte('processed_at', toEndISO),
+            .gte('processed_at', fromISO).lte('processed_at', toEndISO)),
         supabase_1.serviceClient.from('business_health')
             .select('baseline')
             .eq('organisation_id', orgId)

@@ -39,6 +39,26 @@ function usePracticeRevenueSeries(practiceId: string | null) {
   });
 }
 
+interface ChannelProvider { provider: string; spend_pence: number; leads: number; conversions: number; cpl_pence: number; cpa_pence: number }
+interface MarketingRoi {
+  connected: boolean;
+  spend_pence: number; revenue_pence: number; roas: number; cac_pence: number;
+  leads_from_ads: number; total_leads: number; new_patients: number;
+  by_provider: ChannelProvider[];
+}
+
+// Per-practice channel ROI (marketing/roi accepts practice_id).
+function usePracticeMarketingRoi(practiceId: string | null) {
+  return useQuery({
+    queryKey: ['practice-marketing-roi', practiceId],
+    enabled: !!practiceId,
+    queryFn: () => api<MarketingRoi>(`/api/growth/marketing/roi?practice_id=${practiceId}`),
+  });
+}
+
+const PROVIDER_LABEL: Record<string, string> = { google_ads: 'Google Ads', meta_ads: 'Facebook / Meta' };
+const providerLabel = (p: string) => PROVIDER_LABEL[p] || p;
+
 const monthLabel = (k: string) => {
   const [y, m] = k.split('-').map(Number);
   return new Date(Date.UTC(y, (m || 1) - 1, 1)).toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
@@ -71,6 +91,7 @@ export function PracticeDeepDiveScreen() {
     [chair.data, scope],
   );
 
+  const roi = usePracticeMarketingRoi(pid);
   const mixData = (mix.data?.treatments ?? []).slice(0, 8);
   const trendData = (series.data ?? []).map((m) => ({ label: monthLabel(m.month), pence: m.revenue }));
 
@@ -177,8 +198,43 @@ export function PracticeDeepDiveScreen() {
             </div>
           </div>
 
-          <AlertRow tone="info" title="Channel ROI coming to this view"
-            body="Per-site marketing channel return needs the practice x channel data source (next backend slice)." />
+          {/* Channel ROI — real, per-practice */}
+          <div className="card-padded">
+            <div className="flex items-baseline justify-between">
+              <h3 className="display text-lg">Channel ROI</h3>
+              <span className="text-[11px] text-ink-soft">paid acquisition · this practice</span>
+            </div>
+            {roi.isLoading && <p className="text-sm text-ink-muted mt-3">Loading…</p>}
+            {roi.data && !roi.data.connected && (
+              <p className="text-sm text-ink-muted mt-3">
+                No ad-spend data connected for this practice. Connect Google Ads / Meta in Integrations to see channel return here.
+              </p>
+            )}
+            {roi.data && roi.data.connected && (
+              <>
+                <div className="grid gap-3 grid-cols-2 md:grid-cols-4 mt-3">
+                  <KpiTile label="Ad spend" value={formatPence(roi.data.spend_pence)} delta={`${roi.data.leads_from_ads} leads from ads`} />
+                  <KpiTile label="Attributed revenue" value={formatPence(roi.data.revenue_pence)} delta="settled in window" deltaTone="up" />
+                  <KpiTile label="ROAS" value={`${roi.data.roas.toFixed(2)}x`} delta="revenue / spend" deltaTone={roi.data.roas >= 3.5 ? 'up' : roi.data.roas < 2.5 ? 'down' : 'muted'} />
+                  <KpiTile label="Cost / new patient" value={formatPence(roi.data.cac_pence)} delta={`${roi.data.new_patients} new patients`} />
+                </div>
+                {roi.data.by_provider.length > 0 && (
+                  <ResponsiveContainer width="100%" height={Math.max(140, roi.data.by_provider.length * 56)}>
+                    <BarChart data={roi.data.by_provider.map((p) => ({ ...p, name: providerLabel(p.provider) }))} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+                      <CartesianGrid stroke="var(--border)" horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--ink-soft)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => poundsK(v)} />
+                      <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: 'var(--ink-muted)' }} axisLine={false} tickLine={false} />
+                      <Tooltip formatter={(v: number, _n, p: any) => [`${formatPence(v)} · ${p?.payload?.leads} leads · CPA ${formatPence(p?.payload?.cpa_pence)}`, 'Spend']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                      <Bar dataKey="spend_pence" radius={[0, 6, 6, 0]}>
+                        {roi.data.by_provider.map((p, i) => <Cell key={i} fill={p.provider === 'meta_ads' ? '#4267B2' : '#3B7DDD'} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+                <p className="text-[11px] text-ink-soft mt-2">ROAS/CAC are practice-level (revenue &amp; new patients aren&apos;t split per channel); spend, leads and CPA are per channel.</p>
+              </>
+            )}
+          </div>
         </>
       )}
     </div>
