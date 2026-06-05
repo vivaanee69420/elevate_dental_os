@@ -128,6 +128,25 @@ export const analyticsService = {
     treatmentModels() {
         return formulas_1.DEFAULT_SERVICE_MODELS;
     },
+    // Group Valuation (Arch #3 pure compute, Value & Growth view). The UI posts
+    // the driver state (debounced); this returns the three-buyer result plus the
+    // ranked value-uplift levers. No DB, no persistence. NOTE: this is the
+    // server-authoritative successor to `valuation()` below (which keeps using
+    // the legacy baseline-derived `calculateValuation` for GET /valuation).
+    computeValuation(state) {
+        const result = (0, formulas_1.computeGroupValuation)(state);
+        const levers = (0, formulas_1.valueUpliftLevers)({
+            result,
+            principalMultiple: state.principalMultiple,
+            associateMultiple: state.associateMultiple,
+            dsoMultiple: state.dsoMultiple,
+        });
+        return { result, levers };
+    },
+    // Sale Planner trajectory — model a target exit and the year-by-year path.
+    computeValuationExitPlan(body) {
+        return (0, formulas_1.planExitTrajectory)(body);
+    },
     // Pull monthly_financials actuals and resolve Xero-overrides-manual
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).

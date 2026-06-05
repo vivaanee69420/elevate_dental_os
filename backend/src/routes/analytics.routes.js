@@ -34,4 +34,8 @@ router.get('/chair', fin, (0, async_handler_1.asyncHandler)(analytics_controller
 // Treatment Economics Workbench — pure compute, audit-exempt (/compute/ path).
 router.get('/compute/treatment-models', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentModels));
 router.post('/compute/treatment-economics', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentEconomics));
+// Value & Growth — driver-based valuation + Sale Planner (pure compute,
+// audit-exempt /compute/ path, valuation.view gate same as GET /valuation).
+router.post('/compute/valuation', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuationCompute));
+router.post('/compute/valuation/exit-plan', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuationExitPlan));
 export default router;

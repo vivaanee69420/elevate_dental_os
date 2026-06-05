@@ -61,4 +61,13 @@ export const analyticsController = {
         const model = analytics_model_1.treatmentModelSchema.parse(req.body);
         res.json(analytics_service_1.analyticsService.treatmentEconomics(model));
     },
+    // Value & Growth — server-authoritative valuation compute (Arch #3).
+    valuationCompute(req, res) {
+        const state = analytics_model_1.valuationStateSchema.parse(req.body);
+        res.json(analytics_service_1.analyticsService.computeValuation(state));
+    },
+    valuationExitPlan(req, res) {
+        const body = analytics_model_1.valuationExitPlanSchema.parse(req.body);
+        res.json(analytics_service_1.analyticsService.computeValuationExitPlan(body));
+    },
 };

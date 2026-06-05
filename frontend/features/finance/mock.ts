@@ -203,39 +203,13 @@ export interface ValuationResult {
   growthAdjust: number;
 }
 
-/**
- * Three-model valuation engine — direct port of prototype `calculateValuation`.
- * Principal-led subtracts/keeps notional principal salary out; Associate &
- * DSO add it back. DSO additionally applies a growth premium.
- */
-export function calculateValuation(state: ValuationState, base: ValuationBase): ValuationResult {
-  const associateEbitda = base.reportedEbitda + state.addBacks + state.principalSalary;
-  const principalNetProfit = base.reportedEbitda + state.addBacks;
-
-  const regionFactor = REGION_ADJUSTMENTS[state.region]?.factor ?? 1.0;
-  // Growth premium: 10% YoY = neutral, +1% per 5pts above (max +20%), penalty below.
-  const growthAdjust = 1 + Math.max(-0.15, Math.min(0.2, (state.growthRate - 10) / 50));
-
-  const principalVal = principalNetProfit * state.principalMultiple * regionFactor;
-  const associateVal = associateEbitda * state.associateMultiple * regionFactor;
-  const dsoVal = associateEbitda * state.dsoMultiple * regionFactor * growthAdjust;
-
-  const midpoint = (associateVal + principalVal) / 2;
-  const strategic = dsoVal * 1.1; // 10% earn-out uplift
-
-  return {
-    reportedEbitda: base.reportedEbitda,
-    associateEbitda,
-    principalNetProfit,
-    principalValuation: principalVal,
-    associateValuation: associateVal,
-    dsoValuation: dsoVal,
-    midpoint,
-    strategic,
-    regionFactor,
-    growthAdjust,
-  };
-}
+// The three-model valuation engine is now SERVER-AUTHORITATIVE — it lives in
+// backend `lib/formulas.js` (`computeGroupValuation`, FORMULAS.md §13, tested)
+// and is reached via `useValuationCompute` (../valuation-hooks) which posts the
+// state and returns this `ValuationResult` shape. The formula is intentionally
+// NOT duplicated here (project rule: formulas.js is the single source for
+// financial calcs). The constants/types/defaults above remain client-side as UI
+// config + benchmark display.
 
 /** Default valuation inputs (prototype localStorage fallbacks). */
 export function defaultValuationState(): ValuationState {
