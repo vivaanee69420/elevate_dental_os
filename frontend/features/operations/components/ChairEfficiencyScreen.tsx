@@ -1,0 +1,133 @@
+'use client';
+
+// Chair Efficiency (GM Intelligence OS) — every chair as an asset: true
+// occupancy vs paid-for capacity, the cost of empty chairs, and the recovery
+// plan. Scope/period-driven. Money via formatPence (pence -> £). New green/gold
+// system + shared primitives. OCPSPD / profit-per-chair-hour land later
+// (backend returns null with a note).
+
+import { useState } from 'react';
+import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, type Column } from '@/components/ui';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { formatPence } from '@/lib/format';
+import { useChairAnalytics } from '../chair-analytics-hooks';
+import type { ChairPracticeRow } from '../chair-analytics-api';
+
+const UPLIFTS = [0, 5, 10, 20, 40];
+
+export function ChairEfficiencyScreen() {
+  const [recover, setRecover] = useState(10);
+  const { data, isLoading, isError, error } = useChairAnalytics(recover);
+
+  const cols: Column<ChairPracticeRow>[] = [
+    {
+      header: 'Practice',
+      render: (r) => (
+        <span className="font-semibold">
+          {r.name}
+          {r.utilAssumed && (
+            <span className="ml-2 text-[11px] font-normal text-ink-soft">util assumed</span>
+          )}
+        </span>
+      ),
+    },
+    { header: 'Chairs', align: 'right', render: (r) => r.chairs },
+    { header: 'Occupancy', align: 'right', render: (r) => `${r.occupancyPct}%` },
+    { header: 'Booked/yr', align: 'right', render: (r) => `${r.bookedHrsYr.toLocaleString('en-GB')}h` },
+    { header: 'Empty/yr', align: 'right', render: (r) => `${r.emptyHrsYr.toLocaleString('en-GB')}h` },
+    { header: 'Cost of empty', align: 'right', render: (r) => formatPence(r.lostPotentialYrPence) },
+    { header: 'Recoverable', align: 'right', render: (r) => formatPence(r.recoverRevYrPence) },
+  ];
+
+  return (
+    <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Chair Efficiency"
+        subtitle="Every chair as an asset — true occupancy against full capacity, the cost of empty chairs, and exactly how much to recover."
+      />
+      <ScopePeriodBar />
+
+      {isLoading && <EmptyState message="Loading chair economics…" />}
+
+      {isError && (
+        <AlertRow tone="bad" title="Couldn't load chair analytics" body={(error as Error)?.message} />
+      )}
+
+      {data && !data.applicable && (
+        <AlertRow
+          tone="info"
+          title="Chair analytics apply to clinical practices"
+          body={data.message || 'Switch scope to the whole group or a single practice.'}
+        />
+      )}
+
+      {data && data.applicable && data.group && (
+        <>
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
+            <KpiTile
+              label="True chair occupancy"
+              value={`${data.group.occupancyPct}%`}
+              delta={`${(data.group.occupancyPct - (data.config?.benchOccPct ?? 88)).toFixed(1)}pts vs ${data.config?.benchOccPct ?? 88}% benchmark`}
+              deltaTone={data.group.occupancyPct >= (data.config?.benchOccPct ?? 88) ? 'up' : 'down'}
+            />
+            <KpiTile
+              label="Cost of empty chairs"
+              value={formatPence(data.group.lostPotentialYrPence)}
+              delta={`${data.group.emptyHrsYr.toLocaleString('en-GB')} empty hrs/yr at £${((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/chair-hr`}
+              deltaTone="down"
+            />
+            <KpiTile
+              label={`Recoverable to ${data.config?.benchOccPct ?? 88}%`}
+              value={formatPence(data.group.recoverRevYrPence)}
+              delta="At your own revenue/hr, not the ceiling"
+              deltaTone="up"
+            />
+          </div>
+
+          {/* Recovery engine — server-authoritative; the uplift drives ?recover= */}
+          <div className="card-padded">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h3 className="display text-lg">Chair Recovery Engine</h3>
+                <p className="text-xs text-ink-muted mt-1">
+                  Win back occupancy points and see the chair-hours + revenue it unlocks across the scope.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] uppercase tracking-wider text-ink-soft font-semibold">Uplift</label>
+                <select
+                  className="text-[13px] border border-border bg-card rounded-xl px-3 py-2"
+                  value={recover}
+                  onChange={(e) => setRecover(Number(e.target.value))}
+                >
+                  {UPLIFTS.map((u) => (
+                    <option key={u} value={u}>{u}%</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            {data.recovery && (
+              <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 mt-4">
+                <KpiTile label="Recovery chair-time" value={`${data.recovery.recoveryHrsYr.toLocaleString('en-GB')}h`} delta="per year, across scope" />
+                <KpiTile label="Revenue unlocked" value={formatPence(data.recovery.revenueUnlockedPence)} delta="at your current yield/hr" deltaTone="up" />
+                <KpiTile label="New occupancy" value={`${data.recovery.newOccupancyPct}%`} delta={`from ${data.group.occupancyPct}% today`} />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h3 className="display text-lg mb-2">Occupancy &amp; cost of empty chairs — by practice</h3>
+            <DataTable
+              columns={cols}
+              rows={data.practices}
+              rowKey={(r) => r.id}
+              empty={<EmptyState message="No practices in scope." />}
+            />
+          </div>
+
+          {data.note && <p className="text-[11px] text-ink-soft">{data.note}</p>}
+        </>
+      )}
+    </div>
+  );
+}
