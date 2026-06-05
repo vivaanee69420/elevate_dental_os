@@ -21,6 +21,8 @@ import {
 import { useState } from 'react';
 import { poundsCompact, monthShort } from '../mock';
 import { useCashflow, useCashflowOutlook } from '../hooks';
+import { useBusinessHub } from '@/features/overview/business-hub-api';
+import { useMarketingRoi } from '@/features/growth/hooks';
 import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import DateRangeFilter, { type DateRange } from './DateRangeFilter';
@@ -42,11 +44,48 @@ function shortWeek(d: string) {
   return `${dt.getDate()}/${dt.getMonth() + 1}`;
 }
 
+// Compact KPI for the top context strip. `tag` is an optional pill (tone:
+// good | warn | muted) under the sublabel.
+function StripKpi({
+  label,
+  value,
+  sub,
+  tag,
+  tone = 'muted',
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tag?: string;
+  tone?: 'good' | 'warn' | 'muted';
+}) {
+  const tagBg = tone === 'good' ? 'var(--success-50, #DCFCE7)' : tone === 'warn' ? '#FEF3C7' : 'var(--bg)';
+  const tagFg = tone === 'good' ? 'var(--success)' : tone === 'warn' ? '#78350F' : 'var(--ink-muted)';
+  return (
+    <div className="card-padded">
+      <div className="text-xs text-ink-muted uppercase" style={{ letterSpacing: '0.04em' }}>{label}</div>
+      <div className="display text-2xl font-bold mt-1" style={{ lineHeight: 1.05 }}>{value}</div>
+      {sub && <div className="text-xs text-ink-muted mt-1">{sub}</div>}
+      {tag && (
+        <span
+          className="text-xs font-semibold"
+          style={{ display: 'inline-block', marginTop: 8, background: tagBg, color: tagFg, padding: '2px 8px', borderRadius: 999 }}
+        >
+          {tag}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function CashflowScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
   const { data, isLoading, isError } = useCashflow(13, practiceId, range);
   const { data: outlook } = useCashflowOutlook(4, 2, practiceId);
+  // Context strip — group KPIs (90-day window) + live paid-marketing efficiency.
+  const { data: hub } = useBusinessHub(90);
+  const { data: roi } = useMarketingRoi();
   const weeks = data?.weeks ?? [];
   const hasData = weeks.length > 0;
   // Real closing balance only — no projection, no comparison line.
@@ -96,6 +135,62 @@ export default function CashflowScreen() {
           </div>
         </div>
       )}
+
+      {/* Context strip — group KPIs (90d) + live paid-marketing efficiency.
+          Group revenue is settled receipts (cash basis = cash collected);
+          profit is contribution from the baseline margin. Ad metrics are real
+          when an ad account is connected, else honest "not connected". */}
+      {hub && (() => {
+        const g = hub.group;
+        const turnover = g.revenuePence / 100;
+        const target = g.revenueTargetPence / 100;
+        const vsTarget = target > 0 ? (turnover / target - 1) * 100 : null;
+        const profit = turnover * (g.marginPct || 0) / 100;
+        const connected = !!roi?.connected;
+        const spend = connected ? roi!.spend_pence / 100 : null;
+        const spendPctTurn = spend != null && turnover > 0 ? (spend / turnover) * 100 : null;
+        const roas = connected ? roi!.roas : 0;
+        return (
+          <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}>
+            <StripKpi
+              label="Group turnover"
+              value={gbp(turnover)}
+              sub="Settled receipts · 90 days"
+              tag={vsTarget != null ? `${vsTarget >= 0 ? '▲' : '▼'} ${Math.abs(vsTarget).toFixed(0)}% vs target` : undefined}
+              tone={vsTarget != null && vsTarget >= 0 ? 'good' : 'warn'}
+            />
+            <StripKpi
+              label="Group profit"
+              value={g.marginPct ? gbp(profit) : '—'}
+              sub={g.marginPct ? `Contribution · ${g.marginPct.toFixed(1)}% of turnover` : 'Set a baseline margin'}
+            />
+            <StripKpi
+              label="New patients"
+              value={connected ? String(roi!.new_patients) : '—'}
+              sub={connected && roi!.cac_pence ? `${gbp(roi!.cac_pence / 100)} cost / patient` : 'Connect ads'}
+            />
+            <StripKpi
+              label="Marketing spend"
+              value={spend != null ? gbp(spend) : '—'}
+              sub={spend != null ? 'Tracked acquisition spend' : 'Not connected'}
+              tag={spendPctTurn != null ? `${spendPctTurn.toFixed(1)}% of turnover` : undefined}
+              tone="warn"
+            />
+            <StripKpi
+              label="Blended paid ROAS"
+              value={connected && roas ? `${roas.toFixed(2)}×` : '—'}
+              sub={connected ? 'Paid revenue ÷ paid spend' : 'Not connected'}
+              tag={connected && roas ? (roas >= 3 ? 'Healthy' : 'Watch') : undefined}
+              tone={connected && roas >= 3 ? 'good' : 'warn'}
+            />
+            <StripKpi
+              label="Lead conversion"
+              value={`${(g.conversionRate || 0).toFixed(0)}%`}
+              sub="Lead → appointment · 90 days"
+            />
+          </div>
+        );
+      })()}
 
       {/* Headline — cash position, net this month, runway (from the outlook) */}
       {outlook && (() => {
