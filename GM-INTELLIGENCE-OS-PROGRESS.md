@@ -31,7 +31,7 @@ Branch: `feat/intelligence-os-phase0`
 |---|---|---|
 | T5 Workbench → ProfitScreen (pure debounced compute endpoint) | [ ] | golden ± tolerance; audit-exempt |
 | T6 3-buyer Valuation + Sale Planner → ValuationScreen | [ ] | driver-based; EBITDA reconciled; versioned |
-| T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [~] | formulas DONE (+15 tests, FORMULAS.md §11). Backend DONE: migration 000036 (assumed_util_pct, applied hosted), chairAnalytics service (real trailing-12mo revenue + assumption util), GET /api/analytics/chair (finance.view, scopeQuerySchema), +2 tests, API.md. utilPct=owner-editable assumption (decision). OCPSPD/profit-per-chair-hr deferred (opex/treatment-minute sourcing). NEXT: frontend ChairEfficiency UI + ScopePeriodBar wiring |
+| T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [x] | FULL VERTICAL DONE: formulas (+15 tests, FORMULAS.md §11) → migration 000036 (applied hosted) → chairAnalytics service (+2 tests) → GET /api/analytics/chair (finance.view) → ChairEfficiencyScreen UI + ScopePeriodBar wired into /chair (tsc+lint clean). FIRST end-to-end slice — proves the formulas→endpoint→UI pattern. Remaining: OCPSPD + profit-per-chair-hr (deferred, need opex/treatment-minute sourcing) |
 | Group Overview rollup (Academy+Lab) + Decision Lens | [ ] | |
 **Exit:** Tier-1 new UI, scope/period reactive. — `[ ]`
 
