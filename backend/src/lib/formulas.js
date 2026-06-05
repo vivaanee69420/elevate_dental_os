@@ -143,6 +143,29 @@ export function calculateLTV(input) {
     return pence(lifetimeProfit);
 }
 
+// Patient LTV (lifetime net profit, in pence) derived from the saved Business
+// Health baseline. The baseline stores `revenue`/`profit` in WHOLE POUNDS
+// (business-health.service writes revenuePence/100), so they are scaled back to
+// pence here. Inputs to calculateLTV are grounded, not assumed:
+//   averageAnnualSpendPence = annual revenue / active patients
+//   averageRetentionYears   = active patients / annual new patients   (Little's
+//                             law: steady-state stock / inflow = mean tenure)
+//   netMarginPct            = profit / revenue
+// Returns 0 when the baseline lacks the patient counts needed (the LTV:CAC
+// caller then hides the ratio rather than showing a divide-by-zero figure).
+export function ltvFromBaseline(baseline) {
+    if (!baseline) return 0;
+    const activePatients = Number(baseline.active_patients) || 0;
+    const newPerMonth = Number(baseline.new_per_month) || 0;
+    const revenuePounds = Number(baseline.revenue) || 0;
+    const profitPounds = Number(baseline.profit) || 0;
+    if (activePatients <= 0 || newPerMonth <= 0 || revenuePounds <= 0) return 0;
+    const averageAnnualSpendPence = (revenuePounds * 100) / activePatients;
+    const averageRetentionYears = activePatients / (newPerMonth * 12);
+    const netMarginPct = (profitPounds / revenuePounds) * 100;
+    return calculateLTV({ averageAnnualSpendPence, averageRetentionYears, netMarginPct });
+}
+
 export function calculateMarketingROI(input) {
     return {
         costPerLeadPence: input.leads > 0 ? pence(input.spendPence / input.leads) : 0,

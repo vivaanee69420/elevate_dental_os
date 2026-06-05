@@ -25,6 +25,8 @@
 
 import { useMemo, useState } from 'react';
 import { useValuationBase } from '../hooks';
+import { useMarketingRoi } from '@/features/growth/hooks';
+import { formatPence as fmtPence } from '@/lib/format';
 import FinanceToolbar from './FinanceToolbar';
 import {
   calculateValuation,
@@ -323,9 +325,40 @@ function CurrentTab({
   reset: () => void;
 }) {
   const pctTurnover = (v: number) => ((v / base.ttmRevenue) * 100).toFixed(0) + '%';
+  const { data: roi } = useMarketingRoi();
 
   return (
     <div>
+      {/* Marketing efficiency (live) — real CAC / ROAS / LTV:CAC from connected
+          ad accounts (Google Ads now; Meta next). LTV comes from the Business
+          Health baseline (annual spend/patient × tenure × margin); LTV:CAC > 3
+          is the healthy benchmark and supports the valuation multiple. */}
+      {roi?.connected && (
+        <div className="card-padded mb-4">
+          <h2 className="display text-base font-semibold mb-1">Marketing efficiency (live)</h2>
+          <p className="text-ink-muted mb-3" style={{ fontSize: 11 }}>
+            Paid acquisition · last 30 days · account-level
+          </p>
+          <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            {[
+              { label: 'Cost / new patient (CAC)', value: roi.cac_pence ? fmtPence(roi.cac_pence) : '—' },
+              { label: 'Patient LTV', value: roi.ltv_pence ? fmtPence(roi.ltv_pence) : '— (set baseline)' },
+              {
+                label: 'LTV : CAC',
+                value: roi.ltv_cac_ratio ? `${roi.ltv_cac_ratio.toFixed(1)}x` : '—',
+                colour: roi.ltv_cac_ratio ? (roi.ltv_cac_ratio >= 3 ? 'var(--success)' : 'var(--warning)') : undefined,
+              },
+              { label: 'ROAS', value: roi.roas ? `${roi.roas.toFixed(2)}x` : '—' },
+            ].map((m) => (
+              <div key={m.label}>
+                <div className="text-ink-muted uppercase" style={{ fontSize: 10, letterSpacing: '0.05em' }}>{m.label}</div>
+                <div className="display font-bold mt-1" style={{ fontSize: 22, color: (m as { colour?: string }).colour }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Three-model headline */}
       <div
         className="card-padded mb-4"

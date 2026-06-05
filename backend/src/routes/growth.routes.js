@@ -6,6 +6,7 @@
 import * as express_1 from "express";
 import * as async_handler_1 from "../middleware/async-handler.js";
 import * as supabase_1 from "../lib/supabase.js";
+import * as formulas_1 from "../lib/formulas.js";
 import { AppError } from "../middleware/errors.js";
 const router = (0, express_1.Router)();
 
@@ -249,6 +250,187 @@ router.get('/benchmark', (0, async_handler_1.asyncHandler)(async (req, res) => {
         industry_median_response_min: 30,
         org_id: req.user.organisation_id,
         note: 'Industry benchmarks placeholder — Phase 7 wires real provider',
+    });
+}));
+
+// Live ad spend & performance from connected marketing providers (Google Ads
+// now; Meta Ads next), read from ad_metrics. Org-scoped; window-aware via
+// ?from=&to= (else 30-day rolling). NOTE: ad spend is account-level, not
+// practice-attributed (ad_metrics.practice_id is null), so practice_id is
+// intentionally ignored here. Returns per-provider totals, per-campaign rows,
+// a daily spend series for charting, and overall totals. All money in pence.
+router.get('/marketing/ad-spend', (0, async_handler_1.asyncHandler)(async (req, res) => {
+    const { fromISO, toISO } = resolveWindow(req.query);
+    const fromDate = fromISO.slice(0, 10);
+    const toDate = (toISO ?? new Date().toISOString()).slice(0, 10);
+
+    let q = supabase_1.serviceClient.from('ad_metrics')
+        .select('provider, campaign_id, campaign_name, metric_date, spend_pence, impressions, clicks, leads, conversions')
+        .eq('organisation_id', req.user.organisation_id)
+        .gte('metric_date', fromDate)
+        .lte('metric_date', toDate);
+    const { data: rows = [] } = await q;
+
+    const blank = () => ({ spend_pence: 0, impressions: 0, clicks: 0, leads: 0, conversions: 0 });
+    const add = (acc, r) => {
+        acc.spend_pence += r.spend_pence ?? 0;
+        acc.impressions += r.impressions ?? 0;
+        acc.clicks += r.clicks ?? 0;
+        acc.leads += r.leads ?? 0;
+        acc.conversions += r.conversions ?? 0;
+        return acc;
+    };
+    // Derived rate fields. CPC/CPL/CPA in pence; CTR/conv-rate as percentages.
+    const withRates = (a) => ({
+        ...a,
+        ctr: a.impressions ? +(a.clicks / a.impressions * 100).toFixed(2) : 0,
+        cpc_pence: a.clicks ? Math.round(a.spend_pence / a.clicks) : 0,
+        cpl_pence: a.leads ? Math.round(a.spend_pence / a.leads) : 0,
+        cpa_pence: a.conversions ? Math.round(a.spend_pence / a.conversions) : 0,
+        conversion_rate: a.clicks ? +(a.conversions / a.clicks * 100).toFixed(2) : 0,
+    });
+
+    const byProvider = new Map();
+    const byCampaign = new Map();
+    const byDate = new Map();
+    const totals = blank();
+    for (const r of rows) {
+        add(totals, r);
+        add(byProvider.get(r.provider) ?? byProvider.set(r.provider, blank()).get(r.provider), r);
+        const ck = `${r.provider}::${r.campaign_id ?? 'unknown'}`;
+        if (!byCampaign.has(ck)) byCampaign.set(ck, { provider: r.provider, campaign_id: r.campaign_id, campaign_name: r.campaign_name, ...blank() });
+        add(byCampaign.get(ck), r);
+        const dk = r.metric_date;
+        if (!byDate.has(dk)) byDate.set(dk, { date: dk, ...blank() });
+        add(byDate.get(dk), r);
+    }
+
+    res.json({
+        connected: rows.length > 0,
+        window: { from: fromDate, to: toDate },
+        totals: withRates(totals),
+        channels: Array.from(byProvider.entries())
+            .map(([provider, a]) => ({ provider, ...withRates(a) }))
+            .sort((x, y) => y.spend_pence - x.spend_pence),
+        campaigns: Array.from(byCampaign.values())
+            .map(withRates)
+            .sort((x, y) => y.spend_pence - x.spend_pence),
+        daily: Array.from(byDate.values()).sort((x, y) => x.date.localeCompare(y.date)),
+    });
+}));
+
+// Marketing ROI — the cross-cut that turns raw ad spend into decisions. Joins
+// ad_metrics (spend/impressions/clicks/conversions) with leads (attributed to a
+// provider by utm_source/source), contacts (new patients) and settled payments
+// (revenue) over the same window. Powers Dashboard tile, Business Hub ROAS,
+// Valuation LTV:CAC and Leads CPL — one source so every screen agrees.
+// Org-scoped, account-level (no practice_id). All money in pence.
+//
+// Attribution heuristic (no campaign-id on leads yet): a lead counts toward a
+// provider when its utm_source/source matches the provider's keywords.
+const AD_PROVIDER_MATCH = {
+    google_ads: /google|adwords|gads/i,
+    meta_ads: /facebook|meta|instagram|\bfb\b|\big\b/i,
+};
+function attributeProvider(lead) {
+    const hay = `${lead.utm_source ?? ''} ${lead.utm_medium ?? ''} ${lead.source ?? ''}`;
+    for (const [provider, re] of Object.entries(AD_PROVIDER_MATCH)) {
+        if (re.test(hay)) return provider;
+    }
+    return null;
+}
+router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) => {
+    const orgId = req.user.organisation_id;
+    const { fromISO, toISO } = resolveWindow(req.query);
+    const fromDate = fromISO.slice(0, 10);
+    const toDate = (toISO ?? new Date().toISOString()).slice(0, 10);
+    const toEndISO = toISO ?? new Date().toISOString();
+
+    const [adR, leadsR, contactsR, paymentsR, healthR] = await Promise.all([
+        supabase_1.serviceClient.from('ad_metrics')
+            .select('provider, spend_pence, impressions, clicks, conversions')
+            .eq('organisation_id', orgId)
+            .gte('metric_date', fromDate).lte('metric_date', toDate),
+        supabase_1.serviceClient.from('leads')
+            .select('source, utm_source, utm_medium, created_at')
+            .eq('organisation_id', orgId)
+            .gte('created_at', fromISO).lte('created_at', toEndISO),
+        supabase_1.serviceClient.from('contacts')
+            .select('id, created_at')
+            .eq('organisation_id', orgId)
+            .gte('created_at', fromISO).lte('created_at', toEndISO),
+        supabase_1.serviceClient.from('payments')
+            .select('amount_pence, status, processed_at')
+            .eq('organisation_id', orgId)
+            .gte('processed_at', fromISO).lte('processed_at', toEndISO),
+        supabase_1.serviceClient.from('business_health')
+            .select('baseline')
+            .eq('organisation_id', orgId)
+            .maybeSingle(),
+    ]);
+    const adRows = adR.data ?? [];
+    const leads = leadsR.data ?? [];
+    const newPatients = (contactsR.data ?? []).length;
+    const revenue_pence = (paymentsR.data ?? [])
+        .filter((p) => p.status === 'settled')
+        .reduce((s, p) => s + (p.amount_pence ?? 0), 0);
+
+    const blank = () => ({ spend_pence: 0, impressions: 0, clicks: 0, conversions: 0, leads: 0 });
+    const byProvider = new Map();
+    const totals = blank();
+    for (const r of adRows) {
+        const p = byProvider.get(r.provider) ?? byProvider.set(r.provider, blank()).get(r.provider);
+        for (const acc of [p, totals]) {
+            acc.spend_pence += r.spend_pence ?? 0;
+            acc.impressions += r.impressions ?? 0;
+            acc.clicks += r.clicks ?? 0;
+            acc.conversions += r.conversions ?? 0;
+        }
+    }
+    // Attribute leads to providers (and a running total of all ad-attributed leads).
+    let adLeads = 0;
+    for (const l of leads) {
+        const p = attributeProvider(l);
+        if (!p) continue;
+        adLeads += 1;
+        const acc = byProvider.get(p) ?? byProvider.set(p, blank()).get(p);
+        acc.leads += 1;
+    }
+    totals.leads = adLeads;
+
+    // Derived ratios. roas/cac/cpl are business-level (revenue & new patients
+    // are not split per provider), so they live on totals only.
+    const ratios = (a) => ({
+        cpl_pence: a.leads ? Math.round(a.spend_pence / a.leads) : 0,
+        cpa_pence: a.conversions ? Math.round(a.spend_pence / a.conversions) : 0,
+        cpc_pence: a.clicks ? Math.round(a.spend_pence / a.clicks) : 0,
+    });
+
+    // Patient LTV from the saved baseline → LTV:CAC (the headline acquisition-
+    // quality ratio for the Valuation screen). 0 when no baseline / no patient
+    // counts, in which case the UI hides the ratio.
+    const ltv_pence = formulas_1.ltvFromBaseline(healthR.data?.baseline);
+    const cac_pence = newPatients ? Math.round(totals.spend_pence / newPatients) : 0;
+
+    res.json({
+        connected: adRows.length > 0,
+        window: { from: fromDate, to: toDate },
+        spend_pence: totals.spend_pence,
+        impressions: totals.impressions,
+        clicks: totals.clicks,
+        conversions: totals.conversions,
+        leads_from_ads: adLeads,
+        total_leads: leads.length,
+        new_patients: newPatients,
+        revenue_pence,
+        roas: totals.spend_pence ? +(revenue_pence / totals.spend_pence).toFixed(2) : 0,
+        cac_pence,
+        ltv_pence,
+        ltv_cac_ratio: ltv_pence && cac_pence ? +(ltv_pence / cac_pence).toFixed(2) : 0,
+        ...ratios(totals),
+        by_provider: Array.from(byProvider.entries())
+            .map(([provider, a]) => ({ provider, ...a, ...ratios(a) }))
+            .sort((x, y) => y.spend_pence - x.spend_pence),
     });
 }));
 

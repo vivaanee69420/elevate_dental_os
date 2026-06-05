@@ -342,6 +342,17 @@ Paginated appointments in the window (most-recent `starts_at` first). `{ booking
 ### `GET /api/growth/marketing`
 `{ leads_30d, revenue_pence_30d, by_provider }` (revenue = settled payments).
 
+### `GET /api/growth/marketing/ad-spend?from=&to=`
+Live ad spend & performance from connected marketing providers (Google Ads now;
+Meta Ads next), read from `ad_metrics`. Org-scoped; window-aware via `from`/`to`
+(else 30-day rolling). Account-level — `practice_id` is intentionally ignored
+(ad spend isn't practice-attributed). All money in integer pence.
+`{ connected, window:{from,to}, totals, channels[], campaigns[], daily[] }` —
+each aggregate carries `{ spend_pence, impressions, clicks, leads, conversions,
+ctr, cpc_pence, cpl_pence, cpa_pence, conversion_rate }`; `channels` add
+`provider`, `campaigns` add `provider/campaign_id/campaign_name`, `daily` is a
+per-date spend series for charting. `connected:false` when no rows in window.
+
 ### `GET /api/growth/loyalty`
 `{ active, total }` over `memberships`.
 

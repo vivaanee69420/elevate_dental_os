@@ -16,6 +16,8 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useHealth } from '@/features/health/hooks';
 import { useLeads } from '@/features/leads/hooks';
+import { useMarketingRoi } from '@/features/growth/hooks';
+import { formatPence as fmtPence } from '@/lib/format';
 import { usePractices } from '@/features/practices/hooks';
 import {
   useDashboardSummary,
@@ -129,6 +131,7 @@ export default function DashboardScreen() {
   const { data: practiceResp, isLoading: practiceLoading } =
     usePracticeSummary();
   const { data: leadsResp, isLoading: leadsLoading } = useLeads();
+  const { data: roi } = useMarketingRoi();
 
   const leads: Lead[] = useMemo(
     () => (leadsResp?.leads ?? []).map(toLead),
@@ -560,6 +563,24 @@ export default function DashboardScreen() {
           </Link>
         ))}
       </div>
+
+      {/* Paid marketing — live ad spend / ROAS / CPL (Google Ads now; Meta
+          next). Hidden until ads are connected + synced. Links to Marketing. */}
+      {roi?.connected && (
+        <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+          {[
+            { label: 'Ad spend (30d)', value: fmtPence(roi.spend_pence), sub: `${roi.clicks.toLocaleString('en-GB')} clicks`, colour: BRAND },
+            { label: 'ROAS', value: roi.roas ? `${roi.roas.toFixed(2)}x` : '—', sub: 'settled revenue / spend', colour: roi.roas >= 1 ? POS : NEG },
+            { label: 'Cost / lead', value: roi.cpl_pence ? fmtPence(roi.cpl_pence) : '—', sub: `${roi.leads_from_ads.toLocaleString('en-GB')} ad leads`, colour: AMB },
+          ].map((k) => (
+            <Link key={k.label} href="/marketing" className="card card-padded block" style={{ borderLeft: `4px solid ${k.colour}` }}>
+              <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 10, letterSpacing: '0.05em' }}>{k.label}</div>
+              <div className="display font-bold" style={{ fontSize: 26, color: k.colour, lineHeight: 1.1, margin: '4px 0 2px' }}>{k.value}</div>
+              <div className="text-ink-muted" style={{ fontSize: 10, lineHeight: 1.4 }}>{k.sub}</div>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* Break-even · Target · Actual */}
       <div className="card card-padded mb-4">

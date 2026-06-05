@@ -228,6 +228,27 @@ Example private patient LTV:
 850 × 7 × 0.15 = £892
 ```
 
+### 7a. LTV from the Business Health baseline (`ltvFromBaseline`)
+
+Derives the three `calculateLTV` inputs from the saved baseline instead of
+assuming them, so LTV (and LTV:CAC on the Valuation / marketing screens) is
+grounded in the org's own numbers. Baseline `revenue`/`profit` are stored in
+**whole pounds**, so they are scaled to pence.
+
+```
+averageAnnualSpendPence = (baseline.revenue × 100) / baseline.active_patients
+averageRetentionYears   = baseline.active_patients / (baseline.new_per_month × 12)
+netMarginPct            = (baseline.profit / baseline.revenue) × 100
+ltv = calculateLTV(...)   (pence)
+```
+
+`averageRetentionYears` uses Little's law: at steady state, mean tenure =
+patient stock ÷ annual inflow. Returns `0` when `active_patients`,
+`new_per_month` or `revenue` are missing/zero (callers then hide LTV:CAC).
+
+LTV:CAC ratio (acquisition quality, used on Valuation): `ltv_pence / cac_pence`,
+where `cac_pence = ad_spend / new_patients`. Healthy benchmark ≥ 3.
+
 ---
 
 ## 8. Marketing ROI
