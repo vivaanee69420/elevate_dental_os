@@ -49,5 +49,5 @@ export interface ChairAnalytics {
 }
 
 export function fetchChairAnalytics(scope: string, recover: number): Promise<ChairAnalytics> {
-  return api<ChairAnalytics>(`/analytics/chair?scope=${encodeURIComponent(scope)}&recover=${recover}`);
+  return api<ChairAnalytics>(`/api/analytics/chair?scope=${encodeURIComponent(scope)}&recover=${recover}`);
 }
