@@ -58,11 +58,11 @@ export interface TreatmentEconomics {
 }
 
 export function fetchTreatmentModels(): Promise<Record<string, TreatmentModel>> {
-  return api<Record<string, TreatmentModel>>('/analytics/compute/treatment-models');
+  return api<Record<string, TreatmentModel>>('/api/analytics/compute/treatment-models');
 }
 
 export function computeTreatmentEconomics(model: TreatmentModel): Promise<TreatmentEconomics> {
-  return api<TreatmentEconomics>('/analytics/compute/treatment-economics', {
+  return api<TreatmentEconomics>('/api/analytics/compute/treatment-economics', {
     method: 'POST',
     body: JSON.stringify(model),
   });
