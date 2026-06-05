@@ -68,6 +68,51 @@ opex:overhead+other }` (`financeSeriesRowFromBuckets`).
 
 Annual P&L (`pl`) sums the trailing ≤12 entered periods.
 
+### 1b. Profit Benchmarking — `calculateProfitBenchmark`
+
+The actual cost/profit ratios of a P&L against the **UK dental group benchmarks**.
+These five constants are GROUP-wide (not per-org — per-org overrides are a tracked
+TODO). Shishir to confirm before launch.
+
+```
+PROFIT_BENCHMARKS  (% of revenue)
+  Dentist / associate ... 45
+  Support staff ......... 18
+  Lab + material ........ 15
+  Other fixed costs ..... 12
+  Profit (floor) ........ 10
+                          ─────
+                          100
+```
+
+calculatePL cost lines → the five benchmark categories:
+```
+dentist     = costs.associates
+staff       = costs.staff
+labMaterial = costs.lab + costs.materials
+otherFixed  = costs.property + costs.marketing + costs.other
+profit      = netProfit                      (a target floor, not a cost)
+```
+
+Per category: `variancePts = actualPct − benchmarkPct`.
+- Cost line: **under** benchmark is good ("Lean"); over is "Overspending".
+- Profit: **over** the 10% floor is good ("Above target"); under is "Below target".
+- A `|variance| ≤ 1pt` dead band reads "On benchmark" (severity neutral).
+
+`overspendPence` = Σ (cost lines above their benchmark) — the recoverable margin
+("move a line to benchmark, it drops to the bottom line"). Profit is excluded.
+
+**Honesty flag (`dentistStaffSeparable`):** Xero books associate pay inside the
+`staff`/`overhead` buckets, so actuals carry **no** `associates` bucket (it is 0 —
+see §1a). When `associates = 0` the Dentist row shows 0% (a false "Lean") and Staff
+is inflated. `calculateProfitBenchmark` sets `dentistStaffSeparable = false` so the
+UI combines/annotates the two lines instead of reading the green dentist row as a
+real saving. It is `true` only when a real `associates` figure exists.
+
+**Real data or zero:** `plBenchmark` uses `monthly_financials` actuals only — never
+the baseline projection (it is a Finance screen, §1a). No actuals / no cost source ⇒
+`costsAvailable:false`, no rows.
+
 ---
 
 ## 2. Practice Valuation

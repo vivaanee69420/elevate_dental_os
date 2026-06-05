@@ -42,6 +42,10 @@ export const analyticsController = {
         const practiceId = req.query.practice_id || undefined;
         res.json(await analytics_service_1.analyticsService.pl(req.user.organisation_id, { practiceId }));
     },
+    async plBenchmark(req, res) {
+        const practiceId = req.query.practice_id || undefined;
+        res.json(await analytics_service_1.analyticsService.plBenchmark(req.user.organisation_id, { practiceId }));
+    },
     async valuation(req, res) {
         res.json(await analytics_service_1.analyticsService.valuation(req.user.organisation_id));
     },

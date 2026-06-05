@@ -29,6 +29,7 @@ router.get('/cashflow', fin, (0, async_handler_1.asyncHandler)(analytics_control
 router.get('/cashflow-outlook', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashflowOutlook));
 router.get('/financial', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.financial));
 router.get('/pl', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.pl));
+router.get('/pl-benchmark', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.plBenchmark));
 router.get('/kpis', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.kpis));
 router.get('/valuation', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuation));
 router.get('/chair', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.chair));
