@@ -205,6 +205,24 @@ export const analyticsService = {
         });
         return result;
     },
+    // Profit Benchmarking (Intelligence OS — CoA→P&L). Actual cost/profit ratios
+    // vs the UK dental group benchmarks. A FINANCE screen → real actuals or zero,
+    // never the baseline projection (FORMULAS §1a). When there is no real cost
+    // source we return costsAvailable:false and no rows — the client shows a
+    // "connect Xero / enter actuals" empty state rather than fabricating ratios.
+    async plBenchmark(orgId, { practiceId = null } = {}) {
+        const actuals = await this._actualsBundle(orgId, practiceId);
+        const a = actuals.annual || {};
+        const revenue = a.revenue || 0;
+        const costTotal = (a.staff || 0) + (a.lab || 0) + (a.materials || 0) + (a.overhead || 0) + (a.other || 0);
+        if (!actuals.hasAny || revenue <= 0 || costTotal <= 0) {
+            return { costsAvailable: false, basis: 'none', revenue, rows: [], overspendPence: 0, periodsCovered: actuals.periodsCovered };
+        }
+        const plInput = plInputFromBuckets(a);
+        const pl = (0, formulas_1.calculatePL)(plInput);
+        const result = (0, formulas_1.calculateProfitBenchmark)({ revenue: plInput.revenue, costs: plInput.costs, netProfit: pl.netProfit });
+        return { ...result, marginPct: pl.marginPct, netProfit: pl.netProfit, totalCosts: pl.totalCosts, costsAvailable: true, basis: 'actuals', periodsCovered: actuals.periodsCovered };
+    },
     async valuation(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
         const b = health?.baseline;

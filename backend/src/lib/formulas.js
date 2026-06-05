@@ -27,6 +27,53 @@ export function calculatePL(input) {
     };
 }
 
+// Profit Benchmarking (Intelligence OS — CoA→P&L). UK dental GROUP constants —
+// the standard cost/profit ratios a healthy private practice runs at. Documented
+// in docs/FORMULAS.md §1b; per-org overrides are a later TODO (plan TODO2).
+export const PROFIT_BENCHMARKS = { dentist: 45, staff: 18, labMaterial: 15, otherFixed: 12, profit: 10 };
+
+// Compare a P&L's actual cost/profit ratios to PROFIT_BENCHMARKS. Pure; integer
+// pence in. Takes calculatePL-shaped input ({revenue, costs, netProfit}) and maps
+// its seven cost lines into the five benchmark categories:
+//   dentist     = costs.associates
+//   staff       = costs.staff
+//   labMaterial = costs.lab + costs.materials
+//   otherFixed  = costs.property + costs.marketing + costs.other
+//   profit      = netProfit            (a target floor, not a cost)
+// Verdict logic mirrors the prototype benchPanel: a cost line UNDER benchmark is
+// good ("Lean"); profit OVER the 10% floor is good ("Above target"); a ±1pt dead
+// band reads "On benchmark". `overspendPence` totals only cost lines above their
+// benchmark — the recoverable margin ("move a line to benchmark, it drops to the
+// bottom line"). `dentistStaffSeparable` is false when Xero has folded associate
+// pay into the staff bucket (associates = 0 while staff carries it) — the caller
+// surfaces that so the green/lean dentist row is not read as a real saving.
+export function calculateProfitBenchmark(input) {
+    const revenue = input.revenue || 0;
+    const c = input.costs || {};
+    const cats = [
+        { key: 'dentist', label: 'Dentist / associate', bm: PROFIT_BENCHMARKS.dentist, actual: c.associates || 0 },
+        { key: 'staff', label: 'Support staff', bm: PROFIT_BENCHMARKS.staff, actual: c.staff || 0 },
+        { key: 'labMaterial', label: 'Lab + material', bm: PROFIT_BENCHMARKS.labMaterial, actual: (c.lab || 0) + (c.materials || 0) },
+        { key: 'otherFixed', label: 'Other fixed costs', bm: PROFIT_BENCHMARKS.otherFixed, actual: (c.property || 0) + (c.marketing || 0) + (c.other || 0) },
+        { key: 'profit', label: 'Profit', bm: PROFIT_BENCHMARKS.profit, actual: input.netProfit || 0, isProfit: true },
+    ];
+    let overspendPence = 0;
+    const rows = cats.map((cat) => {
+        const actualPct = revenue > 0 ? pct((cat.actual / revenue) * 100, 1) : 0;
+        const benchmarkPence = pence((revenue * cat.bm) / 100);
+        const variancePts = pct(actualPct - cat.bm, 1);
+        const good = cat.isProfit ? variancePts >= 0 : variancePts <= 0;
+        const severity = Math.abs(variancePts) <= 1 ? 'neutral' : good ? 'good' : 'bad';
+        const verdict = Math.abs(variancePts) < 1
+            ? 'On benchmark'
+            : good ? (cat.isProfit ? 'Above target' : 'Lean')
+                : (cat.isProfit ? 'Below target' : 'Overspending');
+        if (!cat.isProfit && cat.actual > benchmarkPence) overspendPence += cat.actual - benchmarkPence;
+        return { key: cat.key, label: cat.label, benchmarkPct: cat.bm, benchmarkPence, actualPence: cat.actual, actualPct, variancePts, good, severity, verdict };
+    });
+    return { revenue, rows, overspendPence, dentistStaffSeparable: (c.associates || 0) > 0 };
+}
+
 export function calculateValuation(input) {
     // Determine practice type
     const isPrivate = input.privateRevenuePct >= 75;

@@ -279,6 +279,7 @@ Response:
 
 ### `GET /api/analytics/dashboard` — main dashboard rollup
 ### `GET /api/analytics/pl` — Profit & Loss using formulas.calculatePL()
+### `GET /api/analytics/pl-benchmark?practice_id=<uuid>` — Profit Benchmarking (Intelligence OS — CoA→P&L). Actual cost/profit ratios vs the UK dental group benchmarks (Dentist 45 · Staff 18 · Lab+Material 15 · Other Fixed 12 · Profit 10), from `formulas.calculateProfitBenchmark`. Returns `{ rows:[{key,label,benchmarkPct,benchmarkPence,actualPence,actualPct,variancePts,good,severity,verdict}], overspendPence, dentistStaffSeparable, marginPct, netProfit, totalCosts, costsAvailable, basis, periodsCovered }`. **Real `monthly_financials` actuals only — never the baseline** (Finance screen, FORMULAS §1a/§1b); no cost source ⇒ `costsAvailable:false`, no rows. `dentistStaffSeparable:false` flags Xero folding associate pay into staff. finance.view.
 ### `GET /api/analytics/valuation` — 3-model valuation
 ### `GET /api/analytics/kpis` — 23-metric scorecard with traffic lights
 ### `GET /api/analytics/business-hub?days=90` — group + per-practice rollup (Business Hub): revenue (settled payments), appointments/no-show (appointments), conversion (leads), group margin/target from business_health baseline. finance.view.

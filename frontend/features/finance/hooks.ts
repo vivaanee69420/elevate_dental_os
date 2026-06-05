@@ -4,6 +4,7 @@ import {
   getCashflow,
   getCashflowOutlook,
   getFinancial,
+  getProfitBenchmark,
   getValuationBase,
   getPaymentSourceBreakdown,
   recordManualPayment,
@@ -40,6 +41,13 @@ export function useFinancial(dsoDays = 45, payableDays = 30, practiceId: string 
   return useQuery({
     queryKey: ['financial', dsoDays, payableDays, practiceId, range?.from ?? null, range?.to ?? null],
     queryFn: () => getFinancial(dsoDays, payableDays, practiceId, range),
+  });
+}
+
+export function useProfitBenchmark(practiceId: string | null = null) {
+  return useQuery({
+    queryKey: ['pl-benchmark', practiceId],
+    queryFn: () => getProfitBenchmark(practiceId),
   });
 }
 

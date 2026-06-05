@@ -382,3 +382,56 @@ export async function listMonthlyFinancials(params?: {
 export async function deleteMonthlyFinancial(id: string) {
   return api(`/api/monthly-financials/${id}`, { method: 'DELETE' });
 }
+
+// --- Profit Benchmarking (Intelligence OS — CoA→P&L) ------------------------
+// Actual cost/profit ratios vs the UK dental group benchmarks (45/18/15/12/10).
+// Real monthly_financials actuals only — costsAvailable:false when there is no
+// real cost source (never a baseline estimate on a Finance screen). £ in pounds.
+export interface BenchmarkRow {
+  key: string;
+  label: string;
+  benchmarkPct: number;
+  benchmark: number; // pounds
+  actual: number; // pounds
+  actualPct: number;
+  variancePts: number;
+  good: boolean;
+  severity: 'good' | 'bad' | 'neutral';
+  verdict: string;
+}
+export interface ProfitBenchmark {
+  costsAvailable: boolean;
+  basis: 'actuals' | 'none';
+  periodsCovered: number;
+  revenue: number; // pounds
+  marginPct: number;
+  overspend: number; // pounds — recoverable to benchmark
+  dentistStaffSeparable: boolean;
+  rows: BenchmarkRow[];
+}
+
+export async function getProfitBenchmark(practiceId?: string | null): Promise<ProfitBenchmark> {
+  const pp = practiceId ? `?practice_id=${practiceId}` : '';
+  const r = await api(`/api/analytics/pl-benchmark${pp}`);
+  return {
+    costsAvailable: !!r.costsAvailable,
+    basis: r.basis ?? 'none',
+    periodsCovered: r.periodsCovered ?? 0,
+    revenue: p(r.revenue),
+    marginPct: r.marginPct ?? 0,
+    overspend: p(r.overspendPence),
+    dentistStaffSeparable: r.dentistStaffSeparable !== false,
+    rows: (r.rows ?? []).map((row: any) => ({
+      key: row.key,
+      label: row.label,
+      benchmarkPct: row.benchmarkPct,
+      benchmark: p(row.benchmarkPence),
+      actual: p(row.actualPence),
+      actualPct: row.actualPct,
+      variancePts: row.variancePts,
+      good: !!row.good,
+      severity: row.severity ?? 'neutral',
+      verdict: row.verdict ?? '',
+    })),
+  };
+}
