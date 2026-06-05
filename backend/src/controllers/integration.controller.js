@@ -25,12 +25,14 @@ export const integrationController = {
     // Always redirects back to the frontend integrations page — never returns JSON.
     async oauthCallback(req, res) {
         const provider = req.params.provider;
-        const { code, state, error: oauthError } = req.query;
+        // QuickBooks returns the company id as `realmId` on the callback query;
+        // other OAuth providers only carry code + state. Forward it through.
+        const { code, state, realmId, error: oauthError } = req.query;
         const dest = new URL(`${frontendUrl()}/integrations`);
         try {
             if (oauthError) throw new Error(String(oauthError));
             const { orgId } = verifyState(state, provider);
-            await integration_service_1.integrationService.finishConnect(orgId, provider, { code });
+            await integration_service_1.integrationService.finishConnect(orgId, provider, { code, realmId });
             dest.searchParams.set('connected', provider);
         } catch (err) {
             dest.searchParams.set('error', err.message || 'oauth_failed');

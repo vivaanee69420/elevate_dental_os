@@ -67,16 +67,9 @@ function makeOauthStub({ id, label, category, scopes, authUrl, tokenUrl, clientI
     registerProvider({ id, label, authStyle: 'oauth', category }, impl);
 }
 
-// Xero now has a real provider (xero-provider.js) — full OAuth + tenant
-// capture + token refresh + P&L sync. Registered separately, not a stub.
-
-makeOauthStub({
-    id: 'quickbooks', label: 'QuickBooks', category: 'accounting',
-    scopes: ['com.intuit.quickbooks.accounting'],
-    authUrl: 'https://appcenter.intuit.com/connect/oauth2',
-    tokenUrl: 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer',
-    clientIdEnv: 'QUICKBOOKS_CLIENT_ID', clientSecretEnv: 'QUICKBOOKS_CLIENT_SECRET',
-});
+// Xero and QuickBooks now have real providers (xero-provider.js /
+// quickbooks-provider.js) — full OAuth + company capture + token refresh + P&L
+// sync. Registered separately, not stubs.
 
 makeOauthStub({
     id: 'google_calendar', label: 'Google Calendar', category: 'calendar',
@@ -86,13 +79,8 @@ makeOauthStub({
     clientIdEnv: 'GOOGLE_CLIENT_ID', clientSecretEnv: 'GOOGLE_CLIENT_SECRET',
 });
 
-makeOauthStub({
-    id: 'google_ads', label: 'Google Ads', category: 'marketing',
-    scopes: ['https://www.googleapis.com/auth/adwords'],
-    authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
-    tokenUrl: 'https://oauth2.googleapis.com/token',
-    clientIdEnv: 'GOOGLE_CLIENT_ID', clientSecretEnv: 'GOOGLE_CLIENT_SECRET',
-});
+// google_ads is now a REAL provider (google-ads-provider.js) — full OAuth +
+// accessible-customer capture + token refresh + spend sync. Removed from stubs.
 
 makeOauthStub({
     id: 'meta_ads', label: 'Meta Lead Ads', category: 'marketing',
