@@ -52,6 +52,44 @@ export const treatmentModelSchema = zod_1.z.object({
     })).max(50).default([]),
 });
 
+// Group Valuation state (POST /compute/valuation body). All money in integer
+// pence; multiples/factors are plain numbers (the classification/region/tier
+// tables live client-side and the resolved values are sent here — the formula
+// is pure arithmetic). Bounded so a hostile body can't overflow; coerced since
+// sliders may post numeric strings. Pure compute — no persistence (Arch #3).
+const PENCE = zod_1.z.coerce.number().int().min(0).max(1_000_000_000_000); // ≤ £10bn
+export const valuationStateSchema = zod_1.z.object({
+    reportedEbitdaPence: PENCE,
+    addBacksPence: PENCE.default(0),
+    principalSalaryPence: PENCE.default(0),
+    principalMultiple: zod_1.z.coerce.number().min(0).max(30).default(0),
+    associateMultiple: zod_1.z.coerce.number().min(0).max(30).default(0),
+    dsoMultiple: zod_1.z.coerce.number().min(0).max(30).default(0),
+    regionFactor: zod_1.z.coerce.number().min(0.5).max(2).default(1),
+    growthRatePct: zod_1.z.coerce.number().min(-100).max(200).default(10),
+});
+
+// Sale Planner trajectory (POST /compute/valuation/exit-plan body). `baselinePence`
+// is today's midpoint (from the valuation result — not recomputed here).
+export const valuationExitPlanSchema = zod_1.z.object({
+    base: zod_1.z.object({
+        ttmRevenuePence: PENCE.default(0),
+        reportedEbitdaPence: PENCE.default(0),
+    }),
+    baselinePence: PENCE.default(0),
+    principalSalaryPence: PENCE.default(0),
+    plan: zod_1.z.object({
+        targetValuePence: PENCE.default(0),
+        targetYears: zod_1.z.coerce.number().int().min(1).max(40).default(5),
+        futureEbitdaPence: PENCE.default(0),
+        futureRevenuePence: PENCE.default(0),
+        futureMultiple: zod_1.z.coerce.number().min(0).max(30).default(0),
+        futureBuyerType: zod_1.z.enum(['principal', 'associate', 'dso']).default('associate'),
+        addedSites: zod_1.z.coerce.number().int().min(0).max(500).default(0),
+        siteCount: zod_1.z.coerce.number().int().min(0).max(500).default(0),
+    }),
+});
+
 export const seriesQuerySchema = zod_1.z.object({
     months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
     practice_id: zod_1.z.string().uuid().optional(),

@@ -4,7 +4,7 @@ Plan: `GM-INTELLIGENCE-OS-PLAN.md` (eng-reviewed 2026-06-05). Update after every
 
 Status key: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-06-05 (eng review complete; scope reframed)
+Last updated: 2026-06-05 (T6 Value & Growth / Valuation vertical — server-authoritative)
 
 ---
 
@@ -30,25 +30,25 @@ Branch: `feat/intelligence-os-phase0`
 | Task | Status | Notes / commit |
 |---|---|---|
 | T5 Workbench → ProfitScreen (pure debounced compute endpoint) | [x] | FULL VERTICAL DONE: computeServiceEconomics + DEFAULT_SERVICE_MODELS (pence, 11 tests, FORMULAS.md §12) → POST /api/analytics/compute/treatment-economics + GET .../treatment-models (finance.view, **audit-exempt /compute/ path**) → TreatmentWorkbench UI (treatment tabs, £↔pence inputs, debounced sliders, money-flow + components + principal-vs-associate planning) on /profit. Establishes the Arch#3 compute pattern. Suite 376 green; tsc+lint clean. Persisted overrides = later slice |
-| T6 3-buyer Valuation + Sale Planner → ValuationScreen | [ ] | driver-based; EBITDA reconciled; versioned |
+| T6 3-buyer Valuation + Sale Planner → ValuationScreen | [x] | FULL VERTICAL DONE: driver-based engine moved server-side (`computeGroupValuation` + `valueUpliftLevers` + `planExitTrajectory`, pence, +18 tests, FORMULAS.md §13) → POST `/api/analytics/compute/valuation` + `/compute/valuation/exit-plan` (valuation.view, audit-exempt /compute/ path) → ValuationScreen now posts state (debounced) via `useValuationCompute`/`useValuationExitPlan`, pence↔pounds adapter keeps the pound-denominated screen intact. **EBITDA reconciled + versioned**: legacy `calculateValuation` (§2) LEFT UNTOUCHED (GET /valuation unchanged) — new engine takes reported EBITDA + explicit add-backs (no fabrication). Client formula deleted from mock.ts (single-source rule). Suite 394 green; tsc+lint clean |
 | T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [x] | FULL VERTICAL DONE: formulas (+15 tests, FORMULAS.md §11) → migration 000036 (applied hosted) → chairAnalytics service (+2 tests) → GET /api/analytics/chair (finance.view) → ChairEfficiencyScreen UI + ScopePeriodBar wired into /chair (tsc+lint clean). FIRST end-to-end slice — proves the formulas→endpoint→UI pattern. Remaining: OCPSPD + profit-per-chair-hr (deferred, need opex/treatment-minute sourcing) |
 | Group Overview rollup + Decision Lens | [x] | GroupOverviewScreen on /business-hub — REAL business-hub data, scope-aware (practice narrows; academy/lab note), KPI strip + per-practice table + client-computed Decision Lens (AlertRow). tsc+lint clean. Academy/Lab entity revenue rollup = later (needs entity_revenue_lines wiring) |
-**Exit:** Tier-1 new UI, scope/period reactive. — `[~]` 5 views built fresh on the new tokens/primitives/ScopePeriodBar:
+**Exit:** Tier-1 new UI, scope/period reactive. — `[~]` 6 views built fresh on the new tokens/primitives/ScopePeriodBar:
 - Chair Efficiency (/chair) ✅ full vertical incl. endpoint
 - Treatment Workbench (/profit) ✅ full vertical incl. pure compute endpoint
 - Group Overview (/business-hub) ✅ real business-hub data
 - Lead Funnel (/leads) ✅ real business-hub data
 - Practice Deep Dive (/deep-dive, NEW route + nav) ✅ real (business-hub + chair + treatments + revenue-series + marketing/roi), scope-driven. Enriched: 8-stat hero, 8 chair-economics KPIs, treatment-mix bar chart + 12mo turnover area chart + Channel ROI (KPIs + per-provider spend bar chart) — all recharts, green/gold. Channel ROI added practice_id filter to /growth/marketing/roi (no new endpoint).
+- Value & Growth / Valuation (/valuation) ✅ full vertical incl. pure compute endpoints (T6). Prototype labels this view "Value & Growth" (BOARDROOM); maps to existing /valuation route per the nav-mapping decision. NOTE: screen header still reads "Practice Valuation" — relabel is part of the D5/D6 nav sweep, not T6.
 
 Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (d91514f).
 
 ### Bug fixes
 - 404 on chair + workbench endpoints: api() paths missing `/api/` prefix (proxy forwards `http://backend/${path}`). Fixed chair-analytics-api + workbench-api to `/api/analytics/...` (business-hub-api was already correct).
 
-### Pending Intelligence OS views (7 of 12)
+### Pending Intelligence OS views (6 of 12)
 - AI Analyst (Ask box) — needs new `POST /api/analytics/ai-ask` → lib/claude.js (findings UI already exists)
 - Treatment Mix heat matrix — needs practice×treatment RPC
-- Sale Planner / driver Valuation — T6 backend (extend calculateValuation + EBITDA reconcile)
 - Chair OCPSPD + profit-per-chair-hr panels — opex/treatment-minute sourcing
 - Marketing & ROI, P&L & Margin, Cashflow & Runway, Clinicians — screens exist (reskinned); need new layout + ScopePeriodBar + scope wiring
 
@@ -114,5 +114,5 @@ Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (
 
 ## Risks / blockers
 - **kind read-path audit (T2)** — must catch every legacy practice rollup or Academy/Lab corrupt group tables / div-by-zero. Phase-0 exit gate.
-- **calculateValuation EBITDA reconciliation (T6)** — service fabricates `profit+revenue*0.04`; prototype uses explicit add-backs. Two defs; version to avoid silently changing current outputs.
+- ~~**calculateValuation EBITDA reconciliation (T6)**~~ — RESOLVED. New `computeGroupValuation` (FORMULAS.md §13) takes reported EBITDA + explicit add-backs (no fabrication); legacy `calculateValuation` (§2) left untouched so GET /valuation is byte-identical. Two versioned engines, documented divergence — no silent output change.
 - **Day data semantics** — cash receipts ≠ production; must stay labelled "Cash collected".

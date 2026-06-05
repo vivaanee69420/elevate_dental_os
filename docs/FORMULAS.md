@@ -407,6 +407,61 @@ Profit planning — who completes the work:
 owner edits live client-side and post to the compute endpoint. Persisted overrides are a
 later slice.
 
+## 13. Group Valuation — driver-based 3-buyer engine (Intelligence OS — Value & Growth)
+
+Source: `backend/src/lib/formulas.js` (`computeGroupValuation`, `valuationGrowthAdjust`,
+`valueUpliftLevers`, `planExitTrajectory`); tested in
+`backend/test/formulas-valuation.test.mjs`. Pure functions, integer pence — the live
+Value & Growth screen posts the driver state (debounced) and gets these back
+(server-authoritative, no client formula duplication).
+
+**Versioning note (important for the accountant).** This is a *new* engine that sits
+alongside the legacy `calculateValuation` (§2). The legacy function is **left untouched**
+so its only caller — `GET /api/analytics/valuation` — keeps producing identical numbers.
+The two differ on EBITDA treatment **by design**:
+
+- §2 (legacy) fabricates EBITDA from the Business Health baseline as `profit + revenue*4%`
+  (a flat D&A/interest add-back) and applies fixed per-classification multiples.
+- §13 (this engine) takes a **reported EBITDA** (TTM, from the P&L) and applies the owner's
+  **explicit** add-backs and a notional principal salary — no fabricated add-back. Multiples
+  and the region factor are owner-adjustable and passed in resolved (the classification /
+  region / DSO-tier lookup tables are UI config, not part of the formula).
+
+Money inputs are pence; multiples and `regionFactor` are plain numbers.
+
+    growthAdjust       = 1 + clamp((growthRatePct - 10) / 50, -0.15, +0.20)   (10% YoY = neutral)
+    principalNetProfit = reportedEbitda + addBacks                       (ANP — Principal-led basis)
+    associateEbitda    = reportedEbitda + addBacks + principalSalary     (Adjusted — Assoc/DSO basis)
+    principalValuation = principalNetProfit * principalMultiple * regionFactor
+    associateValuation = associateEbitda   * associateMultiple * regionFactor
+    dsoValuation       = associateEbitda   * dsoMultiple * regionFactor * growthAdjust
+    midpoint           = (associateValuation + principalValuation) / 2   (most likely sale price)
+    strategic          = dsoValuation * 1.10                              (DSO + earn-out / platform uplift)
+
+`valueUpliftLevers` ranks (desc) the £ added to a headline figure if the owner pulls each
+lever today, derived from the computed result + the resolved multiples
+(`avgMultiple = (principal+associate+dso)/3`):
+
+    growth → 15%          = dsoValuation * 0.10
+    cut lab (+£50k EBITDA) = 5,000,000 * avgMultiple
+    +£30k add-backs       = 3,000,000 * avgMultiple
+    add second site       = dsoValuation * 0.15
+    shift to private      = 0.5 * associateEbitda
+    +£100k recurring @35%  = 3,500,000 * avgMultiple
+
+`planExitTrajectory` (Sale Planner) models a target exit. `baselinePence` is today's midpoint
+(passed in from the result, not recomputed). The per-year advisory `focus` copy is **not** a
+formula — it is UI text computed client-side from these numbers.
+
+    projected     = (buyer=='principal' ? futureEbitda - principalSalary : futureEbitda)
+                    * futureMultiple * (buyer=='dso' && totalSites>=10 ? 1.10 : 1)
+    gap           = max(0, targetValue - baseline)
+    cagrNeeded    = (targetValue / baseline)^(1/targetYears) - 1
+    ebitdaNeeded  = targetValue / futureMultiple
+    ebitdaMargin  = futureEbitda / futureRevenue          (current = reportedEbitda / ttmRevenue)
+    revenueGrowth = futureRevenue / ttmRevenue - 1
+    years[i]      = linear interp now→exit of revenue, EBITDA, sites; margin + implied value per year
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:

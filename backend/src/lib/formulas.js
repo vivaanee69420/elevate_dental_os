@@ -424,3 +424,133 @@ export function computeServiceEconomics(model) {
         })),
     };
 }
+
+// ===========================================================================
+// GROUP VALUATION — driver-based 3-buyer engine (Intelligence OS — Value &
+// Growth view). Integer pence; server-authoritative (FORMULAS.md §13).
+//
+// VERSIONING: this is a NEW function alongside the legacy `calculateValuation`
+// (§2), which is intentionally LEFT UNTOUCHED so its existing caller
+// (GET /api/analytics/valuation) keeps producing identical numbers. The model
+// below is the one the Value & Growth screen posts to. The two differ on EBITDA
+// treatment by design: the legacy one fabricates EBITDA (profit + revenue*0.04)
+// from the baseline; this one takes a REPORTED EBITDA and applies EXPLICIT
+// owner-entered add-backs + a notional principal salary (no fabrication).
+//
+// All money inputs are pence; multiples/factors are plain numbers. Pure: the
+// classification/region/tier tables live client-side (UI defaults + benchmark
+// display) and the resolved multiples + region factor are passed in, so the
+// formula is pure arithmetic with no enum coupling.
+// ===========================================================================
+
+// Growth premium applied to the DSO method: 10% YoY is neutral; +1pt of uplift
+// per 5pts above (capped +20%), penalty below (floor -15%). Mirrors the shipped
+// client model exactly so moving the compute server-side changes no output.
+export function valuationGrowthAdjust(growthRatePct) {
+    return 1 + Math.max(-0.15, Math.min(0.2, ((growthRatePct || 0) - 10) / 50));
+}
+
+export function computeGroupValuation(input) {
+    const reportedEbitda = Math.round(input.reportedEbitdaPence || 0);
+    const addBacks = Math.round(input.addBacksPence || 0);
+    const principalSalary = Math.round(input.principalSalaryPence || 0);
+    const principalMultiple = input.principalMultiple || 0;
+    const associateMultiple = input.associateMultiple || 0;
+    const dsoMultiple = input.dsoMultiple || 0;
+    const regionFactor = input.regionFactor || 1;
+
+    // Adjusted EBITDA (Associate/DSO basis) adds the notional principal salary
+    // back — clinical work is covered by associates. ANP (Principal-led basis)
+    // does not — the owner-buyer funds their own clinical work out of it.
+    const associateEbitda = reportedEbitda + addBacks + principalSalary;
+    const principalNetProfit = reportedEbitda + addBacks;
+    const growthAdjust = valuationGrowthAdjust(input.growthRatePct);
+
+    const principalValuation = pence(principalNetProfit * principalMultiple * regionFactor);
+    const associateValuation = pence(associateEbitda * associateMultiple * regionFactor);
+    const dsoValuation = pence(associateEbitda * dsoMultiple * regionFactor * growthAdjust);
+    const midpoint = pence((associateValuation + principalValuation) / 2);
+    const strategic = pence(dsoValuation * 1.1); // 10% earn-out / platform uplift
+
+    return {
+        reportedEbitda, associateEbitda, principalNetProfit,
+        principalValuation, associateValuation, dsoValuation,
+        midpoint, strategic,
+        regionFactor, growthAdjust: pct(growthAdjust, 4),
+    };
+}
+
+// Value-uplift levers — each line is the £ added to a headline figure if the
+// owner pulls that lever today, ranked by impact. Pure: derived from an already
+// computed valuation result + the resolved multiples. Pence. Mirrors the
+// shipped client levers (amounts are EBITDA deltas × multiple, etc.).
+export function valueUpliftLevers({ result, principalMultiple, associateMultiple, dsoMultiple }) {
+    const avgMultiple = ((principalMultiple || 0) + (associateMultiple || 0) + (dsoMultiple || 0)) / 3;
+    const levers = [
+        { key: 'growth', label: 'Increase growth rate to 15% (DSO buyers love this)', impactPence: pence(result.dsoValuation * 0.1) },
+        { key: 'lab_cost', label: 'Cut lab cost from 18% to 15% target (+£50k EBITDA)', impactPence: pence(5_000_000 * avgMultiple) },
+        { key: 'add_backs', label: 'Identify £30k more legitimate add-backs', impactPence: pence(3_000_000 * avgMultiple) },
+        { key: 'second_site', label: 'Add second site (scale into DSO interest zone)', impactPence: pence(result.dsoValuation * 0.15) },
+        { key: 'private_mix', label: 'Shift to private/mixed (+0.5x multiple)', impactPence: pence(0.5 * result.associateEbitda) },
+        { key: 'recurring', label: 'Add £100k recurring private revenue at 35% margin', impactPence: pence(3_500_000 * avgMultiple) },
+    ];
+    return levers.sort((a, b) => b.impactPence - a.impactPence);
+}
+
+// Sale Planner trajectory — model a target exit and the path to reach it. Pure;
+// integer pence. `baselinePence` is today's midpoint (passed from the valuation
+// result so the formula isn't duplicated). The advisory `focus`/action copy per
+// year is intentionally NOT here — it's UI text, computed client-side from these
+// numbers. Mirrors the shipped client planner math.
+export function planExitTrajectory({ base, plan, baselinePence, principalSalaryPence = 0 }) {
+    const ttmRevenue = Math.round(base?.ttmRevenuePence || 0);
+    const reportedEbitda = Math.round(base?.reportedEbitdaPence || 0);
+    const targetValue = Math.round(plan?.targetValuePence || 0);
+    const targetYears = Math.max(1, Math.round(plan?.targetYears || 1));
+    const futureEbitda = Math.round(plan?.futureEbitdaPence || 0);
+    const futureRevenue = Math.round(plan?.futureRevenuePence || 0);
+    const futureMultiple = plan?.futureMultiple || 0;
+    const buyer = plan?.futureBuyerType || 'associate';
+    const addedSites = Math.max(0, Math.round(plan?.addedSites || 0));
+    const siteCount = Math.max(0, Math.round(plan?.siteCount || 0));
+    const baseline = Math.round(baselinePence || 0);
+
+    const totalSites = siteCount + addedSites;
+    const dsoPremium = (s) => (buyer === 'dso' && s >= 10 ? 1.1 : 1);
+    const projected = pence(
+        (buyer === 'principal' ? futureEbitda - principalSalaryPence : futureEbitda)
+        * futureMultiple * dsoPremium(totalSites),
+    );
+
+    const gap = Math.max(0, targetValue - baseline);
+    const cagrNeededPct = baseline > 0 && targetYears > 0
+        ? pct((Math.pow(targetValue / baseline, 1 / targetYears) - 1) * 100, 2) : 0;
+    const ebitdaNeededPence = futureMultiple > 0 ? pence(targetValue / futureMultiple) : 0;
+    const ebitdaMarginPct = futureRevenue > 0 ? pct((futureEbitda / futureRevenue) * 100, 2) : 0;
+    const currentEbitdaMarginPct = ttmRevenue > 0 ? pct((reportedEbitda / ttmRevenue) * 100, 2) : 0;
+    const revenueGrowthPct = ttmRevenue > 0 ? pct((futureRevenue / ttmRevenue - 1) * 100, 2) : 0;
+
+    const years = [];
+    for (let i = 0; i <= targetYears; i++) {
+        const t = i / targetYears;
+        const revPence = pence(ttmRevenue + (futureRevenue - ttmRevenue) * t);
+        const ebitdaPence = pence(reportedEbitda + (futureEbitda - reportedEbitda) * t);
+        const sites = Math.round(siteCount + (totalSites - siteCount) * t);
+        const marginPct = revPence > 0 ? pct((ebitdaPence / revPence) * 100, 2) : 0;
+        const valYearPence = pence(ebitdaPence * futureMultiple * dsoPremium(sites));
+        years.push({ year: i, revPence, ebitdaPence, sites, marginPct, valYearPence });
+    }
+
+    return {
+        projectedPence: projected,
+        baselinePence: baseline,
+        gapPence: gap,
+        cagrNeededPct,
+        ebitdaNeededPence,
+        ebitdaMarginPct,
+        currentEbitdaMarginPct,
+        revenueGrowthPct,
+        totalSites,
+        years,
+    };
+}

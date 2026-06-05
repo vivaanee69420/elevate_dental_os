@@ -29,7 +29,6 @@ import { useMarketingRoi } from '@/features/growth/hooks';
 import { formatPence as fmtPence } from '@/lib/format';
 import FinanceToolbar from './FinanceToolbar';
 import {
-  calculateValuation,
   defaultValuationState,
   getDefaultMultiples,
   poundsCompact,
@@ -40,14 +39,32 @@ import {
   REGION_ADJUSTMENTS,
   REGIONS_DISPLAY,
   type ValuationState,
+  type ValuationResult,
   type PracticeType,
   type DsoTier,
   type RegionKey,
 } from '../mock';
+import { useValuationCompute, useValuationExitPlan } from '../valuation-hooks';
+import type { ValuationLever } from '../valuation-api';
 
 const BRAND = 'var(--brand)';
 const SUCCESS = 'var(--success)';
 const DANGER = 'var(--danger)';
+
+// First-paint placeholder before the server compute responds (Arch #3). All
+// money zero; factors neutral so derived labels render without NaN.
+const EMPTY_RESULT: ValuationResult = {
+  reportedEbitda: 0,
+  associateEbitda: 0,
+  principalNetProfit: 0,
+  principalValuation: 0,
+  associateValuation: 0,
+  dsoValuation: 0,
+  midpoint: 0,
+  strategic: 0,
+  regionFactor: 1,
+  growthAdjust: 1,
+};
 
 // Coloured signed-variance text vs an industry benchmark (prototype renderVariance).
 function variance(actual: number, benchmark: number, unit: 'x' | 'pp') {
@@ -144,8 +161,13 @@ export default function ValuationScreen() {
   // Patch helper for the valuation input state.
   const patch = (p: Partial<ValuationState>) => setState((s) => ({ ...s, ...p }));
 
-  // Run the three-model engine whenever inputs change.
-  const result = useMemo(() => calculateValuation(state, base), [state, base]);
+  // Run the three-model engine server-side (Arch #3, debounced) — the valuation
+  // formula lives in lib/formulas.js (FORMULAS.md §13), not duplicated here.
+  // `placeholderData: prev` keeps the last result on screen while a new compute
+  // is in flight; EMPTY_RESULT covers the first paint before the first response.
+  const { data: computed } = useValuationCompute(state, base);
+  const result = computed?.result ?? EMPTY_RESULT;
+  const levers = computed?.levers ?? [];
 
   // Auto-classify practice type from the NHS % slider (prototype updateValuation).
   const derivedType: PracticeType =
@@ -178,18 +200,6 @@ export default function ValuationScreen() {
   function reset() {
     setState(defaultValuationState());
   }
-
-  // Value uplift levers, ranked by midpoint impact (prototype updateValuation levers).
-  const avgMultiple =
-    (state.principalMultiple + state.associateMultiple + state.dsoMultiple) / 3;
-  const levers = [
-    { label: 'Increase growth rate to 15% (DSO buyers love this)', impact: result.dsoValuation * 0.1 },
-    { label: 'Cut lab cost from 18% to 15% target (+£50k EBITDA)', impact: 50000 * avgMultiple },
-    { label: 'Identify £30k more legitimate add-backs', impact: 30000 * avgMultiple },
-    { label: 'Add second site (scale into DSO interest zone)', impact: result.dsoValuation * 0.15 },
-    { label: 'Shift to private/mixed (+0.5x multiple)', impact: 0.5 * result.associateEbitda },
-    { label: 'Add £100k recurring private revenue at 35% margin', impact: 35000 * avgMultiple },
-  ].sort((a, b) => b.impact - a.impact);
 
   return (
     <div className="container max-w-7xl mx-auto">
@@ -313,13 +323,13 @@ function CurrentTab({
   state: ValuationState;
   patch: (p: Partial<ValuationState>) => void;
   base: { ttmRevenue: number; reportedEbitda: number };
-  result: ReturnType<typeof calculateValuation>;
+  result: ValuationResult;
   derivedType: PracticeType;
   benchmarks: (typeof PRACTICE_TYPE_MULTIPLES)[PracticeType];
   dsoBench: number;
   regionLabel: string;
   growthLabel: string;
-  levers: { label: string; impact: number }[];
+  levers: ValuationLever[];
   setPracticeType: (t: PracticeType) => void;
   setDsoTier: (t: DsoTier) => void;
   reset: () => void;
@@ -1172,7 +1182,7 @@ function PlannerTab({
 }: {
   base: { ttmRevenue: number; reportedEbitda: number };
   state: ValuationState;
-  result: ReturnType<typeof calculateValuation>;
+  result: ValuationResult;
 }) {
   const [p, setP] = useState<PlannerState>(() => ({
     targetValue: 10000000,
@@ -1185,67 +1195,54 @@ function PlannerTab({
   }));
   const patch = (x: Partial<PlannerState>) => setP((s) => ({ ...s, ...x }));
 
-  // Derive projection, gap, CAGR and the year-by-year build plan.
+  // Derive projection, gap, CAGR and the year-by-year build plan server-side
+  // (Arch #3, debounced). The money math lives in lib/formulas.js
+  // (planExitTrajectory, FORMULAS.md §13); only the advisory per-year `focus`
+  // copy is computed here. baseline = today's midpoint from the valuation result.
+  const { data: plan } = useValuationExitPlan({
+    base,
+    baseline: result.midpoint,
+    principalSalary: state.principalSalary,
+    targetValue: p.targetValue,
+    targetYears: p.targetYears,
+    futureEbitda: p.futureEbitda,
+    futureRevenue: p.futureRevenue,
+    futureMultiple: p.futureMultiple,
+    futureBuyerType: p.futureBuyerType,
+    addedSites: p.addedSites,
+    siteCount: state.siteCount,
+  });
   const calc = useMemo(() => {
-    const baseline = result.midpoint;
-    let projected =
-      p.futureBuyerType === 'principal'
-        ? (p.futureEbitda - 120000) * p.futureMultiple
-        : p.futureEbitda * p.futureMultiple;
-    const totalSites = state.siteCount + p.addedSites;
-    if (p.futureBuyerType === 'dso' && totalSites >= 10) projected *= 1.1;
-
-    const gap = Math.max(0, p.targetValue - baseline);
-    const cagrNeeded =
-      baseline > 0 && p.targetYears > 0
-        ? (Math.pow(p.targetValue / baseline, 1 / p.targetYears) - 1) * 100
-        : 0;
-    const ebitdaNeeded = p.targetValue / p.futureMultiple;
-    const ebitdaMargin = p.futureRevenue > 0 ? (p.futureEbitda / p.futureRevenue) * 100 : 0;
-    const currentEbitdaMargin =
-      base.ttmRevenue > 0 ? (base.reportedEbitda / base.ttmRevenue) * 100 : 0;
-    const revenueGrowthPct =
-      base.ttmRevenue > 0 ? (p.futureRevenue / base.ttmRevenue - 1) * 100 : 0;
-
-    // Year-by-year linear interpolation from now to target.
-    const years = [];
-    const endSites = state.siteCount + p.addedSites;
-    for (let i = 0; i <= p.targetYears; i++) {
-      const t = i / p.targetYears;
-      const rev = base.ttmRevenue + (p.futureRevenue - base.ttmRevenue) * t;
-      const ebitda = base.reportedEbitda + (p.futureEbitda - base.reportedEbitda) * t;
-      const sites = Math.round(state.siteCount + (endSites - state.siteCount) * t);
-      const margin = rev > 0 ? (ebitda / rev) * 100 : 0;
-      const valYear =
-        ebitda * p.futureMultiple * (p.futureBuyerType === 'dso' && sites >= 10 ? 1.1 : 1);
+    const base0 = plan ?? {
+      projected: 0,
+      baseline: result.midpoint,
+      gap: 0,
+      cagrNeeded: 0,
+      ebitdaNeeded: 0,
+      ebitdaMargin: 0,
+      currentEbitdaMargin: 0,
+      revenueGrowthPct: 0,
+      totalSites: state.siteCount + p.addedSites,
+      years: [] as { year: number; rev: number; ebitda: number; sites: number; margin: number; valYear: number }[],
+    };
+    const endSites = base0.totalSites;
+    const years = base0.years.map((y) => {
       let focus: string;
-      if (i === 0) focus = 'Baseline · clean books, tidy Xero, install KPI scorecard';
-      else if (i === 1)
+      if (y.year === 0) focus = 'Baseline · clean books, tidy Xero, install KPI scorecard';
+      else if (y.year === 1)
         focus = 'Lift conversion + chair util · launch loyalty plan · first PM hire';
-      else if (i === 2)
+      else if (y.year === 2)
         focus =
           endSites > state.siteCount
             ? `Acquire site #${state.siteCount + 1} · integrate · stabilise`
             : 'Implant pillar to £200k/month · Practice Freedom Formula';
-      else if (i === p.targetYears)
+      else if (y.year === p.targetYears)
         focus = 'Exit-ready · marketing pack with broker (Dental Elite / Christie & Co) · DD prep';
       else focus = 'Compound: margin discipline · selective acquisitions';
-      years.push({ year: i, rev, ebitda, sites, margin, valYear, focus });
-    }
-
-    return {
-      baseline,
-      projected,
-      gap,
-      cagrNeeded,
-      ebitdaNeeded,
-      ebitdaMargin,
-      currentEbitdaMargin,
-      revenueGrowthPct,
-      totalSites,
-      years,
-    };
-  }, [p, base, state, result]);
+      return { ...y, focus };
+    });
+    return { ...base0, years };
+  }, [plan, p.targetYears, p.addedSites, state.siteCount, result.midpoint]);
 
   const onTarget = calc.projected >= p.targetValue;
   const pctOfTarget = (calc.projected / p.targetValue) * 100;
