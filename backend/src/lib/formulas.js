@@ -198,3 +198,119 @@ export function calculateProgress(input) {
         remainingToTarget,
     };
 }
+
+// ===========================================================================
+// Chair economics (GM Intelligence OS — Chair Efficiency view).
+// Pure functions, integer pence. Group operating standards are documented
+// constants here (FORMULAS.md §11); per-org overrides will live in a
+// chair_config table (plan TODO2). All hour figures are annual.
+// ===========================================================================
+
+// Default group chair operating standards. benchRevHrPence = £300/chair-hour.
+export const CHAIR_CONFIG = {
+    openHrs: 8,          // surgery open hours per day
+    weeksYr: 46,         // working weeks per year
+    daysWk: 5,           // working days per week
+    benchOccPct: 88,     // industry benchmark chair occupancy
+    benchRevHrPence: 30000, // £300 revenue per chair-hour ceiling
+};
+
+/** Working days per year from a config (default 230). */
+export function workDaysYr(config = CHAIR_CONFIG) {
+    return config.weeksYr * config.daysWk;
+}
+
+// True chair economics: capacity vs booked, the cost of empty chairs, and the
+// hours/£ recoverable to benchmark. `annualRevenuePence` is the entity's annual
+// turnover; `utilPct` its current occupancy (0-100).
+export function calculateChairStats(input) {
+    const config = { ...CHAIR_CONFIG, ...(input.config || {}) };
+    const chairs = Math.max(0, input.chairs || 0);
+    const utilPct = Math.max(0, Math.min(100, input.utilPct || 0));
+    const annualRevenuePence = Math.max(0, input.annualRevenuePence || 0);
+
+    const capHrsYr = chairs * config.openHrs * workDaysYr(config);
+    const bookedHrsYr = capHrsYr * utilPct / 100;
+    const emptyHrsYr = capHrsYr - bookedHrsYr;
+    const revPerBookedHrPence = bookedHrsYr > 0 ? pence(annualRevenuePence / bookedHrsYr) : 0;
+    const revPotentialYrPence = pence(capHrsYr * config.benchRevHrPence);
+    const lostPotentialYrPence = pence(emptyHrsYr * config.benchRevHrPence);
+    // Hours to climb from current occupancy to benchmark (never negative).
+    const recoverableToBenchHrsYr = Math.max(0, capHrsYr * (config.benchOccPct - utilPct) / 100);
+    // Recovered revenue valued at the entity's OWN yield/hr, not the ceiling (conservative).
+    const recoverRevYrPence = pence(recoverableToBenchHrsYr * revPerBookedHrPence);
+    const surgeryDaysYr = chairs * workDaysYr(config);
+
+    return {
+        chairs,
+        occupancyPct: pct(utilPct),
+        capHrsYr: Math.round(capHrsYr),
+        bookedHrsYr: Math.round(bookedHrsYr),
+        emptyHrsYr: Math.round(emptyHrsYr),
+        revPerBookedHrPence,
+        revPotentialYrPence,
+        lostPotentialYrPence,
+        recoverableToBenchHrsYr: Math.round(recoverableToBenchHrsYr),
+        recoverRevYrPence,
+        surgeryDaysYr,
+        occVariancePct: pct(utilPct - config.benchOccPct),
+    };
+}
+
+// Operating cost per surgery per day / per hour. `annualOpexPence` is the fixed
+// run cost (staff + premises + admin), EXCLUDING clinician pay, lab, marketing.
+export function calculateOcpspd(input) {
+    const config = { ...CHAIR_CONFIG, ...(input.config || {}) };
+    const surgeryDaysYr = Math.max(0, input.surgeryDaysYr || 0);
+    const annualOpexPence = Math.max(0, input.annualOpexPence || 0);
+    const perDayPence = surgeryDaysYr > 0 ? pence(annualOpexPence / surgeryDaysYr) : 0;
+    const perHrPence = config.openHrs > 0 ? pence(perDayPence / config.openHrs) : 0;
+    return { perDayPence, perHrPence, surgeryDaysYr };
+}
+
+// Profit per chair-hour by treatment — the booking-priority ranking. Each input
+// row: { key, label, minutes, units, revenuePence, profitPence }. Returns rows
+// (descending profit/hr) + group totals. The one resource you can't make more of.
+export function profitPerChairHour(input) {
+    const rows = (input.treatments || [])
+        .filter((t) => (t.units || 0) > 0 && (t.minutes || 0) > 0)
+        .map((t) => {
+            const hrs = (t.minutes * t.units) / 60;
+            return {
+                key: t.key,
+                label: t.label,
+                minutes: t.minutes,
+                units: t.units,
+                chairHrs: Math.round(hrs),
+                revenuePence: pence(t.revenuePence || 0),
+                profitPence: pence(t.profitPence || 0),
+                revPerHrPence: hrs > 0 ? pence((t.revenuePence || 0) / hrs) : 0,
+                profitPerHrPence: hrs > 0 ? pence((t.profitPence || 0) / hrs) : 0,
+            };
+        })
+        .sort((a, b) => b.profitPerHrPence - a.profitPerHrPence);
+    const totalHrs = rows.reduce((s, r) => s + (r.minutes * r.units) / 60, 0);
+    const totalProfit = rows.reduce((s, r) => s + r.profitPence, 0);
+    const totalRevenue = rows.reduce((s, r) => s + r.revenuePence, 0);
+    return {
+        rows,
+        totalChairHrs: Math.round(totalHrs),
+        blendedProfitPerHrPence: totalHrs > 0 ? pence(totalProfit / totalHrs) : 0,
+        blendedRevPerHrPence: totalHrs > 0 ? pence(totalRevenue / totalHrs) : 0,
+    };
+}
+
+// Recovery engine: pick occupancy points to win back, see hours + revenue
+// unlocked (valued at the entity's own yield/hr). upliftPctPoints is additive.
+export function chairRecovery(input) {
+    const capHrsYr = Math.max(0, input.capHrsYr || 0);
+    const upliftPctPoints = Math.max(0, input.upliftPctPoints || 0);
+    const revPerBookedHrPence = Math.max(0, input.revPerBookedHrPence || 0);
+    const currentOccupancyPct = Math.max(0, Math.min(100, input.currentOccupancyPct || 0));
+    const recoveryHrsYr = capHrsYr * upliftPctPoints / 100;
+    return {
+        recoveryHrsYr: Math.round(recoveryHrsYr),
+        revenueUnlockedPence: pence(recoveryHrsYr * revPerBookedHrPence),
+        newOccupancyPct: pct(Math.min(100, currentOccupancyPct + upliftPctPoints)),
+    };
+}

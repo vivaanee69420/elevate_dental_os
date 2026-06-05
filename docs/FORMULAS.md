@@ -316,6 +316,55 @@ KPIs: `avgUtilPct` = mean of non-null cell %s; `peakSlot`/`lowestSlot` = max/min
 Source of truth: `backend/src/lib/chair-utilisation.js` (`aggregateGrid`), unit-tested in
 `backend/test/chair-utilisation.test.mjs`.
 
+## 11. Chair economics (Intelligence OS — Chair Efficiency view)
+
+Source: `backend/src/lib/formulas.js` (`calculateChairStats`, `calculateOcpspd`,
+`profitPerChairHour`, `chairRecovery`); tested in `backend/test/formulas-chair.test.mjs`.
+All money is integer pence; all hour figures are annual.
+
+**Group operating standards** (`CHAIR_CONFIG`, documented constants — per-org
+overrides planned via a `chair_config` table):
+
+    openHrs = 8         (surgery open hours/day)
+    weeksYr = 46,  daysWk = 5   ->  workDaysYr = 230
+    benchOccPct = 88            (industry benchmark occupancy)
+    benchRevHrPence = 30,000    (£300 revenue per chair-hour ceiling)
+
+**calculateChairStats** — `{ chairs, utilPct, annualRevenuePence, config? }`:
+
+    capHrsYr            = chairs * openHrs * workDaysYr
+    bookedHrsYr         = capHrsYr * utilPct/100
+    emptyHrsYr          = capHrsYr - bookedHrsYr
+    revPerBookedHrPence = annualRevenuePence / bookedHrsYr        (entity's own yield)
+    revPotentialYrPence = capHrsYr * benchRevHrPence              (ceiling at £300/hr)
+    lostPotentialYrPence= emptyHrsYr * benchRevHrPence            (cost of empty chairs)
+    recoverableToBenchHrsYr = max(0, capHrsYr * (benchOccPct - utilPct)/100)
+    recoverRevYrPence   = recoverableToBenchHrsYr * revPerBookedHrPence  (conservative: own yield, not ceiling)
+    surgeryDaysYr       = chairs * workDaysYr
+    occVariancePct      = utilPct - benchOccPct
+
+Guards: 0 chairs -> all-zero (no division by zero); util >= benchmark -> recoverable clamps to 0.
+
+**calculateOcpspd** (operating cost per surgery per day/hour) — `{ annualOpexPence, surgeryDaysYr, config? }`.
+`annualOpexPence` = fixed run cost (staff + premises + admin), EXCLUDING clinician pay, lab, marketing:
+
+    perDayPence = annualOpexPence / surgeryDaysYr
+    perHrPence  = perDayPence / openHrs        (0 surgery-days -> 0)
+
+**profitPerChairHour** — booking-priority ranking. Each treatment row
+`{ minutes, units, revenuePence, profitPence }`:
+
+    chairHrs        = minutes * units / 60
+    profitPerHrPence= profitPence / chairHrs
+    (rows sorted by profitPerHrPence desc; zero-unit/zero-minute rows dropped)
+    blendedProfitPerHrPence = Σ profit / Σ chairHrs
+
+**chairRecovery** — `{ capHrsYr, upliftPctPoints, revPerBookedHrPence, currentOccupancyPct }`:
+
+    recoveryHrsYr        = capHrsYr * upliftPctPoints/100
+    revenueUnlockedPence = recoveryHrsYr * revPerBookedHrPence   (own yield, a floor not a ceiling)
+    newOccupancyPct      = min(100, currentOccupancyPct + upliftPctPoints)
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:
