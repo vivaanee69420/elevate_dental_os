@@ -314,3 +314,113 @@ export function chairRecovery(input) {
         newOccupancyPct: pct(Math.min(100, currentOccupancyPct + upliftPctPoints)),
     };
 }
+
+// ===========================================================================
+// Treatment Economics Workbench (GM Intelligence OS — Treatment Profitability).
+// Pure function, integer pence. The full money flow for a flagship treatment:
+// fee -> CBCT/lab/components -> gross -> clinician/marketing/run cost ->
+// practice profit -> add back in-house margins -> net profit/case. Plus the
+// target-price solver, max-ad/CAC, and principal-vs-associate planning.
+// Drives the live workbench: the UI posts a model, this returns the figures
+// (server-authoritative, no client formula duplication — Arch #3).
+// ===========================================================================
+
+// Seed defaults (pence). Owner-editable in the workbench; persisted overrides
+// are a later slice. Documented in FORMULAS.md §12.
+export const DEFAULT_SERVICE_MODELS = {
+    fullarch: {
+        key: 'fullarch', label: 'Full Arch', unit: 'case',
+        pricePence: 1_000_000, cbctPence: 19_900, marketingPct: 10, utilitiesPence: 0,
+        surgeryRunCostPence: 60_000, labBillPence: 350_000, labMarginPct: 30,
+        dentistPct: 40, targetMarginPct: 35, surgeries: 1, casesPerSurgery: 2, implantsPerPatient: 1,
+        components: [
+            { name: 'Implant', qty: 4, retailPence: 21_000, costPence: 10_500 },
+            { name: 'MUA', qty: 4, retailPence: 15_000, costPence: 7_500 },
+            { name: 'Temp cylinder', qty: 4, retailPence: 5_500, costPence: 3_500 },
+            { name: 'Healing cap', qty: 4, retailPence: 3_500, costPence: 2_000 },
+            { name: 'Bridge components', qty: 1, retailPence: 78_000, costPence: 54_000 },
+        ],
+    },
+    implant: {
+        key: 'implant', label: 'Single Implant', unit: 'implant',
+        pricePence: 205_000, cbctPence: 19_900, marketingPct: 10, utilitiesPence: 0,
+        surgeryRunCostPence: 15_000, labBillPence: 0, labMarginPct: 0,
+        dentistPct: 40, targetMarginPct: 35, surgeries: 1, casesPerSurgery: 20, implantsPerPatient: 2,
+        components: [
+            { name: 'Implant fixture', qty: 1, retailPence: 38_000, costPence: 21_000 },
+            { name: 'Crown', qty: 1, retailPence: 20_000, costPence: 18_000 },
+            { name: 'Consumables', qty: 1, retailPence: 12_000, costPence: 12_000 },
+        ],
+    },
+    invisalign: {
+        key: 'invisalign', label: 'Invisalign', unit: 'case',
+        pricePence: 350_000, cbctPence: 0, marketingPct: 10, utilitiesPence: 15_000,
+        surgeryRunCostPence: 15_000, labBillPence: 130_000, labMarginPct: 0,
+        dentistPct: 40, targetMarginPct: 35, surgeries: 1, casesPerSurgery: 8, implantsPerPatient: 1,
+        components: [
+            { name: 'Attachments / composite', qty: 1, retailPence: 12_000, costPence: 4_000 },
+            { name: 'IPR / bonding kit', qty: 1, retailPence: 6_000, costPence: 2_000 },
+            { name: 'Vivera retainers', qty: 1, retailPence: 20_000, costPence: 9_000 },
+        ],
+    },
+};
+
+export function computeServiceEconomics(model) {
+    const price = Math.max(0, model.pricePence || 0);
+    const cbct = Math.max(0, model.cbctPence || 0);
+    const utilities = Math.max(0, model.utilitiesPence || 0);
+    const surgeryRunCost = Math.max(0, model.surgeryRunCostPence || 0);
+    const labBill = Math.max(0, model.labBillPence || 0);
+    const components = Array.isArray(model.components) ? model.components : [];
+
+    const marketing = pence(price * (model.marketingPct || 0) / 100);
+    const labProfit = pence(labBill * (model.labMarginPct || 0) / 100);
+    const compRetail = components.reduce((s, c) => s + (c.retailPence || 0) * (c.qty || 0), 0);
+    const compCost = components.reduce((s, c) => s + (c.costPence || 0) * (c.qty || 0), 0);
+    const compProfit = compRetail - compCost;
+    const directTreatmentCost = compCost + labBill;
+
+    const grossBeforeDentist = Math.max(price - cbct - directTreatmentCost, 0);
+    const dentistGross = pence((model.dentistPct || 0) / 100 * grossBeforeDentist);
+    const practiceProfit = grossBeforeDentist - dentistGross - marketing - utilities - surgeryRunCost;
+    const groupProfit = practiceProfit + compProfit + labProfit + cbct;
+    const marginPct = price > 0 ? pct(groupProfit / price * 100) : 0;
+
+    // Target-price solver: price that yields targetMarginPct at fixed costs.
+    const contributionSlope = price > 0 ? (grossBeforeDentist - dentistGross) / price : 0;
+    const fixedBase = -(cbct + directTreatmentCost + utilities + surgeryRunCost) + compProfit + labProfit + cbct;
+    const targetMarginFrac = (model.targetMarginPct || 0) / 100;
+    const targetPricePence = contributionSlope > targetMarginFrac
+        ? pence(-fixedBase / (contributionSlope - targetMarginFrac)) : 0;
+    // Most ad spend per case that still holds a 20% acquisition cost.
+    const maxAdAt20Pence = pence(groupProfit + marketing - 0.2 * price);
+
+    const monthlyCases = Math.max(0, (model.surgeries || 0) * (model.casesPerSurgery || 0));
+    const ipp = Math.max(model.implantsPerPatient || 1, 1);
+    const patients = model.unit === 'implant' ? Math.round(monthlyCases / ipp) : monthlyCases;
+    const cacPence = pence(marketing * (model.unit === 'implant' ? ipp : 1));
+    const monthlyRevenuePence = monthlyCases * price;
+    const monthlyProfitPence = monthlyCases * groupProfit;
+    const annualProfitPence = monthlyProfitPence * 12;
+
+    return {
+        key: model.key, label: model.label, unit: model.unit,
+        pricePence: price, cbctPence: cbct, marketingPence: marketing, utilitiesPence: utilities,
+        surgeryRunCostPence: surgeryRunCost, labBillPence: labBill, labProfitPence: labProfit,
+        compRetailPence: compRetail, compCostPence: compCost, compProfitPence: compProfit,
+        directTreatmentCostPence: directTreatmentCost,
+        grossBeforeDentistPence: grossBeforeDentist, dentistGrossPence: dentistGross,
+        practiceProfitPence: practiceProfit, groupProfitPence: groupProfit, marginPct,
+        targetPricePence, maxAdAt20Pence, cacPence,
+        monthlyCases, patients,
+        monthlyRevenuePence, monthlyProfitPence, annualProfitPence,
+        // Profit planning — who completes the work.
+        associateProfitPence: groupProfit,
+        principalProfitPence: groupProfit + dentistGross,
+        principalUpliftPence: dentistGross,
+        components: components.map((c) => ({
+            name: c.name, qty: c.qty, retailPence: c.retailPence, costPence: c.costPence,
+            profitPence: ((c.retailPence || 0) - (c.costPence || 0)) * (c.qty || 0),
+        })),
+    };
+}

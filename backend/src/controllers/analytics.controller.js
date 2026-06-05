@@ -53,4 +53,12 @@ export const analyticsController = {
         const recoverPctPoints = Math.max(0, Math.min(40, Number(req.query.recover) || 10));
         res.json(await analytics_service_1.analyticsService.chairAnalytics(req.user.organisation_id, { scope: q.scope, recoverPctPoints }));
     },
+    // Pure compute (audit-exempt via /compute/ path) — see Arch #3.
+    treatmentModels(req, res) {
+        res.json(analytics_service_1.analyticsService.treatmentModels());
+    },
+    treatmentEconomics(req, res) {
+        const model = analytics_model_1.treatmentModelSchema.parse(req.body);
+        res.json(analytics_service_1.analyticsService.treatmentEconomics(model));
+    },
 };

@@ -365,6 +365,48 @@ Guards: 0 chairs -> all-zero (no division by zero); util >= benchmark -> recover
     revenueUnlockedPence = recoveryHrsYr * revPerBookedHrPence   (own yield, a floor not a ceiling)
     newOccupancyPct      = min(100, currentOccupancyPct + upliftPctPoints)
 
+## 12. Treatment Economics Workbench (Intelligence OS — Treatment Profitability)
+
+Source: `backend/src/lib/formulas.js` (`computeServiceEconomics`, `DEFAULT_SERVICE_MODELS`);
+tested in `backend/test/formulas-workbench.test.mjs`. Pure function, integer pence —
+the live workbench posts a model and gets these figures back (server-authoritative,
+no client formula duplication). Model fields are all pence except the `*Pct` ratios.
+
+    marketing            = price * marketingPct/100
+    labProfit            = labBill * labMarginPct/100
+    compRetail/compCost  = Σ retail*qty / Σ cost*qty ;  compProfit = compRetail - compCost
+    directTreatmentCost  = compCost + labBill
+    grossBeforeDentist   = max(price - cbct - directTreatmentCost, 0)
+    dentistGross         = dentistPct/100 * grossBeforeDentist
+    practiceProfit       = grossBeforeDentist - dentistGross - marketing - utilities - surgeryRunCost
+    groupProfit          = practiceProfit + compProfit + labProfit + cbct      (net profit / case)
+    marginPct            = groupProfit / price * 100
+
+Target-price solver (price that yields targetMarginPct on the practice contribution):
+
+    contributionSlope    = (grossBeforeDentist - dentistGross) / price
+    fixedBase            = -(cbct + directTreatmentCost + utilities + surgeryRunCost) + compProfit + labProfit + cbct
+    targetPrice          = contributionSlope > targetMarginFrac ? -fixedBase/(contributionSlope - targetMarginFrac) : 0
+
+  NB targetPrice = 0 when the contribution slope is below the target margin (unreachable by
+  price alone — the in-house add-backs are what lift the GROUP margin above the slope).
+
+    maxAdAt20            = groupProfit + marketing - 0.2*price   (most ad/case holding 20% CAC)
+    monthlyCases         = surgeries * casesPerSurgery
+    patients             = unit=='implant' ? monthlyCases/implantsPerPatient : monthlyCases
+    cac                  = marketing * (unit=='implant' ? implantsPerPatient : 1)
+    monthly/annualProfit = monthlyCases * groupProfit (×12)
+
+Profit planning — who completes the work:
+
+    associateProfit  = groupProfit                  (clinician paid their % out of gross)
+    principalProfit  = groupProfit + dentistGross    (group retains the clinician margin)
+    principalUplift  = dentistGross
+
+`DEFAULT_SERVICE_MODELS` (fullarch/implant/invisalign) are documented seed defaults;
+owner edits live client-side and post to the compute endpoint. Persisted overrides are a
+later slice.
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:

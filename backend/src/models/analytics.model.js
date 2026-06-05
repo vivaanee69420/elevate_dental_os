@@ -25,6 +25,33 @@ export const scopeQuerySchema = zod_1.z.object({
     pk: zod_1.z.string().trim().regex(/^\d{4}-\d{2}(-\d{2})?$/).optional(),
 });
 
+// Treatment Economics Workbench model (POST body). All money in integer pence.
+// Bounded so a hostile body can't overflow the solver; coerced since the client
+// may send numeric strings. Pure compute — no persistence (Arch #3).
+export const treatmentModelSchema = zod_1.z.object({
+    key: zod_1.z.string().max(40).optional(),
+    label: zod_1.z.string().max(80).optional(),
+    unit: zod_1.z.enum(['case', 'implant']).default('case'),
+    pricePence: zod_1.z.coerce.number().int().min(0).max(100_000_000),
+    cbctPence: zod_1.z.coerce.number().int().min(0).max(100_000_000).default(0),
+    marketingPct: zod_1.z.coerce.number().min(0).max(100).default(0),
+    utilitiesPence: zod_1.z.coerce.number().int().min(0).max(100_000_000).default(0),
+    surgeryRunCostPence: zod_1.z.coerce.number().int().min(0).max(100_000_000).default(0),
+    labBillPence: zod_1.z.coerce.number().int().min(0).max(100_000_000).default(0),
+    labMarginPct: zod_1.z.coerce.number().min(0).max(100).default(0),
+    dentistPct: zod_1.z.coerce.number().min(0).max(100).default(0),
+    targetMarginPct: zod_1.z.coerce.number().min(0).max(100).default(0),
+    surgeries: zod_1.z.coerce.number().int().min(0).max(1000).default(0),
+    casesPerSurgery: zod_1.z.coerce.number().int().min(0).max(10000).default(0),
+    implantsPerPatient: zod_1.z.coerce.number().int().min(1).max(20).default(1),
+    components: zod_1.z.array(zod_1.z.object({
+        name: zod_1.z.string().max(80).default(''),
+        qty: zod_1.z.coerce.number().int().min(0).max(1000).default(0),
+        retailPence: zod_1.z.coerce.number().int().min(0).max(100_000_000).default(0),
+        costPence: zod_1.z.coerce.number().int().min(0).max(100_000_000).default(0),
+    })).max(50).default([]),
+});
+
 export const seriesQuerySchema = zod_1.z.object({
     months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
     practice_id: zod_1.z.string().uuid().optional(),

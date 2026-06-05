@@ -14,6 +14,10 @@ export function audit(req, res, next) {
             return; // don't log failures
         if (req.originalUrl.includes('/webhooks/'))
             return; // webhooks audit themselves
+        // Pure-compute endpoints persist nothing — exempt so debounced slider
+        // recompute (Arch #3) doesn't spam audit_log. Mark with /compute/.
+        if (req.originalUrl.includes('/analytics/compute/'))
+            return;
         const action = req.method === 'POST' ? 'create' :
             req.method === 'DELETE' ? 'delete' :
                 'update';

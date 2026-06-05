@@ -282,6 +282,8 @@ Response:
 ### `GET /api/analytics/valuation` — 3-model valuation
 ### `GET /api/analytics/kpis` — 23-metric scorecard with traffic lights
 ### `GET /api/analytics/business-hub?days=90` — group + per-practice rollup (Business Hub): revenue (settled payments), appointments/no-show (appointments), conversion (leads), group margin/target from business_health baseline. finance.view.
+### `GET /api/analytics/compute/treatment-models` — seed workbench models (fullarch/implant/invisalign), pence. finance.view. Pure read.
+### `POST /api/analytics/compute/treatment-economics` — Treatment Economics Workbench (Intelligence OS). Body = a treatment model (`treatmentModelSchema`, all money pence). Returns the full money flow from `formulas.computeServiceEconomics`: gross/clinician/practice/group profit, marginPct, target-price solver, max-ad/CAC, monthly+annual, principal-vs-associate. **Pure compute — no persistence, audit-exempt** (`/compute/` path), so debounced slider recompute (Arch #3) doesn't spam audit_log. finance.view.
 ### `GET /api/analytics/chair?scope=all&recover=10` — Chair Efficiency (Intelligence OS). Per-practice + group chair economics from `formulas.calculateChairStats`/`chairRecovery`: capacity vs booked hours, cost-of-empty-chairs, recoverable-to-benchmark, recovery projection. `scope` = all|practices|academy|lab|<practiceUUID> (resolveScope; academy/lab → `{applicable:false}`). Revenue = trailing-12mo settled receipts per practice (real); `utilPct` = `practices.assumed_util_pct` owner assumption (default 80, `utilAssumed:true` when unset). OCPSPD + profit-per-chair-hour deferred (`null`, pending opex/treatment-minute sourcing). finance.view.
 
 **Real-data read path (exact, or zero — never estimated):**
