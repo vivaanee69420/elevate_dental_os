@@ -21,6 +21,7 @@ export const NAV: NavSection[] = [
   { label: 'Overview', items: [
     { id: 'dashboard', label: 'Command Centre' },
     { id: 'business-hub', label: 'Business Hub', isNew: true },
+    { id: 'deep-dive', label: 'Practice Deep Dive', isNew: true },
     { id: 'task-manager', label: 'Task Manager' },
     { id: 'ai-insights', label: 'AI Insights' },
     { id: 'p4g-ai', label: 'Mastermind AI' },

@@ -33,7 +33,24 @@ Branch: `feat/intelligence-os-phase0`
 | T6 3-buyer Valuation + Sale Planner → ValuationScreen | [ ] | driver-based; EBITDA reconciled; versioned |
 | T7 Chair OCPSPD + empty-chair + Recovery + profit/chair-hr | [x] | FULL VERTICAL DONE: formulas (+15 tests, FORMULAS.md §11) → migration 000036 (applied hosted) → chairAnalytics service (+2 tests) → GET /api/analytics/chair (finance.view) → ChairEfficiencyScreen UI + ScopePeriodBar wired into /chair (tsc+lint clean). FIRST end-to-end slice — proves the formulas→endpoint→UI pattern. Remaining: OCPSPD + profit-per-chair-hr (deferred, need opex/treatment-minute sourcing) |
 | Group Overview rollup + Decision Lens | [x] | GroupOverviewScreen on /business-hub — REAL business-hub data, scope-aware (practice narrows; academy/lab note), KPI strip + per-practice table + client-computed Decision Lens (AlertRow). tsc+lint clean. Academy/Lab entity revenue rollup = later (needs entity_revenue_lines wiring) |
-**Exit:** Tier-1 new UI, scope/period reactive. — `[~]` 4 views built fresh on the new tokens/primitives/ScopePeriodBar: Chair (✅ vertical), Workbench (✅ vertical incl. compute endpoint), Group Overview (✅ real business-hub), Lead Funnel (✅ real business-hub). Commits e393809→edd5763. Remaining views split: backend-gated (Valuation T6, Treatment-Mix RPC, OCPSPD) vs existing-screens-needing-reskin (P&L/Cashflow/Marketing/Clinicians) vs new-UI-on-existing-endpoint (AI Analyst Ask, Practice Deep Dive).
+**Exit:** Tier-1 new UI, scope/period reactive. — `[~]` 5 views built fresh on the new tokens/primitives/ScopePeriodBar:
+- Chair Efficiency (/chair) ✅ full vertical incl. endpoint
+- Treatment Workbench (/profit) ✅ full vertical incl. pure compute endpoint
+- Group Overview (/business-hub) ✅ real business-hub data
+- Lead Funnel (/leads) ✅ real business-hub data
+- Practice Deep Dive (/deep-dive, NEW route + nav) ✅ real (business-hub + chair endpoint), scope-driven
+
+Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (d91514f).
+
+### Bug fixes
+- 404 on chair + workbench endpoints: api() paths missing `/api/` prefix (proxy forwards `http://backend/${path}`). Fixed chair-analytics-api + workbench-api to `/api/analytics/...` (business-hub-api was already correct).
+
+### Pending Intelligence OS views (7 of 12)
+- AI Analyst (Ask box) — needs new `POST /api/analytics/ai-ask` → lib/claude.js (findings UI already exists)
+- Treatment Mix heat matrix — needs practice×treatment RPC
+- Sale Planner / driver Valuation — T6 backend (extend calculateValuation + EBITDA reconcile)
+- Chair OCPSPD + profit-per-chair-hr panels — opex/treatment-minute sourcing
+- Marketing & ROI, P&L & Margin, Cashflow & Runway, Clinicians — screens exist (reskinned); need new layout + ScopePeriodBar + scope wiring
 
 ## Phase 2 — Tier-2 (new UI + extended compute)
 | Task | Status | Notes / commit |
