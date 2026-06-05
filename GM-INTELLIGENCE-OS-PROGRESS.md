@@ -38,7 +38,7 @@ Branch: `feat/intelligence-os-phase0`
 - Treatment Workbench (/profit) ✅ full vertical incl. pure compute endpoint
 - Group Overview (/business-hub) ✅ real business-hub data
 - Lead Funnel (/leads) ✅ real business-hub data
-- Practice Deep Dive (/deep-dive, NEW route + nav) ✅ real (business-hub + chair + treatments + revenue-series), scope-driven. Enriched: 8-stat hero, 8 chair-economics KPIs, treatment-mix bar chart + 12mo turnover area chart (recharts, green/gold). All existing endpoints, no new backend.
+- Practice Deep Dive (/deep-dive, NEW route + nav) ✅ real (business-hub + chair + treatments + revenue-series + marketing/roi), scope-driven. Enriched: 8-stat hero, 8 chair-economics KPIs, treatment-mix bar chart + 12mo turnover area chart + Channel ROI (KPIs + per-provider spend bar chart) — all recharts, green/gold. Channel ROI added practice_id filter to /growth/marketing/roi (no new endpoint).
 
 Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (d91514f).
 
@@ -102,6 +102,9 @@ Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (
 | D3 Heat-matrix non-colour cue (WCAG 1.4.1) | [ ] | Phase 2 |
 | D4 Responsive (stack KPIs) + a11y (glyph aria-hidden, contrast) | [ ] | Phase 2 |
 | D5 Reskin existing ~50 screens to new tokens | [ ] | DEFERRED sweep (P3) |
+
+## Known caveats
+- **Channel ROI spend is account-level, not per-practice.** `ad_metrics.practice_id` is NULL for Google/Meta (one ad account per group). So Deep Dive's per-practice Channel ROI shows real data only when ad rows carry a practice_id; otherwise "not connected" even if the group has ads. Live now: `ad_metrics` = 0 rows (no ads connected) → honest "not connected". Future fix: per-practice channel view should lead with **leads-by-channel** (leads.source/utm, practice-scoped, real) and show paid spend/ROAS as group-level context. Tracked.
 
 ## Risks / blockers
 - **kind read-path audit (T2)** — must catch every legacy practice rollup or Academy/Lab corrupt group tables / div-by-zero. Phase-0 exit gate.
