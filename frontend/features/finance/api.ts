@@ -112,6 +112,105 @@ export async function getCashflow(weeks = 13, practiceId?: string | null, range?
   };
 }
 
+// --- Cashflow & Runway outlook (forward projection + bills + decision) -------
+export interface OutlookMonth {
+  month: string;
+  in: number;
+  out: number;
+  net: number;
+  opening: number;
+  closing: number;
+  costsAvailable: boolean;
+  projected: boolean;
+}
+export interface OutlookBill {
+  item: string;
+  type: string;
+  window: string;
+  amount: number;
+  estimated: boolean;
+}
+export interface CashflowOutlook {
+  basis: string;
+  bankConnected: boolean;
+  anchorBank: number;
+  costsAvailable: boolean;
+  costsBasis: 'actuals' | 'baseline' | 'none';
+  balancesReconstructed: boolean;
+  months: OutlookMonth[];
+  currentIndex: number;
+  lowestProjected: number;
+  runway: CashRunway;
+  bills: OutlookBill[];
+  billsBasis: string;
+  billsNote: string;
+  decision: {
+    buffer: number;
+    freeCash: number;
+    sweepable: number;
+    lowClearsBuffer: boolean;
+    action: 'build_buffer' | 'sweep' | 'hold';
+  };
+}
+
+export async function getCashflowOutlook(
+  months = 4,
+  forward = 2,
+  practiceId?: string | null,
+): Promise<CashflowOutlook> {
+  const pp = practiceId ? `&practice_id=${practiceId}` : '';
+  const r = await api(`/api/analytics/cashflow-outlook?months=${months}&forward=${forward}${pp}`);
+  const d = r.decision ?? {};
+  return {
+    basis: r.basis ?? 'revenue-only',
+    bankConnected: !!r.bankConnected,
+    anchorBank: p(r.anchorBankPence),
+    costsAvailable: !!r.costsAvailable,
+    costsBasis: r.costsBasis ?? 'none',
+    balancesReconstructed: !!r.balancesReconstructed,
+    months: (r.months ?? []).map((m: any) => ({
+      month: m.month,
+      in: p(m.inPence),
+      out: p(m.outPence),
+      net: p(m.netPence),
+      opening: p(m.openingPence ?? 0),
+      closing: p(m.closingPence ?? 0),
+      costsAvailable: !!m.costsAvailable,
+      projected: !!m.projected,
+    })),
+    currentIndex: r.currentIndex ?? -1,
+    lowestProjected: p(r.lowestProjectedPence),
+    runway: {
+      freeCash: p(r.runway?.freeCashPence),
+      monthlyReceipts: p(r.runway?.monthlyReceiptsPence),
+      monthlyCosts: p(r.runway?.monthlyCostsPence),
+      monthlyNet: p(r.runway?.monthlyNetPence),
+      monthlyBurn: p(r.runway?.monthlyBurnPence),
+      runwayMonths: r.runway?.runwayMonths ?? null,
+      cashPositive: !!r.runway?.cashPositive,
+      status: r.runway?.status ?? 'healthy',
+      costsAvailable: !!r.runway?.costsAvailable,
+      costsBasis: r.runway?.costsBasis ?? 'none',
+    },
+    bills: (r.bills ?? []).map((b: any) => ({
+      item: b.item,
+      type: b.type,
+      window: b.window,
+      amount: p(b.amountPence),
+      estimated: !!b.estimated,
+    })),
+    billsBasis: r.billsBasis ?? 'none',
+    billsNote: r.billsNote ?? '',
+    decision: {
+      buffer: p(d.bufferPence),
+      freeCash: p(d.freeCashPence),
+      sweepable: p(d.sweepablePence),
+      lowClearsBuffer: !!d.lowClearsBuffer,
+      action: d.action ?? 'hold',
+    },
+  };
+}
+
 export interface FinancialRatio {
   key: string;
   value: number;

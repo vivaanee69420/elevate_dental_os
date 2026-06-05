@@ -16,6 +16,10 @@ export const analyticsController = {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months, practiceId: q.practice_id, from: q.from, to: q.to }));
     },
+    async cashflowOutlook(req, res) {
+        const q = analytics_model_1.outlookQuerySchema.parse(req.query);
+        res.json(await analytics_service_1.analyticsService.cashflowOutlook(req.user.organisation_id, { months: q.months, forward: q.forward, practiceId: q.practice_id }));
+    },
     async cashflow(req, res) {
         const q = analytics_model_1.weeksQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks, practiceId: q.practice_id, from: q.from, to: q.to }));

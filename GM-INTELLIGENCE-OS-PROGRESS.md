@@ -4,7 +4,7 @@ Plan: `GM-INTELLIGENCE-OS-PLAN.md` (eng-reviewed 2026-06-05). Update after every
 
 Status key: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-06-05 (Cashflow & Runway vertical — calculateRunway on GET /cashflow)
+Last updated: 2026-06-05 (Cashflow & Runway — enriched: outlook projection + bills + decision)
 
 ---
 
@@ -58,7 +58,7 @@ Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (
 | Treatment Mix heat matrix + insight cards | [ ] | |
 | Clinicians unified (production, OCPSPD, ledger, UDA-by-assoc) | [ ] | |
 | CoA → P&L mapping + Profit Benchmarking (45/18/15/12/10) | [ ] | constants documented in FORMULAS.md |
-| Cashflow: bills-to-plan + free-cash + runway | [x] | FULL VERTICAL DONE: `calculateRunway` (pence, +5 tests, FORMULAS.md §14) → `runway` block added to GET /api/analytics/cashflow (free cash = real bank; monthly burn = P&L cost base — monthly_financials actuals, baseline fallback; receipts annualised from window) → CashflowScreen Runway panel (free cash / monthly net / runway months, status-coloured, honest "no cost source" + "no payables source" states). **Bills-to-plan: NO data source** (cashflow is receipts-only, `paymentsPence:0`) → omitted honestly, `billsToPlanPence:null`. Suite 399 green; tsc+lint clean |
+| Cashflow: bills-to-plan + free-cash + runway | [x] | FULL VERTICAL DONE + ENRICHED to the prototype. (1) `calculateRunway` (pence, FORMULAS.md §14) on GET /cashflow runway block. (2) `cashflowOutlook` + GET /api/analytics/cashflow-outlook (FORMULAS.md §15): month-by-month cash IN (real settled receipts) vs OUT (P&L cost base, flagged), forward months PROJECTED from run-rate, closing-balance trail ANCHORED to today's real bank balance (current month closes there; earlier reconstructed; later projected), `lowestProjected`. (3) `estimateCorporationTax` (UK FY24/25 rates: 19/marginal/25) → bills-to-plan; VAT NOT estimated (dental largely exempt); no payables feed → honest gap note. (4) `freeCashDecision` (2-week buffer; sweepable only when lowest projected clears buffer). CashflowScreen rebuilt to match prototype: headline cards (cash position / net this month / runway "Self-funding") + Cash-in-vs-out + Will-I-run-out table + Bills-to-plan + Decision panel; kept real weekly receipts below. +11 tests (runway/corp-tax/decision). Skipped the generic marketing/ROAS/new-patient KPI strip (Overview/Business-Hub data, not cashflow). Suite 405 green; tsc+lint clean |
 | T9 Day = cash-collected-by-day + composite index | [ ] | labelled 'Cash collected', NOT production |
 | AI Analyst findings + Ask box (reuse generate/p4g-ai) | [ ] | no new endpoint |
 | T11 Port remaining views (new UI) | [ ] | British copy, no emojis |

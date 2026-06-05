@@ -90,6 +90,13 @@ export const valuationExitPlanSchema = zod_1.z.object({
     }),
 });
 
+// cashflow-outlook ?months=4&forward=2 — trailing real months + projected months.
+export const outlookQuerySchema = zod_1.z.object({
+    months: zod_1.z.coerce.number().int().min(1).max(24).default(4),
+    forward: zod_1.z.coerce.number().int().min(0).max(12).default(2),
+    practice_id: zod_1.z.string().uuid().optional(),
+});
+
 export const seriesQuerySchema = zod_1.z.object({
     months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
     practice_id: zod_1.z.string().uuid().optional(),

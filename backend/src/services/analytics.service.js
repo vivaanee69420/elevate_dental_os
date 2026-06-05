@@ -560,6 +560,133 @@ export const analyticsService = {
             runway,
         };
     },
+    // Cashflow & Runway OUTLOOK (Intelligence OS) — month-by-month cash in vs out,
+    // a forward-projected closing-balance trail ("will I run out?"), tax bills to
+    // plan for, and a free-cash decision. Honesty rules:
+    //   • IN  = exact settled receipts per month (real).
+    //   • OUT = P&L cost base per month (monthly_financials actuals) — an accrual
+    //           proxy for cash out, flagged; 0 + costsAvailable:false when no source.
+    //   • Forward months are PROJECTED from a recent run-rate (flagged projected).
+    //   • Closing balances are anchored to TODAY's real bank balance: the current
+    //     month closes at the real bank balance, earlier months are reconstructed
+    //     from it (balancesReconstructed:true), later months projected forward.
+    //   • Bills are tax ESTIMATES from profit; no payables/scheduled-bill source.
+    async cashflowOutlook(orgId, { months = 4, forward = 2, now = () => new Date(), practiceId = null } = {}) {
+        const ref = now();
+        const [series, bank] = await Promise.all([
+            this.financeSeries(orgId, { months, now, practiceId }),
+            analytics_repository_1.analyticsRepository.bankSummary(orgId),
+        ]);
+        const anchorBank = bank.totalPence || 0;
+        const real = series.months.map((m) => {
+            const out = (m.associatePay || 0) + (m.staffCosts || 0) + (m.labMaterials || 0) + (m.opex || 0);
+            return { month: m.month, inPence: m.revenue || 0, outPence: out, costsAvailable: !!m.costsAvailable, projected: false };
+        });
+
+        // Run-rate for projection: average of recent months (IN always real;
+        // OUT only from months that have a real cost source).
+        const recentIn = real.slice(-3);
+        const inRunRate = recentIn.length ? Math.round(recentIn.reduce((s, m) => s + m.inPence, 0) / recentIn.length) : 0;
+        const costMonths = real.filter((m) => m.costsAvailable);
+        let outRunRate = costMonths.length
+            ? Math.round(costMonths.slice(-3).reduce((s, m) => s + m.outPence, 0) / Math.min(3, costMonths.length))
+            : 0;
+        // No per-month costs at all → fall back to the org baseline cost base.
+        let costsBasis = costMonths.length ? 'actuals' : 'none';
+        if (!costMonths.length && !practiceId) {
+            const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
+            const b = health?.baseline;
+            if (b?.revenue) {
+                const revenuePence = b.revenue * 100;
+                const totalCostPct = (b.cost_associates || 0) + (b.cost_lab || 0) + (b.cost_materials || 0)
+                    + (b.cost_staff || 0) + (b.cost_property || 0) + (b.cost_marketing || 0) + (b.cost_other || 0);
+                if (totalCostPct > 0) {
+                    outRunRate = Math.round((revenuePence * totalCostPct / 100) / 12);
+                    costsBasis = 'baseline';
+                }
+            }
+        }
+        const costsAvailable = costsBasis !== 'none';
+
+        // Forward projected months (next `forward` calendar months).
+        const pad = (n) => String(n).padStart(2, '0');
+        const lastKey = real.length ? real[real.length - 1].month : `${ref.getFullYear()}-${pad(ref.getMonth() + 1)}`;
+        const [ly, lm] = lastKey.split('-').map(Number);
+        const projected = [];
+        for (let i = 1; i <= forward; i++) {
+            const d = new Date(ly, lm - 1 + i, 1);
+            projected.push({
+                month: `${d.getFullYear()}-${pad(d.getMonth() + 1)}`,
+                inPence: inRunRate,
+                outPence: outRunRate,
+                costsAvailable,
+                projected: true,
+            });
+        }
+
+        const all = [...real, ...projected].map((m) => ({ ...m, netPence: m.inPence - m.outPence }));
+        const currentIdx = real.length - 1; // last real month closes at the real bank balance
+        // Anchor closing[currentIdx] = anchorBank; reconstruct earlier, project later.
+        if (currentIdx >= 0) {
+            all[currentIdx].closingPence = anchorBank;
+            all[currentIdx].openingPence = anchorBank - all[currentIdx].netPence;
+            for (let i = currentIdx - 1; i >= 0; i--) {
+                all[i].closingPence = all[i + 1].openingPence;
+                all[i].openingPence = all[i].closingPence - all[i].netPence;
+            }
+            for (let i = currentIdx + 1; i < all.length; i++) {
+                all[i].openingPence = all[i - 1].closingPence;
+                all[i].closingPence = all[i].openingPence + all[i].netPence;
+            }
+        }
+        const lowestProjectedPence = all.length ? Math.min(...all.map((m) => m.closingPence ?? anchorBank)) : anchorBank;
+
+        // Annual profit for the tax estimate: real (sum of months with costs,
+        // annualised) when available, else baseline-derived; else 0 (no estimate).
+        let annualProfitPence = 0;
+        let profitBasis = 'none';
+        if (costMonths.length) {
+            const avgNet = costMonths.slice(-3).reduce((s, m) => s + (m.inPence - m.outPence), 0) / Math.min(3, costMonths.length);
+            annualProfitPence = Math.round(avgNet * 12);
+            profitBasis = 'actuals';
+        } else if (!practiceId && outRunRate > 0) {
+            annualProfitPence = Math.round((inRunRate - outRunRate) * 12);
+            profitBasis = 'baseline';
+        }
+        const corpTaxPence = annualProfitPence > 0 ? (0, formulas_1.estimateCorporationTax)(annualProfitPence) : 0;
+        const bills = corpTaxPence > 0
+            ? [{ item: 'Corporation tax', type: 'tax', window: 'annual estimate', amountPence: corpTaxPence, estimated: true }]
+            : [];
+
+        const decision = (0, formulas_1.freeCashDecision)({
+            cashOnHandPence: anchorBank,
+            monthlyCostsPence: outRunRate,
+            lowestProjectedPence,
+            bufferWeeks: 2,
+        });
+        const runway = (0, formulas_1.calculateRunway)({
+            cashOnHandPence: anchorBank,
+            monthlyReceiptsPence: inRunRate,
+            monthlyCostsPence: outRunRate,
+        });
+
+        return {
+            basis: series.basis,
+            bankConnected: bank.count > 0,
+            anchorBankPence: anchorBank,
+            costsAvailable,
+            costsBasis,
+            balancesReconstructed: currentIdx >= 1, // historical closings derived from today's balance
+            months: all,
+            currentIndex: currentIdx,
+            lowestProjectedPence,
+            runway: { ...runway, costsAvailable, costsBasis },
+            bills,
+            billsBasis: profitBasis, // how the tax estimate was derived
+            billsNote: 'Committed bills (VAT, PAYE, supplier invoices) need an accounting/payables feed — not connected. Dental treatment income is largely VAT-exempt.',
+            decision,
+        };
+    },
     // /financial — Key Ratios + Balance Sheet, EXACT data only (no baseline,
     // no assumption-driven estimates). Revenue = exact settled-payment TTM (RPC)
     // or monthly_financials actual. Costs/margins are REAL only when there is a

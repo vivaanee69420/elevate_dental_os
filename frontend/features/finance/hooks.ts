@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getFinanceSeries,
   getCashflow,
+  getCashflowOutlook,
   getFinancial,
   getValuationBase,
   getPaymentSourceBreakdown,
@@ -25,6 +26,13 @@ export function useCashflow(weeks = 13, practiceId: string | null = null, range?
   return useQuery({
     queryKey: ['cashflow', weeks, practiceId, range?.from ?? null, range?.to ?? null],
     queryFn: () => getCashflow(weeks, practiceId, range),
+  });
+}
+
+export function useCashflowOutlook(months = 4, forward = 2, practiceId: string | null = null) {
+  return useQuery({
+    queryKey: ['cashflow-outlook', months, forward, practiceId],
+    queryFn: () => getCashflowOutlook(months, forward, practiceId),
   });
 }
 
