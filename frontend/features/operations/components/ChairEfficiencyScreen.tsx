@@ -63,6 +63,13 @@ export function ChairEfficiencyScreen() {
 
       {data && data.applicable && data.group && (
         <>
+          {(data.practices ?? []).some((p) => p.utilAssumed) && (
+            <AlertRow
+              tone="warn"
+              title="Occupancy is a working assumption, not live data"
+              body={`Chair count and revenue are real (settled payments). Occupancy defaults to ${data.practices?.find((p) => p.utilAssumed)?.occupancyPct ?? 80}% until live chair data is connected — so "cost of empty chairs" and "recoverable" below are modelled off that assumption. Set a per-practice occupancy, or connect chair-utilisation/appointment data, to make these live.`}
+            />
+          )}
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
             <KpiTile
               label="True chair occupancy"
