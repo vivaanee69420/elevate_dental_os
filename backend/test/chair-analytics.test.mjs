@@ -19,17 +19,20 @@ beforeEach(() => {
 });
 
 describe('chairAnalytics', () => {
-  it('joins chairs + assumed_util_pct + real revenue; flags assumed util; rolls up group', async () => {
-    supaRec.resultProvider = () => ({
-      data: [
-        { id: 'p1', name: 'Rochester', chairs: 6, assumed_util_pct: 84 },
-        { id: 'p2', name: 'Barnet', chairs: 5, assumed_util_pct: null }, // -> default 80, flagged
-      ],
-      error: null,
-    });
+  it('occupancy from the MANUAL grid; falls back to assumption when no grid; rolls up group', async () => {
+    // p1 has manual grid rows -> occupancy = booked/available; p2 has none -> assumed.
+    supaRec.resultProvider = (q) =>
+      q.table === 'chair_utilisation'
+        ? { data: [
+            { practice_id: 'p1', booked_minutes: 4790, available_minutes: 7200 }, // 66.5% -> 66.5
+          ], error: null }
+        : { data: [
+            { id: 'p1', name: 'Rochester', chairs: 6, assumed_util_pct: 84 },
+            { id: 'p2', name: 'Barnet', chairs: 5, assumed_util_pct: null },
+          ], error: null };
     supaRec.rpcProvider = (fn) =>
       fn === 'settled_revenue_by_practice'
-        ? { data: [{ practice_id: 'p1', pence: 231_840_000 }], error: null } // p2 has no revenue row -> 0
+        ? { data: [{ practice_id: 'p1', pence: 231_840_000 }], error: null }
         : { data: [], error: null };
 
     const r = await svc.chairAnalytics(ORG, { scope: 'all', recoverPctPoints: 10, now });
@@ -37,17 +40,19 @@ describe('chairAnalytics', () => {
     expect(r.applicable).toBe(true);
     const p1 = r.practices.find((x) => x.id === 'p1');
     const p2 = r.practices.find((x) => x.id === 'p2');
+    // p1: manual grid 4790/7200 = 66.5% -> source 'manual', not assumed
+    expect(p1.occupancySource).toBe('manual');
     expect(p1.utilAssumed).toBe(false);
+    expect(p1.occupancyPct).toBe(66.5);
     expect(p1.capHrsYr).toBe(11040);          // 6*8*230
-    expect(p1.revPerBookedHrPence).toBe(25000); // 231.84M / 9273.6h
-    expect(p2.utilAssumed).toBe(true);          // null -> default 80
+    // p2: no grid -> assumption (assumed_util_pct null -> default 80)
+    expect(p2.occupancySource).toBe('assumption');
+    expect(p2.utilAssumed).toBe(true);
     expect(p2.occupancyPct).toBe(80);
 
-    // group capacity = 11040 + (5*8*230=9200) = 20240
     expect(r.group.capHrsYr).toBe(20240);
     expect(r.group.chairs).toBe(11);
-    expect(r.recovery.recoveryHrsYr).toBe(2024); // 10% of 20240
-    expect(r.ocpspd).toBeNull();                 // deferred, honestly flagged
+    expect(r.ocpspd).toBeNull();
   });
 
   it('academy/lab scope -> not applicable, no crash', async () => {

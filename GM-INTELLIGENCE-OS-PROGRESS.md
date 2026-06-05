@@ -103,6 +103,12 @@ Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (
 | D4 Responsive (stack KPIs) + a11y (glyph aria-hidden, contrast) | [ ] | Phase 2 |
 | D5 Reskin existing ~50 screens to new tokens | [ ] | DEFERRED sweep (P3) |
 
+## Chair occupancy = MANUAL grid (product decision)
+- Chair Efficiency / Deep Dive occupancy now reads from the **manual chair-utilisation grid** (`chair_utilisation`, owner-maintained — booked ÷ available minutes per practice), NOT appointments and NOT a flat assumption. The chair-utilisation tab is intentionally manual and unchanged. No grid data for a practice → falls back to assumed 80% (flagged `occupancySource:'assumption'`). Live now: all practices ~67% from the grid.
+- `occupancySource: 'manual' | 'assumption'` returned per practice; UI labels accordingly (info banner "from chair-utilisation grid" vs warn "fill the grid").
+- Migration 000037 (`chair_booked_minutes_by_practice`, completed-appt minutes) is retained as a UTILITY only (future actual-vs-manual comparison), NOT the occupancy source.
+- Still not real: `practices.chairs` defaults to 1 (capacity/cost-of-empty £ depend on it). Separate from occupancy; flag/fix when real chair counts exist.
+
 ## Known caveats
 - **Channel ROI spend is account-level, not per-practice.** `ad_metrics.practice_id` is NULL for Google/Meta (one ad account per group). So Deep Dive's per-practice Channel ROI shows real data only when ad rows carry a practice_id; otherwise "not connected" even if the group has ads. Live now: `ad_metrics` = 0 rows (no ads connected) → honest "not connected". Future fix: per-practice channel view should lead with **leads-by-channel** (leads.source/utm, practice-scoped, real) and show paid spend/ROAS as group-level context. Tracked.
 

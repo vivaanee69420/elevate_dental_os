@@ -136,14 +136,16 @@ export function PracticeDeepDiveScreen() {
             <div>
               <div className="flex items-baseline justify-between mb-2">
                 <h3 className="display text-lg">Chair economics</h3>
-                {chairRow.utilAssumed && (
-                  <span className="text-[11px] text-warning font-semibold">occupancy assumed ({chairRow.occupancyPct}%) — not live</span>
-                )}
+                <span className={`text-[11px] font-semibold ${chairRow.occupancySource === 'manual' ? 'text-ink-soft' : 'text-warning'}`}>
+                  {chairRow.occupancySource === 'manual'
+                    ? `occupancy ${chairRow.occupancyPct}% · chair-utilisation grid`
+                    : `occupancy assumed (${chairRow.occupancyPct}%) — fill the chair-utilisation grid`}
+                </span>
               </div>
               <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
                 <KpiTile label="Cost of empty chairs" value={formatPence(chairRow.lostPotentialYrPence)} delta={`${chairRow.emptyHrsYr.toLocaleString('en-GB')} empty hrs/yr`} deltaTone="down" />
                 <KpiTile label="Recoverable to benchmark" value={formatPence(chairRow.recoverRevYrPence)} delta={`${chairRow.recoverableToBenchHrsYr.toLocaleString('en-GB')} hrs at own yield`} deltaTone="up" />
-                <KpiTile label="Revenue / booked chair-hr" value={formatPence(chairRow.revPerBookedHrPence)} delta={chairRow.utilAssumed ? 'occupancy assumed' : 'from data'} />
+                <KpiTile label="Revenue / booked chair-hr" value={formatPence(chairRow.revPerBookedHrPence)} delta={chairRow.occupancySource === 'manual' ? 'occupancy from grid' : 'occupancy assumed'} />
                 <KpiTile label="Occupancy vs benchmark" value={`${chairRow.occVariancePct > 0 ? '+' : ''}${chairRow.occVariancePct}pts`} delta="vs 88% target" deltaTone={chairRow.occVariancePct >= 0 ? 'up' : 'down'} />
                 <KpiTile label="Capacity" value={`${chairRow.capHrsYr.toLocaleString('en-GB')}h`} delta="chair-hours / yr" />
                 <KpiTile label="Booked" value={`${chairRow.bookedHrsYr.toLocaleString('en-GB')}h`} delta="billing chair-hours / yr" />
