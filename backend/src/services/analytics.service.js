@@ -501,14 +501,63 @@ export const analyticsService = {
         const STALE_MS = 7 * DAY;
         const bankStale = !bank.lastSyncedAt ||
             (ref.getTime() - new Date(bank.lastSyncedAt).getTime()) > STALE_MS;
+        const totalReceiptsPence = out.reduce((s, w) => s + w.receiptsPence, 0);
+
+        // Runway: free cash now (real bank balance) vs monthly burn. Receipts are
+        // the window's settled receipts annualised to a monthly rate; costs come
+        // from the P&L (monthly_financials actuals preferred, else the org
+        // baseline). There is NO scheduled-bills source, so bills-to-plan is
+        // omitted and the burn is the P&L cost base — flagged when no cost source.
+        // monthly rate = receipts/week × (52/12) weeks per month.
+        const monthlyReceiptsPence = weeks > 0
+            ? Math.round((totalReceiptsPence * 52) / (weeks * 12))
+            : 0;
+        const actuals = await this._actualsBundle(orgId, practiceId);
+        let monthlyCostsPence = 0;
+        let costsAvailable = false;
+        let costsBasis = 'none';
+        if (actuals.hasAny) {
+            const pl = (0, formulas_1.calculatePL)(plInputFromBuckets(actuals.annual));
+            if (pl.totalCosts > 0 && actuals.periodsCovered > 0) {
+                monthlyCostsPence = Math.round(pl.totalCosts / actuals.periodsCovered);
+                costsAvailable = true;
+                costsBasis = 'actuals';
+            }
+        }
+        if (!costsAvailable && !practiceId) {
+            const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
+            const b = health?.baseline;
+            if (b?.revenue) {
+                const revenuePence = b.revenue * 100;
+                const totalCostPct = (b.cost_associates || 0) + (b.cost_lab || 0) + (b.cost_materials || 0)
+                    + (b.cost_staff || 0) + (b.cost_property || 0) + (b.cost_marketing || 0) + (b.cost_other || 0);
+                if (totalCostPct > 0) {
+                    monthlyCostsPence = Math.round((revenuePence * totalCostPct / 100) / 12);
+                    costsAvailable = true;
+                    costsBasis = 'baseline';
+                }
+            }
+        }
+        const runway = {
+            ...(0, formulas_1.calculateRunway)({
+                cashOnHandPence: openingStart,
+                monthlyReceiptsPence,
+                monthlyCostsPence,
+            }),
+            costsAvailable,
+            costsBasis,
+            billsToPlanPence: null, // no payables / scheduled-bill source
+        };
+
         return {
             basis: 'actuals',
             bankConnected: bank.count > 0,
             bankStale,
             lastSyncedAt: bank.lastSyncedAt,
             openingBalancePence: openingStart,
-            totalReceiptsPence: out.reduce((s, w) => s + w.receiptsPence, 0),
+            totalReceiptsPence,
             weeks: out,
+            runway,
         };
     },
     // /financial — Key Ratios + Balance Sheet, EXACT data only (no baseline,

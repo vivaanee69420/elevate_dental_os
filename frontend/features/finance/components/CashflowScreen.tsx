@@ -22,6 +22,11 @@ import PracticeTabs from '@/features/practices/PracticeTabs';
 import DateRangeFilter, { type DateRange } from './DateRangeFilter';
 
 const BRAND = 'var(--brand)';
+const RUNWAY_COLOUR: Record<string, string> = {
+  healthy: 'var(--success)',
+  warning: 'var(--warning)',
+  critical: 'var(--danger)',
+};
 
 function Kpi({ label, value, delta }: { label: string; value: string; delta?: string }) {
   return (
@@ -114,6 +119,83 @@ export default function CashflowScreen() {
           value={isLoading ? '…' : poundsCompact(closing)}
         />
       </div>
+
+      {data?.runway && (
+        <div
+          className="card-padded mb-6"
+          style={{ borderLeft: `4px solid ${RUNWAY_COLOUR[data.runway.status]}` }}
+        >
+          <div className="mb-3">
+            <h2 className="display text-lg font-semibold">Runway</h2>
+            <p className="text-sm text-ink-muted">
+              Free cash now vs monthly burn from your P&amp;L cost base — not a forecast.
+            </p>
+          </div>
+
+          {!data.runway.costsAvailable && (
+            <div
+              className="mb-4 text-sm text-ink-muted"
+              style={{ borderLeft: '4px solid var(--warning)', paddingLeft: 12 }}
+            >
+              <strong className="text-ink">No cost source — runway not shown.</strong> Connect
+              Xero or enter monthly financials so we can measure your burn. Free cash below is
+              still your real bank balance.
+            </div>
+          )}
+
+          <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+            <Kpi
+              label="Free cash"
+              value={isLoading ? '…' : poundsCompact(data.runway.freeCash)}
+              delta="Real bank balance"
+            />
+            <Kpi
+              label="Monthly receipts"
+              value={isLoading ? '…' : poundsCompact(data.runway.monthlyReceipts)}
+              delta="13-week rate"
+            />
+            <div className="card-padded">
+              <div className="text-xs text-ink-muted uppercase">
+                {data.runway.cashPositive ? 'Monthly surplus' : 'Monthly burn'}
+              </div>
+              <div
+                className="display text-2xl font-bold mt-1"
+                style={{ color: data.runway.monthlyNet >= 0 ? 'var(--success)' : 'var(--danger)' }}
+              >
+                {data.runway.monthlyNet >= 0 ? '+' : '−'}
+                {poundsCompact(Math.abs(data.runway.monthlyNet))}
+              </div>
+              <div className="text-xs text-ink-muted mt-1">receipts − P&amp;L costs</div>
+            </div>
+            <div className="card-padded">
+              <div className="text-xs text-ink-muted uppercase">Runway</div>
+              <div
+                className="display text-2xl font-bold mt-1"
+                style={{ color: RUNWAY_COLOUR[data.runway.status] }}
+              >
+                {!data.runway.costsAvailable
+                  ? '—'
+                  : data.runway.cashPositive
+                    ? 'Cash-positive'
+                    : `${data.runway.runwayMonths} mo`}
+              </div>
+              <div className="text-xs text-ink-muted mt-1">
+                {!data.runway.costsAvailable
+                  ? 'needs a cost source'
+                  : data.runway.cashPositive
+                    ? 'cash-flow positive — no finite runway'
+                    : 'months of cash at current burn'}
+              </div>
+            </div>
+          </div>
+
+          <p className="text-ink-muted" style={{ fontSize: 11, marginTop: 12 }}>
+            Bills-to-plan not shown — no scheduled-payables source yet, so burn is your P&amp;L
+            cost base
+            {data.runway.costsAvailable ? ` (${data.runway.costsBasis})` : ''}.
+          </p>
+        </div>
+      )}
 
       <div className="card-padded mb-4">
         <h2 className="display text-lg font-semibold mb-5">

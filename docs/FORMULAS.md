@@ -462,6 +462,32 @@ formula — it is UI text computed client-side from these numbers.
     revenueGrowth = futureRevenue / ttmRevenue - 1
     years[i]      = linear interp now→exit of revenue, EBITDA, sites; margin + implied value per year
 
+## 14. Cash Runway (Intelligence OS — Cashflow & Runway)
+
+Source: `backend/src/lib/formulas.js` (`calculateRunway`); tested in
+`backend/test/formulas-runway.test.mjs`. Pure function, integer pence. Surfaced on
+`GET /api/analytics/cashflow` as a `runway` block alongside the real backward
+13-week receipts view (§4).
+
+**Inputs are real, not projected.** `cashOnHand` = the current bank balance
+(open-banking summary). `monthlyReceipts` = the window's settled receipts annualised
+to a monthly rate (`totalReceipts × 52 / (weeks × 12)`). `monthlyCosts` = the P&L cost
+base per month — `monthly_financials` actuals (`totalCosts / periodsCovered`) when
+present, else the org Business Health baseline cost-% applied to baseline revenue ÷ 12.
+`costsAvailable=false` (`costsBasis:'none'`) when there is no cost source — the UI then
+says so rather than implying a runway.
+
+    monthlyNet   = monthlyReceipts - monthlyCosts
+    cashPositive = monthlyNet >= 0
+    monthlyBurn  = cashPositive ? 0 : -monthlyNet
+    runwayMonths = cashPositive ? null : freeCash / monthlyBurn      (null = no finite runway)
+    status       = runwayMonths < 3 -> critical ; < 6 -> warning ; else healthy
+
+**No bills-to-plan.** There is no payables / scheduled-bill source, so `billsToPlanPence`
+is `null` and the burn is the P&L cost base — never fabricated future bills. (When a
+payables feed exists, bills-to-plan becomes a real line and runway can net committed
+outflows.)
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:

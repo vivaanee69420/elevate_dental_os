@@ -4,7 +4,7 @@ Plan: `GM-INTELLIGENCE-OS-PLAN.md` (eng-reviewed 2026-06-05). Update after every
 
 Status key: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-06-05 (T6 Value & Growth / Valuation vertical — server-authoritative)
+Last updated: 2026-06-05 (Cashflow & Runway vertical — calculateRunway on GET /cashflow)
 
 ---
 
@@ -58,7 +58,7 @@ Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (
 | Treatment Mix heat matrix + insight cards | [ ] | |
 | Clinicians unified (production, OCPSPD, ledger, UDA-by-assoc) | [ ] | |
 | CoA → P&L mapping + Profit Benchmarking (45/18/15/12/10) | [ ] | constants documented in FORMULAS.md |
-| Cashflow: bills-to-plan + free-cash + runway | [ ] | |
+| Cashflow: bills-to-plan + free-cash + runway | [x] | FULL VERTICAL DONE: `calculateRunway` (pence, +5 tests, FORMULAS.md §14) → `runway` block added to GET /api/analytics/cashflow (free cash = real bank; monthly burn = P&L cost base — monthly_financials actuals, baseline fallback; receipts annualised from window) → CashflowScreen Runway panel (free cash / monthly net / runway months, status-coloured, honest "no cost source" + "no payables source" states). **Bills-to-plan: NO data source** (cashflow is receipts-only, `paymentsPence:0`) → omitted honestly, `billsToPlanPence:null`. Suite 399 green; tsc+lint clean |
 | T9 Day = cash-collected-by-day + composite index | [ ] | labelled 'Cash collected', NOT production |
 | AI Analyst findings + Ask box (reuse generate/p4g-ai) | [ ] | no new endpoint |
 | T11 Port remaining views (new UI) | [ ] | British copy, no emojis |

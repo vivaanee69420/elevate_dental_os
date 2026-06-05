@@ -73,6 +73,37 @@ export function calculateAssociatePay(input) {
     return { grossPence, labDeductionPence, prevBalancePence, netPence };
 }
 
+// Cash runway (Intelligence OS — Cashflow & Runway view). Pure; integer pence.
+// freeCash = cash on hand now (real bank balance). monthlyNet = receipts − costs;
+// when negative the group is burning, and runway = months of cash left at that
+// burn. Cash-positive ⇒ runwayMonths = null (no finite runway — not a bug).
+// NB "bills-to-plan" is intentionally absent: there is no payables/scheduled-bill
+// source, so the burn is derived from the P&L cost base, not future bills.
+export function calculateRunway({ cashOnHandPence = 0, monthlyReceiptsPence = 0, monthlyCostsPence = 0 } = {}) {
+    const freeCashPence = Math.round(cashOnHandPence);
+    const receipts = Math.round(monthlyReceiptsPence);
+    const costs = Math.round(monthlyCostsPence);
+    const monthlyNetPence = receipts - costs;
+    const cashPositive = monthlyNetPence >= 0;
+    const monthlyBurnPence = cashPositive ? 0 : -monthlyNetPence;
+    let runwayMonths = null;
+    let status = 'healthy';
+    if (!cashPositive && monthlyBurnPence > 0) {
+        runwayMonths = pct(freeCashPence / monthlyBurnPence, 1);
+        status = runwayMonths < 3 ? 'critical' : runwayMonths < 6 ? 'warning' : 'healthy';
+    }
+    return {
+        freeCashPence,
+        monthlyReceiptsPence: receipts,
+        monthlyCostsPence: costs,
+        monthlyNetPence,
+        monthlyBurnPence,
+        runwayMonths,
+        cashPositive,
+        status,
+    };
+}
+
 export function calculateCashFlow(weeks) {
     return weeks.map(w => {
         const closing = w.openingBalancePence + w.receiptsPence - w.paymentsPence;

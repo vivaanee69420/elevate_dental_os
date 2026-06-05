@@ -53,6 +53,22 @@ export interface CashflowWeek {
   closing: number;
 }
 
+// Cash runway derived from the real bank balance + P&L cost base (FORMULAS §14).
+// All money in pounds (converted from the pence the backend returns). runwayMonths
+// is null when cash-positive (no finite runway — not a missing value).
+export interface CashRunway {
+  freeCash: number;
+  monthlyReceipts: number;
+  monthlyCosts: number;
+  monthlyNet: number;
+  monthlyBurn: number;
+  runwayMonths: number | null;
+  cashPositive: boolean;
+  status: 'healthy' | 'warning' | 'critical';
+  costsAvailable: boolean;
+  costsBasis: 'actuals' | 'baseline' | 'none';
+}
+
 // Real backward 13-week cash view: each week = settled payments received that
 // week (no projection). baselineWeeklyRunRate is a comparison target only.
 export async function getCashflow(weeks = 13, practiceId?: string | null, range?: DateRange | null): Promise<{
@@ -62,9 +78,11 @@ export async function getCashflow(weeks = 13, practiceId?: string | null, range?
   openingBalance: number;
   totalReceipts: number;
   weeks: CashflowWeek[];
+  runway: CashRunway | null;
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
   const r = await api(`/api/analytics/cashflow?weeks=${weeks}${pp}${rangeQS(range)}`);
+  const rw = r.runway;
   return {
     bankConnected: !!r.bankConnected,
     bankStale: !!r.bankStale,
@@ -77,6 +95,20 @@ export async function getCashflow(weeks = 13, practiceId?: string | null, range?
       receipts: p(w.receiptsPence),
       closing: p(w.closingBalancePence),
     })),
+    runway: rw
+      ? {
+          freeCash: p(rw.freeCashPence),
+          monthlyReceipts: p(rw.monthlyReceiptsPence),
+          monthlyCosts: p(rw.monthlyCostsPence),
+          monthlyNet: p(rw.monthlyNetPence),
+          monthlyBurn: p(rw.monthlyBurnPence),
+          runwayMonths: rw.runwayMonths ?? null,
+          cashPositive: !!rw.cashPositive,
+          status: rw.status ?? 'healthy',
+          costsAvailable: !!rw.costsAvailable,
+          costsBasis: rw.costsBasis ?? 'none',
+        }
+      : null,
   };
 }
 
