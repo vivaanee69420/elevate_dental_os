@@ -14,6 +14,8 @@ import * as snapshot_utils_1 from "../lib/snapshot-utils.js";
 import * as dentally_sync_1 from "../lib/integrations/dentally-sync.js";
 import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
 import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
+import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
+import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 // --------------------------------------------------------------------------
 // Business-health snapshot — daily 02:00 UTC, decides per-org by cadence.
 // Phase 2: replaces stub baseline-copy with formula-driven calc against real
@@ -210,4 +212,28 @@ node_cron_1.default.schedule('15 2 * * *', async () => {
         console.error('[worker] Xero sync failed', err);
     }
 });
+// --------------------------------------------------------------------------
+// QuickBooks P&L sync — daily 02:30, pull the month's Profit & Loss into
+// monthly_financials for orgs with an active quickbooks integration.
+// --------------------------------------------------------------------------
+node_cron_1.default.schedule('30 2 * * *', async () => {
+    try {
+        const results = await quickbooks_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] QuickBooks sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] QuickBooks sync failed', err);
+    }
+});
+// Google Ads spend sync — daily 02:45, pull the last 30 days of per-campaign
+// spend/performance into ad_metrics for orgs with an active google_ads
+// integration. Each org's rows are keyed by organisation_id (no cross-tenant).
+node_cron_1.default.schedule('45 2 * * *', async () => {
+    try {
+        const results = await google_ads_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] Google Ads sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] Google Ads sync failed', err);
+    }
+});
+
 console.log('[workers] Started — cron schedules active');

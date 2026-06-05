@@ -8,6 +8,8 @@ import { getProvider, listProviders } from "../lib/integrations/provider-interfa
 import * as errors_1 from "../middleware/errors.js";
 import * as dentally_sync_1 from "../lib/integrations/dentally-sync.js";
 import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
+import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
+import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
 import { signWebhookToken } from "../lib/webhook-token.js";
 import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
@@ -21,6 +23,8 @@ const WEBHOOK_PROVIDERS = new Set(['dentally']);
 const ON_DEMAND_SYNCERS = {
     dentally: dentally_sync_1.syncOneOrg,
     xero: xero_sync_1.syncOneOrg,
+    quickbooks: quickbooks_sync_1.syncOneOrg,
+    google_ads: google_ads_sync_1.syncOneOrg,
     gohighlevel: gohighlevel_sync_1.syncOneOrg,
 };
 
