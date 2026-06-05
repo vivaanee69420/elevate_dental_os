@@ -96,6 +96,16 @@ export const analyticsService = {
             note: 'OCPSPD and profit-per-chair-hour pending per-practice opex/treatment-minute sourcing.',
         };
     },
+    // Treatment Economics Workbench (Arch #3 pure compute). The UI posts a model
+    // (debounced); this returns the full money flow. No DB, no persistence.
+    treatmentEconomics(model) {
+        return (0, formulas_1.computeServiceEconomics)(model);
+    },
+    // Seed default workbench models (owner-editable client-side; persisted
+    // overrides are a later slice).
+    treatmentModels() {
+        return formulas_1.DEFAULT_SERVICE_MODELS;
+    },
     // Pull monthly_financials actuals and resolve Xero-overrides-manual
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
