@@ -27,6 +27,75 @@ export const analyticsService = {
         // Otherwise a specific practice UUID (already shape-validated by scopeQuerySchema).
         return { mode: 'entity', practiceIds: [scope], kinds: ['practice'], isAggregate: false };
     },
+    // Chair Efficiency view (GM Intelligence OS). Per-practice chair economics:
+    // occupancy, cost-of-empty-chairs, recoverable-to-benchmark, plus a group
+    // recovery projection. Single fetch + in-memory join (no N+1, Perf #1).
+    // Revenue is REAL (trailing-12mo settled receipts per practice). utilPct is
+    // an owner-editable assumption (practices.assumed_util_pct; defaults to
+    // DEFAULT_UTIL_PCT when unset, flagged utilAssumed=true).
+    // OCPSPD + profit-per-chair-hour are deferred (need per-practice opex +
+    // treatment-minute sourcing) — formulas exist + tested, wiring pending.
+    async chairAnalytics(orgId, { scope = 'all', recoverPctPoints = 10, now = () => new Date() } = {}) {
+        const DEFAULT_UTIL_PCT = 80;
+        const resolved = await this.resolveScope(orgId, scope);
+        if (resolved.mode === 'academy' || resolved.mode === 'lab') {
+            return { applicable: false, scope: resolved.mode,
+                message: 'Chair analytics measure clinical surgery capacity — switch scope to the group or a practice.' };
+        }
+        let practices = await analytics_repository_1.analyticsRepository.practicesFull(orgId);
+        if (resolved.mode === 'entity')
+            practices = practices.filter((p) => resolved.practiceIds.includes(p.id));
+
+        // Trailing 12 months of settled receipts = annual revenue per practice.
+        const since = new Date(now());
+        since.setUTCFullYear(since.getUTCFullYear() - 1);
+        const revRows = await analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since.toISOString());
+        const revByPractice = new Map(revRows.map((r) => [r.practice_id, Number(r.pence) || 0]));
+
+        const rows = practices.map((p) => {
+            const utilAssumed = p.assumed_util_pct == null;
+            const utilPct = utilAssumed ? DEFAULT_UTIL_PCT : p.assumed_util_pct;
+            const annualRevenuePence = revByPractice.get(p.id) || 0;
+            const stats = (0, formulas_1.calculateChairStats)({ chairs: p.chairs || 0, utilPct, annualRevenuePence });
+            return { id: p.id, name: p.name, utilAssumed, annualRevenuePence, ...stats };
+        });
+
+        // Group rollup — sum hours/£, blended occupancy + yield/hr.
+        const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
+        const capHrsYr = sum((r) => r.capHrsYr);
+        const bookedHrsYr = sum((r) => r.bookedHrsYr);
+        const annualRevenuePence = sum((r) => r.annualRevenuePence);
+        const groupOccupancyPct = capHrsYr > 0 ? Math.round((bookedHrsYr / capHrsYr) * 1000) / 10 : 0;
+        const blendedRevPerBookedHrPence = bookedHrsYr > 0 ? Math.round(annualRevenuePence / bookedHrsYr) : 0;
+        const group = {
+            chairs: sum((r) => r.chairs),
+            capHrsYr,
+            bookedHrsYr,
+            emptyHrsYr: sum((r) => r.emptyHrsYr),
+            occupancyPct: groupOccupancyPct,
+            lostPotentialYrPence: sum((r) => r.lostPotentialYrPence),
+            recoverRevYrPence: sum((r) => r.recoverRevYrPence),
+            revPotentialYrPence: sum((r) => r.revPotentialYrPence),
+            blendedRevPerBookedHrPence,
+        };
+        const recovery = (0, formulas_1.chairRecovery)({
+            capHrsYr, upliftPctPoints: recoverPctPoints,
+            revPerBookedHrPence: blendedRevPerBookedHrPence, currentOccupancyPct: groupOccupancyPct,
+        });
+
+        return {
+            applicable: true,
+            scope,
+            config: formulas_1.CHAIR_CONFIG,
+            practices: rows,
+            group,
+            recovery,
+            // Deferred: need per-practice opex + treatment-minute sourcing.
+            ocpspd: null,
+            profitPerChairHour: null,
+            note: 'OCPSPD and profit-per-chair-hour pending per-practice opex/treatment-minute sourcing.',
+        };
+    },
     // Pull monthly_financials actuals and resolve Xero-overrides-manual
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
