@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { Card, Chip } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice } from '../business-hub-api';
+import { useMarketingRoi } from '@/features/growth/hooks';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 
 function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'good' | 'warn' | 'bad' }) {
@@ -38,6 +39,7 @@ function rateChip(value: number, kind: 'noShow' | 'conversion') {
 
 export default function BusinessHubScreen() {
   const { data, isLoading, error } = useBusinessHub(90);
+  const { data: roi } = useMarketingRoi();
   const [practiceId, setPracticeId] = useState<string | null>(null);
 
   if (isLoading) {
@@ -110,6 +112,22 @@ export default function BusinessHubScreen() {
           tone={view.conversionRate >= 50 ? 'good' : view.conversionRate >= 30 ? 'warn' : 'bad'}
         />
       </div>
+
+      {/* Marketing ROI strip — paid ads (Google Ads now; Meta next), last 30
+          days. Account-level (not per-practice), so it stays on group view. */}
+      {!selected && roi?.connected && (
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
+          <Kpi label="Ad spend (30d)" value={formatPence(roi.spend_pence)} sub={`${formatNumber(roi.clicks)} clicks`} />
+          <Kpi
+            label="ROAS"
+            value={roi.roas ? `${roi.roas.toFixed(2)}x` : '—'}
+            sub="settled revenue / spend"
+            tone={roi.roas >= 4 ? 'good' : roi.roas >= 1 ? 'warn' : 'bad'}
+          />
+          <Kpi label="Cost / new patient" value={roi.cac_pence ? formatPence(roi.cac_pence) : '—'} sub={`${formatNumber(roi.new_patients)} new patients`} />
+          <Kpi label="Cost / lead" value={roi.cpl_pence ? formatPence(roi.cpl_pence) : '—'} sub={`${formatNumber(roi.leads_from_ads)} ad leads`} />
+        </div>
+      )}
 
       {/* Per-practice comparison */}
       <Card>

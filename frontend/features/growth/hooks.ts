@@ -5,6 +5,8 @@ import {
   getPracticePatients,
   getBookingSummary,
   getRecentBookings,
+  getAdSpend,
+  getMarketingRoi,
   type DateRange,
 } from './api';
 
@@ -44,6 +46,24 @@ export function useRecentBookings(
   return useQuery({
     queryKey: ['growth', 'recent-bookings', practiceId, range?.from ?? null, range?.to ?? null, page, perPage],
     queryFn: () => getRecentBookings(practiceId, range, page, perPage),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Live ad spend (Google Ads / Meta Ads). Account-level — no practice filter. */
+export function useAdSpend(range?: DateRange | null) {
+  return useQuery({
+    queryKey: ['growth', 'ad-spend', range?.from ?? null, range?.to ?? null],
+    queryFn: () => getAdSpend(range),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Marketing ROI cross-cut (spend x leads x revenue x new patients). */
+export function useMarketingRoi(range?: DateRange | null) {
+  return useQuery({
+    queryKey: ['growth', 'marketing-roi', range?.from ?? null, range?.to ?? null],
+    queryFn: () => getMarketingRoi(range),
     placeholderData: keepPreviousData,
   });
 }

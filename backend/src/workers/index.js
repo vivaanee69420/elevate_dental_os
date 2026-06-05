@@ -58,7 +58,11 @@ node_cron_1.default.schedule('0 2 * * *', async () => {
                 pl,
                 revenue: Math.round((pl?.revenue || 0) / 100),
                 profit: Math.round((pl?.netProfit || 0) / 100),
-                ltv: formulas_1.calculateLTV?.(payments.data ?? [], appointments.data ?? []) ?? null,
+                // LTV from the saved baseline (active_patients / new_per_month /
+                // revenue / profit). The old call passed payment+appointment
+                // ARRAYS to calculateLTV, which expects a {averageAnnualSpendPence,
+                // averageRetentionYears, netMarginPct} object → produced NaN.
+                ltv: formulas_1.ltvFromBaseline?.(bh.baseline) ?? null,
                 marketingROI: formulas_1.calculateMarketingROI?.(leads.data ?? [], payments.data ?? []) ?? null,
                 window: { from: from.toISOString(), to: today.toISOString() },
                 source_breakdown: snapshot_utils_1.countBySource(payments.data, leads.data, appointments.data),

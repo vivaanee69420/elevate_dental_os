@@ -115,3 +115,94 @@ export function getRecentBookings(
     `/api/growth/recent-bookings${base}${sep}page=${page}&per_page=${perPage}`,
   );
 }
+
+// ---- Live ad spend (Google Ads now; Meta Ads next) -------------------------
+// Account-level, not practice-attributed, so no practice_id param. Money pence.
+
+/** Aggregated spend + performance, with derived rate fields. */
+export interface AdAggregate {
+  spend_pence: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  conversions: number;
+  ctr: number;             // %
+  cpc_pence: number;
+  cpl_pence: number;
+  cpa_pence: number;
+  conversion_rate: number; // %
+}
+
+export interface AdChannel extends AdAggregate {
+  provider: string;        // 'google_ads' | 'meta_ads'
+}
+
+export interface AdCampaign extends AdAggregate {
+  provider: string;
+  campaign_id: string | null;
+  campaign_name: string | null;
+}
+
+export interface AdDailyPoint {
+  date: string;
+  spend_pence: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  conversions: number;
+}
+
+export interface AdSpendResponse {
+  connected: boolean;
+  window: { from: string; to: string };
+  totals: AdAggregate;
+  channels: AdChannel[];
+  campaigns: AdCampaign[];
+  daily: AdDailyPoint[];
+}
+
+export function getAdSpend(range?: DateRange | null) {
+  // Reuse filterQS for the from/to window only (practice_id intentionally omitted).
+  return api<AdSpendResponse>(`/api/growth/marketing/ad-spend${filterQS(null, range)}`);
+}
+
+// ---- Marketing ROI (spend x leads x revenue x new patients) ----------------
+// Cross-cut powering Dashboard tile / Business Hub ROAS / Valuation CAC /
+// Leads CPL. Account-level; all money pence. roas/cac/cpl are business-level.
+
+export interface AdProviderRoi {
+  provider: string;
+  spend_pence: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  leads: number;
+  cpl_pence: number;
+  cpa_pence: number;
+  cpc_pence: number;
+}
+
+export interface MarketingRoiResponse {
+  connected: boolean;
+  window: { from: string; to: string };
+  spend_pence: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  leads_from_ads: number;
+  total_leads: number;
+  new_patients: number;
+  revenue_pence: number;
+  roas: number;            // revenue / spend
+  cac_pence: number;       // spend / new patients
+  ltv_pence: number;       // patient LTV from baseline (0 if no baseline)
+  ltv_cac_ratio: number;   // ltv / cac (0 when either is unavailable)
+  cpl_pence: number;       // spend / ad-attributed leads
+  cpa_pence: number;       // spend / conversions
+  cpc_pence: number;
+  by_provider: AdProviderRoi[];
+}
+
+export function getMarketingRoi(range?: DateRange | null) {
+  return api<MarketingRoiResponse>(`/api/growth/marketing/roi${filterQS(null, range)}`);
+}
