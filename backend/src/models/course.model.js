@@ -13,6 +13,7 @@ const TRACKS = ['foundations', 'business-health', 'marketing', 'implants', 'busi
 const LEVELS = ['all', 'beginner', 'intermediate', 'advanced'];
 const ACCESS = ['free', 'mentorship'];
 const FILE_CATEGORIES = ['presentations', 'reading', 'assignments', 'clinical', 'misc'];
+const RESOURCE_CATEGORIES = ['marking-rubrics', 'additional-resources'];
 
 export const courseCreateSchema = zod_1.z.object({
     title: zod_1.z.string().trim().min(1).max(200),
@@ -70,6 +71,7 @@ export const resourceCreateSchema = zod_1.z.object({
     size_bytes: zod_1.z.number().int().min(0).optional(),
     access: zod_1.z.enum(ACCESS).default('free'),
     position: zod_1.z.number().int().min(0).default(0),
+    category: zod_1.z.enum(RESOURCE_CATEGORIES).default('additional-resources'),
 });
 
 export const lessonFileCreateSchema = zod_1.z.object({

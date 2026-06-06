@@ -204,6 +204,29 @@ describe('addLessonFile', () => {
   });
 });
 
+describe('addResource category', () => {
+  it('persists a course-level category and returns it', async () => {
+    let insertVals;
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'courses') return { data: { id: COURSE, status: 'draft' }, error: null };
+      if (q.table === 'course_resources' && q.insertVals) {
+        insertVals = q.insertVals;
+        return { data: { id: 'r1', course_id: COURSE, ...q.insertVals }, error: null };
+      }
+      return { data: null, error: null };
+    };
+    const out = await svc.addResource(COURSE, {
+      name: 'Rubric.pdf',
+      file_key: 'courses/rubric.pdf',
+      access: 'free',
+      position: 0,
+      category: 'marking-rubrics',
+    });
+    expect(insertVals.category).toBe('marking-rubrics');
+    expect(out.category).toBe('marking-rubrics');
+  });
+});
+
 describe('getCourse (nested modules)', () => {
   it('nests lessons under their module and files under their lesson', async () => {
     supaRec.resultProvider = (q) => {

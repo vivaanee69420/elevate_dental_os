@@ -17,7 +17,7 @@ const MODULE_COLS =
 const LESSON_FILE_COLS =
     'id, lesson_id, category, name, file_key, file_type, size_bytes, position, access, created_at';
 const RESOURCE_COLS =
-    'id, course_id, name, file_key, file_type, size_bytes, access, position, created_at';
+    'id, course_id, name, file_key, file_type, size_bytes, access, position, category, created_at';
 
 export const courseRepository = {
     // Full catalog incl. drafts (authoring list). Ordered by position then title.
