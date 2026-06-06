@@ -5,7 +5,7 @@
 // reuses the app's Card / Chip / table primitives.
 
 import { useState } from 'react';
-import { Card, Chip } from '@/components/ui';
+import { Card, Chip, Skeleton } from '@/components/ui';
 import { useMe } from '@/hooks/useMe';
 import {
   useImportBatches, useUploadCsv, useApproveBatch, useRejectBatch,
@@ -137,7 +137,11 @@ export default function DataHubScreen() {
       <Card>
         <h2 className="display font-semibold" style={{ fontSize: 17, marginBottom: 12 }}>Approval queue</h2>
         {isLoading ? (
-          <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading…</div>
+          <div className="space-y-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-5 w-full" />
+            ))}
+          </div>
         ) : error ? (
           <div style={{ color: 'var(--danger)', fontSize: 13 }}>Failed to load: {(error as Error).message}</div>
         ) : batches.length === 0 ? (

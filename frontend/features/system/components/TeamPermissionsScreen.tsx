@@ -13,7 +13,7 @@
 // hidden from nav for non-holders.
 import { useMemo, useState } from 'react';
 import { useMe } from '@/hooks/useMe';
-import { Chip, type ChipColour } from '@/components/ui';
+import { Chip, Skeleton, SkeletonTable, type ChipColour } from '@/components/ui';
 import {
   usePermissionsMatrix,
   useSetRolePermission,
@@ -171,11 +171,10 @@ function TeamMembers() {
         </div>
 
         {isLoading && (
-          <div
-            className="text-ink-muted"
-            style={{ padding: '16px', fontSize: 13 }}
-          >
-            Loading team...
+          <div className="p-4 space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-6 w-full" />
+            ))}
           </div>
         )}
 
@@ -587,9 +586,7 @@ export default function TeamPermissionsScreen() {
     return (
       <div className="mx-auto" style={{ maxWidth: 1280 }}>
         <TeamMembers />
-        <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          Loading permissions...
-        </p>
+        <SkeletonTable rows={6} cols={5} />
       </div>
     );
   }

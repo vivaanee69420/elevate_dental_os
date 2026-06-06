@@ -2,7 +2,11 @@
 // No business logic here.
 
 import { csvUploadSchema } from "../models/csv-import.model.js";
+import { idParamSchema } from "../models/common.model.js";
+import * as zod_1 from "zod";
 import * as csv_import_service_1 from "../services/csv-import.service.js";
+
+const rejectBodySchema = zod_1.z.object({ reason: zod_1.z.string().trim().max(500).optional() });
 
 function handleApprovalError(err, res) {
     if (err?.name === 'ApprovalError') {
@@ -47,14 +51,16 @@ export const csvImportController = {
     },
 
     async detail(req, res) {
-        const result = await csv_import_service_1.getBatchDetail(req.user.organisation_id, req.params.id);
+        const { id } = idParamSchema.parse(req.params);
+        const result = await csv_import_service_1.getBatchDetail(req.user.organisation_id, id);
         if (!result) return res.status(404).json({ error: 'batch not found' });
         res.json(result);
     },
 
     async approve(req, res) {
+        const { id } = idParamSchema.parse(req.params);
         try {
-            const result = await csv_import_service_1.approveBatch(req.user.organisation_id, req.user.id, req.params.id);
+            const result = await csv_import_service_1.approveBatch(req.user.organisation_id, req.user.id, id);
             res.json(result);
         } catch (err) {
             if (handleApprovalError(err, res)) return;
@@ -63,8 +69,10 @@ export const csvImportController = {
     },
 
     async reject(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const { reason } = rejectBodySchema.parse(req.body ?? {});
         try {
-            const result = await csv_import_service_1.rejectBatch(req.user.organisation_id, req.params.id, req.body?.reason);
+            const result = await csv_import_service_1.rejectBatch(req.user.organisation_id, id, reason);
             res.json(result);
         } catch (err) {
             if (handleApprovalError(err, res)) return;

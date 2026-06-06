@@ -1,4 +1,5 @@
 import { useHealthInsights } from '../../hooks';
+import { SkeletonText } from '@/components/ui';
 
 export function Review({ baseline, targets, onBack, onComplete }: any) {
   const { data: insights } = useHealthInsights();
@@ -50,7 +51,11 @@ export function Review({ baseline, targets, onBack, onComplete }: any) {
           🤖 Plan4Growth AI&apos;s first read
         </h3>
         {!insights?.insights && (
-          <p className="text-sm text-ink-muted">Loading AI analysis…</p>
+          <div className="space-y-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <SkeletonText key={i} lines={2} />
+            ))}
+          </div>
         )}
         {insights?.insights?.map((ins: any, i: number) => {
           const colour =

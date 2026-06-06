@@ -14,4 +14,13 @@ export const taskController = {
         const body = task_model_1.taskUpdateSchema.parse(req.body);
         res.json(await task_service_1.taskService.update(req.user.organisation_id, req.params.id, body));
     },
+    async remove(req, res) {
+        res.json(await task_service_1.taskService.remove(req.user.organisation_id, req.params.id));
+    },
+    async remind(req, res) {
+        res.json(await task_service_1.taskService.remind(req.user.organisation_id, req.params.id, req.user.email));
+    },
+    async remindOverdue(req, res) {
+        res.json(await task_service_1.taskService.remindOverdue(req.user.organisation_id, req.user.email));
+    },
 };

@@ -1,5 +1,6 @@
 import * as analytics_service_1 from "../services/analytics.service.js";
 import * as analytics_model_1 from "../models/analytics.model.js";
+import { idParamSchema, practiceQuerySchema } from "../models/common.model.js";
 export const analyticsController = {
     async dashboard(req, res) {
         res.json(await analytics_service_1.analyticsService.dashboard(req.user.organisation_id));
@@ -39,11 +40,11 @@ export const analyticsController = {
         res.json(await analytics_service_1.analyticsService.generateInsights(req.user.organisation_id));
     },
     async pl(req, res) {
-        const practiceId = req.query.practice_id || undefined;
+        const { practice_id: practiceId } = practiceQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.pl(req.user.organisation_id, { practiceId }));
     },
     async plBenchmark(req, res) {
-        const practiceId = req.query.practice_id || undefined;
+        const { practice_id: practiceId } = practiceQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.plBenchmark(req.user.organisation_id, { practiceId }));
     },
     // P&L & Margin (Intelligence OS) — scope/period-aware group statement +
@@ -175,7 +176,8 @@ export const analyticsController = {
         res.json(await analytics_service_1.analyticsService.listPlSheets(req.user.organisation_id));
     },
     async getPlSheet(req, res) {
-        const sheet = await analytics_service_1.analyticsService.getPlSheet(req.user.organisation_id, req.params.id);
+        const { id } = idParamSchema.parse(req.params);
+        const sheet = await analytics_service_1.analyticsService.getPlSheet(req.user.organisation_id, id);
         if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
         res.json(sheet);
     },
@@ -184,18 +186,21 @@ export const analyticsController = {
         res.status(201).json(await analytics_service_1.analyticsService.createPlSheet(req.user.organisation_id, fields, req.user.id));
     },
     async updatePlSheet(req, res) {
+        const { id } = idParamSchema.parse(req.params);
         const fields = analytics_model_1.plSheetUpdateSchema.parse(req.body);
-        const sheet = await analytics_service_1.analyticsService.updatePlSheet(req.user.organisation_id, req.params.id, fields, req.user.id);
+        const sheet = await analytics_service_1.analyticsService.updatePlSheet(req.user.organisation_id, id, fields, req.user.id);
         if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
         res.json(sheet);
     },
     async deletePlSheet(req, res) {
-        await analytics_service_1.analyticsService.deletePlSheet(req.user.organisation_id, req.params.id);
+        const { id } = idParamSchema.parse(req.params);
+        await analytics_service_1.analyticsService.deletePlSheet(req.user.organisation_id, id);
         res.status(204).end();
     },
     // CSV export of a saved sheet (£ from integer pence). finance.view.
     async exportPlSheetCsv(req, res) {
-        const sheet = await analytics_service_1.analyticsService.getPlSheet(req.user.organisation_id, req.params.id);
+        const { id } = idParamSchema.parse(req.params);
+        const sheet = await analytics_service_1.analyticsService.getPlSheet(req.user.organisation_id, id);
         if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
         const { filename, csv } = analytics_service_1.analyticsService.plSheetToCsv(sheet);
         res.setHeader('Content-Type', 'text/csv; charset=utf-8');

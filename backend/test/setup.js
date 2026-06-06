@@ -21,6 +21,12 @@ process.env.SUPABASE_ANON_KEY ||= 'test-anon-key';
 // for convenience; individual tests may override).
 process.env.INTEGRATIONS_SECRET_KEY ||= 'test-integrations-key';
 process.env.OAUTH_STATE_SECRET ||= 'test-state-secret';
+// Messaging clients (postmark/twilio) construct at module import; give them
+// non-empty dummy creds so importing any service that pulls in lib/messaging.js
+// doesn't throw. No network is hit at construction. Twilio SID must start 'AC'.
+process.env.POSTMARK_SERVER_TOKEN ||= 'test-postmark-token';
+process.env.TWILIO_ACCOUNT_SID ||= 'ACtest00000000000000000000000000000';
+process.env.TWILIO_AUTH_TOKEN ||= 'test-twilio-token';
 
 const h = vi.hoisted(() => {
   const supaRec = {

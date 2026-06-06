@@ -49,6 +49,7 @@ const ORG = 'org-hhhhhhhh';
 describe('businessHealthService.metrics', () => {
   beforeEach(() => {
     supaRec.last = undefined;
+    supaRec.rpcProvider = undefined;
     supaRec.resultProvider = () => ({ data: [], error: null });
   });
 
@@ -82,6 +83,78 @@ describe('businessHealthService.metrics', () => {
   it('reception gets an empty stub (CRM-only rule)', async () => {
     const out = await svc.metrics(ORG, 'reception');
     expect(out).toEqual({ metrics: [] });
+  });
+
+  it('hybrid metrics resolve to live computed values (Dentally/grid) over manual', async () => {
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'health_patient_actuals')
+        return { data: { new_patients_month: 305, active_patients: 5515, retention_12mo: 37.1, recall_compliance: null }, error: null };
+      if (fn === 'health_production_actuals')
+        return { data: { avg_case_value_pence: 69474, production_per_associate_pence: 48498 }, error: null };
+      return { data: null, error: { message: 'unstubbed' } };
+    };
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'business_health')
+        // A stale manual new_patients_month must be overridden by the live value.
+        return { data: { baseline: {}, targets: {}, manual: { new_patients_month: { value: 99, asof: '2026-01-01' } } }, error: null };
+      if (q.table === 'chair_utilisation')
+        return { data: [{ booked_minutes: 80, available_minutes: 100 }], error: null };
+      return { data: [], error: null };
+    };
+
+    const { metrics } = await svc.metrics(ORG, 'owner');
+    const by = (k) => metrics.find((m) => m.key === k);
+
+    const newp = by('new_patients_month');
+    expect(newp.current).toBe(305);            // live wins over manual 99
+    expect(newp.source).toBe('dentally');
+    expect(newp.sourceType).toBe('auto');      // renders as a source-chip tile
+    expect(by('active_patients').current).toBe(5515);
+    expect(by('retention_12mo').current).toBe(37.1);
+    expect(by('avg_case_value').current).toBe(694.7);   // 69474 pence -> £
+    expect(by('avg_case_value').source).toBe('dentally');
+    expect(by('chair_utilisation').current).toBe(80);   // 80/100 booked/available
+    expect(by('chair_utilisation').source).toBe('grid');
+
+    // recall_compliance has no source signal (null) and no manual entry -> manual/needsInput.
+    const recall = by('recall_compliance');
+    expect(recall.current).toBeNull();
+    expect(recall.sourceType).toBe('manual');
+    expect(recall.needsInput).toBe(true);
+  });
+
+  it('hybrid metrics fall back to manual when the live source is empty/absent', async () => {
+    // rpcProvider default returns an error -> resolveComputed catches -> null.
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health'
+        ? { data: { baseline: {}, targets: {}, manual: { active_patients: { value: 16200, asof: '2026-05-01' } } }, error: null }
+        : { data: [], error: null };
+
+    const { metrics } = await svc.metrics(ORG, 'owner');
+    const active = metrics.find((m) => m.key === 'active_patients');
+    expect(active.current).toBe(16200);
+    expect(active.sourceType).toBe('manual');
+    expect(active.source).toBe('manual');
+    expect(active.asof).toBe('2026-05-01');
+
+    // No manual entry + no live data -> needsInput.
+    const prod = metrics.find((m) => m.key === 'production_per_associate');
+    expect(prod.current).toBeNull();
+    expect(prod.needsInput).toBe(true);
+  });
+
+  it('as-of (historical) reads do NOT use live computed values', async () => {
+    supaRec.rpcProvider = (fn) =>
+      fn === 'health_patient_actuals'
+        ? { data: { new_patients_month: 305, active_patients: 5515 }, error: null }
+        : { data: null, error: { message: 'unstubbed' } };
+    supaRec.resultProvider = () => ({ data: [], error: null }); // getInputsAsOf -> no snapshot
+
+    const { metrics } = await svc.metrics(ORG, 'owner', { asOf: '2026-01-31' });
+    const newp = metrics.find((m) => m.key === 'new_patients_month');
+    // History replays the manual snapshot; computed live value is ignored.
+    expect(newp.current).toBeNull();
+    expect(newp.sourceType).toBe('manual');
   });
 });
 

@@ -5,7 +5,7 @@
 // Note: "Active payment plans" and "Recovered TTM" KPIs have no Dentally data
 // source yet (payment-plan/recovery feeds are out of scope) — left static.
 
-import { Card } from '@/components/ui';
+import { Card, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { useDebt, formatPenceCompact, type DebtBand } from '../debt-api';
 
@@ -53,8 +53,9 @@ export default function DebtScreen() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto" style={{ maxWidth: 1500 }}>
-        <p className="text-sm text-ink-muted">Loading debt recovery…</p>
+      <div className="container mx-auto flex flex-col gap-4" style={{ maxWidth: 1500 }}>
+        <SkeletonKpiRow count={4} />
+        <SkeletonTable rows={8} cols={5} />
       </div>
     );
   }

@@ -9,6 +9,7 @@
 // (project rule 7).
 import { useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { Skeleton } from '@/components/ui';
 import { useMyTraining, useLibrary, type MyEnrolment } from '../useLibrary';
 
 const PURPLE = '#9333EA';
@@ -128,6 +129,25 @@ export default function MyModulesScreen() {
           </div>
         ))}
       </div>
+
+      {/* Loading skeleton */}
+      {isLoading && enrolments.length === 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+            gap: 14,
+          }}
+        >
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="card-padded">
+              <Skeleton className="w-full mb-3" style={{ height: 120 }} />
+              <Skeleton className="h-4 w-3/4 mb-2" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Pick up where you left off */}
       {inProgress.length > 0 && (

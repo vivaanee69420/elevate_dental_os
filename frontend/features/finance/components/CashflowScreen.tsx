@@ -19,6 +19,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { useState } from 'react';
+import { Skeleton } from '@/components/ui';
 import { poundsCompact, monthShort } from '../mock';
 import { useCashflow, useCashflowOutlook } from '../hooks';
 import { useBusinessHub } from '@/features/overview/business-hub-api';
@@ -95,7 +96,7 @@ export default function CashflowScreen() {
   }));
 
   return (
-    <div className="container max-w-7xl mx-auto">
+    <div>
       <div className="mb-6">
         <h1 className="display text-3xl font-bold">Cashflow &amp; Runway</h1>
         <p className="text-sm text-ink-muted">
@@ -465,9 +466,7 @@ export default function CashflowScreen() {
           Weekly receipts — last 13 weeks (real settled payments)
         </h2>
         {isLoading ? (
-          <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
-            Loading…
-          </div>
+          <Skeleton className="w-full" style={{ height: 240 }} />
         ) : !hasData ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
             No settled payments in the last 13 weeks
