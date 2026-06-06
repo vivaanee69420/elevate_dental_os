@@ -47,6 +47,10 @@ export default function GoHighLevelPanel({
   // Working copy of stage -> status, seeded from the saved config.
   const [mappings, setMappings] = useState<Record<string, string>>(initialMappings);
   const [saved, setSaved] = useState(false);
+  // Stage mapping is fully automatic (backend infers status from the stage name).
+  // Hide the per-stage override table behind an advanced toggle so the panel
+  // isn't a wall of dropdowns. Open it automatically if any override is set.
+  const [showMapping, setShowMapping] = useState(Object.keys(initialMappings).length > 0);
 
   // Reconnect / replace-credentials form (API keys are write-only — never
   // returned by the API — so we show the Location ID + a masked indicator and
@@ -106,9 +110,9 @@ export default function GoHighLevelPanel({
       </h2>
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
         Your contacts and opportunities were pulled automatically on connect and
-        refresh hourly. Map each pipeline stage to an Elevate lead status so
-        synced opportunities land in the right column — unmapped stages fall back
-        to a best-guess from the stage name.
+        refresh hourly. Pipeline stages map to Elevate lead statuses automatically
+        from the stage name — only open Customise if a stage lands in the wrong
+        column.
       </p>
 
       {/* Connection — view current Location ID + replace credentials. */}
@@ -194,8 +198,20 @@ export default function GoHighLevelPanel({
         </span>
       </div>
 
-      <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Pipeline stage mapping</h3>
-      {isLoading ? (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Pipeline stage mapping</h3>
+        <span className="text-ink-muted" style={{ fontSize: 11 }}>Automatic — stages map from their name</span>
+        <button
+          onClick={() => setShowMapping((v) => !v)}
+          style={{
+            marginLeft: 'auto', padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 6,
+            border: '1px solid var(--border)', background: 'white', color: 'var(--ink)', cursor: 'pointer',
+          }}
+        >
+          {showMapping ? 'Hide overrides' : 'Customise'}
+        </button>
+      </div>
+      {!showMapping ? null : isLoading ? (
         <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading pipelines…</div>
       ) : error ? (
         <div style={{ fontSize: 12, color: 'var(--danger)' }}>

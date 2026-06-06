@@ -8,3 +8,8 @@ preview
 # temp one-off scripts/logs (GHL probes, re-sync)
 backend/_*.mjs
 backend/_*.log
+
+# OS + local agent junk
+.DS_Store
+**/.DS_Store
+.claude/
