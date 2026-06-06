@@ -16,6 +16,7 @@ import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
 import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
 import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
+import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 // --------------------------------------------------------------------------
 // Business-health snapshot — daily 02:00 UTC, decides per-org by cadence.
 // Phase 2: replaces stub baseline-copy with formula-driven calc against real
@@ -237,6 +238,17 @@ node_cron_1.default.schedule('45 2 * * *', async () => {
         if (results.length > 0) console.log(`[worker] Google Ads sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] Google Ads sync failed', err);
+    }
+});
+// Meta (Facebook) Ads spend sync — daily 02:50, pull the last 30 days of
+// per-campaign spend/performance into ad_metrics for orgs with an active
+// meta_ads integration. Each org's rows are keyed by organisation_id.
+node_cron_1.default.schedule('50 2 * * *', async () => {
+    try {
+        const results = await meta_ads_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] Meta Ads sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] Meta Ads sync failed', err);
     }
 });
 

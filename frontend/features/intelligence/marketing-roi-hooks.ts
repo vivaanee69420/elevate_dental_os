@@ -9,7 +9,7 @@ export function useMarketingRoi() {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['marketing-roi', scopeKey(sp)],
-    queryFn: () => fetchMarketingRoi(sp.scope, sp.period, sp.periodKey),
+    queryFn: () => fetchMarketingRoi(sp.scope, sp.win),
     staleTime: 60_000,
   });
 }

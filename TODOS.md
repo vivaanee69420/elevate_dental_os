@@ -1,5 +1,29 @@
 # TODOS
 
+## Meta Ads — fill in live credentials (code complete)
+
+**What:** Provide real Meta app credentials so the Meta Ads integration can
+actually connect and sync. The full integration is BUILT and tested
+(`backend/src/lib/integrations/meta-ads-provider.js` + `meta-ads-sync.js`,
+nightly cron, `ad_metrics` write path, frontend tile auto-renders). Only the
+secrets are missing.
+
+**Scope when picked up:**
+- Create the Meta app at developers.facebook.com; add the Marketing API.
+- Set `META_APP_ID` / `META_APP_SECRET` in `backend/.env` (placeholders
+  `REPLACE_ME_*` currently) AND on the Railway backend + worker services.
+- Add redirect URI `${BACKEND_PUBLIC_URL}/oauth/meta_ads/callback` under
+  Facebook Login → Settings → Valid OAuth Redirect URIs.
+- Submit for **Meta App Review** to get `ads_read` in production (Meta gates
+  live-account data behind review; dev-mode works only for app admins/testers).
+
+**Why blocked:** no Meta app/credentials yet, and App Review is a Meta-side
+approval we can't shortcut. Until set, the Connect button 500s at authorize.
+
+**Context:** Mirrors the Google Ads provider. Token model differs — Meta has no
+refresh_token (long-lived `fb_exchange_token`), spend is a decimal-string. See
+memory `meta-ads-integration`.
+
 ## Frontend `src/` migration (deferred)
 
 **What:** Move `frontend/{app,components,features,lib,middleware.ts}` under `frontend/src/`.

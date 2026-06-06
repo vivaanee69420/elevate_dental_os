@@ -9,7 +9,7 @@ export function usePLMargin() {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['pl-margin', scopeKey(sp)],
-    queryFn: () => fetchPLMargin(sp.scope, sp.period, sp.periodKey),
+    queryFn: () => fetchPLMargin(sp.scope, sp.win),
     staleTime: 60_000,
   });
 }

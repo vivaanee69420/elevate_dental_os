@@ -1,92 +1,126 @@
 'use client';
 
-// ScopePeriodBar — the global Scope + Period control rendered at the top of
-// each analytics view (Overview, Profit, Valuation, Chair, etc.). Mirrors the
-// prototype's .filters topbar. Reads/writes the URL-synced ScopePeriod state.
-// Not in the global app shell: only analytics screens render it, so CRM/Inbox
-// pages stay uncluttered ("map into existing screens" decision).
+// ScopePeriodBar — the global Scope + Period control at the top of each analytics
+// view. Two pill rows: Scope (All practices + each synced practice, data-driven)
+// and Period (Recent / This month / This year / Pick month / Custom). Writes the
+// URL-synced ScopePeriod state; every mode resolves to a [since, until) window.
 
 import { useMemo } from 'react';
 import { usePractices } from '@/features/practices/hooks';
 import { useScopePeriod } from './scope-context';
 
-/** Last 6 months as {key,label} for the month picker (UTC, stable). */
-function recentMonths(count = 6): { key: string; label: string }[] {
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** Last `count` months as {key,label} for the Pick-month picker (UTC, stable). */
+function recentMonths(count = 12): { key: string; label: string }[] {
   const out: { key: string; label: string }[] = [];
   const now = new Date();
   for (let i = 0; i < count; i++) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
     const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
-    const label = d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
-    out.push({ key, label });
+    out.push({ key, label: `${MONTHS_SHORT[d.getUTCMonth()]} ${d.getUTCFullYear()}` });
   }
   return out;
 }
 
+function currentMonthKey(): string {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'text-[13px] px-3.5 py-2 rounded-xl border whitespace-nowrap transition-colors ' +
+        (active
+          ? 'bg-brand text-white border-brand shadow-panel-sm font-medium'
+          : 'bg-card text-ink border-border hover:border-brand-200')
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
 export function ScopePeriodBar() {
-  const { scope, period, periodKey, setScope, setPeriod, setPeriodKey } = useScopePeriod();
+  const {
+    scope, mode, monthKey, customSince, customUntil,
+    setScope, setMode, setMonthKey, setYearKey, setCustom,
+  } = useScopePeriod();
   const { data } = usePractices();
   const practices = data?.practices;
 
-  const months = useMemo(() => recentMonths(6), []);
-  // Keep the day key sensible when toggling to 'day': default to the 1st of the month.
-  const dayKey = period === 'day' ? periodKey : `${(periodKey || months[0].key)}-01`;
-
-  const sel =
+  const months = useMemo(() => recentMonths(12), []);
+  const curMonth = currentMonthKey();
+  const fieldCls =
     'text-[13px] border border-border bg-card text-ink px-3 py-2 rounded-xl shadow-panel-sm cursor-pointer';
 
   return (
-    <div className="flex gap-2.5 flex-wrap items-end mb-4">
-      <Field label="View by">
-        <select
-          className={sel}
-          value={period}
-          onChange={(e) => setPeriod(e.target.value === 'day' ? 'day' : 'month')}
-        >
-          <option value="month">Month</option>
-          <option value="day">Day (cash collected)</option>
-        </select>
-      </Field>
+    <div className="flex flex-col gap-2.5 mb-4">
+      {/* Scope pills — All practices + every synced practice (data-driven). */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <Pill active={scope === 'all'} onClick={() => setScope('all')}>
+          All practices
+        </Pill>
+        {practices?.map((p) => (
+          <Pill key={p.id} active={scope === p.id} onClick={() => setScope(p.id)}>
+            {p.name}
+          </Pill>
+        ))}
+      </div>
 
-      <Field label={period === 'day' ? 'Day' : 'Month'}>
-        {period === 'month' ? (
-          <select className={sel} value={periodKey} onChange={(e) => setPeriodKey(e.target.value)}>
+      {/* Period pills. */}
+      <div className="flex gap-2 flex-wrap items-center">
+        <Pill active={mode === 'recent'} onClick={() => setMode('recent')}>
+          Recent
+        </Pill>
+        <Pill active={mode === 'month' && monthKey === curMonth} onClick={() => setMonthKey(curMonth)}>
+          This month
+        </Pill>
+        <Pill active={mode === 'year'} onClick={() => setYearKey(String(new Date().getUTCFullYear()))}>
+          This year
+        </Pill>
+        <Pill
+          active={mode === 'month' && monthKey !== curMonth}
+          onClick={() => setMonthKey(months[1]?.key || monthKey)}
+        >
+          Pick month
+        </Pill>
+        <Pill active={mode === 'custom'} onClick={() => setCustom(customSince, customUntil)}>
+          Custom
+        </Pill>
+
+        {/* Contextual controls for Pick month / Custom. */}
+        {mode === 'month' && (
+          <select className={fieldCls} value={monthKey} onChange={(e) => setMonthKey(e.target.value)}>
             {months.map((m) => (
               <option key={m.key} value={m.key}>
                 {m.label}
               </option>
             ))}
           </select>
-        ) : (
-          <input
-            type="date"
-            className={sel}
-            value={dayKey}
-            onChange={(e) => setPeriodKey(e.target.value)}
-          />
         )}
-      </Field>
-
-      <Field label="Scope">
-        <select className={sel} value={scope} onChange={(e) => setScope(e.target.value)}>
-          <option value="all">Whole Group</option>
-          <option value="practices">All Practices</option>
-          {practices?.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-      </Field>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-[10px] tracking-wider uppercase text-ink-soft font-semibold">{label}</label>
-      {children}
+        {mode === 'custom' && (
+          <div className="flex gap-2 items-center">
+            <input
+              type="date"
+              className={fieldCls}
+              value={customSince}
+              onChange={(e) => setCustom(e.target.value, customUntil)}
+            />
+            <span className="text-ink-soft text-[13px]">to</span>
+            <input
+              type="date"
+              className={fieldCls}
+              value={customUntil}
+              onChange={(e) => setCustom(customSince, e.target.value)}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

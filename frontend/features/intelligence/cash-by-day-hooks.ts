@@ -9,7 +9,7 @@ export function useCashByDay() {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['cash-by-day', scopeKey(sp)],
-    queryFn: () => fetchCashByDay(sp.scope, sp.period, sp.periodKey),
+    queryFn: () => fetchCashByDay(sp.scope, sp.win),
     staleTime: 60_000,
   });
 }

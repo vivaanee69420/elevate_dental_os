@@ -82,13 +82,9 @@ makeOauthStub({
 // google_ads is now a REAL provider (google-ads-provider.js) — full OAuth +
 // accessible-customer capture + token refresh + spend sync. Removed from stubs.
 
-makeOauthStub({
-    id: 'meta_ads', label: 'Meta Lead Ads', category: 'marketing',
-    scopes: ['leads_retrieval', 'pages_manage_ads', 'pages_read_engagement'],
-    authUrl: 'https://www.facebook.com/v18.0/dialog/oauth',
-    tokenUrl: 'https://graph.facebook.com/v18.0/oauth/access_token',
-    clientIdEnv: 'META_APP_ID', clientSecretEnv: 'META_APP_SECRET',
-});
+// meta_ads is now a REAL provider (meta-ads-provider.js) — full OAuth +
+// long-lived token + ad-account capture + token refresh + spend sync. Removed
+// from stubs.
 
 makeOauthStub({
     id: 'mailchimp', label: 'Mailchimp', category: 'marketing',

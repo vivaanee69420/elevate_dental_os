@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { windowParams, type ResolvedWindow } from '@/features/_shared/scope-context';
 
 // Treatment Mix heat matrix (GM Intelligence OS) — GET /api/analytics/treatment-matrix.
 // Appointment VOLUME by treatment type x practice for the selected scope +
@@ -51,28 +52,16 @@ const EMPTY: Omit<TreatmentMatrix, 'applicable' | 'scope'> = {
   practices: [], types: [], distinctTypes: 0, grandTotal: 0, maxCell: 0, insights: [],
 };
 
-function qs(scope: string, period: 'month' | 'day', pk: string) {
-  return `scope=${encodeURIComponent(scope)}&period=${period}&pk=${encodeURIComponent(pk)}`;
-}
-
 // Volume matrix — appointment count by treatment type x practice.
-export function fetchTreatmentMatrix(
-  scope: string,
-  period: 'month' | 'day',
-  pk: string,
-): Promise<TreatmentMatrix> {
-  return api<TreatmentMatrix>(`/api/analytics/treatment-matrix?${qs(scope, period, pk)}`).then((r) => ({
+export function fetchTreatmentMatrix(scope: string, win: ResolvedWindow): Promise<TreatmentMatrix> {
+  return api<TreatmentMatrix>(`/api/analytics/treatment-matrix?${windowParams(scope, win)}`).then((r) => ({
     ...EMPTY, ...r, applicable: r.applicable !== false,
   }));
 }
 
 // Revenue matrix — real invoiced fee (PENCE) by treatment name x practice.
-export function fetchTreatmentRevenue(
-  scope: string,
-  period: 'month' | 'day',
-  pk: string,
-): Promise<TreatmentMatrix> {
-  return api<TreatmentMatrix>(`/api/analytics/treatment-revenue?${qs(scope, period, pk)}`).then((r) => ({
+export function fetchTreatmentRevenue(scope: string, win: ResolvedWindow): Promise<TreatmentMatrix> {
+  return api<TreatmentMatrix>(`/api/analytics/treatment-revenue?${windowParams(scope, win)}`).then((r) => ({
     ...EMPTY, ...r, applicable: r.applicable !== false,
   }));
 }

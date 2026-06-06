@@ -3,7 +3,7 @@
 
 import { api } from '@/lib/api';
 import { useQuery } from '@tanstack/react-query';
-import { useScopePeriod, type Period } from '@/features/_shared/scope-context';
+import { useScopePeriod } from '@/features/_shared/scope-context';
 
 export interface HubPractice {
   practiceId: string;
@@ -16,6 +16,14 @@ export interface HubPractice {
   noShowRate: number;     // percentage points
   leads: number;
   conversionRate: number; // percentage points
+}
+
+export interface RevenueLine {
+  line: string;        // clinical category (Implants, Restorative, …)
+  fee_pence: number;   // invoiced revenue in window
+  item_count: number;
+  cost_pence: number;  // 0 until a P&L feed (Xero/QuickBooks) is connected
+  profit_pence: number; // = fee_pence while cost is 0
 }
 
 export interface BusinessHub {
@@ -36,6 +44,9 @@ export interface BusinessHub {
     leadToStartRate: number;       // treatmentsStarted / leads, percentage points
   };
   practices: HubPractice[];
+  revenueByLine: RevenueLine[];
+  revenueLineCostBasis: 'pl_margin' | null; // null => Xero/QuickBooks not connected, profit is gross (cost 0)
+  revenueLineMarginPct: number;             // group net margin used to allocate per-line cost
   truncated: boolean;
 }
 
@@ -45,34 +56,6 @@ export interface HubWindow {
   since?: string;
   until?: string;
   label?: string;
-}
-
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-// Turn the global Scope/Period state into a concrete [since, until] window + label.
-// month 'YYYY-MM' -> the whole calendar month; day 'YYYY-MM-DD' -> that single day.
-// All bounds in UTC to match the server's stable UTC period keys.
-export function windowFromPeriod(period: Period, periodKey: string): HubWindow {
-  if (period === 'day') {
-    const [y, m, d] = periodKey.split('-').map(Number);
-    if (!y || !m || !d) return { days: 90 };
-    const start = Date.UTC(y, m - 1, d);
-    const end = Date.UTC(y, m - 1, d + 1) - 1;
-    return {
-      since: new Date(start).toISOString(),
-      until: new Date(end).toISOString(),
-      label: `${d} ${MONTHS[m - 1]} ${y}`,
-    };
-  }
-  const [y, m] = periodKey.split('-').map(Number);
-  if (!y || !m) return { days: 90 };
-  const start = Date.UTC(y, m - 1, 1);
-  const end = Date.UTC(y, m, 1) - 1; // last ms of the month
-  return {
-    since: new Date(start).toISOString(),
-    until: new Date(end).toISOString(),
-    label: `${MONTHS[m - 1]} ${y}`,
-  };
 }
 
 function queryString(win: HubWindow): string {
@@ -92,11 +75,11 @@ export function getBusinessHub(win: HubWindow = { days: 90 }) {
 // (legacy) or an explicit HubWindow to pin a trailing-days or custom window
 // regardless of the filter (used by screens that aren't period-scoped).
 export function useBusinessHub(arg?: number | HubWindow) {
-  const { period, periodKey } = useScopePeriod();
+  const { win: gw } = useScopePeriod();
   const win: HubWindow =
     typeof arg === 'number' ? { days: arg }
     : arg ? arg
-    : windowFromPeriod(period, periodKey);
+    : { since: gw.since, until: gw.until, label: gw.label };
   return useQuery({
     queryKey: ['business-hub', win],
     queryFn: () => getBusinessHub(win),

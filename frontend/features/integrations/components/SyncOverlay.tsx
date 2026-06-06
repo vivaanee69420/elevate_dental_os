@@ -36,6 +36,8 @@ const PROVIDER_LABEL: Record<string, string> = {
   dentally: 'Dentally',
   gohighlevel: 'GoHighLevel',
   xero: 'Xero',
+  google_ads: 'Google Ads',
+  meta_ads: 'Meta Ads',
 };
 
 // No change to the polled payload for this long (and not done) => treat as

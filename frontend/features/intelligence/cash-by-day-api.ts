@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { windowParams, type ResolvedWindow } from '@/features/_shared/scope-context';
 
 // Day — Cash Collected (GM Intelligence OS) — GET /api/analytics/cash-by-day.
 // REAL settled receipts banked by working day across the month in scope, plus a
@@ -44,11 +45,6 @@ const EMPTY: CashByDay = {
   days: [], peak: null, selected: null, insights: [],
 };
 
-export function fetchCashByDay(
-  scope: string,
-  period: 'month' | 'day',
-  pk: string,
-): Promise<CashByDay> {
-  const qs = `scope=${encodeURIComponent(scope)}&period=${period}&pk=${encodeURIComponent(pk)}`;
-  return api<CashByDay>(`/api/analytics/cash-by-day?${qs}`).then((r) => ({ ...EMPTY, ...r }));
+export function fetchCashByDay(scope: string, win: ResolvedWindow): Promise<CashByDay> {
+  return api<CashByDay>(`/api/analytics/cash-by-day?${windowParams(scope, win)}`).then((r) => ({ ...EMPTY, ...r }));
 }

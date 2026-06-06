@@ -14,7 +14,7 @@
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
 import { Card, Chip, AlertRow, EmptyState } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
-import { useBusinessHub, type HubPractice } from '../business-hub-api';
+import { useBusinessHub, type HubPractice, type RevenueLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { useMarketingRoi } from '@/features/growth/hooks';
 
@@ -54,6 +54,10 @@ export function GroupPerformanceScreen() {
 
   const channels = roi?.connected ? roi.by_provider : [];
   const lens = buildLens(practices, g.marginPct, roi);
+
+  // Clinical revenue lines from Dentally invoice items (group-wide).
+  const lines = data.revenueByLine ?? [];
+  const costConnected = data.revenueLineCostBasis != null; // Xero/QuickBooks P&L feed present
 
   return (
     <div className="flex flex-col gap-4">
@@ -163,20 +167,58 @@ export function GroupPerformanceScreen() {
         </Card>
       </div>
 
-      {/* Revenue by Line + Profit Contribution — no treatment-line feed yet. */}
+      {/* Revenue by Line + Profit Contribution — live from Dentally invoice
+          items, bucketed into clinical treatment lines. Costs (Xero/QuickBooks)
+          are not connected, so contribution is gross (cost £0). */}
       <div className="grid gap-4 lg:grid-cols-2 items-start">
         <Card>
           <h3 className="display text-lg font-semibold">Revenue by Line</h3>
-          <p className="text-sm text-ink-muted mt-0.5">Where group turnover comes from — across clinical, academy and lab.</p>
-          <EmptyState message="Needs a treatment-line production feed — not available from Dentally yet." />
+          <p className="text-sm text-ink-muted mt-0.5">Where group turnover comes from — clinical treatment lines · {windowLabel}.</p>
+          {lines.length === 0
+            ? <EmptyState message="No invoiced treatments from Dentally in this window yet." />
+            : <RevenueLineBars lines={lines} metric="fee" />}
         </Card>
 
         <Card>
           <h3 className="display text-lg font-semibold">Profit Contribution</h3>
-          <p className="text-sm text-ink-muted mt-0.5">Treatment lines ranked by profit contribution.</p>
-          <EmptyState message="Needs treatment-line costs (Xero) — shown once connected." />
+          <p className="text-sm text-ink-muted mt-0.5">
+            {costConnected
+              ? `Net contribution by line · allocated at the ${data.revenueLineMarginPct}% group P&L margin (Xero/QuickBooks).`
+              : 'Treatment lines ranked by contribution · costs £0 until a P&L feed (Xero/QuickBooks) is connected.'}
+          </p>
+          {lines.length === 0
+            ? <EmptyState message="No invoiced treatments from Dentally in this window yet." />
+            : <RevenueLineBars lines={lines} metric={costConnected ? 'profit' : 'fee'} showShare />}
         </Card>
       </div>
+    </div>
+  );
+}
+
+// Clinical treatment lines as labelled bars, high-to-low. metric selects the
+// value: 'fee' = invoiced revenue (Revenue by Line); 'profit' = net contribution
+// after allocated cost (Profit Contribution, only when a P&L feed is connected).
+// showShare adds each line's % of the metric total.
+function RevenueLineBars({ lines, metric, showShare = false }: { lines: RevenueLine[]; metric: 'fee' | 'profit'; showShare?: boolean }) {
+  const valueOf = (l: RevenueLine) => (metric === 'profit' ? l.profit_pence : l.fee_pence);
+  const total = lines.reduce((s, l) => s + valueOf(l), 0);
+  const max = Math.max(1, ...lines.map(valueOf));
+  return (
+    <div className="flex flex-col gap-2.5 mt-3">
+      {lines.map((l) => (
+        <div key={l.line}>
+          <div className="flex items-baseline justify-between text-sm">
+            <span className="font-medium">{l.line}</span>
+            <span className="tabular-nums">
+              {formatPence(valueOf(l))}
+              {showShare && <span className="text-ink-muted text-xs ml-1.5">{total > 0 ? Math.round((valueOf(l) / total) * 100) : 0}%</span>}
+            </span>
+          </div>
+          <div className="h-2 mt-1 rounded-full bg-[var(--border)] overflow-hidden">
+            <div className="h-full rounded-full bg-[var(--brand)]" style={{ width: `${Math.round((valueOf(l) / max) * 100)}%` }} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

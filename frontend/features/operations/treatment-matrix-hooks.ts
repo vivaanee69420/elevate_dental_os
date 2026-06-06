@@ -10,7 +10,7 @@ export function useTreatmentMatrix(enabled = true) {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['treatment-matrix', scopeKey(sp)],
-    queryFn: () => fetchTreatmentMatrix(sp.scope, sp.period, sp.periodKey),
+    queryFn: () => fetchTreatmentMatrix(sp.scope, sp.win),
     staleTime: 60_000,
     enabled,
   });
@@ -21,7 +21,7 @@ export function useTreatmentRevenue(enabled = true) {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['treatment-revenue', scopeKey(sp)],
-    queryFn: () => fetchTreatmentRevenue(sp.scope, sp.period, sp.periodKey),
+    queryFn: () => fetchTreatmentRevenue(sp.scope, sp.win),
     staleTime: 60_000,
     enabled,
   });
