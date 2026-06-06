@@ -1,8 +1,16 @@
 'use client';
+import { useState } from 'react';
 import Link from 'next/link';
-import { Card, ProgressBar, progressTone } from '@/components/ui';
+import { Card, ProgressBar, progressTone, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
 import { useHealth, useHealthProgress, useUpdateCadence } from '../hooks';
+
+// Month picker value 'YYYY-MM' -> last day of that month 'YYYY-MM-DD' (period end).
+function monthToAsOf(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return `${month}-${String(last).padStart(2, '0')}`;
+}
 
 function CadenceCard() {
   const { data: health } = useHealth();
@@ -44,9 +52,17 @@ function CadenceCard() {
 }
 
 export default function ProgressScreen() {
-  const { data } = useHealthProgress();
+  const [month, setMonth] = useState('');           // '' = live current values
+  const asOf = month ? monthToAsOf(month) : undefined;
+  const { data } = useHealthProgress(asOf);
 
-  if (!data) return <div>Loading…</div>;
+  if (!data)
+    return (
+      <div className="flex flex-col gap-4">
+        <SkeletonKpiRow count={4} />
+        <SkeletonTable rows={6} cols={4} />
+      </div>
+    );
 
   if (!data.completed) {
     return (
@@ -71,8 +87,28 @@ export default function ProgressScreen() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <h1 className="display text-3xl font-bold">Progress Tracker</h1>
-      <p className="text-sm text-ink-muted mb-5">Baseline → current → target</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="display text-3xl font-bold">Progress Tracker</h1>
+          <p className="text-sm text-ink-muted mb-5">
+            Baseline → current → target{asOf ? ` · as at ${asOf}` : ''}
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-ink-muted">
+          As at
+          <input
+            type="month"
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+            className="border border-line rounded-md px-2 py-1 text-ink"
+          />
+          {month && (
+            <button type="button" onClick={() => setMonth('')} className="text-accent underline">
+              Live
+            </button>
+          )}
+        </label>
+      </div>
 
       <CadenceCard />
 

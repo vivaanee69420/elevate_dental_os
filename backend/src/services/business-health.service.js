@@ -13,6 +13,21 @@ import * as formulas_1 from "../lib/formulas.js";
 import { analyticsService } from "./analytics.service.js";
 import { METRIC_CATALOG, METRIC_BY_KEY } from "../lib/health-metrics.js";
 const round1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
+const todayStr = () => new Date().toISOString().split('T')[0];
+
+// Capture a point-in-time copy of the owner's manual inputs (000054) so a past
+// period can later show what baseline/targets/manual KPIs WERE at that time.
+// `current` is the just-saved business_health row when the caller already has
+// it (avoids a re-read); otherwise we fetch it.
+async function captureInputs(orgId, current) {
+    const row = current || (await business_health_repository_1.businessHealthRepository.getMetricsData(orgId)) || {};
+    await business_health_repository_1.businessHealthRepository.upsertInputsSnapshot(orgId, todayStr(), {
+        baseline: row.baseline || {},
+        targets: row.targets || {},
+        manual: row.manual || {},
+    });
+}
+
 export const businessHealthService = {
     async get(orgId, role) {
         if (role === 'reception') {
@@ -44,7 +59,7 @@ export const businessHealthService = {
                 payload.targets = { ...existing.targets, ...body.targets };
         }
         // If marking complete for the first time, set timestamp + capture baseline snapshot
-        if (body.setup_completed && (!existing || !existing.baseline?.completed_at)) {
+        if (body.setup_completed && (!existing || !existing.setup_completed_at)) {
             payload.setup_completed_at = new Date().toISOString();
             // Capture baseline snapshot
             const baseline = payload.baseline || existing?.baseline || {};
@@ -68,6 +83,8 @@ export const businessHealthService = {
         const { data, error } = await business_health_repository_1.businessHealthRepository.upsertHealth(payload);
         if (error)
             throw new errors_1.AppError(error.message, 400);
+        // History: stamp today's manual-input snapshot from the just-saved row.
+        await captureInputs(orgId, data);
         return data;
     },
     async insights(orgId, role) {
@@ -103,17 +120,19 @@ export const businessHealthService = {
             throw new errors_1.AppError(error.message, 400);
         return data;
     },
-    async progress(orgId) {
+    async progress(orgId, { asOf = null } = {}) {
         const health = await business_health_repository_1.businessHealthRepository.getProgressData(orgId);
         if (!health?.setup_completed_at) {
             return { completed: false };
         }
         const snapshots = await business_health_repository_1.businessHealthRepository.listSnapshots(orgId);
-        const baseline = health.baseline;
-        const targets = health.targets;
+        // As-of read: rewind the manual baseline/targets anchor to `asOf`.
+        const snap = asOf ? await business_health_repository_1.businessHealthRepository.getInputsAsOf(orgId, asOf) : null;
+        const baseline = snap?.baseline || health.baseline;
+        const targets = snap?.targets || health.targets;
         const [summary, hub] = await Promise.all([
-            analyticsService.dashboardSummary(orgId),
-            analyticsService.businessHub(orgId),
+            analyticsService.dashboardSummary(orgId, asOf ? { to: new Date(asOf) } : {}),
+            analyticsService.businessHub(orgId, asOf ? { until: asOf } : {}),
         ]);
         // Real where a source exists; baseline-hold (honest, no fabrication)
         // for the three metrics with no live source yet.
@@ -158,15 +177,25 @@ export const businessHealthService = {
             snapshots: snapshots || [],
         };
     },
-    async metrics(orgId, role) {
+    async metrics(orgId, role, { asOf = null } = {}) {
         if (role === 'reception') return { metrics: [] };
-        const health = await business_health_repository_1.businessHealthRepository.getMetricsData(orgId);
-        const baseline = health?.baseline || {};
-        const targets = health?.targets || {};
-        const manual = health?.manual || {};
+        // As-of read: rewind manual baseline/targets/KPIs to what they WERE on
+        // `asOf`; live (auto) metrics window to the same upper bound.
+        let baseline, targets, manual;
+        if (asOf) {
+            const snap = await business_health_repository_1.businessHealthRepository.getInputsAsOf(orgId, asOf);
+            baseline = snap?.baseline || {};
+            targets = snap?.targets || {};
+            manual = snap?.manual || {};
+        } else {
+            const health = await business_health_repository_1.businessHealthRepository.getMetricsData(orgId);
+            baseline = health?.baseline || {};
+            targets = health?.targets || {};
+            manual = health?.manual || {};
+        }
         const [summary, hub] = await Promise.all([
-            analyticsService.dashboardSummary(orgId),
-            analyticsService.businessHub(orgId),
+            analyticsService.dashboardSummary(orgId, asOf ? { to: new Date(asOf) } : {}),
+            analyticsService.businessHub(orgId, asOf ? { until: asOf } : {}),
         ]);
         const auto = {
             annual_revenue:    { value: round1(summary.revenuePence / 100), source: summary.basis },
@@ -216,9 +245,11 @@ export const businessHealthService = {
         if (meta.sourceType !== 'manual') {
             throw new errors_1.AppError(`Metric ${key} is computed automatically and cannot be set manually`, 400);
         }
-        const asof = new Date().toISOString().split('T')[0];
+        const asof = todayStr();
         const entry = { value, asof };
         await business_health_repository_1.businessHealthRepository.setManualMetric(orgId, key, entry);
+        // History: stamp today's manual-input snapshot with the new KPI value.
+        await captureInputs(orgId);
         return entry;
     },
     async updateCadence(orgId, role, body) {

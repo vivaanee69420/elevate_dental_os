@@ -128,10 +128,12 @@ CREATE TABLE business_health_snapshots (
   snapshot_date DATE NOT NULL,
   label TEXT,
   metrics JSONB NOT NULL,
+  inputs JSONB,  -- point-in-time copy of owner manual inputs {baseline,targets,manual}; see 000054
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(organisation_id, snapshot_date)
 );
 CREATE INDEX idx_snapshots_org_date ON business_health_snapshots(organisation_id, snapshot_date DESC);
+CREATE INDEX idx_snapshots_inputs_org_date ON business_health_snapshots(organisation_id, snapshot_date DESC) WHERE inputs IS NOT NULL;
 
 -- ============================================================================
 -- ASSOCIATES (clinicians)
@@ -331,6 +333,18 @@ CREATE TABLE IF NOT EXISTS chair_utilisation (
 );
 CREATE TRIGGER chair_utilisation_updated_at BEFORE UPDATE ON chair_utilisation FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE UNIQUE INDEX IF NOT EXISTS uq_chair_util_cell ON chair_utilisation(organisation_id, practice_id, chair_name, weekday, slot);
+
+-- Chair-utilisation history: per-practice grid snapshot on every change (000055)
+CREATE TABLE IF NOT EXISTS chair_utilisation_snapshots (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  practice_id UUID NOT NULL REFERENCES practices(id) ON DELETE CASCADE,
+  snapshot_date DATE NOT NULL,
+  cells JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(organisation_id, practice_id, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_chair_snapshots_org_practice_date ON chair_utilisation_snapshots(organisation_id, practice_id, snapshot_date DESC);
 
 -- ============================================================================
 -- TASKS (todos linked to leads, contacts, or standalone)
