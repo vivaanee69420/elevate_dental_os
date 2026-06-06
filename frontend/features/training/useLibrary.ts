@@ -60,6 +60,7 @@ export interface CourseDetailLessonFile {
   size_bytes: number | null;
   position: number;
   access: 'free' | 'mentorship';
+  created_at?: string | null;
 }
 
 export interface CourseDetailLesson {
@@ -90,8 +91,10 @@ export interface CourseDetailResource {
   name: string;
   access: 'free' | 'mentorship';
   locked: boolean;
+  category: 'marking-rubrics' | 'additional-resources';
   file_type: string | null;
   size_bytes: number | null;
+  created_at?: string | null;
   file_key: string | null;
 }
 

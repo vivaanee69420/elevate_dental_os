@@ -14,6 +14,7 @@ export type Track =
 export type Level = 'all' | 'beginner' | 'intermediate' | 'advanced';
 export type Status = 'draft' | 'published';
 export type Category = 'presentations' | 'reading' | 'assignments' | 'clinical' | 'misc';
+export type ResourceCategory = 'marking-rubrics' | 'additional-resources';
 
 export interface Course {
   id: string;
@@ -43,6 +44,7 @@ export interface LessonFile {
   size_bytes: number | null;
   position: number;
   access: Access;
+  created_at?: string | null;
 }
 
 export interface Lesson {
@@ -79,6 +81,8 @@ export interface Resource {
   size_bytes: number | null;
   access: Access;
   position: number;
+  category: ResourceCategory;
+  created_at?: string | null;
 }
 
 export interface CourseDetail extends Course {
@@ -102,6 +106,10 @@ export const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'assignments', label: 'Assignment Details' },
   { key: 'clinical', label: 'Clinical Cases' },
   { key: 'misc', label: 'Miscellaneous' },
+];
+export const RESOURCE_CATEGORIES: { key: ResourceCategory; label: string }[] = [
+  { key: 'marking-rubrics', label: 'Marking Rubrics' },
+  { key: 'additional-resources', label: 'Additional Resources' },
 ];
 
 export const coursesApi = {
