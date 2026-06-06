@@ -26,6 +26,8 @@
 // ============================================================================
 import * as auth_repository_1 from "../repositories/auth.repository.js";
 import * as errors_1 from "../middleware/errors.js";
+import { notificationService } from "./notification.service.js";
+import { platformAdminRepository } from "../repositories/platform-admin.repository.js";
 
 // owner > practice_manager > reception
 const ROLE_RANK = { owner: 3, practice_manager: 2, reception: 1 };
@@ -172,6 +174,25 @@ export const authService = {
     // platform admin approves. The response says so explicitly.
     async signup(body) {
         const { organisation_id } = await provisionOrgOwner(body, 'pending');
+        try {
+            const admins = await platformAdminRepository.listActiveAdmins();
+            if (admins.length) {
+                const recipients = {};
+                admins.forEach((a) => { recipients[a.id] = { email: a.email, phone: null }; });
+                await notificationService.notify({
+                    orgId: null,
+                    userIds: admins.map((a) => a.id),
+                    isPlatform: true,
+                    category: 'account',
+                    title: 'New signup awaiting approval',
+                    body: `${body.organisation_name || 'A new organisation'} requested access.`,
+                    link: '/platform/signups',
+                    recipients,
+                });
+            }
+        } catch (err) {
+            console.warn('[auth] signup admin-notify failed', err);
+        }
         return {
             success: true,
             organisation_id,
@@ -244,6 +265,17 @@ export const authService = {
             await rollbackAuthIdentity(data.user.id, body.email);
             throw new errors_1.AppError(userError.message, 400);
         }
+        try {
+            await notificationService.notify({
+                orgId,
+                userIds: [data.user.id],
+                category: 'team',
+                title: 'You have been invited to Elevate',
+                body: 'An owner added you to their practice group. Set your password to get started.',
+                link: '/login',
+                recipients: { [data.user.id]: { email: body.email, phone: null } },
+            });
+        } catch (err) { console.warn('[auth] invite notify failed', err); }
         return { success: true, user_id: data.user.id, status: 'invited' };
     },
 
