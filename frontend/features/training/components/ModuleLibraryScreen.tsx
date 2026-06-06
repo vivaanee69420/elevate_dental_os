@@ -7,6 +7,7 @@
 // started" for now — see MODULE-LIBRARY.md).
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Skeleton } from '@/components/ui';
 import { useLibrary, type LibModule } from '../useLibrary';
 
 const PURPLE = '#9333EA';
@@ -181,13 +182,32 @@ export default function ModuleLibraryScreen() {
         })}
       </div>
 
-      {/* Empty / loading */}
-      {modules.length === 0 && (
+      {/* Loading skeleton grid */}
+      {isLoading && modules.length === 0 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+            gap: 14,
+          }}
+        >
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="card-padded">
+              <Skeleton className="w-full mb-3" style={{ height: 140 }} />
+              <Skeleton className="h-4 w-3/4 mb-2" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Empty */}
+      {!isLoading && modules.length === 0 && (
         <div
           className="card-padded text-ink-muted"
           style={{ textAlign: 'center', padding: 40, fontSize: 13 }}
         >
-          {isLoading ? 'Loading courses…' : 'No published courses yet.'}
+          No published courses yet.
         </div>
       )}
 

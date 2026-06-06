@@ -11,7 +11,7 @@
 //   TREATMENT_SUMMARY ──► sorted-by-value table + volume bar (value/maxValue)
 
 import { useMemo } from 'react';
-import { Card, KpiTile, Chip, EmptyState, type ChipColour } from '@/components/ui';
+import { Card, KpiTile, Chip, EmptyState, Skeleton, type ChipColour } from '@/components/ui';
 import { formatPoundsCompact } from '@/features/_mock';
 import { SOURCE_SUMMARY, TREATMENT_SUMMARY } from '../data';
 import { useAdSpend } from '../hooks';
@@ -35,8 +35,12 @@ function LiveAdSpend() {
   if (isLoading) {
     return (
       <Card className="mb-4">
-        <h2 className="display font-semibold mb-1" style={{ fontSize: 18 }}>Ad spend (live)</h2>
-        <p className="text-sm text-ink-muted">Loading…</p>
+        <h2 className="display font-semibold mb-3" style={{ fontSize: 18 }}>Ad spend (live)</h2>
+        <div className="space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-5 w-full" />
+          ))}
+        </div>
       </Card>
     );
   }

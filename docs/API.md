@@ -118,6 +118,7 @@ Manually capture a snapshot.
 Returns the unified business-health metric array. Each item:
 `{ key, label, cat, unit, better, sourceType, source, asof, needsInput, baseline, current, target, progressPct, deltaFromBaselinePct }`.
 `current` is live-computed for `sourceType: auto` (revenue/profit/margin/cash from analytics actuals; conversion/no-show from rollups) and read from the manual store for `sourceType: manual`. Reception receives `{ metrics: [] }`.
+"Hybrid" metrics (new/active/retention/recall patients, avg case value, production/associate, chair utilisation, lead response — catalog `computed: true`, migration 000056) are computed live from the Dentally-synced tables / chair grid / leads; when a live value exists it WINS over any manual entry and the item is returned with `sourceType: auto` and `source` set to its origin (`dentally` | `grid` | `ghl`). When the source has no data, the item falls back to `sourceType: manual` (owner-editable). Live computation runs only for the live view, not for `?asOf` history.
 Optional `?asOf=YYYY-MM-DD` returns the manual baseline/targets/KPIs as they were on that date (000054 history); the UI treats an as-of view as read-only.
 
 ### `PATCH /api/health/metrics/:key` *(owner-only)*
@@ -498,9 +499,24 @@ Mounted at `/api/training`. Tenant auth. Reads from the **global** published cou
 
 ## Tasks
 
+Read is open to every authenticated role; **all mutations are Owner-only**
+(`requireRole('owner')`) — non-owners get 403. The Task Manager UI hides write
+controls for non-owners accordingly.
+
 ### `GET /api/tasks?status=open&assigned_to=...`
-### `POST /api/tasks`
-### `PATCH /api/tasks/:id`
+Lists the org's tasks (joins assignee `full_name`). Any role.
+### `POST /api/tasks` *(owner-only)*
+Create. Body: `title`, `description?`, `assigned_to?`, `due_date?`, `priority?`.
+### `PATCH /api/tasks/:id` *(owner-only)*
+Update. Bounded fields: `title`, `description`, `assigned_to`, `due_date`,
+`priority`, `status`. `status=done` stamps `completed_at`.
+### `DELETE /api/tasks/:id` *(owner-only)*
+Delete a task.
+### `POST /api/tasks/:id/remind` *(owner-only)*
+Email the assignee a reminder (cc owner); bumps `reminder_count`/`last_reminded_at`.
+### `POST /api/tasks/remind-overdue` *(owner-only)*
+Bulk-remind every overdue task. Returns `{ reminded, total, results }`.
+Auto-reminders also fire nightly at 08:00 UK via the worker cron.
 
 ## Billing *(owner-only)*
 
@@ -529,6 +545,16 @@ Records inbound email as communication.
 
 ### `POST /webhooks/twilio/inbound`
 Records inbound SMS as communication.
+
+### `POST /webhooks/ses-events`
+Receives AWS SNS-wrapped SES delivery, bounce, and complaint event notifications. No tenant auth — secured by SNS signature verification and a topic-ARN allowlist.
+
+Behaviour:
+- **SubscriptionConfirmation** — the endpoint auto-confirms the SNS subscription by fetching the `SubscribeURL` supplied in the message body; no manual confirmation step is required.
+- **Bounce (permanent)** and **Complaint** — the affected address is added to the global `suppression_list` table so subsequent sends are blocked.
+- **Delivery** — the event is logged to `provider_events` for auditing.
+- Returns `403` when the SNS signature is invalid or the `TopicArn` in the message does not match `SNS_TOPIC_ARN` (when that env var is set).
+- Returns `200` for all accepted and successfully processed events.
 
 ## Public OAuth callbacks (no auth — signed state)
 
@@ -585,6 +611,74 @@ every 2h in `workers/index.js`, plus first-pull-on-connect and on-demand `/sync`
 
 > GoHighLevel inbound sync (opportunities + contacts → leads/contacts) runs
 > hourly in `workers/index.js`; not an HTTP endpoint.
+
+## Notifications
+
+In-app notification inbox and delivery-preference management for the current authenticated user. All endpoints under `/api/notifications` require tenant auth (JWT cookie via the same-origin proxy). Notifications are scoped to the calling user within their organisation.
+
+`category` is one of `account | team | integration | digest | system`.
+
+### `GET /api/notifications?unread=<true|false>`
+List the current user's in-app notifications, most recent first (max 50). Optional `unread` query param filters to unread-only (`true`) or read-only (`false`); omitted returns all.
+```json
+Response:
+{
+  "notifications": [
+    {
+      "id": "uuid",
+      "organisation_id": "uuid",
+      "category": "integration",
+      "title": "Dentally sync complete",
+      "body": "329,412 appointments imported successfully.",
+      "link_url": "/integrations",
+      "read_at": null,
+      "created_at": "2026-06-06T09:00:00Z"
+    }
+  ]
+}
+```
+
+### `GET /api/notifications/unread-count`
+Returns the count of unread notifications for the current user.
+```json
+Response:
+{ "count": 3 }
+```
+
+### `POST /api/notifications/:id/read`
+Mark a single notification as read. Returns 404 if the notification does not belong to the current user.
+```json
+Response:
+{ "ok": true }
+```
+
+### `POST /api/notifications/read-all`
+Mark all of the current user's notifications as read.
+```json
+Response:
+{ "ok": true }
+```
+
+### `GET /api/notifications/preferences`
+Returns only the categories for which the user has explicitly set preferences. Categories not present in the response use the defaults: `in_app=true`, `email=true`, `sms=true` for `integration` only (all other categories default `sms=false`).
+```json
+Response:
+{
+  "preferences": [
+    { "category": "integration", "in_app": true, "email": true, "sms": false }
+  ]
+}
+```
+
+### `PUT /api/notifications/preferences`
+Upsert delivery preferences for one or more categories. Missing categories are left unchanged.
+```json
+Request:
+{ "preferences": [{ "category": "digest", "in_app": true, "email": false, "sms": false }] }
+
+Response:
+{ "ok": true }
+```
 
 ## Error responses
 

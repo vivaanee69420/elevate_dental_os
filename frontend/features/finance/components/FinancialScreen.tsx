@@ -9,6 +9,7 @@
 
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { SkeletonText } from '@/components/ui';
 import { annualTotal } from '../mock';
 import { useFinancial, useFinanceSeries } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
@@ -211,9 +212,7 @@ export default function FinancialScreen() {
         <div className="card-padded">
           <h2 className="display text-lg font-semibold mb-4">Key ratios</h2>
           {isLoading ? (
-            <div className="text-ink-muted" style={{ fontSize: 13 }}>
-              Loading…
-            </div>
+            <SkeletonText lines={5} />
           ) : ratios.length === 0 ? (
             <div className="text-ink-muted" style={{ fontSize: 13 }}>
               No data — set your baseline.
@@ -241,9 +240,7 @@ export default function FinancialScreen() {
         <div className="card-padded">
           <h2 className="display text-lg font-semibold mb-4">Balance sheet (estimated)</h2>
           {isLoading ? (
-            <div className="text-ink-muted" style={{ fontSize: 13 }}>
-              Loading…
-            </div>
+            <SkeletonText lines={5} />
           ) : Object.keys(bs).length === 0 ? (
             <div className="text-ink-muted" style={{ fontSize: 13 }}>
               No data — set your baseline.

@@ -22,7 +22,8 @@ export function NumberInput({
           value={value ?? ''}
           onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
           placeholder={placeholder}
-          className={`input w-full ${prefix ? 'pl-7' : ''}`}
+          className="input w-full"
+          style={prefix ? { paddingLeft: '1.75rem' } : undefined}
         />
       </div>
     </div>

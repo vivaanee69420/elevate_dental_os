@@ -8,7 +8,7 @@
 // GoHighLevel → leads). Group revenue target comes from the org baseline.
 
 import { useState } from 'react';
-import { Card, Chip } from '@/components/ui';
+import { Card, Chip, SkeletonKpiRow, SkeletonChart, Skeleton } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice } from '../business-hub-api';
 import { useMarketingRoi } from '@/features/growth/hooks';
@@ -47,7 +47,16 @@ export default function BusinessHubScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
 
   if (isLoading) {
-    return <div className="text-ink-muted">Loading business overview…</div>;
+    return (
+      <div>
+        <div className="mb-6">
+          <Skeleton className="h-8 w-56 mb-2" />
+          <Skeleton className="h-4 w-80" />
+        </div>
+        <SkeletonKpiRow count={4} className="mb-6" />
+        <SkeletonChart height={300} />
+      </div>
+    );
   }
   if (error) {
     return (

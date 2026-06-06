@@ -9,7 +9,7 @@
 // read false-green). The fully-editable spreadsheet engine + account-level CoA
 // mapping are the Phase 3 persistence slice.
 
-import { PageHeader, KpiTile, EmptyState, AlertRow } from '@/components/ui';
+import { PageHeader, KpiTile, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill, th, td } from './os-ui';
@@ -49,7 +49,10 @@ export default function PLMarginScreen() {
       {isError ? (
         <Panel><EmptyState message={`Couldn't load P&L: ${(error as Error)?.message ?? 'unknown error'}`} /></Panel>
       ) : isLoading ? (
-        <Panel><EmptyState message="Loading accounting actuals…" /></Panel>
+        <>
+          <SkeletonKpiRow count={4} />
+          <SkeletonTable rows={6} cols={4} />
+        </>
       ) : !data?.hasData ? (
         <Panel>
           <PanelHead title="Profit & Loss" sub="Real actuals only — no projection on a finance screen." />

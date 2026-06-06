@@ -6,6 +6,7 @@
 
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
+import { Skeleton } from '@/components/ui';
 import { api } from '@/lib/api';
 
 const PER_PAGE = 25;
@@ -85,8 +86,10 @@ export default function AppointmentsScreen() {
 
       <div className="card-padded">
         {isLoading && (
-          <div className="text-ink-muted" style={{ fontSize: 13, padding: '24px 0', textAlign: 'center' }}>
-            Loading appointments…
+          <div className="space-y-3">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <Skeleton key={i} className="h-5 w-full" />
+            ))}
           </div>
         )}
 

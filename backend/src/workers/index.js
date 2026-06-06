@@ -17,6 +17,9 @@ import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
 import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
+import * as aws_ses_1 from "../lib/aws-ses.js";
+import * as aws_sns_1 from "../lib/aws-sns.js";
+import { notificationService } from "../services/notification.service.js";
 // --------------------------------------------------------------------------
 // Business-health snapshot — daily 02:00 UTC, decides per-org by cadence.
 // Phase 2: replaces stub baseline-copy with formula-driven calc against real
@@ -98,7 +101,7 @@ node_cron_1.default.schedule('0 6 * * 1', async () => {
     console.log('[worker] Running weekly digest');
     const { data: orgs } = await supabase_1.serviceClient
         .from('organisations')
-        .select('id, name, users(email, full_name, role)')
+        .select('id, name, users(id, email, full_name, role)')
         .neq('subscription_plan', 'cancelled');
     for (const org of orgs || []) {
         const owners = org.users?.filter((u) => u.role === 'owner') || [];
@@ -109,6 +112,15 @@ node_cron_1.default.schedule('0 6 * * 1', async () => {
                     to: owner.email,
                     subject: `Your Elevate weekly digest — ${org.name}`,
                     body: `<h2>This week at ${org.name}</h2><p>Hi ${owner.full_name},</p><p>Your weekly business snapshot...</p>`,
+                });
+                await notificationService.notify({
+                    orgId: org.id,
+                    userIds: [owner.id],
+                    category: 'digest',
+                    title: `Your weekly digest — ${org.name}`,
+                    body: 'Your weekly business snapshot is ready.',
+                    link: '/overview',
+                    recipients: { [owner.id]: { email: null, phone: null } },
                 });
             }
             catch (err) {
@@ -249,6 +261,62 @@ node_cron_1.default.schedule('50 2 * * *', async () => {
         if (results.length > 0) console.log(`[worker] Meta Ads sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] Meta Ads sync failed', err);
+    }
+});
+// --------------------------------------------------------------------------
+// Task overdue auto-reminders — daily 08:00 UK time. Email the assignee of
+// every open/in-progress task whose due_date has passed, throttled to once a
+// day (skip if last_reminded_at is today). Bumps reminder_count so the Task
+// Manager shows "X sent". Owner-only manual sends use the same email path.
+// --------------------------------------------------------------------------
+node_cron_1.default.schedule('0 8 * * *', async () => {
+    const today = new Date().toISOString().split('T')[0];
+    try {
+        const { data: tasks, error } = await supabase_1.serviceClient
+            .from('tasks')
+            .select('id, organisation_id, title, description, priority, due_date, reminder_count, last_reminded_at, assignee:users!tasks_assigned_to_fkey(full_name, email)')
+            .in('status', ['open', 'in_progress'])
+            .lt('due_date', today);
+        if (error) throw new Error(error.message);
+        let sent = 0;
+        for (const t of tasks || []) {
+            const to = t.assignee?.email;
+            if (!to) continue;
+            // Throttle: one auto-reminder per task per day.
+            if (t.last_reminded_at && t.last_reminded_at.split('T')[0] === today) continue;
+            const due = t.due_date ? new Date(t.due_date).toLocaleDateString('en-GB') : 'no due date';
+            try {
+                await messaging_1.sendEmail({
+                    orgId: t.organisation_id,
+                    to,
+                    subject: `Overdue: ${t.title}`,
+                    body: `A task assigned to you is overdue.\n\nTask: ${t.title}\n${t.description ? `Notes: ${t.description}\n` : ''}Priority: ${t.priority}\nWas due: ${due}\n\nPlease update its status in the Task Manager.`,
+                });
+                await supabase_1.serviceClient
+                    .from('tasks')
+                    .update({ reminder_count: (t.reminder_count || 0) + 1, last_reminded_at: new Date().toISOString() })
+                    .eq('id', t.id)
+                    .eq('organisation_id', t.organisation_id);
+                sent++;
+            } catch (err) {
+                console.error(`[worker] task reminder failed for ${t.id}`, err);
+            }
+        }
+        if (sent > 0) console.log(`[worker] Task overdue reminders: ${sent} sent`);
+    } catch (err) {
+        console.error('[worker] Task reminder job failed', err);
+    }
+}, { timezone: 'Europe/London' });
+
+// --------------------------------------------------------------------------
+// Notification outbox drain — every minute.
+// --------------------------------------------------------------------------
+node_cron_1.default.schedule('* * * * *', async () => {
+    try {
+        const n = await notificationService.drainOnce({ ses: aws_ses_1, sns: aws_sns_1 });
+        if (n) console.log(`[worker] drained ${n} notification deliveries`);
+    } catch (err) {
+        console.error('[worker] notification drain failed', err);
     }
 });
 

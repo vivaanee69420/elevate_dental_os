@@ -13,6 +13,7 @@ import * as zod_1 from "zod";
 import * as async_handler_1 from "../middleware/async-handler.js";
 import * as auth_1 from "../middleware/auth.js";
 import * as supabase_1 from "../lib/supabase.js";
+import { idParamSchema } from "../models/common.model.js";
 const router = (0, express_1.Router)();
 
 router.get('/', (0, async_handler_1.asyncHandler)(async (req, res) => {
@@ -68,12 +69,13 @@ const pmsSiteIdSchema = zod_1.z.object({
 });
 
 router.patch('/:id/pms-site-id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(async (req, res) => {
+    const { id } = idParamSchema.parse(req.params);
     const { pms_site_id } = pmsSiteIdSchema.parse(req.body);
     const value = pms_site_id ? pms_site_id : null; // '' -> null (clears mapping)
     const { data, error } = await supabase_1.serviceClient
         .from('practices')
         .update({ pms_site_id: value })
-        .eq('id', req.params.id)
+        .eq('id', id)
         .eq('organisation_id', req.user.organisation_id) // tenant guard (serviceClient bypasses RLS)
         .select('id, name, pms_site_id')
         .maybeSingle();

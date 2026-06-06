@@ -1,30 +1,33 @@
 'use client';
-// Tax (Making Tax Digital) — pixel-faithful port of
-// preview/elevate-dental-os-v2.html (PAGES.tax). VAT / Corporation tax /
-// Self-assessment. Static mock data (no backend); annual revenue/profit come
-// from ../data.ts at the prototype's scale.
+// Tax (Making Tax Digital) — VAT / PAYE / Self-assessment for a UK dental group.
+// Static mock data (no backend); annual revenue comes from ../data.ts at the
+// prototype's scale.
 //
-// Data-flow (mirrors the prototype's arithmetic):
+// UK tax model (corporation tax lives on its own; not shown here):
 //
-//   ANNUAL_REVENUE ──┬─► vatQuarterly = revenue * 0.12 / 4 * 0.20
-//                     └─► VAT breakdown table (exempt 88% / standard 12%)
-//   ANNUAL_PROFIT ───┬─► corpTax = profit>250k ? (profit-250k)*0.25 + 250k*0.19
-//                     │                          : profit*0.19
-//                     └─► Corp tax calc table (small-profits / main-rate split)
-//                     └─► KPI tiles + HMRC deadlines table
+//   ANNUAL_REVENUE ──┬─► vatQuarterly = standard-rated slice * 20%
+//                     └─► VAT breakdown table (exempt dental care vs standard-rated)
+//
+// Dental specifics: clinical dental treatment by a registered professional is a
+// VAT-EXEMPT supply of medical care; only cosmetic-only work, teeth whitening and
+// retail (toothbrushes, whitening kits) are standard-rated at 20%. VAT
+// registration threshold is £90,000 taxable turnover. MTD for VAT is mandatory;
+// MTD for Income Tax Self Assessment (ITSA) phases in from Apr 2026 for the
+// director's >£50k self-employment/property income.
 
 import { Card } from '@/components/ui';
 import { formatPounds } from '@/features/_mock';
-import { ANNUAL_REVENUE, ANNUAL_PROFIT, formatPoundsCompact } from '../data';
+import { ANNUAL_REVENUE, formatPoundsCompact } from '../data';
 
-// VAT chargeable on the ~12% standard-rated slice of quarterly revenue at 20%.
-const VAT_QUARTERLY = Math.round((ANNUAL_REVENUE * 0.12) / 4 * 0.2);
+// Standard-rated share of revenue (cosmetic-only, whitening, retail) — the rest
+// is exempt clinical dental care. VAT chargeable on that slice at 20%.
+const STANDARD_RATED_SHARE = 0.12;
+const VAT_QUARTERLY = Math.round((ANNUAL_REVENUE * STANDARD_RATED_SHARE) / 4 * 0.2);
 
-// UK corporation tax: 19% on profit up to £250k, 25% on the excess.
-const CORP_TAX =
-  ANNUAL_PROFIT > 250000
-    ? (ANNUAL_PROFIT - 250000) * 0.25 + 250000 * 0.19
-    : ANNUAL_PROFIT * 0.19;
+// Director Self Assessment estimate (income tax + Class 4 NIC on profit share).
+const SA_ESTIMATE = 35000;
+// Self Assessment is paid in two payments on account at 50% each.
+const SA_PAYMENT_ON_ACCOUNT = Math.round(SA_ESTIMATE / 2);
 
 /** One KPI tile with a label, big value and a red "due" sub-line. */
 function TaxKpi({ label, value, due }: { label: string; value: string; due: string }) {
@@ -44,7 +47,7 @@ export default function TaxScreen() {
       <div className="mb-6">
         <h1 className="display text-3xl font-bold">Tax (Making Tax Digital)</h1>
         <p className="text-sm text-ink-muted mt-1">
-          VAT &middot; Corporation tax &middot; Self-assessment
+          VAT &middot; PAYE &amp; payroll &middot; Self-assessment
         </p>
       </div>
 
@@ -58,13 +61,13 @@ export default function TaxScreen() {
           due="Due 7 Aug 2026"
         />
         <TaxKpi
-          label="Corp tax accrual"
-          value={formatPoundsCompact(CORP_TAX)}
-          due="Due 9 months post-YE"
+          label="PAYE / NIC (this month)"
+          value={formatPoundsCompact(0)}
+          due="Due 22nd (RTI)"
         />
         <TaxKpi
           label="Director SA estimate"
-          value={formatPoundsCompact(35000)}
+          value={formatPoundsCompact(SA_ESTIMATE)}
           due="Due 31 Jan 2027"
         />
       </div>
@@ -111,11 +114,11 @@ export default function TaxScreen() {
             </tr>
             <tr>
               <td>
-                <strong>Corporation Tax</strong>
+                <strong>PAYE / NIC (RTI)</strong>
               </td>
-              <td>FY26</td>
-              <td className="right">{formatPoundsCompact(CORP_TAX)}</td>
-              <td>1 Feb 2027</td>
+              <td>Monthly</td>
+              <td className="right">&mdash;</td>
+              <td>22nd each month</td>
               <td>
                 <span className="chip chip-blue">Scheduled</span>
               </td>
@@ -125,7 +128,7 @@ export default function TaxScreen() {
                 <strong>Self Assessment</strong>
               </td>
               <td>FY25-26</td>
-              <td className="right">£35,000</td>
+              <td className="right">{formatPounds(SA_ESTIMATE)}</td>
               <td>31 Jan 2027</td>
               <td>
                 <span className="chip chip-blue">Scheduled</span>
@@ -166,18 +169,18 @@ export default function TaxScreen() {
               </tr>
               <tr>
                 <td className="text-ink-muted" style={{ padding: '6px 0' }}>
-                  Exempt (dental services)
+                  Exempt (clinical dental care)
                 </td>
                 <td style={{ textAlign: 'right' }}>
-                  {formatPoundsCompact((ANNUAL_REVENUE / 4) * 0.88)}
+                  {formatPoundsCompact((ANNUAL_REVENUE / 4) * (1 - STANDARD_RATED_SHARE))}
                 </td>
               </tr>
               <tr>
                 <td className="text-ink-muted" style={{ padding: '6px 0' }}>
-                  Standard rated (cosmetic, retail)
+                  Standard rated (cosmetic, whitening, retail)
                 </td>
                 <td style={{ textAlign: 'right' }}>
-                  {formatPoundsCompact((ANNUAL_REVENUE / 4) * 0.12)}
+                  {formatPoundsCompact((ANNUAL_REVENUE / 4) * STANDARD_RATED_SHARE)}
                 </td>
               </tr>
               <tr style={{ borderTop: '1px solid var(--border)' }}>
@@ -198,42 +201,42 @@ export default function TaxScreen() {
             className="display font-semibold"
             style={{ fontSize: 17, marginBottom: 12 }}
           >
-            Corp tax calc
+            Self-assessment (director)
           </h2>
           <table style={{ width: '100%', fontSize: 13 }}>
             <tbody>
               <tr>
                 <td className="text-ink-muted" style={{ padding: '6px 0' }}>
-                  Annual profit
+                  Estimated tax + Class 4 NIC
                 </td>
                 <td style={{ textAlign: 'right' }}>
-                  {formatPoundsCompact(ANNUAL_PROFIT)}
+                  {formatPounds(SA_ESTIMATE)}
                 </td>
               </tr>
               <tr>
                 <td className="text-ink-muted" style={{ padding: '6px 0' }}>
-                  Small profits band (£250k @ 19%)
+                  Balancing payment (31 Jan 2027)
                 </td>
                 <td style={{ textAlign: 'right' }}>
-                  {formatPounds(Math.min(ANNUAL_PROFIT, 250000) * 0.19)}
+                  {formatPounds(SA_PAYMENT_ON_ACCOUNT)}
                 </td>
               </tr>
               <tr>
                 <td className="text-ink-muted" style={{ padding: '6px 0' }}>
-                  Main rate (over £250k @ 25%)
+                  Payment on account (31 Jul 2027)
                 </td>
                 <td style={{ textAlign: 'right' }}>
-                  {formatPounds(Math.max(0, ANNUAL_PROFIT - 250000) * 0.25)}
+                  {formatPounds(SA_PAYMENT_ON_ACCOUNT)}
                 </td>
               </tr>
               <tr style={{ borderTop: '1px solid var(--border)' }}>
                 <td style={{ padding: '8px 0' }}>
-                  <strong>Total corporation tax</strong>
+                  <strong>MTD for ITSA</strong>
                 </td>
                 <td
                   style={{ textAlign: 'right', fontWeight: 700, color: 'var(--brand)' }}
                 >
-                  {formatPoundsCompact(CORP_TAX)}
+                  From Apr 2026
                 </td>
               </tr>
             </tbody>

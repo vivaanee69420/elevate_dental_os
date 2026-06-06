@@ -5,6 +5,7 @@
 // appointments.appointment_type per practice/window.
 
 import { formatNumber } from '@/lib/format';
+import { SkeletonTable } from '@/components/ui';
 import { useTreatmentMix } from '../treatments-api';
 
 /** Treatment Mix screen — sourced from /api/treatments. */
@@ -33,11 +34,7 @@ export default function TreatmentsScreen() {
         </p>
       </div>
 
-      {isLoading && (
-        <div className="card-padded text-ink-muted" style={{ fontSize: 13 }}>
-          Loading treatment mix…
-        </div>
-      )}
+      {isLoading && <SkeletonTable rows={8} cols={3} />}
 
       {isError && (
         <div className="card-padded" style={{ fontSize: 13, color: 'var(--danger)' }}>

@@ -12,7 +12,7 @@
 // in once Xero (P&L) and a treatment-production/price feed are connected.
 
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
-import { Card, Chip, AlertRow, EmptyState } from '@/components/ui';
+import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice, type RevenueLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
@@ -25,7 +25,13 @@ export function GroupPerformanceScreen() {
   const { data, isLoading, isError } = useBusinessHub();
   const { data: roi } = useMarketingRoi();
 
-  if (isLoading) return <EmptyState message="Loading group performance…" />;
+  if (isLoading)
+    return (
+      <div>
+        <SkeletonKpiRow count={4} className="mb-6" />
+        <SkeletonChart height={280} />
+      </div>
+    );
   if (isError || !data) return <AlertRow tone="bad" title="Couldn't load group performance" />;
 
   const g = data.group;

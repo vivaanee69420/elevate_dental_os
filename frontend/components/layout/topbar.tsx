@@ -1,6 +1,7 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import { useMe } from '@/hooks/useMe';
+import { NotificationBell } from '@/features/notifications/components/NotificationBell';
 
 // TopBar — app shell header. Mirrors the preview prototype's .topbar:
 // org name on the left, user avatar + sign out on the right.
@@ -35,6 +36,7 @@ export function TopBar() {
     <header className="h-14 bg-card border-b border-border px-6 flex items-center justify-between sticky top-0 z-10">
       <span className="font-medium text-ink">{me?.organisation_name ?? ''}</span>
       <div className="flex items-center gap-3">
+        <NotificationBell />
         {me && (
           <div className="w-7 h-7 rounded-full bg-brand-50 text-brand flex items-center justify-center text-[11px] font-semibold">
             {initials(me.full_name || me.email)}

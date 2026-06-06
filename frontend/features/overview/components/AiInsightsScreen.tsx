@@ -17,7 +17,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import Link from 'next/link';
-import { Card, KpiTile, Chip } from '@/components/ui';
+import { Card, KpiTile, Chip, Skeleton, SkeletonText } from '@/components/ui';
 import { formatPounds, formatPoundsCompact } from '@/features/_mock';
 import { useState } from 'react';
 import { buildInsights, buildProjection, type Insight } from '../data';
@@ -338,11 +338,10 @@ export default function AiInsightsScreen() {
           </div>
         )}
         {loading ? (
-          <div
-            className="text-ink-muted"
-            style={{ padding: '24px 20px', fontSize: 13 }}
-          >
-            Loading insights…
+          <div className="p-5 space-y-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <SkeletonText key={i} lines={2} />
+            ))}
           </div>
         ) : insights.length === 0 ? (
           <div
@@ -420,12 +419,7 @@ export default function AiInsightsScreen() {
           90-day forward projection
         </h2>
         {loading ? (
-          <div
-            className="text-ink-muted"
-            style={{ fontSize: 13, padding: '40px 0' }}
-          >
-            Loading projection…
-          </div>
+          <Skeleton className="w-full" style={{ height: 240 }} />
         ) : chartData.length === 0 ? (
           <div
             className="text-ink-muted"

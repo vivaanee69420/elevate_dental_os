@@ -4,6 +4,7 @@
 // All data is entered here; nothing comes from Dentally.
 
 import { useMemo, useState } from 'react';
+import { Skeleton } from '@/components/ui';
 import { usePractices } from '@/features/integrations/hooks';
 import { formatNumber } from '@/lib/format';
 import {
@@ -117,7 +118,7 @@ export default function ChairScreen() {
       <div className="card-padded mb-4">
         <h2 className="display font-bold" style={{ fontSize: 17, marginBottom: 16 }}>Heatmap</h2>
         {!grid && gridError && <div className="text-ink-muted" style={{ fontSize: 13 }}>Could not load chair utilisation. Please try again.</div>}
-        {!grid && !gridError && <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading…</div>}
+        {!grid && !gridError && <Skeleton className="w-full" style={{ height: 200 }} />}
         {grid && records.length === 0 && (
           <div className="text-ink-muted" style={{ fontSize: 13 }}>
             No utilisation records yet. Add chairs and hours below to build the heatmap.

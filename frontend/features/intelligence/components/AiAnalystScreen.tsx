@@ -9,7 +9,7 @@
 // else a graceful keyword-matched fallback over the same real findings.
 
 import { useState } from 'react';
-import { PageHeader, EmptyState } from '@/components/ui';
+import { PageHeader, EmptyState, SkeletonText } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill } from './os-ui';
 import { useAiFindings, useAiAsk } from '../ai-ask-hooks';
@@ -74,7 +74,11 @@ export default function AiAnalystScreen() {
         {isError ? (
           <EmptyState message={`Couldn't load findings: ${(error as Error)?.message ?? 'unknown error'}`} />
         ) : isLoading ? (
-          <EmptyState message="Analysing your live numbers…" />
+          <div className="space-y-4 mt-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <SkeletonText key={i} lines={2} />
+            ))}
+          </div>
         ) : findings.length === 0 ? (
           <EmptyState message="Not enough live data in this scope/period to surface findings yet. Connect Xero/Dentally/ads or pick a period with activity." />
         ) : (
