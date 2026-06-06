@@ -63,6 +63,23 @@ export const notificationRepository = {
         return data ?? [];
     },
 
+    // Batch variant for fan-out: one query for many users. Returns
+    // Map<user_id, prefRow[]> so notify() avoids an N+1 per-recipient query.
+    async getPreferencesBatch(userIds) {
+        if (!userIds.length) return new Map();
+        const { data, error } = await supabase_1.serviceClient
+            .from('notification_preferences')
+            .select('user_id, category, in_app, email, sms')
+            .in('user_id', userIds);
+        if (error) throw new Error(error.message);
+        const map = new Map();
+        for (const row of data ?? []) {
+            if (!map.has(row.user_id)) map.set(row.user_id, []);
+            map.get(row.user_id).push(row);
+        }
+        return map;
+    },
+
     async upsertPreferences(rows) {
         const { error } = await supabase_1.serviceClient
             .from('notification_preferences')
