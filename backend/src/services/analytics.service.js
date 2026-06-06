@@ -1647,15 +1647,23 @@ export const analyticsService = {
     // payments), ops (appointments → completed/DNA), growth (leads → conversion).
     // Group revenue target = business_health baseline (a goal). Group margin is
     // REAL only when monthly_financials actuals exist, else 0 (never estimated).
-    async businessHub(orgId, { days = 90, now = () => new Date() } = {}) {
-        const sinceISO = new Date(now().getTime() - days * 86400000).toISOString();
-        const [practices, revRows, apptRows, leadRows, actuals, health] = await Promise.all([
+    async businessHub(orgId, { days = 90, since = null, until = null, label = null, now = () => new Date() } = {}) {
+        // Window: an explicit [since, until] (a picked month/day) takes priority;
+        // otherwise fall back to the trailing N-day window (until open).
+        const sinceISO = since || new Date(now().getTime() - days * 86400000).toISOString();
+        const untilISO = until || null;
+        // Leads are windowed only when an upper bound is set (month/day mode); in
+        // the trailing-days mode they stay all-time, as before.
+        const leadSinceISO = untilISO ? sinceISO : null;
+        const [practices, revRows, apptRows, leadRows, treatments, actuals, health, noShowTracked] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
-            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO),
-            analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO),
-            analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId),
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
+            analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
+            analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId, leadSinceISO, untilISO),
+            analytics_repository_1.analyticsRepository.treatmentsRollupByOrg(orgId, sinceISO, untilISO),
             this._actualsBundle(orgId),
             analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            analytics_repository_1.analyticsRepository.hasNoShowData(orgId),
         ]);
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         const num = (v) => Number(v || 0);
@@ -1690,8 +1698,15 @@ export const analyticsService = {
         const totalRevenue = sum('revenuePence');
         const totalAppts = sum('appointments');
         const totalNoShows = sum('noShows');
-        const totalLeads = sum('leads');
+        // Leads + converted from the raw rollups, not the per-practice rows:
+        // GHL leads arrive with a null practice_id, so summing practiceRows
+        // would silently drop them (they never match a practice). The raw
+        // leadRows include the null-practice bucket.
+        const totalLeads = leadRows.reduce((s, r) => s + num(r.total), 0);
         const totalConverted = leadRows.reduce((s, r) => s + num(r.converted), 0);
+        // Treatment funnel (org-wide; treatment_plans are not practice-attributed).
+        const treatmentsStarted = num(treatments.started);
+        const treatmentsClosedPence = num(treatments.closed_value_pence);
 
         // Revenue target = baseline goal (owner-set). Margin REAL or 0.
         const b = health?.baseline || {};
@@ -1700,7 +1715,7 @@ export const analyticsService = {
             ? formulas_1.calculatePL(plInputFromBuckets(actuals.annual)).marginPct
             : 0;
         return {
-            period: { days, since: sinceISO },
+            period: { days, since: sinceISO, until: untilISO, label },
             group: {
                 practices: practiceRows.length,
                 revenuePence: totalRevenue,
@@ -1709,8 +1724,12 @@ export const analyticsService = {
                 appointments: totalAppts,
                 noShows: totalNoShows,
                 noShowRate: rate(totalNoShows, totalAppts),
+                noShowTracked, // false => no_show state never synced; show "—" not 0%
                 leads: totalLeads,
                 conversionRate: rate(totalConverted, totalLeads),
+                treatmentsStarted,
+                treatmentsClosedPence,
+                leadToStartRate: rate(treatmentsStarted, totalLeads),
             },
             practices: practiceRows,
             truncated: false, // exact SQL rollups — never truncated

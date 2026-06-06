@@ -1,21 +1,13 @@
 'use client';
 // Training — Module Library. Pixel-faithful port of
-// preview/elevate-dental-os-v2.html PAGES['training-library'].
-//
-// Filter pipeline:
-//   filter ('all' | 'free' | 'mentorship' | <track>)
-//     -> filtered modules
-//       -> grid of module cards (progress / locked / start states)
-//
-// Mentorship status is the static MENTORSHIP_STATUS snapshot; in the
-// prototype mentorship is active so every module unlocks. Emoji glyphs
-// from the prototype are replaced with text labels (project rule 7).
+// preview/elevate-dental-os-v2.html PAGES['training-library], now wired to the
+// REAL published catalogue (useLibrary -> /api/training/library). Mentorship
+// gating comes from the org's mentorship_active flag. Cards navigate to the
+// course detail view. Per-module PROGRESS is still pending (always "not
+// started" for now — see MODULE-LIBRARY.md).
 import { useMemo, useState } from 'react';
-import {
-  TRAINING_MODULES,
-  MENTORSHIP_STATUS,
-  getModuleProgress,
-} from '../data';
+import { useRouter } from 'next/navigation';
+import { useLibrary, type LibModule } from '../useLibrary';
 
 const PURPLE = '#9333EA';
 const PURPLE_DARK = '#6D28D9';
@@ -44,39 +36,41 @@ function trackTag(track: string): string {
 
 /** Module Library screen. */
 export default function ModuleLibraryScreen() {
+  const router = useRouter();
+  const { data, isLoading, error } = useLibrary();
+  const modules: LibModule[] = data?.modules ?? [];
+  const mentorshipActive = data?.mentorship_active ?? false;
+  const status = { active: mentorshipActive };
+
   const [filter, setFilter] = useState<Filter>('all');
-  const status = MENTORSHIP_STATUS;
 
   // Distinct tracks, in first-seen order (mirrors [...new Set(...)]).
   const tracks = useMemo(
-    () => [...new Set(TRAINING_MODULES.map((m) => m.track))],
-    [],
+    () => [...new Set(modules.map((m) => m.track))],
+    [modules],
   );
 
-  const freeCount = TRAINING_MODULES.filter((m) => m.access === 'free').length;
-  const mentorshipCount = TRAINING_MODULES.filter(
-    (m) => m.access === 'mentorship',
-  ).length;
+  const freeCount = modules.filter((m) => m.access === 'free').length;
+  const mentorshipCount = modules.filter((m) => m.access === 'mentorship').length;
 
   // Apply the active filter.
   const filtered = useMemo(() => {
-    if (filter === 'all') return TRAINING_MODULES;
-    if (filter === 'free')
-      return TRAINING_MODULES.filter((m) => m.access === 'free');
+    if (filter === 'all') return modules;
+    if (filter === 'free') return modules.filter((m) => m.access === 'free');
     if (filter === 'mentorship')
-      return TRAINING_MODULES.filter((m) => m.access === 'mentorship');
-    return TRAINING_MODULES.filter((m) => m.track === filter);
-  }, [filter]);
+      return modules.filter((m) => m.access === 'mentorship');
+    return modules.filter((m) => m.track === filter);
+  }, [filter, modules]);
 
   // Filter buttons: the three specials, then one per track.
   const filterButtons: { v: Filter; l: string; n: number }[] = [
-    { v: 'all', l: 'All', n: TRAINING_MODULES.length },
+    { v: 'all', l: 'All', n: modules.length },
     { v: 'free', l: 'Free', n: freeCount },
     { v: 'mentorship', l: 'Mentorship', n: mentorshipCount },
     ...tracks.map((t) => ({
       v: t,
       l: t.replace('-', ' '),
-      n: TRAINING_MODULES.filter((m) => m.track === t).length,
+      n: modules.filter((m) => m.track === t).length,
     })),
   ];
 
@@ -88,10 +82,16 @@ export default function ModuleLibraryScreen() {
           Plan4Growth Module Library
         </h1>
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          {TRAINING_MODULES.length} modules · {freeCount} free,{' '}
-          {mentorshipCount} mentorship-only
+          {modules.length} modules · {freeCount} free, {mentorshipCount}{' '}
+          mentorship-only
         </p>
       </div>
+
+      {error && (
+        <div className="text-sm text-danger mb-4">
+          {(error as Error).message}
+        </div>
+      )}
 
       {/* Mentorship status banner */}
       <div
@@ -110,19 +110,12 @@ export default function ModuleLibraryScreen() {
       >
         <div style={{ flex: 1 }}>
           <div className="display font-bold" style={{ fontSize: 18 }}>
-            {status.active
-              ? `Mentorship active · ${status.tier}`
-              : 'Mentorship inactive'}
+            {status.active ? 'Mentorship active' : 'Mentorship inactive'}
           </div>
           <div style={{ fontSize: 12, opacity: 0.9, marginTop: 4 }}>
             {status.active
-              ? `All ${mentorshipCount} mentorship modules unlocked · renews ${new Date(
-                  status.renewsAt,
-                ).toLocaleDateString('en-GB', {
-                  month: 'long',
-                  year: 'numeric',
-                })}`
-              : `Upgrade to Diploma Member to unlock ${mentorshipCount} mentorship modules + monthly group calls`}
+              ? `All ${mentorshipCount} mentorship modules unlocked`
+              : `Upgrade to unlock ${mentorshipCount} mentorship modules + monthly group calls`}
           </div>
         </div>
         <button
@@ -188,6 +181,16 @@ export default function ModuleLibraryScreen() {
         })}
       </div>
 
+      {/* Empty / loading */}
+      {modules.length === 0 && (
+        <div
+          className="card-padded text-ink-muted"
+          style={{ textAlign: 'center', padding: 40, fontSize: 13 }}
+        >
+          {isLoading ? 'Loading courses…' : 'No published courses yet.'}
+        </div>
+      )}
+
       {/* Module grid */}
       <div
         style={{
@@ -197,18 +200,12 @@ export default function ModuleLibraryScreen() {
         }}
       >
         {filtered.map((m) => {
-          const progress = getModuleProgress(m.id);
           const locked = m.access === 'mentorship' && !status.active;
-          const pct =
-            m.lessons.length > 0
-              ? Math.round(
-                  (progress.completedLessons / m.lessons.length) * 100,
-                )
-              : 0;
           return (
             <div
               key={m.id}
               className="card"
+              onClick={() => router.push(`/training-library/${m.id}`)}
               style={{
                 overflow: 'hidden',
                 cursor: 'pointer',
@@ -332,80 +329,60 @@ export default function ModuleLibraryScreen() {
                   style={{ fontSize: 11, marginBottom: 8 }}
                 >
                   {m.lessons.length} lesson
-                  {m.lessons.length > 1 ? 's' : ''} · Level: {m.level}
+                  {m.lessons.length === 1 ? '' : 's'} · Level: {m.level}
                 </div>
-                {!locked && progress.started ? (
-                  <div style={{ marginTop: 8 }}>
+                {/* Progress (enrolled, unlocked courses only) */}
+                {!locked && m.enrolled && m.total_lessons > 0 && (
+                  <div style={{ marginBottom: 8 }}>
                     <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        fontSize: 10,
-                        marginBottom: 4,
-                      }}
+                      className="text-ink-muted"
+                      style={{ fontSize: 10, marginBottom: 4 }}
                     >
-                      <span
-                        className="text-ink-muted"
-                        style={{ fontWeight: 600 }}
-                      >
-                        {progress.completedLessons}/{m.lessons.length} lessons
-                      </span>
-                      <span style={{ color: PURPLE, fontWeight: 700 }}>
-                        {pct}%
-                      </span>
+                      {m.completed_lessons}/{m.total_lessons} complete ·{' '}
+                      {m.progress_pct}%
                     </div>
                     <div
                       style={{
-                        height: 4,
-                        background: 'var(--bg)',
-                        borderRadius: 4,
+                        height: 6,
+                        borderRadius: 3,
+                        background: 'var(--border)',
                         overflow: 'hidden',
                       }}
                     >
                       <div
                         style={{
                           height: '100%',
-                          background: `linear-gradient(90deg, ${PURPLE}, ${PURPLE_DARK})`,
-                          width: `${pct}%`,
+                          width: `${m.progress_pct}%`,
+                          background: PURPLE,
                         }}
                       />
                     </div>
                   </div>
-                ) : !locked ? (
-                  <button
-                    style={{
-                      width: '100%',
-                      padding: 8,
-                      background: PURPLE,
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 6,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      marginTop: 4,
-                    }}
-                  >
-                    Start module
-                  </button>
-                ) : (
-                  <button
-                    style={{
-                      width: '100%',
-                      padding: 8,
-                      background: `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`,
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: 6,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      marginTop: 4,
-                    }}
-                  >
-                    Preview &amp; unlock
-                  </button>
                 )}
+                <button
+                  style={{
+                    width: '100%',
+                    padding: 8,
+                    background: locked
+                      ? `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`
+                      : PURPLE,
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    marginTop: 4,
+                  }}
+                >
+                  {locked
+                    ? 'Preview & unlock'
+                    : !m.enrolled
+                      ? 'Start module'
+                      : m.progress_pct === 100
+                        ? 'Review module'
+                        : 'Continue module'}
+                </button>
               </div>
             </div>
           );

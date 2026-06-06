@@ -1,22 +1,15 @@
 'use client';
 // Training — My Modules ("My Learning"). Pixel-faithful port of
-// preview/elevate-dental-os-v2.html PAGES['training-my'].
+// preview/elevate-dental-os-v2.html PAGES['training-my'], now wired to REAL
+// data: useMyTraining (/api/training/my — enrolled courses + per-course
+// progress) for the in-progress/completed buckets, and useLibrary
+// (/api/training/library) for "recommended" (published, not yet enrolled).
 //
-// Derivation pipeline (off the static MODULE_PROGRESS snapshot):
-//   modules + progress
-//     -> inProgress  (started, not all lessons done)
-//     -> completed   (all lessons done)
-//     -> recommended (not started, accessible)  [first 4]
-//     -> timeInvested = sum(pct(module) * module minutes)
-//
-// Emoji glyphs from the prototype are replaced with text/colour
-// treatments (project rule 7).
+// Emoji glyphs from the prototype are replaced with text/colour treatments
+// (project rule 7).
 import { useMemo } from 'react';
-import {
-  TRAINING_MODULES,
-  MENTORSHIP_STATUS,
-  getModuleProgress,
-} from '../data';
+import { useRouter } from 'next/navigation';
+import { useMyTraining, useLibrary, type MyEnrolment } from '../useLibrary';
 
 const PURPLE = '#9333EA';
 const PURPLE_DARK = '#6D28D9';
@@ -42,42 +35,39 @@ function trackTag(track: string): string {
 
 /** My Modules screen. */
 export default function MyModulesScreen() {
-  const status = MENTORSHIP_STATUS;
+  const router = useRouter();
+  const { data: my, isLoading } = useMyTraining();
+  const { data: lib } = useLibrary();
 
-  // Bucket modules and compute time invested.
-  const { inProgress, completed, recommended, totalMinutesWatched } =
-    useMemo(() => {
-      const inProg = TRAINING_MODULES.filter((m) => {
-        const p = getModuleProgress(m.id);
-        return p.started && p.completedLessons < m.lessons.length;
-      });
-      const done = TRAINING_MODULES.filter((m) => {
-        const p = getModuleProgress(m.id);
-        return p.completedLessons >= m.lessons.length && m.lessons.length > 0;
-      });
-      const rec = TRAINING_MODULES.filter((m) => {
-        const p = getModuleProgress(m.id);
-        return !p.started && (m.access === 'free' || status.active);
-      }).slice(0, 4);
-      const mins = TRAINING_MODULES.reduce((sum, m) => {
-        const p = getModuleProgress(m.id);
-        if (!p.started) return sum;
-        const totalMin = parseInt(m.duration, 10) || 30;
-        return (
-          sum + Math.round((p.completedLessons / m.lessons.length) * totalMin)
-        );
-      }, 0);
-      return {
-        inProgress: inProg,
-        completed: done,
-        recommended: rec,
-        totalMinutesWatched: mins,
-      };
-    }, [status.active]);
+  const enrolments: MyEnrolment[] = my?.enrolments ?? [];
+  const mentorshipActive = lib?.mentorship_active ?? false;
+  const modules = lib?.modules ?? [];
 
-  const availableCount = TRAINING_MODULES.filter(
-    (m) => m.access === 'free' || status.active,
-  ).length;
+  const { inProgress, completed, recommended, availableCount } = useMemo(() => {
+    const inProg = enrolments.filter(
+      (e) => e.completed_lessons < e.total_lessons || e.total_lessons === 0,
+    );
+    const done = enrolments.filter(
+      (e) => e.total_lessons > 0 && e.completed_lessons >= e.total_lessons,
+    );
+    const enrolledIds = new Set(enrolments.map((e) => e.course_id));
+    const rec = modules
+      .filter(
+        (m) =>
+          !enrolledIds.has(m.id) &&
+          (m.access === 'free' || mentorshipActive),
+      )
+      .slice(0, 4);
+    const avail = modules.filter(
+      (m) => m.access === 'free' || mentorshipActive,
+    ).length;
+    return {
+      inProgress: inProg,
+      completed: done,
+      recommended: rec,
+      availableCount: avail,
+    };
+  }, [enrolments, modules, mentorshipActive]);
 
   /** Section heading style (Fraunces display, prototype sizing). */
   const h2: React.CSSProperties = {
@@ -108,22 +98,9 @@ export default function MyModulesScreen() {
         }}
       >
         {[
-          {
-            l: 'In progress',
-            v: String(inProgress.length),
-            c: PURPLE,
-          },
-          {
-            l: 'Completed',
-            v: String(completed.length),
-            c: GREEN,
-          },
-          {
-            l: 'Time invested',
-            v: `${Math.floor(totalMinutesWatched / 60)}h ${
-              totalMinutesWatched % 60
-            }m`,
-          },
+          { l: 'In progress', v: String(inProgress.length), c: PURPLE },
+          { l: 'Completed', v: String(completed.length), c: GREEN },
+          { l: 'Enrolled', v: String(enrolments.length) },
           { l: 'Available to you', v: String(availableCount) },
         ].map((s) => (
           <div key={s.l} className="card-padded">
@@ -166,82 +143,68 @@ export default function MyModulesScreen() {
               marginBottom: 20,
             }}
           >
-            {inProgress.map((m) => {
-              const p = getModuleProgress(m.id);
-              const pct = Math.round(
-                (p.completedLessons / m.lessons.length) * 100,
-              );
-              return (
-                <div
-                  key={m.id}
-                  className="card-padded"
-                  style={{ cursor: 'pointer' }}
-                >
+            {inProgress.map((e) => (
+              <div
+                key={e.course_id}
+                className="card-padded"
+                style={{ cursor: 'pointer' }}
+                onClick={() => router.push(`/training-library/${e.course_id}`)}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div
+                    className="display font-bold"
                     style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: 8,
+                      background: `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`,
                       display: 'flex',
                       alignItems: 'center',
-                      gap: 12,
+                      justifyContent: 'center',
+                      fontSize: 14,
+                      letterSpacing: '0.04em',
+                      color: 'white',
+                      flexShrink: 0,
                     }}
                   >
+                    {trackTag(e.track)}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="display font-bold" style={{ fontSize: 14 }}>
+                      {e.title}
+                    </div>
                     <div
-                      className="display font-bold"
+                      className="text-ink-muted"
+                      style={{ fontSize: 11, margin: '4px 0' }}
+                    >
+                      {e.completed_lessons} of {e.total_lessons} lessons
+                    </div>
+                    <div
                       style={{
-                        width: 56,
-                        height: 56,
-                        borderRadius: 8,
-                        background: `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 14,
-                        letterSpacing: '0.04em',
-                        color: 'white',
-                        flexShrink: 0,
+                        height: 4,
+                        background: 'var(--bg)',
+                        borderRadius: 4,
+                        overflow: 'hidden',
                       }}
                     >
-                      {trackTag(m.track)}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        className="display font-bold"
-                        style={{ fontSize: 14 }}
-                      >
-                        {m.title}
-                      </div>
-                      <div
-                        className="text-ink-muted"
-                        style={{ fontSize: 11, margin: '4px 0' }}
-                      >
-                        Lesson {p.completedLessons + 1} of {m.lessons.length}
-                      </div>
                       <div
                         style={{
-                          height: 4,
-                          background: 'var(--bg)',
-                          borderRadius: 4,
-                          overflow: 'hidden',
+                          height: '100%',
+                          background: `linear-gradient(90deg, ${PURPLE}, ${PURPLE_DARK})`,
+                          width: `${e.progress_pct}%`,
                         }}
-                      >
-                        <div
-                          style={{
-                            height: '100%',
-                            background: `linear-gradient(90deg, ${PURPLE}, ${PURPLE_DARK})`,
-                            width: `${pct}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div
-                      className="display font-bold"
-                      style={{ fontSize: 18, color: PURPLE }}
-                    >
-                      {pct}%
+                      />
                     </div>
                   </div>
+                  <div
+                    className="display font-bold"
+                    style={{ fontSize: 18, color: PURPLE }}
+                  >
+                    {e.progress_pct}%
+                  </div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
         </>
       )}
@@ -260,16 +223,18 @@ export default function MyModulesScreen() {
               marginBottom: 20,
             }}
           >
-            {completed.map((m) => (
+            {completed.map((e) => (
               <div
-                key={m.id}
+                key={e.course_id}
                 className="card"
                 style={{
                   padding: 12,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 10,
+                  cursor: 'pointer',
                 }}
+                onClick={() => router.push(`/training-library/${e.course_id}`)}
               >
                 <div
                   className="font-bold"
@@ -288,14 +253,9 @@ export default function MyModulesScreen() {
                   &#10003;
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>
-                    {m.title}
-                  </div>
-                  <div
-                    className="text-ink-muted"
-                    style={{ fontSize: 11 }}
-                  >
-                    {m.duration} · {m.instructor}
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{e.title}</div>
+                  <div className="text-ink-muted" style={{ fontSize: 11 }}>
+                    {e.total_lessons} lessons · Level: {e.level}
                   </div>
                 </div>
               </div>
@@ -305,68 +265,66 @@ export default function MyModulesScreen() {
       )}
 
       {/* Recommended */}
-      <h2 className="display" style={h2}>
-        Recommended for you
-      </h2>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          gap: 10,
-        }}
-      >
-        {recommended.map((m) => (
+      {recommended.length > 0 && (
+        <>
+          <h2 className="display" style={h2}>
+            Recommended for you
+          </h2>
           <div
-            key={m.id}
-            className="card-padded"
-            style={{ cursor: 'pointer' }}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+              gap: 10,
+            }}
           >
-            <div style={{ display: 'flex', gap: 10 }}>
+            {recommended.map((m) => (
               <div
-                className="display font-bold"
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 6,
-                  background:
-                    m.access === 'free'
-                      ? 'linear-gradient(135deg, var(--success), #059669)'
-                      : `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 12,
-                  letterSpacing: '0.04em',
-                  color: 'white',
-                }}
+                key={m.id}
+                className="card-padded"
+                style={{ cursor: 'pointer' }}
+                onClick={() => router.push(`/training-library/${m.id}`)}
               >
-                {trackTag(m.track)}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    lineHeight: 1.3,
-                  }}
-                >
-                  {m.title}
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <div
+                    className="display font-bold"
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 6,
+                      background:
+                        m.access === 'free'
+                          ? 'linear-gradient(135deg, var(--success), #059669)'
+                          : `linear-gradient(135deg, ${PURPLE}, ${PURPLE_DARK})`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 12,
+                      letterSpacing: '0.04em',
+                      color: 'white',
+                    }}
+                  >
+                    {trackTag(m.track)}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.3 }}>
+                      {m.title}
+                    </div>
+                    <div
+                      className="text-ink-muted"
+                      style={{ fontSize: 10, marginTop: 2 }}
+                    >
+                      {m.lessons.length} lessons · Level: {m.level}
+                    </div>
+                  </div>
                 </div>
-                <div
-                  className="text-ink-muted"
-                  style={{ fontSize: 10, marginTop: 2 }}
-                >
-                  {m.duration} · {m.lessons.length} lessons
-                </div>
               </div>
-            </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </>
+      )}
 
-      {/* Empty-state nudge (only if nothing started) */}
-      {TRAINING_MODULES.filter((m) => getModuleProgress(m.id).started)
-        .length === 0 && (
+      {/* Empty-state nudge (nothing enrolled yet) */}
+      {!isLoading && enrolments.length === 0 && (
         <div
           className="card-padded"
           style={{
@@ -382,14 +340,11 @@ export default function MyModulesScreen() {
           >
             Start your first module
           </h3>
-          <p
-            className="text-ink-muted"
-            style={{ fontSize: 13, marginBottom: 12 }}
-          >
-            Most owners start with &quot;CEO Mindset Reset&quot; or
-            &quot;Reading Your Numbers&quot;.
+          <p className="text-ink-muted" style={{ fontSize: 13, marginBottom: 12 }}>
+            Browse the Module Library and enrol to start tracking progress.
           </p>
           <button
+            onClick={() => router.push('/training-library')}
             style={{
               padding: '10px 18px',
               background: PURPLE,

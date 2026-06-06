@@ -490,6 +490,50 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 50000, appointments: 1 });
   });
 
+  it('noShowTracked reflects whether any no_show appointment exists (— vs 0% in the UI)', async () => {
+    // No no_show row anywhere -> tracked=false so the UI renders "—" not a
+    // misleading 0% (Dentally feeds that never sync a DNA state look like this).
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : q.table === 'appointments' ? { data: [], error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = rollups;
+    const off = await svc.businessHub(ORG_A, { days: 90 });
+    expect(off.group.noShowTracked).toBe(false);
+
+    // One no_show row present -> tracked=true so the real rate shows.
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : q.table === 'appointments' ? { data: [{ id: 'a1' }], error: null }
+      : { data: [], error: null };
+    const on = await svc.businessHub(ORG_A, { days: 90 });
+    expect(on.group.noShowTracked).toBe(true);
+  });
+
+  it('counts null-practice GHL leads in the group total and rolls up treatments', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = (fn) => {
+      // p1 has 1 lead; GHL leads arrive with practice_id null (9 leads, 2 converted).
+      if (fn === 'leads_rollup_by_practice')
+        return { data: [{ practice_id: 'p1', total: 1, converted: 0 }, { practice_id: null, total: 9, converted: 2 }], error: null };
+      if (fn === 'treatments_rollup_by_org')
+        return { data: [{ started: 4, completed: 3, closed_value_pence: 120000 }], error: null };
+      return { data: [], error: null };
+    };
+    const res = await svc.businessHub(ORG_A, { days: 90 });
+    expect(res.group.leads).toBe(10);            // 1 practice-attributed + 9 null-practice
+    expect(res.group.conversionRate).toBe(20);   // 2 / 10
+    expect(res.practices[0].leads).toBe(1);      // per-practice row still excludes the null bucket
+    expect(res.group.treatmentsStarted).toBe(4);
+    expect(res.group.treatmentsClosedPence).toBe(120000);
+    expect(res.group.leadToStartRate).toBe(40);  // 4 started / 10 leads
+  });
+
   it('org-scoped: table queries + every rollup RPC pin the org', async () => {
     const tables = [];
     supaRec.resultProvider = (q) => {

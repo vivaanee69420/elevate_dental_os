@@ -22,6 +22,7 @@ const NAV = [
   { href: '/platform/users', label: 'Users' },
   { href: '/platform/audit', label: 'Audit log' },
   { href: '/platform/integrations', label: 'Integrations' },
+  { href: '/platform/courses', label: 'Courses' },
 ];
 
 export function PlatformSidebar() {

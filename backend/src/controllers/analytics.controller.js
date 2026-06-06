@@ -62,7 +62,13 @@ export const analyticsController = {
     },
     async businessHub(req, res) {
         const days = Number(req.query.days) || 90;
-        res.json(await analytics_service_1.analyticsService.businessHub(req.user.organisation_id, { days }));
+        // Optional explicit window (a picked month/day). Normalise to ISO; ignore
+        // anything unparseable so a bad query param can't reach the SQL window.
+        const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+        const since = iso(req.query.since);
+        const until = iso(req.query.until);
+        const label = typeof req.query.label === 'string' ? req.query.label.slice(0, 40) : null;
+        res.json(await analytics_service_1.analyticsService.businessHub(req.user.organisation_id, { days, since, until, label }));
     },
     async chair(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);

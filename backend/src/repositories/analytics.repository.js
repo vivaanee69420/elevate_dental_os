@@ -211,17 +211,42 @@ export const analyticsRepository = {
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
-    async appointmentsRollupByPractice(orgId, sinceISO) {
+    async appointmentsRollupByPractice(orgId, sinceISO, untilISO = null) {
         const { data, error } = await supabase_1.serviceClient.rpc('appointments_rollup_by_practice', {
-            p_org: orgId, p_since: sinceISO,
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
         });
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
-    async leadsRollupByPractice(orgId) {
-        const { data, error } = await supabase_1.serviceClient.rpc('leads_rollup_by_practice', { p_org: orgId });
+    // True if this org has ANY appointment marked as a no-show. Dentally orgs
+    // that never sync a did_not_attend/DNA state have zero no_show rows, which is
+    // indistinguishable from a genuine "no missed appointments" at the rollup. We
+    // use this to show "—" (not tracked) instead of a misleading 0% no-show rate.
+    async hasNoShowData(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('appointments')
+            .select('id')
+            .eq('organisation_id', orgId)
+            .eq('status', 'no_show')
+            .limit(1);
+        if (error) throw new Error(error.message);
+        return (data || []).length > 0;
+    },
+    async leadsRollupByPractice(orgId, sinceISO = null, untilISO = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('leads_rollup_by_practice', {
+            p_org: orgId, p_since: sinceISO ?? null, p_until: untilISO ?? null,
+        });
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
+    },
+    // Org-wide treatment rollup (treatment_plans are not practice-attributed).
+    async treatmentsRollupByOrg(orgId, sinceISO, untilISO = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('treatments_rollup_by_org', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) throw new Error(error.message);
+        const row = Array.isArray(data) ? data[0] : data;
+        return row || { started: 0, completed: 0, closed_value_pence: 0 };
     },
     // ------------------------------------------------------------------------
     // Business Hub sources — per-practice rollup across finance + ops + growth.

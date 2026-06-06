@@ -76,8 +76,6 @@ export function ScopePeriodBar() {
               {p.name}
             </option>
           ))}
-          <option value="academy">Academy</option>
-          <option value="lab">Lab</option>
         </select>
       </Field>
     </div>

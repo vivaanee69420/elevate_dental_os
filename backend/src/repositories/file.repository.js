@@ -20,6 +20,19 @@ export const fileRepository = {
         });
         return (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 300 });
     },
+    // Presign a short-lived S3 GET so the browser can download an object the
+    // backend has already authorised. `filename` (optional) sets a download
+    // name via Content-Disposition.
+    async presignDownload(key, filename) {
+        const command = new client_s3_1.GetObjectCommand({
+            Bucket: BUCKET,
+            Key: key,
+            ResponseContentDisposition: filename
+                ? `attachment; filename="${filename.replace(/"/g, '')}"`
+                : undefined,
+        });
+        return (0, s3_request_presigner_1.getSignedUrl)(s3, command, { expiresIn: 300 });
+    },
     async insert(row) {
         const { data } = await supabase_1.serviceClient
             .from('files')

@@ -6,7 +6,7 @@
 // view; Academy/Lab note that the hub covers clinical practices.
 
 import { useMemo } from 'react';
-import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, type Column } from '@/components/ui';
+import { PageHeader, KpiTile, EmptyState, AlertRow } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { formatPence } from '@/lib/format';
@@ -23,21 +23,16 @@ export function GroupOverviewScreen() {
     return data.practices.filter((p) => p.practiceId === scope);
   }, [data, scope]);
 
-  // Decision Lens — ranked actions from the data.
-  const lens = useMemo(() => buildLens(inScope, data?.group.marginPct ?? 0), [inScope, data]);
-
-  const cols: Column<HubPractice>[] = [
-    { header: 'Practice', render: (p) => <span className="font-semibold">{p.name}</span> },
-    { header: 'Turnover', align: 'right', render: (p) => formatPence(p.revenuePence) },
-    { header: 'Appts', align: 'right', render: (p) => p.appointments.toLocaleString('en-GB') },
-    { header: 'No-show', align: 'right', render: (p) => `${p.noShowRate}%` },
-    { header: 'Leads', align: 'right', render: (p) => p.leads.toLocaleString('en-GB') },
-    { header: 'Conversion', align: 'right', render: (p) => `${p.conversionRate}%` },
-  ];
-
-  const headlineRevenue = scope === 'all' || scope === 'practices'
+  const isGroupScope = scope === 'all' || scope === 'practices';
+  const headlineRevenue = isGroupScope
     ? data?.group.revenuePence ?? 0
     : inScope.reduce((s, p) => s + p.revenuePence, 0);
+  // Leads/conversion are ALWAYS the group total, even at practice scope. GHL is
+  // connected as a single location serving every practice, so leads carry no
+  // practice_id and can't be split per-practice without fabricating attribution.
+  // Showing the org-wide figure (labelled "group") is the honest view.
+  const leadsValue = data?.group.leads ?? 0;
+  const conversionValue = data?.group.conversionRate ?? 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -58,27 +53,15 @@ export function GroupOverviewScreen() {
       {data && scope !== 'academy' && scope !== 'lab' && (
         <>
           <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
-            <KpiTile label="Turnover" value={formatPence(headlineRevenue)} delta={`${data.period.days}-day window`} />
+            <KpiTile label="Turnover" value={formatPence(headlineRevenue)} delta={data.period.label ?? `${data.period.days}-day window`} />
             <KpiTile label="Margin" value={`${data.group.marginPct}%`} delta="net, from actuals" deltaTone={data.group.marginPct >= 18 ? 'up' : data.group.marginPct > 0 ? 'muted' : 'down'} />
             <KpiTile label="Appointments" value={inScopeSum(inScope, 'appointments').toLocaleString('en-GB')} delta={`${inScopeSum(inScope, 'completed').toLocaleString('en-GB')} completed`} />
-            <KpiTile label="No-show rate" value={`${rate(inScopeSum(inScope, 'noShows'), inScopeSum(inScope, 'appointments'))}%`} delta={`${inScopeSum(inScope, 'noShows').toLocaleString('en-GB')} no-shows`} deltaTone="down" />
-            <KpiTile label="Leads" value={inScopeSum(inScope, 'leads').toLocaleString('en-GB')} delta="in window" />
-            <KpiTile label="Conversion" value={`${rate(convertedFrom(inScope), inScopeSum(inScope, 'leads'))}%`} delta="lead → patient" deltaTone="up" />
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 items-start">
-            <div>
-              <h3 className="display text-lg mb-2">Business performance — by practice</h3>
-              <DataTable columns={cols} rows={inScope} rowKey={(p) => p.practiceId} empty={<EmptyState message="No practices in scope." />} />
-            </div>
-            <div className="card-padded">
-              <h3 className="display text-lg mb-3">Decision Lens — what to act on this week</h3>
-              {lens.length === 0 ? (
-                <p className="text-sm text-ink-muted">No standout actions in scope.</p>
-              ) : (
-                lens.map((a, i) => <AlertRow key={i} tone={a.tone} title={a.title} body={a.body} />)
-              )}
-            </div>
+            <KpiTile label="No-show rate"
+              value={data.group.noShowTracked ? `${rate(inScopeSum(inScope, 'noShows'), inScopeSum(inScope, 'appointments'))}%` : '—'}
+              delta={data.group.noShowTracked ? `${inScopeSum(inScope, 'noShows').toLocaleString('en-GB')} no-shows` : 'not tracked in Dentally'}
+              deltaTone="down" />
+            <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={isGroupScope ? 'all sources' : 'group — all practices'} />
+            <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'lead → booked' : 'group — all practices'} deltaTone="up" />
           </div>
         </>
       )}
@@ -89,28 +72,6 @@ export function GroupOverviewScreen() {
 function inScopeSum(rows: HubPractice[], k: keyof HubPractice): number {
   return rows.reduce((s, p) => s + (Number(p[k]) || 0), 0);
 }
-function convertedFrom(rows: HubPractice[]): number {
-  return rows.reduce((s, p) => s + Math.round((p.leads * p.conversionRate) / 100), 0);
-}
 function rate(n: number, d: number): number {
   return d ? Math.round((n / d) * 1000) / 10 : 0;
-}
-
-type Lens = { tone: 'good' | 'warn' | 'bad' | 'info'; title: string; body: string };
-function buildLens(rows: HubPractice[], marginPct: number): Lens[] {
-  if (!rows.length) return [];
-  const out: Lens[] = [];
-  const topRev = [...rows].sort((a, b) => b.revenuePence - a.revenuePence)[0];
-  out.push({ tone: 'good', title: `${topRev.name} leads on turnover`, body: `${formatPence(topRev.revenuePence)} in the window — protect its diary and replicate the mix.` });
-
-  const worstNoShow = [...rows].filter((p) => p.appointments > 0).sort((a, b) => b.noShowRate - a.noShowRate)[0];
-  if (worstNoShow && worstNoShow.noShowRate > 0)
-    out.push({ tone: 'warn', title: `${worstNoShow.name} no-show rate ${worstNoShow.noShowRate}%`, body: `${worstNoShow.noShows.toLocaleString('en-GB')} missed appointments — reminders, deposits and speed-to-lead are the cheapest fix.` });
-
-  const worstConv = [...rows].filter((p) => p.leads > 0).sort((a, b) => a.conversionRate - b.conversionRate)[0];
-  if (worstConv)
-    out.push({ tone: 'info', title: `${worstConv.name} converts ${worstConv.conversionRate}% of leads`, body: `Front-desk conversion is the lever — a few points here beats more ad spend.` });
-
-  out.push({ tone: marginPct >= 18 ? 'good' : 'bad', title: `Group net margin ${marginPct}%`, body: marginPct >= 18 ? 'Healthy against the ~18% dental benchmark.' : 'Below the ~18% benchmark — wage ratio and lab/materials are the usual leak.' });
-  return out.slice(0, 4);
 }

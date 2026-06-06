@@ -146,7 +146,7 @@ export default function CourseDetailScreen() {
   }
 
   return (
-    <div className="mx-auto space-y-5" style={{ maxWidth: 880 }}>
+    <div className="mx-auto space-y-5" style={{ maxWidth: 1200 }}>
       <button
         onClick={() => router.push('/training-library')}
         className="text-sm text-ink-muted hover:text-ink"

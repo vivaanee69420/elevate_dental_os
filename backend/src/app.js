@@ -49,6 +49,7 @@ import * as associate_routes_1 from "./routes/associate.routes.js";
 import * as treatment_routes_1 from "./routes/treatment.routes.js";
 import * as staff_routes_1 from "./routes/staff.routes.js";
 import platformAdminRouter from "./routes/platform-admin.routes.js";
+import platformCoursesRouter from "./routes/platform-courses.routes.js";
 const CORS_ALLOWED = [
     'http://localhost:3000',
     'http://localhost:3001',
@@ -161,6 +162,9 @@ export function buildApp() {
     // Mounted BEFORE the tenant /api router so /api/platform/* skips
     // tenant `authenticate` entirely. Hard auth isolation between tenants
     // (Supabase JWT) and SaaS owners (PLATFORM_ADMIN_JWT_SECRET).
+    // Module Library (LMS) authoring — mounted BEFORE platformAdminRouter so the
+    // broad '/api/platform' mount doesn't shadow '/api/platform/courses'.
+    app.use('/api/platform/courses', platformCoursesRouter);
     app.use('/api/platform', platformAdminRouter);
 
     // ---- Authenticated routes ----

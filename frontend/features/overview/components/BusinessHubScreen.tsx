@@ -38,16 +38,20 @@ function rateChip(value: number, kind: 'noShow' | 'conversion') {
 }
 
 export default function BusinessHubScreen() {
-  const { data, isLoading, error } = useBusinessHub(90);
+  // Follow the global Scope/Period filter (month/day) like the Group Overview +
+  // Performance screens above. Previously pinned to a fixed 90-day window, which
+  // made this block disagree with the rest of the page (e.g. page on "Mar 2026"
+  // but this still showing trailing 90 days).
+  const { data, isLoading, error } = useBusinessHub();
   const { data: roi } = useMarketingRoi();
   const [practiceId, setPracticeId] = useState<string | null>(null);
 
   if (isLoading) {
-    return <div className="container mx-auto text-ink-muted" style={{ maxWidth: 1400 }}>Loading business overview…</div>;
+    return <div className="text-ink-muted">Loading business overview…</div>;
   }
   if (error) {
     return (
-      <div className="container mx-auto" style={{ maxWidth: 1400 }}>
+      <div>
         <div style={{ color: 'var(--danger)', fontSize: 13 }}>Failed to load: {(error as Error).message}</div>
       </div>
     );
@@ -63,11 +67,11 @@ export default function BusinessHubScreen() {
   const hasData = g.revenuePence > 0 || g.appointments > 0 || g.leads > 0;
 
   return (
-    <div className="container mx-auto" style={{ maxWidth: 1400 }}>
+    <div>
       <div className="mb-6">
         <h1 className="display text-3xl font-bold">Business Hub</h1>
         <p className="text-sm text-ink-muted mt-1">
-          Group totals and per-practice comparison &middot; last {data!.period.days} days &middot; {g.practices} sites
+          Group totals and per-practice comparison &middot; {data!.period.label ?? `last ${data!.period.days} days`} &middot; {g.practices} sites
         </p>
       </div>
 
@@ -139,9 +143,9 @@ export default function BusinessHubScreen() {
               <th className="right">Revenue</th>
               <th className="right">Chairs</th>
               <th className="right">Appts</th>
-              <th>No-show</th>
+              <th className="right">No-show</th>
               <th className="right">Leads</th>
-              <th>Conversion</th>
+              <th className="right">Conversion</th>
             </tr>
           </thead>
           <tbody>
@@ -151,9 +155,9 @@ export default function BusinessHubScreen() {
                 <td className="right">{formatPence(p.revenuePence)}</td>
                 <td className="right">{p.chairs}</td>
                 <td className="right">{formatNumber(p.appointments)}</td>
-                <td>{rateChip(p.noShowRate, 'noShow')}</td>
+                <td className="right">{rateChip(p.noShowRate, 'noShow')}</td>
                 <td className="right">{formatNumber(p.leads)}</td>
-                <td>{rateChip(p.conversionRate, 'conversion')}</td>
+                <td className="right">{rateChip(p.conversionRate, 'conversion')}</td>
               </tr>
             ))}
           </tbody>
