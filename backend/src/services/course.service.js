@@ -8,6 +8,12 @@ import { courseRepository } from '../repositories/course.repository.js';
 import { fileRepository } from '../repositories/file.repository.js';
 import { AppError } from '../middleware/errors.js';
 
+function groupBy(rows, key) {
+    const out = {};
+    for (const r of rows) (out[r[key]] ||= []).push(r);
+    return out;
+}
+
 export const courseService = {
     // Presign an S3 PUT for a course attachment. Reuses the S3 helpers but, unlike
     // the tenant files domain, writes NO `files` row — course content is global,
@@ -24,15 +30,26 @@ export const courseService = {
         return { courses };
     },
 
-    // Full course with ordered lessons + resources. 404 when missing.
+    // Full course with nested modules → lessons → files + resources. 404 when missing.
     async getCourse(id) {
         const course = await courseRepository.getCourse(id);
         if (!course) throw new AppError('Course not found', 404);
-        const [lessons, resources] = await Promise.all([
+        const [modules, lessons, resources] = await Promise.all([
+            courseRepository.listModules(id),
             courseRepository.listLessons(id),
             courseRepository.listResources(id),
         ]);
-        return { ...course, lessons, resources };
+        const files = await courseRepository.listLessonFilesForLessons(lessons.map((l) => l.id));
+        const filesByLesson = groupBy(files, 'lesson_id');
+        const lessonsByModule = groupBy(
+            lessons.map((l) => ({ ...l, files: filesByLesson[l.id] || [] })),
+            'module_id',
+        );
+        const nestedModules = modules.map((m) => ({
+            ...m,
+            lessons: (lessonsByModule[m.id] || []).sort((a, b) => a.position - b.position),
+        }));
+        return { ...course, modules: nestedModules, resources };
     },
 
     async createCourse(body, admin) {
@@ -63,15 +80,16 @@ export const courseService = {
         return course;
     },
 
-    async addLesson(courseId, body) {
+    async addLesson(courseId, moduleId, body) {
         const course = await courseRepository.getCourse(courseId);
         if (!course) throw new AppError('Course not found', 404);
-        // Append to the end unless an explicit position is supplied.
+        const mod = await courseRepository.getModuleById(moduleId);
+        if (!mod || mod.course_id !== courseId) throw new AppError('Module not found', 404);
         let position = body.position;
         if (position === undefined) {
-            position = (await courseRepository.maxLessonPosition(courseId)) + 1;
+            position = (await courseRepository.maxLessonPosition(moduleId)) + 1;
         }
-        return courseRepository.createLesson(courseId, { ...body, position });
+        return courseRepository.createLesson(courseId, { ...body, module_id: moduleId, position });
     },
 
     async updateLesson(courseId, lessonId, body) {
@@ -85,13 +103,13 @@ export const courseService = {
         return { deleted: true };
     },
 
-    // Reorder lessons: assign position = array index, scoped to the course.
-    async reorderLessons(courseId, ids) {
-        const course = await courseRepository.getCourse(courseId);
-        if (!course) throw new AppError('Course not found', 404);
+    // Reorder lessons: assign position = array index, scoped to the module.
+    async reorderLessons(courseId, moduleId, ids) {
+        const mod = await courseRepository.getModuleById(moduleId);
+        if (!mod || mod.course_id !== courseId) throw new AppError('Module not found', 404);
         await Promise.all(
             ids.map((lessonId, i) =>
-                courseRepository.setLessonPosition(courseId, lessonId, i),
+                courseRepository.setLessonPosition(moduleId, lessonId, i),
             ),
         );
         return courseRepository.listLessons(courseId);
@@ -137,6 +155,23 @@ export const courseService = {
 
     async deleteResource(courseId, resId) {
         await courseRepository.deleteResource(courseId, resId);
+        return { deleted: true };
+    },
+
+    async addLessonFile(courseId, lessonId, body) {
+        const lesson = await courseRepository.getLessonById(lessonId);
+        if (!lesson || lesson.course_id !== courseId) throw new AppError('Lesson not found', 404);
+        let position = body.position;
+        if (position === undefined) {
+            position = (await courseRepository.maxLessonFilePosition(lessonId)) + 1;
+        }
+        return courseRepository.createLessonFile(lessonId, { ...body, position });
+    },
+
+    async deleteLessonFile(courseId, lessonId, fileId) {
+        const lesson = await courseRepository.getLessonById(lessonId);
+        if (!lesson || lesson.course_id !== courseId) throw new AppError('Lesson not found', 404);
+        await courseRepository.deleteLessonFile(lessonId, fileId);
         return { deleted: true };
     },
 };
