@@ -14,7 +14,7 @@ export const businessHealthRepository = {
     async getExisting(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('business_health')
-            .select('id, baseline, targets')
+            .select('id, baseline, targets, setup_completed_at')
             .eq('organisation_id', orgId)
             .maybeSingle();
         return data;
@@ -43,6 +43,45 @@ export const businessHealthRepository = {
             .eq('organisation_id', orgId)
             .single();
         return data;
+    },
+    // --- Manual-input history (000054) ---------------------------------------
+    // Write/refresh today's point-in-time copy of the owner's manual inputs.
+    // Lives in the `inputs` column so it never clobbers the cron's `metrics`
+    // on the shared daily row (unique org+snapshot_date). Read-modify-write
+    // rather than upsert because `metrics` is NOT NULL — a blind upsert would
+    // either violate it on insert or wipe cron metrics on conflict.
+    async upsertInputsSnapshot(orgId, dateStr, inputs) {
+        const { data: existing } = await supabase_1.serviceClient
+            .from('business_health_snapshots')
+            .select('id')
+            .eq('organisation_id', orgId)
+            .eq('snapshot_date', dateStr)
+            .maybeSingle();
+        if (existing) {
+            const { error } = await supabase_1.serviceClient
+                .from('business_health_snapshots')
+                .update({ inputs })
+                .eq('id', existing.id)
+                .eq('organisation_id', orgId);
+            if (error) throw new Error(error.message);
+        } else {
+            const { error } = await supabase_1.serviceClient
+                .from('business_health_snapshots')
+                .insert({ organisation_id: orgId, snapshot_date: dateStr, label: 'inputs', metrics: {}, inputs });
+            if (error) throw new Error(error.message);
+        }
+        return inputs;
+    },
+    // Latest manual-input blob effective on/before `dateStr` (as-of read).
+    async getInputsAsOf(orgId, dateStr) {
+        const { data } = await supabase_1.serviceClient
+            .from('business_health_snapshots')
+            .select('snapshot_date, inputs')
+            .eq('organisation_id', orgId)
+            .lte('snapshot_date', dateStr)
+            .order('snapshot_date', { ascending: false });
+        const row = (data || []).find((r) => r.inputs);
+        return row?.inputs || null;
     },
     async listSnapshots(orgId) {
         const { data } = await supabase_1.serviceClient
