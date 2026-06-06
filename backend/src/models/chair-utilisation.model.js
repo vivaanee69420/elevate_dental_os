@@ -7,6 +7,8 @@ export const SLOTS = ['morning', 'midday', 'afternoon', 'evening'];
 
 export const chairUtilisationListQuerySchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid().optional(),
+    // As-of period end for historical grid reads (000055).
+    asOf: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 export const chairUtilisationCreateSchema = zod_1.z.object({

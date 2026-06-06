@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { formatPounds } from '@/features/_mock';
 import { useMe } from '@/hooks/useMe';
+import { SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { useMetrics, useUpdateMetric } from '../hooks';
 import type { HealthMetric } from '../api';
 
@@ -94,12 +95,28 @@ function SummaryTile({ label, value, colour }: { label: string; value: number; c
   );
 }
 
-export default function KpiScorecardScreen() {
-  const { data } = useMetrics();
-  const { data: me } = useMe();
-  const canEdit = me?.role === 'owner';
+// Month picker value 'YYYY-MM' -> last day of that month 'YYYY-MM-DD' (period end).
+function monthToAsOf(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  const last = new Date(y, m, 0).getDate();
+  return `${month}-${String(last).padStart(2, '0')}`;
+}
 
-  if (!data) return <div>Loading…</div>;
+export default function KpiScorecardScreen() {
+  const [month, setMonth] = useState('');           // '' = live current values
+  const asOf = month ? monthToAsOf(month) : undefined;
+  const { data } = useMetrics(asOf);
+  const { data: me } = useMe();
+  // Viewing a past period is read-only — you cannot edit history.
+  const canEdit = me?.role === 'owner' && !asOf;
+
+  if (!data)
+    return (
+      <div className="flex flex-col gap-4">
+        <SkeletonKpiRow count={4} />
+        <SkeletonTable rows={8} cols={4} />
+      </div>
+    );
   const metrics = data.metrics;
   const green = metrics.filter((m) => statusOf(m) === 'green').length;
   const amber = metrics.filter((m) => statusOf(m) === 'amber').length;
@@ -107,11 +124,28 @@ export default function KpiScorecardScreen() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <div className="mb-4">
-        <h1 className="display text-3xl font-bold">KPI Scorecard</h1>
-        <p className="text-sm text-ink-muted">
-          Performance management · {metrics.length} KPIs traffic-lighted · live from your connected data
-        </p>
+      <div className="mb-4 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="display text-3xl font-bold">KPI Scorecard</h1>
+          <p className="text-sm text-ink-muted">
+            Performance management · {metrics.length} KPIs traffic-lighted ·{' '}
+            {asOf ? `showing values as at ${asOf} (read-only history)` : 'live from your connected data'}
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-ink-muted">
+          As at
+          <input
+            type="month"
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+            className="border border-line rounded-md px-2 py-1 text-ink"
+          />
+          {month && (
+            <button type="button" onClick={() => setMonth('')} className="text-accent underline">
+              Live
+            </button>
+          )}
+        </label>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">

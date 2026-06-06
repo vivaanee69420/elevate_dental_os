@@ -8,8 +8,10 @@ export function updateHealth(payload: any) {
   return api('/api/health', { method: 'PUT', body: JSON.stringify(payload) });
 }
 
-export function getHealthProgress() {
-  return api('/api/health/progress');
+// `asOf` (YYYY-MM-DD) rewinds manual baseline/targets/KPIs to what they were on
+// that date (000054 history); omit for the live current values.
+export function getHealthProgress(asOf?: string) {
+  return api(`/api/health/progress${asOf ? `?asOf=${asOf}` : ''}`);
 }
 
 export function getHealthInsights() {
@@ -49,8 +51,8 @@ export interface HealthMetric {
   remainingToTarget: number | null;
 }
 
-export function getMetrics() {
-  return api<{ metrics: HealthMetric[] }>('/api/health/metrics');
+export function getMetrics(asOf?: string) {
+  return api<{ metrics: HealthMetric[] }>(`/api/health/metrics${asOf ? `?asOf=${asOf}` : ''}`);
 }
 
 export function updateMetric(key: string, value: number) {
