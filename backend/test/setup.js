@@ -79,6 +79,10 @@ const h = vi.hoisted(() => {
         (q.ltes ||= []).push({ col, val });
         return builder;
       },
+      lt(col, val) {
+        (q.lts ||= []).push({ col, val });
+        return builder;
+      },
       order(col, opts) {
         q.order = { col, opts };
         return builder;

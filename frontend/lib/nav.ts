@@ -23,7 +23,8 @@ export const NAV: NavSection[] = [
     { id: 'business-hub', label: 'Business Hub', isNew: true },
     { id: 'deep-dive', label: 'Practice Deep Dive', isNew: true },
     { id: 'task-manager', label: 'Task Manager' },
-    { id: 'ai-insights', label: 'AI Insights' },
+    { id: 'ai-insights', label: 'AI Analyst', isNew: true },
+    { id: 'day', label: 'Day · Cash Collected', isNew: true },
     { id: 'p4g-ai', label: 'Mastermind AI' },
     { id: 'scenarios', label: 'Scenarios' },
     { id: 'tax', label: 'Tax (MTD)' },
@@ -34,9 +35,9 @@ export const NAV: NavSection[] = [
   { label: 'Finance', items: [
     { id: 'cashflow', label: 'Cash Flow' },
     { id: 'profit', label: 'Profit & Loss' },
-    { id: 'financial', label: 'Financial' },
+    { id: 'financial', label: 'P&L & Margin' },
     { id: 'payments', label: 'Patient Payments' },
-    { id: 'valuation', label: 'Valuation' },
+    { id: 'valuation', label: 'Value & Growth' },
   ]},
   { label: 'Business Health', items: [
     { id: 'health-setup', label: 'Setup & Targets' },
@@ -46,6 +47,7 @@ export const NAV: NavSection[] = [
   { label: 'Operations', items: [
     { id: 'appointments', label: 'Appointments', isNew: true },
     { id: 'associates', label: 'Associates' },
+    { id: 'clinicians', label: 'Clinicians', isNew: true },
     { id: 'staff', label: 'Staff Scheduling' },
     { id: 'pay', label: 'Associate Pay' },
     { id: 'chair', label: 'Chair Utilisation' },
@@ -54,7 +56,7 @@ export const NAV: NavSection[] = [
   ]},
   { label: 'Growth', items: [
     { id: 'patients', label: 'Patients' },
-    { id: 'marketing', label: 'Marketing' },
+    { id: 'marketing', label: 'Marketing & ROI' },
     { id: 'loyalty', label: 'Loyalty & Members' },
     { id: 'reviews', label: 'Reviews' },
     { id: 'booking', label: 'Online Booking' },

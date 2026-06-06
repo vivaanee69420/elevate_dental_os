@@ -67,3 +67,17 @@ export function computeTreatmentEconomics(model: TreatmentModel): Promise<Treatm
     body: JSON.stringify(model),
   });
 }
+
+// Real case-fee benchmarks from Dentally invoice_items. Per workbench category,
+// the mean invoice total for invoices containing that procedure (patient FEE
+// only — costs stay owner-entered). null per category when no matching invoices.
+export interface FeeBenchmark { feePence: number; sampleSize: number }
+export interface TreatmentFeeBenchmarks {
+  windowMonths: number;
+  invoicesAnalysed: number;
+  benchmarks: Partial<Record<'fullarch' | 'implant' | 'invisalign', FeeBenchmark | null>>;
+}
+
+export function fetchTreatmentFeeBenchmarks(): Promise<TreatmentFeeBenchmarks> {
+  return api<TreatmentFeeBenchmarks>('/api/analytics/treatment-fee-benchmarks');
+}

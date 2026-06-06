@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, type Column } from '@/components/ui';
 import { formatPence } from '@/lib/format';
-import { useTreatmentModels, useTreatmentEconomics } from '../workbench-hooks';
+import { useTreatmentModels, useTreatmentEconomics, useTreatmentFeeBenchmarks } from '../workbench-hooks';
 import type { TreatmentModel, WorkbenchComponent } from '../workbench-api';
 
 const poundsToPence = (p: number) => Math.round((Number.isFinite(p) ? p : 0) * 100);
@@ -17,17 +17,41 @@ const penceToPounds = (p: number) => Math.round((p || 0) / 100);
 
 export function TreatmentWorkbench() {
   const { data: models, isLoading: modelsLoading, isError } = useTreatmentModels();
+  const { data: feeBenchmarks } = useTreatmentFeeBenchmarks();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [model, setModel] = useState<TreatmentModel | null>(null);
 
+  const benchOf = (key?: string | null) =>
+    (key && feeBenchmarks?.benchmarks?.[key as 'fullarch' | 'implant' | 'invisalign']) || null;
+
   // Seed the model from the selected default once models arrive / tab changes.
+  // When a real Dentally case-fee benchmark exists for the treatment, seed the
+  // case fee from it (the patient FEE — costs below stay owner-entered).
   useEffect(() => {
     if (!models) return;
     const key = activeKey && models[activeKey] ? activeKey : Object.keys(models)[0];
     if (key && key !== activeKey) setActiveKey(key);
-    if (key && (!model || model.key !== key)) setModel({ ...models[key], components: models[key].components.map((c) => ({ ...c })) });
+    if (key && (!model || model.key !== key)) {
+      const seed = { ...models[key], components: models[key].components.map((c) => ({ ...c })) };
+      const bench = benchOf(key);
+      if (bench?.feePence) seed.pricePence = bench.feePence;
+      setModel(seed);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [models, activeKey]);
+
+  // Benchmarks can arrive AFTER the model was seeded from defaults. Upgrade the
+  // case fee to the real average only if the owner hasn't edited it yet (still
+  // equal to the hardcoded default), so a manual edit is never clobbered.
+  useEffect(() => {
+    const key = model?.key;
+    if (!key || !models || !feeBenchmarks) return;
+    const bench = benchOf(key);
+    if (bench?.feePence && model?.pricePence === models[key]?.pricePence) {
+      setModel((m) => (m && m.key === key ? { ...m, pricePence: bench.feePence } : m));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feeBenchmarks, models, model?.key]);
 
   const { data: econ } = useTreatmentEconomics(model);
 
@@ -71,6 +95,31 @@ export function TreatmentWorkbench() {
           </button>
         ))}
       </div>
+
+      {/* Real case-fee provenance — only when Dentally invoices give a benchmark
+          for this treatment. Patient fee only; costs stay owner-entered. */}
+      {(() => {
+        const bench = benchOf(model.key);
+        if (!bench?.feePence) return null;
+        const defaultPence = models[model.key!]?.pricePence ?? 0;
+        const usingReal = model.pricePence === bench.feePence;
+        const gbp = (pence: number) => `£${penceToPounds(pence).toLocaleString('en-GB')}`;
+        return (
+          <AlertRow
+            tone={usingReal ? 'good' : 'info'}
+            title={usingReal ? `Case fee from real Dentally invoices — ${gbp(bench.feePence)}` : `Real case fee available — ${gbp(bench.feePence)}`}
+            body={`Average total across ${bench.sampleSize} ${model.label} invoice${bench.sampleSize === 1 ? '' : 's'} in the last ${feeBenchmarks?.windowMonths ?? 12} months. This is the patient fee — your lab/CBCT/component costs below stay manual (Dentally never sends supplier cost).`}
+            tag={
+              <button
+                className="btn btn-ghost text-[12px] whitespace-nowrap"
+                onClick={() => patch({ pricePence: usingReal ? defaultPence : bench.feePence })}
+              >
+                {usingReal ? `Use default ${gbp(defaultPence)}` : `Use real ${gbp(bench.feePence)}`}
+              </button>
+            }
+          />
+        );
+      })()}
 
       {/* money-flow results */}
       {econ && (

@@ -34,10 +34,11 @@ export interface PracticeUda {
   rate: number; // £/UDA
 }
 
-/** Per-practice UDA delivery — verbatim from the prototype. */
+// Not wired: no real UDA delivery feed. `delivered` is 0 for every practice so
+// the tracker shows 0 against contract rather than synthesised delivery counts.
 export const PRACTICE_UDA: PracticeUda[] = [
-  { name: 'Ashford Dental', contract: 8000, delivered: 4900, rate: 28.5 },
-  { name: 'Rochester Dental', contract: 12000, delivered: 7200, rate: 27.0 },
-  { name: 'Barnet Dental', contract: 6000, delivered: 3100, rate: 28.0 },
-  { name: 'Bexleyheath', contract: 6000, delivered: 3200, rate: 26.5 },
+  { name: 'Ashford Dental', contract: 0, delivered: 0, rate: 0 },
+  { name: 'Rochester Dental', contract: 0, delivered: 0, rate: 0 },
+  { name: 'Barnet Dental', contract: 0, delivered: 0, rate: 0 },
+  { name: 'Bexleyheath', contract: 0, delivered: 0, rate: 0 },
 ];

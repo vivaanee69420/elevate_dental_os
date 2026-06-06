@@ -46,6 +46,48 @@ describe('authHeader', () => {
     });
 });
 
+describe('invoiceItemRow', () => {
+    const ORG = 'org-1';
+    const invoiceMap = new Map([
+        ['9001', { practice_id: 'prac-A', contact_id: 'contact-7', dated_on: '2026-05-10', paid: true }],
+    ]);
+    const practitionerMap = new Map([['p55', 'assoc-9']]);
+
+    it('maps name + string prices to pence and resolves practice/date from the invoice', () => {
+        const row = __test.invoiceItemRow(ORG, {
+            id: 'ii-1', name: 'Single Implant', item_price: '2050.0', total_price: '2050.0',
+            quantity: 1, nhs_charge: false, invoice_id: 9001, practitioner_id: 'p55',
+            treatment_plan_id: 'tp-3',
+        }, invoiceMap, practitionerMap);
+        expect(row).toMatchObject({
+            organisation_id: ORG, source: 'dentally', pms_external_id: 'ii-1',
+            pms_invoice_id: '9001', treatment_name: 'Single Implant',
+            unit_price_pence: 205000, fee_pence: 205000, quantity: 1, nhs_charge: false,
+            practice_id: 'prac-A', contact_id: 'contact-7', associate_id: 'assoc-9',
+            treatment_plan_id: 'tp-3', invoiced_on: '2026-05-10', invoice_paid: true,
+        });
+    });
+
+    it('total_price drives the qty-inclusive fee; quantity defaults to 1', () => {
+        const row = __test.invoiceItemRow(ORG, {
+            id: 'ii-2', name: 'Crown', item_price: '200', total_price: '600', quantity: 3, invoice_id: 9001,
+        }, invoiceMap);
+        expect(row.unit_price_pence).toBe(20000);
+        expect(row.fee_pence).toBe(60000);
+        expect(row.quantity).toBe(3);
+        const noQty = __test.invoiceItemRow(ORG, { id: 'ii-3', name: 'X', item_price: '10', invoice_id: 9001 }, invoiceMap);
+        expect(noQty.quantity).toBe(1);
+        expect(noQty.fee_pence).toBe(1000); // falls back to item_price when total_price absent
+    });
+
+    it('unknown invoice -> null practice/date, never throws', () => {
+        const row = __test.invoiceItemRow(ORG, { id: 'ii-4', name: 'Y', item_price: '5', invoice_id: 9999 }, invoiceMap);
+        expect(row.practice_id).toBeNull();
+        expect(row.contact_id).toBeNull();
+        expect(row.invoiced_on).toBeNull();
+    });
+});
+
 function page(body) {
     return { ok: true, status: 200, json: async () => body };
 }

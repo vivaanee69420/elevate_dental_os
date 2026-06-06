@@ -207,9 +207,11 @@ export default function ValuationScreen() {
       <div className="mb-4">
         <div className="flex justify-between items-end gap-4 flex-wrap">
           <div>
-            <h1 className="display text-3xl font-bold">Practice Valuation</h1>
+            <h1 className="display text-3xl font-bold">Value &amp; Growth</h1>
             <p className="text-sm text-ink-muted">
-              Three-model valuation: Principal-led · Associate-led · DSO/Corporate
+              The boardroom view — Enterprise Value against your &pound;100M goal, the levers that move it,
+              and the work that makes the group sellable. Three-model valuation: Principal-led &middot;
+              Associate-led &middot; DSO/Corporate.
             </p>
             <FinanceToolbar />
           </div>

@@ -2,11 +2,26 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchTreatmentModels, computeTreatmentEconomics, type TreatmentModel } from './workbench-api';
+import {
+  fetchTreatmentModels,
+  computeTreatmentEconomics,
+  fetchTreatmentFeeBenchmarks,
+  type TreatmentModel,
+} from './workbench-api';
 
 // Seed default models (fullarch/implant/invisalign) from the backend.
 export function useTreatmentModels() {
   return useQuery({ queryKey: ['treatment-models'], queryFn: fetchTreatmentModels, staleTime: Infinity });
+}
+
+// Real case-fee benchmarks from Dentally invoice_items (12mo). Used to seed the
+// workbench case fee with the real average; owner can revert to the default.
+export function useTreatmentFeeBenchmarks() {
+  return useQuery({
+    queryKey: ['treatment-fee-benchmarks'],
+    queryFn: fetchTreatmentFeeBenchmarks,
+    staleTime: 5 * 60_000,
+  });
 }
 
 // Debounce any value by `ms` — used so slider drags don't fire a request per tick.
