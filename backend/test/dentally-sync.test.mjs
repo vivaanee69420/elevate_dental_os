@@ -7,10 +7,10 @@ import { encryptSecret } from '../src/lib/crypto.js';
 // integration.repository.upsert chains .select().single() which the supabase
 // fake doesn't model; mock the repo so syncOneOrg's bookkeeping is observable.
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn() },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), mergeConfig: vi.fn() },
 }));
 
-const { syncOneOrg, bootstrapOnConnect, invoiceRow, __test } = await import('../src/lib/integrations/dentally-sync.js');
+const { syncOneOrg, syncAllOrgs, bootstrapOnConnect, invoiceRow, __test } = await import('../src/lib/integrations/dentally-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 describe('dentally mappers', () => {
@@ -245,7 +245,59 @@ describe('syncOneOrg', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
-    it('recent mode: all three resources pull the same ~24-month updated_since window (no open-only `after`)', async () => {
+    it('reports progress for every heavy pull + a final linking phase (no silent stretch, no frozen 99%)', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        // Every collection returns one page of one row so each phase reports.
+        global.fetch = vi.fn(async (url) => {
+            const u = url.toString();
+            const key = u.includes('/patients') ? 'patients'
+                : u.includes('/appointments') ? 'appointments'
+                : u.includes('/payments') ? 'payments'
+                : u.includes('/treatment_plans') ? 'treatment_plans'
+                : u.includes('/invoice_items') ? 'invoice_items'
+                : u.includes('/invoices') ? 'invoices'
+                : u.includes('/practitioners') ? 'practitioners'
+                : u.includes('/users') ? 'users'
+                : null;
+            if (!key) return page({});
+            return page({ [key]: [{ id: `${key}-1`, site_id: 'S1', patient_id: 'P1', invoice_id: 'invoices-1', name: 'X', item_price: '1' }], meta: { total_pages: 1 } });
+        });
+        const phases = [];
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-01-01T00:00:00Z' }, (p) => phases.push(p.phase));
+
+        // The previously-silent heavy pulls now each emit progress.
+        for (const ph of ['patients', 'appointments', 'payments', 'treatment_plans', 'invoices', 'invoice_items']) {
+            expect(phases).toContain(ph);
+        }
+        // The 99% tail (relink RPCs) is announced, not silent.
+        expect(phases).toContain('linking');
+        // linking is emitted after the data pulls (it precedes the relink RPCs).
+        expect(phases.lastIndexOf('linking')).toBeGreaterThan(phases.lastIndexOf('invoice_items'));
+    });
+
+    it('pulls /invoices once (the invoice map is built from the same fetch, not a second pull)', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        let invoiceListPulls = 0;
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            // Count only the paginating collection pulls of /invoices (page param
+            // present), not the up-front page-count probe — both hit the path, but
+            // the duplicate we removed was a second *full* pull.
+            if (u.pathname.endsWith('/invoices') && u.searchParams.get('page') === '1') invoiceListPulls++;
+            const seg = u.pathname.split('/').pop();
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-01-01T00:00:00Z' });
+        // probe (fetchPageCount) + one real pull = 2 page-1 hits; the old code did
+        // 3 (probe + buildInvoiceMap + pullInvoices).
+        expect(invoiceListPulls).toBe(2);
+    });
+
+    it('recent mode: all three resources pull the same ~12-month updated_since window (no open-only `after`)', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const seen = [];
@@ -257,19 +309,19 @@ describe('syncOneOrg', () => {
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { recent: true });
 
-        const expected24 = Date.now() - 24 * 30 * 86400000; // RECENT_MONTHS
+        const expected12 = Date.now() - 12 * 30 * 86400000; // RECENT_MONTHS
         const patients = seen.filter((s) => s.path.includes('/patients'));
         const payments = seen.filter((s) => s.path.includes('/payments'));
         const appts = seen.filter((s) => s.path.includes('/appointments'));
         expect(patients.length).toBeGreaterThan(0);
         expect(payments.length).toBeGreaterThan(0);
         expect(appts.length).toBeGreaterThan(0);
-        // Patients + payments pull the bounded 2-year window via updated_since.
+        // Patients + payments pull the bounded 1-year window via updated_since.
         for (const s of [...patients, ...payments]) {
             expect(s.after).toBeNull();
-            expect(Math.abs(new Date(s.updated_since).getTime() - expected24)).toBeLessThan(86400000);
+            expect(Math.abs(new Date(s.updated_since).getTime() - expected12)).toBeLessThan(86400000);
         }
-        // Appointments are pulled BOTH ways on bootstrap: the 2-year history via
+        // Appointments are pulled BOTH ways on bootstrap: the 1-year history via
         // updated_since (for Associates / Treatment Mix / Pay) AND the upcoming
         // book via `after=now` (for the live Appointments diary — a separate
         // query so years of history can't crowd future bookings out under the
@@ -279,11 +331,59 @@ describe('syncOneOrg', () => {
         expect(apptHistory.length).toBeGreaterThan(0);
         expect(apptUpcoming.length).toBeGreaterThan(0);
         for (const s of apptHistory) {
-            expect(Math.abs(new Date(s.updated_since).getTime() - expected24)).toBeLessThan(86400000);
+            expect(Math.abs(new Date(s.updated_since).getTime() - expected12)).toBeLessThan(86400000);
         }
         for (const s of apptUpcoming) {
             expect(Math.abs(new Date(s.after).getTime() - Date.now())).toBeLessThan(86400000);
         }
+    });
+});
+
+describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
+    beforeEach(() => {
+        integrationRepository.upsert.mockReset();
+        integrationRepository.markFailed.mockReset();
+        integrationRepository.mergeConfig.mockReset();
+    });
+
+    it('first run full-backfills all history (2005 anchor) then flags the org', async () => {
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'integrations' && q.op === 'select')
+                return { data: [{ organisation_id: 'org-1', provider: 'dentally', status: 'active', secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+            if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            return { data: [], error: null };
+        };
+        const seen = [];
+        global.fetch = vi.fn(async (url) => {
+            seen.push(new URL(url.toString()).searchParams.get('updated_since'));
+            return page({ patients: [], meta: { total_pages: 1 } });
+        });
+        const res = await syncAllOrgs();
+        expect(res[0].backfill).toBe(true);
+        expect(seen.filter(Boolean).some((s) => s.startsWith('2005-'))).toBe(true); // full history
+        expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-1', 'dentally', { history_backfilled: true });
+    });
+
+    it('once flagged, later runs ride the incremental cursor (no re-backfill)', async () => {
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'integrations' && q.op === 'select')
+                return { data: [{ organisation_id: 'org-2', provider: 'dentally', status: 'active', secrets, config: { history_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+            if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            return { data: [], error: null };
+        };
+        const seen = [];
+        global.fetch = vi.fn(async (url) => {
+            seen.push(new URL(url.toString()).searchParams.get('updated_since'));
+            return page({ patients: [], meta: { total_pages: 1 } });
+        });
+        const res = await syncAllOrgs();
+        expect(res[0].backfill).toBe(false);
+        const windowed = seen.filter(Boolean);
+        expect(windowed.length).toBeGreaterThan(0);
+        expect(windowed.every((s) => s.startsWith('2026-05'))).toBe(true); // incremental from last_sync_at
+        expect(integrationRepository.mergeConfig).not.toHaveBeenCalled();
     });
 });
 
