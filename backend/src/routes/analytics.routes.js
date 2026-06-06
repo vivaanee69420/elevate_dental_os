@@ -30,11 +30,19 @@ router.get('/cashflow-outlook', fin, (0, async_handler_1.asyncHandler)(analytics
 router.get('/financial', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.financial));
 router.get('/pl', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.pl));
 router.get('/pl-benchmark', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.plBenchmark));
+router.get('/pl-margin', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.plMargin));
 router.get('/kpis', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.kpis));
 router.get('/valuation', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuation));
 router.get('/chair', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.chair));
+router.get('/treatment-matrix', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentMatrix));
+router.get('/treatment-revenue', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentRevenue));
+router.get('/cash-by-day', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashByDay));
+router.get('/marketing-roi', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.marketingRoi));
+router.get('/clinicians', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.clinicians));
+router.post('/ai-ask', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiAsk));
 // Treatment Economics Workbench — pure compute, audit-exempt (/compute/ path).
 router.get('/compute/treatment-models', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentModels));
+router.get('/treatment-fee-benchmarks', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentFeeBenchmarks));
 router.post('/compute/treatment-economics', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentEconomics));
 // Value & Growth — driver-based valuation + Sale Planner (pure compute,
 // audit-exempt /compute/ path, valuation.view gate same as GET /valuation).

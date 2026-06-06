@@ -55,6 +55,41 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return data || [];
     },
+    // Clinicians view (Intelligence OS): associate roster with pay/lab splits +
+    // home practice. pay_pct/lab_split_pct are stored as basis points (4500=45%).
+    async cliniciansRoster(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('associates')
+            .select('id, full_name, pay_pct, lab_split_pct, active, primary_practice_id, specialty, practice:practices!associates_primary_practice_id_fkey(name)')
+            .eq('organisation_id', orgId)
+            .order('full_name', { ascending: true })
+            .limit(LIMIT_GUARD);
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+    // Real NHS/UDA obligation per practice (owner-entered, not from Dentally).
+    async practicesNhs(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('practices')
+            .select('id, name, nhs_contract_uda, nhs_uda_rate_pence')
+            .eq('organisation_id', orgId)
+            .eq('kind', 'practice')
+            .limit(LIMIT_GUARD);
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+    // All entities (practice + academy + lab) with kind, for scope naming on the
+    // P&L / per-entity views. One query; the service filters by scope.
+    async allEntities(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('practices')
+            .select('id, name, kind')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (error)
+            throw new Error(error.message);
+        return data || [];
+    },
     async settledPayments(orgId) {
         const { data, error } = await supabase_1.serviceClient
             .from('payments')
@@ -78,6 +113,37 @@ export const analyticsRepository = {
             .limit(LIMIT_GUARD);
         if (error)
             throw new Error(error.message);
+        return data || [];
+    },
+    // Marketing & ROI sources (Intelligence OS). Real ad spend per provider +
+    // CRM leads for channel attribution within [since, until). practiceIds (array
+    // | null) scopes to specific entities; null = whole org. ad_metrics.practice_id
+    // is frequently NULL (one ad account per group) — an entity scope then sees no
+    // paid spend, which is honest (spend isn't tagged to that practice).
+    async adMetricsInWindow(orgId, fromDate, toDate, practiceIds = null) {
+        let q = supabase_1.serviceClient
+            .from('ad_metrics')
+            .select('provider, spend_pence, impressions, clicks, conversions, practice_id')
+            .eq('organisation_id', orgId)
+            .gte('metric_date', fromDate)
+            .lte('metric_date', toDate)
+            .limit(LIMIT_GUARD);
+        if (practiceIds) q = q.in('practice_id', practiceIds);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+    async leadsForMarketing(orgId, sinceISO, untilISO, practiceIds = null) {
+        let q = supabase_1.serviceClient
+            .from('leads')
+            .select('source, utm_source, utm_medium, status, practice_id, estimated_value_pence, created_at')
+            .eq('organisation_id', orgId)
+            .gte('created_at', sinceISO)
+            .lt('created_at', untilISO)
+            .limit(LIMIT_GUARD);
+        if (practiceIds) q = q.in('practice_id', practiceIds);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
         return data || [];
     },
     async settledPaymentsInWindow(orgId, sinceISO) {
@@ -170,6 +236,116 @@ export const analyticsRepository = {
         if (error)
             throw new Error(error.message);
         return data || [];
+    },
+    // Treatment Mix heat matrix (GM Intelligence OS): appointment VOLUME by
+    // practice_id x appointment_type within [since, until). Prefers the
+    // treatment_mix_matrix RPC; falls back to a paginated JS-side grouping when
+    // the RPC is absent (mirrors treatment.repository.mixByType). VOLUME only —
+    // Dentally appointments carry no price (data wall). Rows: { practice_id,
+    // appointment_type, volume }. NULL types collapse to 'Unspecified'.
+    async treatmentMixMatrix(orgId, sinceISO, untilISO = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('treatment_mix_matrix', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (!error && Array.isArray(data)) {
+            return data.map((r) => ({
+                practice_id: r.practice_id,
+                appointment_type: r.appointment_type ?? 'Unspecified',
+                volume: Number(r.volume) || 0,
+            }));
+        }
+        return this._matrixFallback(orgId, sinceISO, untilISO);
+    },
+    async _matrixFallback(orgId, sinceISO, untilISO = null) {
+        const counts = new Map(); // `${practice_id}|${type}` -> volume
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+            let query = supabase_1.serviceClient
+                .from('appointments')
+                .select('practice_id, appointment_type')
+                .eq('organisation_id', orgId)
+                .gte('starts_at', sinceISO);
+            if (untilISO) query = query.lt('starts_at', untilISO);
+            // Stable order required across .range() windows (PostgREST gives no
+            // row-order guarantee otherwise -> rows skipped/double-counted).
+            // .range() is terminal, so it comes last.
+            const { data, error } = await query
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(error.message);
+            const rows = data ?? [];
+            for (const r of rows) {
+                const type = r.appointment_type ?? 'Unspecified';
+                const key = `${r.practice_id}|${type}`;
+                counts.set(key, (counts.get(key) ?? 0) + 1);
+            }
+            if (rows.length < PAGE) break;
+        }
+        return [...counts.entries()].map(([key, volume]) => {
+            const sep = key.indexOf('|');
+            return { practice_id: key.slice(0, sep), appointment_type: key.slice(sep + 1), volume };
+        });
+    },
+    // Treatment REVENUE matrix (GM Intelligence OS): real invoiced fee by
+    // practice_id x treatment_name within [since, until), from invoice_items.
+    // Prefers the treatment_revenue_matrix RPC; falls back to a paginated scan.
+    // Rows: { practice_id, treatment_name, fee_pence, item_count }.
+    async treatmentRevenueMatrix(orgId, sinceISO, untilISO = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('treatment_revenue_matrix', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (!error && Array.isArray(data)) {
+            return data.map((r) => ({
+                practice_id: r.practice_id,
+                treatment_name: r.treatment_name || 'Unspecified',
+                fee_pence: Number(r.fee_pence) || 0,
+                item_count: Number(r.item_count) || 0,
+            }));
+        }
+        return this._revenueMatrixFallback(orgId, sinceISO, untilISO);
+    },
+    async _revenueMatrixFallback(orgId, sinceISO, untilISO = null) {
+        // invoiced_on is a DATE; compare against the date portion of the window.
+        const sinceDate = String(sinceISO).slice(0, 10);
+        const untilDate = untilISO ? String(untilISO).slice(0, 10) : null;
+        const agg = new Map(); // `${practice_id}|${name}` -> { fee, count }
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+            let query = supabase_1.serviceClient
+                .from('invoice_items')
+                .select('practice_id, treatment_name, fee_pence')
+                .eq('organisation_id', orgId)
+                .gte('invoiced_on', sinceDate);
+            if (untilDate) query = query.lt('invoiced_on', untilDate);
+            const { data, error } = await query
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(error.message);
+            const rows = data ?? [];
+            for (const r of rows) {
+                const name = r.treatment_name || 'Unspecified';
+                const key = `${r.practice_id}|${name}`;
+                const a = agg.get(key) || { fee: 0, count: 0 };
+                a.fee += Number(r.fee_pence) || 0;
+                a.count += 1;
+                agg.set(key, a);
+            }
+            if (rows.length < PAGE) break;
+        }
+        return [...agg.entries()].map(([key, v]) => {
+            const sep = key.indexOf('|');
+            return { practice_id: key.slice(0, sep), treatment_name: key.slice(sep + 1), fee_pence: v.fee, item_count: v.count };
+        });
+    },
+    // Per-invoice rollup (names[] + total fee) for the workbench real-fee seed.
+    // RPC only (no fallback): a JS array_agg-equivalent scan would be heavy and
+    // this is a non-critical enhancement — returns [] if the RPC is absent.
+    async invoiceCaseRollup(orgId, sinceISO) {
+        const { data, error } = await supabase_1.serviceClient.rpc('invoice_case_rollup', {
+            p_org: orgId, p_since: sinceISO,
+        });
+        if (error || !Array.isArray(data)) return [];
+        return data.map((r) => ({ names: r.names ?? [], total_pence: Number(r.total_pence) || 0 }));
     },
     // Appointments in a rolling window for utilisation / DNA per practice.
     async appointmentsForHub(orgId, sinceISO) {

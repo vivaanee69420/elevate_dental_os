@@ -7,6 +7,8 @@ import * as analytics_repository_1 from "../repositories/analytics.repository.js
 import * as formulas_1 from "../lib/formulas.js";
 import * as claude_1 from "../lib/claude.js";
 import * as monthlyFinancial_repository_1 from "../repositories/monthlyFinancial.repository.js";
+import * as associate_repository_1 from "../repositories/associate.repository.js";
+import * as payRun_repository_1 from "../repositories/pay-run.repository.js";
 import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
@@ -118,6 +120,177 @@ export const analyticsService = {
             note: 'OCPSPD and profit-per-chair-hour pending per-practice opex/treatment-minute sourcing.',
         };
     },
+    // Treatment Mix heat matrix (GM Intelligence OS, Phase 2). Appointment
+    // VOLUME by treatment type x practice for the selected scope + period. This
+    // is clinical ACTIVITY, not revenue: Dentally appointments carry no price
+    // (data wall), so there is intentionally no £ here. Scope/period-driven.
+    //
+    //   columns = practices in scope (sorted by volume desc)
+    //   rows    = appointment types (top 12 by volume; the long tail rolls into
+    //             one honest 'Other' row so the matrix stays readable)
+    //   cell    = appointment count for (type, practice) in the window
+    //
+    // Insights are volume-framed (top treatment, single-site concentration,
+    // busiest practice, Pareto breadth) — never money.
+    async treatmentMatrix(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        if (resolved.mode === 'academy' || resolved.mode === 'lab') {
+            return { applicable: false, scope: resolved.mode,
+                message: 'Treatment mix measures clinical appointment volume — switch scope to the group or a practice.' };
+        }
+        const { since, until, label } = treatmentWindow(period, periodKey, now());
+
+        let practicesAll = await analytics_repository_1.analyticsRepository.practicesFull(orgId);
+        if (resolved.mode === 'entity')
+            practicesAll = practicesAll.filter((p) => resolved.practiceIds.includes(p.id));
+        const nameById = new Map(practicesAll.map((p) => [p.id, p.name]));
+
+        const raw = await analytics_repository_1.analyticsRepository.treatmentMixMatrix(orgId, since, until);
+        // Keep only appointments belonging to a practice in scope (drops stray
+        // academy/lab rows and out-of-scope practices for an entity view).
+        const rows = raw.filter((r) => nameById.has(r.practice_id));
+
+        const m = assembleMixMatrix(practicesAll, rows, (r) => r.appointment_type, (r) => r.volume);
+        const insights = buildMixInsights({
+            grandTotal: m.grandTotal, sortedTypes: m.sortedTypes, practices: m.practices,
+            practiceTotals: m.practiceTotals, cell: m.cell, nameById,
+        });
+
+        return {
+            applicable: true,
+            scope,
+            period,
+            window: { since, until, label },
+            practices: m.practices,
+            types: m.typeRows,
+            distinctTypes: m.distinctTypes,
+            grandTotal: m.grandTotal,
+            maxCell: m.maxCell,
+            insights,
+            note: 'Appointment volume only — Dentally provides no per-treatment price, so this ranks clinical activity, not revenue.',
+        };
+    },
+    // Treatment REVENUE heat matrix (GM Intelligence OS, Phase 2). Real invoiced
+    // FEE by treatment name x practice for the selected scope + period, from
+    // invoice_items (the real per-treatment fee feed). Money in integer pence.
+    // This is the patient FEE (retail) — NOT the practice's cost; lab/material
+    // cost is never in the Dentally feed and stays owner-entered in the workbench.
+    // Same matrix shape as treatmentMatrix so the frontend can toggle Volume/£.
+    async treatmentRevenueMatrix(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        if (resolved.mode === 'academy' || resolved.mode === 'lab') {
+            return { applicable: false, scope: resolved.mode,
+                message: 'Treatment revenue measures clinical invoiced fees — switch scope to the group or a practice.' };
+        }
+        const { since, until, label } = treatmentWindow(period, periodKey, now());
+
+        let practicesAll = await analytics_repository_1.analyticsRepository.practicesFull(orgId);
+        if (resolved.mode === 'entity')
+            practicesAll = practicesAll.filter((p) => resolved.practiceIds.includes(p.id));
+        const nameById = new Map(practicesAll.map((p) => [p.id, p.name]));
+
+        const raw = await analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, since, until);
+        const rows = raw.filter((r) => nameById.has(r.practice_id));
+
+        const m = assembleMixMatrix(practicesAll, rows, (r) => r.treatment_name, (r) => r.fee_pence);
+        const insights = buildRevenueInsights({
+            grandTotal: m.grandTotal, sortedTypes: m.sortedTypes, practices: m.practices,
+            cell: m.cell, nameById,
+        });
+
+        return {
+            applicable: true,
+            scope,
+            period,
+            window: { since, until, label },
+            practices: m.practices,
+            types: m.typeRows,
+            distinctTypes: m.distinctTypes,
+            grandTotal: m.grandTotal,   // total fee in pence
+            maxCell: m.maxCell,         // biggest single cell in pence
+            insights,
+            basis: 'invoice_items',
+            hasData: m.grandTotal > 0,
+            note: 'Real invoiced fees from Dentally (patient price). Lab/material cost is not in the feed — set it in the Workbench.',
+        };
+    },
+    // Day — Cash Collected (GM Intelligence OS, T9). REAL settled receipts banked
+    // by working day across the month containing periodKey, plus a composite
+    // collection index (each day vs the month's average working day = 100). This
+    // is CASH RECEIPTS by processed_at date — NOT billed production (decision A2).
+    //
+    // Always month-framed: even when period='day' the screen shows the whole
+    // month's by-day breakdown and highlights the selected day, so we resolve the
+    // month of periodKey and return every Mon–Sat day (Sundays only if they
+    // banked cash). Applicable to any scope that takes payments (incl. academy/lab).
+    async cashByDay(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        // Month window from periodKey (day keys collapse to their month).
+        const monthKey = (periodKey || '').slice(0, 7);
+        const { since, until, label } = treatmentWindow('month', monthKey, now());
+
+        const byDay = await this._receiptsByDayScoped(orgId, since, until, resolved);
+        const penceByDay = new Map(byDay.map((r) => [r.day, Number(r.pence) || 0]));
+
+        // Enumerate the month's days; keep Mon–Sat always, Sun only if it banked.
+        const [y, mo] = monthKey.split('-').map(Number);
+        const lastDate = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+        const days = [];
+        for (let d = 1; d <= lastDate; d++) {
+            const date = new Date(Date.UTC(y, mo - 1, d));
+            const dow = date.getUTCDay();
+            const key = `${monthKey}-${String(d).padStart(2, '0')}`;
+            const pence = penceByDay.get(key) || 0;
+            if (dow === 0 && pence === 0) continue; // skip empty Sundays
+            days.push({ date: key, label: `${DOW_SHORT[dow]} ${d} ${MONTHS_SHORT[mo - 1]}`, dow, pence });
+        }
+
+        const totalPence = days.reduce((s, r) => s + r.pence, 0);
+        const workingDays = days.filter((r) => r.dow !== 0).length || days.length;
+        const avgPerDayPence = workingDays ? Math.round(totalPence / workingDays) : 0;
+        const withIndex = days.map((r) => ({
+            ...r, index: avgPerDayPence ? Math.round((r.pence / avgPerDayPence) * 1000) / 10 : 0,
+        }));
+        const peak = withIndex.slice().sort((a, b) => b.pence - a.pence)[0] || null;
+
+        const selected = period === 'day' && periodKey
+            ? withIndex.find((r) => r.date === periodKey) || null
+            : null;
+
+        const insights = buildCashByDayInsights({ withIndex, avgPerDayPence, peak, totalPence });
+
+        return {
+            applicable: true,
+            scope, period,
+            window: { since, until, label },
+            monthLabel: label,
+            basis: 'settled_receipts',
+            hasData: totalPence > 0,
+            totalPence,
+            avgPerDayPence,
+            workingDays,
+            days: withIndex,
+            peak,
+            selected,
+            insights,
+            note: 'Cash banked by processed_at date — settled receipts, not billed production.',
+        };
+    },
+    // Sum settled receipts by day across the in-scope entities. practiceIds=null
+    // (all/practices) → one whole-org RPC call; otherwise call per resolved id
+    // and merge (academy/lab/specific practice — at most a handful, no N+1 risk).
+    async _receiptsByDayScoped(orgId, since, until, resolved) {
+        if (!resolved.practiceIds || resolved.practiceIds.length === 0) {
+            return analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, since, null, until);
+        }
+        const parts = await Promise.all(resolved.practiceIds.map((id) =>
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, since, id, until)));
+        const merged = new Map();
+        for (const rows of parts)
+            for (const r of rows)
+                merged.set(r.day, (merged.get(r.day) || 0) + (Number(r.pence) || 0));
+        return [...merged].map(([day, pence]) => ({ day, pence }));
+    },
     // Treatment Economics Workbench (Arch #3 pure compute). The UI posts a model
     // (debounced); this returns the full money flow. No DB, no persistence.
     treatmentEconomics(model) {
@@ -127,6 +300,26 @@ export const analyticsService = {
     // overrides are a later slice).
     treatmentModels() {
         return formulas_1.DEFAULT_SERVICE_MODELS;
+    },
+    // Real case-fee benchmarks for the Treatment Economics Workbench, derived
+    // from Dentally invoice_items over a trailing window. Per workbench category
+    // (fullarch/implant/invisalign): the mean INVOICE total for invoices that
+    // contain that procedure (a case is billed across many lines — see
+    // formulas.classifyCaseFees). This is the patient FEE only; lab/material
+    // COST is never in the Dentally feed, so the workbench keeps owner-entered
+    // costs and only the case fee is seeded. Returns null per category with no
+    // matching invoices; the UI then keeps the hardcoded default for that one.
+    async treatmentFeeBenchmarks(orgId, { months = 12, now = () => new Date() } = {}) {
+        const since = new Date(now());
+        since.setUTCMonth(since.getUTCMonth() - months);
+        const invoices = await analytics_repository_1.analyticsRepository.invoiceCaseRollup(orgId, since.toISOString());
+        const fees = (0, formulas_1.classifyCaseFees)(invoices);
+        return {
+            windowMonths: months,
+            invoicesAnalysed: invoices.length,
+            // { fullarch|implant|invisalign : { feePence, sampleSize } | null }
+            benchmarks: fees,
+        };
     },
     // Group Valuation (Arch #3 pure compute, Value & Growth view). The UI posts
     // the driver state (debounced); this returns the three-buyer result plus the
@@ -222,6 +415,414 @@ export const analyticsService = {
         const pl = (0, formulas_1.calculatePL)(plInput);
         const result = (0, formulas_1.calculateProfitBenchmark)({ revenue: plInput.revenue, costs: plInput.costs, netProfit: pl.netProfit });
         return { ...result, marginPct: pl.marginPct, netProfit: pl.netProfit, totalCosts: pl.totalCosts, costsAvailable: true, basis: 'actuals', periodsCovered: actuals.periodsCovered };
+    },
+    // P&L & Margin (GM Intelligence OS, T11). Scope/period-aware group P&L
+    // statement + per-entity breakdown from REAL monthly_financials actuals
+    // (Xero/QuickBooks override manual, per bucketsByPeriod). A FINANCE screen →
+    // real actuals or an honest empty state, NEVER a fabricated projection.
+    //
+    // Granularity is the honest CoA→P&L bucket set: revenue, lab+materials,
+    // staff (Xero folds associate/clinician pay into staff — `dentistStaffSeparable:false`
+    // banners this), other opex (overhead+other); `tax` is below the operating
+    // line and excluded. Period: the selected month's actuals when present, else
+    // the trailing ≤12mo annual sum (basis flags which). Per-entity rows appear
+    // only when monthly_financials carries practice_id; org-level-only data →
+    // `perEntityAvailable:false` and a group statement alone.
+    async plMargin(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        const monthKey = (periodKey || '').slice(0, 7) ||
+            `${now().getUTCFullYear()}-${String(now().getUTCMonth() + 1).padStart(2, '0')}`;
+
+        const [entityRows, allFin] = await Promise.all([
+            analytics_repository_1.analyticsRepository.allEntities(orgId),
+            monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId),
+        ]);
+        const entityById = new Map(entityRows.map((e) => [e.id, e]));
+        const practiceKindIds = new Set(entityRows.filter((e) => e.kind === 'practice').map((e) => e.id));
+
+        // Which practice_ids count for this scope. __org__ (null practice_id) rows
+        // belong to the whole group → included for all/practices, excluded from a
+        // specific entity/academy/lab scope.
+        const inScope = (pid) => {
+            const key = pid || '__org__';
+            if (resolved.mode === 'all') return true;
+            if (resolved.mode === 'practices') return key === '__org__' || practiceKindIds.has(pid);
+            return resolved.practiceIds.includes(pid); // entity/academy/lab
+        };
+
+        // Group rows by practiceKey, then resolve period buckets per group.
+        const byKey = new Map(); // practiceKey -> rows
+        for (const r of allFin) {
+            if (!inScope(r.practice_id)) continue;
+            const key = r.practice_id || '__org__';
+            (byKey.get(key) || byKey.set(key, []).get(key)).push(r);
+        }
+
+        // For a row set: pick the selected month's buckets if present (revenue>0),
+        // else the trailing ≤12mo annual sum. Returns { buckets, basis, periods }.
+        const resolveBuckets = (rows) => {
+            const byPeriod = bucketsByPeriod(rows);
+            const month = byPeriod.get(monthKey);
+            if (month && (month.revenue || 0) > 0) {
+                return { buckets: month, basis: 'month', periodsCovered: 1 };
+            }
+            const periods = [...byPeriod.keys()].sort().slice(-12);
+            const annual = {};
+            for (const p of periods)
+                for (const [k, v] of Object.entries(byPeriod.get(p))) annual[k] = (annual[k] || 0) + v;
+            return { buckets: annual, basis: 'annual', periodsCovered: periods.length };
+        };
+
+        // Resolve EACH key (entity or __org__) independently — Xero-overrides-
+        // manual precedence is per-entity, so never merge sources across entities
+        // before resolving (that would let one practice's synced row suppress
+        // another's manual row). The group statement is the SUM of per-key lines.
+        const entities = [];
+        const groupLine = { revPence: 0, labMaterialsPence: 0, grossPence: 0, staffPence: 0, otherOpexPence: 0, netPence: 0 };
+        let anyMonth = false, anyAnnual = false, groupPeriods = 0;
+        for (const [key, rows] of byKey) {
+            const { buckets, basis, periodsCovered } = resolveBuckets(rows);
+            const line = plLineFromBuckets(buckets);
+            if (line.revPence <= 0 && line.netPence === 0) continue;
+            // Accumulate into the group statement (all in-scope keys, incl. __org__).
+            for (const f of Object.keys(groupLine)) groupLine[f] += line[f];
+            if (basis === 'month') anyMonth = true; else anyAnnual = true;
+            groupPeriods = Math.max(groupPeriods, periodsCovered);
+            if (key === '__org__') continue; // org-level stays in the total, not a row
+            const ent = entityById.get(key);
+            entities.push({
+                id: key,
+                name: ent?.name || 'Unknown entity',
+                kind: ent?.kind || 'practice',
+                region: ent?.kind === 'academy' ? 'Academy' : ent?.kind === 'lab' ? 'Lab' : '',
+                basis, periodsCovered, ...line,
+            });
+        }
+        entities.sort((a, b) => b.revPence - a.revPence);
+
+        const statement = {
+            ...groupLine,
+            marginPct: groupLine.revPence ? Math.round((groupLine.netPence / groupLine.revPence) * 1000) / 10 : 0,
+        };
+        const hasData = statement.revPence > 0 || statement.netPence !== 0;
+        const basis = !hasData ? 'none'
+            : anyMonth && anyAnnual ? 'actuals-mixed'
+            : anyMonth ? 'actuals-month' : 'actuals-annual';
+
+        return {
+            applicable: true,
+            scope, period,
+            monthKey,
+            basis,
+            hasData,
+            costsAvailable: hasData,
+            periodsCovered: groupPeriods,
+            statement,
+            // Xero folds associate/clinician pay into the staff bucket — never
+            // show a separate clinician line off this source (it would read false).
+            dentistStaffSeparable: false,
+            perEntityAvailable: entities.length > 0,
+            entityBasisMixed: anyMonth && anyAnnual,
+            entities,
+            note: 'Real P&L from monthly_financials (Xero/QuickBooks override manual). Staff includes associate/clinician pay (Xero books them together). Editable scenario sheets + account-level CoA mapping are the persistence slice.',
+        };
+    },
+    // Marketing & ROI (GM Intelligence OS, T11). Per-channel acquisition economics
+    // from REAL sources: ad spend from `ad_metrics` (paid providers), channel
+    // attribution + conversions from CRM `leads`, revenue from settled payments.
+    //
+    // HONEST DATA WALL: spend and leads are real per channel; REVENUE IS NOT
+    // attributable per channel (no per-touch attribution), so there is NO
+    // per-channel ROAS/revenue here — only a business-level blended paid ROAS
+    // (settled revenue ÷ paid spend). Per-channel ranks on spend → leads → CPL →
+    // patients → CPA. Conversions use one consistent definition across all
+    // channels: a CRM lead that reached treatment_started/treatment_completed.
+    async marketingRoi(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        const { since, until, label } = treatmentWindow(period, periodKey, now());
+        const fromDate = since.slice(0, 10);
+        const untilD = new Date(until); untilD.setUTCDate(untilD.getUTCDate() - 1);
+        const toDate = untilD.toISOString().slice(0, 10); // inclusive last day of window
+
+        const pids = resolved.practiceIds; // null = whole org
+        const [adRows, leads, revRows, practices] = await Promise.all([
+            analytics_repository_1.analyticsRepository.adMetricsInWindow(orgId, fromDate, toDate, pids),
+            analytics_repository_1.analyticsRepository.leadsForMarketing(orgId, since, until, pids),
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since, until),
+            analytics_repository_1.analyticsRepository.practicesFull(orgId),
+        ]);
+        const nameById = new Map(practices.map((p) => [p.id, p.name]));
+        const inScopeRev = revRows.filter((r) => !pids || pids.includes(r.practice_id));
+
+        // Per-channel accumulators (spend from ad_metrics; leads/conversions from CRM).
+        const ch = new Map(MKT_CHANNELS.map((c) => [c.key, { ...c, spendPence: 0, impressions: 0, clicks: 0, leads: 0, conversions: 0 }]));
+        for (const a of adRows) {
+            const c = ch.get(a.provider);
+            if (!c) continue;
+            c.spendPence += a.spend_pence || 0;
+            c.impressions += a.impressions || 0;
+            c.clicks += a.clicks || 0;
+        }
+        for (const l of leads) {
+            const c = ch.get(attributeChannel(l));
+            if (!c) continue;
+            c.leads += 1;
+            if (CONVERTED_STATUSES.has(l.status)) c.conversions += 1;
+        }
+
+        const totalLeads = leads.length;
+        const channels = [...ch.values()]
+            .filter((c) => c.leads > 0 || c.spendPence > 0)
+            .map((c) => ({
+                key: c.key, label: c.label, color: c.color, paid: c.paid, group: c.group,
+                spendPence: c.spendPence, impressions: c.impressions, clicks: c.clicks,
+                leads: c.leads, conversions: c.conversions,
+                cplPence: c.leads ? Math.round(c.spendPence / c.leads) : 0,
+                cpaPence: c.conversions ? Math.round(c.spendPence / c.conversions) : 0,
+                leadSharePct: totalLeads ? Math.round((c.leads / totalLeads) * 1000) / 10 : 0,
+                convRatePct: c.leads ? Math.round((c.conversions / c.leads) * 1000) / 10 : 0,
+            }))
+            .sort((a, b) => b.spendPence - a.spendPence || b.leads - a.leads);
+
+        const paidSpendPence = channels.filter((c) => c.paid).reduce((s, c) => s + c.spendPence, 0);
+        const totalConversions = channels.reduce((s, c) => s + c.conversions, 0);
+        const settledRevenuePence = inScopeRev.reduce((s, r) => s + (Number(r.pence) || 0), 0);
+        const blendedRoas = paidSpendPence ? Math.round((settledRevenuePence / paidSpendPence) * 100) / 100 : null;
+        const blendedRoiPct = paidSpendPence ? Math.round(((settledRevenuePence - paidSpendPence) / paidSpendPence) * 100) : null;
+
+        const google = channels.find((c) => c.key === 'google_ads') || null;
+        const meta = channels.find((c) => c.key === 'meta_ads') || null;
+
+        // Per-practice acquisition: leads/conversions (CRM) + revenue (settled);
+        // ad spend per practice only when ad_metrics carries practice_id.
+        const adSpendByPractice = new Map();
+        let adSpendPerPracticeAvailable = false;
+        for (const a of adRows) {
+            if (!a.practice_id) continue;
+            adSpendPerPracticeAvailable = true;
+            adSpendByPractice.set(a.practice_id, (adSpendByPractice.get(a.practice_id) || 0) + (a.spend_pence || 0));
+        }
+        const revByPractice = new Map(inScopeRev.map((r) => [r.practice_id, Number(r.pence) || 0]));
+        const leadsByPractice = new Map();
+        for (const l of leads) {
+            const id = l.practice_id;
+            if (!id) continue;
+            const a = leadsByPractice.get(id) || { leads: 0, conversions: 0 };
+            a.leads += 1;
+            if (CONVERTED_STATUSES.has(l.status)) a.conversions += 1;
+            leadsByPractice.set(id, a);
+        }
+        const practiceIdsSeen = new Set([...leadsByPractice.keys(), ...revByPractice.keys(), ...adSpendByPractice.keys()]);
+        const byPractice = [...practiceIdsSeen]
+            .filter((id) => nameById.has(id))
+            .map((id) => {
+                const lp = leadsByPractice.get(id) || { leads: 0, conversions: 0 };
+                const spendPence = adSpendByPractice.get(id) || 0;
+                const revenuePence = revByPractice.get(id) || 0;
+                return {
+                    id, name: nameById.get(id),
+                    leads: lp.leads, conversions: lp.conversions,
+                    convRatePct: lp.leads ? Math.round((lp.conversions / lp.leads) * 1000) / 10 : 0,
+                    revenuePence,
+                    spendPence,
+                    cpaPence: lp.conversions && spendPence ? Math.round(spendPence / lp.conversions) : 0,
+                    roas: spendPence ? Math.round((revenuePence / spendPence) * 100) / 100 : null,
+                };
+            })
+            .sort((a, b) => b.leads - a.leads || b.revenuePence - a.revenuePence);
+
+        const insights = buildMarketingInsights({ channels, blendedRoas, paidSpendPence, settledRevenuePence, connected: adRows.length > 0, adSpendPerPracticeAvailable });
+
+        return {
+            applicable: true,
+            scope, period,
+            window: { since, until, label },
+            connected: adRows.length > 0,
+            hasLeads: totalLeads > 0,
+            channels,
+            paidSpendPence,
+            totalLeads,
+            totalConversions,
+            settledRevenuePence,
+            blendedRoas,
+            blendedRoiPct,
+            google,
+            meta,
+            revenuePerChannelAvailable: false,
+            byPracticeAvailable: byPractice.length > 0,
+            adSpendPerPracticeAvailable,
+            byPractice,
+            insights,
+            note: 'Spend (ad_metrics) and leads (CRM) are real per channel. Revenue is NOT attributable per channel — only a business-level blended paid ROAS is shown. Conversions = leads reaching treatment_started/completed.',
+        };
+    },
+    // Clinicians (GM Intelligence OS, T2). Per-clinician production, pay splits
+    // and NHS/UDA obligation from REAL data: associate roster (names/splits),
+    // per-associate completed production (treatment_plans via associate_production
+    // RPC), appointment activity (associate_appointment_stats), and owner-entered
+    // NHS contract UDA per practice.
+    //
+    // HONEST DATA WALLS (no fabrication — the prototype's revenue-share model is
+    // gone): production £ exists only when Dentally treatment_plans are synced
+    // (`productionAvailable`); appointment stats only where appointments carry a
+    // resolved associate_id (`appointmentsAvailable`); UDA-completed needs the
+    // same treatment_plan feed (`nhs.completedAvailable`). Lab cost / OCPSPD per
+    // clinician have no real per-clinician source and are intentionally omitted.
+    async clinicians(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        if (resolved.mode === 'academy' || resolved.mode === 'lab') {
+            return { applicable: false, scope: resolved.mode,
+                message: 'Clinician analytics apply to the dental practices — switch scope to the group or a practice.' };
+        }
+        const { since, until, label } = treatmentWindow(period, periodKey, now());
+
+        const [roster, prodMap, apptMap, nhsPractices] = await Promise.all([
+            analytics_repository_1.analyticsRepository.cliniciansRoster(orgId),
+            payRun_repository_1.payRunRepository.productionByAssociate(orgId, { start: since, end: until }),
+            associate_repository_1.associateRepository.appointmentStatsByAssociate(orgId, since),
+            analytics_repository_1.analyticsRepository.practicesNhs(orgId),
+        ]);
+
+        // Scope filter: a specific practice narrows the roster to its associates.
+        const scoped = resolved.mode === 'entity'
+            ? roster.filter((a) => resolved.practiceIds.includes(a.primary_practice_id))
+            : roster;
+
+        const productionAvailable = [...prodMap.values()].some((v) => v > 0);
+        const appointmentsAvailable = apptMap.size > 0;
+
+        const clinicians = scoped.map((a) => {
+            const payPct = (a.pay_pct ?? 4500) / 100;        // basis points → %
+            const labSplitPct = (a.lab_split_pct ?? 5000) / 100;
+            const productionPence = prodMap.get(a.id) || 0;
+            const feesPence = Math.round(productionPence * payPct / 100);
+            const netToPracticePence = productionPence - feesPence;
+            const stats = apptMap.get(a.id) || { total: 0, completed: 0, no_shows: 0 };
+            return {
+                id: a.id,
+                name: a.full_name,
+                role: a.specialty || 'Associate Dentist',
+                practiceId: a.primary_practice_id,
+                practiceName: a.practice?.name || '—',
+                active: a.active !== false,
+                payPct, labSplitPct,
+                productionPence, feesPence, netToPracticePence,
+                appointments: stats.total, completed: stats.completed, noShows: stats.no_shows,
+            };
+        }).sort((x, y) => y.productionPence - x.productionPence || y.appointments - x.appointments);
+
+        const totalProductionPence = clinicians.reduce((s, c) => s + c.productionPence, 0);
+        const totalFeesPence = clinicians.reduce((s, c) => s + c.feesPence, 0);
+        const totalNetPence = clinicians.reduce((s, c) => s + c.netToPracticePence, 0);
+
+        // NHS/UDA — owner-entered contract per practice. Completed UDA needs the
+        // treatment_plan feed (not yet populated), so it's flagged unavailable.
+        const scopedNhs = (resolved.mode === 'entity'
+            ? nhsPractices.filter((p) => resolved.practiceIds.includes(p.id))
+            : nhsPractices
+        ).filter((p) => (p.nhs_contract_uda || 0) > 0);
+        const nhs = {
+            available: scopedNhs.length > 0,
+            completedAvailable: false, // treatment_plan UDA feed empty
+            practices: scopedNhs.map((p) => ({
+                id: p.id, name: p.name,
+                contractUda: p.nhs_contract_uda || 0,
+                udaRatePence: p.nhs_uda_rate_pence || 2850,
+            })),
+        };
+
+        const insights = buildCliniciansInsights({ clinicians, productionAvailable, appointmentsAvailable, totalProductionPence, totalFeesPence });
+
+        return {
+            applicable: true,
+            scope, period,
+            window: { since, until, label },
+            productionAvailable,
+            appointmentsAvailable,
+            clinicians,
+            totalProductionPence,
+            totalFeesPence,
+            totalNetPence,
+            nhs,
+            insights,
+            note: 'Roster, pay splits and NHS contract are live. Production £ is from completed Dentally treatment plans; appointment counts need practitioner-tagged appointments. Lab cost / operating-cost-per-surgery per clinician have no real per-clinician source and are omitted (use the Treatment Workbench).',
+        };
+    },
+    // AI Analyst (GM Intelligence OS). Prioritised, £-ranked findings over the
+    // group's LIVE numbers for the current scope/period, plus a natural-language
+    // answer to a free-text question. The findings are REAL — they aggregate the
+    // data-derived Decision-Lens insights already produced by the P&L, Marketing,
+    // Clinicians and Cash views (no fabrication). When a question is asked and
+    // ANTHROPIC_API_KEY is set, Claude writes the answer (+ may re-rank findings)
+    // grounded ONLY in a compact real summary; otherwise we return the
+    // deterministic findings with no Claude call (graceful, no hard dependency).
+    async aiAsk(orgId, { scope = 'all', period = 'month', periodKey, question = '', now = () => new Date() } = {}) {
+        const [pl, mkt, clin, cash] = await Promise.all([
+            this.plMargin(orgId, { scope, period, periodKey, now }),
+            this.marketingRoi(orgId, { scope, period, periodKey, now }),
+            this.clinicians(orgId, { scope, period, periodKey, now }),
+            this.cashByDay(orgId, { scope, period, periodKey, now }),
+        ]);
+
+        // Aggregate the real, data-derived insight cards into Insight-shaped
+        // findings ({ sev, t, d, v }), ranked bad > warn > good > info.
+        const toFinding = (i) => ({ sev: i.tone, t: i.title, d: i.body, v: i.value || '' });
+        const pool = [
+            ...(pl.hasData ? pl.insights ?? [] : []).map(toFinding),
+            ...(mkt.insights ?? []).map(toFinding),
+            ...(clin.applicable !== false ? clin.insights ?? [] : []).map(toFinding),
+            ...(cash.insights ?? []).map(toFinding),
+        ];
+        // Cross-cutting headline facts straight off the real rollups.
+        const facts = [];
+        if (pl.hasData) facts.push({ sev: pl.statement.marginPct >= 18 ? 'good' : pl.statement.marginPct >= 10 ? 'warn' : 'bad', t: `Group net margin ${pl.statement.marginPct.toFixed(1)}%`, d: `${gbpPence(pl.statement.netPence)} net on ${gbpPence(pl.statement.revPence)} revenue (${pl.basis}).`, v: `${pl.statement.marginPct.toFixed(1)}%` });
+        if (mkt.connected && mkt.blendedRoas != null) facts.push({ sev: mkt.blendedRoas >= 3.5 ? 'good' : mkt.blendedRoas < 2.5 ? 'warn' : 'info', t: `Blended paid ROAS ${mkt.blendedRoas.toFixed(2)}×`, d: `${gbpPence(mkt.settledRevenuePence)} revenue on ${gbpPence(mkt.paidSpendPence)} ad spend (business-level).`, v: `${mkt.blendedRoas.toFixed(2)}×` });
+        if (cash.hasData) facts.push({ sev: 'info', t: `${gbpPence(cash.totalPence)} cash collected · ${cash.monthLabel}`, d: `${gbpPence(cash.avgPerDayPence)} per working day across ${cash.workingDays} days.`, v: gbpPence(cash.totalPence) });
+
+        const SEV_RANK = { bad: 0, warn: 1, good: 2, info: 3 };
+        const findings = dedupeFindings([...facts, ...pool])
+            .sort((a, b) => SEV_RANK[a.sev] - SEV_RANK[b.sev])
+            .slice(0, 8);
+
+        const scopeLabel = { all: 'Whole Group', practices: 'All Practices', academy: 'Academy', lab: 'Lab' }[scope] || 'Practice';
+        const periodLabel = cash.monthLabel || pl.monthKey || '';
+
+        // No question → just the prioritised findings (the screen's default view).
+        const q = (question || '').trim();
+        if (!q) {
+            return { scope, period, question: '', answer: null, findings, basis: 'rollups', model: null };
+        }
+
+        // Compact, real summary for Claude (small token footprint, no raw dumps).
+        const summary = {
+            scopeLabel, periodLabel,
+            data: {
+                pl: pl.hasData ? { revenuePence: pl.statement.revPence, netPence: pl.statement.netPence, marginPct: pl.statement.marginPct, basis: pl.basis, entities: pl.entities.map((e) => ({ name: e.name, revPence: e.revPence, netPence: e.netPence, marginPct: e.marginPct })) } : null,
+                marketing: { connected: mkt.connected, paidSpendPence: mkt.paidSpendPence, settledRevenuePence: mkt.settledRevenuePence, blendedRoas: mkt.blendedRoas, channels: mkt.channels.map((c) => ({ label: c.label, spendPence: c.spendPence, leads: c.leads, conversions: c.conversions, cpaPence: c.cpaPence })) },
+                clinicians: clin.applicable === false ? null : { productionAvailable: clin.productionAvailable, totalProductionPence: clin.totalProductionPence, totalFeesPence: clin.totalFeesPence, top: clin.clinicians.slice(0, 5).map((c) => ({ name: c.name, productionPence: c.productionPence, payPct: c.payPct })) },
+                cash: cash.hasData ? { totalPence: cash.totalPence, avgPerDayPence: cash.avgPerDayPence, peak: cash.peak && { label: cash.peak.label, pence: cash.peak.pence } } : null,
+            },
+        };
+
+        try {
+            const ai = await claude_1.askAnalyst(q, summary);
+            const answerFindings = ai.findings && ai.findings.length ? ai.findings : findings.slice(0, 4);
+            return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: 'claude-sonnet-4-5' };
+        } catch (err) {
+            // Graceful fallback — no Claude key or a transient error: keyword-match
+            // the question against the real findings so the Ask box still works.
+            const ql = q.toLowerCase();
+            const hits = findings.filter((f) => `${f.t} ${f.d}`.toLowerCase().split(/\W+/).some((w) => w.length > 3 && ql.includes(w)));
+            return {
+                scope, period, question: q,
+                answer: null,
+                findings,
+                answerFindings: (hits.length ? hits : findings).slice(0, 3),
+                basis: 'rollups',
+                model: null,
+                note: 'AI answer unavailable (no model configured) — showing the closest matching findings from your live data.',
+            };
+        }
     },
     async valuation(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
@@ -1003,3 +1604,447 @@ export const analyticsService = {
         };
     },
 };
+
+// ----------------------------------------------------------------------------
+// Treatment Mix helpers (module-level; pure, no DB).
+// ----------------------------------------------------------------------------
+
+// AI Analyst helpers (module-level; pure, no DB).
+const gbpPence = (p) => '£' + Math.round((p || 0) / 100).toLocaleString('en-GB');
+// Drop duplicate findings (same title), keeping the first (higher-priority) one.
+function dedupeFindings(list) {
+    const seen = new Set();
+    const out = [];
+    for (const f of list) {
+        const key = (f.t || '').toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(f);
+    }
+    return out;
+}
+
+// Marketing & ROI helpers (module-level; pure, no DB).
+// A CRM lead counts as a converted patient once it reaches treatment.
+const CONVERTED_STATUSES = new Set(['treatment_started', 'treatment_completed']);
+// Paid-provider matchers (mirror growth.routes attributeProvider).
+const AD_PROVIDER_MATCH = { google_ads: /google|adwords|gads/i, meta_ads: /facebook|meta|instagram|\bfb\b|\big\b/i };
+// Channel catalog: 2 paid (ad_metrics providers) + organic CRM lead buckets.
+const MKT_CHANNELS = [
+    { key: 'google_ads', label: 'Google Ads', color: '#2f6fb0', paid: true, group: 'paid' },
+    { key: 'meta_ads', label: 'Facebook / Meta', color: '#3b5998', paid: true, group: 'paid' },
+    { key: 'seo', label: 'SEO / Website', color: '#1d6e5f', paid: false, group: 'organic' },
+    { key: 'referral', label: 'Referrals', color: '#5aa674', paid: false, group: 'organic' },
+    { key: 'recall', label: 'Internal Recall', color: '#c6a253', paid: false, group: 'organic' },
+    { key: 'other', label: 'Other / Direct', color: '#84958c', paid: false, group: 'organic' },
+];
+// Attribute a CRM lead to a channel from its utm/source free-text.
+function attributeChannel(lead) {
+    const hay = `${lead.utm_source ?? ''} ${lead.utm_medium ?? ''} ${lead.source ?? ''}`.toLowerCase();
+    for (const [provider, re] of Object.entries(AD_PROVIDER_MATCH)) if (re.test(hay)) return provider;
+    if (/seo|organic|website|search|\bweb\b/.test(hay)) return 'seo';
+    if (/refer/.test(hay)) return 'referral';
+    if (/recall|reactiv|internal/.test(hay)) return 'recall';
+    return 'other';
+}
+// Decision-Lens cards for Marketing & ROI — derived purely from the real
+// channel data. Each { tone, title, body, value }; never invents per-channel
+// revenue. Returns [] when there is nothing real to say.
+function buildMarketingInsights({ channels, blendedRoas, paidSpendPence, settledRevenuePence, connected, adSpendPerPracticeAvailable }) {
+    const cards = [];
+    const gbp = (p) => '£' + Math.round((p || 0) / 100).toLocaleString('en-GB');
+    if (!channels.length) return cards;
+
+    // 1. Blended paid ROAS (business-level, clearly labelled).
+    if (connected && paidSpendPence > 0 && blendedRoas != null) {
+        cards.push({
+            tone: blendedRoas >= 3.5 ? 'good' : blendedRoas < 2.5 ? 'warn' : 'info',
+            title: `Blended paid ROAS ${blendedRoas.toFixed(2)}× (business-level)`,
+            body: `${gbp(settledRevenuePence)} settled revenue against ${gbp(paidSpendPence)} of ad spend. This is group-level — revenue can't be attributed per channel without per-touch tracking.`,
+            value: `${blendedRoas.toFixed(2)}×`,
+        });
+    } else if (!connected) {
+        cards.push({
+            tone: 'info',
+            title: 'No ad spend connected',
+            body: 'Connect Google Ads / Meta Ads (Integrations) to see spend, CPL and blended ROAS. Lead volumes below are from the CRM and are already live.',
+            value: 'Not connected',
+        });
+    }
+
+    // 2. Best converting channel by patient conversion rate (floor 3 leads).
+    const conv = channels.filter((c) => c.leads >= 3).sort((a, b) => b.convRatePct - a.convRatePct)[0];
+    if (conv) {
+        cards.push({
+            tone: 'good',
+            title: `${conv.label} converts best at ${conv.convRatePct}%`,
+            body: `${conv.conversions} of ${conv.leads} leads reached treatment. Protect and scale the channels that turn enquiries into patients, not just the cheapest leads.`,
+            value: `${conv.convRatePct}%`,
+        });
+    }
+
+    // 3. Cheapest paid cost-per-patient (where spend is tracked).
+    const paid = channels.filter((c) => c.paid && c.cpaPence > 0).sort((a, b) => a.cpaPence - b.cpaPence);
+    if (paid.length >= 2) {
+        const best = paid[0], worst = paid[paid.length - 1];
+        cards.push({
+            tone: 'info',
+            title: `${best.label} is the cheapest patient acquisition`,
+            body: `${gbp(best.cpaPence)}/patient vs ${gbp(worst.cpaPence)} on ${worst.label}. Shift incremental budget toward the lower CPA while volume holds.`,
+            value: `${gbp(best.cpaPence)}/pt`,
+        });
+    }
+
+    // 4. Honest gap: spend not tagged per practice.
+    if (connected && !adSpendPerPracticeAvailable) {
+        cards.push({
+            tone: 'warn',
+            title: 'Ad spend is group-level, not per practice',
+            body: 'Your ad accounts run at group level (no practice tag), so per-practice ROAS below leads with real leads → patients → revenue; paid spend/ROAS per site needs practice-tagged campaigns.',
+            value: 'Group only',
+        });
+    }
+    return cards;
+}
+
+// Decision-Lens cards for the Clinicians view — from real roster + production +
+// appointment data only. Honest about the data walls. { tone,title,body,value }.
+function buildCliniciansInsights({ clinicians, productionAvailable, appointmentsAvailable, totalProductionPence, totalFeesPence }) {
+    const cards = [];
+    const gbp = (p) => '£' + Math.round((p || 0) / 100).toLocaleString('en-GB');
+    if (!clinicians.length) return cards;
+
+    if (!productionAvailable) {
+        cards.push({
+            tone: 'warn',
+            title: 'Production £ not yet available',
+            body: 'Per-clinician production comes from completed Dentally treatment plans, which are not synced for this org yet. Roster, pay splits and appointment activity below are live; connect/resync Dentally treatment plans to populate production and fees.',
+            value: 'Sync needed',
+        });
+    } else {
+        // Top producer + fee ratio.
+        const top = clinicians[0];
+        if (top && top.productionPence > 0) {
+            cards.push({
+                tone: 'good',
+                title: `${top.name} leads production at ${gbp(top.productionPence)}`,
+                body: `${gbp(top.feesPence)} in associate fees (${top.payPct}% split), leaving ${gbp(top.netToPracticePence)} to the practice before lab and chair cost.`,
+                value: gbp(top.productionPence),
+            });
+        }
+        const feeRatio = totalProductionPence ? Math.round((totalFeesPence / totalProductionPence) * 1000) / 10 : 0;
+        cards.push({
+            tone: feeRatio > 45 ? 'warn' : 'info',
+            title: `Clinician fee ratio is ${feeRatio}% of production`,
+            body: `${gbp(totalFeesPence)} of associate pay against ${gbp(totalProductionPence)} of production across ${clinicians.length} clinicians. Watch the blend as higher-split principals take more chair time.`,
+            value: `${feeRatio}%`,
+        });
+    }
+
+    if (!appointmentsAvailable) {
+        cards.push({
+            tone: 'info',
+            title: 'Appointment activity needs practitioner tagging',
+            body: 'Legacy Dentally appointments were synced before practitioner mapping, so per-clinician appointment counts are blank until a relink/backfill runs. New appointments tag automatically.',
+            value: 'Relink',
+        });
+    }
+    return cards;
+}
+
+// Resolve a monthly_financials bucket set into the honest P&L line shape (pence).
+// lab+materials are direct costs (above gross); staff (incl. associate pay) +
+// overhead+other are operating costs. `tax` is below the operating line and
+// excluded — matches plInputFromBuckets / the baseline P&L. Pure, no DB.
+function plLineFromBuckets(b = {}) {
+    const revPence = b.revenue || 0;
+    const labMaterialsPence = (b.lab || 0) + (b.materials || 0);
+    const staffPence = b.staff || 0;
+    const otherOpexPence = (b.overhead || 0) + (b.other || 0);
+    const netPence = revPence - labMaterialsPence - staffPence - otherOpexPence;
+    return {
+        revPence,
+        labMaterialsPence,
+        grossPence: revPence - labMaterialsPence,
+        staffPence,
+        otherOpexPence,
+        netPence,
+        marginPct: revPence ? Math.round((netPence / revPence) * 1000) / 10 : 0,
+    };
+}
+
+const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+
+// Resolve the [since, until) window + a human label from the scope/period
+// control. month: the whole calendar month of pk ('YYYY-MM'); day: the single
+// day of pk ('YYYY-MM-DD'). A missing/unparseable pk falls back to the current
+// month from `now` (UTC, stable across server/client).
+function treatmentWindow(period, periodKey, now) {
+    const y0 = now.getUTCFullYear();
+    const m0 = now.getUTCMonth();
+    if (period === 'day') {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(periodKey || '');
+        const y = m ? Number(m[1]) : y0;
+        const mo = m ? Number(m[2]) - 1 : m0;
+        const d = m ? Number(m[3]) : now.getUTCDate();
+        const since = new Date(Date.UTC(y, mo, d));
+        const until = new Date(Date.UTC(y, mo, d + 1));
+        return {
+            since: since.toISOString(),
+            until: until.toISOString(),
+            label: `${d} ${MONTHS_SHORT[mo]} ${y}`,
+        };
+    }
+    const m = /^(\d{4})-(\d{2})$/.exec(periodKey || '');
+    const y = m ? Number(m[1]) : y0;
+    const mo = m ? Number(m[2]) - 1 : m0;
+    const since = new Date(Date.UTC(y, mo, 1));
+    const until = new Date(Date.UTC(y, mo + 1, 1));
+    return {
+        since: since.toISOString(),
+        until: until.toISOString(),
+        label: `${MONTHS_LONG[mo]} ${y}`,
+    };
+}
+
+// Shared matrix assembler for the Treatment Mix views. Turns flat
+// { practice_id, ... } rows into the columns/rows/cells the heat matrix renders.
+// keyOf(row) -> the row dimension (appointment_type | treatment_name); metricOf
+// (row) -> the additive measure (volume | fee_pence). Columns = every in-scope
+// practice (even zero-metric ones), sorted by metric desc. Rows = top 12 by
+// metric; the long tail collapses into one 'Other treatment types' row. maxCell
+// excludes that tail so the aggregate can't wash out the heat scale.
+function assembleMixMatrix(practicesAll, rows, keyOf, metricOf) {
+    const typeTotals = new Map();
+    const practiceTotals = new Map();
+    const cell = new Map(); // `${type}|${practiceId}` -> metric
+    let grandTotal = 0;
+    for (const r of rows) {
+        const type = keyOf(r);
+        const metric = metricOf(r) || 0;
+        const key = `${type}|${r.practice_id}`;
+        typeTotals.set(type, (typeTotals.get(type) ?? 0) + metric);
+        practiceTotals.set(r.practice_id, (practiceTotals.get(r.practice_id) ?? 0) + metric);
+        cell.set(key, (cell.get(key) ?? 0) + metric);
+        grandTotal += metric;
+    }
+
+    const practices = practicesAll
+        .map((p) => ({ id: p.id, name: p.name, total: practiceTotals.get(p.id) ?? 0 }))
+        .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+
+    const TOP = 12;
+    const sortedTypes = [...typeTotals.entries()]
+        .map(([type, total]) => ({ type, total }))
+        .sort((a, b) => b.total - a.total);
+    const head = sortedTypes.slice(0, TOP);
+    const tail = sortedTypes.slice(TOP);
+    const share = (n) => (grandTotal ? Math.round((1000 * n) / grandTotal) / 10 : 0);
+    const buildCells = (type) => practices.map((p) => cell.get(`${type}|${p.id}`) ?? 0);
+
+    const typeRows = head.map((t) => ({
+        type: t.type, total: t.total, sharePct: share(t.total), isOther: false, cells: buildCells(t.type),
+    }));
+    if (tail.length > 1) {
+        const otherTotal = tail.reduce((s, t) => s + t.total, 0);
+        const otherCells = practices.map((p) => tail.reduce((s, t) => s + (cell.get(`${t.type}|${p.id}`) ?? 0), 0));
+        // 'Other treatment types' (not 'Other') so it never collides with a real
+        // type literally named 'Other' in the feed.
+        typeRows.push({ type: 'Other treatment types', total: otherTotal, sharePct: share(otherTotal), isOther: true, cells: otherCells });
+    } else if (tail.length === 1) {
+        typeRows.push({ type: tail[0].type, total: tail[0].total, sharePct: share(tail[0].total), isOther: false, cells: buildCells(tail[0].type) });
+    }
+
+    let maxCell = 0;
+    for (const row of typeRows) {
+        if (row.isOther) continue;
+        for (const v of row.cells) if (v > maxCell) maxCell = v;
+    }
+
+    return { practices, typeRows, grandTotal, maxCell, distinctTypes: typeTotals.size, sortedTypes, cell, practiceTotals };
+}
+
+// Money-framed insight cards for the REVENUE matrix. Real invoiced fees, so £ is
+// honest here (unlike the volume view). Each card { tone, title, body }.
+function buildRevenueInsights({ grandTotal, sortedTypes, practices, cell, nameById }) {
+    const cards = [];
+    if (!grandTotal || sortedTypes.length === 0) return cards;
+    const gbp = (pence) => formulas_1.formatPounds(pence);
+
+    const top = sortedTypes[0];
+    cards.push({
+        tone: 'info',
+        title: `${top.type} earns the most`,
+        body: `${gbp(top.total)} (${Math.round((1000 * top.total) / grandTotal) / 10}% of invoiced fees in scope).`,
+    });
+
+    if (practices.length > 1) {
+        const floor = grandTotal * 0.05;
+        let best = null;
+        for (const t of sortedTypes) {
+            if (t.total < floor) continue;
+            let maxVol = 0, maxPid = null;
+            for (const p of practices) {
+                const v = cell.get(`${t.type}|${p.id}`) ?? 0;
+                if (v > maxVol) { maxVol = v; maxPid = p.id; }
+            }
+            const sh = t.total ? maxVol / t.total : 0;
+            if (maxPid && (!best || sh > best.share)) best = { type: t.type, practiceId: maxPid, share: sh };
+        }
+        if (best && best.share >= 0.7) {
+            cards.push({
+                tone: 'warn',
+                title: `${best.type} revenue concentrated at one site`,
+                body: `${Math.round(best.share * 100)}% of ${best.type} fees come from ${nameById.get(best.practiceId) ?? 'one practice'} — single-site dependency.`,
+            });
+        }
+    }
+
+    if (practices.length > 1 && practices[0].total > 0) {
+        const busiest = practices[0];
+        cards.push({
+            tone: 'good',
+            title: `${busiest.name} bills the most`,
+            body: `${gbp(busiest.total)} — ${Math.round((1000 * busiest.total) / grandTotal) / 10}% of group invoiced fees.`,
+        });
+    }
+
+    let cum = 0, n = 0;
+    for (const t of sortedTypes) { cum += t.total; n += 1; if (cum >= grandTotal * 0.8) break; }
+    cards.push({
+        tone: 'info',
+        title: 'Revenue concentration',
+        body: `${n} of ${sortedTypes.length} treatment ${sortedTypes.length === 1 ? 'type' : 'types'} make up 80% of invoiced fees.`,
+    });
+
+    return cards;
+}
+
+// Volume-framed insight cards for the heat matrix. NEVER money — appointments
+// carry no price. Each card is { tone, title, body }; empty data -> [].
+function buildMixInsights({ grandTotal, sortedTypes, practices, practiceTotals, cell, nameById }) {
+    const cards = [];
+    if (!grandTotal || sortedTypes.length === 0) return cards;
+
+    // 1. Top treatment by share of all appointments.
+    const top = sortedTypes[0];
+    const topShare = Math.round((1000 * top.total) / grandTotal) / 10;
+    cards.push({
+        tone: 'info',
+        title: `${top.type} leads the mix`,
+        body: `${topShare}% of appointments in scope (${top.total.toLocaleString('en-GB')} of ${grandTotal.toLocaleString('en-GB')}).`,
+    });
+
+    // 2. Single-site concentration — the type most dependent on one practice.
+    // Only meaningful with >1 practice and a type of real volume (floor 5%).
+    if (practices.length > 1) {
+        const floor = grandTotal * 0.05;
+        let best = null; // { type, practiceId, share }
+        for (const t of sortedTypes) {
+            if (t.total < floor) continue;
+            let maxVol = 0, maxPid = null;
+            for (const p of practices) {
+                const v = cell.get(`${t.type}|${p.id}`) ?? 0;
+                if (v > maxVol) { maxVol = v; maxPid = p.id; }
+            }
+            const share = t.total ? maxVol / t.total : 0;
+            if (maxPid && (!best || share > best.share)) best = { type: t.type, practiceId: maxPid, share };
+        }
+        if (best && best.share >= 0.7) {
+            cards.push({
+                tone: 'warn',
+                title: `${best.type} concentrated at one site`,
+                body: `${Math.round(best.share * 100)}% of ${best.type} appointments run through ${nameById.get(best.practiceId) ?? 'one practice'} — single-site dependency.`,
+            });
+        }
+    }
+
+    // 3. Busiest practice + its dominant treatment.
+    if (practices.length > 1 && practices[0].total > 0) {
+        const busiest = practices[0];
+        let domType = null, domVol = 0;
+        for (const t of sortedTypes) {
+            const v = cell.get(`${t.type}|${busiest.id}`) ?? 0;
+            if (v > domVol) { domVol = v; domType = t.type; }
+        }
+        const share = Math.round((1000 * busiest.total) / grandTotal) / 10;
+        cards.push({
+            tone: 'good',
+            title: `${busiest.name} is the busiest site`,
+            body: `${share}% of group appointments${domType ? `; ${domType} is its top treatment` : ''}.`,
+        });
+    }
+
+    // 4. Pareto breadth — how few types make up 80% of all volume.
+    let cum = 0, n = 0;
+    for (const t of sortedTypes) { cum += t.total; n += 1; if (cum >= grandTotal * 0.8) break; }
+    cards.push({
+        tone: 'info',
+        title: 'Mix breadth',
+        body: `${n} of ${sortedTypes.length} treatment ${sortedTypes.length === 1 ? 'type' : 'types'} make up 80% of appointment volume.`,
+    });
+
+    return cards;
+}
+
+// Decision Lens cards for the Day (Cash Collected) view — derived purely from
+// the real by-day receipts. Each card is { tone, title, body, value }; no data
+// -> []. Money in pence; the £ string is for display only.
+function buildCashByDayInsights({ withIndex, avgPerDayPence, peak, totalPence }) {
+    const cards = [];
+    if (!totalPence || !withIndex.length) return cards;
+    const gbp = (p) => '£' + Math.round((p || 0) / 100).toLocaleString('en-GB');
+
+    // 1. Peak collection day vs the average working day.
+    if (peak && peak.pence > 0) {
+        cards.push({
+            tone: 'good',
+            title: `Peak collection on ${peak.label}`,
+            body: `${gbp(peak.pence)} banked — index ${Math.round(peak.index)} vs the average working day (100).`,
+            value: gbp(peak.pence),
+        });
+    }
+
+    // 2. Saturday softness — avg Saturday cash vs avg Mon–Fri cash.
+    const sats = withIndex.filter((r) => r.dow === 6);
+    const weekdays = withIndex.filter((r) => r.dow >= 1 && r.dow <= 5);
+    if (sats.length && weekdays.length) {
+        const satAvg = sats.reduce((s, r) => s + r.pence, 0) / sats.length;
+        const wdAvg = weekdays.reduce((s, r) => s + r.pence, 0) / weekdays.length;
+        if (wdAvg > 0 && satAvg < wdAvg * 0.6) {
+            const down = Math.round((1 - satAvg / wdAvg) * 100);
+            cards.push({
+                tone: 'info',
+                title: 'Saturdays run light on collections',
+                body: `Saturday banks ~${down}% below the weekday average — expected for a part-day, but check card-on-file settlement is firing on weekend treatment.`,
+                value: `-${down}%`,
+            });
+        }
+    }
+
+    // 3. Strongest weekday on average (where to concentrate high-value diary).
+    const byDow = new Map();
+    for (const r of weekdays) {
+        const a = byDow.get(r.dow) || { sum: 0, n: 0 };
+        a.sum += r.pence; a.n += 1; byDow.set(r.dow, a);
+    }
+    let bestDow = null, bestAvg = 0;
+    for (const [dow, a] of byDow) {
+        const avg = a.n ? a.sum / a.n : 0;
+        if (avg > bestAvg) { bestAvg = avg; bestDow = dow; }
+    }
+    if (bestDow != null && avgPerDayPence > 0 && bestAvg > avgPerDayPence * 1.1) {
+        const up = Math.round((bestAvg / avgPerDayPence - 1) * 100);
+        cards.push({
+            tone: 'info',
+            title: `${DOW_SHORT[bestDow]} is the strongest collection day`,
+            body: `${DOW_SHORT[bestDow]} averages ${gbp(Math.round(bestAvg))}, ~${up}% above the typical working day — weight high-value, high-deposit cases here.`,
+            value: `+${up}%`,
+        });
+    }
+
+    return cards;
+}

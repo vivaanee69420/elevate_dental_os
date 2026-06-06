@@ -452,6 +452,23 @@ Profit planning — who completes the work:
 owner edits live client-side and post to the compute endpoint. Persisted overrides are a
 later slice.
 
+**Real case-fee auto-fill** (`classifyCaseFees`, tested in `formulas-workbench.test.mjs`):
+the workbench `pricePence` (CASE FEE) is auto-populated from real Dentally invoices, not
+the seed default, when data exists. A dental case is billed across MANY invoice line items
+(an implant = placement + abutment + crown), so the honest case fee is the **mean INVOICE
+total** for invoices that contain the procedure — not a single line:
+
+    caseFee[category] = mean( invoice.total_pence ) over invoices whose item names match
+                        TREATMENT_CASE_RULES[category].match and not .not
+    rules: fullarch  = /all-on | full arch | arch surgery | hybrid bridge/
+           implant   = /implant/  excluding /consult|review|x-ray|radiograph|assess|planning|scan/
+           invisalign= /invisalign | clear aligner/  excluding /review/
+
+  null per category when no matching invoices ⇒ the workbench keeps the seed default for it.
+  This is the patient FEE only; lab/CBCT/component COST is never in the Dentally feed and
+  stays owner-entered. Source: invoice_items (Dentally `/invoice_items` pull) →
+  `invoice_case_rollup` RPC → `classifyCaseFees` → `GET /api/analytics/treatment-fee-benchmarks`.
+
 ## 13. Group Valuation — driver-based 3-buyer engine (Intelligence OS — Value & Growth)
 
 Source: `backend/src/lib/formulas.js` (`computeGroupValuation`, `valuationGrowthAdjust`,

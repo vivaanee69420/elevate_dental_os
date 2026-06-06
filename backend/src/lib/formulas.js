@@ -480,6 +480,42 @@ export const DEFAULT_SERVICE_MODELS = {
     },
 };
 
+// Treatment Economics Workbench — real case-fee seeding from Dentally invoice
+// items. A dental "case" is billed as MANY line items across visits (an implant
+// = placement + abutment + crown), so the honest case fee = the average INVOICE
+// total for invoices that contain the procedure, not a single line. Names are
+// the practice's own Dentally catalog labels; these patterns matched the live
+// data (e.g. "All-on-4 Surgery Single Arch", "Placement Of Implant",
+// "Invisalign Comprehensive"). Keys match DEFAULT_SERVICE_MODELS.
+export const TREATMENT_CASE_RULES = {
+    fullarch: { match: /all[\s-]?on|full[\s-]?arch|arch surgery|hybrid bridge/i },
+    implant: { match: /implant/i, not: /consult|review|x[\s-]?ray|radiograph|assess|planning|scan/i },
+    invisalign: { match: /invisalign|clear[\s-]?aligner/i, not: /review/i },
+};
+
+// invoices: [{ names: string[], total_pence }]. Returns, per category, the mean
+// invoice total across invoices containing a matching (and non-excluded) line,
+// or null when there are no matches. Pure (no I/O) so it is unit-tested directly
+// against real catalog names.
+export function classifyCaseFees(invoices, rules = TREATMENT_CASE_RULES) {
+    const acc = {};
+    for (const key of Object.keys(rules)) acc[key] = { sum: 0, n: 0 };
+    for (const inv of invoices || []) {
+        const names = (inv.names || []).filter(Boolean);
+        const total = Number(inv.total_pence) || 0;
+        if (total <= 0 || names.length === 0) continue;
+        for (const [key, r] of Object.entries(rules)) {
+            const hit = names.some((nm) => r.match.test(nm) && !(r.not && r.not.test(nm)));
+            if (hit) { acc[key].sum += total; acc[key].n += 1; }
+        }
+    }
+    const out = {};
+    for (const [key, a] of Object.entries(acc)) {
+        out[key] = a.n > 0 ? { feePence: Math.round(a.sum / a.n), sampleSize: a.n } : null;
+    }
+    return out;
+}
+
 export function computeServiceEconomics(model) {
     const price = Math.max(0, model.pricePence || 0);
     const cbct = Math.max(0, model.cbctPence || 0);

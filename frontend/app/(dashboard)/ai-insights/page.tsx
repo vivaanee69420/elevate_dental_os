@@ -1,1 +1,1 @@
-export { default } from '@/features/overview/components/AiInsightsScreen';
+export { default } from '@/features/intelligence/components/AiAnalystScreen';

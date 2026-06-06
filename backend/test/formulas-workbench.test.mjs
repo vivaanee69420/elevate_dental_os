@@ -94,3 +94,53 @@ describe('endpoint wiring (schema + service)', () => {
     expect(svc.treatmentModels().implant.unit).toBe('implant');
   });
 });
+
+// ----------------------------------------------------------------------------
+// classifyCaseFees — real case-fee seeding from Dentally invoice rollups.
+// Names below are REAL Dentally catalog labels probed from the live API.
+// ----------------------------------------------------------------------------
+import { classifyCaseFees } from '../src/lib/formulas.js';
+
+describe('classifyCaseFees', () => {
+    it('attributes whole-invoice totals by procedure keyword (real catalog names)', () => {
+        const invoices = [
+            // Full implant case across components on one invoice: 1177+806+898 = 2881.
+            { names: ['Placement Of Implant', 'Implant Abutment', 'Implant Crown'], total_pence: 288100 },
+            // Another implant invoice (placement only).
+            { names: ['Placement Of Implant'], total_pence: 117700 },
+            // Full arch.
+            { names: ['All-on-4 Surgery Single Arch'], total_pence: 614000 },
+            // Invisalign package.
+            { names: ['Invisalign Comprehensive', 'Essix Retainer Upper'], total_pence: 292300 },
+            { names: ['Invisalign'], total_pence: 146000 },
+            // Noise that must NOT count toward implant (consult/x-ray only).
+            { names: ['Implant Consultation'], total_pence: 3100 },
+            { names: ['OPG Panoramic X-ray'], total_pence: 6100 },
+            // Invisalign Review (£0 and excluded by /review/) — ignored.
+            { names: ['Invisalign Review'], total_pence: 0 },
+        ];
+        const out = classifyCaseFees(invoices);
+        // implant: invoices [2881, 1177] -> mean 2029 (consult-only invoice excluded).
+        expect(out.implant).toEqual({ feePence: 202900, sampleSize: 2 });
+        // fullarch: one invoice 6140.
+        expect(out.fullarch).toEqual({ feePence: 614000, sampleSize: 1 });
+        // invisalign: [2923, 1460] -> mean 2191.5 -> 219150. Review excluded.
+        expect(out.invisalign).toEqual({ feePence: 219150, sampleSize: 2 });
+    });
+
+    it('null per category when no matching invoices', () => {
+        const out = classifyCaseFees([{ names: ['Exam', 'Scale & Polish'], total_pence: 9000 }]);
+        expect(out.fullarch).toBeNull();
+        expect(out.implant).toBeNull();
+        expect(out.invisalign).toBeNull();
+    });
+
+    it('skips zero/negative-total and empty-name invoices', () => {
+        const out = classifyCaseFees([
+            { names: ['Placement Of Implant'], total_pence: 0 },
+            { names: [], total_pence: 50000 },
+            { names: ['Balance imported from previous system'], total_pence: -4600 },
+        ]);
+        expect(out.implant).toBeNull();
+    });
+});

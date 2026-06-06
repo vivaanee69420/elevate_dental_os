@@ -25,6 +25,18 @@ export const scopeQuerySchema = zod_1.z.object({
     pk: zod_1.z.string().trim().regex(/^\d{4}-\d{2}(-\d{2})?$/).optional(),
 });
 
+// AI Analyst Ask (POST body). Same scope/period selector + a bounded free-text
+// question (empty/absent → prioritised findings only, no Claude call).
+export const aiAskSchema = zod_1.z.object({
+    scope: zod_1.z.string().trim().default('all').refine(
+        (s) => SCOPE_LITERALS.includes(s) || UUID_RE.test(s),
+        { message: 'scope must be all|practices|academy|lab or a practice UUID' },
+    ),
+    period: zod_1.z.enum(['month', 'day']).default('month'),
+    pk: zod_1.z.string().trim().regex(/^\d{4}-\d{2}(-\d{2})?$/).optional(),
+    question: zod_1.z.string().trim().max(500).optional(),
+});
+
 // Treatment Economics Workbench model (POST body). All money in integer pence.
 // Bounded so a hostile body can't overflow the solver; coerced since the client
 // may send numeric strings. Pure compute — no persistence (Arch #3).

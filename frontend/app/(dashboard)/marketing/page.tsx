@@ -1,1 +1,1 @@
-export { default } from '@/features/growth/components/MarketingScreen';
+export { default } from '@/features/intelligence/components/MarketingRoiScreen';

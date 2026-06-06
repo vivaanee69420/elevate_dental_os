@@ -4,7 +4,7 @@ Plan: `GM-INTELLIGENCE-OS-PLAN.md` (eng-reviewed 2026-06-05). Update after every
 
 Status key: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 
-Last updated: 2026-06-05 (Cashflow & Runway — enriched: outlook projection + bills + decision)
+Last updated: 2026-06-06 (Frontend-first build of the 6 remaining views: Clinicians, AI Analyst, Day, Marketing & ROI, P&L & Margin + Value & Growth relabel)
 
 ---
 
@@ -46,22 +46,43 @@ Commits e393809→(this). Also: full green/gold reskin sweep across 49 screens (
 ### Bug fixes
 - 404 on chair + workbench endpoints: api() paths missing `/api/` prefix (proxy forwards `http://backend/${path}`). Fixed chair-analytics-api + workbench-api to `/api/analytics/...` (business-hub-api was already correct).
 
-### Pending Intelligence OS views (6 of 12)
-- AI Analyst (Ask box) — needs new `POST /api/analytics/ai-ask` → lib/claude.js (findings UI already exists)
-- Treatment Mix heat matrix — needs practice×treatment RPC
-- Chair OCPSPD + profit-per-chair-hr panels — opex/treatment-minute sourcing
-- Marketing & ROI, P&L & Margin, Cashflow & Runway, Clinicians — screens exist (reskinned); need new layout + ScopePeriodBar + scope wiring
+### Intelligence OS views — all 12 now have a new-UI screen (2026-06-06)
+The 6 remaining views were built FRONTEND-FIRST this session (decision: ship the UI on a
+shared mock engine, wire the backend per-screen afterwards). All 12 nav views now render the
+green/gold scope/period-reactive Intelligence OS UI:
+- Group Overview, Practice Deep Dive, Treatment Mix, Treatment Profitability, Chair Efficiency,
+  Lead Funnel, Value & Growth — DONE (full vertical, real endpoints) in earlier sessions.
+- **Clinicians (/clinicians), AI Analyst (/ai-insights), Day (/day), Marketing & ROI (/marketing),
+  P&L & Margin (/financial)** — frontend built this session; **backend wiring pending.**
+- Value & Growth (/valuation) — header relabelled from "Practice Valuation" (the T6 vertical was
+  already done; this closes the D5/D6 relabel note).
+
+Shared mock engine: `frontend/features/intelligence/os-data.ts` (faithful TS port of the
+GM-Group-Intelligence-OS_3.html data engine — PRACTICES/ACADEMY/LAB, channels, treatments,
+scopedEntities/groupChannels/practiceAssociates/ocpspd/plEntity/buildInsights, scope/period-aware).
+Shared panel primitives: `frontend/features/intelligence/components/os-ui.tsx`. Money is whole
+POUNDS in the mock (prototype convention); the wiring slice converts to integer pence at the api()
+boundary (CLAUDE.md rule 2).
+
+### Backend-wiring TODO (next phase — replace os-data per screen)
+- AI Analyst: `POST /api/analytics/ai-ask` → lib/claude.js (findings shape already matches `buildInsights`).
+- Marketing & ROI: marketing-analytics endpoint over `ad_metrics` + `leads` (per-channel + per-practice).
+- P&L & Margin: real CoA→P&L over Xero (reuse `calculateProfitBenchmark` lineage); editable sheets = Phase 3.
+- Clinicians: production from synced appointments + associate mapping + UDA feed.
+- Day: real settled receipts by `processed_at` date + composite index.
+- Chair OCPSPD + profit-per-chair-hr panels — still need opex/treatment-minute sourcing.
 
 ## Phase 2 — Tier-2 (new UI + extended compute)
 | Task | Status | Notes / commit |
 |---|---|---|
-| Treatment Mix heat matrix + insight cards | [ ] | |
-| Clinicians unified (production, OCPSPD, ledger, UDA-by-assoc) | [ ] | |
-| CoA → P&L mapping + Profit Benchmarking (45/18/15/12/10) | [ ] | constants documented in FORMULAS.md |
+| Treatment Mix heat matrix + insight cards | [x] | FULL VERTICAL DONE (volume + **real £ revenue**). VOLUME: `treatment_mix_matrix` RPC (migration `…000038`) → `treatmentMatrix({scope,period,pk})` → GET /api/analytics/treatment-matrix → `TreatmentMatrixScreen` on /treatments (ScopePeriodBar + KpiTiles + AlertRow insights + HeatCell matrix; top-12 + 'Other treatment types' tail; volume-framed insights). REVENUE: shared `assembleMixMatrix` builder + `treatment_revenue_matrix` RPC (`…000041`) over **invoice_items** → `treatmentRevenueMatrix` → GET /api/analytics/treatment-revenue → **Volume/Revenue £ toggle** on the screen (cells in £, money-framed insights). +13 backend tests. Suite 431 green; tsc+lint clean; API.md updated. **Real-fee plumbing (the big unlock):** Dentally `/invoices`+`/invoice_items` now pulled (connector + new `invoice_items` table `…000040`); fixed `treatment_plans` 0-rows bug (missing unique idx, `…000039`). Workbench case fee **auto-fills** from real invoices (`invoice_case_rollup` RPC `…000042` + `classifyCaseFees` → GET /api/analytics/treatment-fee-benchmarks; FORMULAS.md §12). See memory `dentally-invoice-items-real-fees`. **Pending:** verify against the populating resync + `/ship` (live app needs deploy for invoice_items pull). |
+| Clinicians unified (production, OCPSPD, ledger, UDA-by-assoc) | [x] | WIRED (full vertical, honest data walls): `clinicians({scope,period,pk})` over REAL associate roster (`cliniciansRoster` repo — pay_pct/lab_split_pct), `associate_production` RPC (treatment_plans), `associate_appointment_stats`, owner-entered NHS contract (`practicesNhs` repo) → GET /api/analytics/clinicians (finance.view; academy/lab not-applicable) → `CliniciansScreen` reads `useClinicians`. **NO fabrication** — `productionAvailable`/`appointmentsAvailable`/`nhs.completedAvailable` flags drive honest "awaiting Dentally feed" states (treatment_plans empty live); lab/OCPSPD per clinician omitted (no real source); bars fall back to appointment volume when production absent. +6 tests (suite 454 green); tsc+lint clean; API.md updated. Mock os-data path removed. |
+| CoA → P&L mapping + Profit Benchmarking (45/18/15/12/10) | [x] | FULL VERTICAL DONE: `calculateProfitBenchmark` + `PROFIT_BENCHMARKS` constants (pence, 10 tests, FORMULAS.md §1b) → GET /api/analytics/pl-benchmark (finance.view, **actuals-only — no baseline on a Finance screen**; costsAvailable:false/no rows when no cost source) → ProfitBenchmarkScreen on /profit (5 cost-line tiles, variance table, CoA→P&L bucket→category mapping panel). Honest `dentistStaffSeparable` flag: Xero folds associate pay into staff → UI combines/banners instead of false-green dentist row. Did NOT fabricate Xero account codes (real bucket mapping only; account-code-level = later owner-gated slice). API.md updated. Suite 415 green; tsc+lint clean. Commit ee97cbd |
 | Cashflow: bills-to-plan + free-cash + runway | [x] | FULL VERTICAL DONE + ENRICHED to the prototype. (1) `calculateRunway` (pence, FORMULAS.md §14) on GET /cashflow runway block. (2) `cashflowOutlook` + GET /api/analytics/cashflow-outlook (FORMULAS.md §15): month-by-month cash IN (real settled receipts) vs OUT (P&L cost base, flagged), forward months PROJECTED from run-rate, closing-balance trail ANCHORED to today's real bank balance (current month closes there; earlier reconstructed; later projected), `lowestProjected`. (3) `estimateCorporationTax` (UK FY24/25 rates: 19/marginal/25) → bills-to-plan; VAT NOT estimated (dental largely exempt); no payables feed → honest gap note. (4) `freeCashDecision` (2-week buffer; sweepable only when lowest projected clears buffer). CashflowScreen rebuilt to match prototype: headline cards (cash position / net this month / runway "Self-funding") + Cash-in-vs-out + Will-I-run-out table + Bills-to-plan + Decision panel; kept real weekly receipts below. +11 tests (runway/corp-tax/decision). Skipped the generic marketing/ROAS/new-patient KPI strip (Overview/Business-Hub data, not cashflow). Suite 405 green; tsc+lint clean |
-| T9 Day = cash-collected-by-day + composite index | [ ] | labelled 'Cash collected', NOT production |
-| AI Analyst findings + Ask box (reuse generate/p4g-ai) | [ ] | no new endpoint |
-| T11 Port remaining views (new UI) | [ ] | British copy, no emojis |
+| T9 Day = cash-collected-by-day + composite index | [x] | FULL VERTICAL DONE (2026-06-06): `cashByDay({scope,period,pk})` over `settled_receipts_by_day` RPC (real receipts by `processed_at` date; scope→org/entity, month-framed, composite index vs avg working day=100, data-derived Decision Lens) → GET /api/analytics/cash-by-day (finance.view) → `DayScreen` reads `useCashByDay` (loading/empty/error states), money in PENCE. +6 tests (suite 437 green); tsc+lint clean; API.md updated. Mock os-data path removed from the screen. |
+| AI Analyst findings + Ask box (reuse generate/p4g-ai) | [x] | WIRED (full vertical): `aiAsk({scope,period,pk,question})` aggregates the REAL Decision-Lens insights from plMargin+marketingRoi+clinicians+cashByDay (+ headline margin/ROAS/cash facts) into £-ranked findings; with a question + ANTHROPIC_API_KEY, `claude.askAnalyst` writes a NL answer grounded in a compact real summary, else keyword-match fallback → POST /api/analytics/ai-ask (finance.view, `aiAskSchema`) → `AiAnalystScreen` (`useAiFindings` query + `useAiAsk` mutation; loading/empty/error). NO fabrication — findings are the live rollups. +4 tests (suite 458 green); tsc+lint clean; API.md updated. Mock os-data path removed. |
+| T11 Port remaining views (new UI) | [x] | **Marketing & ROI WIRED (full vertical):** `marketingRoi({scope,period,pk})` over real `ad_metrics` (paid spend) + CRM `leads` (channel attribution via utm/source; conversions = leads reaching treatment) + settled revenue → GET /api/analytics/marketing-roi (finance.view; repo `adMetricsInWindow`/`leadsForMarketing` added). HONEST: no per-channel revenue/ROAS (revenue unattributable) — only business-level blended paid ROAS; per-practice ROAS only when ad spend is practice-tagged. `MarketingRoiScreen` rebuilt off `useMarketingRoi` (loading/empty/not-connected; spend→leads→CPL→patients→CPA led; Decision Lens). +6 tests (suite 448 green); tsc+lint clean; API.md updated. ~~P&L & Margin~~ done (prev row). |
+| ~~T11 (P&L & Margin)~~ | [x] | **P&L & Margin WIRED (full vertical):** `plMargin({scope,period,pk})` over real `monthly_financials` actuals (Xero/QuickBooks override manual, resolved PER ENTITY; honest CoA buckets — staff incl. associate pay, tax excluded; selected-month else trailing-annual) → GET /api/analytics/pl-margin (finance.view, `allEntities` repo helper added) → `PLMarginScreen` reads `usePLMargin` (loading/empty/error; staff-includes-associate banner; per-entity only when practice-tagged), money in PENCE. +5 tests (suite 442 green); tsc+lint clean; API.md updated. **Marketing & ROI backend wiring pending.** |
 **Exit:** all 12 views ported, new UI. — `[ ]`
 
 ## Phase 3 — Persistence + editable sheets (final slice)

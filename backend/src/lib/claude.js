@@ -95,6 +95,47 @@ Return ONLY valid JSON array of 5 insights. No other text.`;
 }
 
 // ============================================================================
+// AI ANALYST (GM Intelligence OS) — answers a free-text question about the
+// group's LIVE numbers for the current scope/period, and returns ranked findings
+// in the Insight shape the screen renders ({ sev, t, d, v }). `summary` is a
+// compact, already-real data bundle assembled by the service (no fabrication).
+// Throws when no API key (caller falls back to deterministic findings).
+// ============================================================================
+const SEV_MAP = { good: 'good', positive: 'good', warn: 'warn', warning: 'warn', bad: 'bad', critical: 'bad', danger: 'bad', info: 'info' };
+function normSev(s) { return SEV_MAP[String(s || '').toLowerCase()] || 'info'; }
+
+export async function askAnalyst(question, summary) {
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('No ANTHROPIC_API_KEY');
+    const prompt = `A UK dental practice group owner asks a question about their LIVE numbers. Answer using ONLY the data provided — reference the actual figures, never invent numbers. Money is shown in pence; talk in £.
+
+SCOPE: ${summary.scopeLabel} · ${summary.periodLabel}
+LIVE DATA (real, integer pence unless noted):
+${JSON.stringify(summary.data)}
+
+Owner's question: ${question}
+
+Return ONLY valid JSON, no prose/code-fences, of the form:
+{"answer": "2-4 sentence direct answer in £, referencing the real figures", "findings": [{"severity":"good|warn|bad|info","title":"short headline with a real number","detail":"1-2 sentences: the data point + the action","value":"the £ impact or metric, e.g. £12,400/mo or 3.1x"}]}
+Give 2-4 findings ranked by importance. If the data can't answer the question, say so honestly in "answer" and return findings:[].`;
+    const response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 1200,
+        system: 'You are a UK dental business analyst. Return only a single valid JSON object.',
+        messages: [{ role: 'user', content: prompt }],
+    });
+    const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const obj = JSON.parse(jsonText);
+    const findings = Array.isArray(obj.findings)
+        ? obj.findings.filter((x) => x && x.title).map((x) => ({
+            sev: normSev(x.severity), t: String(x.title),
+            d: String(x.detail || ''), v: x.value ? String(x.value) : '',
+        }))
+        : [];
+    return { answer: typeof obj.answer === 'string' ? obj.answer : '', findings, usage: response.usage };
+}
+
+// ============================================================================
 // AI-INSIGHTS — Claude analyses LIVE rollups (baseline + per-practice/source
 // conversion + revenue projection) and writes insight cards in the exact
 // shape the AI Insights screen renders. Returns [] on any failure so the

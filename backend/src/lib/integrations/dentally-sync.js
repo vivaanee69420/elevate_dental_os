@@ -507,6 +507,37 @@ export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap
     };
 }
 
+// Invoice item = the REAL per-treatment fee line. Verified live shape:
+// { id, name, item_price, total_price, quantity, nhs_charge, invoice_id,
+//   practitioner_id, treatment_plan_id, treatment_plan_item_id }. The item
+// itself carries no practice/date — those come from its parent invoice (site_id
+// + patient_id + dated_on), resolved via `invoiceMap` (dentally invoice id ->
+// { practice_id, contact_id, dated_on, paid }) so the row is self-contained.
+// item_price/total_price arrive as money STRINGS -> integer pence (toPence).
+export function invoiceItemRow(orgId, it, invoiceMap = new Map(), practitionerMap = new Map()) {
+    const inv = invoiceMap.get(String(it.invoice_id)) || {};
+    const qty = Number(it.quantity);
+    return {
+        organisation_id: orgId,
+        source: 'dentally',
+        pms_external_id: String(it.id),
+        pms_invoice_id: it.invoice_id != null ? String(it.invoice_id) : null,
+        pms_practitioner_id: it.practitioner_id != null ? String(it.practitioner_id) : null,
+        practice_id: inv.practice_id ?? null,
+        contact_id: inv.contact_id ?? null,
+        associate_id: practitionerMap.get(String(it.practitioner_id)) ?? null,
+        treatment_plan_id: it.treatment_plan_id != null ? String(it.treatment_plan_id) : null,
+        treatment_name: it.name ?? null,
+        unit_price_pence: toPence(it.item_price),
+        // total_price is qty-inclusive; fall back to unit price when absent.
+        fee_pence: toPence(it.total_price ?? it.item_price),
+        quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
+        nhs_charge: it.nhs_charge === true,
+        invoiced_on: inv.dated_on ?? null,
+        invoice_paid: inv.paid ?? null,
+    };
+}
+
 // ---- pulls ------------------------------------------------------------------
 
 async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
@@ -581,6 +612,34 @@ async function pullTreatmentPlans(orgId, base, auth, params, associateMap, conta
         .filter((tp) => tp && tp.id != null)
         .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap));
     const synced = await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
+    return { synced };
+}
+
+// Build { dentally invoice id -> { practice_id, contact_id, dated_on, paid } }
+// for the window. Invoice items carry only invoice_id; the invoice carries the
+// site/patient/date, so we pull invoices first to resolve each item's practice
+// + period. Invoices themselves are not persisted (only this transient map).
+async function buildInvoiceMap(orgId, base, auth, params, siteMap, contactMap, maxPages) {
+    const remote = await fetchAllPages(base, '/invoices', auth, params, null, maxPages);
+    const map = new Map();
+    for (const inv of remote) {
+        if (!inv || inv.id == null) continue;
+        map.set(String(inv.id), {
+            practice_id: siteMap.get(String(inv.site_id)) ?? null,
+            contact_id: contactMap.get(String(inv.patient_id)) ?? null,
+            dated_on: inv.dated_on ?? null,
+            paid: inv.paid === true,
+        });
+    }
+    return map;
+}
+
+async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitionerMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/invoice_items', auth, params, onPage, maxPages);
+    const rows = remote
+        .filter((it) => it && it.id != null)
+        .map((it) => invoiceItemRow(orgId, it, invoiceMap, practitionerMap));
+    const synced = await upsertChunked('invoice_items', rows, 'organisation_id,source,pms_external_id');
     return { synced };
 }
 
@@ -728,6 +787,16 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         } catch (err) {
             console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
         }
+        // Invoice items = the real per-treatment fee feed (treatment name +
+        // price). Pull invoices first to resolve each item's practice + date,
+        // then the items. Same never-fail-the-whole-sync pattern as plans.
+        let invoiceItems = { synced: 0 };
+        try {
+            const invoiceMap = await buildInvoiceMap(orgId, base, auth, { updated_since: since }, siteMap, contactMap, maxPages);
+            invoiceItems = await pullInvoiceItems(orgId, base, auth, { updated_since: since }, invoiceMap, practitionerMap, null, maxPages);
+        } catch (err) {
+            console.warn(`[dentally] invoice_items pull skipped: ${err?.message || err}`);
+        }
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
         // from before this column existed). Set-based; cheap; never cross-tenant.
@@ -762,6 +831,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             appointments_upcoming: upcomingSynced,
             payments: pays.synced,
             treatment_plans: treatmentPlans.synced,
+            invoice_items: invoiceItems.synced,
             skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0),
             skipped_closed_appointments: appts.skippedClosed ?? 0,
             relinked_appointment_contacts: relinked,
@@ -839,4 +909,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow };
+export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow };

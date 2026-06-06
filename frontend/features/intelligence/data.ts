@@ -17,14 +17,9 @@
  * Group trailing-12-month revenue, reproduced from the prototype dataset
  * (12 synthesised months at the prototype's scale). Whole pounds.
  */
-export const ANNUAL_REVENUE = (() => {
-  // Same month synthesis the prototype dataset uses, summed to a yearly total.
-  let total = 0;
-  for (let i = 0; i < 12; i++) {
-    total += Math.round(815000 + i * 9000 + (i % 3) * 12000);
-  }
-  return total;
-})();
+// Zero until the group P&L feed is wired (no real /api/analytics endpoint yet).
+// 0 is shown rather than a synthesised prototype baseline.
+export const ANNUAL_REVENUE = 0;
 
 /** Group annual EBITDA at the prototype's blended 23.5% margin. Whole pounds. */
 export const ANNUAL_PROFIT = Math.round(ANNUAL_REVENUE * 0.235);
@@ -40,61 +35,63 @@ export interface Scenario {
   status: 'positive' | 'negative' | 'neutral';
 }
 
-/** The six what-if scenarios, verbatim from PAGES.scenarios. */
+// Scenario shells kept as structure; all modelled outputs are 0 until the
+// scenario engine is wired to real group data. 0 is shown rather than the
+// prototype's synthesised what-if figures.
 export const SCENARIOS: Scenario[] = [
   {
     title: 'Hire new associate (Bexleyheath)',
-    revenue: 280000,
-    profit: 140000,
-    cash: -12000,
-    valuation: 840000,
+    revenue: 0,
+    profit: 0,
+    cash: 0,
+    valuation: 0,
     summary: 'Recruitment £8k + lost productivity months 1-2. Break-even month 4.',
-    status: 'positive',
+    status: 'neutral',
   },
   {
     title: 'Buy practice in Maidstone (£950k)',
-    revenue: 580000,
-    profit: 160000,
-    cash: -380000,
-    valuation: 960000,
+    revenue: 0,
+    profit: 0,
+    cash: 0,
+    valuation: 0,
     summary: '60% loan / 40% equity. Adds 25% to group EBITDA.',
-    status: 'positive',
+    status: 'neutral',
   },
   {
     title: 'Raise private fees 8%',
-    revenue: 95000,
-    profit: 95000,
-    cash: 95000,
-    valuation: 570000,
+    revenue: 0,
+    profit: 0,
+    cash: 0,
+    valuation: 0,
     summary: 'Some patient churn (4-6%). Net positive even at 10% churn.',
-    status: 'positive',
+    status: 'neutral',
   },
   {
     title: 'Lose top associate (Dr Mitchell)',
-    revenue: -412000,
-    profit: -206000,
-    cash: -50000,
-    valuation: -1236000,
+    revenue: 0,
+    profit: 0,
+    cash: 0,
+    valuation: 0,
     summary:
       'Worst case. Recruitment + 3-month productivity gap. Mitigation: bonus structure.',
-    status: 'negative',
+    status: 'neutral',
   },
   {
     title: 'Drop NHS contract (Rochester)',
-    revenue: -380000,
-    profit: -200000,
-    cash: 28000,
-    valuation: -1200000,
+    revenue: 0,
+    profit: 0,
+    cash: 0,
+    valuation: 0,
     summary:
       'Net negative short-term but releases chair capacity for private. Revisit at 6 months.',
-    status: 'negative',
+    status: 'neutral',
   },
   {
     title: 'Open 6th site (organic, 2027)',
-    revenue: 480000,
-    profit: 80000,
-    cash: -180000,
-    valuation: 480000,
+    revenue: 0,
+    profit: 0,
+    cash: 0,
+    valuation: 0,
     summary:
       'Greenfield startup. Year 1 slow, breakeven month 14. Lower risk than acquisition.',
     status: 'neutral',
@@ -110,17 +107,9 @@ export interface Debtor {
   age: number;
 }
 
-/** Outstanding debtors, verbatim from PAGES.debt. */
-export const DEBTORS: Debtor[] = [
-  { name: 'Mr R. Sutton', practice: 'Warwick Lodge', tx: 'All-on-4', amount: 4250, age: 145 },
-  { name: 'Mrs S. Patel', practice: 'Ashford', tx: 'Invisalign', amount: 1800, age: 92 },
-  { name: 'Mr J. Wallace', practice: 'Rochester', tx: 'Implant', amount: 2950, age: 68 },
-  { name: 'Ms L. Cooper', practice: 'Bexleyheath', tx: 'Bonding', amount: 800, age: 45 },
-  { name: 'Dr M. Singh', practice: 'Barnet', tx: 'Veneers x 6', amount: 4800, age: 38 },
-  { name: 'Mrs A. Johnson', practice: 'Ashford', tx: 'Multiple', amount: 1450, age: 22 },
-  { name: 'Mr D. Hill', practice: 'Warwick Lodge', tx: 'All-on-4', amount: 3200, age: 12 },
-  { name: 'Mrs E. Thomas', practice: 'Rochester', tx: 'Whitening', amount: 320, age: 8 },
-];
+// Empty until a real A/R feed is wired — no synthesised debtor rows.
+// The Debt Recovery screen shows £0 outstanding rather than dummy balances.
+export const DEBTORS: Debtor[] = [];
 
 /** A configurable alert-threshold definition shown on the Alerts screen. */
 export interface AlertThreshold {
