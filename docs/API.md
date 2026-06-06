@@ -442,6 +442,21 @@ Response:
 { "uploadUrl": "https://s3.eu-west-2.amazonaws.com/...", "key": "...", "file": {...} }
 ```
 
+## Training (tenant)
+
+Mounted at `/api/training`. Tenant auth. Reads from the **global** published course catalogue; enrolment and progress are per-org/user.
+
+- `GET  /api/training/library` — published catalogue for this org (mentorship-gated) with per-user enrolment + progress. Returns `{ courses: [...], mentorship_active }`.
+- `GET  /api/training/courses/:id` — one published course, full content (modules → lessons), per-lesson progress and access gate. 403 when org lacks the required `access` tier.
+- `POST /api/training/courses/:id/enrol` — enrol the current user in a published course (idempotent). Returns `{ enrolment }`.
+- `POST /api/training/lessons/:lessonId/complete` — mark a lesson complete (default) or incomplete (`{ completed: false }`). Returns `{ progress }`.
+- `GET  /api/training/lessons/:lessonId/attachment` — presigned S3 GET for a lesson's single legacy attachment (mentorship-gated). Returns `{ url }`.
+- `GET  /api/training/lesson-files/:fileId/download` — presigned S3 GET for a categorised lesson file from the `lesson_files` table (gated like the lesson). Returns `{ url }`.
+- `GET  /api/training/resources/:resourceId/download` — presigned S3 GET for a course-level resource (gated like the course detail). Returns `{ url }`.
+- `GET  /api/training/my` — enrolled published courses with per-course progress for the current user. Returns `{ courses: [...] }`.
+- `GET  /api/training/mentorship` — stub (separate slice). Returns `{ programmes: [] }`.
+- `GET  /api/training/one-to-one` — stub (separate slice). Returns `{ user_id, sessions: [] }`.
+
 ## Memberships
 
 ### `GET /api/memberships/plans` — list plans
@@ -663,3 +678,45 @@ route except `/me` and `/change-password` until they rotate their password.
 - `PLATFORM_ADMIN_BOOTSTRAP_EMAIL` + `PLATFORM_ADMIN_BOOTSTRAP_PASSWORD` — when both set
   AND the `platform_admins` table is empty, server boot creates the first
   superadmin with `must_change_password=true`. Idempotent thereafter.
+
+## Platform course authoring (`/api/platform/courses/*`)
+
+**Auth:** platform superadmin JWT only (same auth model as `/api/platform/*` above — platform JWT, not Supabase JWT). All endpoints require `superadmin` role. The catalogue is **global** (no `organisation_id`); tenant read/enrol/progress lives on `/api/training`.
+
+File uploads: use `POST /api/platform/courses/presign` to get an S3 presigned PUT URL, then store the returned `key` when creating courses/lessons/files. Tenant downloads use the `/api/training/…/download` endpoints.
+
+### Courses
+
+- `GET    /api/platform/courses` — list all courses (draft + published). Returns `{ courses: [...] }`.
+- `POST   /api/platform/courses` — create course (body: `courseCreateSchema`). Returns the created course (201).
+- `GET    /api/platform/courses/:id` — one course with modules, lessons, and files. Returns the full course.
+- `PATCH  /api/platform/courses/:id` — partial update (`courseUpdateSchema`). Returns the updated course.
+- `DELETE /api/platform/courses/:id` — delete course (cascades modules/lessons). Returns `{ deleted }`.
+- `POST   /api/platform/courses/:id/publish` — set status `published` or `draft` (body `{ status }`, default `published`). Returns updated course.
+- `POST   /api/platform/courses/presign` — presigned S3 PUT URL for an attachment upload (body: `{ filename, content_type }`). Returns `{ uploadUrl, key, file }`.
+
+### Modules *(superadmin)*
+
+- `POST   /api/platform/courses/:id/modules/reorder` — reorder modules (body `{ ids: string[] }`, full ordered list of module UUIDs). Returns `{ modules }`.
+- `POST   /api/platform/courses/:id/modules` — create module. Body: `{ title, position?, access? }`. Returns the created module (201).
+- `PATCH  /api/platform/courses/:id/modules/:moduleId` — partial update of a module (any subset of create fields). Returns the updated module.
+- `DELETE /api/platform/courses/:id/modules/:moduleId` — delete module (cascades lessons and their files). Returns `{ deleted }`.
+
+### Lessons *(superadmin)*
+
+- `POST   /api/platform/courses/:id/modules/:moduleId/lessons/reorder` — reorder lessons within a module (body `{ ids: string[] }`). Returns `{ lessons }`.
+- `POST   /api/platform/courses/:id/modules/:moduleId/lessons` — create lesson under a module. Body: lesson fields (title, type, content, position, access, etc.). Returns the created lesson (201).
+- `PATCH  /api/platform/courses/:id/lessons/:lessonId` — partial update of a lesson. Returns the updated lesson.
+- `DELETE /api/platform/courses/:id/lessons/:lessonId` — delete lesson (cascades lesson files). Returns `{ deleted }`.
+
+### Lesson files *(superadmin)*
+
+- `POST   /api/platform/courses/:id/lessons/:lessonId/files` — add a categorised file to a lesson. Body: `{ category, name, file_key, file_type?, size_bytes?, access? }`. Returns the created lesson file record (201).
+- `DELETE /api/platform/courses/:id/lessons/:lessonId/files/:fileId` — remove a lesson file. Returns `{ deleted }`.
+
+### Course resources *(superadmin)*
+
+- `POST   /api/platform/courses/:id/resources` — attach a course-level resource (body: `resourceCreateSchema`). Returns the created resource (201).
+- `DELETE /api/platform/courses/:id/resources/:resId` — remove a course-level resource. Returns `{ deleted }`.
+
+> **Schema note (migration `000047`):** modules live in `course_modules`; lesson files live in `lesson_files`; lessons carry a `module_id` FK. Migration `000047` is **NOT YET applied on hosted** — apply it + run `NOTIFY pgrst, 'reload schema';` before using any module or lesson-file endpoint in production.
