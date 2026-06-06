@@ -9,7 +9,7 @@ export class AppError extends Error {
     }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// _next is required so Express treats this as error-handling middleware.
 export function errorHandler(err, req, res, _next) {
     if (err instanceof zod_1.ZodError) {
         return res.status(400).json({
