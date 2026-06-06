@@ -115,6 +115,21 @@ export const trainingService = {
         const shapedLessons = lessons.map((l) => {
             const locked = gate(l.access);
             const rawFiles = filesByLesson.get(l.id) || [];
+            const shapedFiles = locked ? [] : rawFiles.map((f) => ({
+                id: f.id,
+                lesson_id: f.lesson_id,
+                category: f.category,
+                name: f.name,
+                file_key: f.file_key,
+                file_type: f.file_type,
+                size_bytes: f.size_bytes,
+                position: f.position,
+                access: f.access,
+            }));
+            // Suppress legacy attachment fields when a backfilled lesson_files row
+            // already carries the same file (migration 000047). Avoids double-render.
+            const backfilled = !locked && l.attachment_file_key &&
+                shapedFiles.some((f) => f.file_key === l.attachment_file_key);
             return {
                 id: l.id,
                 module_id: l.module_id,
@@ -124,20 +139,11 @@ export const trainingService = {
                 completed: completedSet.has(l.id),
                 teaser: l.teaser,
                 body: locked ? null : l.body,
-                attachment_name: locked ? null : l.attachment_name,
-                attachment_file_key: locked ? null : l.attachment_file_key,
-                attachment_size_bytes: locked ? null : l.attachment_size_bytes,
-                files: locked ? [] : rawFiles.map((f) => ({
-                    id: f.id,
-                    lesson_id: f.lesson_id,
-                    category: f.category,
-                    name: f.name,
-                    file_key: f.file_key,
-                    file_type: f.file_type,
-                    size_bytes: f.size_bytes,
-                    position: f.position,
-                    access: f.access,
-                })),
+                attachment_name: (locked || backfilled) ? null : l.attachment_name,
+                attachment_file_key: (locked || backfilled) ? null : l.attachment_file_key,
+                attachment_type: (locked || backfilled) ? null : l.attachment_type,
+                attachment_size_bytes: (locked || backfilled) ? null : l.attachment_size_bytes,
+                files: shapedFiles,
             };
         });
 
@@ -274,7 +280,7 @@ export const trainingService = {
         if (!lesson) throw new AppError('File not found', 404);
         const course = await courseRepository.getPublished(lesson.course_id);
         if (!course) throw new AppError('File not found', 404);
-        if (file.access === 'mentorship' && !(await orgMentorshipActive(orgId))) {
+        if ((lesson.access === 'mentorship' || file.access === 'mentorship') && !(await orgMentorshipActive(orgId))) {
             throw new AppError('Locked — mentorship required', 403);
         }
         const url = await fileRepository.presignDownload(file.file_key, file.name);
