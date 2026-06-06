@@ -125,6 +125,7 @@ export const trainingService = {
                 size_bytes: f.size_bytes,
                 position: f.position,
                 access: f.access,
+                created_at: f.created_at,
             }));
             // Suppress legacy attachment fields when a backfilled lesson_files row
             // already carries the same file (migration 000047). Avoids double-render.
@@ -202,6 +203,8 @@ export const trainingService = {
                     file_type: r.file_type,
                     size_bytes: r.size_bytes,
                     file_key: locked ? null : r.file_key,
+                    category: r.category,
+                    created_at: r.created_at,
                 };
             }),
         };
