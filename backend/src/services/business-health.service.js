@@ -14,6 +14,39 @@ import { analyticsService } from "./analytics.service.js";
 import { METRIC_CATALOG, METRIC_BY_KEY } from "../lib/health-metrics.js";
 const round1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
 const todayStr = () => new Date().toISOString().split('T')[0];
+const numOrNull = (n) => (n == null || n === '' || Number.isNaN(Number(n)) ? null : Number(n));
+const penceToPounds = (p) => (p == null ? null : round1(Number(p) / 100));
+
+// Live actuals for the hybrid (computed:true) KPIs, in the units the catalog
+// expects (% / count / £). Each source is awaited independently and guarded so
+// a missing RPC/table (e.g. before migration 000056 lands, or a non-Dentally
+// org) degrades that metric to its manual fallback — never throws. Trailing
+// 12-month window for production/lead-response; patient KPIs window internally.
+async function resolveComputed(orgId) {
+    const since = new Date();
+    since.setMonth(since.getMonth() - 12);
+    const sinceISO = since.toISOString();
+    const repo = business_health_repository_1.businessHealthRepository;
+    const safe = (p) => p.catch(() => null);
+    const [patient, production, chairUtil, leadResp] = await Promise.all([
+        safe(repo.patientActuals(orgId, null)),
+        safe(repo.productionActuals(orgId, sinceISO, null)),
+        safe(repo.chairUtilisationSummary(orgId)),
+        safe(repo.leadResponseActual(orgId, sinceISO)),
+    ]);
+    const p = patient || {};
+    const prod = production || {};
+    return {
+        new_patients_month: numOrNull(p.new_patients_month),
+        active_patients: numOrNull(p.active_patients),
+        retention_12mo: numOrNull(p.retention_12mo),
+        recall_compliance: numOrNull(p.recall_compliance),
+        chair_utilisation: numOrNull(chairUtil),
+        avg_case_value: penceToPounds(prod.avg_case_value_pence),
+        production_per_associate: penceToPounds(prod.production_per_associate_pence),
+        lead_response_time: numOrNull(leadResp),
+    };
+}
 
 // Capture a point-in-time copy of the owner's manual inputs (000054) so a past
 // period can later show what baseline/targets/manual KPIs WERE at that time.
@@ -205,12 +238,25 @@ export const businessHealthService = {
             lead_to_treatment: { value: round1(hub.group.conversionRate), source: 'live' },
             fta_no_show_rate:  { value: round1(hub.group.noShowRate), source: 'live' },
         };
+        // Hybrid computed actuals — live only (a past as-of view replays the
+        // manual snapshot instead; chair/recall history is not RPC-derivable).
+        // A null key here means "no source data" -> fall back to manual below.
+        // Each source is independently guarded so a missing RPC/table degrades
+        // that one metric to manual rather than failing the whole scorecard.
+        const computed = !asOf ? await resolveComputed(orgId) : {};
         const metrics = METRIC_CATALOG.map((m) => {
             let current = null, source, asof = null, needsInput = false;
+            let sourceType = m.sourceType;
             if (m.sourceType === 'auto') {
                 const a = auto[m.key] || {};
                 current = a.value ?? null;
                 source = a.source || 'live';
+            } else if (m.computed && computed[m.key] != null) {
+                // Live computed value wins over a stale manual entry and renders
+                // as an auto/source-chip tile.
+                current = computed[m.key];
+                source = m.computedSource || 'live';
+                sourceType = 'auto';
             } else {
                 const entry = manual[m.key];
                 source = 'manual';
@@ -228,7 +274,7 @@ export const businessHealthService = {
                 : { progressPct: 0, deltaFromBaselinePct: 0, remainingToTarget: null };
             return {
                 key: m.key, label: m.label, cat: m.cat, unit: m.unit, better: m.better,
-                sourceType: m.sourceType, source, asof, needsInput,
+                sourceType, source, asof, needsInput,
                 baseline: baselineVal, current, target, ...prog,
             };
         });

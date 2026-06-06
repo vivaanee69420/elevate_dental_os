@@ -1,8 +1,8 @@
 // Intelligence section — local mock-data layer.
 //
-// The Intelligence screens (Scenario Planner, Tax/MTD, Debt Recovery, Alerts)
-// are fed entirely by the figures hard-coded in the prototype
-// (preview/elevate-dental-os-v2.html, PAGES.scenarios/tax/debt/alerts). The
+// The Intelligence screens (Tax/MTD, Debt Recovery, Alerts) are fed entirely by
+// the figures hard-coded in the prototype
+// (preview/elevate-dental-os-v2.html, PAGES.tax/debt/alerts). The
 // shared @/features/_mock module does not expose the group P&L totals the Tax
 // screen needs, so the annual revenue/profit baseline is reproduced here at the
 // prototype's scale (~£10.3m turnover, ~23.5% margin). When real
@@ -23,80 +23,6 @@ export const ANNUAL_REVENUE = 0;
 
 /** Group annual EBITDA at the prototype's blended 23.5% margin. Whole pounds. */
 export const ANNUAL_PROFIT = Math.round(ANNUAL_REVENUE * 0.235);
-
-/** A single modelled what-if scenario shown on the Scenario Planner. */
-export interface Scenario {
-  title: string;
-  revenue: number;
-  profit: number;
-  cash: number;
-  valuation: number;
-  summary: string;
-  status: 'positive' | 'negative' | 'neutral';
-}
-
-// Scenario shells kept as structure; all modelled outputs are 0 until the
-// scenario engine is wired to real group data. 0 is shown rather than the
-// prototype's synthesised what-if figures.
-export const SCENARIOS: Scenario[] = [
-  {
-    title: 'Hire new associate (Bexleyheath)',
-    revenue: 0,
-    profit: 0,
-    cash: 0,
-    valuation: 0,
-    summary: 'Recruitment £8k + lost productivity months 1-2. Break-even month 4.',
-    status: 'neutral',
-  },
-  {
-    title: 'Buy practice in Maidstone (£950k)',
-    revenue: 0,
-    profit: 0,
-    cash: 0,
-    valuation: 0,
-    summary: '60% loan / 40% equity. Adds 25% to group EBITDA.',
-    status: 'neutral',
-  },
-  {
-    title: 'Raise private fees 8%',
-    revenue: 0,
-    profit: 0,
-    cash: 0,
-    valuation: 0,
-    summary: 'Some patient churn (4-6%). Net positive even at 10% churn.',
-    status: 'neutral',
-  },
-  {
-    title: 'Lose top associate (Dr Mitchell)',
-    revenue: 0,
-    profit: 0,
-    cash: 0,
-    valuation: 0,
-    summary:
-      'Worst case. Recruitment + 3-month productivity gap. Mitigation: bonus structure.',
-    status: 'neutral',
-  },
-  {
-    title: 'Drop NHS contract (Rochester)',
-    revenue: 0,
-    profit: 0,
-    cash: 0,
-    valuation: 0,
-    summary:
-      'Net negative short-term but releases chair capacity for private. Revisit at 6 months.',
-    status: 'neutral',
-  },
-  {
-    title: 'Open 6th site (organic, 2027)',
-    revenue: 0,
-    profit: 0,
-    cash: 0,
-    valuation: 0,
-    summary:
-      'Greenfield startup. Year 1 slow, breakeven month 14. Lower risk than acquisition.',
-    status: 'neutral',
-  },
-];
 
 /** A configurable alert-threshold definition shown on the Alerts screen. */
 export interface AlertThreshold {

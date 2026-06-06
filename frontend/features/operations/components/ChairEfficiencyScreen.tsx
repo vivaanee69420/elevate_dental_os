@@ -7,7 +7,7 @@
 // (backend returns null with a note).
 
 import { useEffect, useState } from 'react';
-import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, type Column } from '@/components/ui';
+import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable, type Column } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { formatPence } from '@/lib/format';
 import { useChairAnalytics } from '../chair-analytics-hooks';
@@ -49,7 +49,12 @@ export function ChairEfficiencyScreen() {
       />
       <ScopePeriodBar />
 
-      {isLoading && <EmptyState message="Loading chair economics…" />}
+      {isLoading && (
+        <>
+          <SkeletonKpiRow count={4} />
+          <SkeletonTable rows={6} cols={5} />
+        </>
+      )}
 
       {isError && (
         <AlertRow tone="bad" title="Couldn't load chair analytics" body={(error as Error)?.message} />

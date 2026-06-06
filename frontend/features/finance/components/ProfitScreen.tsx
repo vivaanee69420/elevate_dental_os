@@ -15,6 +15,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { useState } from 'react';
+import { Skeleton } from '@/components/ui';
 import { annualTotal, poundsCompact, monthLabel, monthShort } from '../mock';
 import { useFinanceSeries } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
@@ -219,9 +220,7 @@ export default function ProfitScreen() {
           Revenue &amp; profit — last 12 months
         </h2>
         {isLoading ? (
-          <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
-            Loading…
-          </div>
+          <Skeleton className="w-full" style={{ height: 240 }} />
         ) : !hasRevenue ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
             No settled payments in the last 12 months
@@ -284,31 +283,35 @@ export default function ProfitScreen() {
                         {poundsCompact(m.revenue)}
                       </td>
                       <td className="text-right text-ink-muted" style={{ padding: '10px 16px' }}>
-                        {poundsCompact(m.associate_pay)}
+                        {costsAvailable ? poundsCompact(m.associate_pay) : '—'}
                       </td>
                       <td className="text-right text-ink-muted" style={{ padding: '10px 16px' }}>
-                        {poundsCompact(m.staff_costs)}
+                        {costsAvailable ? poundsCompact(m.staff_costs) : '—'}
                       </td>
                       <td className="text-right text-ink-muted" style={{ padding: '10px 16px' }}>
-                        {poundsCompact(m.lab_materials)}
+                        {costsAvailable ? poundsCompact(m.lab_materials) : '—'}
                       </td>
                       <td className="text-right text-ink-muted" style={{ padding: '10px 16px' }}>
-                        {poundsCompact(m.opex)}
+                        {costsAvailable ? poundsCompact(m.opex) : '—'}
                       </td>
                       <td
-                        className="text-right font-semibold"
-                        style={{ padding: '10px 16px', color: 'var(--success)' }}
+                        className={`text-right font-semibold ${costsAvailable ? '' : 'text-ink-muted'}`}
+                        style={{ padding: '10px 16px', color: costsAvailable ? 'var(--success)' : undefined }}
                       >
-                        {poundsCompact(m.profit)}
+                        {costsAvailable ? poundsCompact(m.profit) : '—'}
                       </td>
                       <td className="text-right" style={{ padding: '10px 24px' }}>
-                        <span
-                          className={`chip ${
-                            parseFloat(margin) >= 10 ? 'chip-emerald' : 'chip-amber'
-                          }`}
-                        >
-                          {margin}%
-                        </span>
+                        {costsAvailable ? (
+                          <span
+                            className={`chip ${
+                              parseFloat(margin) >= 10 ? 'chip-emerald' : 'chip-amber'
+                            }`}
+                          >
+                            {margin}%
+                          </span>
+                        ) : (
+                          <span className="text-ink-muted">—</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -319,22 +322,29 @@ export default function ProfitScreen() {
                   {poundsCompact(annual.revenue)}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {poundsCompact(annual.associate_pay)}
+                  {costsAvailable ? poundsCompact(annual.associate_pay) : '—'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {poundsCompact(annual.staff_costs)}
+                  {costsAvailable ? poundsCompact(annual.staff_costs) : '—'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {poundsCompact(annual.lab_materials)}
+                  {costsAvailable ? poundsCompact(annual.lab_materials) : '—'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {poundsCompact(annual.opex)}
+                  {costsAvailable ? poundsCompact(annual.opex) : '—'}
                 </td>
-                <td className="text-right" style={{ padding: '10px 16px', color: 'var(--success)' }}>
-                  {poundsCompact(annual.profit)}
+                <td
+                  className={`text-right ${costsAvailable ? '' : 'text-ink-muted'}`}
+                  style={{ padding: '10px 16px', color: costsAvailable ? 'var(--success)' : undefined }}
+                >
+                  {costsAvailable ? poundsCompact(annual.profit) : '—'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 24px' }}>
-                  <span className="chip chip-emerald">{annualMargin}%</span>
+                  {costsAvailable ? (
+                    <span className="chip chip-emerald">{annualMargin}%</span>
+                  ) : (
+                    <span className="text-ink-muted">—</span>
+                  )}
                 </td>
               </tr>
             </tbody>

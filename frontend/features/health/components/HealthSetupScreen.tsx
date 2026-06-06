@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useHealth, useUpdateHealth } from '../hooks';
 import { Welcome } from './steps/Welcome';
@@ -22,6 +22,8 @@ const STEPS = [
   { id: 7, title: 'Review & Confirm', desc: 'AI analysis of your data' },
 ];
 
+const SAVE_DEBOUNCE_MS = 600;
+
 export default function HealthSetupScreen() {
   const router = useRouter();
   const { data: health } = useHealth();
@@ -31,32 +33,82 @@ export default function HealthSetupScreen() {
   const [baseline, setBaseline] = useState<Record<string, any>>({});
   const [targets, setTargets] = useState<Record<string, any>>({});
 
+  // Local state is authoritative once the user is editing. Refs mirror the
+  // latest committed values so a debounced save always sends the FULL object
+  // (no read-modify-write race on the server) without waiting for a re-render.
+  const baselineRef = useRef(baseline);
+  const targetsRef = useRef(targets);
+  baselineRef.current = baseline;
+  targetsRef.current = targets;
+
+  // Seed the form from the server EXACTLY ONCE. After that, refetches (e.g.
+  // the invalidation that follows every save) must never clobber what the
+  // user is currently typing.
+  const hydrated = useRef(false);
   useEffect(() => {
-    if (health) {
+    if (health && !hydrated.current) {
+      hydrated.current = true;
       setStep(health.setup_step || 0);
       setBaseline(health.baseline || {});
       setTargets(health.targets || {});
     }
   }, [health]);
 
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Single-flight, debounced save. Always sends the complete baseline + targets
+  // so concurrent/stale server reads can never drop a field. Extra fields
+  // (setup_step, setup_completed) merge on top.
+  function flushSave(extra: Record<string, any> = {}) {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    saveMutation.mutate(
+      { baseline: baselineRef.current, targets: targetsRef.current, ...extra },
+      extra.setup_completed
+        ? { onSuccess: () => router.push('/progress') }
+        : undefined,
+    );
+  }
+
+  function scheduleSave() {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => flushSave(), SAVE_DEBOUNCE_MS);
+  }
+
+  // Don't lose the last in-flight edit if the user navigates away mid-debounce.
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveMutation.mutate({ baseline: baselineRef.current, targets: targetsRef.current });
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function updateBaseline(key: string, value: any) {
-    setBaseline((prev) => ({ ...prev, [key]: value }));
-    saveMutation.mutate({ baseline: { [key]: value } });
+    const next = { ...baselineRef.current, [key]: value };
+    baselineRef.current = next;
+    setBaseline(next);
+    scheduleSave();
   }
 
   function updateTargets(key: string, value: any) {
-    setTargets((prev) => ({ ...prev, [key]: value }));
-    saveMutation.mutate({ targets: { [key]: value } });
+    const next = { ...targetsRef.current, [key]: value };
+    targetsRef.current = next;
+    setTargets(next);
+    scheduleSave();
   }
 
   function gotoStep(n: number) {
     setStep(n);
-    saveMutation.mutate({ setup_step: n });
+    flushSave({ setup_step: n });
   }
 
   function complete() {
-    saveMutation.mutate({ setup_completed: true, setup_step: 7 });
-    router.push('/progress');
+    flushSave({ setup_completed: true, setup_step: 7 });
   }
 
   const completionPct = (() => {
@@ -65,6 +117,14 @@ export default function HealthSetupScreen() {
     const targetFilled = targets.years && targets.profit_multiple && targets.exit_strategy ? 3 : 0;
     return Math.round(((filled + targetFilled) / (required.length + 3)) * 100);
   })();
+
+  const saveStatus = saveMutation.isError
+    ? "Couldn't save — check your connection or permissions"
+    : saveMutation.isPending
+      ? 'Saving…'
+      : saveMutation.isSuccess
+        ? 'All changes saved'
+        : '';
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -84,6 +144,15 @@ export default function HealthSetupScreen() {
           >
             {completionPct}%
           </div>
+          {saveStatus && (
+            <div
+              className={`text-[11px] mt-0.5 ${
+                saveMutation.isError ? 'text-danger' : 'text-ink-muted'
+              }`}
+            >
+              {saveStatus}
+            </div>
+          )}
         </div>
       </div>
 

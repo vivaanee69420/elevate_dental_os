@@ -14,7 +14,7 @@
 //   usePracticePatients(practiceId, page)      ──> expandable patient table
 
 import { useState } from 'react';
-import { Card, Chip } from '@/components/ui';
+import { Card, Chip, Skeleton, SkeletonKpiRow } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import DateRangeFilter, { type DateRange } from '@/features/finance/components/DateRangeFilter';
@@ -64,9 +64,12 @@ function PracticePatients({ practiceId }: { practiceId: string }) {
           </tr>
         </thead>
         <tbody>
-          {isLoading && patients.length === 0 && (
-            <tr><td className="p-2 text-ink-muted" colSpan={4}>Loading…</td></tr>
-          )}
+          {isLoading && patients.length === 0 &&
+            Array.from({ length: 8 }).map((_, i) => (
+              <tr key={`sk-${i}`}>
+                <td className="p-2" colSpan={4}><Skeleton className="h-4 w-full" /></td>
+              </tr>
+            ))}
           {!isLoading && patients.length === 0 && (
             <tr><td className="p-2 text-ink-muted" colSpan={4}>No patients for this practice.</td></tr>
           )}
@@ -135,7 +138,7 @@ export default function PatientsScreen() {
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
       <DateRangeFilter value={range} onChange={setRange} />
 
-      {isLoading && <Card className="mb-4">Loading…</Card>}
+      {isLoading && <SkeletonKpiRow count={4} className="mb-4" />}
       {error && (
         <Card className="mb-4 text-rose-600">Could not load practice performance.</Card>
       )}

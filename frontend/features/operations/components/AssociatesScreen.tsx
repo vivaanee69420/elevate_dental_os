@@ -4,6 +4,7 @@
 // production, UDA and conversion are not in the Dentally feed and show "—".
 
 import { useMemo } from 'react';
+import { Skeleton } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
 import { useAssociates, type AssociateRow } from '../associates-api';
 
@@ -90,8 +91,10 @@ export default function AssociatesScreen() {
       {/* Roster table */}
       <div className="card" style={{ overflow: 'hidden' }}>
         {isLoading && (
-          <div className="text-ink-muted" style={{ fontSize: 13, padding: '24px 0', textAlign: 'center' }}>
-            Loading associates…
+          <div className="p-4 space-y-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-5 w-full" />
+            ))}
           </div>
         )}
         {isError && (

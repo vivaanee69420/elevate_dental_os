@@ -1,5 +1,6 @@
 import * as lead_service_1 from "../services/lead.service.js";
 import * as lead_model_1 from "../models/lead.model.js";
+import { idParamSchema } from "../models/common.model.js";
 export const leadController = {
     async list(req, res) {
         const q = lead_model_1.leadListQuerySchema.parse(req.query);
@@ -13,7 +14,8 @@ export const leadController = {
         res.json(await lead_service_1.leadService.pipelines(req.user.organisation_id));
     },
     async getById(req, res) {
-        const data = await lead_service_1.leadService.getById(req.user.organisation_id, req.params.id);
+        const { id } = idParamSchema.parse(req.params);
+        const data = await lead_service_1.leadService.getById(req.user.organisation_id, id);
         res.json(data);
     },
     async create(req, res) {
@@ -25,6 +27,7 @@ export const leadController = {
         res.json(await lead_service_1.leadService.update(req.user.organisation_id, req.params.id, body));
     },
     async remove(req, res) {
-        res.json(await lead_service_1.leadService.softDelete(req.user.organisation_id, req.params.id));
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await lead_service_1.leadService.softDelete(req.user.organisation_id, id));
     },
 };

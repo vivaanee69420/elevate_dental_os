@@ -14,7 +14,7 @@ import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, Cell,
 } from 'recharts';
-import { PageHeader, KpiTile, EmptyState, AlertRow } from '@/components/ui';
+import { PageHeader, KpiTile, EmptyState, AlertRow, Skeleton, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { formatPence } from '@/lib/format';
@@ -73,7 +73,7 @@ const poundsK = (pence: number) => {
 const MIX_COLORS = ['#1D6E5F', '#2E9E6A', '#C6A253', '#2B7A8C', '#0F5132', '#BF8A22', '#5F7268', '#9FCBBC'];
 
 export function PracticeDeepDiveScreen() {
-  const { scope } = useScopePeriod();
+  const { scope, win } = useScopePeriod();
   const isSinglePractice = scope !== 'all' && scope !== 'practices' && scope !== 'academy' && scope !== 'lab';
   const pid = isSinglePractice ? scope : null;
 
@@ -111,7 +111,12 @@ export function PracticeDeepDiveScreen() {
         <AlertRow tone="info" title="Select a practice"
           body="Use the Scope selector above to choose a single practice — the deep dive is per-site." />
       )}
-      {isSinglePractice && (hub.isLoading || chair.isLoading) && <EmptyState message="Loading practice…" />}
+      {isSinglePractice && (hub.isLoading || chair.isLoading) && (
+        <>
+          <SkeletonKpiRow count={4} />
+          <SkeletonTable rows={6} cols={4} />
+        </>
+      )}
       {isSinglePractice && !hub.isLoading && !hubRow && <AlertRow tone="warn" title="No data for this practice in the window" />}
 
       {isSinglePractice && hubRow && (
@@ -160,9 +165,9 @@ export function PracticeDeepDiveScreen() {
             <div className="card-padded">
               <div className="flex items-baseline justify-between">
                 <h3 className="display text-lg">Treatment mix</h3>
-                <span className="text-[11px] text-ink-soft">by appointment volume</span>
+                <span className="text-[11px] text-ink-soft">by appointment volume · {win.label}</span>
               </div>
-              {mix.isLoading && <p className="text-sm text-ink-muted mt-3">Loading…</p>}
+              {mix.isLoading && <Skeleton className="w-full mt-3" style={{ height: 180 }} />}
               {mix.data && mixData.length === 0 && <p className="text-sm text-ink-muted mt-3">No treatment data in the window.</p>}
               {mixData.length > 0 && (
                 <ResponsiveContainer width="100%" height={Math.max(180, mixData.length * 34)}>
@@ -183,7 +188,7 @@ export function PracticeDeepDiveScreen() {
             {/* 12-month turnover trend — area chart */}
             <div className="card-padded">
               <h3 className="display text-lg">Turnover — last 12 months</h3>
-              {series.isLoading && <p className="text-sm text-ink-muted mt-3">Loading…</p>}
+              {series.isLoading && <Skeleton className="w-full mt-3" style={{ height: 180 }} />}
               {trendData.length > 0 && trendData.every((m) => !m.pence) && <p className="text-sm text-ink-muted mt-3">No settled revenue in the window.</p>}
               {trendData.length > 0 && (
                 <ResponsiveContainer width="100%" height={220}>
@@ -205,42 +210,51 @@ export function PracticeDeepDiveScreen() {
             </div>
           </div>
 
-          {/* Channel ROI — real, per-practice */}
+          {/* Channel ROI — real, per-practice. Always renders the KPI grid +
+              per-channel chart (Google Ads / Meta seeded at 0 until spend syncs). */}
           <div className="card-padded">
             <div className="flex items-baseline justify-between">
               <h3 className="display text-lg">Channel ROI</h3>
               <span className="text-[11px] text-ink-soft">paid acquisition · this practice</span>
             </div>
-            {roi.isLoading && <p className="text-sm text-ink-muted mt-3">Loading…</p>}
-            {roi.data && !roi.data.connected && (
-              <p className="text-sm text-ink-muted mt-3">
-                No ad-spend data connected for this practice. Connect Google Ads / Meta in Integrations to see channel return here.
-              </p>
-            )}
-            {roi.data && roi.data.connected && (
-              <>
-                <div className="grid gap-3 grid-cols-2 md:grid-cols-4 mt-3">
-                  <KpiTile label="Ad spend" value={formatPence(roi.data.spend_pence)} delta={`${roi.data.leads_from_ads} leads from ads`} />
-                  <KpiTile label="Attributed revenue" value={formatPence(roi.data.revenue_pence)} delta="settled in window" deltaTone="up" />
-                  <KpiTile label="ROAS" value={`${roi.data.roas.toFixed(2)}x`} delta="revenue / spend" deltaTone={roi.data.roas >= 3.5 ? 'up' : roi.data.roas < 2.5 ? 'down' : 'muted'} />
-                  <KpiTile label="Cost / new patient" value={formatPence(roi.data.cac_pence)} delta={`${roi.data.new_patients} new patients`} />
-                </div>
-                {roi.data.by_provider.length > 0 && (
-                  <ResponsiveContainer width="100%" height={Math.max(140, roi.data.by_provider.length * 56)}>
-                    <BarChart data={roi.data.by_provider.map((p) => ({ ...p, name: providerLabel(p.provider) }))} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+            {roi.isLoading && <Skeleton className="w-full mt-3" style={{ height: 180 }} />}
+            {roi.data && (() => {
+              const d = roi.data;
+              // Seed both ad channels at 0 so the chart shows the full picture
+              // before/until Google Ads + Meta spend has synced.
+              const blankProvider = (provider: string): ChannelProvider => ({ provider, spend_pence: 0, leads: 0, conversions: 0, cpl_pence: 0, cpa_pence: 0 });
+              const merged = ['google_ads', 'meta_ads'].map(
+                (p) => d.by_provider.find((x) => x.provider === p) ?? blankProvider(p),
+              );
+              const providerRows = d.by_provider.length > 0 ? d.by_provider : merged;
+              return (
+                <>
+                  {!d.connected && (
+                    <p className="text-[11px] text-ink-soft mt-3">
+                      No ad-spend synced yet — connect Google Ads / Meta in Integrations. Showing zeroed channels until spend lands.
+                    </p>
+                  )}
+                  <div className="grid gap-3 grid-cols-2 md:grid-cols-4 mt-3">
+                    <KpiTile label="Ad spend" value={formatPence(d.spend_pence)} delta={`${d.leads_from_ads} leads from ads`} />
+                    <KpiTile label="Attributed revenue" value={formatPence(d.revenue_pence)} delta="settled in window" deltaTone="up" />
+                    <KpiTile label="ROAS" value={`${d.roas.toFixed(2)}x`} delta="revenue / spend" deltaTone={d.roas >= 3.5 ? 'up' : d.roas < 2.5 ? 'down' : 'muted'} />
+                    <KpiTile label="Cost / new patient" value={formatPence(d.cac_pence)} delta={`${d.new_patients} new patients`} />
+                  </div>
+                  <ResponsiveContainer width="100%" height={Math.max(140, providerRows.length * 56)}>
+                    <BarChart data={providerRows.map((p) => ({ ...p, name: providerLabel(p.provider) }))} layout="vertical" margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
                       <CartesianGrid stroke="var(--border)" horizontal={false} />
                       <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--ink-soft)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => poundsK(v)} />
                       <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 11, fill: 'var(--ink-muted)' }} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(v: number, _n, p: any) => [`${formatPence(v)} · ${p?.payload?.leads} leads · CPA ${formatPence(p?.payload?.cpa_pence)}`, 'Spend']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                       <Bar dataKey="spend_pence" radius={[0, 6, 6, 0]}>
-                        {roi.data.by_provider.map((p, i) => <Cell key={i} fill={p.provider === 'meta_ads' ? '#4267B2' : '#3B7DDD'} />)}
+                        {providerRows.map((p, i) => <Cell key={i} fill={p.provider === 'meta_ads' ? '#4267B2' : '#3B7DDD'} />)}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
-                )}
-                <p className="text-[11px] text-ink-soft mt-2">ROAS/CAC are practice-level (revenue &amp; new patients aren&apos;t split per channel); spend, leads and CPA are per channel.</p>
-              </>
-            )}
+                  <p className="text-[11px] text-ink-soft mt-2">ROAS/CAC are practice-level (revenue &amp; new patients aren&apos;t split per channel); spend, leads and CPA are per channel.</p>
+                </>
+              );
+            })()}
           </div>
         </>
       )}

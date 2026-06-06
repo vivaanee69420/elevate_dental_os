@@ -10,16 +10,16 @@
 import * as supabase_1 from "../lib/supabase.js";
 
 export const treatmentRepository = {
-    async mixByType(orgId, { practiceId, since }) {
+    async mixByType(orgId, { practiceId, since, until }) {
         const { data, error } = await supabase_1.serviceClient
-            .rpc('treatment_mix_stats', { p_org: orgId, p_practice: practiceId ?? null, p_since: since });
+            .rpc('treatment_mix_stats', { p_org: orgId, p_practice: practiceId ?? null, p_since: since, p_until: until ?? null });
         if (!error && Array.isArray(data)) {
             return data.map((r) => ({ type: r.appointment_type ?? 'Unspecified', volume: Number(r.volume) }));
         }
-        return this._mixFallback(orgId, { practiceId, since });
+        return this._mixFallback(orgId, { practiceId, since, until });
     },
 
-    async _mixFallback(orgId, { practiceId, since }) {
+    async _mixFallback(orgId, { practiceId, since, until }) {
         const counts = new Map();
         const PAGE = 1000;
         for (let from = 0; ; from += PAGE) {
@@ -28,6 +28,7 @@ export const treatmentRepository = {
                 .select('appointment_type')
                 .eq('organisation_id', orgId)
                 .gte('starts_at', since);
+            if (until) query = query.lte('starts_at', until);
             if (practiceId) query = query.eq('practice_id', practiceId);
             // Stable order is required: without it PostgREST gives no row-order
             // guarantee across .range() windows, so rows could be skipped or

@@ -227,6 +227,42 @@ recurringRevenuePct = (membership_revenue + plan_revenue) / revenue × 100
 retentionRatePct = activePatients / (activePatients + lapsedPatients) × 100
 ```
 
+### Live scorecard actuals (Dentally-sourced, migration 000056)
+
+The KPI Scorecard resolves these "hybrid" metrics from the synced Dentally
+tables when data exists, otherwise falls back to the owner's manual entry
+(`health_patient_actuals` / `health_production_actuals` RPCs; `chair_utilisation`
+grid; `leads` for response time). A 12-month trailing window unless noted.
+
+```
+# Patient (from appointments + contacts) — health_patient_actuals
+newPatientsPerMonth = count(patients whose FIRST appointment is in last 12mo) / 12
+                      # registration date is not synced; first-ever visit is the proxy
+activePatients      = count(distinct patients with an appointment in last 12mo)
+retention12moPct    = count(patients active in prior year [24–12mo ago]
+                            who are ALSO active in last 12mo)
+                      / count(patients active in prior year) × 100   # null if no prior cohort
+recallCompliancePct = count(patients due [next_recall_date ≤ today]
+                            with an appointment on/after that date)
+                      / count(patients due) × 100   # null when recall dates not synced → manual
+
+# Production (from invoice_items real fees) — health_production_actuals
+avgCaseValuePence            = avg( Σ fee_pence per treatment_plan_id )  # a case = one plan
+productionPerAssociatePence  = Σ fee_pence (window)
+                               / count(distinct producing associate_id)
+                               / monthsInWindow
+
+# Chair utilisation (owner-maintained grid)
+chairUtilisationPct = Σ booked_minutes / Σ available_minutes × 100   # null if no available minutes
+
+# Lead response (CRM/GHL)
+leadResponseMins = avg(leads.last_response_minutes) over leads created in window
+                   # null until GHL conversations populate it → manual
+```
+
+All money stays integer pence; a null actual is honest "no source" and never
+fabricated — the metric stays manual/needs-input.
+
 ### Traffic light thresholds
 
 | Metric | 🟢 Green | 🟡 Amber | 🔴 Red |

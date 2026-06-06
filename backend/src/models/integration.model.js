@@ -14,3 +14,15 @@ export const integrationCallbackSchema = zod_1.z.object({
     apiKey: zod_1.z.string().optional(),
     baseUrl: zod_1.z.string().url().optional(),
 });
+// { mappings: { [stageId]: status } } — the service further checks each value.
+export const stageMappingsSchema = zod_1.z.object({
+    mappings: zod_1.z.record(zod_1.z.string(), zod_1.z.string()),
+});
+// Real-time webhook shared secret (Dentally HMAC). Empty string clears it.
+export const webhookSecretSchema = zod_1.z.object({
+    secret: zod_1.z.string().max(500),
+});
+// On-demand pull: ?full=true (query) or { full: true } (body) re-pulls window.
+export const syncBodySchema = zod_1.z.object({
+    full: zod_1.z.boolean().optional(),
+});

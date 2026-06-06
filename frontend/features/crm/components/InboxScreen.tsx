@@ -9,6 +9,7 @@
 // source moved from mock fixtures to the real endpoint.
 
 import { useMemo, useState } from 'react';
+import { Skeleton } from '@/components/ui';
 import { useCommunications, useSendCommunication } from '../hooks';
 import { type Communication } from '../api';
 import { CRM_NAVY, agoLabel } from '../data';
@@ -316,11 +317,10 @@ export default function InboxScreen() {
           </div>
           <div style={{ overflowY: 'auto', flex: 1, maxHeight: 700 }}>
             {isLoading ? (
-              <div
-                className="text-ink-muted text-center"
-                style={{ padding: '30px 20px', fontSize: 12 }}
-              >
-                Loading…
+              <div className="p-3 space-y-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full" />
+                ))}
               </div>
             ) : filtered.length === 0 ? (
               <div

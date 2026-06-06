@@ -4,6 +4,7 @@
 // looking at real Stripe data, or just numbers I typed?").
 
 import { usePaymentSourceBreakdown } from '../hooks';
+import { Skeleton } from '@/components/ui';
 
 const PROVIDER_LABEL: Record<string, string> = {
   manual: 'Manual entry',
@@ -32,7 +33,9 @@ export default function SourceBreakdownCard({ days = 30 }: { days?: number }) {
   if (isLoading) {
     return (
       <div className="card-padded">
-        <div className="text-ink-muted" style={{ fontSize: 12 }}>Loading data sources…</div>
+        <Skeleton className="h-3 w-48 mb-3" />
+        <Skeleton className="h-2 w-full mb-2" />
+        <Skeleton className="h-3 w-32" />
       </div>
     );
   }

@@ -128,4 +128,55 @@ export const businessHealthRepository = {
             .eq('organisation_id', orgId);
         if (error) throw new Error(error.message);
     },
+    // --- Live KPI actuals (000056) -------------------------------------------
+    // Patient KPIs (new/active/retention/recall) computed in Postgres over the
+    // appointments + contacts tables. Returns the RPC's JSON blob (keys may be
+    // null when a source signal is absent). p_asof null = current date.
+    async patientActuals(orgId, asof = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('health_patient_actuals', {
+            p_org: orgId, p_asof: asof ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return data || {};
+    },
+    // Production KPIs (avg case value, production/associate) from invoice_items
+    // within [sinceISO, untilISO). Money in pence; keys null when no source rows.
+    async productionActuals(orgId, sinceISO, untilISO = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('health_production_actuals', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return data || {};
+    },
+    // Group chair utilisation % from the owner-maintained chair grid. Small
+    // table; summed in Node. Returns null when no available minutes are set.
+    async chairUtilisationSummary(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('chair_utilisation')
+            .select('booked_minutes, available_minutes')
+            .eq('organisation_id', orgId)
+            .limit(5000);
+        if (error) throw new Error(error.message);
+        const rows = data || [];
+        const booked = rows.reduce((s, r) => s + (r.booked_minutes || 0), 0);
+        const avail = rows.reduce((s, r) => s + (r.available_minutes || 0), 0);
+        return avail > 0 ? Math.round((booked / avail) * 1000) / 10 : null;
+    },
+    // Average first-response time (minutes) across leads created in the window.
+    // GHL/CRM signal; null until lead_response_minutes is populated (e.g. GHL
+    // conversations sync) -> the metric stays manual.
+    async leadResponseActual(orgId, sinceISO) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('leads')
+            .select('last_response_minutes')
+            .eq('organisation_id', orgId)
+            .gte('created_at', sinceISO)
+            .not('last_response_minutes', 'is', null)
+            .limit(5000);
+        if (error) throw new Error(error.message);
+        const rows = data || [];
+        if (!rows.length) return null;
+        const sum = rows.reduce((s, r) => s + (r.last_response_minutes || 0), 0);
+        return Math.round((sum / rows.length) * 10) / 10;
+    },
 };

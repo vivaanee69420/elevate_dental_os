@@ -6,7 +6,7 @@
 // cheapest place to add profit.
 
 import { useMemo } from 'react';
-import { PageHeader, KpiTile, BarRow, EmptyState, AlertRow } from '@/components/ui';
+import { PageHeader, KpiTile, BarRow, EmptyState, AlertRow, SkeletonKpiRow, SkeletonChart } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { useBusinessHub, type HubPractice } from '@/features/overview/business-hub-api';
@@ -47,7 +47,12 @@ export function LeadFunnelScreen() {
       />
       <ScopePeriodBar />
 
-      {isLoading && <EmptyState message="Loading funnel…" />}
+      {isLoading && (
+        <>
+          <SkeletonKpiRow count={4} />
+          <SkeletonChart height={260} />
+        </>
+      )}
       {isError && <AlertRow tone="bad" title="Couldn't load the funnel" />}
       {notApplicable && (
         <AlertRow tone="info" title="The funnel covers clinical practices" body="Switch scope to the group or a practice." />

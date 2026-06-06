@@ -45,6 +45,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // Finance
   cashflow: 'finance.view',
   profit: 'finance.view',
+  workbench: 'finance.view',
   financial: 'finance.view',
   payments: 'finance.view',
   valuation: 'valuation.view',
@@ -64,7 +65,6 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   uda: 'operations.view',
 
   // Intelligence
-  scenarios: 'intelligence.view',
   tax: 'intelligence.view',
   debt: 'intelligence.view',
   alerts: 'intelligence.view',

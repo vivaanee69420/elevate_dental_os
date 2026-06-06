@@ -77,7 +77,6 @@ export const PAGE_META: PageMeta[] = [
   { id: 'treatments', label: 'Treatments', section: 'Operations', importance: 'minor' },
   { id: 'uda', label: 'UDA Tracker', section: 'Operations', importance: 'minor' },
   // Intelligence
-  { id: 'scenarios', label: 'Scenarios', section: 'Intelligence', importance: 'major' },
   { id: 'tax', label: 'Tax (MTD)', section: 'Intelligence', importance: 'major' },
   { id: 'debt', label: 'Debt Recovery', section: 'Intelligence', importance: 'major' },
   { id: 'alerts', label: 'Alerts', section: 'Intelligence', importance: 'minor' },

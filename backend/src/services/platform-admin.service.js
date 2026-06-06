@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
 import { platformAdminRepository } from '../repositories/platform-admin.repository.js';
 import { provisionOrgOwner } from './auth.service.js';
+import { notificationService } from './notification.service.js';
 
 const JWT_ISSUER = 'elevate-platform';
 const JWT_EXPIRES = '8h';
@@ -134,6 +135,17 @@ export const platformAdminService = {
     }
     await platformAdminRepository.setUserStatusById(userId, 'active');
     await audit(admin, 'approve_signup', { req, orgId: owner.organisation_id, userId });
+    try {
+        await notificationService.notify({
+            orgId: owner.organisation_id,
+            userIds: [userId],
+            category: 'account',
+            title: 'Your Elevate account is approved',
+            body: 'You can now log in.',
+            link: '/login',
+            recipients: { [userId]: { email: owner.email, phone: null } },
+        });
+    } catch (err) { console.warn('[platform] approve notify failed', err); }
     return { ok: true, status: 'active' };
   },
 
@@ -146,6 +158,16 @@ export const platformAdminService = {
     }
     await platformAdminRepository.setUserStatusById(userId, 'rejected');
     await audit(admin, 'reject_signup', { req, orgId: owner.organisation_id, userId });
+    try {
+        await notificationService.notify({
+            orgId: owner.organisation_id,
+            userIds: [userId],
+            category: 'account',
+            title: 'Your Elevate signup was not approved',
+            body: 'Your request to access Elevate was declined.',
+            recipients: { [userId]: { email: owner.email, phone: null } },
+        });
+    } catch (err) { console.warn('[platform] reject notify failed', err); }
     return { ok: true, status: 'rejected' };
   },
 

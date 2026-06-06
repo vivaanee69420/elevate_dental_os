@@ -49,6 +49,7 @@ import * as associate_routes_1 from "./routes/associate.routes.js";
 import * as treatment_routes_1 from "./routes/treatment.routes.js";
 import * as staff_routes_1 from "./routes/staff.routes.js";
 import * as debt_routes_1 from "./routes/debt.routes.js";
+import * as notification_routes_1 from "./routes/notification.routes.js";
 import platformAdminRouter from "./routes/platform-admin.routes.js";
 import platformCoursesRouter from "./routes/platform-courses.routes.js";
 const CORS_ALLOWED = [
@@ -94,6 +95,7 @@ export function buildApp() {
     app.use('/webhooks/stripe', express_1.default.raw({ type: '*/*', limit: '10mb' }));
     // Dentally webhook also needs the raw body for HMAC signature verification.
     app.use('/webhooks/dentally', express_1.default.raw({ type: '*/*', limit: '10mb' }));
+    app.use('/webhooks/ses-events', express_1.default.raw({ type: '*/*', limit: '1mb' }));
     // Global JSON parser for everything else.
     app.use(express_1.default.json({ limit: '10mb' }));
     app.use(express_1.default.urlencoded({ extended: true }));
@@ -194,6 +196,7 @@ export function buildApp() {
     api.use('/staff', staff_routes_1.default);
     api.use('/tasks', tasks_routes_1.default);
     api.use('/comms', comms_routes_1.default);
+    api.use('/notifications', notification_routes_1.default);
     api.use('/payments', payments_routes_1.default);
     api.use('/debt', debt_routes_1.default);
     api.use('/pay-runs', pay_runs_routes_1.default);
