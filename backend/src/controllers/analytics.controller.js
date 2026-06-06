@@ -141,4 +141,59 @@ export const analyticsController = {
         const body = analytics_model_1.valuationExitPlanSchema.parse(req.body);
         res.json(analytics_service_1.analyticsService.computeValuationExitPlan(body));
     },
+
+    // ── Phase 3 / T12 — persisted config ────────────────────────────────────
+    // Saved valuation drivers. GET = valuation.view; PUT = valuation.edit (route
+    // gates), audited. GET returns null when never configured (UI seeds itself).
+    async getValuationInputs(req, res) {
+        res.json(await analytics_service_1.analyticsService.getValuationInputs(req.user.organisation_id));
+    },
+    async putValuationInputs(req, res) {
+        const state = analytics_model_1.valuationInputsSchema.parse(req.body);
+        res.json(await analytics_service_1.analyticsService.saveValuationInputs(req.user.organisation_id, state, req.user.id));
+    },
+    // Saved surgery-capacity config (merged over CHAIR_CONFIG defaults).
+    // GET = finance.view; PUT = finance.edit.
+    async getChairConfig(req, res) {
+        res.json(await analytics_service_1.analyticsService.getChairConfig(req.user.organisation_id));
+    },
+    async putChairConfig(req, res) {
+        const cfg = analytics_model_1.chairConfigSchema.parse(req.body);
+        res.json(await analytics_service_1.analyticsService.saveChairConfig(req.user.organisation_id, cfg, req.user.id));
+    },
+
+    // ── Phase 3 / T13 — editable P&L scenario sheets ────────────────────────
+    // Scenario overlay only (never feeds actuals). GET = finance.view; mutations
+    // = finance.edit (route gates), audited automatically (non-/compute/ path).
+    async listPlSheets(req, res) {
+        res.json(await analytics_service_1.analyticsService.listPlSheets(req.user.organisation_id));
+    },
+    async getPlSheet(req, res) {
+        const sheet = await analytics_service_1.analyticsService.getPlSheet(req.user.organisation_id, req.params.id);
+        if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+        res.json(sheet);
+    },
+    async createPlSheet(req, res) {
+        const fields = analytics_model_1.plSheetCreateSchema.parse(req.body);
+        res.status(201).json(await analytics_service_1.analyticsService.createPlSheet(req.user.organisation_id, fields, req.user.id));
+    },
+    async updatePlSheet(req, res) {
+        const fields = analytics_model_1.plSheetUpdateSchema.parse(req.body);
+        const sheet = await analytics_service_1.analyticsService.updatePlSheet(req.user.organisation_id, req.params.id, fields, req.user.id);
+        if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+        res.json(sheet);
+    },
+    async deletePlSheet(req, res) {
+        await analytics_service_1.analyticsService.deletePlSheet(req.user.organisation_id, req.params.id);
+        res.status(204).end();
+    },
+    // CSV export of a saved sheet (£ from integer pence). finance.view.
+    async exportPlSheetCsv(req, res) {
+        const sheet = await analytics_service_1.analyticsService.getPlSheet(req.user.organisation_id, req.params.id);
+        if (!sheet) return res.status(404).json({ error: 'Sheet not found' });
+        const { filename, csv } = analytics_service_1.analyticsService.plSheetToCsv(sheet);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(csv);
+    },
 };

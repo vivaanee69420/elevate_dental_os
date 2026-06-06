@@ -9,6 +9,9 @@ import * as claude_1 from "../lib/claude.js";
 import * as monthlyFinancial_repository_1 from "../repositories/monthlyFinancial.repository.js";
 import * as associate_repository_1 from "../repositories/associate.repository.js";
 import * as payRun_repository_1 from "../repositories/pay-run.repository.js";
+import * as valuationInputs_repository_1 from "../repositories/valuationInputs.repository.js";
+import * as chairConfig_repository_1 from "../repositories/chairConfig.repository.js";
+import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
@@ -57,9 +60,10 @@ export const analyticsService = {
         // each, aggregated in memory (no N+1).
         const since = new Date(now());
         since.setUTCFullYear(since.getUTCFullYear() - 1);
-        const [revRows, gridRows] = await Promise.all([
+        const [revRows, gridRows, config] = await Promise.all([
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since.toISOString()),
             analytics_repository_1.analyticsRepository.chairUtilisationRows(orgId),
+            this.getChairConfig(orgId),
         ]);
         const revByPractice = new Map(revRows.map((r) => [r.practice_id, Number(r.pence) || 0]));
         // Per-practice manual occupancy = Σ booked / Σ available.
@@ -80,7 +84,7 @@ export const analyticsService = {
             const utilPct = hasManual
                 ? Math.min(100, Math.round((gm.booked / gm.available) * 1000) / 10)
                 : (p.assumed_util_pct == null ? DEFAULT_UTIL_PCT : p.assumed_util_pct);
-            const stats = (0, formulas_1.calculateChairStats)({ chairs: p.chairs || 0, utilPct, annualRevenuePence });
+            const stats = (0, formulas_1.calculateChairStats)({ chairs: p.chairs || 0, utilPct, annualRevenuePence, config });
             return { id: p.id, name: p.name, utilAssumed, occupancySource, annualRevenuePence, ...stats };
         });
 
@@ -110,7 +114,7 @@ export const analyticsService = {
         return {
             applicable: true,
             scope,
-            config: formulas_1.CHAIR_CONFIG,
+            config,
             practices: rows,
             group,
             recovery,
@@ -119,6 +123,115 @@ export const analyticsService = {
             profitPerChairHour: null,
             note: 'OCPSPD and profit-per-chair-hour pending per-practice opex/treatment-minute sourcing.',
         };
+    },
+
+    // ── Phase 3 / T12 — persisted CONFIG ────────────────────────────────────
+    // valuation_inputs and chair_config are per-org saved drivers. Reads merge
+    // the saved row over the code defaults; writes upsert the single per-org row
+    // (gated on valuation.edit / finance.edit at the route, audited).
+
+    // Saved valuation drivers in the camelCase shape POST /compute/valuation
+    // consumes, or null when never configured (the UI then shows its own seed).
+    async getValuationInputs(orgId) {
+        const row = await valuationInputs_repository_1.valuationInputsRepository.get(orgId);
+        if (!row) return null;
+        return {
+            reportedEbitdaPence: Number(row.reported_ebitda_pence) || 0,
+            addBacksPence: Number(row.addbacks_pence) || 0,
+            principalSalaryPence: Number(row.principal_salary_pence) || 0,
+            principalMultiple: Number(row.principal_multiple) || 0,
+            associateMultiple: Number(row.associate_multiple) || 0,
+            dsoMultiple: Number(row.dso_multiple) || 0,
+            regionFactor: row.region_factor == null ? 1 : Number(row.region_factor),
+            growthRatePct: row.growth_rate_pct == null ? 10 : Number(row.growth_rate_pct),
+            uiState: row.ui_state ?? null,
+            updatedAt: row.updated_at,
+        };
+    },
+    // Persist the validated valuation state. state is the camelCase
+    // valuationInputsSchema output; map to the snake_case columns.
+    async saveValuationInputs(orgId, state, userId) {
+        await valuationInputs_repository_1.valuationInputsRepository.upsert(orgId, {
+            reported_ebitda_pence: state.reportedEbitdaPence,
+            addbacks_pence: state.addBacksPence,
+            principal_salary_pence: state.principalSalaryPence,
+            principal_multiple: state.principalMultiple,
+            associate_multiple: state.associateMultiple,
+            dso_multiple: state.dsoMultiple,
+            region_factor: state.regionFactor,
+            growth_rate_pct: state.growthRatePct,
+            ui_state: state.uiState ?? null,
+        }, userId);
+        return this.getValuationInputs(orgId);
+    },
+    // Effective chair config = lib/formulas.js CHAIR_CONFIG defaults overlaid
+    // with the saved per-org row (when present). Always returns a full config so
+    // the chair formulas never see undefined keys.
+    async getChairConfig(orgId) {
+        const row = await chairConfig_repository_1.chairConfigRepository.get(orgId);
+        if (!row) return { ...formulas_1.CHAIR_CONFIG, isDefault: true };
+        return {
+            openHrs: row.open_hrs == null ? formulas_1.CHAIR_CONFIG.openHrs : Number(row.open_hrs),
+            weeksYr: row.weeks_yr == null ? formulas_1.CHAIR_CONFIG.weeksYr : Number(row.weeks_yr),
+            daysWk: row.days_wk == null ? formulas_1.CHAIR_CONFIG.daysWk : Number(row.days_wk),
+            benchOccPct: row.bench_occ_pct == null ? formulas_1.CHAIR_CONFIG.benchOccPct : Number(row.bench_occ_pct),
+            benchRevHrPence: row.bench_rev_hr_pence == null ? formulas_1.CHAIR_CONFIG.benchRevHrPence : Number(row.bench_rev_hr_pence),
+            isDefault: false,
+            updatedAt: row.updated_at,
+        };
+    },
+    async saveChairConfig(orgId, cfg, userId) {
+        await chairConfig_repository_1.chairConfigRepository.upsert(orgId, {
+            open_hrs: cfg.openHrs,
+            weeks_yr: cfg.weeksYr,
+            days_wk: cfg.daysWk,
+            bench_occ_pct: cfg.benchOccPct,
+            bench_rev_hr_pence: cfg.benchRevHrPence,
+        }, userId);
+        return this.getChairConfig(orgId);
+    },
+
+    // ── Phase 3 / T13 — editable P&L scenario sheets ────────────────────────
+    // SCENARIO OVERLAY ONLY: these sheets are standalone planning grids. They
+    // never override the real actuals P&L and never feed EBITDA/valuation (the
+    // finance screens stay real-actuals-or-zero). CRUD + CSV export.
+    async listPlSheets(orgId) {
+        return plSheet_repository_1.plSheetRepository.list(orgId);
+    },
+    async getPlSheet(orgId, id) {
+        return plSheet_repository_1.plSheetRepository.get(orgId, id);
+    },
+    async createPlSheet(orgId, fields, userId) {
+        return plSheet_repository_1.plSheetRepository.create(orgId, fields, userId);
+    },
+    async updatePlSheet(orgId, id, fields, userId) {
+        return plSheet_repository_1.plSheetRepository.update(orgId, id, fields, userId);
+    },
+    async deletePlSheet(orgId, id) {
+        return plSheet_repository_1.plSheetRepository.remove(orgId, id);
+    },
+    // Render a saved sheet to CSV (lines x columns, money as £ with 2 decimals
+    // from integer pence). Pure — no persistence. Returns { filename, csv }.
+    plSheetToCsv(sheet) {
+        const cols = Array.isArray(sheet.cols) ? sheet.cols : [];
+        const lines = Array.isArray(sheet.lines) ? sheet.lines : [];
+        const cells = sheet.cells && typeof sheet.cells === 'object' ? sheet.cells : {};
+        const esc = (v) => {
+            const s = String(v ?? '');
+            return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        };
+        const poundsFromPence = (p) => (Number(p) / 100).toFixed(2);
+        const header = ['Line', ...cols.map((c) => c.label || c.id)];
+        const rows = lines.map((ln) => {
+            const cellVals = cols.map((c) => {
+                const v = cells[`${ln.id}:${c.id}`];
+                return v == null ? '' : poundsFromPence(v);
+            });
+            return [ln.label || ln.id, ...cellVals];
+        });
+        const csv = [header, ...rows].map((r) => r.map(esc).join(',')).join('\r\n') + '\r\n';
+        const safeName = String(sheet.name || 'pl-sheet').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+        return { filename: `${safeName}.csv`, csv };
     },
     // Treatment Mix heat matrix (GM Intelligence OS, Phase 2). Appointment
     // VOLUME by treatment type x practice for the selected scope + period. This

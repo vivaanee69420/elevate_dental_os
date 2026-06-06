@@ -139,3 +139,62 @@ export const financialQuerySchema = zod_1.z.object({
     from: dateStr,
     to: dateStr,
 });
+
+// ============================================================================
+// Phase 3 — persisted config & editable sheets (PUT/POST bodies).
+// ============================================================================
+
+// PUT /valuation-inputs — persisted per-org valuation drivers (T12). Same typed
+// field shape as valuationStateSchema (the compute consumer) so the saved row
+// round-trips straight into POST /compute/valuation, plus an optional UI-only
+// `uiState` blob so the Value & Growth screen restores faithfully (region key,
+// classification, DSO tier — things that don't feed a formula). uiState is
+// bounded by key count so a hostile body can't store an unbounded blob.
+export const valuationInputsSchema = valuationStateSchema.extend({
+    uiState: zod_1.z.record(zod_1.z.any())
+        .refine((o) => Object.keys(o).length <= 40, { message: 'uiState too large' })
+        .optional(),
+});
+
+// PUT /chair-config — persisted per-org surgery-capacity assumptions (T12).
+// Mirrors lib/formulas.js CHAIR_CONFIG keys; bounded so a hostile body can't
+// produce div-by-zero or absurd capacity. finance.edit gated, audited.
+export const chairConfigSchema = zod_1.z.object({
+    openHrs: zod_1.z.coerce.number().min(1).max(24).default(8),
+    weeksYr: zod_1.z.coerce.number().int().min(1).max(52).default(46),
+    daysWk: zod_1.z.coerce.number().int().min(1).max(7).default(5),
+    benchOccPct: zod_1.z.coerce.number().min(1).max(100).default(88),
+    benchRevHrPence: PENCE.default(30000),
+});
+
+// pl_sheets grid payload (T13). Scenario overlay only — never feeds actuals.
+// Bounded so a hostile body can't store an unbounded blob. Cells are a flat map
+// "<lineId>:<colId>" -> integer pence (may be negative for cost/contra lines).
+const SHEET_CELL_PENCE = zod_1.z.coerce.number().int().min(-1_000_000_000_000).max(1_000_000_000_000);
+const sheetCol = zod_1.z.object({
+    id: zod_1.z.string().max(40),
+    label: zod_1.z.string().max(80).default(''),
+}).passthrough();
+const sheetLine = zod_1.z.object({
+    id: zod_1.z.string().max(40),
+    label: zod_1.z.string().max(120).default(''),
+    kind: zod_1.z.enum(['line', 'subtotal', 'total', 'header']).default('line'),
+}).passthrough();
+const sheetCells = zod_1.z.record(zod_1.z.string().max(82), SHEET_CELL_PENCE);
+
+export const plSheetCreateSchema = zod_1.z.object({
+    name: zod_1.z.string().trim().min(1).max(120),
+    type: zod_1.z.enum(['scenario', 'budget', 'forecast']).default('scenario'),
+    cols: zod_1.z.array(sheetCol).max(60).default([]),
+    lines: zod_1.z.array(sheetLine).max(300).default([]),
+    cells: sheetCells.default({}),
+});
+
+// PUT — all fields optional (partial save of name/type/grid).
+export const plSheetUpdateSchema = zod_1.z.object({
+    name: zod_1.z.string().trim().min(1).max(120).optional(),
+    type: zod_1.z.enum(['scenario', 'budget', 'forecast']).optional(),
+    cols: zod_1.z.array(sheetCol).max(60).optional(),
+    lines: zod_1.z.array(sheetLine).max(300).optional(),
+    cells: sheetCells.optional(),
+}).refine((o) => Object.keys(o).length > 0, { message: 'no fields to update' });
