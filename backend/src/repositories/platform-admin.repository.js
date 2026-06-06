@@ -27,6 +27,15 @@ export const platformAdminRepository = {
     return data;
   },
 
+  // Recipients for platform-wide notifications (e.g. new signup awaiting approval).
+  async listActiveAdmins() {
+    const { data, error } = await serviceClient
+      .from('platform_admins')
+      .select('id, email');
+    if (error) throw error;
+    return data ?? [];
+  },
+
   async count() {
     const { count, error } = await serviceClient
       .from('platform_admins')
