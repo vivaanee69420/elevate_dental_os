@@ -23,10 +23,18 @@ export const notificationService = {
 
     async notify({ orgId = null, userIds, isPlatform = false, category, title, body = null, link = null, recipients }) {
         if (!userIds?.length) return;
-        const addrMap = recipients || (await this.resolveRecipients(userIds));
+        // Deduplicate so a caller that unions several role lists cannot create
+        // two in-app rows for one user (and orphan one with no delivery).
+        const ids = [...new Set(userIds)];
+        // platform_admins are NOT in public.users, so resolveRecipients() cannot
+        // find their addresses — platform callers must pass `recipients`.
+        if (isPlatform && !recipients) {
+            throw new Error('isPlatform notify requires an explicit recipients map (platform_admins are not in public.users)');
+        }
+        const addrMap = recipients || (await this.resolveRecipients(ids));
 
         // 1. In-app rows (synchronous).
-        const notifRows = userIds.map((uid) => ({
+        const notifRows = ids.map((uid) => ({
             organisation_id: orgId,
             user_id: uid,
             is_platform: isPlatform,
@@ -39,13 +47,16 @@ export const notificationService = {
         const idByUser = {};
         inserted.forEach((row) => { idByUser[row.user_id] = row.id; });
 
-        // 2. Resolve prefs + suppression, then enqueue email/sms deliveries.
-        const allEmails = userIds.map((u) => addrMap[u]?.email).filter(Boolean);
+        // 2. Resolve prefs (one batched query) + email suppression, then enqueue
+        //    email/sms deliveries. Suppression covers email only — phone numbers
+        //    are never in suppression_list.
+        const allEmails = ids.map((u) => addrMap[u]?.email).filter(Boolean);
         const suppressed = await notificationRepository.suppressedAddresses(allEmails);
+        const prefsByUser = await notificationRepository.getPreferencesBatch(ids);
 
         const deliveries = [];
-        for (const uid of userIds) {
-            const prefs = await notificationRepository.getPreferences(uid);
+        for (const uid of ids) {
+            const prefs = prefsByUser.get(uid) || [];
             const pref = prefs.find((p) => p.category === category) || defaultPref(category);
             const addr = addrMap[uid] || {};
             const notifId = idByUser[uid];
