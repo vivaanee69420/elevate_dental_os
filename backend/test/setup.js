@@ -62,7 +62,9 @@ const h = vi.hoisted(() => {
         q.op = 'upsert';
         q.upsertVals = vals;
         q.upsertOpts = opts;
-        return settle();
+        // Return the builder (like insert) so both terminal `await upsert(v)`
+        // (via .then) and chained `upsert(v).select().single()` work.
+        return builder;
       },
       eq(col, val) {
         q.eqs.push({ col, val });

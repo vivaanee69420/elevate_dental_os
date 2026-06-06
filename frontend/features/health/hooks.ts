@@ -8,8 +8,8 @@ export function useHealth() {
   return useQuery({ queryKey: ['health'], queryFn: getHealth });
 }
 
-export function useHealthProgress() {
-  return useQuery({ queryKey: ['progress'], queryFn: getHealthProgress });
+export function useHealthProgress(asOf?: string) {
+  return useQuery({ queryKey: ['progress', asOf ?? null], queryFn: () => getHealthProgress(asOf) });
 }
 
 export function useHealthInsights() {
@@ -36,8 +36,8 @@ export function useSnapshots() {
   return useQuery({ queryKey: ['health-snapshots'], queryFn: listSnapshots });
 }
 
-export function useMetrics() {
-  return useQuery({ queryKey: ['health-metrics'], queryFn: getMetrics });
+export function useMetrics(asOf?: string) {
+  return useQuery({ queryKey: ['health-metrics', asOf ?? null], queryFn: () => getMetrics(asOf) });
 }
 
 export function useUpdateMetric() {

@@ -106,6 +106,7 @@ Response:
 
 ### `GET /api/health/progress`
 Returns baseline → current → target for 8 metrics with progress %.
+Optional `?asOf=YYYY-MM-DD` rewinds the manual baseline/targets to what they were on that date (000054 history) and windows live actuals to the same upper bound.
 
 ### `GET /api/health/snapshots`
 Historical snapshots ordered chronologically.
@@ -117,6 +118,7 @@ Manually capture a snapshot.
 Returns the unified business-health metric array. Each item:
 `{ key, label, cat, unit, better, sourceType, source, asof, needsInput, baseline, current, target, progressPct, deltaFromBaselinePct }`.
 `current` is live-computed for `sourceType: auto` (revenue/profit/margin/cash from analytics actuals; conversion/no-show from rollups) and read from the manual store for `sourceType: manual`. Reception receives `{ metrics: [] }`.
+Optional `?asOf=YYYY-MM-DD` returns the manual baseline/targets/KPIs as they were on that date (000054 history); the UI treats an as-of view as read-only.
 
 ### `PATCH /api/health/metrics/:key` *(owner-only)*
 Body `{ value: number }`. Sets a manual metric value (`business_health.manual[key] = { value, asof }`). 400 if the key is unknown or auto-sourced; 403 for non-owners. Audited.
@@ -176,7 +178,7 @@ Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ app
 ## Chair utilisation (manual)  — owner / practice_manager
 
 - `GET  /api/chair-utilisation?practice_id=<uuid>` — list manual records.
-- `GET  /api/chair-utilisation/grid?practice_id=<uuid>` — aggregated weekday×slot heatmap
+- `GET  /api/chair-utilisation/grid?practice_id=<uuid>` — aggregated weekday×slot heatmap. Optional `&asOf=YYYY-MM-DD` (with `practice_id`) replays the historical grid as it was on that date (000055 history)
   `{ days:[1..7], slots:['morning','midday','afternoon','evening'], grid, kpis }`.
 - `POST /api/chair-utilisation` — body `{ practice_id, chair_name, weekday(1-7), slot, booked_minutes, available_minutes, notes? }`.
 - `PATCH /api/chair-utilisation/:id` — partial update (practice_id immutable).
