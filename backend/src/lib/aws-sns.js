@@ -51,7 +51,10 @@ export async function verifySnsSignature(msg) {
         .map((f) => `${f}\n${msg[f]}\n`)
         .join('');
     const pem = await fetchText(certUrl);
-    const verifier = crypto_1.default.createVerify('RSA-SHA1');
+    // SignatureVersion '1' => RSA-SHA1 (legacy); '2' => RSA-SHA256 (default on
+    // topics created since ~2022). Pick the algorithm from the message.
+    const algo = String(msg.SignatureVersion) === '2' ? 'RSA-SHA256' : 'RSA-SHA1';
+    const verifier = crypto_1.default.createVerify(algo);
     verifier.update(canonical, 'utf8');
     try {
         return verifier.verify(pem, msg.Signature, 'base64');
