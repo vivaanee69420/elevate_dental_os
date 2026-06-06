@@ -91,4 +91,34 @@ export const notificationService = {
         const rows = preferences.map((p) => ({ user_id: userId, ...p }));
         return notificationRepository.upsertPreferences(rows);
     },
+
+    async drainOnce({ ses, sns, now = new Date(), limit = 50 } = {}) {
+        const BACKOFF = [60000, 300000, 1800000, 7200000, 43200000];
+        const rows = await notificationRepository.claimPendingDeliveries(limit, now.toISOString());
+        for (const d of rows) {
+            try {
+                let externalId;
+                if (d.channel === 'email') {
+                    externalId = await ses.sendEmail({
+                        to: d.to_address,
+                        subject: d.notification?.title || 'Notification',
+                        html: `<p>${d.notification?.body || d.notification?.title || ''}</p>`,
+                    });
+                } else {
+                    externalId = await sns.sendSMS({
+                        to: d.to_address,
+                        body: d.notification?.title || 'Notification',
+                    });
+                }
+                await notificationRepository.markDeliverySent(d.id, externalId, now.toISOString());
+            } catch (err) {
+                const attempts = (d.attempts ?? 0) + 1;
+                const failed = attempts >= 5;
+                const backoff = BACKOFF[Math.min(attempts - 1, BACKOFF.length - 1)];
+                const nextIso = new Date(now.getTime() + backoff).toISOString();
+                await notificationRepository.markDeliveryRetry(d.id, attempts, err.message, nextIso, failed);
+            }
+        }
+        return rows.length;
+    },
 };
