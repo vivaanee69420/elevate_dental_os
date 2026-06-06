@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import { useStaff, type StaffRow } from '../staff-api';
+import { SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 
 /** Format a last-login timestamp as a short en-GB date (or em dash). */
 function fmtLastActive(iso: string | null): string {
@@ -57,9 +58,10 @@ export default function StaffScreen() {
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
 
       {isLoading && (
-        <div className="card-padded text-ink-muted" style={{ fontSize: 13 }}>
-          Loading staff…
-        </div>
+        <>
+          <SkeletonKpiRow count={4} className="mb-4" />
+          <SkeletonTable rows={6} cols={4} />
+        </>
       )}
 
       {isError && (

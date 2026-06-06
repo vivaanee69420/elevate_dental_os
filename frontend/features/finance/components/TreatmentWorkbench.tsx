@@ -7,7 +7,7 @@
 // Money is edited in £ and stored/sent as integer pence.
 
 import { useEffect, useMemo, useState } from 'react';
-import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, type Column } from '@/components/ui';
+import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable, type Column } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { useTreatmentModels, useTreatmentEconomics, useTreatmentFeeBenchmarks } from '../workbench-hooks';
 import type { TreatmentModel, WorkbenchComponent } from '../workbench-api';
@@ -70,7 +70,13 @@ export function TreatmentWorkbench() {
     [],
   );
 
-  if (modelsLoading) return <EmptyState message="Loading workbench…" />;
+  if (modelsLoading)
+    return (
+      <div className="flex flex-col gap-4">
+        <SkeletonKpiRow count={4} />
+        <SkeletonTable rows={6} cols={4} />
+      </div>
+    );
   if (isError) return <AlertRow tone="bad" title="Couldn't load workbench models" />;
   if (!model || !models) return <EmptyState message="No treatment models available." />;
 

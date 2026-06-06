@@ -8,7 +8,7 @@
 // per channel — the screen leads on spend → leads → CPL → patients → CPA, and
 // shows only a business-level blended paid ROAS. Money is integer PENCE.
 
-import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState } from '@/components/ui';
+import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill, th, td } from './os-ui';
@@ -31,7 +31,10 @@ export default function MarketingRoiScreen() {
       {isError ? (
         <Panel><EmptyState message={`Couldn't load marketing data: ${(error as Error)?.message ?? 'unknown error'}`} /></Panel>
       ) : isLoading ? (
-        <Panel><EmptyState message="Loading channels…" /></Panel>
+        <>
+          <SkeletonKpiRow count={4} />
+          <SkeletonTable rows={6} cols={4} />
+        </>
       ) : !data?.hasLeads && !data?.connected ? (
         <Panel>
           <PanelHead title="Marketing & ROI" sub="Real ad spend + CRM leads." />

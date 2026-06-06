@@ -10,7 +10,7 @@
 import { useState } from 'react';
 import { useProfitBenchmark } from '../hooks';
 import PracticeTabs from '@/features/practices/PracticeTabs';
-import { Card, EmptyState } from '@/components/ui';
+import { Card, EmptyState, SkeletonKpiRow, SkeletonChart } from '@/components/ui';
 
 const gbp = (n: number) => '£' + Math.round(n).toLocaleString('en-GB');
 const signed = (n: number) => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n).toFixed(1);
@@ -62,7 +62,12 @@ export default function ProfitBenchmarkScreen() {
 
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
 
-      {isLoading && <Card><div className="text-sm text-ink-muted">Loading…</div></Card>}
+      {isLoading && (
+        <>
+          <SkeletonKpiRow count={3} />
+          <SkeletonChart height={260} />
+        </>
+      )}
 
       {isError && (
         <Card>

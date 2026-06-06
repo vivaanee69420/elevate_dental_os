@@ -1,5 +1,6 @@
 import * as integration_service_1 from "../services/integration.service.js";
 import * as integration_model_1 from "../models/integration.model.js";
+import { providerParamSchema, idParamSchema } from "../models/common.model.js";
 import { verifyState } from "../lib/oauth-state.js";
 
 function frontendUrl() {
@@ -15,7 +16,7 @@ export const integrationController = {
         res.json(await integration_service_1.integrationService.startConnect(req.user.organisation_id, body.provider, body));
     },
     async callback(req, res) {
-        const provider = req.params.provider;
+        const { provider } = providerParamSchema.parse(req.params);
         // OAuth providers carry { code, state } in query; broker uses POST body.
         const payload = req.method === 'POST' ? req.body : req.query;
         res.json(await integration_service_1.integrationService.finishConnect(req.user.organisation_id, provider, payload));
@@ -41,47 +42,59 @@ export const integrationController = {
         res.redirect(dest.toString());
     },
     async revoke(req, res) {
-        res.json(await integration_service_1.integrationService.revoke(req.user.organisation_id, req.params.provider));
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.revoke(req.user.organisation_id, provider));
     },
     async refresh(req, res) {
-        res.json(await integration_service_1.integrationService.refresh(req.user.organisation_id, req.params.provider));
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.refresh(req.user.organisation_id, provider));
     },
     // On-demand data pull for a connected provider (Refresh button).
     // ?full=true re-pulls the full window (backfill after mapping practices).
     // Fire-and-forget: returns immediately; the UI polls /sync-progress for the
     // live percentage and the syncer stamps last_sync_at/last_error on the row.
     async sync(req, res) {
-        const full = req.query.full === 'true' || req.body?.full === true;
+        const { provider } = providerParamSchema.parse(req.params);
+        const { full: bodyFull } = integration_model_1.syncBodySchema.parse(req.body ?? {});
+        const full = req.query.full === 'true' || bodyFull === true;
         const { organisation_id } = req.user;
-        const provider = req.params.provider;
         integration_service_1.integrationService.syncNow(organisation_id, provider, { full })
             .catch((err) => console.error(`[integrations] sync ${provider} failed:`, err?.message || err));
         res.json({ started: true, provider, full });
     },
     // Live progress of the running/last sync (in-memory). Polled by the UI bar.
     async syncProgress(req, res) {
-        res.json(integration_service_1.integrationService.syncProgress(req.user.organisation_id, req.params.provider));
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(integration_service_1.integrationService.syncProgress(req.user.organisation_id, provider));
     },
     // Distinct Dentally site_ids (with counts) to drive practice mapping.
     async siteIds(req, res) {
-        res.json(await integration_service_1.integrationService.detectSiteIds(req.user.organisation_id, req.params.provider));
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.detectSiteIds(req.user.organisation_id, provider));
     },
     // GoHighLevel pipelines + stages, to drive the stage-mapping UI.
     async pipelines(req, res) {
-        res.json(await integration_service_1.integrationService.detectPipelines(req.user.organisation_id, req.params.provider));
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.detectPipelines(req.user.organisation_id, provider));
     },
     // Persist the GHL stage -> Elevate status mapping.
     async setStageMappings(req, res) {
-        res.json(await integration_service_1.integrationService.setStageMappings(req.user.organisation_id, req.params.provider, req.body?.mappings));
+        const { provider } = providerParamSchema.parse(req.params);
+        const { mappings } = integration_model_1.stageMappingsSchema.parse(req.body);
+        res.json(await integration_service_1.integrationService.setStageMappings(req.user.organisation_id, provider, mappings));
     },
     // Real-time webhook config (URL to paste into the provider + secret setter).
     async webhookInfo(req, res) {
-        res.json(await integration_service_1.integrationService.webhookInfo(req.user.organisation_id, req.params.provider));
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.webhookInfo(req.user.organisation_id, provider));
     },
     async setWebhookSecret(req, res) {
-        res.json(await integration_service_1.integrationService.setWebhookSecret(req.user.organisation_id, req.params.provider, req.body?.secret));
+        const { provider } = providerParamSchema.parse(req.params);
+        const { secret } = integration_model_1.webhookSecretSchema.parse(req.body);
+        res.json(await integration_service_1.integrationService.setWebhookSecret(req.user.organisation_id, provider, secret));
     },
     async remove(req, res) {
-        res.json(await integration_service_1.integrationService.remove(req.user.organisation_id, req.params.id));
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.remove(req.user.organisation_id, id));
     },
 };

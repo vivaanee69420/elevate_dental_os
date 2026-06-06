@@ -1,5 +1,6 @@
 import * as pay_run_service_1 from "../services/pay-run.service.js";
 import * as pay_run_model_1 from "../models/pay-run.model.js";
+import { idParamSchema } from "../models/common.model.js";
 export const payRunController = {
     async list(req, res) {
         res.json(await pay_run_service_1.payRunService.list(req.user.organisation_id));
@@ -13,6 +14,7 @@ export const payRunController = {
         res.json(await pay_run_service_1.payRunService.draft(req.user.organisation_id, q));
     },
     async approve(req, res) {
-        res.json(await pay_run_service_1.payRunService.approve(req.user.organisation_id, req.params.id, req.user.id));
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await pay_run_service_1.payRunService.approve(req.user.organisation_id, id, req.user.id));
     },
 };

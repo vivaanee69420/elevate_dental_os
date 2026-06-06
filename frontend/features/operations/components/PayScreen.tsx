@@ -8,6 +8,7 @@
 // excluded. Money arrives as integer pence -> converted to whole pounds here.
 
 import { useMemo } from 'react';
+import { SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPounds } from '@/features/_mock';
 import { useDraftPayRun, lastCompleteMonth, type PayDraftRow } from '../pay-api';
 
@@ -59,9 +60,10 @@ export default function PayScreen() {
       </div>
 
       {isLoading && (
-        <div className="card-padded text-ink-muted" style={{ fontSize: 13 }}>
-          Loading pay run…
-        </div>
+        <>
+          <SkeletonKpiRow count={4} className="mb-4" />
+          <SkeletonTable rows={6} cols={4} />
+        </>
       )}
 
       {isError && (

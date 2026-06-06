@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
+import { Skeleton, SkeletonText } from '@/components/ui';
 import {
   useCourse,
   useEnrol,
@@ -95,7 +96,14 @@ export default function CourseDetailScreen() {
     }
   }
 
-  if (isLoading) return <div className="p-6 text-ink-muted">Loading course…</div>;
+  if (isLoading)
+    return (
+      <div className="p-6">
+        <Skeleton className="h-8 w-1/2 mb-4" />
+        <Skeleton className="w-full mb-6" style={{ height: 200 }} />
+        <SkeletonText lines={6} />
+      </div>
+    );
   if (error)
     return <div className="p-6 text-danger">{(error as Error).message}</div>;
   if (!course) return <div className="p-6 text-ink-muted">Course not found.</div>;

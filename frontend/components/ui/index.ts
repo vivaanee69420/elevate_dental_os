@@ -9,3 +9,11 @@ export { Chip, STAGE_CHIP_COLOUR, type ChipColour } from './Chip';
 export { BarRow } from './BarRow';
 export { HeatCell } from './HeatCell';
 export { AlertRow } from './AlertRow';
+export {
+  Skeleton,
+  SkeletonText,
+  SkeletonKpi,
+  SkeletonKpiRow,
+  SkeletonChart,
+  SkeletonTable,
+} from './Skeleton';

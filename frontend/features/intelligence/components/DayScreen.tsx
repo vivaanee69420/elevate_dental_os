@@ -8,7 +8,7 @@
 // WIRED: reads GET /api/analytics/cash-by-day (real settled receipts by
 // processed_at date, scope/period reactive). Money is integer PENCE.
 
-import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState } from '@/components/ui';
+import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill } from './os-ui';
@@ -30,7 +30,10 @@ export default function DayScreen() {
       {isError ? (
         <Panel><EmptyState message={`Couldn't load cash receipts: ${(error as Error)?.message ?? 'unknown error'}`} /></Panel>
       ) : isLoading ? (
-        <Panel><EmptyState message="Loading settled receipts…" /></Panel>
+        <>
+          <SkeletonKpiRow count={4} />
+          <SkeletonChart height={260} />
+        </>
       ) : !data?.hasData ? (
         <Panel>
           <PanelHead title="Cash collected by day" sub={data?.monthLabel} />

@@ -35,6 +35,7 @@ import {
   type Lead,
   type PLModel,
 } from '../mock';
+import { Skeleton } from '@/components/ui';
 
 const POS = 'var(--success)';
 const NEG = 'var(--danger)';
@@ -771,8 +772,10 @@ export default function DashboardScreen() {
           </span>
         </div>
         {practiceLoading ? (
-          <div className="text-ink-muted" style={{ fontSize: 12 }}>
-            Loading practices…
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-5 w-full" />
+            ))}
           </div>
         ) : v.scorecard.length === 0 ? (
           <div className="text-ink-muted" style={{ fontSize: 12 }}>
@@ -889,12 +892,7 @@ export default function DashboardScreen() {
           </div>
         </div>
         {seriesLoading ? (
-          <div
-            className="text-ink-muted"
-            style={{ fontSize: 12, padding: '40px 0' }}
-          >
-            Loading projection…
-          </div>
+          <Skeleton className="w-full" style={{ height: 240 }} />
         ) : v.chartSeries.length === 0 ? (
           <div
             className="text-ink-muted"
