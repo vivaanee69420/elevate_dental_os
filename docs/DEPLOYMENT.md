@@ -288,6 +288,62 @@ railway up
 # Restore from daily backup via Supabase dashboard → Settings → Database → Backups
 ```
 
+## Notifications / AWS SES + SNS
+
+The notification service sends in-app, email, and SMS notifications. Emails are dispatched via AWS SES; SMS via AWS SNS. An outbox-drain worker processes the queue every minute.
+
+### Environment variables (backend)
+
+| Variable | Description |
+|---|---|
+| `AWS_REGION` | AWS region for SES + SNS, e.g. `eu-west-2`. Defaults to `eu-west-2` if unset. Reuses the same region as the existing S3 bucket. |
+| `SES_FROM` | Verified SES sender address, e.g. `notifications@elevate.app`. |
+| `SES_CONFIGURATION_SET` | Name of the SES configuration set whose event destination publishes Bounce / Complaint / Delivery events to the SNS topic (enables bounce and complaint tracking). |
+| `SNS_TOPIC_ARN` | **Required in production.** ARN of the SNS topic that fronts the SES events webhook (`/webhooks/ses-events`). Any inbound SNS message whose `TopicArn` does not match is rejected with `403`. Without this var the topic-allowlist check is skipped — acceptable for local/dev only. |
+| `SNS_SENDER_ID` | *(Optional)* Alphanumeric SMS sender ID where supported by the carrier (e.g. `Elevate`). |
+| `SNS_SMS_TYPE` | SMS message type: `Transactional` (default) or `Promotional`. |
+| `USE_LEGACY_EMAIL` | Set to `true` to fall back to Postmark instead of SES (emergency use only). |
+| `USE_LEGACY_SMS` | Set to `true` to fall back to Twilio instead of SNS SMS (emergency use only). |
+| AWS credentials | The standard AWS SDK credential chain is used — no additional vars required if the same IAM user / role already set for S3 (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`) is granted the SES + SNS permissions listed below. |
+
+### One-time AWS setup
+
+The following steps are performed once, via the AWS Console or IaC (Terraform / CloudFormation).
+
+1. **SES — verify sending domain.** In SES → Verified identities, add `elevate.app` (or your sending domain), enable DKIM, and add the generated DNS records. **Request production access** (move out of the SES sandbox) — until granted, SES will only deliver to verified email addresses.
+
+2. **SNS — create events topic.** In SNS → Topics, create a Standard topic (e.g. `elevate-ses-events-production`). Note its ARN and set `SNS_TOPIC_ARN` in the backend environment.
+
+3. **SES — create configuration set.** In SES → Configuration sets, create a set (e.g. `elevate-production`). Add an event destination of type SNS; select the topic from step 2; tick the event types **Bounce**, **Complaint**, and **Delivery**. Set `SES_CONFIGURATION_SET` in the backend environment.
+
+4. **SNS — subscribe the webhook endpoint.** In SNS → Subscriptions, create a subscription with protocol `HTTPS` and endpoint `https://<app-host>/webhooks/ses-events`. The backend will auto-confirm the subscription when SNS delivers the `SubscriptionConfirmation` message.
+
+**IAM permissions** — the `elevate-api` IAM user requires:
+```json
+{
+  "Effect": "Allow",
+  "Action": ["ses:SendEmail", "ses:SendRawEmail", "sns:Publish"],
+  "Resource": "*"
+}
+```
+
+### Migration / runtime notes
+
+- Migration `supabase/migrations/20260101000052_notifications.sql` adds four tables: `notifications`, `notification_preferences`, `notification_deliveries`, and `suppression_list`. After applying on hosted Supabase, run `NOTIFY pgrst, 'reload schema';` to flush the PostgREST schema cache (recurring gotcha — cache does not reload automatically).
+- The outbox drain runs inside the worker process (`backend/src/workers/index.js`) on a one-minute cron. That process **must be running** for emails and SMS to actually send. Do **not** add the drain to `ghl-sync-once.js` — that file is a one-shot process that calls `process.exit` on completion.
+- `USE_LEGACY_EMAIL` / `USE_LEGACY_SMS` are provided for emergency rollback only. In normal operation both should be unset (or set to `false`) so all sends go through SES / SNS.
+
+### Production checklist additions
+
+Add these items alongside the main checklist in §11:
+
+- [ ] SES domain verified, DKIM DNS records propagated, production access granted
+- [ ] SNS topic created and `SNS_TOPIC_ARN` set in the `api` service
+- [ ] SES configuration set created, SNS event destination confirmed for Bounce/Complaint/Delivery; `SES_CONFIGURATION_SET` set
+- [ ] `/webhooks/ses-events` HTTPS subscription confirmed (auto-confirmed on first SNS message)
+- [ ] Migration `000052_notifications` applied on hosted; `NOTIFY pgrst, 'reload schema';` run
+- [ ] Worker process (`src/workers/index.js`) running as a separate Railway service
+
 ## 13. Monitoring & alerts
 
 Set up these alerts:
