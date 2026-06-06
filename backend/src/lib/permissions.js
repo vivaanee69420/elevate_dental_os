@@ -26,7 +26,9 @@
 // permission_key -> human label (label is for the admin UI / docs only).
 export const PERMISSION_CATALOG = {
   'finance.view': 'View finance (cash flow, P&L, financial)',
+  'finance.edit': 'Edit finance config & scenario sheets (chair config, P&L sheets)',
   'valuation.view': 'View practice valuation',
+  'valuation.edit': 'Edit valuation inputs (EBITDA, drivers, sale plan)',
   'businesshealth.manage': 'Manage Business Health setup & targets',
   'operations.view': 'View operations (associates, staff, chair, UDA)',
   'intelligence.view': 'View intelligence (scenarios, tax, debt, alerts)',

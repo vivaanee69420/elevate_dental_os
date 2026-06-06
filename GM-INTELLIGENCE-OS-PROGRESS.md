@@ -88,12 +88,12 @@ boundary (CLAUDE.md rule 2).
 ## Phase 3 — Persistence + editable sheets (final slice)
 | Task | Status | Notes / commit |
 |---|---|---|
-| T8 RBAC finance.edit/valuation.edit + gate mutations | [ ] | persisted edits audited |
-| T12 valuation_inputs + chair_config (org config, RLS, audit) | [ ] | |
-| T13 Editable P&L: resolve TODO1 precedence → pl_sheets (Postgres) | [ ] | CSV export; NOT localStorage |
-| FORMULAS.md + API.md + documented constants | [ ] | accountant sign-off |
-| T10 /qa + /browse pass against test-plan artifact | [ ] | |
-**Exit:** all live, no mock, CI green, docs updated. — `[ ]`
+| T8 RBAC finance.edit/valuation.edit + gate mutations | [x] | BACKEND DONE: added `finance.edit`/`valuation.edit` to PERMISSION_CATALOG (owner-default via reduce; PM/reception excluded). All Phase-3 mutation routes gated on the `*.edit` key (not `*.view`, rule 5); audited automatically by the audit middleware (non-`/compute/` path). |
+| T12 valuation_inputs + chair_config (org config, RLS, audit) | [x] | BACKEND DONE: migration `…000043` (both org-scoped, UNIQUE org, RLS `current_org_id()` reception-excluded, `set_updated_at`). Repos `valuationInputs`/`chairConfig`. Service get/save (snake↔camel map; chair merges over CHAIR_CONFIG defaults). GET/PUT `/valuation-inputs` (val/valEdit) + `/chair-config` (fin/finEdit). **`GET /chair` now overlays saved chair_config into capacity** (calculateChairStats `config`). +10 tests (suite 468 green). **Frontend save/load UI pending.** |
+| T13 Editable P&L: resolve TODO1 precedence → pl_sheets (Postgres) | [x] | BACKEND DONE. **TODO1 resolved = SCENARIO OVERLAY** (sheets never override actuals or feed EBITDA; finance screens stay real-or-zero). Migration `…000044` (`pl_sheets`: name/type/cols/lines/cells jsonb, org RLS, audited). Repo `plSheet` (list/get/create/update/delete, org-scoped). Service CRUD + `plSheetToCsv` (£ from pence). Full CRUD routes + `/pl-sheets/:id/csv` export, finance.edit-gated mutations. Money integer pence. **Frontend editable-grid UI pending.** |
+| FORMULAS.md + API.md + documented constants | [x] | API.md: Phase-3 persistence block (10 endpoints, gates, precedence note). FORMULAS.md §16 (config constants for accountant sign-off + precedence rule); §11 chair_config note updated. Accountant sign-off still to be obtained. |
+| T10 /qa + /browse pass against test-plan artifact | [ ] | pending frontend |
+**Exit:** all live, no mock, CI green, docs updated. — `[ ]` (backend complete; frontend save/load UI + editable P&L grid + QA remain) |
 
 ---
 

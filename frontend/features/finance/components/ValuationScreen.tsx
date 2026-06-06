@@ -23,8 +23,9 @@
 //   PlannerState (sliders) ──> projected value, gap, CAGR, action cards,
 //                              year-by-year interpolation table
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useValuationBase } from '../hooks';
+import { useValuationInputs, useSaveValuationInputs } from '../valuation-config-hooks';
 import { useMarketingRoi } from '@/features/growth/hooks';
 import { formatPence as fmtPence } from '@/lib/format';
 import FinanceToolbar from './FinanceToolbar';
@@ -161,6 +162,19 @@ export default function ValuationScreen() {
   // Patch helper for the valuation input state.
   const patch = (p: Partial<ValuationState>) => setState((s) => ({ ...s, ...p }));
 
+  // Phase 3 / T12 — load the saved per-org drivers once, then persist on demand.
+  // We seed `state` from the saved uiState exactly once (so a user's in-progress
+  // edits are never clobbered by a late query settle).
+  const { data: saved } = useValuationInputs();
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (!seeded.current && saved?.uiState) {
+      seeded.current = true;
+      setState((s) => ({ ...s, ...saved.uiState }));
+    }
+  }, [saved]);
+  const saveInputs = useSaveValuationInputs();
+
   // Run the three-model engine server-side (Arch #3, debounced) — the valuation
   // formula lives in lib/formulas.js (FORMULAS.md §13), not duplicated here.
   // `placeholderData: prev` keeps the last result on screen while a new compute
@@ -214,6 +228,34 @@ export default function ValuationScreen() {
               Associate-led &middot; DSO/Corporate.
             </p>
             <FinanceToolbar />
+            <div className="flex items-center gap-3 mt-3">
+              <button
+                onClick={() => saveInputs.mutate({ state, base })}
+                disabled={saveInputs.isPending}
+                style={{
+                  padding: '8px 16px',
+                  background: BRAND,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: saveInputs.isPending ? 'default' : 'pointer',
+                  opacity: saveInputs.isPending ? 0.6 : 1,
+                }}
+              >
+                {saveInputs.isPending ? 'Saving…' : 'Save valuation inputs'}
+              </button>
+              <span className="text-xs text-ink-muted">
+                {saveInputs.isError
+                  ? 'Save failed — you may not have edit permission.'
+                  : saveInputs.isSuccess
+                    ? 'Saved.'
+                    : saved?.updatedAt
+                      ? `Last saved ${new Date(saved.updatedAt).toLocaleDateString('en-GB')}`
+                      : 'Not yet saved'}
+              </span>
+            </div>
           </div>
           <div
             style={{

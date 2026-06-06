@@ -367,8 +367,9 @@ Source: `backend/src/lib/formulas.js` (`calculateChairStats`, `calculateOcpspd`,
 `profitPerChairHour`, `chairRecovery`); tested in `backend/test/formulas-chair.test.mjs`.
 All money is integer pence; all hour figures are annual.
 
-**Group operating standards** (`CHAIR_CONFIG`, documented constants — per-org
-overrides planned via a `chair_config` table):
+**Group operating standards** (`CHAIR_CONFIG` code defaults — per-org overrides
+now persisted in the `chair_config` table, Phase 3 / T12; `GET /chair` overlays
+the saved row over these defaults):
 
     openHrs = 8         (surgery open hours/day)
     weeksYr = 46,  daysWk = 5   ->  workDaysYr = 230
@@ -582,6 +583,47 @@ Outlook honesty: IN = real settled receipts/month; OUT = P&L cost base/month (ac
 proxy, flagged; 0 when no source); forward months are run-rate PROJECTIONS; closing
 balances are anchored to today's real bank balance (current month closes there, earlier
 months reconstructed, later months projected).
+
+## 16. Persisted config & editable P&L sheets (Phase 3 — T12/T13)
+
+Source: `analytics.service` (`getValuationInputs`/`saveValuationInputs`,
+`getChairConfig`/`saveChairConfig`, `pl_sheets` CRUD + `plSheetToCsv`); tables
+`valuation_inputs`, `chair_config`, `pl_sheets`; tested in
+`backend/test/analytics-config.test.mjs`. All money integer pence.
+
+**These are persistence, not new arithmetic.** The formulas are unchanged:
+- `valuation_inputs` stores the **driver state** that `POST /compute/valuation`
+  already consumes (§13). Saving then loading round-trips the same numbers into
+  the same engine — no formula change, just persistence + an `updated_by` audit.
+- `chair_config` stores per-org overrides of the §11 `CHAIR_CONFIG` constants.
+  `GET /chair` overlays the saved row over the code defaults before running
+  `calculateChairStats`; an unset org behaves exactly as before (defaults).
+
+**Documented config constants (accountant sign-off):**
+
+    valuation drivers   reportedEbitdaPence (from the P&L, TTM), addBacksPence,
+                        principalSalaryPence, principalMultiple/associateMultiple/
+                        dsoMultiple, regionFactor (0.5–2), growthRatePct (default 10)
+    chair config        openHrs 8, weeksYr 46, daysWk 5, benchOccPct 88,
+                        benchRevHrPence 30,000  (== §11 CHAIR_CONFIG defaults)
+
+**P&L sheets precedence (TODO1 — resolved, scenario overlay):**
+
+`pl_sheets` are **editable scenario / budget / forecast grids** stored as
+`cols`/`lines`/`cells` JSONB (cells map `"<lineId>:<colId>" → pence`, negatives
+allowed for cost/contra lines). They are a **standalone planning artifact**:
+
+- They **DO NOT** override the real actuals P&L. `pl` and `pl-margin` stay
+  Xero > monthly_financials-manual > zero (§1a). A finance screen never shows a
+  hand-typed sheet number as if it were a real actual.
+- They **DO NOT** feed EBITDA or the valuation (§13 EBITDA still comes only from
+  the real P&L). No re-sync revert/stick problem because there is no feedback
+  loop into actuals at all.
+- CSV export (`plSheetToCsv`) renders lines × columns with £ to 2dp from the
+  integer-pence cells (NOT localStorage — Postgres-backed, org-scoped, RLS).
+
+This keeps the "finance screen = real actuals or honest empty, never fabricated"
+guarantee while still giving the owner an editable what-if spreadsheet beside it.
 
 ## Audit trail
 

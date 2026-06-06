@@ -17,6 +17,10 @@ import * as analytics_controller_1 from "../controllers/analytics.controller.js"
 const router = (0, express_1.Router)();
 const fin = (0, auth_1.requirePermission)('finance.view');
 const val = (0, auth_1.requirePermission)('valuation.view');
+// Phase 3 edit gates (rule 5: edits are owner-toggled, never finance.view).
+// All persisted mutations below are audited by the audit middleware.
+const finEdit = (0, auth_1.requirePermission)('finance.edit');
+const valEdit = (0, auth_1.requirePermission)('valuation.edit');
 router.get('/dashboard', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dashboard));
 router.get('/dashboard-summary', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dashboardSummary));
 router.get('/revenue-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.revenueSeries));
@@ -48,4 +52,20 @@ router.post('/compute/treatment-economics', fin, (0, async_handler_1.asyncHandle
 // audit-exempt /compute/ path, valuation.view gate same as GET /valuation).
 router.post('/compute/valuation', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuationCompute));
 router.post('/compute/valuation/exit-plan', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuationExitPlan));
+
+// Phase 3 / T12 — persisted config. GET = view gate; PUT = edit gate (audited).
+router.get('/valuation-inputs', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.getValuationInputs));
+router.put('/valuation-inputs', valEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.putValuationInputs));
+router.get('/chair-config', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.getChairConfig));
+router.put('/chair-config', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.putChairConfig));
+
+// Phase 3 / T13 — editable P&L scenario sheets (scenario overlay; never feeds
+// actuals). GET = finance.view; mutations = finance.edit (audited). The /csv
+// export route is registered before /:id so it isn't shadowed.
+router.get('/pl-sheets', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.listPlSheets));
+router.post('/pl-sheets', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.createPlSheet));
+router.get('/pl-sheets/:id/csv', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.exportPlSheetCsv));
+router.get('/pl-sheets/:id', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.getPlSheet));
+router.put('/pl-sheets/:id', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.updatePlSheet));
+router.delete('/pl-sheets/:id', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.deletePlSheet));
 export default router;
