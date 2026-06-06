@@ -17,6 +17,12 @@ import {
   type CourseDetailLessonFile,
 } from '../useLibrary';
 import { CATEGORIES } from '@/lib/course-admin';
+import MaterialsBrowser from '../materials/MaterialsBrowser';
+import {
+  buildTree,
+  type MaterialsInput,
+  type MaterialFile,
+} from '../materials/buildTree';
 
 const PURPLE = '#9333EA';
 
@@ -78,6 +84,7 @@ export default function CourseDetailScreen() {
   const enrol = useEnrol();
   const setComplete = useSetLessonComplete(id);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [tab, setTab] = useState<'content' | 'materials'>('content');
 
   async function download(fn: () => Promise<void>) {
     setDownloadError(null);
@@ -98,6 +105,45 @@ export default function CourseDetailScreen() {
   const pct = total ? Math.round((done / total) * 100) : 0;
 
   const modules = course.modules ?? [];
+
+  // Adapt the loaded course into the Materials folder-view input. `course` is
+  // guaranteed non-null here (early returns above). Per-lesson files are
+  // flattened into their module; the '__unassigned__' fallback bucket is
+  // excluded from the Materials view.
+  function toMaterialsInput(c: NonNullable<typeof course>): MaterialsInput {
+    return {
+      modules: (c.modules ?? [])
+        .filter((m) => m.id !== '__unassigned__')
+        .map((m) => ({
+          id: m.id,
+          title: m.title,
+          locked: m.access === 'mentorship' && !c.mentorship_active,
+          files: m.lessons.flatMap((l) =>
+            l.files.map((f) => ({
+              id: f.id,
+              name: f.name,
+              size_bytes: f.size_bytes,
+              created_at: f.created_at,
+              category: f.category,
+              lessonId: l.id,
+            })),
+          ),
+        })),
+      resources: c.resources.map((r) => ({
+        id: r.id,
+        name: r.name,
+        size_bytes: r.size_bytes,
+        created_at: r.created_at,
+        category: r.category,
+        locked: r.locked,
+      })),
+    };
+  }
+
+  function downloadMaterial(file: MaterialFile) {
+    if (file.source === 'lesson-file') download(() => downloadLessonFile(file.id));
+    else download(() => downloadResource(file.id));
+  }
 
   return (
     <div className="mx-auto space-y-5" style={{ maxWidth: 880 }}>
@@ -200,6 +246,35 @@ export default function CourseDetailScreen() {
         <div className="text-sm text-danger">{downloadError}</div>
       )}
 
+      {/* Content / Materials tab bar */}
+      <div className="flex gap-2 border-b border-border">
+        {(['content', 'materials'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px capitalize ${
+              tab === t ? 'text-ink border-ink' : 'text-ink-muted border-transparent'
+            }`}
+            style={tab === t ? { borderColor: PURPLE, color: PURPLE } : undefined}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'materials' ? (
+        (() => {
+          const { tree, stats } = buildTree(toMaterialsInput(course));
+          return (
+            <MaterialsBrowser
+              tree={tree}
+              stats={stats}
+              onDownload={downloadMaterial}
+            />
+          );
+        })()
+      ) : (
+        <>
       {/* Modules → Lessons */}
       {modules.length === 0 ? (
         <p className="text-ink-muted text-sm">No lessons in this course yet.</p>
@@ -411,6 +486,8 @@ export default function CourseDetailScreen() {
             </div>
           ))}
         </section>
+      )}
+        </>
       )}
     </div>
   );
