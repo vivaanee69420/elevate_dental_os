@@ -174,6 +174,59 @@ export const courseRepository = {
         if (error) throw new Error(error.message);
     },
 
+    async listLessonFilesForLessons(lessonIds) {
+        if (!lessonIds.length) return [];
+        const { data, error } = await supabase_1.serviceClient
+            .from('lesson_files')
+            .select(LESSON_FILE_COLS)
+            .in('lesson_id', lessonIds)
+            .order('position', { ascending: true })
+            .limit(5000);
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+
+    async getLessonFileById(fileId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('lesson_files')
+            .select(LESSON_FILE_COLS)
+            .eq('id', fileId)
+            .maybeSingle();
+        if (error) throw new Error(error.message);
+        return data || null;
+    },
+
+    async maxLessonFilePosition(lessonId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('lesson_files')
+            .select('position')
+            .eq('lesson_id', lessonId)
+            .order('position', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        if (error) throw new Error(error.message);
+        return data ? data.position : -1;
+    },
+
+    async createLessonFile(lessonId, fields) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('lesson_files')
+            .insert({ ...fields, lesson_id: lessonId })
+            .select(LESSON_FILE_COLS)
+            .single();
+        if (error) throw new Error(error.message);
+        return data;
+    },
+
+    async deleteLessonFile(lessonId, fileId) {
+        const { error } = await supabase_1.serviceClient
+            .from('lesson_files')
+            .delete()
+            .eq('lesson_id', lessonId)
+            .eq('id', fileId);
+        if (error) throw new Error(error.message);
+    },
+
     // Single lesson by id (used by the tenant download endpoint to resolve the
     // owning course + access flag before presigning).
     async getLessonById(lessonId) {
