@@ -26,6 +26,12 @@ import {
   type Access,
   type Category,
 } from '@/lib/course-admin';
+import MaterialsBrowser from '@/features/training/materials/MaterialsBrowser';
+import {
+  buildTree,
+  type MaterialsInput,
+  type MaterialFile,
+} from '@/features/training/materials/buildTree';
 
 function fmtSize(bytes: number | null): string {
   if (!bytes) return '';
@@ -41,6 +47,7 @@ export default function CourseEditorPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingMeta, setSavingMeta] = useState(false);
+  const [tab, setTab] = useState<'structure' | 'materials'>('structure');
 
   // Editable metadata mirror.
   const [meta, setMeta] = useState<Partial<CourseDetail>>({});
@@ -104,6 +111,89 @@ export default function CourseEditorPage() {
     }
   }
 
+  function toMaterialsInput(c: CourseDetail): MaterialsInput {
+    return {
+      modules: c.modules.map((m) => ({
+        id: m.id,
+        title: m.title,
+        locked: m.access === 'mentorship',
+        files: m.lessons.flatMap((l) =>
+          l.files.map((f) => ({
+            id: f.id,
+            name: f.name,
+            size_bytes: f.size_bytes,
+            created_at: f.created_at,
+            category: f.category,
+            lessonId: l.id,
+          })),
+        ),
+      })),
+      resources: c.resources.map((r) => ({
+        id: r.id,
+        name: r.name,
+        size_bytes: r.size_bytes,
+        created_at: r.created_at,
+        category: r.category,
+      })),
+    };
+  }
+
+  async function uploadModuleFile(
+    _moduleId: string,
+    category: string,
+    lessonId: string,
+    file: File,
+  ) {
+    try {
+      const up = await uploadAttachment(file);
+      await coursesApi.addLessonFile(id, lessonId, {
+        category: category as Category,
+        name: up.name,
+        file_key: up.key,
+        file_type: up.type,
+        size_bytes: up.size,
+        access: 'free',
+      });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function uploadResourceFile(
+    category: 'marking-rubrics' | 'additional-resources',
+    file: File,
+  ) {
+    try {
+      const up = await uploadAttachment(file);
+      await coursesApi.addResource(id, {
+        name: up.name,
+        file_key: up.key,
+        file_type: up.type,
+        size_bytes: up.size,
+        access: 'free',
+        category,
+      });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  async function deleteMaterial(file: MaterialFile) {
+    if (!window.confirm(`Remove "${file.name}"?`)) return;
+    try {
+      if (file.source === 'lesson-file' && file.lessonId) {
+        await coursesApi.removeLessonFile(id, file.lessonId, file.id);
+      } else if (file.source === 'resource') {
+        await coursesApi.removeResource(id, file.id);
+      }
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
   if (loading) return <div className="p-6 text-ink-muted">Loading…</div>;
   if (!course) return <div className="p-6 text-danger">{error || 'Course not found.'}</div>;
 
@@ -136,6 +226,42 @@ export default function CourseEditorPage() {
 
       {error && <div className="text-sm text-danger">{error}</div>}
 
+      <div className="flex gap-2 border-b border-border">
+        {(['structure', 'materials'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px capitalize ${
+              tab === t ? 'border-brand text-brand' : 'border-transparent text-ink-muted'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'materials' ? (
+        (() => {
+          const { tree, stats } = buildTree(toMaterialsInput(course));
+          const lessonsByModule = Object.fromEntries(
+            course.modules.map((m) => [
+              m.id,
+              m.lessons.map((l) => ({ id: l.id, title: l.title })),
+            ]),
+          );
+          return (
+            <MaterialsBrowser
+              tree={tree}
+              stats={stats}
+              lessonsByModule={lessonsByModule}
+              onUploadModuleFile={uploadModuleFile}
+              onUploadResource={uploadResourceFile}
+              onDeleteFile={deleteMaterial}
+            />
+          );
+        })()
+      ) : (
+        <>
       {/* ---- Metadata ---- */}
       <form onSubmit={saveMeta} className="p-5 rounded-lg border border-border bg-white space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -237,6 +363,8 @@ export default function CourseEditorPage() {
 
       {/* ---- Resources ---- */}
       <ResourcesSection course={course} onChange={load} setError={setError} />
+        </>
+      )}
 
       {/* Local input styling (kept inline; no new global tokens). */}
       <style jsx>{`
