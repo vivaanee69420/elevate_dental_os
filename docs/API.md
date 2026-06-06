@@ -447,7 +447,7 @@ Response:
 Mounted at `/api/training`. Tenant auth. Reads from the **global** published course catalogue; enrolment and progress are per-org/user.
 
 - `GET  /api/training/library` — published catalogue for this org (mentorship-gated) with per-user enrolment + progress. Returns `{ courses: [...], mentorship_active }`.
-- `GET  /api/training/courses/:id` — one published course, full content (modules → lessons), per-lesson progress and access gate. 403 when org lacks the required `access` tier.
+- `GET  /api/training/courses/:id` — one published course, full content (modules → lessons), per-lesson progress and access gate. 403 when org lacks the required `access` tier. Resources include `category` (`marking-rubrics` | `additional-resources`) and `created_at`; lesson files include `created_at` (used by the Materials folder view).
 - `POST /api/training/courses/:id/enrol` — enrol the current user in a published course (idempotent). Returns `{ enrolment }`.
 - `POST /api/training/lessons/:lessonId/complete` — mark a lesson complete (default) or incomplete (`{ completed: false }`). Returns `{ progress }`.
 - `GET  /api/training/lessons/:lessonId/attachment` — presigned S3 GET for a lesson's single legacy attachment (mentorship-gated). Returns `{ url }`.
@@ -716,7 +716,7 @@ File uploads: use `POST /api/platform/courses/presign` to get an S3 presigned PU
 
 ### Course resources *(superadmin)*
 
-- `POST   /api/platform/courses/:id/resources` — attach a course-level resource (body: `resourceCreateSchema`). Returns the created resource (201).
+- `POST   /api/platform/courses/:id/resources` — attach a course-level resource (body: `resourceCreateSchema`). Request/response now include `category` (`marking-rubrics` | `additional-resources`, default `additional-resources`; migration `000048`). Returns the created resource (201).
 - `DELETE /api/platform/courses/:id/resources/:resId` — remove a course-level resource. Returns `{ deleted }`.
 
 > **Schema note (migration `000047`):** modules live in `course_modules`; lesson files live in `lesson_files`; lessons carry a `module_id` FK. Migration `000047` is **NOT YET applied on hosted** — apply it + run `NOTIFY pgrst, 'reload schema';` before using any module or lesson-file endpoint in production.
