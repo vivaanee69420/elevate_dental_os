@@ -10,7 +10,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: { upsert: vi.fn(), markFailed: vi.fn() },
 }));
 
-const { syncOneOrg, bootstrapOnConnect, __test } = await import('../src/lib/integrations/dentally-sync.js');
+const { syncOneOrg, bootstrapOnConnect, invoiceRow, __test } = await import('../src/lib/integrations/dentally-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 describe('dentally mappers', () => {
@@ -34,6 +34,45 @@ describe('dentally mappers', () => {
         expect(__test.mapPaymentMethod('CARD')).toBe('card');
         expect(__test.mapPaymentMethod('crypto')).toBeNull();
     });
+});
+
+describe('invoiceRow', () => {
+  const siteMap = new Map([['site-1', 'prac-1']]);
+  const contactMap = new Map([['pat-1', 'contact-1']]);
+
+  it('maps a Dentally invoice to an invoices row', () => {
+    const row = invoiceRow('org-1', {
+      id: 'inv-1', site_id: 'site-1', patient_id: 'pat-1',
+      amount: 100, amount_outstanding: 40, dated_on: '2026-01-01',
+      due_on: '2026-01-31', paid: false,
+      invoice_items: [{ treatment: 'Implant' }], patient_name: 'R Sutton',
+    }, siteMap, contactMap);
+    expect(row).toMatchObject({
+      organisation_id: 'org-1', source: 'dentally', external_id: 'inv-1',
+      practice_id: 'prac-1', contact_id: 'contact-1',
+      amount_pence: 10000, amount_outstanding_pence: 4000,
+      dated_on: '2026-01-01', due_on: '2026-01-31', paid: false,
+      treatment: 'Implant', patient_name: 'R Sutton',
+    });
+  });
+
+  it('returns null when the site maps to no practice (practice_id is NOT NULL)', () => {
+    expect(invoiceRow('org-1', { id: 'x', site_id: 'unknown' }, siteMap, contactMap)).toBeNull();
+  });
+
+  it('summarises multiple invoice items as "Multiple items"', () => {
+    const row = invoiceRow('org-1', {
+      id: 'inv-2', site_id: 'site-1', invoice_items: [{ treatment: 'A' }, { treatment: 'B' }],
+    }, siteMap, contactMap);
+    expect(row.treatment).toBe('Multiple items');
+    expect(row.amount_pence).toBe(0);
+    expect(row.amount_outstanding_pence).toBe(0);
+  });
+
+  it('leaves contact_id null for an unknown patient', () => {
+    const row = invoiceRow('org-1', { id: 'inv-3', site_id: 'site-1', patient_id: 'ghost' }, siteMap, contactMap);
+    expect(row.contact_id).toBeNull();
+  });
 });
 
 describe('authHeader', () => {
@@ -169,6 +208,9 @@ describe('syncOneOrg', () => {
             if (u.includes('/payments')) return page({ payments: [
                 { id: 'PAY1', patient_id: 'P1', site_id: 'S1', amount: 12.5, payment_method: 'card', paid: true, payment_date: 'd' },
             ], meta: { total_pages: 1 } });
+            if (u.includes('/invoices')) return page({ invoices: [
+                { id: 'INV1', patient_id: 'P1', site_id: 'S1', amount: 200, amount_outstanding: 50, dated_on: 'd1', due_on: 'd2', paid: false, invoice_items: [{ treatment: 'Crown' }] },
+            ], meta: { total_pages: 1 } });
             return page({});
         });
 
@@ -178,6 +220,13 @@ describe('syncOneOrg', () => {
         expect(res.appointments).toBe(1);          // A2 skipped (unknown site)
         expect(res.skipped_unmatched_practice).toBe(1);
         expect(res.payments).toBe(1);
+        expect(res.invoices).toBe(1);
+        const invUpsert = queries.find((q) => q.table === 'invoices' && q.op === 'upsert');
+        expect(invUpsert.upsertVals[0]).toMatchObject({
+            organisation_id: 'org-1', source: 'dentally', external_id: 'INV1',
+            practice_id: 'prac-1', amount_pence: 20000, amount_outstanding_pence: 5000, contact_id: 'cont-1',
+        });
+        expect(invUpsert.upsertOpts.onConflict).toBe('organisation_id,source,external_id');
 
         const payUpsert = queries.find((q) => q.table === 'payments' && q.op === 'upsert');
         expect(payUpsert.upsertVals[0]).toMatchObject({

@@ -538,6 +538,37 @@ export function invoiceItemRow(orgId, it, invoiceMap = new Map(), practitionerMa
     };
 }
 
+// Summarise an invoice's line items into a single treatment label for the debt
+// table. >1 item -> "Multiple items"; else the first item's treatment name.
+function invoiceTreatment(items) {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    if (items.length > 1) return 'Multiple items';
+    const it = items[0];
+    return it?.treatment ?? it?.name ?? it?.description ?? null;
+}
+
+export function invoiceRow(orgId, inv, siteMap, contactMap) {
+    const practiceId = siteMap.get(String(inv.site_id));
+    if (!practiceId) return null; // invoices.practice_id is NOT NULL
+    return {
+        organisation_id: orgId,
+        source: 'dentally',
+        external_id: String(inv.id),
+        practice_id: practiceId,
+        contact_id: contactMap.get(String(inv.patient_id)) ?? null,
+        // UAT: Dentally money units are ambiguous (docs say `amount` is "integer";
+        // the payments path treats it as pounds-decimal). Use toPence for
+        // consistency; verify pence-vs-pounds against the sandbox during UAT.
+        amount_pence: toPence(inv.amount),
+        amount_outstanding_pence: toPence(inv.amount_outstanding),
+        dated_on: inv.dated_on ?? null,
+        due_on: inv.due_on ?? null,
+        paid: inv.paid === true,
+        treatment: invoiceTreatment(inv.invoice_items),
+        patient_name: inv.patient_name ?? null,
+    };
+}
+
 // ---- pulls ------------------------------------------------------------------
 
 async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
@@ -643,9 +674,22 @@ async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitio
     return { synced };
 }
 
+async function pullInvoices(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
+    const remote = await fetchAllPages(base, '/invoices', auth, params, onPage, maxPages);
+    const rows = [];
+    let skipped = 0;
+    for (const inv of remote) {
+        const row = invoiceRow(orgId, inv, siteMap, contactMap);
+        if (!row) { skipped++; continue; } // invoices.practice_id is NOT NULL
+        rows.push(row);
+    }
+    const synced = await upsertChunked('invoices', rows, 'organisation_id,source,external_id');
+    return { synced, skipped };
+}
+
 // ---- webhook apply (real-time, single record) -------------------------------
 // Map+upsert ONE record pushed by a Dentally webhook, reusing the row builders
-// above. resourceType ∈ patient|appointment|payment. create/update both upsert
+// above. resourceType ∈ patient|appointment|payment|invoice. create/update both upsert
 // (idempotent). Returns a small result for logging. Field/event shapes are the
 // documented v1 assumptions — verify against the live webhook during UAT.
 export async function applyWebhookEvent(orgId, resourceType, record) {
@@ -668,6 +712,12 @@ export async function applyWebhookEvent(orgId, resourceType, record) {
         if (!row) return { skipped: 'unmatched_practice' };
         await upsertChunked('payments', [row], 'organisation_id,source,external_id');
         return { table: 'payments', applied: 1 };
+    }
+    if (resourceType === 'invoice') {
+        const row = invoiceRow(orgId, record, siteMap, contactMap);
+        if (!row) return { skipped: 'unmatched_practice' };
+        await upsertChunked('invoices', [row], 'organisation_id,source,external_id');
+        return { table: 'invoices', applied: 1 };
     }
     return { ignored: resourceType };
 }
@@ -707,6 +757,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     const apptParams = { updated_since: since };
     const patientParams = { updated_since: since };
     const payParams = { updated_since: since };
+    const invoiceParams = { updated_since: since };
 
     // Page-weighted progress. The 3 resources are very unequal (a practice can
     // have ~5x more appointments than patients), so weighting each phase as a
@@ -716,13 +767,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // pct = cumulative-pages-done / grand-total. The number now matches reality
     // and moves smoothly. The page-1 probe rows are re-fetched by the pull (one
     // wasted page/resource — negligible against hundreds).
-    const PHASES = ['patients', 'appointments', 'payments'];
-    const [patientPages, apptPages, payPages] = await Promise.all([
+    const PHASES = ['patients', 'appointments', 'payments', 'invoices'];
+    const [patientPages, apptPages, payPages, invoicePages] = await Promise.all([
         fetchPageCount(base, '/patients', auth, patientParams, maxPages),
         fetchPageCount(base, '/appointments', auth, apptParams, maxPages),
         fetchPageCount(base, '/payments', auth, payParams, maxPages),
+        fetchPageCount(base, '/invoices', auth, invoiceParams, maxPages),
     ]);
-    const phaseTotals = [patientPages, apptPages, payPages];
+    const phaseTotals = [patientPages, apptPages, payPages, invoicePages];
     const reporter = (idx) => (page, totalPages, count) => {
         // reportPct grows phaseTotals from the live pull so an under-counting
         // probe (no meta.total_pages -> 1, or a timed-out probe -> 0) can't
@@ -797,6 +849,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         } catch (err) {
             console.warn(`[dentally] invoice_items pull skipped: ${err?.message || err}`);
         }
+        const invoices = await pullInvoices(orgId, base, auth, invoiceParams, siteMap, contactMap, reporter(3), maxPages);
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
         // from before this column existed). Set-based; cheap; never cross-tenant.
@@ -832,7 +885,8 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             payments: pays.synced,
             treatment_plans: treatmentPlans.synced,
             invoice_items: invoiceItems.synced,
-            skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0),
+            invoices: invoices.synced,
+            skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0) + (invoices.skipped ?? 0),
             skipped_closed_appointments: appts.skippedClosed ?? 0,
             relinked_appointment_contacts: relinked,
             relinked_appointment_associates: relinkedAssociates,
@@ -909,4 +963,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow };
+export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment };

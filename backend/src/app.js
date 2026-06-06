@@ -48,6 +48,7 @@ import * as chair_utilisation_routes_1 from "./routes/chair-utilisation.routes.j
 import * as associate_routes_1 from "./routes/associate.routes.js";
 import * as treatment_routes_1 from "./routes/treatment.routes.js";
 import * as staff_routes_1 from "./routes/staff.routes.js";
+import * as debt_routes_1 from "./routes/debt.routes.js";
 import platformAdminRouter from "./routes/platform-admin.routes.js";
 import platformCoursesRouter from "./routes/platform-courses.routes.js";
 const CORS_ALLOWED = [
@@ -194,6 +195,7 @@ export function buildApp() {
     api.use('/tasks', tasks_routes_1.default);
     api.use('/comms', comms_routes_1.default);
     api.use('/payments', payments_routes_1.default);
+    api.use('/debt', debt_routes_1.default);
     api.use('/pay-runs', pay_runs_routes_1.default);
     api.use('/workflows', workflows_routes_1.default);
     api.use('/files', files_routes_1.default);

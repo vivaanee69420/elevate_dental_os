@@ -440,6 +440,30 @@ CREATE TRIGGER lab_inv_updated_at BEFORE UPDATE ON lab_invoices FOR EACH ROW EXE
 CREATE INDEX idx_lab_org ON lab_invoices(organisation_id);
 
 -- ============================================================================
+-- PATIENT INVOICES (synced from Dentally; powers Debt Recovery)
+-- ============================================================================
+CREATE TABLE invoices (
+  id                        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id           UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  practice_id               UUID NOT NULL REFERENCES practices(id) ON DELETE CASCADE,
+  contact_id                UUID REFERENCES contacts(id) ON DELETE SET NULL,
+  source                    TEXT NOT NULL DEFAULT 'dentally',
+  external_id               TEXT,
+  amount_pence              INTEGER NOT NULL DEFAULT 0,
+  amount_outstanding_pence  INTEGER NOT NULL DEFAULT 0,
+  dated_on                  DATE,
+  due_on                    DATE,
+  paid                      BOOLEAN NOT NULL DEFAULT FALSE,
+  treatment                 TEXT,
+  patient_name              TEXT,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TRIGGER invoices_updated_at BEFORE UPDATE ON invoices FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE UNIQUE INDEX uq_invoices_src_ext ON invoices(organisation_id, source, external_id);
+CREATE INDEX idx_invoices_org_practice ON invoices(organisation_id, practice_id);
+
+-- ============================================================================
 -- ASSOCIATE PAY RUNS
 -- ============================================================================
 CREATE TABLE pay_runs (
