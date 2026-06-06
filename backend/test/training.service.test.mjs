@@ -159,3 +159,24 @@ describe('download gate', () => {
     expect(result?.message ?? '').not.toMatch(/Locked/);
   });
 });
+
+describe('courseDetail materials fields', () => {
+  it('returns resource category + created_at and file created_at', async () => {
+    const ORG = 'org-1', USER = 'user-1', CID = 'course-1';
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'courses') return { data: { id: CID, status: 'published', access: 'free', title: 'C' }, error: null };
+      if (q.table === 'course_modules') return { data: [{ id: 'm1', title: 'M1', position: 0, access: 'free' }], error: null };
+      if (q.table === 'course_lessons') return { data: [{ id: 'l1', course_id: CID, module_id: 'm1', title: 'L1', position: 0, access: 'free' }], error: null };
+      if (q.table === 'lesson_files') return { data: [{ id: 'f1', lesson_id: 'l1', category: 'reading', name: 'r.pdf', file_key: 'k', file_type: 'application/pdf', size_bytes: 10, position: 0, access: 'free', created_at: '2026-04-01T00:00:00Z' }], error: null };
+      if (q.table === 'course_resources') return { data: [{ id: 'res1', name: 'Rubric.pdf', access: 'free', file_type: 'application/pdf', size_bytes: 20, file_key: 'rk', category: 'marking-rubrics', created_at: '2026-04-02T00:00:00Z' }], error: null };
+      if (q.table === 'organisations') return { data: { mentorship_active: false }, error: null };
+      if (q.table === 'course_enrolments') return { data: [], error: null };
+      if (q.table === 'lesson_progress') return { data: [], error: null };
+      return { data: null, error: null };
+    };
+    const out = await svc.courseDetail(ORG, USER, CID);
+    expect(out.resources[0].category).toBe('marking-rubrics');
+    expect(out.resources[0].created_at).toBe('2026-04-02T00:00:00Z');
+    expect(out.modules[0].lessons[0].files[0].created_at).toBe('2026-04-01T00:00:00Z');
+  });
+});
