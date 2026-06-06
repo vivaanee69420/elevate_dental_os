@@ -18,6 +18,8 @@ import { decryptSecret } from "./crypto.js";
 import * as supabase_1 from "./supabase.js";
 import * as postmark_1 from "./postmark.js";
 import * as twilio_1 from "./twilio.js";
+import * as ses_1 from "./aws-ses.js";
+import * as sns_1 from "./aws-sns.js";
 
 async function logEvent(orgId, provider, external_id, event_type, payload = {}) {
     try {
@@ -66,10 +68,16 @@ export async function sendEmail(opts) {
     if (ses) {
         return sendViaSES(orgId, ses, opts);
     }
-    // Fallback: platform Postmark.
-    const messageId = await postmark_1.sendEmail({ to, subject, body, from });
-    await logEvent(orgId, 'postmark', messageId, 'sent', { to });
-    return { external_id: messageId, provider: 'postmark' };
+    // Platform fallback: AWS SES (single platform domain). Legacy Postmark only
+    // when explicitly enabled via env.
+    if (process.env.USE_LEGACY_EMAIL === 'true') {
+        const messageId = await postmark_1.sendEmail({ to, subject, body, from });
+        await logEvent(orgId, 'postmark', messageId, 'sent', { to });
+        return { external_id: messageId, provider: 'postmark' };
+    }
+    const sesId = await ses_1.sendEmail({ to, subject, html: body, from });
+    await logEvent(orgId, 'ses', sesId, 'sent', { to });
+    return { external_id: sesId, provider: 'ses' };
 }
 
 export async function sendSMS(opts) {
@@ -79,7 +87,12 @@ export async function sendSMS(opts) {
     if (sns) {
         return sendViaSNS(orgId, sns, opts);
     }
-    const sid = await twilio_1.sendSMS({ to, body });
-    await logEvent(orgId, 'twilio', sid, 'sent', { to });
-    return { external_id: sid, provider: 'twilio' };
+    if (process.env.USE_LEGACY_SMS === 'true') {
+        const sid = await twilio_1.sendSMS({ to, body });
+        await logEvent(orgId, 'twilio', sid, 'sent', { to });
+        return { external_id: sid, provider: 'twilio' };
+    }
+    const snsId = await sns_1.sendSMS({ to, body });
+    await logEvent(orgId, 'sns_sms', snsId, 'sent', { to });
+    return { external_id: snsId, provider: 'sns_sms' };
 }
