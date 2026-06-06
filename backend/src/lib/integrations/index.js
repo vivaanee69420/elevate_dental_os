@@ -8,3 +8,4 @@ import './gohighlevel-provider.js';
 import './xero-provider.js';
 import './quickbooks-provider.js';
 import './google-ads-provider.js';
+import './meta-ads-provider.js';

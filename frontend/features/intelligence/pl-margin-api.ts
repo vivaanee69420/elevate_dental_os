@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { windowParams, type ResolvedWindow } from '@/features/_shared/scope-context';
 
 // P&L & Margin (GM Intelligence OS) — GET /api/analytics/pl-margin.
 // Scope/period-aware group P&L statement + per-entity breakdown from REAL
@@ -49,11 +50,6 @@ const EMPTY: PLMargin = {
   dentistStaffSeparable: false, perEntityAvailable: false, entityBasisMixed: false, entities: [],
 };
 
-export function fetchPLMargin(
-  scope: string,
-  period: 'month' | 'day',
-  pk: string,
-): Promise<PLMargin> {
-  const qs = `scope=${encodeURIComponent(scope)}&period=${period}&pk=${encodeURIComponent(pk)}`;
-  return api<PLMargin>(`/api/analytics/pl-margin?${qs}`).then((r) => ({ ...EMPTY, ...r }));
+export function fetchPLMargin(scope: string, win: ResolvedWindow): Promise<PLMargin> {
+  return api<PLMargin>(`/api/analytics/pl-margin?${windowParams(scope, win)}`).then((r) => ({ ...EMPTY, ...r }));
 }

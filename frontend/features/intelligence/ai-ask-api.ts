@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { type ResolvedWindow } from '@/features/_shared/scope-context';
 
 // AI Analyst (GM Intelligence OS) — POST /api/analytics/ai-ask.
 // £-ranked findings over the group's LIVE scope/period numbers (aggregated from
@@ -25,14 +26,9 @@ export interface AiAskResult {
   note?: string;
 }
 
-export function postAiAsk(
-  scope: string,
-  period: 'month' | 'day',
-  pk: string,
-  question?: string,
-): Promise<AiAskResult> {
+export function postAiAsk(scope: string, win: ResolvedWindow, question?: string): Promise<AiAskResult> {
   return api<AiAskResult>('/api/analytics/ai-ask', {
     method: 'POST',
-    body: JSON.stringify({ scope, period, pk, question: question ?? '' }),
+    body: JSON.stringify({ scope, since: win.since, until: win.until, label: win.label, question: question ?? '' }),
   });
 }

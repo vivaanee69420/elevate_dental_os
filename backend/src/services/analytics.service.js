@@ -45,7 +45,7 @@ export const analyticsService = {
     //   occupancySource: 'manual' (grid) | 'assumption'.
     // Cost-of-empty / recoverable are modelled off occupancy + chair capacity.
     // OCPSPD + profit-per-chair-hour still deferred.
-    async chairAnalytics(orgId, { scope = 'all', recoverPctPoints = 10, now = () => new Date() } = {}) {
+    async chairAnalytics(orgId, { scope = 'all', recoverPctPoints = 10, since: winSince, until: winUntil, now = () => new Date() } = {}) {
         const DEFAULT_UTIL_PCT = 80;
         const resolved = await this.resolveScope(orgId, scope);
         if (resolved.mode === 'academy' || resolved.mode === 'lab') {
@@ -56,12 +56,20 @@ export const analyticsService = {
         if (resolved.mode === 'entity')
             practices = practices.filter((p) => resolved.practiceIds.includes(p.id));
 
-        // Revenue (trailing 12mo) + the manual chair-utilisation grid. One query
-        // each, aggregated in memory (no N+1).
-        const since = new Date(now());
-        since.setUTCFullYear(since.getUTCFullYear() - 1);
+        // Revenue (window if supplied, else trailing 12mo) + the manual chair-
+        // utilisation grid (manual, never date-scoped). One query each, aggregated
+        // in memory (no N+1).
+        let sinceIso, untilIso = null;
+        if (winSince && winUntil) {
+            sinceIso = new Date(winSince).toISOString();
+            untilIso = new Date(winUntil).toISOString();
+        } else {
+            const s = new Date(now());
+            s.setUTCFullYear(s.getUTCFullYear() - 1);
+            sinceIso = s.toISOString();
+        }
         const [revRows, gridRows, config] = await Promise.all([
-            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since.toISOString()),
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceIso, untilIso),
             analytics_repository_1.analyticsRepository.chairUtilisationRows(orgId),
             this.getChairConfig(orgId),
         ]);
@@ -245,13 +253,13 @@ export const analyticsService = {
     //
     // Insights are volume-framed (top treatment, single-site concentration,
     // busiest practice, Pareto breadth) — never money.
-    async treatmentMatrix(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+    async treatmentMatrix(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
         if (resolved.mode === 'academy' || resolved.mode === 'lab') {
             return { applicable: false, scope: resolved.mode,
                 message: 'Treatment mix measures clinical appointment volume — switch scope to the group or a practice.' };
         }
-        const { since, until, label } = treatmentWindow(period, periodKey, now());
+        const { since, until, label } = resolveWindow({ since: winSince, until: winUntil, label: winLabel, period, periodKey, now: now() });
 
         let practicesAll = await analytics_repository_1.analyticsRepository.practicesFull(orgId);
         if (resolved.mode === 'entity')
@@ -289,13 +297,13 @@ export const analyticsService = {
     // This is the patient FEE (retail) — NOT the practice's cost; lab/material
     // cost is never in the Dentally feed and stays owner-entered in the workbench.
     // Same matrix shape as treatmentMatrix so the frontend can toggle Volume/£.
-    async treatmentRevenueMatrix(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+    async treatmentRevenueMatrix(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
         if (resolved.mode === 'academy' || resolved.mode === 'lab') {
             return { applicable: false, scope: resolved.mode,
                 message: 'Treatment revenue measures clinical invoiced fees — switch scope to the group or a practice.' };
         }
-        const { since, until, label } = treatmentWindow(period, periodKey, now());
+        const { since, until, label } = resolveWindow({ since: winSince, until: winUntil, label: winLabel, period, periodKey, now: now() });
 
         let practicesAll = await analytics_repository_1.analyticsRepository.practicesFull(orgId);
         if (resolved.mode === 'entity')
@@ -336,26 +344,29 @@ export const analyticsService = {
     // month's by-day breakdown and highlights the selected day, so we resolve the
     // month of periodKey and return every Mon–Sat day (Sundays only if they
     // banked cash). Applicable to any scope that takes payments (incl. academy/lab).
-    async cashByDay(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+    async cashByDay(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
-        // Month window from periodKey (day keys collapse to their month).
-        const monthKey = (periodKey || '').slice(0, 7);
-        const { since, until, label } = treatmentWindow('month', monthKey, now());
+        // Window: explicit pill window wins; else the whole month of periodKey
+        // (legacy day keys collapse to their month).
+        const { since, until, label } = (winSince && winUntil)
+            ? resolveWindow({ since: winSince, until: winUntil, label: winLabel, now: now() })
+            : treatmentWindow('month', (periodKey || '').slice(0, 7), now());
 
         const byDay = await this._receiptsByDayScoped(orgId, since, until, resolved);
         const penceByDay = new Map(byDay.map((r) => [r.day, Number(r.pence) || 0]));
 
-        // Enumerate the month's days; keep Mon–Sat always, Sun only if it banked.
-        const [y, mo] = monthKey.split('-').map(Number);
-        const lastDate = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+        // Enumerate every UTC day in [since, until); keep Mon–Sat always, Sun only
+        // if it banked. UTC days are exactly 86_400_000 ms apart (no DST drift).
         const days = [];
-        for (let d = 1; d <= lastDate; d++) {
-            const date = new Date(Date.UTC(y, mo - 1, d));
+        for (let t = Date.parse(since); t < Date.parse(until); t += 86_400_000) {
+            const date = new Date(t);
+            const mo = date.getUTCMonth();
+            const d = date.getUTCDate();
             const dow = date.getUTCDay();
-            const key = `${monthKey}-${String(d).padStart(2, '0')}`;
+            const key = `${date.getUTCFullYear()}-${String(mo + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
             const pence = penceByDay.get(key) || 0;
             if (dow === 0 && pence === 0) continue; // skip empty Sundays
-            days.push({ date: key, label: `${DOW_SHORT[dow]} ${d} ${MONTHS_SHORT[mo - 1]}`, dow, pence });
+            days.push({ date: key, label: `${DOW_SHORT[dow]} ${d} ${MONTHS_SHORT[mo]}`, dow, pence });
         }
 
         const totalPence = days.reduce((s, r) => s + r.pence, 0);
@@ -541,10 +552,16 @@ export const analyticsService = {
     // the trailing ≤12mo annual sum (basis flags which). Per-entity rows appear
     // only when monthly_financials carries practice_id; org-level-only data →
     // `perEntityAvailable:false` and a group statement alone.
-    async plMargin(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+    async plMargin(orgId, { scope = 'all', period = 'month', periodKey, since, until, label, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
-        const monthKey = (periodKey || '').slice(0, 7) ||
-            `${now().getUTCFullYear()}-${String(now().getUTCMonth() + 1).padStart(2, '0')}`;
+        // Months the window touches ('YYYY-MM'). Explicit pill window wins; else
+        // the single month of periodKey (legacy month|day path).
+        const windowMonths = (since && until)
+            ? monthsInWindow(since, until)
+            : [(periodKey || '').slice(0, 7) ||
+                `${now().getUTCFullYear()}-${String(now().getUTCMonth() + 1).padStart(2, '0')}`];
+        const monthKey = windowMonths[0];
+        const multiMonth = windowMonths.length > 1;
 
         const [entityRows, allFin] = await Promise.all([
             analytics_repository_1.analyticsRepository.allEntities(orgId),
@@ -571,13 +588,20 @@ export const analyticsService = {
             (byKey.get(key) || byKey.set(key, []).get(key)).push(r);
         }
 
-        // For a row set: pick the selected month's buckets if present (revenue>0),
-        // else the trailing ≤12mo annual sum. Returns { buckets, basis, periods }.
+        // For a row set: sum the buckets for every month the window touches that
+        // carries data (revenue>0 across the window). A single-month window keeps
+        // basis 'month'; a multi-month window sums to basis 'annual'. When the
+        // window has no actuals, fall back to the trailing ≤12mo annual sum.
         const resolveBuckets = (rows) => {
             const byPeriod = bucketsByPeriod(rows);
-            const month = byPeriod.get(monthKey);
-            if (month && (month.revenue || 0) > 0) {
-                return { buckets: month, basis: 'month', periodsCovered: 1 };
+            const hit = windowMonths.filter((mk) => byPeriod.has(mk));
+            if (hit.length > 0) {
+                const summed = {};
+                for (const mk of hit)
+                    for (const [k, v] of Object.entries(byPeriod.get(mk))) summed[k] = (summed[k] || 0) + v;
+                if ((summed.revenue || 0) > 0) {
+                    return { buckets: summed, basis: multiMonth ? 'annual' : 'month', periodsCovered: hit.length };
+                }
             }
             const periods = [...byPeriod.keys()].sort().slice(-12);
             const annual = {};
@@ -650,9 +674,9 @@ export const analyticsService = {
     // (settled revenue ÷ paid spend). Per-channel ranks on spend → leads → CPL →
     // patients → CPA. Conversions use one consistent definition across all
     // channels: a CRM lead that reached treatment_started/treatment_completed.
-    async marketingRoi(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+    async marketingRoi(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
-        const { since, until, label } = treatmentWindow(period, periodKey, now());
+        const { since, until, label } = resolveWindow({ since: winSince, until: winUntil, label: winLabel, period, periodKey, now: now() });
         const fromDate = since.slice(0, 10);
         const untilD = new Date(until); untilD.setUTCDate(untilD.getUTCDate() - 1);
         const toDate = untilD.toISOString().slice(0, 10); // inclusive last day of window
@@ -781,13 +805,13 @@ export const analyticsService = {
     // resolved associate_id (`appointmentsAvailable`); UDA-completed needs the
     // same treatment_plan feed (`nhs.completedAvailable`). Lab cost / OCPSPD per
     // clinician have no real per-clinician source and are intentionally omitted.
-    async clinicians(orgId, { scope = 'all', period = 'month', periodKey, now = () => new Date() } = {}) {
+    async clinicians(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
         if (resolved.mode === 'academy' || resolved.mode === 'lab') {
             return { applicable: false, scope: resolved.mode,
                 message: 'Clinician analytics apply to the dental practices — switch scope to the group or a practice.' };
         }
-        const { since, until, label } = treatmentWindow(period, periodKey, now());
+        const { since, until, label } = resolveWindow({ since: winSince, until: winUntil, label: winLabel, period, periodKey, now: now() });
 
         const [roster, prodMap, apptMap, nhsPractices] = await Promise.all([
             analytics_repository_1.analyticsRepository.cliniciansRoster(orgId),
@@ -869,12 +893,13 @@ export const analyticsService = {
     // ANTHROPIC_API_KEY is set, Claude writes the answer (+ may re-rank findings)
     // grounded ONLY in a compact real summary; otherwise we return the
     // deterministic findings with no Claude call (graceful, no hard dependency).
-    async aiAsk(orgId, { scope = 'all', period = 'month', periodKey, question = '', now = () => new Date() } = {}) {
+    async aiAsk(orgId, { scope = 'all', period = 'month', periodKey, since, until, label, question = '', now = () => new Date() } = {}) {
+        const win = { scope, period, periodKey, since, until, label, now };
         const [pl, mkt, clin, cash] = await Promise.all([
-            this.plMargin(orgId, { scope, period, periodKey, now }),
-            this.marketingRoi(orgId, { scope, period, periodKey, now }),
-            this.clinicians(orgId, { scope, period, periodKey, now }),
-            this.cashByDay(orgId, { scope, period, periodKey, now }),
+            this.plMargin(orgId, win),
+            this.marketingRoi(orgId, win),
+            this.clinicians(orgId, win),
+            this.cashByDay(orgId, win),
         ]);
 
         // Aggregate the real, data-derived insight cards into Insight-shaped
@@ -1655,7 +1680,7 @@ export const analyticsService = {
         // Leads are windowed only when an upper bound is set (month/day mode); in
         // the trailing-days mode they stay all-time, as before.
         const leadSinceISO = untilISO ? sinceISO : null;
-        const [practices, revRows, apptRows, leadRows, treatments, actuals, health, noShowTracked] = await Promise.all([
+        const [practices, revRows, apptRows, leadRows, treatments, actuals, health, noShowTracked, revLineRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -1664,6 +1689,7 @@ export const analyticsService = {
             this._actualsBundle(orgId),
             analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             analytics_repository_1.analyticsRepository.hasNoShowData(orgId),
+            analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, sinceISO, untilISO),
         ]);
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         const num = (v) => Number(v || 0);
@@ -1708,12 +1734,45 @@ export const analyticsService = {
         const treatmentsStarted = num(treatments.started);
         const treatmentsClosedPence = num(treatments.closed_value_pence);
 
+        // Revenue by clinical line — bucket the per-treatment invoiced fee feed
+        // (invoice_items, real Dentally data) into ~8 clinical categories. Group-
+        // wide (sums across practices); the card is "where group turnover comes
+        // from". Lines with no revenue are dropped; sorted high-to-low. Cost/
+        // profit are filled below once the P&L margin is known.
+        const lineAgg = new Map();
+        for (const r of revLineRows) {
+            const line = categoriseTreatmentLine(r.treatment_name);
+            const a = lineAgg.get(line) || { fee_pence: 0, item_count: 0 };
+            a.fee_pence += num(r.fee_pence);
+            a.item_count += num(r.item_count);
+            lineAgg.set(line, a);
+        }
+        const revenueByLine = [...lineAgg.entries()]
+            .map(([line, v]) => ({ line, fee_pence: v.fee_pence, item_count: v.item_count, cost_pence: 0, profit_pence: v.fee_pence }))
+            .filter((l) => l.fee_pence > 0)
+            .sort((a, b2) => b2.fee_pence - a.fee_pence);
+
         // Revenue target = baseline goal (owner-set). Margin REAL or 0.
         const b = health?.baseline || {};
         const revenueTargetPence = b.revenue ? b.revenue * 100 : 0;
         const marginPct = (actuals.hasAny && (actuals.annual.revenue || 0) > 0)
             ? formulas_1.calculatePL(plInputFromBuckets(actuals.annual)).marginPct
             : 0;
+
+        // Profit contribution by line. Real cost comes from the P&L feed
+        // (monthly_financials — Xero/QuickBooks, manual override); Dentally has no
+        // cost side. The feed gives org-level cost, not per-treatment, so allocate
+        // it pro-rata by each line's revenue at the group net margin — the honest
+        // split org-level costs allow (per-line cost tags would refine it later).
+        // No P&L feed (marginPct 0) => cost 0, profit == revenue (gross), exactly
+        // what the card shows until Xero/QuickBooks is connected.
+        const revenueLineCostBasis = marginPct > 0 ? 'pl_margin' : null; // null => costs not connected, profit is gross
+        if (revenueLineCostBasis) {
+            for (const l of revenueByLine) {
+                l.profit_pence = Math.round((l.fee_pence * marginPct) / 100);
+                l.cost_pence = l.fee_pence - l.profit_pence;
+            }
+        }
         return {
             period: { days, since: sinceISO, until: untilISO, label },
             group: {
@@ -1732,10 +1791,35 @@ export const analyticsService = {
                 leadToStartRate: rate(treatmentsStarted, totalLeads),
             },
             practices: practiceRows,
+            revenueByLine, // clinical lines from Dentally invoice_items
+            revenueLineCostBasis, // 'pl_margin' when costs allocated from a P&L feed; null => gross (Xero/QuickBooks not connected, cost 0)
+            revenueLineMarginPct: marginPct, // group net margin used for the per-line cost allocation (0 when no P&L feed)
             truncated: false, // exact SQL rollups — never truncated
         };
     },
 };
+
+// Bucket a raw Dentally treatment name into a clinical revenue line. Ordered:
+// implants win over crown/bridge (e.g. "Implant Crown", "Implant - Bridge"),
+// surgery wins over restorative for bone grafts/extractions. Keyword match on a
+// lowercased name; anything unmatched -> 'Other'. Pure; no DB.
+const REVENUE_LINE_RULES = [
+    ['Implants', /implant|all[\s-]?on[\s-]?\d|fixed teeth/],
+    ['Orthodontics', /invisalign|ortho|aligner|brace/],
+    ['Whitening', /whiten|bleach/],
+    ['Oral Surgery', /extraction|surgical|surgery|bone graft|grafting|sinus|wisdom|implant placement|placement of implant/],
+    ['Hygiene & Prevention', /scale|polish|hygiene|exam|x-?ray|radiograph|check[\s-]?up|fluoride|periodontal|perio /],
+    ['Restorative', /crown|bridge|filling|composite|veneer|inlay|onlay|root canal|endo|restorat|post /],
+    ['Prosthetics', /denture|prosth|chrome/],
+];
+function categoriseTreatmentLine(name) {
+    const n = String(name || '').trim().toLowerCase();
+    if (!n) return 'Other';
+    for (const [line, rx] of REVENUE_LINE_RULES) {
+        if (rx.test(n)) return line;
+    }
+    return 'Other';
+}
 
 // ----------------------------------------------------------------------------
 // Treatment Mix helpers (module-level; pure, no DB).
@@ -1940,6 +2024,36 @@ function treatmentWindow(period, periodKey, now) {
         until: until.toISOString(),
         label: `${MONTHS_LONG[mo]} ${y}`,
     };
+}
+
+// Resolve the active [since, until) window. The pill bar (Recent/This month/
+// This year/Pick month/Custom) sends an explicit ISO [since, until] + label,
+// which wins. Falls back to the legacy period/pk month|day window when absent
+// (back-compat for any caller not yet on the window params).
+function resolveWindow({ since, until, label, period, periodKey, now }) {
+    if (since && until) {
+        return {
+            since: new Date(since).toISOString(),
+            until: new Date(until).toISOString(),
+            label: label || null,
+        };
+    }
+    return treatmentWindow(period, periodKey, now);
+}
+
+// Every calendar month ('YYYY-MM', UTC) the [since, until) window touches. until
+// is exclusive. Capped at 120 months so a hostile range can't loop unbounded.
+function monthsInWindow(since, until) {
+    const s = new Date(since);
+    const e = new Date(Date.parse(until) - 1); // inclusive last instant
+    let y = s.getUTCFullYear(), m = s.getUTCMonth();
+    const ey = e.getUTCFullYear(), em = e.getUTCMonth();
+    const out = [];
+    while ((y < ey || (y === ey && m <= em)) && out.length < 120) {
+        out.push(`${y}-${String(m + 1).padStart(2, '0')}`);
+        if (++m > 11) { m = 0; y++; }
+    }
+    return out.length ? out : [`${s.getUTCFullYear()}-${String(s.getUTCMonth() + 1).padStart(2, '0')}`];
 }
 
 // Shared matrix assembler for the Treatment Mix views. Turns flat

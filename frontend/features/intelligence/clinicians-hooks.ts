@@ -9,7 +9,7 @@ export function useClinicians() {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['clinicians', scopeKey(sp)],
-    queryFn: () => fetchClinicians(sp.scope, sp.period, sp.periodKey),
+    queryFn: () => fetchClinicians(sp.scope, sp.win),
     staleTime: 60_000,
   });
 }

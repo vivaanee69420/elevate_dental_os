@@ -534,6 +534,65 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.group.leadToStartRate).toBe(40);  // 4 started / 10 leads
   });
 
+  it('revenueByLine buckets invoice-item treatments into clinical lines, summed group-wide, sorted desc', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'treatment_revenue_matrix')
+        return { data: [
+          { practice_id: 'p1', treatment_name: 'Placement Of Implant', fee_pence: 500000, item_count: 5 },
+          { practice_id: 'p2', treatment_name: 'Implant Crown', fee_pence: 100000, item_count: 2 },     // implant wins over crown
+          { practice_id: 'p1', treatment_name: 'Zirconium Crown', fee_pence: 200000, item_count: 3 },   // restorative
+          { practice_id: 'p1', treatment_name: 'Scale & Polish', fee_pence: 50000, item_count: 10 },    // hygiene
+          { practice_id: 'p1', treatment_name: 'Invisalign', fee_pence: 80000, item_count: 1 },         // ortho
+          { practice_id: 'p1', treatment_name: 'GM Smile Package', fee_pence: 0, item_count: 1 },       // zero -> dropped
+        ], error: null };
+      return { data: [], error: null };
+    };
+    const res = await svc.businessHub(ORG_A, { days: 90 });
+    const byLine = Object.fromEntries(res.revenueByLine.map((l) => [l.line, l]));
+    expect(byLine.Implants.fee_pence).toBe(600000);   // 500k + 100k (Implant Crown bucketed as implant)
+    expect(byLine.Implants.item_count).toBe(7);
+    expect(byLine.Restorative.fee_pence).toBe(200000);
+    expect(byLine['Hygiene & Prevention'].fee_pence).toBe(50000);
+    expect(byLine.Orthodontics.fee_pence).toBe(80000);
+    expect(res.revenueByLine[0].line).toBe('Implants'); // sorted highest first
+    expect(res.revenueByLine.find((l) => l.fee_pence === 0)).toBeUndefined(); // zero lines dropped
+    // cost/profit: Xero not connected -> cost 0, profit == revenue
+    expect(byLine.Implants.cost_pence).toBe(0);
+    expect(byLine.Implants.profit_pence).toBe(600000);
+    expect(res.revenueLineCostBasis).toBeNull();   // no P&L feed -> gross
+    expect(res.revenueLineMarginPct).toBe(0);
+  });
+
+  it('allocates per-line cost at the group P&L margin when monthly_financials (Xero) exists', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : q.table === 'monthly_financials' ? { data: [
+          { period: '2026-01', dental_bucket: 'revenue', amount_pence: 10_000_000, source: 'xero' },
+          { period: '2026-01', dental_bucket: 'staff', amount_pence: 3_000_000, source: 'xero' },
+        ], error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'treatment_revenue_matrix')
+        return { data: [
+          { practice_id: 'p1', treatment_name: 'Placement Of Implant', fee_pence: 1_000_000, item_count: 5 },
+          { practice_id: 'p1', treatment_name: 'Scale & Polish', fee_pence: 200_000, item_count: 10 },
+        ], error: null };
+      return { data: [], error: null };
+    };
+    const res = await svc.businessHub(ORG_A, { days: 90 });
+    expect(res.group.marginPct).toBe(70);          // 10M rev / 3M staff -> 70% net
+    expect(res.revenueLineCostBasis).toBe('pl_margin');
+    expect(res.revenueLineMarginPct).toBe(70);
+    const impl = res.revenueByLine.find((l) => l.line === 'Implants');
+    expect(impl.profit_pence).toBe(700_000);       // 1,000,000 * 70%
+    expect(impl.cost_pence).toBe(300_000);          // revenue - profit
+  });
+
   it('org-scoped: table queries + every rollup RPC pin the org', async () => {
     const tables = [];
     supaRec.resultProvider = (q) => {

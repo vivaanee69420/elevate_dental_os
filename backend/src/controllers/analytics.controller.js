@@ -51,7 +51,7 @@ export const analyticsController = {
     async plMargin(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.plMargin(req.user.organisation_id, {
-            scope: q.scope, period: q.period, periodKey: q.pk,
+            scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
     async valuation(req, res) {
@@ -73,14 +73,14 @@ export const analyticsController = {
     async chair(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         const recoverPctPoints = Math.max(0, Math.min(40, Number(req.query.recover) || 10));
-        res.json(await analytics_service_1.analyticsService.chairAnalytics(req.user.organisation_id, { scope: q.scope, recoverPctPoints }));
+        res.json(await analytics_service_1.analyticsService.chairAnalytics(req.user.organisation_id, { scope: q.scope, recoverPctPoints, since: q.since, until: q.until }));
     },
     // Treatment Mix heat matrix (GM Intelligence OS) — scope/period-driven
     // appointment volume by type x practice. Volume only (no price; data wall).
     async treatmentMatrix(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.treatmentMatrix(req.user.organisation_id, {
-            scope: q.scope, period: q.period, periodKey: q.pk,
+            scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
     // Treatment REVENUE heat matrix — real invoiced fee by treatment name x
@@ -89,7 +89,7 @@ export const analyticsController = {
     async treatmentRevenue(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.treatmentRevenueMatrix(req.user.organisation_id, {
-            scope: q.scope, period: q.period, periodKey: q.pk,
+            scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
     // AI Analyst (GM Intelligence OS) — £-ranked findings over live scope/period
@@ -97,7 +97,7 @@ export const analyticsController = {
     async aiAsk(req, res) {
         const b = analytics_model_1.aiAskSchema.parse(req.body);
         res.json(await analytics_service_1.analyticsService.aiAsk(req.user.organisation_id, {
-            scope: b.scope, period: b.period, periodKey: b.pk, question: b.question,
+            scope: b.scope, period: b.period, periodKey: b.pk, since: b.since, until: b.until, label: b.label, question: b.question,
         }));
     },
     // Clinicians (GM Intelligence OS) — per-clinician production, pay splits and
@@ -105,7 +105,7 @@ export const analyticsController = {
     async clinicians(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.clinicians(req.user.organisation_id, {
-            scope: q.scope, period: q.period, periodKey: q.pk,
+            scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
     // Marketing & ROI (GM Intelligence OS) — per-channel acquisition economics
@@ -113,7 +113,7 @@ export const analyticsController = {
     async marketingRoi(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.marketingRoi(req.user.organisation_id, {
-            scope: q.scope, period: q.period, periodKey: q.pk,
+            scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
     // Day — Cash Collected (GM Intelligence OS). Real settled receipts banked by
@@ -121,7 +121,7 @@ export const analyticsController = {
     async cashByDay(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.cashByDay(req.user.organisation_id, {
-            scope: q.scope, period: q.period, periodKey: q.pk,
+            scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
     // Real case-fee benchmarks (from Dentally invoice_items) to seed the

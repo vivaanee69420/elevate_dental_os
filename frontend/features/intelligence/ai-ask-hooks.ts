@@ -9,7 +9,7 @@ export function useAiFindings() {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['ai-findings', scopeKey(sp)],
-    queryFn: () => postAiAsk(sp.scope, sp.period, sp.periodKey),
+    queryFn: () => postAiAsk(sp.scope, sp.win),
     staleTime: 60_000,
   });
 }
@@ -18,6 +18,6 @@ export function useAiFindings() {
 export function useAiAsk() {
   const sp = useScopePeriod();
   return useMutation({
-    mutationFn: (question: string) => postAiAsk(sp.scope, sp.period, sp.periodKey, question),
+    mutationFn: (question: string) => postAiAsk(sp.scope, sp.win, question),
   });
 }

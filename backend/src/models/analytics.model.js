@@ -16,6 +16,10 @@ const dateStr = zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional();
 // 'YYYY-MM-DD'. Validating here stops a tampered scope reaching the repo.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SCOPE_LITERALS = ['all', 'practices', 'academy', 'lab'];
+// Explicit [since, until] window from the pill bar (Recent/This month/This year/
+// Pick month/Custom resolve to an ISO range client-side). When both present they
+// override period/pk. Permissive: any Date.parse-able ISO string.
+const isoDateTime = zod_1.z.string().trim().refine((s) => !Number.isNaN(Date.parse(s)), { message: 'invalid ISO date' }).optional();
 export const scopeQuerySchema = zod_1.z.object({
     scope: zod_1.z.string().trim().default('all').refine(
         (s) => SCOPE_LITERALS.includes(s) || UUID_RE.test(s),
@@ -23,6 +27,9 @@ export const scopeQuerySchema = zod_1.z.object({
     ),
     period: zod_1.z.enum(['month', 'day']).default('month'),
     pk: zod_1.z.string().trim().regex(/^\d{4}-\d{2}(-\d{2})?$/).optional(),
+    since: isoDateTime,
+    until: isoDateTime,
+    label: zod_1.z.string().trim().max(60).optional(),
 });
 
 // AI Analyst Ask (POST body). Same scope/period selector + a bounded free-text
@@ -34,6 +41,9 @@ export const aiAskSchema = zod_1.z.object({
     ),
     period: zod_1.z.enum(['month', 'day']).default('month'),
     pk: zod_1.z.string().trim().regex(/^\d{4}-\d{2}(-\d{2})?$/).optional(),
+    since: isoDateTime,
+    until: isoDateTime,
+    label: zod_1.z.string().trim().max(60).optional(),
     question: zod_1.z.string().trim().max(500).optional(),
 });
 

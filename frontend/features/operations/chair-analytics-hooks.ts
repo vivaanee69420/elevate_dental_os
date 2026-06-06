@@ -10,6 +10,6 @@ export function useChairAnalytics(recover: number) {
   const sp = useScopePeriod();
   return useQuery({
     queryKey: ['chair-analytics', scopeKey(sp), recover],
-    queryFn: () => fetchChairAnalytics(sp.scope, recover),
+    queryFn: () => fetchChairAnalytics(sp.scope, recover, sp.win),
   });
 }

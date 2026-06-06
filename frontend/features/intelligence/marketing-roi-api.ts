@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { windowParams, type ResolvedWindow } from '@/features/_shared/scope-context';
 
 // Marketing & ROI (GM Intelligence OS) — GET /api/analytics/marketing-roi.
 // Per-channel acquisition economics from REAL ad_metrics (spend) + CRM leads
@@ -77,11 +78,6 @@ const EMPTY: MarketingRoi = {
   byPractice: [], insights: [],
 };
 
-export function fetchMarketingRoi(
-  scope: string,
-  period: 'month' | 'day',
-  pk: string,
-): Promise<MarketingRoi> {
-  const qs = `scope=${encodeURIComponent(scope)}&period=${period}&pk=${encodeURIComponent(pk)}`;
-  return api<MarketingRoi>(`/api/analytics/marketing-roi?${qs}`).then((r) => ({ ...EMPTY, ...r }));
+export function fetchMarketingRoi(scope: string, win: ResolvedWindow): Promise<MarketingRoi> {
+  return api<MarketingRoi>(`/api/analytics/marketing-roi?${windowParams(scope, win)}`).then((r) => ({ ...EMPTY, ...r }));
 }

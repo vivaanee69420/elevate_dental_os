@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { windowParams, type ResolvedWindow } from '@/features/_shared/scope-context';
 
 // Clinicians (GM Intelligence OS) — GET /api/analytics/clinicians.
 // Per-clinician production, pay splits and NHS/UDA from REAL data: associate
@@ -63,13 +64,8 @@ const EMPTY: Omit<Clinicians, 'applicable' | 'scope'> = {
   nhs: { available: false, completedAvailable: false, practices: [] }, insights: [],
 };
 
-export function fetchClinicians(
-  scope: string,
-  period: 'month' | 'day',
-  pk: string,
-): Promise<Clinicians> {
-  const qs = `scope=${encodeURIComponent(scope)}&period=${period}&pk=${encodeURIComponent(pk)}`;
-  return api<Clinicians>(`/api/analytics/clinicians?${qs}`).then((r) => ({
+export function fetchClinicians(scope: string, win: ResolvedWindow): Promise<Clinicians> {
+  return api<Clinicians>(`/api/analytics/clinicians?${windowParams(scope, win)}`).then((r) => ({
     ...EMPTY, ...r, applicable: r.applicable !== false,
   }));
 }

@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { windowParams, type ResolvedWindow } from '@/features/_shared/scope-context';
 
 // Chair Efficiency (Intelligence OS) — GET /api/analytics/chair. All money is
 // integer pence; hours are annual. OCPSPD + profit-per-chair-hour are deferred
@@ -49,6 +50,6 @@ export interface ChairAnalytics {
   note?: string;
 }
 
-export function fetchChairAnalytics(scope: string, recover: number): Promise<ChairAnalytics> {
-  return api<ChairAnalytics>(`/api/analytics/chair?scope=${encodeURIComponent(scope)}&recover=${recover}`);
+export function fetchChairAnalytics(scope: string, recover: number, win: ResolvedWindow): Promise<ChairAnalytics> {
+  return api<ChairAnalytics>(`/api/analytics/chair?${windowParams(scope, win)}&recover=${recover}`);
 }
