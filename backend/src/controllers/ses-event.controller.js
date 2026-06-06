@@ -25,6 +25,14 @@ export const sesEventController = {
         } catch {
             return res.status(400).json({ error: 'bad json' });
         }
+        // Topic allowlist: a valid SNS signature only proves the message came
+        // from SOME AWS SNS topic. Without this, anyone with an AWS account could
+        // post validly-signed bounce/complaint events to suppress arbitrary
+        // addresses (denial-of-email). Require it to be OUR topic in production.
+        if (process.env.SNS_TOPIC_ARN && msg.TopicArn !== process.env.SNS_TOPIC_ARN) {
+            return res.status(403).json({ error: 'unexpected topic' });
+        }
+
         const valid = await verifySnsSignature(msg);
         if (!valid) return res.status(403).json({ error: 'bad signature' });
 
@@ -35,7 +43,12 @@ export const sesEventController = {
 
         if (msg.Type === 'Notification') {
             let event;
-            try { event = JSON.parse(msg.Message); } catch { event = {}; }
+            try {
+                event = JSON.parse(msg.Message);
+            } catch {
+                console.warn('[ses-event] unparseable Message', msg.MessageId);
+                return res.status(400).json({ error: 'bad message' });
+            }
             const now = new Date().toISOString();
             const type = event.eventType || event.notificationType; // SES uses both shapes
             if (type === 'Bounce' && event.bounce?.bounceType === 'Permanent') {

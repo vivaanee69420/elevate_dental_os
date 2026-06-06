@@ -26,13 +26,25 @@ const SIGN_FIELDS = {
     UnsubscribeConfirmation: ['Message', 'MessageId', 'SubscribeURL', 'Timestamp', 'Token', 'TopicArn', 'Type'],
 };
 
-function fetchText(url) {
+// Only AWS SNS hosts may serve signing certs or receive a SubscribeURL GET.
+// Guards against SSRF: a validly-signed message (from an attacker's own SNS
+// topic) could otherwise point SigningCertURL/SubscribeURL at an internal host.
+const SNS_HOST_RE = /^sns\.[a-z0-9-]+\.amazonaws\.com$/;
+
+export function isSnsHost(url) {
+    try { return SNS_HOST_RE.test(new URL(url).host); } catch { return false; }
+}
+
+function fetchText(url, timeoutMs = 5000) {
     return new Promise((resolve, reject) => {
-        https_1.default.get(url, (res) => {
+        const req = https_1.default.get(url, (res) => {
             let data = '';
             res.on('data', (c) => (data += c));
             res.on('end', () => resolve(data));
-        }).on('error', reject);
+        });
+        req.on('error', reject);
+        // No timeout => a stalled host pins a worker slot (DoS). Bound it.
+        req.setTimeout(timeoutMs, () => req.destroy(new Error('sns fetch timeout')));
     });
 }
 
@@ -40,12 +52,16 @@ function fetchText(url) {
 export async function verifySnsSignature(msg) {
     const certUrl = msg.SigningCertURL || msg.SigningCertUrl;
     if (!certUrl) return false;
-    let host;
-    try { host = new URL(certUrl).host; } catch { return false; }
-    // Allowlist AWS SNS cert hosts only.
-    if (!/^sns\.[a-z0-9-]+\.amazonaws\.com$/.test(host)) return false;
+    // Allowlist AWS SNS cert hosts only (blocks lookalike/internal cert hosts).
+    if (!isSnsHost(certUrl)) return false;
     const fields = SIGN_FIELDS[msg.Type];
     if (!fields) return false;
+    // Every signed field that is REQUIRED for this Type must be present. Subject
+    // is the only optional field (absent on messages with no subject); a missing
+    // required field means a tampered/truncated payload — reject.
+    for (const f of fields) {
+        if (msg[f] === undefined && f !== 'Subject') return false;
+    }
     const canonical = fields
         .filter((f) => msg[f] !== undefined)
         .map((f) => `${f}\n${msg[f]}\n`)
@@ -64,5 +80,9 @@ export async function verifySnsSignature(msg) {
 }
 
 export async function confirmSubscription(subscribeUrl) {
+    // SubscribeURL is signed by AWS, but a message from an attacker's own SNS
+    // topic carries a valid signature — so re-check the host to block SSRF to
+    // internal addresses (e.g. metadata endpoints, adjacent services).
+    if (!isSnsHost(subscribeUrl)) throw new Error('refusing non-SNS SubscribeURL');
     await fetchText(subscribeUrl);
 }
