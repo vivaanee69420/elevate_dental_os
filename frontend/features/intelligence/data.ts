@@ -98,19 +98,6 @@ export const SCENARIOS: Scenario[] = [
   },
 ];
 
-/** A single outstanding debtor row shown on the Debt Recovery screen. */
-export interface Debtor {
-  name: string;
-  practice: string;
-  tx: string;
-  amount: number;
-  age: number;
-}
-
-// Empty until a real A/R feed is wired — no synthesised debtor rows.
-// The Debt Recovery screen shows £0 outstanding rather than dummy balances.
-export const DEBTORS: Debtor[] = [];
-
 /** A configurable alert-threshold definition shown on the Alerts screen. */
 export interface AlertThreshold {
   id: string;
