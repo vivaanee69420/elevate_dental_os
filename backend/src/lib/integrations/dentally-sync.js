@@ -35,8 +35,8 @@ const REQUEST_TIMEOUT_MS = 30000; // abort a hung Dentally request, never hang f
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
 const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls all history
 const BACKFILL_SINCE = '2005-01-01T00:00:00.000Z'; // far-back updated_since so a full pull sees all records (API requires the param)
-const RECENT_MONTHS = 24;        // on-connect bootstrap window: last 24 months (dashboards are TTM; the cron + full-history button deepen the rest)
-const BOOTSTRAP_MAX_PAGES = 900; // ~90k rows/resource cap for the on-connect pull — headroom for a busy multi-site group's full 2-year appointment history (~80k) so the pull reaches recent + upcoming, not just old history
+const RECENT_MONTHS = 12;        // on-connect bootstrap window: last 12 months — a fast connect that lands a full year (dashboards are TTM); the nightly cron deepens the rest of history overnight (see syncAllOrgs one-time backfill)
+const BOOTSTRAP_MAX_PAGES = 900; // ~90k rows/resource cap for the on-connect pull — headroom for a busy multi-site group's full 1-year history so the pull reaches recent + upcoming, not just the oldest rows
 // On the FIRST pull we only want live work — upcoming, not-yet-closed
 // appointments — so onboarding is fast and the Operations view is immediately
 // useful. These states are "closed" and dropped from the open pull; the
@@ -646,25 +646,6 @@ async function pullTreatmentPlans(orgId, base, auth, params, associateMap, conta
     return { synced };
 }
 
-// Build { dentally invoice id -> { practice_id, contact_id, dated_on, paid } }
-// for the window. Invoice items carry only invoice_id; the invoice carries the
-// site/patient/date, so we pull invoices first to resolve each item's practice
-// + period. Invoices themselves are not persisted (only this transient map).
-async function buildInvoiceMap(orgId, base, auth, params, siteMap, contactMap, maxPages) {
-    const remote = await fetchAllPages(base, '/invoices', auth, params, null, maxPages);
-    const map = new Map();
-    for (const inv of remote) {
-        if (!inv || inv.id == null) continue;
-        map.set(String(inv.id), {
-            practice_id: siteMap.get(String(inv.site_id)) ?? null,
-            contact_id: contactMap.get(String(inv.patient_id)) ?? null,
-            dated_on: inv.dated_on ?? null,
-            paid: inv.paid === true,
-        });
-    }
-    return map;
-}
-
 async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitionerMap, onPage, maxPages) {
     const remote = await fetchAllPages(base, '/invoice_items', auth, params, onPage, maxPages);
     const rows = remote
@@ -677,14 +658,26 @@ async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitio
 async function pullInvoices(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
     const remote = await fetchAllPages(base, '/invoices', auth, params, onPage, maxPages);
     const rows = [];
+    // Build the transient invoice map in the same pass — invoice_items carry only
+    // invoice_id, so they resolve practice/contact/date through this map. Saves a
+    // second full /invoices pull (the old buildInvoiceMap path).
+    const invoiceMap = new Map();
     let skipped = 0;
     for (const inv of remote) {
+        if (inv && inv.id != null) {
+            invoiceMap.set(String(inv.id), {
+                practice_id: siteMap.get(String(inv.site_id)) ?? null,
+                contact_id: contactMap.get(String(inv.patient_id)) ?? null,
+                dated_on: inv.dated_on ?? null,
+                paid: inv.paid === true,
+            });
+        }
         const row = invoiceRow(orgId, inv, siteMap, contactMap);
         if (!row) { skipped++; continue; } // invoices.practice_id is NOT NULL
         rows.push(row);
     }
     const synced = await upsertChunked('invoices', rows, 'organisation_id,source,external_id');
-    return { synced, skipped };
+    return { synced, skipped, invoiceMap };
 }
 
 // ---- webhook apply (real-time, single record) -------------------------------
@@ -734,11 +727,11 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // Window selection — ONE window, shared by patients / appointments /
     // payments (all filtered by `updated_since`):
     //  - full   : all history (BACKFILL_SINCE) with a lifted page cap.
-    //  - recent : the on-connect bootstrap — last RECENT_MONTHS (2 years). A
-    //             fresh org lands a complete, bounded 2-year dataset including
+    //  - recent : the on-connect bootstrap — last RECENT_MONTHS (1 year). A
+    //             fresh org lands a complete, bounded 1-year dataset including
     //             COMPLETED appointments, so Associates / Treatment Mix / Pay
-    //             have the historical rows they need (not just the upcoming
-    //             diary).
+    //             have recent historical rows immediately. The deeper history is
+    //             pulled overnight by the nightly cron's one-time full backfill.
     //  - else   : incremental cursor — changed-since last successful sync
     //             (default 30d on first run).
     const since = full
@@ -767,14 +760,21 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // pct = cumulative-pages-done / grand-total. The number now matches reality
     // and moves smoothly. The page-1 probe rows are re-fetched by the pull (one
     // wasted page/resource — negligible against hundreds).
-    const PHASES = ['patients', 'appointments', 'payments', 'invoices'];
-    const [patientPages, apptPages, payPages, invoicePages] = await Promise.all([
+    // Weighted progress phases, in execution order. Every heavy pull is weighted
+    // so the bar reflects ALL fetching — previously treatment_plans + invoice_items
+    // (the largest pulls on a full backfill) ran silent between payments and
+    // invoices, freezing the bar mid-sync; and the bar hit the 99 ceiling after
+    // invoices while invoice_items + the relink RPCs still ran with no feedback.
+    const PHASES = ['patients', 'appointments', 'payments', 'treatment_plans', 'invoices', 'invoice_items'];
+    const [patientPages, apptPages, payPages, planPages, invoicePages, itemPages] = await Promise.all([
         fetchPageCount(base, '/patients', auth, patientParams, maxPages),
         fetchPageCount(base, '/appointments', auth, apptParams, maxPages),
         fetchPageCount(base, '/payments', auth, payParams, maxPages),
+        fetchPageCount(base, '/treatment_plans', auth, { updated_since: since }, maxPages),
         fetchPageCount(base, '/invoices', auth, invoiceParams, maxPages),
+        fetchPageCount(base, '/invoice_items', auth, { updated_since: since }, maxPages),
     ]);
-    const phaseTotals = [patientPages, apptPages, payPages, invoicePages];
+    const phaseTotals = [patientPages, apptPages, payPages, planPages, invoicePages, itemPages];
     const reporter = (idx) => (page, totalPages, count) => {
         // reportPct grows phaseTotals from the live pull so an under-counting
         // probe (no meta.total_pages -> 1, or a timed-out probe -> 0) can't
@@ -789,18 +789,25 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // appointment pull can resolve associate_id. Use the same updated_since
         // window as patients (BACKFILL_SINCE on full/bootstrap so all staff are
         // captured; incremental cursor for routine syncs).
+        // Practitioners + staff are small (whole-practice team), so they aren't
+        // weighted, but we emit a phase label + live count so the overlay shows
+        // "Practitioners · N pulled" instead of dead air at pct 0 before patients.
+        onProgress({ phase: 'practitioners', pct: 0, count: 0 });
         let practitioners = { synced: 0 };
         try {
             practitioners = await pullPractitioners(orgId, base, auth, patientParams, siteMap, maxPages);
+            onProgress({ phase: 'practitioners', pct: 0, count: practitioners.synced });
         } catch (err) {
             console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
         }
         const practitionerMap = await loadPractitionerMap(orgId);
-        // Team roster from /users (cheap, no progress phase). Non-fatal: a
-        // failure here must not abort the whole sync. Populates the Staff screen.
+        // Team roster from /users (cheap). Non-fatal: a failure here must not
+        // abort the whole sync. Populates the Staff screen.
+        onProgress({ phase: 'staff', pct: 0, count: 0 });
         let staff = { synced: 0 };
         try {
             staff = await pullUsers(orgId, base, auth, {}, siteMap, maxPages);
+            onProgress({ phase: 'staff', pct: 0, count: staff.synced });
         } catch (err) {
             console.warn(`[dentally] users pull skipped: ${err?.message || err}`);
         }
@@ -831,25 +838,32 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         const pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
         // Treatment plans = production per practitioner (for the Associate Pay
         // Run). Same window as payments; reuse the practitioner + contact maps to
-        // resolve associate_id / contact_id. No separate progress phase (like
-        // practitioners); never fail the whole sync if this resource errors.
+        // resolve associate_id / contact_id. Weighted phase 3; never fail the
+        // whole sync if this resource errors.
         let treatmentPlans = { synced: 0 };
         try {
-            treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_since: since }, practitionerMap, contactMap, null, maxPages);
+            treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_since: since }, practitionerMap, contactMap, reporter(3), maxPages);
         } catch (err) {
             console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
         }
+        // Invoices (phase 4) are pulled once and persisted; the same fetch builds
+        // the transient invoice map (practice/contact/date per invoice id) that
+        // invoice_items needs to resolve each fee line — no second /invoices pull.
+        const invoices = await pullInvoices(orgId, base, auth, invoiceParams, siteMap, contactMap, reporter(4), maxPages);
         // Invoice items = the real per-treatment fee feed (treatment name +
-        // price). Pull invoices first to resolve each item's practice + date,
-        // then the items. Same never-fail-the-whole-sync pattern as plans.
+        // price), resolved against the invoice map. Weighted phase 5; same
+        // never-fail-the-whole-sync pattern as plans.
         let invoiceItems = { synced: 0 };
         try {
-            const invoiceMap = await buildInvoiceMap(orgId, base, auth, { updated_since: since }, siteMap, contactMap, maxPages);
-            invoiceItems = await pullInvoiceItems(orgId, base, auth, { updated_since: since }, invoiceMap, practitionerMap, null, maxPages);
+            invoiceItems = await pullInvoiceItems(orgId, base, auth, { updated_since: since }, invoices.invoiceMap ?? new Map(), practitionerMap, reporter(5), maxPages);
         } catch (err) {
             console.warn(`[dentally] invoice_items pull skipped: ${err?.message || err}`);
         }
-        const invoices = await pullInvoices(orgId, base, auth, invoiceParams, siteMap, contactMap, reporter(3), maxPages);
+        // All pulls done; the relink RPCs below are set-based SQL that can take a
+        // while on a large org (hundreds of thousands of appointments). Emit an
+        // explicit "linking" phase at the 99 ceiling so the bar shows real work
+        // instead of looking frozen at 99% while these run.
+        onProgress({ phase: 'linking', pct: 99, count: 0 });
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
         // from before this column existed). Set-based; cheap; never cross-tenant.
@@ -952,8 +966,16 @@ export async function syncAllOrgs() {
     const results = [];
     for (const row of rows ?? []) {
         try {
-            const r = await syncOneOrg(row.organisation_id, row);
-            results.push({ orgId: row.organisation_id, ...r });
+            // The on-connect pull is deliberately a fast 1-year window. The FIRST
+            // nightly run after connect deepens it to full history (BACKFILL_SINCE)
+            // — the "rest done overnight" — then flips a one-time flag so every
+            // subsequent run rides the cheap incremental changed-since cursor.
+            const needsBackfill = !row.config?.history_backfilled;
+            const r = await syncOneOrg(row.organisation_id, row, () => {}, { full: needsBackfill });
+            if (needsBackfill && !r.error) {
+                await integrationRepository.mergeConfig(row.organisation_id, 'dentally', { history_backfilled: true });
+            }
+            results.push({ orgId: row.organisation_id, backfill: needsBackfill, ...r });
         } catch (err) {
             // Per-org isolation: one org's failure never blocks the others.
             results.push({ orgId: row.organisation_id, error: err.message });

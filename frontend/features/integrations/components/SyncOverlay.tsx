@@ -15,9 +15,15 @@ import { useSyncProgress } from '../hooks';
 
 const PHASE_LABEL: Record<string, string> = {
   starting: 'Starting…',
+  practitioners: 'Practitioners',
+  staff: 'Staff',
   patients: 'Patients',
   appointments: 'Appointments',
   payments: 'Payments',
+  treatment_plans: 'Treatment plans',
+  invoices: 'Invoices',
+  invoice_items: 'Invoice items',
+  linking: 'Linking records',
   contacts: 'Contacts',
   opportunities: 'Opportunities',
   conversations: 'Conversations',
