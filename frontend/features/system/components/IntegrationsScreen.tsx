@@ -7,7 +7,7 @@
 //   Broker : POST /api/integrations/connect → { requiresKeyPaste } → modal
 //            → POST /api/integrations/:provider/callback { apiKey }
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Chip } from '@/components/ui';
 import {
   useIntegrations,
@@ -28,6 +28,22 @@ import DentallyPracticeMapping from '@/features/integrations/components/Dentally
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
 import SyncOverlay from '@/features/integrations/components/SyncOverlay';
+
+// Map an OAuth callback error code to a human title + message. Known codes get
+// specific guidance; anything else falls back to the raw message.
+function explainOauthError(code: string, provider: string): { title: string; message: string } {
+  const name = provider || 'the provider';
+  if (code === 'NO_AD_ACCOUNT') {
+    return {
+      title: 'No Google Ads account on that email',
+      message:
+        'You signed in with a Google account that has no Google Ads account. ' +
+        'Disconnect and reconnect, choosing the Google email that has access to ' +
+        'your Google Ads account. If you do not have one yet, create it at ads.google.com.',
+    };
+  }
+  return { title: `Could not connect ${name}`, message: code };
+}
 
 function statusOf(provider: string, rows: IntegrationRow[]): IntegrationRow['status'] | null {
   return rows.find((r) => r.provider === provider)?.status ?? null;
@@ -64,6 +80,29 @@ export default function IntegrationsScreen() {
   } | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [locInput, setLocInput] = useState('');
+  const [notice, setNotice] = useState<{
+    kind: 'error' | 'success';
+    title: string;
+    message: string;
+  } | null>(null);
+
+  // OAuth providers redirect back to /integrations with ?connected=<provider> on
+  // success or ?error=<code>&provider=<provider> on failure. Surface that as a
+  // dialog, then strip the params so a refresh doesn't re-trigger it.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    const err = params.get('error');
+    const provider = params.get('provider') ?? connected ?? '';
+    if (connected) {
+      setNotice({ kind: 'success', title: 'Connected', message: `${connected} is now connected.` });
+    } else if (err) {
+      setNotice({ kind: 'error', ...explainOauthError(err, provider) });
+    }
+    if (connected || err) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
 
   const integrations = data?.integrations ?? [];
   const providers = data?.available ?? [];
@@ -213,6 +252,44 @@ export default function IntegrationsScreen() {
         </div>
       ))}
 
+      {notice && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          }}
+          onClick={() => setNotice(null)}
+        >
+          <div
+            className="card-padded"
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'white', maxWidth: 460, width: '90%' }}
+          >
+            <h3
+              style={{
+                fontSize: 16, fontWeight: 700, marginBottom: 8,
+                color: notice.kind === 'error' ? 'var(--danger, #b91c1c)' : 'var(--ink, #111)',
+              }}
+            >
+              {notice.title}
+            </h3>
+            <p className="text-ink-muted" style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 16 }}>
+              {notice.message}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setNotice(null)}
+                style={{
+                  padding: '8px 14px', background: 'var(--brand)', color: 'white',
+                  border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {brokerModal && (
         <div
           style={{

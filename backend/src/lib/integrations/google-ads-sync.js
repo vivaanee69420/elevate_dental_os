@@ -59,7 +59,8 @@ function apiBase() {
     return process.env.GOOGLE_ADS_API_BASE || 'https://googleads.googleapis.com';
 }
 function apiVersion() {
-    return process.env.GOOGLE_ADS_API_VERSION || 'v17';
+    // Must track a currently-supported Google Ads API version (see provider).
+    return process.env.GOOGLE_ADS_API_VERSION || 'v20';
 }
 
 // Ensure a fresh access token (refresh when within 60s of expiry / expired).

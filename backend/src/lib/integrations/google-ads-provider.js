@@ -30,7 +30,9 @@ function apiBase() {
     return process.env.GOOGLE_ADS_API_BASE || 'https://googleads.googleapis.com';
 }
 function apiVersion() {
-    return process.env.GOOGLE_ADS_API_VERSION || 'v17';
+    // Google sunsets Ads API versions ~yearly; a sunset version 404s every call.
+    // Keep this on a currently-supported version (override via env when bumping).
+    return process.env.GOOGLE_ADS_API_VERSION || 'v20';
 }
 function backendUrl() {
     return process.env.BACKEND_PUBLIC_URL || 'http://localhost:8080';
@@ -128,14 +130,23 @@ export const GoogleAdsProvider = {
             await integrationsRepository.markFailed(orgId, 'google_ads', 'no refresh_token (re-consent with offline access)');
             throw new Error('Google did not return a refresh token. Disconnect and reconnect to grant offline access.');
         }
-        // Discover the accounts this login can address; store for the sync.
+        // Discover the accounts this login can reach. Two distinct failures, both
+        // surfaced (never swallowed — a swallowed error here once hid a sunset API
+        // version for an entire debug session):
+        //   - throw  => API/permission problem (bad dev token, sunset version).
+        //   - []      => the Google account that consented has NO Google Ads
+        //               account. The owner picked the wrong email. Signal it with
+        //               the NO_AD_ACCOUNT code so the UI can show a clear dialog.
         let customerIds = [];
         try {
             customerIds = await listAccessibleCustomers(body.access_token);
         } catch (err) {
-            // Non-fatal: token is valid; the owner may need a dev token / MCC.
-            // Persist anyway so the row is active; sync surfaces the real error.
-            console.error('[google_ads] listAccessibleCustomers failed:', err.message);
+            await integrationsRepository.markFailed(orgId, 'google_ads', `account_lookup_failed: ${err.message}`);
+            throw new Error(`Could not list Google Ads accounts: ${err.message}`);
+        }
+        if (customerIds.length === 0) {
+            await integrationsRepository.markFailed(orgId, 'google_ads', 'NO_AD_ACCOUNT');
+            throw new Error('NO_AD_ACCOUNT');
         }
         await persistTokenResponse(orgId, body, { customer_ids: customerIds });
         return { ok: true, customerIds };
