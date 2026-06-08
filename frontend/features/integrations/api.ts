@@ -179,3 +179,26 @@ export function setStageMappings(provider: string, mappings: Record<string, stri
     { method: 'POST', body: JSON.stringify({ mappings }) },
   );
 }
+
+// --- Ad account selection (Google Ads / Meta Ads) ---------------------------
+// Each provider discovers every reachable ad account; the owner picks which are
+// included in the marketing views. Selection is org-isolated; default = all.
+export interface AdAccount {
+  provider: string;
+  customer_id: string;
+  name: string | null;
+  currency: string | null;
+  status: string | null;
+  is_selected: boolean;
+}
+
+export function listAdAccounts(provider: string) {
+  return api<AdAccount[]>(`/api/integrations/${provider}/ad-accounts`);
+}
+
+export function setAdAccountSelection(provider: string, selectedIds: string[]) {
+  return api<{ ok: boolean; accounts: AdAccount[] }>(
+    `/api/integrations/${provider}/ad-accounts/selection`,
+    { method: 'POST', body: JSON.stringify({ selected_ids: selectedIds }) },
+  );
+}

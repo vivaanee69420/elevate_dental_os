@@ -4,6 +4,7 @@
 // 200 status (NOT an error) — preserved exactly from the original.
 // ============================================================================
 import * as analytics_repository_1 from "../repositories/analytics.repository.js";
+import { integrationRepository as integration_repository_1 } from "../repositories/integration.repository.js";
 import * as formulas_1 from "../lib/formulas.js";
 import * as claude_1 from "../lib/claude.js";
 import * as monthlyFinancial_repository_1 from "../repositories/monthlyFinancial.repository.js";
@@ -694,16 +695,23 @@ export const analyticsService = {
     // (settled revenue ÷ paid spend). Per-channel ranks on spend → leads → CPL →
     // patients → CPA. Conversions use one consistent definition across all
     // channels: a CRM lead that reached treatment_started/treatment_completed.
-    async marketingRoi(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, now = () => new Date() } = {}) {
+    async marketingRoi(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, accountIds: accountIdsArg, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
         const { since, until, label } = resolveWindow({ since: winSince, until: winUntil, label: winLabel, period, periodKey, now: now() });
         const fromDate = since.slice(0, 10);
         const untilD = new Date(until); untilD.setUTCDate(untilD.getUTCDate() - 1);
         const toDate = untilD.toISOString().slice(0, 10); // inclusive last day of window
 
+        // Dynamic, org-isolated ad-account filter. Explicit ?account_ids= wins;
+        // else fall back to the org's selected accounts (null => no filter when
+        // the org has no ad_accounts rows yet, preserving old behaviour).
+        const accountIds = (typeof accountIdsArg === 'string' && accountIdsArg.trim())
+            ? accountIdsArg.split(',').map((s) => s.trim()).filter(Boolean)
+            : await integration_repository_1.selectedAdAccountIds(orgId, null);
+
         const pids = resolved.practiceIds; // null = whole org
         const [adRows, leads, revRows, practices] = await Promise.all([
-            analytics_repository_1.analyticsRepository.adMetricsInWindow(orgId, fromDate, toDate, pids),
+            analytics_repository_1.analyticsRepository.adMetricsInWindow(orgId, fromDate, toDate, pids, accountIds),
             analytics_repository_1.analyticsRepository.leadsForMarketing(orgId, since, until, pids),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since, until),
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
@@ -790,12 +798,39 @@ export const analyticsService = {
 
         const insights = buildMarketingInsights({ channels, blendedRoas, paidSpendPence, settledRevenuePence, connected: adRows.length > 0, adSpendPerPracticeAvailable });
 
+        // Per-account spend breakdown (the selected ad accounts), labelled from
+        // the ad_accounts dimension. Org-isolated.
+        const adAccounts = await integration_repository_1.listAdAccounts(orgId, null);
+        const acctMeta = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+        const acctMap = new Map();
+        for (const a of adRows) {
+            const k = `${a.provider}::${a.customer_id ?? 'unknown'}`;
+            const acc = acctMap.get(k) ?? acctMap.set(k, { provider: a.provider, customerId: a.customer_id, spendPence: 0, impressions: 0, clicks: 0, reach: 0, conversions: 0 }).get(k);
+            acc.spendPence += a.spend_pence || 0;
+            acc.impressions += a.impressions || 0;
+            acc.clicks += a.clicks || 0;
+            acc.reach += a.reach || 0;
+            acc.conversions += a.conversions || 0;
+        }
+        const byAccount = [...acctMap.entries()]
+            .map(([k, a]) => ({
+                ...a,
+                name: acctMeta.get(k)?.name ?? null,
+                currency: acctMeta.get(k)?.currency ?? null,
+                status: acctMeta.get(k)?.status ?? null,
+                cpaPence: a.conversions ? Math.round(a.spendPence / a.conversions) : 0,
+                cpcPence: a.clicks ? Math.round(a.spendPence / a.clicks) : 0,
+            }))
+            .sort((a, b) => b.spendPence - a.spendPence);
+
         return {
             applicable: true,
             scope, period,
             window: { since, until, label },
             connected: adRows.length > 0,
             hasLeads: totalLeads > 0,
+            accountFilter: accountIds, // null = all; [] = none; [...] = explicit
+            byAccount,
             channels,
             paidSpendPence,
             totalLeads,

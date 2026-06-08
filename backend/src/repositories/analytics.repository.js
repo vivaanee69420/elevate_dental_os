@@ -120,15 +120,19 @@ export const analyticsRepository = {
     // | null) scopes to specific entities; null = whole org. ad_metrics.practice_id
     // is frequently NULL (one ad account per group) — an entity scope then sees no
     // paid spend, which is honest (spend isn't tagged to that practice).
-    async adMetricsInWindow(orgId, fromDate, toDate, practiceIds = null) {
+    // accountIds (array | null): when non-null, restrict to those ad-account
+    // customer_ids (the dynamic, org-isolated account filter). null = no account
+    // filter (all of the org's accounts).
+    async adMetricsInWindow(orgId, fromDate, toDate, practiceIds = null, accountIds = null) {
         let q = supabase_1.serviceClient
             .from('ad_metrics')
-            .select('provider, spend_pence, impressions, clicks, conversions, practice_id')
+            .select('provider, customer_id, spend_pence, impressions, clicks, reach, conversions, practice_id')
             .eq('organisation_id', orgId)
             .gte('metric_date', fromDate)
             .lte('metric_date', toDate)
             .limit(LIMIT_GUARD);
         if (practiceIds) q = q.in('practice_id', practiceIds);
+        if (accountIds !== null) q = q.in('customer_id', accountIds);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
         return data || [];
@@ -361,6 +365,56 @@ export const analyticsRepository = {
             const sep = key.indexOf('|');
             return { practice_id: key.slice(0, sep), treatment_name: key.slice(sep + 1), fee_pence: v.fee, item_count: v.count };
         });
+    },
+    // Flat "by treatment" breakdown — real invoiced fee + distinct patient count
+    // grouped by treatment_name alone (no practice split), from invoice_items.
+    // Prefers the treatment_breakdown RPC; falls back to a paginated scan.
+    // Rows: { treatment_name, fee_pence, item_count, patient_count }.
+    async treatmentBreakdown(orgId, sinceISO = null, untilISO = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('treatment_breakdown', {
+            p_org: orgId, p_since: sinceISO ?? null, p_until: untilISO ?? null,
+        });
+        if (!error && Array.isArray(data)) {
+            return data.map((r) => ({
+                treatment_name: r.treatment_name || 'Unspecified',
+                fee_pence: Number(r.fee_pence) || 0,
+                item_count: Number(r.item_count) || 0,
+                patient_count: Number(r.patient_count) || 0,
+            }));
+        }
+        return this._treatmentBreakdownFallback(orgId, sinceISO, untilISO);
+    },
+    async _treatmentBreakdownFallback(orgId, sinceISO = null, untilISO = null) {
+        const sinceDate = sinceISO ? String(sinceISO).slice(0, 10) : null;
+        const untilDate = untilISO ? String(untilISO).slice(0, 10) : null;
+        // name -> { fee, count, patients:Set }
+        const agg = new Map();
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+            let query = supabase_1.serviceClient
+                .from('invoice_items')
+                .select('treatment_name, fee_pence, contact_id')
+                .eq('organisation_id', orgId);
+            if (sinceDate) query = query.gte('invoiced_on', sinceDate);
+            if (untilDate) query = query.lt('invoiced_on', untilDate);
+            const { data, error } = await query
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(error.message);
+            const rows = data ?? [];
+            for (const r of rows) {
+                const name = r.treatment_name || 'Unspecified';
+                const a = agg.get(name) || { fee: 0, count: 0, patients: new Set() };
+                a.fee += Number(r.fee_pence) || 0;
+                a.count += 1;
+                if (r.contact_id) a.patients.add(r.contact_id);
+                agg.set(name, a);
+            }
+            if (rows.length < PAGE) break;
+        }
+        return [...agg.entries()].map(([treatment_name, v]) => ({
+            treatment_name, fee_pence: v.fee, item_count: v.count, patient_count: v.patients.size,
+        }));
     },
     // Per-invoice rollup (names[] + total fee) for the workbench real-fee seed.
     // RPC only (no fallback): a JS array_agg-equivalent scan would be heavy and

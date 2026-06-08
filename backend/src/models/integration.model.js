@@ -26,3 +26,8 @@ export const webhookSecretSchema = zod_1.z.object({
 export const syncBodySchema = zod_1.z.object({
     full: zod_1.z.boolean().optional(),
 });
+// Ad-account selection (Google Ads / Meta Ads): the customer_ids to include in
+// the marketing views. The rest are deselected. Empty array = select none.
+export const adAccountSelectionSchema = zod_1.z.object({
+    selected_ids: zod_1.z.array(zod_1.z.string()),
+});

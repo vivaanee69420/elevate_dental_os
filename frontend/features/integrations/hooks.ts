@@ -14,6 +14,8 @@ import {
   setWebhookSecret,
   detectPipelines,
   setStageMappings,
+  listAdAccounts,
+  setAdAccountSelection,
   type ConnectInput,
 } from './api';
 
@@ -142,5 +144,30 @@ export function useSetStageMappings(provider: string) {
   return useMutation({
     mutationFn: (mappings: Record<string, string>) => setStageMappings(provider, mappings),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
+  });
+}
+
+// Ad accounts (Google Ads / Meta Ads) + selection persistence.
+export function useAdAccounts(provider: string, enabled = true) {
+  return useQuery({
+    queryKey: ['ad-accounts', provider],
+    queryFn: () => listAdAccounts(provider),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
+export function useSetAdAccountSelection(provider: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (selectedIds: string[]) => setAdAccountSelection(provider, selectedIds),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['ad-accounts', provider] });
+      // Marketing views read the selected accounts — refresh them.
+      qc.invalidateQueries({ queryKey: ['growth', 'marketing-roi'] });
+      qc.invalidateQueries({ queryKey: ['growth', 'ad-spend'] });
+      qc.invalidateQueries({ queryKey: ['marketing-roi'] });
+      qc.invalidateQueries({ queryKey: ['business-hub'] });
+    },
   });
 }

@@ -93,6 +93,16 @@ export const analyticsController = {
             scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
+    // By treatment (CRM Reports) — flat invoiced-fee + distinct-patient breakdown
+    // grouped by treatment_name (from invoice_items). Org-wide, optional window.
+    // Money in pence. Replaces the old GHL-leads-by-opp.name grouping.
+    async treatmentBreakdown(req, res) {
+        const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+        const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 24));
+        res.json(await analytics_service_1.analyticsService.treatmentBreakdown(req.user.organisation_id, {
+            since: iso(req.query.since), until: iso(req.query.until), limit,
+        }));
+    },
     // AI Analyst (GM Intelligence OS) — £-ranked findings over live scope/period
     // data + a natural-language answer (Claude) to a free-text question.
     async aiAsk(req, res) {
@@ -115,6 +125,7 @@ export const analyticsController = {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.marketingRoi(req.user.organisation_id, {
             scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
+            accountIds: q.account_ids,
         }));
     },
     // Day — Cash Collected (GM Intelligence OS). Real settled receipts banked by

@@ -20,26 +20,48 @@ import { integrationRepository } from "../../repositories/integration.repository
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 
-const GAQL = [
-    'SELECT campaign.id, campaign.name, segments.date,',
-    'metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions',
-    'FROM campaign WHERE segments.date DURING LAST_30_DAYS',
-].join(' ');
+const INCREMENTAL_DAYS = 31;
+const FULL_DAYS = 366;
+
+// GAQL is built per-window. campaign.status + advertising_channel_type are the
+// campaign dimensions (objective proxy); customer.descriptive_name +
+// currency_code enrich the account dimension. Google exposes no per-campaign
+// unique-reach/frequency at this grain, so those stay null on ad_metrics.
+function buildGaql(sinceDate, untilDate) {
+    return [
+        'SELECT campaign.id, campaign.name, campaign.status,',
+        'campaign.advertising_channel_type, segments.date,',
+        'customer.descriptive_name, customer.currency_code,',
+        'metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions',
+        `FROM campaign WHERE segments.date BETWEEN '${sinceDate}' AND '${untilDate}'`,
+    ].join(' ');
+}
 
 function microsToPence(micros) {
     const n = Number(micros ?? 0);
     return Number.isFinite(n) ? Math.round(n / 10_000) : 0;
 }
 
+function daysAgo(days) {
+    return new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+}
+
 // searchStream returns an ARRAY of batches, each { results: [...] }. Flatten to
 // rows. Field names are camelCase in the JSON (costMicros, not cost_micros).
+// Returns { rows, account } — account = { name, currency } sniffed from the
+// customer fields on any row (same for every row of one customer).
 function parseSearchStream(batches) {
     const out = [];
+    let account = null;
     for (const batch of Array.isArray(batches) ? batches : []) {
         for (const r of batch?.results ?? []) {
             const campaign = r.campaign ?? {};
             const segments = r.segments ?? {};
             const metrics = r.metrics ?? {};
+            const customer = r.customer ?? {};
+            if (!account && (customer.descriptiveName || customer.currencyCode)) {
+                account = { name: customer.descriptiveName ?? null, currency: customer.currencyCode ?? null };
+            }
             if (!campaign.id || !segments.date) continue;
             out.push({
                 campaign_id: String(campaign.id),
@@ -48,11 +70,15 @@ function parseSearchStream(batches) {
                 spend_pence: microsToPence(metrics.costMicros),
                 impressions: Number(metrics.impressions ?? 0),
                 clicks: Number(metrics.clicks ?? 0),
+                reach: null,
+                frequency: null,
+                campaign_status: campaign.status ?? null,
+                objective: campaign.advertisingChannelType ?? null,
                 conversions: Math.round(Number(metrics.conversions ?? 0)),
             });
         }
     }
-    return out;
+    return { rows: out, account };
 }
 
 function apiBase() {
@@ -72,13 +98,13 @@ async function ensureToken(orgId, integration) {
     return integrationRepository.getByProvider(orgId, 'google_ads');
 }
 
-async function queryCustomer(customerId, accessToken) {
+async function queryCustomer(customerId, accessToken, query) {
     const { adsHeaders } = await import('./google-ads-provider.js');
     const url = `${apiBase()}/${apiVersion()}/customers/${customerId}/googleAds:searchStream`;
     const res = await fetch(url, {
         method: 'POST',
         headers: adsHeaders(accessToken),
-        body: JSON.stringify({ query: GAQL }),
+        body: JSON.stringify({ query }),
     });
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -87,7 +113,7 @@ async function queryCustomer(customerId, accessToken) {
     return res.json();
 }
 
-export async function syncOneOrg(orgId, integrationArg, _onProgress, _opts) {
+export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'google_ads');
     if (!integration?.secrets) {
         await integrationRepository.markFailed(orgId, 'google_ads', 'no_auth: no stored credentials');
@@ -100,27 +126,42 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, _opts) {
             throw new Error('no accessible Google Ads customers (check developer token / MCC access)');
         }
         const { access_token } = JSON.parse(decryptSecret(integration.secrets));
+        // Full backfill pulls 12mo; the nightly cron pulls the rolling window.
+        const windowDays = opts.full ? FULL_DAYS : INCREMENTAL_DAYS;
+        const sinceDate = daysAgo(windowDays);
+        const untilDate = new Date().toISOString().slice(0, 10);
+        const gaql = buildGaql(sinceDate, untilDate);
 
         // Pull each accessible account; skip the ones that error (a Manager
         // account, or one the dev token can't reach) so one bad account doesn't
-        // sink the whole sync.
+        // sink the whole sync. Enrich the account dimension from the customer
+        // fields returned on each stream.
         const all = [];
         const skipped = [];
+        const accounts = [];
         for (const cid of customerIds) {
             try {
-                const batches = await queryCustomer(cid, access_token);
-                for (const row of parseSearchStream(batches)) {
+                const batches = await queryCustomer(cid, access_token, gaql);
+                const { rows, account } = parseSearchStream(batches);
+                accounts.push({ customer_id: cid, name: account?.name ?? null, currency: account?.currency ?? null });
+                for (const row of rows) {
                     all.push({ organisation_id: orgId, practice_id: null, provider: 'google_ads', source: 'google_ads', customer_id: cid, ...row });
                 }
             } catch (err) {
                 skipped.push({ cid, error: String(err.message).slice(0, 200) });
             }
         }
+        // Refresh account names/currency for the selector (non-fatal).
+        try {
+            if (accounts.length) await integrationRepository.upsertAdAccounts(orgId, 'google_ads', accounts);
+        } catch (err) {
+            console.error('[google_ads] sync ad_accounts refresh failed:', err.message);
+        }
 
         // Replace the whole window: delete this org's google_ads rows in the
-        // last-30-day range, then insert fresh. Idempotent; filtered on provider
-        // so other channels (meta_ads) for the same dates are never clobbered.
-        const since = new Date(Date.now() - 31 * 86400_000).toISOString().slice(0, 10);
+        // pulled range, then insert fresh. Idempotent; filtered on provider so
+        // other channels (meta_ads) for the same dates are never clobbered.
+        const since = sinceDate;
         const { error: delErr } = await supabase_1.serviceClient
             .from('ad_metrics')
             .delete()
@@ -161,4 +202,4 @@ export async function syncAllOrgs() {
     return results;
 }
 
-export const __test = { microsToPence, parseSearchStream, GAQL };
+export const __test = { microsToPence, parseSearchStream, buildGaql };

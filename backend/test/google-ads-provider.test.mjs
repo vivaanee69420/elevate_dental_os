@@ -12,6 +12,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
         upsertSecrets: vi.fn(),
         markFailed: vi.fn(),
         getByProvider: vi.fn(),
+        upsertAdAccounts: vi.fn(),
     },
 }));
 

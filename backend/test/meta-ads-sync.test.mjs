@@ -6,7 +6,7 @@ import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), getByProvider: vi.fn() },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn() },
 }));
 
 const { syncOneOrg, __test } = await import('../src/lib/integrations/meta-ads-sync.js');
@@ -43,12 +43,25 @@ describe('parseInsights', () => {
     it('maps insight rows, drops rows missing campaign_id/date_start', () => {
         const rows = [
             { campaign_id: 1, campaign_name: 'Implants', date_start: '2026-05-01',
-              spend: '5.00', impressions: '1200', clicks: '40', actions: [{ action_type: 'lead', value: '3' }] },
+              spend: '5.00', impressions: '1200', clicks: '40', reach: '900', frequency: '1.33',
+              actions: [{ action_type: 'lead', value: '3' }] },
             { campaign_id: 2, date_start: '', spend: '1.00' }, // no date -> dropped
             { campaign_name: 'No id', date_start: '2026-05-02' }, // no id -> dropped
         ];
+        // campaignMeta supplies status + objective (not on insights).
+        const meta = { 1: { status: 'ACTIVE', objective: 'OUTCOME_LEADS' } };
+        expect(__test.parseInsights(rows, meta)).toEqual([
+            { campaign_id: '1', campaign_name: 'Implants', metric_date: '2026-05-01', spend_pence: 500,
+              impressions: 1200, clicks: 40, reach: 900, frequency: 1.33,
+              campaign_status: 'ACTIVE', objective: 'OUTCOME_LEADS', conversions: 3 },
+        ]);
+    });
+    it('defaults reach to 0, frequency/status/objective to null when absent', () => {
+        const rows = [{ campaign_id: 9, date_start: '2026-05-03', spend: '2.00', impressions: '100', clicks: '5' }];
         expect(__test.parseInsights(rows)).toEqual([
-            { campaign_id: '1', campaign_name: 'Implants', metric_date: '2026-05-01', spend_pence: 500, impressions: 1200, clicks: 40, conversions: 3 },
+            { campaign_id: '9', campaign_name: null, metric_date: '2026-05-03', spend_pence: 200,
+              impressions: 100, clicks: 5, reach: 0, frequency: null,
+              campaign_status: null, objective: null, conversions: 0 },
         ]);
     });
     it('handles empty / non-array input', () => {

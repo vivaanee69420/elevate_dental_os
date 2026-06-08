@@ -70,12 +70,21 @@ async function exchangeForLongLived(shortToken) {
     return body; // { access_token, token_type, expires_in }
 }
 
-// After consent, find which ad accounts this user can read. Returns numeric
-// account ids (without the "act_" prefix the insights endpoint needs — the
-// sync prepends it). Follows paging in the rare case a user has many accounts.
+// Meta account_status is an integer enum; map the common values to a label for
+// the selector. Unknown codes fall through to the raw number as a string.
+const META_ACCOUNT_STATUS = {
+    1: 'active', 2: 'disabled', 3: 'unsettled', 7: 'pending_risk_review',
+    8: 'pending_settlement', 9: 'in_grace_period', 100: 'pending_closure', 101: 'closed',
+};
+
+// After consent, find which ad accounts this user can read. Returns the numeric
+// account id (without the "act_" prefix the insights endpoint needs — the sync
+// prepends it) plus name/currency/status for the account selector. Follows
+// paging in the rare case a user has many accounts.
 export async function listAdAccounts(accessToken) {
-    let url = `${graphBase()}/${apiVersion()}/me/adaccounts?fields=account_id,name&limit=200&access_token=${encodeURIComponent(accessToken)}`;
-    const ids = [];
+    let url = `${graphBase()}/${apiVersion()}/me/adaccounts`
+        + `?fields=account_id,name,currency,account_status&limit=200&access_token=${encodeURIComponent(accessToken)}`;
+    const accounts = [];
     let guard = 0;
     while (url && guard < 25) {
         const res = await fetch(url, { headers: { Accept: 'application/json' } });
@@ -85,12 +94,20 @@ export async function listAdAccounts(accessToken) {
             throw new Error(msg);
         }
         for (const a of body.data ?? []) {
-            if (a.account_id) ids.push(String(a.account_id));
+            if (!a.account_id) continue;
+            accounts.push({
+                customer_id: String(a.account_id),
+                name: a.name ?? null,
+                currency: a.currency ?? null,
+                status: a.account_status != null
+                    ? (META_ACCOUNT_STATUS[a.account_status] ?? String(a.account_status))
+                    : null,
+            });
         }
         url = body.paging?.next || null;
         guard++;
     }
-    return ids;
+    return accounts;
 }
 
 export const MetaAdsProvider = {
@@ -158,16 +175,23 @@ export const MetaAdsProvider = {
         }
 
         // 3) Discover the ad accounts this user can read; store for the sync.
-        let accountIds = [];
+        let accounts = [];
         try {
-            accountIds = await listAdAccounts(longLived.access_token);
-            console.log('[meta_ads] discovered %d ad account(s): %s', accountIds.length, accountIds.join(','));
+            accounts = await listAdAccounts(longLived.access_token);
+            console.log('[meta_ads] discovered %d ad account(s): %s', accounts.length, accounts.map((a) => a.customer_id).join(','));
         } catch (err) {
             // Non-fatal: token is valid; the user may lack ads_read on any
             // account. Persist anyway so the row is active; sync surfaces it.
             console.error('[meta_ads] listAdAccounts failed:', err.message);
         }
+        const accountIds = accounts.map((a) => a.customer_id);
         await persistTokenResponse(orgId, longLived, { account_ids: accountIds });
+        // Upsert the account dimension (names/currency/status) so the selector
+        // has readable labels; selection defaults to all-selected.
+        if (accounts.length) {
+            try { await integrationsRepository.upsertAdAccounts(orgId, 'meta_ads', accounts); }
+            catch (err) { console.error('[meta_ads] ad_accounts upsert failed:', err.message); }
+        }
         console.log('[meta_ads] callback DONE org=%s accounts=%d', orgId, accountIds.length);
         return { ok: true, accountIds };
     },

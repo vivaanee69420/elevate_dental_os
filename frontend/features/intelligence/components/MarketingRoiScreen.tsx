@@ -162,6 +162,43 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
         <NoteFoot>{data.note}</NoteFoot>
       </Panel>
 
+      {/* per ad account */}
+      {data.byAccount.length > 0 && (
+        <Panel>
+          <PanelHead
+            title="Spend by Ad Account"
+            sub="Each connected ad account in your selection. Manage which accounts are included in Integrations."
+            right={<Pill tone="info">{data.byAccount.length} {data.byAccount.length === 1 ? 'account' : 'accounts'}</Pill>}
+          />
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse" style={{ minWidth: 720 }}>
+              <thead>
+                <tr className="border-b border-border">
+                  {['Account', 'Provider', 'Spend', 'Impressions', 'Clicks', 'Reach', 'Patients', 'CPA'].map((h, i) => (
+                    <th key={h} className={`${th} ${i ? 'text-right' : 'text-left'}`}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.byAccount.map((a) => (
+                  <tr key={`${a.provider}-${a.customerId}`} className="border-b border-border last:border-0">
+                    <td className={td}>{a.name || a.customerId}{a.currency ? <span className="text-ink-muted"> · {a.currency}</span> : null}</td>
+                    <td className={`${td} text-right capitalize`}>{a.provider.replace('_', ' ')}</td>
+                    <td className={`${td} text-right tabular-nums`}>{gbp(a.spendPence)}</td>
+                    <td className={`${td} text-right tabular-nums`}>{a.impressions.toLocaleString('en-GB')}</td>
+                    <td className={`${td} text-right tabular-nums`}>{a.clicks.toLocaleString('en-GB')}</td>
+                    <td className={`${td} text-right tabular-nums`}>{a.reach ? a.reach.toLocaleString('en-GB') : '—'}</td>
+                    <td className={`${td} text-right tabular-nums`}>{a.conversions}</td>
+                    <td className={`${td} text-right tabular-nums`}>{a.cpaPence ? gbp(a.cpaPence) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <NoteFoot>Spend, impressions, clicks and reach are real per account. Patients (CRM conversions) and revenue aren&apos;t attributed per account, so CPA uses business-level conversions.</NoteFoot>
+        </Panel>
+      )}
+
       {/* leads by channel */}
       <Panel>
         <PanelHead title="Leads by Channel" sub="Where enquiries actually come from (CRM-attributed, real)." />
