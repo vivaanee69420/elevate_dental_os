@@ -20,7 +20,10 @@ import { integrationRepository } from "../../repositories/integration.repository
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 
-const INSIGHT_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,actions';
+const INSIGHT_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,reach,frequency,actions';
+// Incremental window (daily cron); a full backfill pulls 12 months.
+const INCREMENTAL_DAYS = 31;
+const FULL_DAYS = 366;
 // action_types that count as a conversion for a dental practice (form leads,
 // pixel leads, purchases, registrations, appointment schedules, contacts).
 const CONVERSION_ACTION = /lead|purchase|complete_registration|schedule|contact|submit_application/i;
@@ -45,17 +48,26 @@ function conversionsFromActions(actions) {
 }
 
 // Flatten insight rows to ad_metrics shape; drop rows missing campaign/date.
-function parseInsights(rows) {
+// `campaignMeta` maps campaign_id -> { status, objective } (from the campaigns
+// edge, which insights doesn't carry).
+function parseInsights(rows, campaignMeta = {}) {
     const out = [];
     for (const r of Array.isArray(rows) ? rows : []) {
         if (!r?.campaign_id || !r?.date_start) continue;
+        const cid = String(r.campaign_id);
+        const meta = campaignMeta[cid] ?? {};
+        const freq = Number(r.frequency);
         out.push({
-            campaign_id: String(r.campaign_id),
+            campaign_id: cid,
             campaign_name: r.campaign_name ?? null,
             metric_date: r.date_start,
             spend_pence: spendToPence(r.spend),
             impressions: Number(r.impressions ?? 0),
             clicks: Number(r.clicks ?? 0),
+            reach: Number(r.reach ?? 0),
+            frequency: Number.isFinite(freq) ? freq : null,
+            campaign_status: meta.status ?? null,
+            objective: meta.objective ?? null,
             conversions: conversionsFromActions(r.actions),
         });
     }
@@ -80,14 +92,21 @@ async function ensureToken(orgId, integration) {
     return integrationRepository.getByProvider(orgId, 'meta_ads');
 }
 
-async function queryAccount(accountId, accessToken) {
+// ISO YYYY-MM-DD `days` ago (UTC).
+function daysAgo(days) {
+    return new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+}
+
+async function queryAccount(accountId, accessToken, sinceDate) {
+    const until = new Date().toISOString().slice(0, 10);
+    const timeRange = encodeURIComponent(JSON.stringify({ since: sinceDate, until }));
     let url = `${graphBase()}/${apiVersion()}/act_${accountId}/insights`
-        + `?level=campaign&time_increment=1&date_preset=last_30d`
+        + `?level=campaign&time_increment=1&time_range=${timeRange}`
         + `&fields=${INSIGHT_FIELDS}&limit=500&access_token=${encodeURIComponent(accessToken)}`;
     const rows = [];
     let guard = 0;
     // paging.next is a full URL with the access_token already embedded.
-    while (url && guard < 50) {
+    while (url && guard < 200) {
         const res = await fetch(url, { headers: { Accept: 'application/json' } });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body?.error?.message || `insights HTTP ${res.status}`);
@@ -98,7 +117,28 @@ async function queryAccount(accountId, accessToken) {
     return rows;
 }
 
-export async function syncOneOrg(orgId, integrationArg, _onProgress, _opts) {
+// Campaign-level dimensions (status, objective) — not available on insights.
+// Returns { campaign_id: { status, objective } }; a failure here is non-fatal
+// (dims are nullable), so the caller swallows the error.
+async function fetchCampaignMeta(accountId, accessToken) {
+    let url = `${graphBase()}/${apiVersion()}/act_${accountId}/campaigns`
+        + `?fields=id,status,objective&limit=500&access_token=${encodeURIComponent(accessToken)}`;
+    const map = {};
+    let guard = 0;
+    while (url && guard < 50) {
+        const res = await fetch(url, { headers: { Accept: 'application/json' } });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body?.error?.message || `campaigns HTTP ${res.status}`);
+        for (const c of body.data ?? []) {
+            if (c.id) map[String(c.id)] = { status: c.status ?? null, objective: c.objective ?? null };
+        }
+        url = body.paging?.next || null;
+        guard++;
+    }
+    return map;
+}
+
+export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'meta_ads');
     if (!integration?.secrets) {
         await integrationRepository.markFailed(orgId, 'meta_ads', 'no_auth: no stored credentials');
@@ -111,6 +151,20 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, _opts) {
             throw new Error('no connected Meta ad accounts (check ads_read permission)');
         }
         const { access_token } = JSON.parse(decryptSecret(integration.secrets));
+        // Full backfill (post-connect / manual Refresh ?full=true) pulls 12mo;
+        // the nightly cron pulls the rolling ~30-day window.
+        const windowDays = opts.full ? FULL_DAYS : INCREMENTAL_DAYS;
+        const sinceDate = daysAgo(windowDays);
+
+        // Refresh the account dimension (names/currency/status) for the selector;
+        // non-fatal — selection still works off the ids stored at connect.
+        try {
+            const { listAdAccounts } = await import('./meta-ads-provider.js');
+            const accounts = await listAdAccounts(access_token);
+            if (accounts.length) await integrationRepository.upsertAdAccounts(orgId, 'meta_ads', accounts);
+        } catch (err) {
+            console.error('[meta_ads] sync ad_accounts refresh failed:', err.message);
+        }
 
         // Pull each ad account; skip the ones that error (a disabled account, or
         // one the user lost access to) so one bad account doesn't sink the sync.
@@ -118,8 +172,9 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, _opts) {
         const skipped = [];
         for (const aid of accountIds) {
             try {
-                const rows = await queryAccount(aid, access_token);
-                for (const row of parseInsights(rows)) {
+                const meta = await fetchCampaignMeta(aid, access_token).catch(() => ({}));
+                const rows = await queryAccount(aid, access_token, sinceDate);
+                for (const row of parseInsights(rows, meta)) {
                     all.push({ organisation_id: orgId, practice_id: null, provider: 'meta_ads', source: 'meta_ads', customer_id: aid, ...row });
                 }
             } catch (err) {
@@ -127,10 +182,10 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, _opts) {
             }
         }
 
-        // Replace the whole window: delete this org's meta_ads rows in the
-        // last-30-day range, then insert fresh. Idempotent; filtered on provider
-        // so other channels (google_ads) for the same dates are never clobbered.
-        const since = new Date(Date.now() - 31 * 86400_000).toISOString().slice(0, 10);
+        // Replace the whole window: delete this org's meta_ads rows in the pulled
+        // range, then insert fresh. Idempotent; filtered on provider so other
+        // channels (google_ads) for the same dates are never clobbered.
+        const since = sinceDate;
         const { error: delErr } = await supabase_1.serviceClient
             .from('ad_metrics')
             .delete()

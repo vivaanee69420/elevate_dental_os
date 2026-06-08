@@ -124,12 +124,15 @@ export interface AdAggregate {
   spend_pence: number;
   impressions: number;
   clicks: number;
+  reach: number;
   leads: number;
   conversions: number;
   ctr: number;             // %
   cpc_pence: number;
   cpl_pence: number;
   cpa_pence: number;
+  cpm_pence: number;       // cost per 1000 impressions
+  frequency: number;       // impressions / reach
   conversion_rate: number; // %
 }
 
@@ -137,10 +140,22 @@ export interface AdChannel extends AdAggregate {
   provider: string;        // 'google_ads' | 'meta_ads'
 }
 
+/** One connected ad account (the per-account breakdown / filter unit). */
+export interface AdAccountAggregate extends AdAggregate {
+  provider: string;
+  customer_id: string | null;
+  name: string | null;
+  currency: string | null;
+  status: string | null;
+}
+
 export interface AdCampaign extends AdAggregate {
   provider: string;
+  customer_id: string | null;
   campaign_id: string | null;
   campaign_name: string | null;
+  campaign_status: string | null;
+  objective: string | null;
 }
 
 export interface AdDailyPoint {
@@ -155,8 +170,10 @@ export interface AdDailyPoint {
 export interface AdSpendResponse {
   connected: boolean;
   window: { from: string; to: string };
+  account_filter: string[] | null; // null = all; [] = none
   totals: AdAggregate;
   channels: AdChannel[];
+  accounts: AdAccountAggregate[];
   campaigns: AdCampaign[];
   daily: AdDailyPoint[];
 }
@@ -175,6 +192,25 @@ export interface AdProviderRoi {
   spend_pence: number;
   impressions: number;
   clicks: number;
+  reach: number;
+  conversions: number;
+  leads: number;
+  cpl_pence: number;
+  cpa_pence: number;
+  cpc_pence: number;
+}
+
+/** Per-account ROI breakdown (the selected ad accounts). */
+export interface AdAccountRoi {
+  provider: string;
+  customer_id: string | null;
+  name: string | null;
+  currency: string | null;
+  status: string | null;
+  spend_pence: number;
+  impressions: number;
+  clicks: number;
+  reach: number;
   conversions: number;
   leads: number;
   cpl_pence: number;
@@ -200,7 +236,9 @@ export interface MarketingRoiResponse {
   cpl_pence: number;       // spend / ad-attributed leads
   cpa_pence: number;       // spend / conversions
   cpc_pence: number;
+  account_filter: string[] | null; // null = all; [] = none
   by_provider: AdProviderRoi[];
+  by_account: AdAccountRoi[];
 }
 
 export function getMarketingRoi(range?: DateRange | null) {

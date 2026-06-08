@@ -315,11 +315,13 @@ Response:
 
 ### `GET /api/analytics/treatment-revenue?scope=all&period=month&pk=2026-05` — Treatment REVENUE heat matrix (Intelligence OS, Phase 2). The £ counterpart to `treatment-matrix`: real invoiced FEE by treatment name × practice, from `invoice_items` (`treatment_revenue_matrix` RPC; paginated fallback). Same window/scope semantics + response shape as `treatment-matrix`, but `grandTotal`/`maxCell`/`types[].total`/`cells[]` are integer PENCE, rows keyed by `treatment_name`, plus `basis:'invoice_items'` and `hasData`. Insights are money-framed (top earner, single-site revenue concentration, busiest biller, revenue Pareto). `invoice_items` is populated by the Dentally sync (`/invoices` + `/invoice_items` pull). **This is the patient FEE (retail), NOT cost — lab/material cost is never in the Dentally feed and stays owner-entered in the Workbench.** finance.view.
 
+### `GET /api/analytics/treatment-breakdown?limit=24&since=&until=` — Flat "by treatment" breakdown for the CRM Reports card. Real invoiced FEE + distinct PATIENT count grouped by `treatment_name` ALONE (no practice split), from `invoice_items` (`treatment_breakdown` RPC, migration `000058`; paginated JS fallback). Org-wide; `since`/`until` (any Date.parse-able ISO; optional, NULL = all time) window on `invoiced_on`; `limit` 1–100 (default 24). Returns `{ treatments:[{treatment_name, fee_pence, item_count, patient_count}] (fee desc, top `limit`), grandTotal (all treatments, pence), basis:'invoice_items', hasData, note }`. Replaces the old CRM Reports grouping that mis-used `leads.treatment` (= GHL `opp.name`, junk like "New Lead || 22/03/2026") as the treatment key. Patient fee/retail, not cost. finance.view.
+
 ### `POST /api/analytics/ai-ask` — AI Analyst (Intelligence OS). Body `{ scope, period, pk, question? }` (scope/period as elsewhere; `question` ≤500 chars, optional). £-ranked findings over the group's LIVE scope/period numbers, aggregated from the REAL Decision-Lens insights of the P&L / Marketing / Clinicians / Cash rollups (NO fabrication) plus cross-cutting headline facts (group margin, blended ROAS, cash). With a `question` AND `ANTHROPIC_API_KEY` set, Claude (sonnet-4-5) writes a natural-language `answer` grounded ONLY in a compact real summary; without a key it falls back to keyword-matched findings (`basis:'rollups'`, `note`). Returns `{ scope, period, question, answer:string|null, findings:[{sev:'good'|'warn'|'bad'|'info',t,d,v}] (ranked bad→info, ≤8), answerFindings?, basis:'rollups'|'claude', model, note? }`. Money in integer PENCE within findings text. finance.view.
 
 ### `GET /api/analytics/clinicians?scope=all&period=month&pk=2026-05` — Clinicians (Intelligence OS, T2). Per-clinician production, pay splits and NHS/UDA from REAL data: associate roster (names/`pay_pct`/`lab_split_pct`, basis points→%), per-associate completed production (`associate_production` RPC over `treatment_plans`), appointment activity (`associate_appointment_stats`), owner-entered NHS contract (`practices.nhs_contract_uda`/`nhs_uda_rate_pence`). `scope` = all|practices|<practiceUUID> (academy/lab → `{applicable:false}`); period→window. **HONEST DATA WALLS (no revenue-share fabrication):** `productionAvailable` false when treatment_plans aren't synced; `appointmentsAvailable` false when appointments lack a resolved associate_id; `nhs.completedAvailable` always false until the UDA treatment-plan feed lands; lab cost / OCPSPD per clinician have no real per-clinician source and are omitted. Returns `{ applicable, scope, period, window, productionAvailable, appointmentsAvailable, clinicians:[{id,name,role,practiceId,practiceName,active,payPct,labSplitPct,productionPence,feesPence,netToPracticePence,appointments,completed,noShows}], totalProductionPence, totalFeesPence, totalNetPence, nhs:{available,completedAvailable,practices:[{id,name,contractUda,udaRatePence}]}, insights:[{tone,title,body,value}], note }`. Money in integer PENCE. finance.view.
 
-### `GET /api/analytics/marketing-roi?scope=all&period=month&pk=2026-05` — Marketing & ROI (Intelligence OS, T11). Per-channel acquisition economics from REAL sources: ad spend from `ad_metrics` (paid providers google_ads/meta_ads), channel attribution + conversions from CRM `leads`, revenue from settled payments. **HONEST DATA WALL: revenue is NOT attributable per channel (no per-touch attribution) — there is NO per-channel ROAS/revenue, only a business-level blended paid ROAS = settled revenue ÷ paid spend.** Per-channel ranks on spend → leads → CPL → patients → CPA. Conversions use ONE consistent definition across all channels: a CRM lead reaching `treatment_started`/`treatment_completed`. `scope`/`period`/`pk` per resolveScope + window. Returns `{ applicable, scope, period, window, connected (any ad rows), hasLeads, channels:[{key,label,color,paid,group,spendPence,impressions,clicks,leads,conversions,cplPence,cpaPence,leadSharePct,convRatePct}], paidSpendPence, totalLeads, totalConversions, settledRevenuePence, blendedRoas|null, blendedRoiPct|null, google, meta, revenuePerChannelAvailable:false, byPracticeAvailable, adSpendPerPracticeAvailable, byPractice:[{id,name,leads,conversions,convRatePct,revenuePence,spendPence,cpaPence,roas|null}], insights:[{tone,title,body,value}], note }`. Money in integer PENCE. `ad_metrics.practice_id` is usually NULL (one ad account per group) → an entity scope sees no paid spend (honest); per-practice ROAS only when ad spend is practice-tagged. finance.view.
+### `GET /api/analytics/marketing-roi?scope=all&period=month&pk=2026-05&account_ids=` — Marketing & ROI (Intelligence OS, T11). Adds the dynamic, org-isolated ad-account filter: `?account_ids=a,b` restricts spend to those `customer_id`s; absent → the org's SELECTED accounts; no `ad_accounts` rows → all (back-compat). Response adds `accountFilter` (ids|null) + `byAccount:[{provider,customerId,name,currency,status,spendPence,impressions,clicks,reach,conversions,cpaPence,cpcPence}]`. Per-channel acquisition economics from REAL sources: ad spend from `ad_metrics` (paid providers google_ads/meta_ads), channel attribution + conversions from CRM `leads`, revenue from settled payments. **HONEST DATA WALL: revenue is NOT attributable per channel (no per-touch attribution) — there is NO per-channel ROAS/revenue, only a business-level blended paid ROAS = settled revenue ÷ paid spend.** Per-channel ranks on spend → leads → CPL → patients → CPA. Conversions use ONE consistent definition across all channels: a CRM lead reaching `treatment_started`/`treatment_completed`. `scope`/`period`/`pk` per resolveScope + window. Returns `{ applicable, scope, period, window, connected (any ad rows), hasLeads, channels:[{key,label,color,paid,group,spendPence,impressions,clicks,leads,conversions,cplPence,cpaPence,leadSharePct,convRatePct}], paidSpendPence, totalLeads, totalConversions, settledRevenuePence, blendedRoas|null, blendedRoiPct|null, google, meta, revenuePerChannelAvailable:false, byPracticeAvailable, adSpendPerPracticeAvailable, byPractice:[{id,name,leads,conversions,convRatePct,revenuePence,spendPence,cpaPence,roas|null}], insights:[{tone,title,body,value}], note }`. Money in integer PENCE. `ad_metrics.practice_id` is usually NULL (one ad account per group) → an entity scope sees no paid spend (honest); per-practice ROAS only when ad spend is practice-tagged. finance.view.
 
 ### `GET /api/analytics/pl-margin?scope=all&period=month&pk=2026-05` — P&L & Margin (Intelligence OS, T11). Scope/period-aware group P&L statement + per-entity breakdown from REAL `monthly_financials` actuals (Xero/QuickBooks override manual per `bucketsByPeriod`). A FINANCE screen → real actuals or an honest empty state, NEVER a projection. Honest CoA bucket granularity: revenue, lab+materials (direct), staff (incl. associate/clinician pay — `dentistStaffSeparable:false`), other opex (overhead+other); `tax` is below the operating line and excluded. Period = the selected month's actuals when present, else trailing ≤12mo annual (basis flags which). Per-entity precedence resolved PER ENTITY (one practice's synced row never suppresses another's manual). Returns `{ applicable, scope, period, monthKey, basis:'none'|'actuals-month'|'actuals-annual'|'actuals-mixed', hasData, costsAvailable, periodsCovered, statement:{revPence,labMaterialsPence,grossPence,staffPence,otherOpexPence,netPence,marginPct}, dentistStaffSeparable, perEntityAvailable, entityBasisMixed, entities:[{id,name,kind,region,basis,periodsCovered,...PLLine}], note }`. Money in integer PENCE. Per-entity rows appear only when `monthly_financials` carries `practice_id`; org-level-only data → `perEntityAvailable:false`. finance.view.
 
@@ -415,16 +417,30 @@ Paginated appointments in the window (most-recent `starts_at` first). `{ booking
 ### `GET /api/growth/marketing`
 `{ leads_30d, revenue_pence_30d, by_provider }` (revenue = settled payments).
 
-### `GET /api/growth/marketing/ad-spend?from=&to=`
+### `GET /api/growth/marketing/ad-spend?from=&to=&account_ids=`
 Live ad spend & performance from connected marketing providers (Google Ads and
 Meta Ads — both live), read from `ad_metrics`. Org-scoped; window-aware via `from`/`to`
 (else 30-day rolling). Account-level — `practice_id` is intentionally ignored
 (ad spend isn't practice-attributed). All money in integer pence.
-`{ connected, window:{from,to}, totals, channels[], campaigns[], daily[] }` —
-each aggregate carries `{ spend_pence, impressions, clicks, leads, conversions,
-ctr, cpc_pence, cpl_pence, cpa_pence, conversion_rate }`; `channels` add
-`provider`, `campaigns` add `provider/campaign_id/campaign_name`, `daily` is a
-per-date spend series for charting. `connected:false` when no rows in window.
+**Account filter (dynamic, org-isolated):** `?account_ids=a,b` restricts to those
+ad-account `customer_id`s; absent → the org's SELECTED accounts (see
+`/integrations/:provider/ad-accounts/selection`); when the org has no `ad_accounts`
+rows yet → all accounts (back-compat).
+`{ connected, window:{from,to}, account_filter (ids|null), totals, channels[],
+accounts[], campaigns[], daily[] }` — each aggregate carries `{ spend_pence,
+impressions, clicks, reach, leads, conversions, ctr, cpc_pence, cpl_pence,
+cpa_pence, cpm_pence, frequency, conversion_rate }`; `channels` add `provider`;
+`accounts` add `provider/customer_id/name/currency/status` (per-account
+breakdown); `campaigns` add `provider/customer_id/campaign_id/campaign_name/
+campaign_status/objective`; `daily` is a per-date spend series. `connected:false`
+when no rows in window.
+
+### `GET /api/growth/marketing/roi?from=&to=&practice_id=&account_ids=`
+Marketing ROI cross-cut feeding the Business Hub Marketing Snapshot. Same dynamic
+`account_ids` filter as ad-spend. Returns the existing ROI fields plus
+`account_filter` (ids|null), `by_provider[]` (now incl. `reach`) and `by_account[]`
+(`provider/customer_id/name/currency/status/spend_pence/impressions/clicks/reach/
+conversions/leads/cpl_pence/cpa_pence/cpc_pence`). All money in integer pence.
 
 ### `GET /api/growth/loyalty`
 `{ active, total }` over `memberships`.
@@ -602,6 +618,19 @@ caller returns `{ skipped: 'refresh_in_progress' }`.
 
 ### `POST /api/integrations/:provider/revoke`
 Marks the integration `revoked` and clears stored secrets.
+
+### `GET /api/integrations/:provider/ad-accounts`
+Owner only. `provider` ∈ `google_ads | meta_ads` (else 400). Lists the org's
+discovered ad accounts from `ad_accounts`:
+`[{ provider, customer_id, name, currency, status, is_selected }]`. The syncs
+discover ALL reachable accounts and upsert them here; this drives the selector UI.
+
+### `POST /api/integrations/:provider/ad-accounts/selection`
+Owner only. Body `{ selected_ids: string[] }` → marks those `customer_id`s
+`is_selected=true`, the rest `false` (scoped to the one provider). Empty array =
+select none. Selection is the default account filter for the marketing views
+(pull-all, filter-on-read: deselecting never deletes synced history). Returns
+`{ ok, accounts }`.
 
 **Connect styles.** `dentally` (and `soe`) are `broker_key`: connect returns
 `{ requiresKeyPaste, pasteHint }`; the owner pastes the Dentally Bearer token

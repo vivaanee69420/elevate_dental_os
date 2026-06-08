@@ -8,9 +8,26 @@ import * as async_handler_1 from "../middleware/async-handler.js";
 import * as supabase_1 from "../lib/supabase.js";
 import * as formulas_1 from "../lib/formulas.js";
 import { AppError } from "../middleware/errors.js";
+import { integrationRepository } from "../repositories/integration.repository.js";
 const router = (0, express_1.Router)();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Resolve the ad-account filter for the marketing views. Precedence:
+//   1. explicit ?account_ids=a,b,c  -> exactly those customer_ids
+//   2. else the org's SELECTED ad_accounts (default = all selected)
+//   3. else null -> no filter (org has no ad_accounts rows yet: pre-migration /
+//      never synced; falls back to "all rows for the org", the old behaviour).
+// Returns { ids: string[]|null }. An empty array means "selected none" -> the
+// caller filters ad_metrics to nothing (the owner deselected every account).
+async function resolveAdAccountFilter(orgId, query) {
+    const raw = query.account_ids;
+    if (typeof raw === 'string' && raw.trim()) {
+        return { ids: raw.split(',').map((s) => s.trim()).filter(Boolean) };
+    }
+    const selected = await integrationRepository.selectedAdAccountIds(orgId, null);
+    return { ids: selected }; // null when no ad_accounts rows yet
+}
 
 // Validate optional ?practice_id= as a UUID. Returns null when absent so the
 // query stays org-wide; throws 400 (not a raw Postgres 500) on a malformed id.
@@ -264,41 +281,62 @@ router.get('/marketing/ad-spend', (0, async_handler_1.asyncHandler)(async (req, 
     const fromDate = fromISO.slice(0, 10);
     const toDate = (toISO ?? new Date().toISOString()).slice(0, 10);
 
+    const orgId = req.user.organisation_id;
+    const { ids: accountIds } = await resolveAdAccountFilter(orgId, req.query);
+
     let q = supabase_1.serviceClient.from('ad_metrics')
-        .select('provider, campaign_id, campaign_name, metric_date, spend_pence, impressions, clicks, leads, conversions')
-        .eq('organisation_id', req.user.organisation_id)
+        .select('provider, customer_id, campaign_id, campaign_name, campaign_status, objective, metric_date, spend_pence, impressions, clicks, reach, frequency, leads, conversions')
+        .eq('organisation_id', orgId)
         .gte('metric_date', fromDate)
         .lte('metric_date', toDate);
+    // Dynamic, org-isolated account filter (selected accounts, or ?account_ids=).
+    if (accountIds !== null) q = q.in('customer_id', accountIds);
     const { data: rows = [] } = await q;
 
-    const blank = () => ({ spend_pence: 0, impressions: 0, clicks: 0, leads: 0, conversions: 0 });
+    // Account dimension (names/currency/status) for labelling the breakdown +
+    // the selector. Org-isolated.
+    const adAccounts = await integrationRepository.listAdAccounts(orgId, null);
+    const acctMeta = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+
+    const blank = () => ({ spend_pence: 0, impressions: 0, clicks: 0, reach: 0, leads: 0, conversions: 0 });
     const add = (acc, r) => {
         acc.spend_pence += r.spend_pence ?? 0;
         acc.impressions += r.impressions ?? 0;
         acc.clicks += r.clicks ?? 0;
+        acc.reach += r.reach ?? 0;
         acc.leads += r.leads ?? 0;
         acc.conversions += r.conversions ?? 0;
         return acc;
     };
-    // Derived rate fields. CPC/CPL/CPA in pence; CTR/conv-rate as percentages.
+    // Derived rate fields. CPC/CPL/CPA/CPM in pence; CTR/conv-rate as percentages.
+    // frequency = impressions / reach (avg times each person saw an ad).
     const withRates = (a) => ({
         ...a,
         ctr: a.impressions ? +(a.clicks / a.impressions * 100).toFixed(2) : 0,
         cpc_pence: a.clicks ? Math.round(a.spend_pence / a.clicks) : 0,
         cpl_pence: a.leads ? Math.round(a.spend_pence / a.leads) : 0,
         cpa_pence: a.conversions ? Math.round(a.spend_pence / a.conversions) : 0,
+        cpm_pence: a.impressions ? Math.round(a.spend_pence / a.impressions * 1000) : 0,
+        frequency: a.reach ? +(a.impressions / a.reach).toFixed(2) : 0,
         conversion_rate: a.clicks ? +(a.conversions / a.clicks * 100).toFixed(2) : 0,
     });
 
     const byProvider = new Map();
+    const byAccount = new Map();
     const byCampaign = new Map();
     const byDate = new Map();
     const totals = blank();
     for (const r of rows) {
         add(totals, r);
         add(byProvider.get(r.provider) ?? byProvider.set(r.provider, blank()).get(r.provider), r);
+        const ak = `${r.provider}::${r.customer_id ?? 'unknown'}`;
+        if (!byAccount.has(ak)) {
+            const m = acctMeta.get(ak);
+            byAccount.set(ak, { provider: r.provider, customer_id: r.customer_id, name: m?.name ?? null, currency: m?.currency ?? null, status: m?.status ?? null, ...blank() });
+        }
+        add(byAccount.get(ak), r);
         const ck = `${r.provider}::${r.campaign_id ?? 'unknown'}`;
-        if (!byCampaign.has(ck)) byCampaign.set(ck, { provider: r.provider, campaign_id: r.campaign_id, campaign_name: r.campaign_name, ...blank() });
+        if (!byCampaign.has(ck)) byCampaign.set(ck, { provider: r.provider, customer_id: r.customer_id, campaign_id: r.campaign_id, campaign_name: r.campaign_name, campaign_status: r.campaign_status, objective: r.objective, ...blank() });
         add(byCampaign.get(ck), r);
         const dk = r.metric_date;
         if (!byDate.has(dk)) byDate.set(dk, { date: dk, ...blank() });
@@ -308,9 +346,13 @@ router.get('/marketing/ad-spend', (0, async_handler_1.asyncHandler)(async (req, 
     res.json({
         connected: rows.length > 0,
         window: { from: fromDate, to: toDate },
+        account_filter: accountIds, // null = all; [] = none; [...] = explicit
         totals: withRates(totals),
         channels: Array.from(byProvider.entries())
             .map(([provider, a]) => ({ provider, ...withRates(a) }))
+            .sort((x, y) => y.spend_pence - x.spend_pence),
+        accounts: Array.from(byAccount.values())
+            .map(withRates)
             .sort((x, y) => y.spend_pence - x.spend_pence),
         campaigns: Array.from(byCampaign.values())
             .map(withRates)
@@ -351,12 +393,14 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.query.practice_id)
         ? req.query.practice_id : null;
     const withPid = (q) => (pid ? q.eq('practice_id', pid) : q);
+    const { ids: accountIds } = await resolveAdAccountFilter(orgId, req.query);
+    const withAccts = (q) => (accountIds !== null ? q.in('customer_id', accountIds) : q);
 
     const [adR, leadsR, contactsR, paymentsR, healthR] = await Promise.all([
-        withPid(supabase_1.serviceClient.from('ad_metrics')
-            .select('provider, spend_pence, impressions, clicks, conversions')
+        withAccts(withPid(supabase_1.serviceClient.from('ad_metrics')
+            .select('provider, customer_id, spend_pence, impressions, clicks, reach, conversions')
             .eq('organisation_id', orgId)
-            .gte('metric_date', fromDate).lte('metric_date', toDate)),
+            .gte('metric_date', fromDate).lte('metric_date', toDate))),
         withPid(supabase_1.serviceClient.from('leads')
             .select('source, utm_source, utm_medium, created_at')
             .eq('organisation_id', orgId)
@@ -381,15 +425,19 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         .filter((p) => p.status === 'settled')
         .reduce((s, p) => s + (p.amount_pence ?? 0), 0);
 
-    const blank = () => ({ spend_pence: 0, impressions: 0, clicks: 0, conversions: 0, leads: 0 });
+    const blank = () => ({ spend_pence: 0, impressions: 0, clicks: 0, reach: 0, conversions: 0, leads: 0 });
     const byProvider = new Map();
+    const byAccount = new Map();
     const totals = blank();
     for (const r of adRows) {
         const p = byProvider.get(r.provider) ?? byProvider.set(r.provider, blank()).get(r.provider);
-        for (const acc of [p, totals]) {
+        const ak = `${r.provider}::${r.customer_id ?? 'unknown'}`;
+        const acct = byAccount.get(ak) ?? byAccount.set(ak, { provider: r.provider, customer_id: r.customer_id, ...blank() }).get(ak);
+        for (const acc of [p, acct, totals]) {
             acc.spend_pence += r.spend_pence ?? 0;
             acc.impressions += r.impressions ?? 0;
             acc.clicks += r.clicks ?? 0;
+            acc.reach += r.reach ?? 0;
             acc.conversions += r.conversions ?? 0;
         }
     }
@@ -434,9 +482,18 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         ltv_pence,
         ltv_cac_ratio: ltv_pence && cac_pence ? +(ltv_pence / cac_pence).toFixed(2) : 0,
         ...ratios(totals),
+        account_filter: accountIds, // null = all; [] = none; [...] = explicit
         by_provider: Array.from(byProvider.entries())
             .map(([provider, a]) => ({ provider, ...a, ...ratios(a) }))
             .sort((x, y) => y.spend_pence - x.spend_pence),
+        by_account: await (async () => {
+            if (byAccount.size === 0) return [];
+            const meta = new Map((await integrationRepository.listAdAccounts(orgId, null))
+                .map((a) => [`${a.provider}::${a.customer_id}`, a]));
+            return Array.from(byAccount.entries())
+                .map(([k, a]) => ({ ...a, name: meta.get(k)?.name ?? null, currency: meta.get(k)?.currency ?? null, status: meta.get(k)?.status ?? null, ...ratios(a) }))
+                .sort((x, y) => y.spend_pence - x.spend_pence);
+        })(),
     });
 }));
 

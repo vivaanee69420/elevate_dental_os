@@ -6,7 +6,7 @@ import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), getByProvider: vi.fn() },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn() },
 }));
 
 const { syncOneOrg, __test } = await import('../src/lib/integrations/google-ads-sync.js');
@@ -25,23 +25,33 @@ describe('parseSearchStream', () => {
     it('flattens batched results, reads camelCase fields, drops rows missing id/date', () => {
         const batches = [
             { results: [
-                { campaign: { id: 1, name: 'Implants' }, segments: { date: '2026-05-01' },
+                { campaign: { id: 1, name: 'Implants', status: 'ENABLED', advertisingChannelType: 'SEARCH' },
+                  segments: { date: '2026-05-01' }, customer: { descriptiveName: 'Smile Co', currencyCode: 'GBP' },
                   metrics: { costMicros: 5_000_000, impressions: 1200, clicks: 40, conversions: 3 } },
                 { campaign: { id: 2 }, segments: {}, metrics: {} }, // no date -> dropped
             ] },
             { results: [
-                { campaign: { id: 2, name: 'Whitening' }, segments: { date: '2026-05-02' },
+                { campaign: { id: 2, name: 'Whitening', status: 'PAUSED', advertisingChannelType: 'DISPLAY' },
+                  segments: { date: '2026-05-02' },
                   metrics: { costMicros: 2_500_000, impressions: 800, clicks: 25, conversions: 1.6 } },
             ] },
         ];
-        expect(__test.parseSearchStream(batches)).toEqual([
-            { campaign_id: '1', campaign_name: 'Implants', metric_date: '2026-05-01', spend_pence: 500, impressions: 1200, clicks: 40, conversions: 3 },
-            { campaign_id: '2', campaign_name: 'Whitening', metric_date: '2026-05-02', spend_pence: 250, impressions: 800, clicks: 25, conversions: 2 },
-        ]);
+        // Returns { rows, account } — account sniffed from the customer fields.
+        expect(__test.parseSearchStream(batches)).toEqual({
+            account: { name: 'Smile Co', currency: 'GBP' },
+            rows: [
+                { campaign_id: '1', campaign_name: 'Implants', metric_date: '2026-05-01', spend_pence: 500,
+                  impressions: 1200, clicks: 40, reach: null, frequency: null,
+                  campaign_status: 'ENABLED', objective: 'SEARCH', conversions: 3 },
+                { campaign_id: '2', campaign_name: 'Whitening', metric_date: '2026-05-02', spend_pence: 250,
+                  impressions: 800, clicks: 25, reach: null, frequency: null,
+                  campaign_status: 'PAUSED', objective: 'DISPLAY', conversions: 2 },
+            ],
+        });
     });
     it('handles empty / non-array input', () => {
-        expect(__test.parseSearchStream(undefined)).toEqual([]);
-        expect(__test.parseSearchStream([])).toEqual([]);
+        expect(__test.parseSearchStream(undefined)).toEqual({ rows: [], account: null });
+        expect(__test.parseSearchStream([])).toEqual({ rows: [], account: null });
     });
 });
 

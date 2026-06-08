@@ -149,6 +149,15 @@ export const GoogleAdsProvider = {
             throw new Error('NO_AD_ACCOUNT');
         }
         await persistTokenResponse(orgId, body, { customer_ids: customerIds });
+        // Seed the account dimension with the ids; the sync enriches each row
+        // with descriptive_name + currency from the customer resource. Selection
+        // defaults to all-selected.
+        try {
+            await integrationsRepository.upsertAdAccounts(orgId, 'google_ads',
+                customerIds.map((id) => ({ customer_id: id })));
+        } catch (err) {
+            console.error('[google_ads] ad_accounts upsert failed:', err.message);
+        }
         return { ok: true, customerIds };
     },
 

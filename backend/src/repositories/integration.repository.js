@@ -118,4 +118,86 @@ export const integrationRepository = {
             .eq('id', id)
             .eq('organisation_id', orgId);
     },
+
+    // ---- Ad accounts (Google Ads / Meta Ads) dimension + selection ----------
+    // The connectors discover every accessible account and upsert it here; the
+    // marketing read paths filter ad_metrics to the SELECTED accounts. All
+    // queries carry organisation_id (tenant isolation on the serviceClient path).
+
+    // Upsert discovered accounts. `accounts` = [{ customer_id, name, currency,
+    // status }]. is_selected is preserved on conflict (don't re-select an account
+    // the owner has deselected); new accounts default to selected via the column
+    // default. customer_id+provider+org is the unique key.
+    async upsertAdAccounts(orgId, provider, accounts) {
+        const rows = (accounts ?? [])
+            .filter((a) => a && a.customer_id)
+            .map((a) => ({
+                organisation_id: orgId,
+                provider,
+                customer_id: String(a.customer_id),
+                name: a.name ?? null,
+                currency: a.currency ?? null,
+                status: a.status ?? null,
+            }));
+        if (rows.length === 0) return [];
+        const { data, error } = await supabase_1.serviceClient
+            .from('ad_accounts')
+            .upsert(rows, { onConflict: 'organisation_id,provider,customer_id', ignoreDuplicates: false })
+            .select('customer_id, name, currency, status, is_selected');
+        if (error) throw new Error(`ad_accounts upsert: ${error.message}`);
+        return data ?? [];
+    },
+
+    // All accounts for an org (optionally one provider), for the selector UI.
+    async listAdAccounts(orgId, provider = null) {
+        let q = supabase_1.serviceClient
+            .from('ad_accounts')
+            .select('provider, customer_id, name, currency, status, is_selected')
+            .eq('organisation_id', orgId)
+            .order('provider', { ascending: true })
+            .order('name', { ascending: true });
+        if (provider) q = q.eq('provider', provider);
+        const { data } = await q;
+        return data ?? [];
+    },
+
+    // Persist the selection: mark the given customer_ids selected, the rest not.
+    // Scoped to one provider so selecting Meta accounts never touches Google.
+    async setAdAccountSelection(orgId, provider, selectedIds) {
+        const selected = new Set((selectedIds ?? []).map(String));
+        const existing = await this.listAdAccounts(orgId, provider);
+        // One UPDATE per desired state (two statements, not N) keeps it cheap.
+        const toSelect = existing.filter((a) => selected.has(a.customer_id)).map((a) => a.customer_id);
+        const toDeselect = existing.filter((a) => !selected.has(a.customer_id)).map((a) => a.customer_id);
+        if (toSelect.length) {
+            const { error } = await supabase_1.serviceClient
+                .from('ad_accounts').update({ is_selected: true })
+                .eq('organisation_id', orgId).eq('provider', provider)
+                .in('customer_id', toSelect);
+            if (error) throw new Error(`ad_accounts select: ${error.message}`);
+        }
+        if (toDeselect.length) {
+            const { error } = await supabase_1.serviceClient
+                .from('ad_accounts').update({ is_selected: false })
+                .eq('organisation_id', orgId).eq('provider', provider)
+                .in('customer_id', toDeselect);
+            if (error) throw new Error(`ad_accounts deselect: ${error.message}`);
+        }
+        return this.listAdAccounts(orgId, provider);
+    },
+
+    // Selected customer_ids for the read filter. provider = null spans both ad
+    // providers (the cross-channel marketing views). Returns null when the org
+    // has NO ad_accounts rows yet (pre-migration / never synced) so callers can
+    // fall back to "no account filter" rather than filtering to an empty set.
+    async selectedAdAccountIds(orgId, provider = null) {
+        let q = supabase_1.serviceClient
+            .from('ad_accounts')
+            .select('customer_id, is_selected')
+            .eq('organisation_id', orgId);
+        if (provider) q = q.eq('provider', provider);
+        const { data } = await q;
+        if (!data || data.length === 0) return null;
+        return data.filter((a) => a.is_selected).map((a) => a.customer_id);
+    },
 };

@@ -218,6 +218,19 @@ export const integrationService = {
             throw new errors_1.AppError('dentally is not connected', 409);
         return dentally_sync_1.detectSiteIds(orgId, integration);
     },
+    // Ad-account dimension + selection for the marketing views (Google/Meta).
+    // Only the two ad providers have ad accounts; reject anything else.
+    async adAccounts(orgId, provider) {
+        if (provider !== 'google_ads' && provider !== 'meta_ads')
+            throw new errors_1.AppError(`${provider} has no ad accounts`, 400);
+        return integration_repository_1.integrationRepository.listAdAccounts(orgId, provider);
+    },
+    async setAdAccountSelection(orgId, provider, selectedIds) {
+        if (provider !== 'google_ads' && provider !== 'meta_ads')
+            throw new errors_1.AppError(`${provider} has no ad accounts`, 400);
+        const accounts = await integration_repository_1.integrationRepository.setAdAccountSelection(orgId, provider, selectedIds);
+        return { ok: true, accounts };
+    },
     async revoke(orgId, provider) {
         const { impl } = getProvider(provider);
         return impl.revoke(orgId);

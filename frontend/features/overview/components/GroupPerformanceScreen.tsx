@@ -118,6 +118,7 @@ export function GroupPerformanceScreen() {
   ];
 
   const channels = roi?.connected ? roi.by_provider : [];
+  const adAccounts = roi?.connected ? (roi.by_account ?? []) : [];
   const lens = buildLens(practices, g.marginPct, roi);
 
   // Clinical revenue lines from Dentally invoice items (group-wide).
@@ -152,22 +153,61 @@ export function GroupPerformanceScreen() {
         {channels.length === 0 ? (
           <EmptyState message="No ad spend in this window. Connect Google Ads / Meta in Data Hub." />
         ) : (
-          <div className="grid gap-3 mt-3 grid-cols-1 md:grid-cols-3">
-            {channels.map((c) => (
-              <div key={c.provider} className="rounded-xl border border-border p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold capitalize">{c.provider}</span>
-                  <span className="display text-2xl font-bold">{DASH}</span>
+          <>
+            <div className="grid gap-3 mt-3 grid-cols-1 md:grid-cols-3">
+              {channels.map((c) => (
+                <div key={c.provider} className="rounded-xl border border-border p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold capitalize">{c.provider.replace('_', ' ')}</span>
+                    <span className="display text-2xl font-bold">{DASH}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
+                    <ChannelStat label="Spend" value={formatPence(c.spend_pence)} />
+                    <ChannelStat label="Revenue" value={DASH} />
+                    <ChannelStat label="Leads" value={formatNumber(c.leads)} />
+                    <ChannelStat label="New pts" value={formatNumber(c.conversions)} />
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
-                  <ChannelStat label="Spend" value={formatPence(c.spend_pence)} />
-                  <ChannelStat label="Revenue" value={DASH} />
-                  <ChannelStat label="Leads" value={formatNumber(c.leads)} />
-                  <ChannelStat label="New pts" value={formatNumber(c.conversions)} />
+              ))}
+            </div>
+            {adAccounts.length > 1 && (
+              <div className="mt-4">
+                <div className="text-xs text-ink-muted uppercase tracking-wide mb-2">By ad account</div>
+                <div className="overflow-x-auto">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Account</th>
+                        <th className="right">Spend</th>
+                        <th className="right">Impressions</th>
+                        <th className="right">Clicks</th>
+                        <th className="right">Reach</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adAccounts.map((a) => (
+                        <tr key={`${a.provider}-${a.customer_id}`}>
+                          <td>
+                            <strong>{a.name || a.customer_id}</strong>
+                            <span className="text-ink-muted ml-1 capitalize" style={{ fontSize: 11 }}>
+                              {a.provider.replace('_', ' ')}{a.currency ? ` · ${a.currency}` : ''}
+                            </span>
+                          </td>
+                          <td className="right">{formatPence(a.spend_pence)}</td>
+                          <td className="right">{formatNumber(a.impressions)}</td>
+                          <td className="right">{formatNumber(a.clicks)}</td>
+                          <td className="right">{formatNumber(a.reach)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
+                <p className="text-xs text-ink-muted mt-2">
+                  Showing your selected ad accounts. Change which accounts are included in Data Hub → Integrations.
+                </p>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </Card>
 

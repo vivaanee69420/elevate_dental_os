@@ -104,6 +104,16 @@ export const integrationController = {
         const { secret } = integration_model_1.webhookSecretSchema.parse(req.body);
         res.json(await integration_service_1.integrationService.setWebhookSecret(req.user.organisation_id, provider, secret));
     },
+    // Ad accounts (Google/Meta) for the selector + selection persistence.
+    async adAccounts(req, res) {
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.adAccounts(req.user.organisation_id, provider));
+    },
+    async setAdAccountSelection(req, res) {
+        const { provider } = providerParamSchema.parse(req.params);
+        const { selected_ids } = integration_model_1.adAccountSelectionSchema.parse(req.body);
+        res.json(await integration_service_1.integrationService.setAdAccountSelection(req.user.organisation_id, provider, selected_ids));
+    },
     async remove(req, res) {
         const { id } = idParamSchema.parse(req.params);
         res.json(await integration_service_1.integrationService.remove(req.user.organisation_id, id));

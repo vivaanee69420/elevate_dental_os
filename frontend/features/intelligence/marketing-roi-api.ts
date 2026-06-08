@@ -27,6 +27,21 @@ export interface MktChannel {
   convRatePct: number;
 }
 
+export interface MktAccount {
+  provider: string;
+  customerId: string | null;
+  name: string | null;
+  currency: string | null;
+  status: string | null;
+  spendPence: number;
+  impressions: number;
+  clicks: number;
+  reach: number;
+  conversions: number;
+  cpaPence: number;
+  cpcPence: number;
+}
+
 export interface MktPractice {
   id: string;
   name: string;
@@ -62,6 +77,8 @@ export interface MarketingRoi {
   blendedRoiPct: number | null;
   google: MktChannel | null;
   meta: MktChannel | null;
+  accountFilter: string[] | null; // null = all; [] = none
+  byAccount: MktAccount[];
   revenuePerChannelAvailable: boolean;
   byPracticeAvailable: boolean;
   adSpendPerPracticeAvailable: boolean;
@@ -74,6 +91,7 @@ const EMPTY: MarketingRoi = {
   applicable: true, scope: 'all', period: 'month', connected: false, hasLeads: false,
   channels: [], paidSpendPence: 0, totalLeads: 0, totalConversions: 0, settledRevenuePence: 0,
   blendedRoas: null, blendedRoiPct: null, google: null, meta: null,
+  accountFilter: null, byAccount: [],
   revenuePerChannelAvailable: false, byPracticeAvailable: false, adSpendPerPracticeAvailable: false,
   byPractice: [], insights: [],
 };

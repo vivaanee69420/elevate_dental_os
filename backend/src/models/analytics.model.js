@@ -30,6 +30,9 @@ export const scopeQuerySchema = zod_1.z.object({
     since: isoDateTime,
     until: isoDateTime,
     label: zod_1.z.string().trim().max(60).optional(),
+    // Comma-separated ad-account customer_ids to restrict the marketing views to
+    // (used by /marketing-roi). Absent => fall back to the org's selected accounts.
+    account_ids: zod_1.z.string().trim().optional(),
 });
 
 // AI Analyst Ask (POST body). Same scope/period selector + a bounded free-text
