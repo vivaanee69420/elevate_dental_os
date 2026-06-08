@@ -120,6 +120,7 @@ export function GroupPerformanceScreen() {
         <Card>
           <h3 className="display text-lg font-semibold">Business Performance</h3>
           <p className="text-sm text-ink-muted mt-0.5 mb-3">Turnover is live from Dentally. Cash, profit, margin and ROAS need Xero + ad mapping — shown once connected.</p>
+          <div className="overflow-x-auto">
           <table className="table">
             <thead>
               <tr>
@@ -162,6 +163,7 @@ export function GroupPerformanceScreen() {
               </tr>
             </tbody>
           </table>
+          </div>
         </Card>
 
         <Card>
