@@ -46,7 +46,19 @@ export function buildDebtView(rows, now = Date.now()) {
 
 export const debtService = {
     async list(orgId, { practiceId = null } = {}) {
-        const rows = await debt_repository_1.debtRepository.listUnpaid(orgId, { practiceId });
-        return buildDebtView(rows);
+        const since = new Date(Date.now() - 365 * DAY_MS).toISOString();
+        const [rows, recovered_ttm_pence] = await Promise.all([
+            debt_repository_1.debtRepository.listUnpaid(orgId, { practiceId }),
+            debt_repository_1.debtRepository.settledSince(orgId, since, { practiceId }),
+        ]);
+        const view = buildDebtView(rows);
+        // Collection rate = recovered / (recovered + still-outstanding). Real
+        // ratio from the same money base; null when there's nothing to measure
+        // so the UI can hide the sub-line rather than show 0%.
+        const denom = recovered_ttm_pence + view.outstanding_pence;
+        const collection_rate_pct = denom > 0
+            ? Math.round((recovered_ttm_pence / denom) * 1000) / 10
+            : null;
+        return { ...view, recovered_ttm_pence, collection_rate_pct };
     },
 };

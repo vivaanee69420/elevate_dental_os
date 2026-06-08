@@ -1,9 +1,11 @@
 'use client';
-// Debt Recovery — aged debtors from real Dentally invoices via /api/debt.
+// Debt Recovery — aged debtors + recovered total from real invoices/payments
+// via /api/debt (QuickBooks / Xero / Dentally sources, keyed by `source`).
 // (No emoji on the bulk-reminders button — project rule 7.)
 //
-// Note: "Active payment plans" and "Recovered TTM" KPIs have no Dentally data
-// source yet (payment-plan/recovery feeds are out of scope) — left static.
+// Recovered TTM = settled receipts over the trailing 12 months; its sub-line is
+// the collection rate (recovered / (recovered + outstanding)). The old "Active
+// payment plans" KPI was removed — no source feed exists for payment plans.
 
 import { Card, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPence } from '@/lib/format';
@@ -83,7 +85,7 @@ export default function DebtScreen() {
 
       <div
         className="grid"
-        style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}
+        style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 16 }}
       >
         <DebtKpi label="Outstanding" value={formatPenceCompact(data?.outstanding_pence ?? 0)} />
         <DebtKpi
@@ -92,8 +94,16 @@ export default function DebtScreen() {
           sub="Highest risk"
           tone="down"
         />
-        <DebtKpi label="Active payment plans" value="12" sub="£28k/mo" tone="up" />
-        <DebtKpi label="Recovered TTM" value="£42k" sub="86% success" tone="up" />
+        <DebtKpi
+          label="Recovered TTM"
+          value={formatPenceCompact(data?.recovered_ttm_pence ?? 0)}
+          sub={
+            data?.collection_rate_pct != null
+              ? `${data.collection_rate_pct}% collection rate`
+              : undefined
+          }
+          tone="up"
+        />
       </div>
 
       <Card className="mb-4">
