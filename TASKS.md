@@ -8,6 +8,129 @@ Target launch: **Fri 30 May 2026** (now past — in stabilisation).
 
 ---
 
+## Session — 2026-06-08 · Meta Ads OAuth connect debugging (PAUSED — blocked on secret)
+
+Goal: get Meta Ads `Connect` working. Code is fine — this is all Meta-app +
+Railway-env config. No code changes made.
+
+### Root causes found (two, stacked)
+1. **Wrong secret.** `.env` `META_APP_SECRET=df9d6182155e8b31cb7f872bb8a9e5f0`
+   belongs to the OLD app `1703170187610025`, NOT the new app `1475546453835204`.
+   Proven via direct Meta API:
+   - `client_id=1703… + df9d…` → returns access_token ✅ (valid pair, old app)
+   - `client_id=1475… + df9d…` → `Error validating client secret` ❌
+   A secret validates against exactly one app, so `1475…`'s real secret is still
+   unknown / never copied.
+2. **Railway env stale.** Prod authorize URL showed `client_id=1703…` +
+   `redirect_uri=localhost:8080` → Railway had old `META_APP_ID` and default
+   `BACKEND_PUBLIC_URL`. The authorize `redirect_uri` is built from
+   `BACKEND_PUBLIC_URL` (`meta-ads-provider.js:36`); `client_id` = live read-out
+   of `META_APP_ID`.
+
+### Progress this session
+- `BACKEND_PUBLIC_URL` on Railway now correct → redirect_uri shows the railway
+  domain. ✅
+- `META_APP_ID` on Railway STILL `1703…` → authorize still uses the old app. ❌
+
+### Browser "Feature not available" / "App is not active"
+- Served by Facebook (backend logs show nothing — flow never reaches callback).
+- = the app being used (`1703…`) has Facebook Login not configured/published.
+  New apps use **Publish**, not a Dev/Live toggle.
+- Likely **Facebook Login for Business vs classic** mismatch: code sends classic
+  `/dialog/oauth?scope=ads_read` (no `config_id`). FB-Login-for-Business needs a
+  `config_id`. If the app only offers "for Business", either add the **classic
+  Facebook Login** product OR patch `config_id` into the authorize URL.
+
+### To finish (pick ONE app, make id+secret+config consistent)
+- **Path A — old app `1703…` (creds already verified working):** publish it +
+  configure classic Facebook Login + register prod redirect URI
+  `https://elevatedentalos-production.up.railway.app/oauth/meta_ads/callback`.
+  Railway: `META_APP_ID=1703170187610025`, `META_APP_SECRET=df9d6182…`. Redeploy.
+- **Path B — new app `1475…`:** get its REAL secret (Basic → Show), verify via
+  `curl "https://graph.facebook.com/oauth/access_token?client_id=1475546453835204&client_secret=<SECRET>&grant_type=client_credentials"`
+  (must return access_token, not error). Then set `META_APP_ID=1475…` +
+  that secret on Railway backend AND worker. Register the prod redirect URI on
+  app `1475`. Redeploy.
+- Verify after: prod authorize URL must read `client_id=<chosen app>` +
+  railway redirect. Connect → check `integrations.last_error` for `meta_ads`
+  (currently "Error validating client secret", org d3256296-…).
+- Rotate `df9d6182…` (old app secret) + the secrets pasted in chat once stable.
+
+### Note
+- Diagnostic: `client_id` in the FB authorize URL = live value of backend's
+  `META_APP_ID`; `redirect_uri` = `BACKEND_PUBLIC_URL`. Use them to confirm which
+  env the running backend actually loaded (env only reloads on restart/redeploy).
+
+---
+
+## Session — 2026-06-08 · Architecture / scaling / security review (PLAN, not yet built)
+
+Request: review architecture, sync performance, reliability, security; produce a
+prioritised roadmap. Grounded in actual source, not the work log.
+
+### Findings (already built — do NOT rebuild)
+- Sync is already non-blocking — `integration.controller.js:56` fire-and-forget,
+  UI polls `/sync-progress`.
+- Worker process exists — `workers/index.js` (node-cron) + `ghl-sync-once.js`.
+- Token encryption AES-256-GCM at rest (`crypto.js`); tokens never reach frontend.
+- Webhook HMAC verify + signed per-org URL token w/ `timingSafeEqual`.
+- Rate limiting: 100/min/IP global + 50/min/verified-user + 5/min login. helmet on.
+
+### Key bottleneck
+- Sync **progress** lives in a module-level `Map` (`lib/integrations/sync-progress.js`,
+  "lost on restart") and sync **execution** is a bare Promise in the web process.
+  → dies on restart/deploy, no retry, **pins app to a single web instance**
+  (progress poll to a 2nd instance reads an empty Map).
+
+### Decisions (user)
+- **No MFA** (internal/consulting product).
+- **No Redis** — use **Postgres** instead: `pg-boss` for the job queue (durable in
+  the already-backed-up DB, transactional with data writes, zero new infra) +
+  snapshot tables/matviews for KPI cache. Redis throughput ceiling is far above
+  this scale; fewer moving parts = the stated reliability goal.
+
+### Plan — sync → pg-boss (two isolated pieces)
+- **A. Progress: Map → `sync_progress` table.** New migration: table keyed
+  (organisation_id, provider) with running/pct/phase/page/total_pages/done/error/
+  updated_at. Rewrite `sync-progress.js` set/getProgress as async upsert/select
+  (same 3-fn interface). `/sync-progress` then answers from any instance + survives
+  restart. ~300 upserts/Dentally pull = trivial; debounce later if noisy.
+- **B. Execution: in-web Promise → pg-boss job on the worker.** Web `sync()` →
+  `boss.send('integration-sync', {orgId,provider,full}, {singletonKey:
+  "<orgId>:<provider>", retryLimit:3, retryBackoff:true})`, returns immediately.
+  Worker `boss.work('integration-sync', …)` reuses existing `integrationService.syncNow`
+  (already writes progress). `singletonKey` replaces the in-memory stale-flag
+  concurrency guard (delete it). `bootstrapDentally`/`bootstrapGohighlevel` →
+  `integration-bootstrap` job, same shape. pg-boss connects to Supabase Postgres
+  (direct conn string, own `pgboss` schema).
+
+### Roadmap (status ⬜ pending)
+Critical
+- ⬜ **RLS backstop**: enable Custom Access Token Hook (rule 8) + turn RLS on
+  *under* the existing manual `.eq('organisation_id')` filters (fail closed on a
+  missed filter) + per-repo cross-org isolation test. 32 repos on `serviceClient`,
+  only 1 uses `req.db` — manual filter is currently the ONLY tenant wall. Highest
+  severity (patient + financial PII).
+- ⬜ **Sync → pg-boss** (plan A+B above).
+
+Important
+- ⬜ Incremental sync: persist per-(org,provider,resource) cursor; commit cursor
+  only after page lands → crash-safe resume.
+- ⬜ Webhook replay protection: reject stale provider timestamp + dedupe on event id
+  (`webhook-token.js` is intentionally no-expiry).
+- ⬜ Audit logins + data exports to `audit_log` (mutations already covered by `audit` mw).
+- ⬜ Turn on CSP (`helmet({contentSecurityPolicy:false})` today) + turn on Sentry
+  (dep installed, no-op until `SENTRY_DSN` set; keep PII scrubbing for patient/financial).
+- ⬜ Secret rotation: key-id prefix on ciphertext blobs; run a verified backup-restore drill.
+
+Future
+- ⬜ Dentally → webhook-driven deltas; nightly full sync = reconciliation backstop only.
+- ⬜ Cloudflare WAF in front of Railway; per-tenant rate tiers.
+
+NOT doing: MFA, Redis, load balancers, k8s, sharding (wrong scale).
+
+---
+
 ## Session — 2026-06-08 · Command Centre custom date range
 
 Commit `ebb75d7` on `main`. Request: "since we have past data from years can we

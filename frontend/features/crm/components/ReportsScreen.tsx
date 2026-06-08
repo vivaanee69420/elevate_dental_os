@@ -13,12 +13,17 @@
 import { useMemo } from 'react';
 import { useLeads } from '@/features/leads/hooks';
 import type { Lead } from '@/features/leads/api';
+import { useTreatmentBreakdown } from '@/features/crm/treatment-api';
 import { formatPence as formatCurrency } from '@/lib/format';
 
-/** CRM Reports screen — live, derived from GET /api/leads. */
+/** CRM Reports screen — live, derived from GET /api/leads. The "By treatment"
+ *  card is backed by REAL Dentally invoiced fees (GET /api/analytics/treatment-breakdown),
+ *  not the lead pipeline (leads carry GHL opp.name, not a real treatment). */
 export default function ReportsScreen() {
   const { data, isLoading } = useLeads({ limit: 1000 });
   const leads: Lead[] = data?.leads ?? [];
+  const { data: treatmentData } = useTreatmentBreakdown(24);
+  const treatmentBreakdown = treatmentData?.treatments ?? [];
 
   const model = useMemo(() => {
     const val = (l: Lead) => l.estimated_value_pence ?? 0;
@@ -51,15 +56,6 @@ export default function ReportsScreen() {
       return { name: p, leads: pl.length, conversionRate: pl.length ? (converted / pl.length) * 100 : 0 };
     }).sort((a, b) => b.leads - a.leads);
 
-    const treatments = [...new Set(leads.map((l) => l.treatment).filter(Boolean))] as string[];
-    const treatmentBreakdown = treatments.map((t) => {
-      const tl = leads.filter((l) => l.treatment === t);
-      return { name: t, leads: tl.length, value: tl.reduce((s, l) => s + val(l), 0) };
-    })
-      .filter((t) => t.leads > 0)
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 24); // top treatments by value
-
     const funnel = [
       { label: 'Leads received', value: totalLeads, colour: '#3B82F6' },
       { label: 'Contacted', value: contacted, colour: '#7C3AED' },
@@ -84,7 +80,7 @@ export default function ReportsScreen() {
 
     return {
       totalLeads, treatmentStarted, sourceBreakdown, practiceBreakdown,
-      treatmentBreakdown, funnel, pipelineValue, avgFirstContact, ftaRate,
+      funnel, pipelineValue, avgFirstContact, ftaRate,
     };
   }, [leads]);
 
@@ -361,43 +357,53 @@ export default function ReportsScreen() {
         </div>
       </div>
 
-      {/* By treatment */}
+      {/* By treatment — REAL invoiced fees from Dentally (invoice_items), grouped
+          by treatment_name. Patients = unique invoiced patients per treatment. */}
       <div className="card-padded">
         <h2
           className="display font-bold"
-          style={{ fontSize: 16, marginBottom: 12 }}
+          style={{ fontSize: 16, marginBottom: 4 }}
         >
           By treatment
         </h2>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: 10,
-          }}
-        >
-          {model.treatmentBreakdown.map((t) => (
-            <div
-              key={t.name}
-              style={{
-                padding: 10,
-                background: 'var(--bg)',
-                borderRadius: 6,
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 600 }}>{t.name}</div>
+        <p className="text-ink-muted" style={{ fontSize: 11, marginBottom: 12 }}>
+          Invoiced fees from Dentally
+        </p>
+        {treatmentBreakdown.length === 0 ? (
+          <div className="text-ink-muted" style={{ fontSize: 12 }}>
+            No invoiced treatments yet.
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+              gap: 10,
+            }}
+          >
+            {treatmentBreakdown.map((t) => (
               <div
-                className="display font-bold"
-                style={{ fontSize: 20, color: 'var(--brand)', marginTop: 4 }}
+                key={t.treatment_name}
+                style={{
+                  padding: 10,
+                  background: 'var(--bg)',
+                  borderRadius: 6,
+                }}
               >
-                {formatCurrency(t.value)}
+                <div style={{ fontSize: 12, fontWeight: 600 }}>{t.treatment_name}</div>
+                <div
+                  className="display font-bold"
+                  style={{ fontSize: 20, color: 'var(--brand)', marginTop: 4 }}
+                >
+                  {formatCurrency(t.fee_pence)}
+                </div>
+                <div className="text-ink-muted" style={{ fontSize: 11 }}>
+                  {t.patient_count} {t.patient_count === 1 ? 'patient' : 'patients'}
+                </div>
               </div>
-              <div className="text-ink-muted" style={{ fontSize: 11 }}>
-                {t.leads} enquiries
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
