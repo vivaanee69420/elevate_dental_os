@@ -12,13 +12,34 @@
 // in once Xero (P&L) and a treatment-production/price feed are connected.
 
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
-import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart } from '@/components/ui';
+import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type ChipColour } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice, type RevenueLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { useMarketingRoi } from '@/features/growth/hooks';
 
 const DASH = '—';
+
+type HeadlineKpi = { label: string; value: string; sub: string; chip: { text: string; tone: ChipColour } | null };
+
+// n/d as a percentage, rounded to `dp` decimals (default integer). 0 when d<=0.
+function pctOf(n: number, d: number, dp = 0): number {
+  if (d <= 0) return 0;
+  const f = 10 ** dp;
+  return Math.round((n / d) * 100 * f) / f;
+}
+
+// One headline scorecard tile: label, big value, sub-line, optional status chip.
+function HeadlineCard({ c }: { c: HeadlineKpi }) {
+  return (
+    <div className="card-padded flex flex-col">
+      <div className="text-xs text-ink-muted uppercase tracking-wide">{c.label}</div>
+      <div className="display text-2xl font-bold mt-1">{c.value}</div>
+      <div className="text-xs text-ink-muted mt-1">{c.sub}</div>
+      {c.chip && <div className="mt-2"><Chip colour={c.chip.tone}>{c.chip.text}</Chip></div>}
+    </div>
+  );
+}
 
 export function GroupPerformanceScreen() {
   const { scope } = useScopePeriod();
@@ -44,18 +65,56 @@ export function GroupPerformanceScreen() {
   const practices = isGroupScope ? data.practices : data.practices.filter((p) => p.practiceId === scope);
   const maxTurnover = Math.max(1, ...data.practices.map((p) => p.revenuePence));
 
-  // Funnel KPIs — real from Dentally treatment_plans + GHL leads + ad spend.
-  const revPerLead = g.leads > 0 ? Math.round(g.treatmentsClosedPence / g.leads) : 0;
-  const costPerStart = roi?.connected && g.treatmentsStarted > 0
-    ? Math.round(roi.spend_pence / g.treatmentsStarted) : 0;
+  // Headline KPIs — the group business scorecard. Real feeds: Dentally
+  // (turnover, cash banked, treatments, leads) + ads via marketing ROI (spend,
+  // ROAS, cost/patient). Group profit needs a P&L margin (Xero/QuickBooks) and
+  // shows "—" until connected; ad-derived cards show "—" until ads are mapped.
+  const connected = !!roi?.connected;
+  const spendPence = connected ? roi!.spend_pence : 0;
+  const roas = connected ? roi!.roas : 0;
+
+  const profitPence = g.marginPct > 0 ? Math.round((g.revenuePence * g.marginPct) / 100) : 0;
+  const vsBasePct = g.revenueTargetPence > 0
+    ? Math.round(((g.revenuePence - g.revenueTargetPence) / g.revenueTargetPence) * 100) : null;
+  const cashPct = pctOf(g.cashCollectedPence, g.revenuePence);
+  const outstandingPence = Math.max(0, g.revenuePence - g.cashCollectedPence);
+  const spendPctTurnover = pctOf(spendPence, g.revenuePence, 1);
+  const newPts = g.newPatients;
+  const avgPatientValuePence = newPts > 0 ? Math.round(g.treatmentsClosedPence / newPts) : 0;
+  const costPerPatientPence = connected && newPts > 0 ? Math.round(spendPence / newPts) : 0;
+  const closedPctTurnover = pctOf(g.treatmentsClosedPence, g.revenuePence);
   // Treatments started is a COUNT, not a % of leads: Dentally treatment plans
   // (existing patients) and GHL leads (new marketing) are different populations,
-  // so "started ÷ leads" can exceed 100% and means nothing. Show the raw count.
-  const funnel = [
-    { label: 'Treatments closed', value: formatPence(g.treatmentsClosedPence), sub: `Private value completed · ${windowLabel}` },
-    { label: 'Treatments started', value: formatNumber(g.treatmentsStarted), sub: `Dentally plans · ${windowLabel}` },
-    { label: 'Cost / treatment started', value: formatPence(costPerStart), sub: 'Ad spend ÷ treatments started' },
-    { label: 'Revenue / lead', value: formatPence(revPerLead), sub: 'Treatment value ÷ leads' },
+  // so "started ÷ leads" can exceed 100% and means nothing.
+  const revPerLead = g.leads > 0 ? Math.round(g.treatmentsClosedPence / g.leads) : 0;
+  const costPerStart = connected && g.treatmentsStarted > 0 ? Math.round(spendPence / g.treatmentsStarted) : 0;
+  const roasTone: ChipColour = roas >= 4 ? 'emerald' : roas >= 2 ? 'amber' : 'rose';
+  const roasLabel = roas >= 4 ? 'Strong' : roas >= 2 ? 'Watch' : 'Weak';
+
+  // Row 1 — money + acquisition headline. Row 2 — the lead→treatment funnel.
+  const headlineTop: HeadlineKpi[] = [
+    { label: 'Group Turnover', value: formatPence(g.revenuePence), sub: `${windowLabel} · ${g.practices} ${g.practices === 1 ? 'entity' : 'entities'}`,
+      chip: vsBasePct != null ? { text: `${vsBasePct >= 0 ? '▲' : '▼'} ${Math.abs(vsBasePct)}% vs base`, tone: vsBasePct >= 0 ? 'emerald' : 'rose' } : null },
+    { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
+      chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
+    { label: 'Cash Collected', value: formatPence(g.cashCollectedPence), sub: `${cashPct}% of turnover banked`,
+      chip: outstandingPence > 0 ? { text: `${formatPence(outstandingPence)} outstanding`, tone: 'amber' } : null },
+    { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
+      chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
+    { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',
+      chip: roas > 0 ? { text: roasLabel, tone: roasTone } : null },
+    { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'Leads reaching treatment',
+      chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null },
+  ];
+  const headlineFunnel: HeadlineKpi[] = [
+    { label: 'Treatments Closed', value: formatPence(g.treatmentsClosedPence), sub: `Treatment value accepted · ${windowLabel}`,
+      chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover`, tone: 'emerald' } : null },
+    { label: 'Lead → Start Rate', value: `${g.leadToStartRate}%`, sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads`,
+      chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} accepted`, tone: 'emerald' } : null },
+    { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: 'Paid spend ÷ treatments started',
+      chip: connected && spendPence > 0 ? { text: `${formatPence(spendPence)} paid`, tone: 'amber' } : null },
+    { label: 'Revenue / Lead', value: formatPence(revPerLead), sub: 'Attributed value ÷ leads',
+      chip: g.treatmentsClosedPence > 0 ? { text: `${formatPence(g.treatmentsClosedPence)} attributed`, tone: 'emerald' } : null },
   ];
 
   const channels = roi?.connected ? roi.by_provider : [];
@@ -67,15 +126,12 @@ export function GroupPerformanceScreen() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Headline funnel KPIs */}
+      {/* Headline scorecard — money + acquisition (row 1), lead→treatment funnel (row 2) */}
+      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        {headlineTop.map((c) => <HeadlineCard key={c.label} c={c} />)}
+      </div>
       <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-        {funnel.map((k) => (
-          <div key={k.label} className="card-padded">
-            <div className="text-xs text-ink-muted uppercase tracking-wide">{k.label}</div>
-            <div className="display text-2xl font-bold mt-1">{k.value}</div>
-            <div className="text-xs text-ink-muted mt-1">{k.sub}</div>
-          </div>
-        ))}
+        {headlineFunnel.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
 
       {!isGroupScope && (
