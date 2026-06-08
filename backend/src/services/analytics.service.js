@@ -335,6 +335,26 @@ export const analyticsService = {
             note: 'Real invoiced fees from Dentally (patient price). Lab/material cost is not in the feed — set it in the Workbench.',
         };
     },
+    // Flat "by treatment" breakdown for the CRM Reports card. Real invoiced fee +
+    // distinct patient count per treatment_name (from invoice_items), org-wide,
+    // optionally windowed [since, until). Sorted by fee desc, top `limit`. Money
+    // in integer pence. This replaces the old GHL-leads grouping (which grouped
+    // by opp.name — junk like "New Lead || 22/03/2026").
+    async treatmentBreakdown(orgId, { since = null, until = null, limit = 24 } = {}) {
+        const rows = await analytics_repository_1.analyticsRepository.treatmentBreakdown(orgId, since, until);
+        const treatments = rows
+            .filter((r) => r.item_count > 0)
+            .sort((a, b) => b.fee_pence - a.fee_pence)
+            .slice(0, Math.max(1, Math.min(100, limit)));
+        const grandTotal = rows.reduce((s, r) => s + r.fee_pence, 0);
+        return {
+            treatments,                 // [{ treatment_name, fee_pence, item_count, patient_count }]
+            grandTotal,                 // total invoiced fee in pence (all treatments)
+            basis: 'invoice_items',
+            hasData: grandTotal > 0,
+            note: 'Real invoiced fees from Dentally, grouped by treatment. Patients = unique invoiced patients per treatment.',
+        };
+    },
     // Day — Cash Collected (GM Intelligence OS, T9). REAL settled receipts banked
     // by working day across the month containing periodKey, plus a composite
     // collection index (each day vs the month's average working day = 100). This
@@ -1680,7 +1700,7 @@ export const analyticsService = {
         // Leads are windowed only when an upper bound is set (month/day mode); in
         // the trailing-days mode they stay all-time, as before.
         const leadSinceISO = untilISO ? sinceISO : null;
-        const [practices, revRows, apptRows, leadRows, treatments, actuals, health, noShowTracked, revLineRows] = await Promise.all([
+        const [practices, revRows, apptRows, leadRows, treatments, actuals, health, noShowTracked, revLineRows, cashRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -1690,6 +1710,9 @@ export const analyticsService = {
             analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             analytics_repository_1.analyticsRepository.hasNoShowData(orgId),
             analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, sinceISO, untilISO),
+            // Cash banked in window — settled receipts (payments processed), org-wide.
+            // Distinct from turnover (settled invoices); the gap is outstanding/debtors.
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO),
         ]);
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         const num = (v) => Number(v || 0);
@@ -1732,7 +1755,10 @@ export const analyticsService = {
         const totalConverted = leadRows.reduce((s, r) => s + num(r.converted), 0);
         // Treatment funnel (org-wide; treatment_plans are not practice-attributed).
         const treatmentsStarted = num(treatments.started);
+        const treatmentsCompleted = num(treatments.completed);
         const treatmentsClosedPence = num(treatments.closed_value_pence);
+        // Cash banked = sum of settled receipts in the window (real payments).
+        const cashCollectedPence = cashRows.reduce((s, r) => s + num(r.pence), 0);
 
         // Revenue by clinical line — bucket the per-treatment invoiced fee feed
         // (invoice_items, real Dentally data) into ~8 clinical categories. Group-
@@ -1786,8 +1812,11 @@ export const analyticsService = {
                 noShowTracked, // false => no_show state never synced; show "—" not 0%
                 leads: totalLeads,
                 conversionRate: rate(totalConverted, totalLeads),
+                newPatients: totalConverted, // leads reaching treatment (real Dentally/GHL)
                 treatmentsStarted,
+                treatmentsCompleted, // accepted/completed plan count in window
                 treatmentsClosedPence,
+                cashCollectedPence, // settled receipts banked in window
                 leadToStartRate: rate(treatmentsStarted, totalLeads),
             },
             practices: practiceRows,

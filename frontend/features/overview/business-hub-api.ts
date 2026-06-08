@@ -39,8 +39,11 @@ export interface BusinessHub {
     noShowTracked: boolean; // false => Dentally never synced a no_show state; render "—"
     leads: number;
     conversionRate: number;
+    newPatients: number;           // leads reaching treatment (real Dentally/GHL)
     treatmentsStarted: number;     // plans started in window (Dentally)
+    treatmentsCompleted: number;   // accepted/completed plan count in window
     treatmentsClosedPence: number; // private value of completed plans in window
+    cashCollectedPence: number;    // settled receipts banked in window
     leadToStartRate: number;       // treatmentsStarted / leads, percentage points
   };
   practices: HubPractice[];
