@@ -18,4 +18,20 @@ export const debtRepository = {
         if (error) throw new Error(error.message);
         return data ?? [];
     },
+    // Settled receipts in [sinceISO, now) -> "Recovered" total. Real money
+    // collected (QuickBooks/Xero/Stripe payments), summed in pence. Caller
+    // passes a trailing-12-month sinceISO. practiceId scopes to one practice.
+    async settledSince(orgId, sinceISO, { practiceId = null } = {}) {
+        let query = supabase_1.serviceClient
+            .from('payments')
+            .select('amount_pence')
+            .eq('organisation_id', orgId)
+            .eq('status', 'settled')
+            .gte('processed_at', sinceISO)
+            .limit(50000);
+        if (practiceId) query = query.eq('practice_id', practiceId);
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+        return (data ?? []).reduce((s, p) => s + (p.amount_pence ?? 0), 0);
+    },
 };

@@ -12,6 +12,8 @@ export type DebtorRow = {
 export type DebtView = {
   outstanding_pence: number;
   overdue90_pence: number;
+  recovered_ttm_pence: number;
+  collection_rate_pct: number | null;
   bands: DebtBand[];
   debtors: DebtorRow[];
 };
