@@ -4,6 +4,27 @@ Status doc for the QuickBooks (QBO) accounting integration. Built the OAuth +
 P&L connector; the remaining page-wiring (Cashflow, Debt Recovery) is planned
 below for tomorrow.
 
+> **UPDATE — gaps closed (this session).** The connector now pulls FOUR things,
+> not just the current-month P&L. `quickbooks-sync.js` `syncOneOrg` runs:
+> 1. **ProfitAndLoss** -> `monthly_financials` — now **12-month backfill** on first
+>    connect / full refresh (`!last_sync_at || full`); nightly cron stays
+>    current-month only.
+> 2. **BalanceSheet** cash/bank -> `bank_accounts` (`source='quickbooks'`) — real
+>    Cashflow **opening balance**. Needed migration `000057` (adds
+>    `bank_accounts.source` + `external_id` + `uq_bank_accts_src_ext`) — **applied
+>    on hosted** (`mkfhpzjbijbachoonytt`).
+> 3. **Invoice** (Balance>0) -> `invoices` (`source='quickbooks'`, default
+>    practice) — **Debt Recovery** now shows QBO debtors. (The debt slice
+>    repo/service/route/`DebtScreen` already existed reading `invoices`.)
+> 4. **Payment** -> `payments` (`source='quickbooks'`, `status='settled'`) — feeds
+>    the Cashflow weekly receipts (**option B**), **deduped** against existing
+>    non-QBO settled receipts by date+amount to avoid double-counting Stripe.
+>
+> Secondary pulls (2-4) are best-effort (`safePull`) — a failure there never fails
+> the P&L sync. `quickbooks` added to frontend `SYNCABLE` (manual Refresh button).
+> 12 new unit tests; full backend suite 589/589 green. Env creds + Intuit redirect
+> URI + live-company UAT remain the user's setup (sections 2 + 6).
+
 Xero stays available as a **backup** accounting source — both providers write
 `monthly_financials` keyed by `source`, so connecting one never clobbers the
 other.

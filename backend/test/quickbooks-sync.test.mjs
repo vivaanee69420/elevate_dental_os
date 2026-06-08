@@ -68,6 +68,79 @@ describe('parseReportRows', () => {
     });
 });
 
+describe('parseBalanceSheetBanks', () => {
+    it('keeps only leaf accounts under a bank/cash section (or named bank/cash)', () => {
+        const report = { Rows: { Row: [
+            {
+                Header: { ColData: [{ value: 'Bank Accounts' }] },
+                Rows: { Row: [
+                    { ColData: [{ value: 'Current Account' }, { value: '12500.00' }], type: 'Data' },
+                    { ColData: [{ value: 'Savings' }, { value: '3000.00' }], type: 'Data' },
+                ] },
+                type: 'Section',
+            },
+            {
+                Header: { ColData: [{ value: 'Accounts Receivable' }] },
+                Rows: { Row: [
+                    { ColData: [{ value: 'Debtors' }, { value: '900.00' }], type: 'Data' },
+                ] },
+                type: 'Section',
+            },
+        ] } };
+        expect(__test.parseBalanceSheetBanks(report)).toEqual([
+            { account: 'Current Account', amount: '12500.00' },
+            { account: 'Savings', amount: '3000.00' },
+        ]);
+    });
+});
+
+describe('lastNMonths', () => {
+    it('returns N descending YYYY-MM periods, newest first, with month bounds', () => {
+        const months = __test.lastNMonths(12);
+        expect(months).toHaveLength(12);
+        expect(months[0].from).toMatch(/^\d{4}-\d{2}-01$/);
+        expect(months[0].to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        // strictly older as the index grows
+        expect(months[1].period < months[0].period).toBe(true);
+        expect(months[11].period < months[10].period).toBe(true);
+    });
+});
+
+describe('mapInvoiceRow', () => {
+    it('maps a QBO invoice to an invoices row (source=quickbooks, outstanding=Balance)', () => {
+        const row = __test.mapInvoiceRow('org-1', 'prac-1', {
+            Id: '42', TxnDate: '2026-01-10', DueDate: '2026-02-10',
+            TotalAmt: '500.00', Balance: '200.00', CustomerRef: { name: 'Jane Doe' },
+        });
+        expect(row).toMatchObject({
+            organisation_id: 'org-1', practice_id: 'prac-1', source: 'quickbooks',
+            external_id: '42', amount_pence: 50000, amount_outstanding_pence: 20000,
+            due_on: '2026-02-10', paid: false, patient_name: 'Jane Doe',
+        });
+    });
+    it('flags paid when balance is zero', () => {
+        expect(__test.mapInvoiceRow('o', 'p', { Id: '1', TotalAmt: '100', Balance: '0' }).paid).toBe(true);
+    });
+});
+
+describe('dedupeReceipts', () => {
+    it('drops QBO receipts matching an existing settled receipt by date+amount', () => {
+        const payments = [
+            { Id: '1', TxnDate: '2026-01-05', TotalAmt: '150.00' }, // dup -> dropped
+            { Id: '2', TxnDate: '2026-01-06', TotalAmt: '200.00' }, // kept
+        ];
+        const existing = new Set(['2026-01-05|15000']);
+        const { rows, deduped } = __test.dedupeReceipts('org-1', 'prac-1', payments, existing);
+        expect(deduped).toBe(1);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+            external_id: '2', amount_pence: 20000, status: 'settled', source: 'quickbooks',
+            practice_id: 'prac-1', method: 'bank_transfer',
+        });
+        expect(rows[0].processed_at).toContain('2026-01-06');
+    });
+});
+
 describe('syncOneOrg', () => {
     beforeEach(() => {
         integrationRepository.upsert.mockReset();
@@ -101,6 +174,7 @@ describe('syncOneOrg', () => {
             secrets: encryptSecret(JSON.stringify({ access_token: 'tok', refresh_token: 'r' })),
             config: { realm_id: 'realm-1' },
             expires_at: new Date(Date.now() + 3600_000).toISOString(), // fresh -> no refresh
+            last_sync_at: new Date().toISOString(), // already synced -> current month only (no backfill)
         };
         const res = await syncOneOrg('org-1', integration);
 
