@@ -96,6 +96,7 @@ const EMPTY: MarketingRoi = {
   byPractice: [], insights: [],
 };
 
-export function fetchMarketingRoi(scope: string, win: ResolvedWindow): Promise<MarketingRoi> {
-  return api<MarketingRoi>(`/api/analytics/marketing-roi?${windowParams(scope, win)}`).then((r) => ({ ...EMPTY, ...r }));
+export function fetchMarketingRoi(scope: string, win: ResolvedWindow, accountIds?: string[]): Promise<MarketingRoi> {
+  const acct = accountIds?.length ? `&account_ids=${encodeURIComponent(accountIds.join(','))}` : '';
+  return api<MarketingRoi>(`/api/analytics/marketing-roi?${windowParams(scope, win)}${acct}`).then((r) => ({ ...EMPTY, ...r }));
 }
