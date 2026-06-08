@@ -346,7 +346,7 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         integrationRepository.mergeConfig.mockReset();
     });
 
-    it('first run full-backfills all history (2005 anchor) then flags the org', async () => {
+    it('first run full-backfills the 2-year window then flags the org', async () => {
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         supaRec.resultProvider = (q) => {
             if (q.table === 'integrations' && q.op === 'select')
@@ -361,7 +361,10 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         });
         const res = await syncAllOrgs();
         expect(res[0].backfill).toBe(true);
-        expect(seen.filter(Boolean).some((s) => s.startsWith('2005-'))).toBe(true); // full history
+        // full backfill is now a rolling 2-year window, not the old 2005 anchor.
+        const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();
+        expect(seen.filter(Boolean).some((s) => s.startsWith(`${backfillYear}-`))).toBe(true);
+        expect(seen.filter(Boolean).some((s) => s.startsWith('2005-'))).toBe(false);
         expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-1', 'dentally', { history_backfilled: true });
     });
 
@@ -457,7 +460,7 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
-    it('full backfill uses a far-back updated_since (all history), not the 30d/last_sync window', async () => {
+    it('full backfill uses a 2-year updated_since window, not the 30d/last_sync window', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const seen = [];
@@ -467,11 +470,12 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
         });
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { full: true });
-        // every WINDOWED resource pull asked for everything since ~2005, ignoring
+        // every WINDOWED resource pull asked for the most-recent 2 years, ignoring
         // last_sync_at. The /users roster pull is deliberately unwindowed (full
         // team every sync), so it carries no updated_since (null) — skip it.
         const windowed = seen.filter(Boolean);
         expect(windowed.length).toBeGreaterThan(0);
-        for (const s of windowed) expect(s.startsWith('2005-')).toBe(true);
+        const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();
+        for (const s of windowed) expect(s.startsWith(`${backfillYear}-`)).toBe(true);
     });
 });

@@ -9,7 +9,7 @@
 //   node src/workers/dentally-resync-once.js --all                   # every active dentally org
 //
 // Targeted (one org) is the default — re-syncing all orgs is a heavy backfill
-// (BACKFILL_SINCE 2005, up to 5000 pages/resource), so it must be opted into
+// (2-year window, up to 5000 pages/resource), so it must be opted into
 // explicitly with --all. Per-org isolation: one org's failure never blocks the rest.
 import 'dotenv/config';
 import { syncOneOrg } from '../lib/integrations/dentally-sync.js';
@@ -50,8 +50,8 @@ async function loadIntegrations(orgIds) {
         const orgId = row.organisation_id;
         const t0 = Date.now();
         try {
-            // full:true -> BACKFILL_SINCE window + lifted page cap: re-pulls and
-            // upserts all history, overwriting null appointment_type on old rows.
+            // full:true -> 2-year backfill window + lifted page cap: re-pulls and
+            // upserts that history, overwriting null appointment_type on old rows.
             const r = await syncOneOrg(orgId, row, () => {}, { full: true });
             // A manual full resync IS the history backfill — record the same
             // one-time flag the nightly syncAllOrgs() sets, so the next cron run

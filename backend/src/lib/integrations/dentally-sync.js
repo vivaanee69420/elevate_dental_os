@@ -33,8 +33,14 @@ const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
 const REQUEST_TIMEOUT_MS = 30000; // abort a hung Dentally request, never hang forever
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
-const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls all history
-const BACKFILL_SINCE = '2005-01-01T00:00:00.000Z'; // far-back updated_since so a full pull sees all records (API requires the param)
+const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls the 2-year window
+const BACKFILL_YEARS = 2;        // full backfill cap: most-recent 2 years of history, no deeper (product rule)
+// Rolling 2-year updated_since for full pulls. Dentally requires the param; we
+// deliberately cap history at 2 years rather than pulling all-time (was a 2005
+// anchor) so a backfill stays bounded on long-lived practices.
+function backfillSince() {
+    return new Date(Date.now() - BACKFILL_YEARS * 365 * 86400000).toISOString();
+}
 const RECENT_MONTHS = 12;        // on-connect bootstrap window: last 12 months — a fast connect that lands a full year (dashboards are TTM); the nightly cron deepens the rest of history overnight (see syncAllOrgs one-time backfill)
 const BOOTSTRAP_MAX_PAGES = 900; // ~90k rows/resource cap for the on-connect pull — headroom for a busy multi-site group's full 1-year history so the pull reaches recent + upcoming, not just the oldest rows
 // On the FIRST pull we only want live work — upcoming, not-yet-closed
@@ -170,8 +176,8 @@ export function weightedPct(idx, page, phaseTotals) {
 // Update the live progress weighting for one reported page and return the pct.
 // The up-front probe (fetchPageCount) UNDER-counts a phase when Dentally omits
 // meta.total_pages (it falls back to 1 page) or when the probe times out (0).
-// On the bootstrap pull that hits the patients phase, which pulls ALL patients
-// (updated_since=2005) — the longest phase — so weighting it as ~1 page made
+// On the bootstrap pull that hits the patients phase, which pulls the 2-year
+// patient window — the longest phase — so weighting it as ~1 page made
 // weightedPct's Math.min(page, total) clamp the bar near 0% for the entire
 // phase: it looked frozen even though the pull was running. Grow the phase's
 // total from the live pull (the real total_pages when present, and never below
@@ -726,7 +732,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     }
     // Window selection — ONE window, shared by patients / appointments /
     // payments (all filtered by `updated_since`):
-    //  - full   : all history (BACKFILL_SINCE) with a lifted page cap.
+    //  - full   : the most-recent 2 years (backfillSince()) with a lifted page cap.
     //  - recent : the on-connect bootstrap — last RECENT_MONTHS (1 year). A
     //             fresh org lands a complete, bounded 1-year dataset including
     //             COMPLETED appointments, so Associates / Treatment Mix / Pay
@@ -735,7 +741,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     //  - else   : incremental cursor — changed-since last successful sync
     //             (default 30d on first run).
     const since = full
-        ? BACKFILL_SINCE
+        ? backfillSince()
         : recent
             ? new Date(Date.now() - RECENT_MONTHS * 30 * 86400000).toISOString()
             : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
@@ -787,8 +793,8 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         const siteMap = await loadSiteMap(orgId);
         // Practitioners first (cheap, no separate progress phase) so the
         // appointment pull can resolve associate_id. Use the same updated_since
-        // window as patients (BACKFILL_SINCE on full/bootstrap so all staff are
-        // captured; incremental cursor for routine syncs).
+        // window as patients (2-year backfillSince() on full/bootstrap so all
+        // staff in that window are captured; incremental cursor for routine syncs).
         // Practitioners + staff are small (whole-practice team), so they aren't
         // weighted, but we emit a phase label + live count so the overlay shows
         // "Practitioners · N pulled" instead of dead air at pct 0 before patients.
@@ -967,8 +973,9 @@ export async function syncAllOrgs() {
     for (const row of rows ?? []) {
         try {
             // The on-connect pull is deliberately a fast 1-year window. The FIRST
-            // nightly run after connect deepens it to full history (BACKFILL_SINCE)
-            // — the "rest done overnight" — then flips a one-time flag so every
+            // nightly run after connect deepens it to the full 2-year window
+            // (backfillSince()) — the "rest done overnight" — then flips a
+            // one-time flag so every
             // subsequent run rides the cheap incremental changed-since cursor.
             const needsBackfill = !row.config?.history_backfilled;
             const r = await syncOneOrg(row.organisation_id, row, () => {}, { full: needsBackfill });
