@@ -40,6 +40,7 @@ router.get('/valuation', val, (0, async_handler_1.asyncHandler)(analytics_contro
 router.get('/chair', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.chair));
 router.get('/treatment-matrix', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentMatrix));
 router.get('/treatment-revenue', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentRevenue));
+router.get('/treatment-breakdown', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentBreakdown));
 router.get('/cash-by-day', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashByDay));
 router.get('/marketing-roi', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.marketingRoi));
 router.get('/clinicians', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.clinicians));
