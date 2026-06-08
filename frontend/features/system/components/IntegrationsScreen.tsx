@@ -19,7 +19,7 @@ import {
 } from '@/features/integrations/hooks';
 
 // Providers with a real on-demand pull (Refresh button + first-connect sync).
-const SYNCABLE = new Set(['dentally', 'xero', 'gohighlevel', 'quickbooks']);
+const SYNCABLE = new Set(['dentally', 'xero', 'gohighlevel', 'quickbooks', 'google_ads', 'meta_ads']);
 import type {
   IntegrationRow,
   ProviderMeta,
