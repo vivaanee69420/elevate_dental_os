@@ -116,8 +116,15 @@ export default function DashboardScreen() {
   const healthComplete = !!health?.setup_completed;
 
   const [range, setRange] = useState<DateRange>('ytd');
+  // A custom [from,to] window overrides the preset chips and drives the whole
+  // dashboard (KPIs + chart). null = follow the active MTD/QTD/6M/YTD chip.
+  const [custom, setCustom] = useState<{ from: string; to: string } | null>(null);
   const [selected, setSelected] = useState<string>('All practices');
-  const period = useMemo(() => rangeToDates(range), [range]);
+  const period = useMemo(
+    () => custom ?? rangeToDates(range),
+    [range, custom],
+  );
+  const periodLabel = custom ? 'Custom' : rangeLabel(range);
 
   // Practice selector drives the WHOLE dashboard. Resolve the chosen name → id
   // (null = All) and feed it to the period-scoped summary + chart.
@@ -202,7 +209,7 @@ export default function DashboardScreen() {
         icon: '📈',
         label: 'Turnover',
         value: ccPounds(rev),
-        sub: `${rangeLabel(range)} · real settled payments`,
+        sub: `${periodLabel} · real settled payments`,
         colour: POS,
         link: '/cashflow',
       },
@@ -319,6 +326,7 @@ export default function DashboardScreen() {
     health,
     selected,
     range,
+    periodLabel,
     targetMargin,
   ]);
 
@@ -365,7 +373,7 @@ export default function DashboardScreen() {
               Command Centre
             </h1>
             <p className="text-ink-muted" style={{ fontSize: 13 }}>
-              Group · {practiceNames.length || 0} practices · {rangeLabel(range)}{' '}
+              Group · {practiceNames.length || 0} practices · {periodLabel}{' '}
               ({v.dateLabel || '—'})
             </p>
           </div>
@@ -374,7 +382,7 @@ export default function DashboardScreen() {
               className="text-ink-muted font-bold uppercase"
               style={{ fontSize: 10, letterSpacing: '0.05em' }}
             >
-              {rangeLabel(range)} turnover (real)
+              {periodLabel} turnover (real)
             </div>
             <div
               className="display font-bold text-brand"
@@ -442,23 +450,88 @@ export default function DashboardScreen() {
           >
             📅 Chart:
           </span>
-          {RANGES.map((r) => (
-            <button
-              key={r.k}
-              onClick={() => setRange(r.k)}
-              className="font-bold"
-              style={{
-                padding: '6px 11px',
-                borderRadius: 5,
-                fontSize: 11,
-                border: `1px solid ${range === r.k ? BRAND : 'var(--border)'}`,
-                background: range === r.k ? BRAND : 'white',
-                color: range === r.k ? 'white' : '#1F2937',
-              }}
-            >
-              {r.l}
-            </button>
-          ))}
+          {RANGES.map((r) => {
+            const active = range === r.k && !custom;
+            return (
+              <button
+                key={r.k}
+                onClick={() => {
+                  setCustom(null);
+                  setRange(r.k);
+                }}
+                className="font-bold"
+                style={{
+                  padding: '6px 11px',
+                  borderRadius: 5,
+                  fontSize: 11,
+                  border: `1px solid ${active ? BRAND : 'var(--border)'}`,
+                  background: active ? BRAND : 'white',
+                  color: active ? 'white' : '#1F2937',
+                }}
+              >
+                {r.l}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Custom date range — overrides the preset chips. Editing either input
+            switches to custom mode; the range drives KPIs + chart (server caps
+            the chart at 36 months). */}
+        <div
+          className="flex gap-1.5 items-center"
+          style={{ borderLeft: '1px solid var(--border)', paddingLeft: 14 }}
+        >
+          <span
+            className="text-ink-muted font-bold uppercase"
+            style={{ fontSize: 10 }}
+          >
+            From:
+          </span>
+          <input
+            type="date"
+            value={period.from}
+            min="2020-01-01"
+            max={period.to}
+            onChange={(e) => {
+              const from = e.target.value;
+              if (!from) return;
+              const to = period.to;
+              setCustom(from > to ? { from: to, to: from } : { from, to });
+            }}
+            className="font-bold"
+            style={{
+              padding: '5px 8px',
+              border: `1px solid ${custom ? BRAND : 'var(--border)'}`,
+              borderRadius: 5,
+              fontSize: 12,
+            }}
+          />
+          <span
+            className="text-ink-muted font-bold uppercase"
+            style={{ fontSize: 10 }}
+          >
+            To:
+          </span>
+          <input
+            type="date"
+            value={period.to}
+            min={period.from}
+            max={ymd(new Date())}
+            onChange={(e) => {
+              const to = e.target.value;
+              if (!to) return;
+              const from = period.from;
+              setCustom(to < from ? { from: to, to: from } : { from, to });
+            }}
+            className="font-bold"
+            style={{
+              padding: '5px 8px',
+              border: `1px solid ${custom ? BRAND : 'var(--border)'}`,
+              borderRadius: 5,
+              fontSize: 12,
+            }}
+          />
         </div>
 
         <div
@@ -857,10 +930,10 @@ export default function DashboardScreen() {
         <div className="flex justify-between items-center mb-3.5">
           <div>
             <h2 className="display font-bold" style={{ fontSize: 16 }}>
-              Revenue · Cash · Profit — {rangeLabel(range)}
+              Revenue · Cash · Profit — {periodLabel}
             </h2>
             <p className="text-ink-muted" style={{ fontSize: 11 }}>
-              Real settled payments · {rangeLabel(range)} (profit/cash £0 until Xero)
+              Real settled payments · {periodLabel} (profit/cash £0 until Xero)
             </p>
           </div>
           <div className="flex gap-3" style={{ fontSize: 11 }}>
@@ -1066,7 +1139,7 @@ export default function DashboardScreen() {
             className="display font-bold"
             style={{ fontSize: 14, marginBottom: 4 }}
           >
-            Cash position — {rangeLabel(range)}
+            Cash position — {periodLabel}
           </h2>
           <p
             className="text-ink-muted"
