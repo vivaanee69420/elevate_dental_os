@@ -101,9 +101,21 @@ export const MetaAdsProvider = {
         const url = new URL(`${authBase()}/${apiVersion()}/dialog/oauth`);
         url.searchParams.set('response_type', 'code');
         url.searchParams.set('client_id', process.env.META_APP_ID);
-        url.searchParams.set('scope', SCOPES.join(','));
+        // Facebook Login for Business: a published login configuration owns the
+        // permission set, so we pass its config_id and MUST NOT send scope (Meta
+        // rejects scope alongside config_id). Without the env, fall back to the
+        // classic consumer dialog where we request ads_read directly.
+        const configId = process.env.META_LOGIN_CONFIG_ID;
+        if (configId) {
+            url.searchParams.set('config_id', configId);
+        } else {
+            url.searchParams.set('scope', SCOPES.join(','));
+        }
         url.searchParams.set('redirect_uri', redirectUri());
         url.searchParams.set('state', state);
+        console.log('[meta_ads] authorize org=%s app_id=%s mode=%s config_id=%s redirect_uri=%s',
+            orgId, process.env.META_APP_ID, configId ? 'business_login' : 'classic_scope',
+            configId || '(none)', redirectUri());
         await integrationsRepository.upsert(orgId, 'meta_ads', { status: 'pending' });
         return { redirectUrl: url.toString() };
     },
@@ -112,6 +124,8 @@ export const MetaAdsProvider = {
         const { META_APP_ID, META_APP_SECRET } = process.env;
         if (!META_APP_ID || !META_APP_SECRET) throw new Error('Meta Ads OAuth env vars missing');
         if (!code) throw new Error('Missing authorization code');
+        console.log('[meta_ads] callback org=%s app_id=%s secret_len=%d code_len=%d redirect_uri=%s',
+            orgId, META_APP_ID, (META_APP_SECRET || '').length, (code || '').length, redirectUri());
 
         // 1) code -> short-lived user token. Meta's token endpoint is a GET with
         //    query params (not a form POST like Google).
@@ -124,16 +138,21 @@ export const MetaAdsProvider = {
         const short = await res.json().catch(() => ({}));
         if (!res.ok || !short.access_token) {
             const msg = short?.error?.message || short.error_description || 'oauth_failed';
+            console.error('[meta_ads] token exchange FAILED http=%d code=%s subcode=%s msg=%s',
+                res.status, short?.error?.code, short?.error?.error_subcode, msg);
             await integrationsRepository.markFailed(orgId, 'meta_ads', msg);
             throw new Error(short?.error?.message || 'Meta Ads OAuth exchange failed');
         }
+        console.log('[meta_ads] short-lived token OK (len=%d)', short.access_token.length);
 
         // 2) short-lived -> long-lived (~60-day) token. Without this the sync
         //    would die in an hour or two.
         let longLived;
         try {
             longLived = await exchangeForLongLived(short.access_token);
+            console.log('[meta_ads] long-lived token OK expires_in=%s', longLived.expires_in);
         } catch (err) {
+            console.error('[meta_ads] long-lived exchange FAILED:', err.message);
             await integrationsRepository.markFailed(orgId, 'meta_ads', `long-lived exchange failed: ${err.message}`);
             throw new Error(`Meta long-lived token exchange failed: ${err.message}`);
         }
@@ -142,12 +161,14 @@ export const MetaAdsProvider = {
         let accountIds = [];
         try {
             accountIds = await listAdAccounts(longLived.access_token);
+            console.log('[meta_ads] discovered %d ad account(s): %s', accountIds.length, accountIds.join(','));
         } catch (err) {
             // Non-fatal: token is valid; the user may lack ads_read on any
             // account. Persist anyway so the row is active; sync surfaces it.
             console.error('[meta_ads] listAdAccounts failed:', err.message);
         }
         await persistTokenResponse(orgId, longLived, { account_ids: accountIds });
+        console.log('[meta_ads] callback DONE org=%s accounts=%d', orgId, accountIds.length);
         return { ok: true, accountIds };
     },
 
