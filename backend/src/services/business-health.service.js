@@ -167,18 +167,26 @@ export const businessHealthService = {
             analyticsService.dashboardSummary(orgId, asOf ? { to: new Date(asOf) } : {}),
             analyticsService.businessHub(orgId, asOf ? { until: asOf } : {}),
         ]);
+        // Live computed actuals (case value / chair util / new patients) from
+        // the same Dentally-backed RPCs the scorecard uses. Live-only — a past
+        // as-of view has no RPC history, so it holds the manual baseline. Each
+        // source is guarded; a null falls back to baseline (honest, no fake).
+        const computed = !asOf ? await resolveComputed(orgId) : {};
         // Real where a source exists; baseline-hold (honest, no fabrication)
-        // for the three metrics with no live source yet.
+        // when a live source returns null.
         const latest = {
             revenue: round1(summary.revenuePence / 100),
             profit: round1(summary.netProfitPence / 100),
             cash: round1(summary.cashflowPence / 100),
             conversion: round1(hub.group.conversionRate),
-            case_value: baseline.case_value,
+            case_value: computed.avg_case_value ?? baseline.case_value,
             fta_rate: round1(hub.group.noShowRate),
-            chair_util: baseline.utilisation,
-            new_per_month: baseline.new_per_month,
+            chair_util: computed.chair_utilisation ?? baseline.utilisation,
+            new_per_month: computed.new_patients_month ?? baseline.new_per_month,
         };
+        const liveCase = computed.avg_case_value != null;
+        const liveChair = computed.chair_utilisation != null;
+        const liveNew = computed.new_patients_month != null;
         const targetProfit = baseline.profit * (targets.profit_multiple || 2);
         const cagr = (0, formulas_1.calculateCAGR)(baseline.profit, targetProfit, targets.years || 3);
         const metrics = [
@@ -186,10 +194,10 @@ export const businessHealthService = {
             { key: 'profit', label: 'Net profit', baseline: baseline.profit, current: latest.profit, target: targetProfit, better: 'higher', source: summary.basis },
             { key: 'cash', label: 'Cash at bank', baseline: baseline.cash, current: latest.cash, target: baseline.cash * 1.5, better: 'higher', source: 'bank' },
             { key: 'conversion', label: 'Lead conversion %', baseline: baseline.conversion, current: latest.conversion, target: 18, better: 'higher', source: 'live' },
-            { key: 'case_value', label: 'Average case value', baseline: baseline.case_value, current: latest.case_value, target: baseline.case_value * 1.15, better: 'higher', source: 'baseline' },
+            { key: 'case_value', label: 'Average case value', baseline: baseline.case_value, current: latest.case_value, target: baseline.case_value * 1.15, better: 'higher', source: liveCase ? 'live' : 'baseline' },
             { key: 'fta_rate', label: 'FTA rate %', baseline: baseline.fta_rate, current: latest.fta_rate, target: 2.5, better: 'lower', source: 'live' },
-            { key: 'chair_util', label: 'Chair utilisation %', baseline: baseline.utilisation, current: latest.chair_util, target: 88, better: 'higher', source: 'baseline' },
-            { key: 'new_per_month', label: 'New patients/month', baseline: baseline.new_per_month, current: latest.new_per_month, target: baseline.new_per_month * 1.4, better: 'higher', source: 'baseline' },
+            { key: 'chair_util', label: 'Chair utilisation %', baseline: baseline.utilisation, current: latest.chair_util, target: 88, better: 'higher', source: liveChair ? 'live' : 'baseline' },
+            { key: 'new_per_month', label: 'New patients/month', baseline: baseline.new_per_month, current: latest.new_per_month, target: baseline.new_per_month * 1.4, better: 'higher', source: liveNew ? 'live' : 'baseline' },
         ];
         const progress = metrics.map(m => ({
             ...m,
