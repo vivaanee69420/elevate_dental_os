@@ -1,15 +1,32 @@
 'use client';
-// Appointments (Operations) — upcoming, open appointments pulled from the live
-// Dentally sync. Unlike the other Operations screens this is REAL data: it hits
-// GET /api/appointments?from=<today> (backend orders by starts_at asc), so it
-// shows the same open appointments the first Dentally pull brings in.
+// Appointments (Operations) — appointments pulled from the live Dentally sync.
+// Unlike the other Operations screens this is REAL data: it hits
+// GET /api/appointments (backend orders by starts_at asc, supports from/to/
+// practice_id filters). The view defaults to Upcoming but the user can switch
+// to Past or All, pick a custom date range, and filter by practice.
 
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Skeleton } from '@/components/ui';
 import { api } from '@/lib/api';
+import { usePractices } from '@/features/integrations/hooks';
 
 const PER_PAGE = 25;
+
+// Toggle presets. Custom date inputs override these when either is set.
+type View = 'upcoming' | 'past' | 'all';
+const VIEWS: { key: View; label: string }[] = [
+  { key: 'upcoming', label: 'Upcoming' },
+  { key: 'past', label: 'Past' },
+  { key: 'all', label: 'All' },
+];
+
+// Midnight today (local), so an appointment earlier today still counts as upcoming.
+function midnightTodayISO(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
 
 type Appointment = {
   id: string;
@@ -51,20 +68,50 @@ type AppointmentsResponse = {
 };
 
 export default function AppointmentsScreen() {
-  // Midnight today, so an appointment earlier today still shows.
-  const from = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.toISOString();
-  }, []);
+  const [view, setView] = useState<View>('upcoming');
+  // Custom range inputs hold 'YYYY-MM-DD' (or '' = unset). When either is set
+  // they take precedence over the view toggle.
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [practiceId, setPracticeId] = useState('');
   const [page, setPage] = useState(1);
 
+  const { data: practiceData } = usePractices();
+  const practices = practiceData?.practices ?? [];
+
+  const hasCustom = customFrom !== '' || customTo !== '';
+
+  // Resolve the from/to the backend gets. Custom dates win; otherwise the
+  // toggle: Upcoming = from today, Past = up to today, All = no bounds.
+  const { from, to } = useMemo<{ from?: string; to?: string }>(() => {
+    if (hasCustom) {
+      return {
+        from: customFrom ? new Date(`${customFrom}T00:00:00`).toISOString() : undefined,
+        to: customTo ? new Date(`${customTo}T23:59:59.999`).toISOString() : undefined,
+      };
+    }
+    if (view === 'upcoming') return { from: midnightTodayISO() };
+    if (view === 'past') return { to: midnightTodayISO() };
+    return {}; // all
+  }, [view, customFrom, customTo, hasCustom]);
+
+  // Any filter change resets to page 1.
+  function resetTo(fn: () => void) {
+    setPage(1);
+    fn();
+  }
+
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  if (practiceId) params.set('practice_id', practiceId);
+  params.set('page', String(page));
+  params.set('per_page', String(PER_PAGE));
+  const qs = params.toString();
+
   const { data, isLoading, isError, error, isFetching } = useQuery({
-    queryKey: ['appointments', 'upcoming', from, page],
-    queryFn: () =>
-      api<AppointmentsResponse>(
-        `/api/appointments?from=${encodeURIComponent(from)}&page=${page}&per_page=${PER_PAGE}`,
-      ),
+    queryKey: ['appointments', qs],
+    queryFn: () => api<AppointmentsResponse>(`/api/appointments?${qs}`),
     staleTime: 30_000,
     placeholderData: keepPreviousData, // keep the current page visible while the next loads
   });
@@ -80,8 +127,94 @@ export default function AppointmentsScreen() {
           Appointments
         </h1>
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          Upcoming, open appointments across your practices · live from Dentally
+          Appointments across your practices · live from Dentally
         </p>
+      </div>
+
+      <div
+        className="card-padded"
+        style={{ marginBottom: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 16 }}
+      >
+        {/* View toggle — Upcoming / Past / All. Disabled (dimmed) while a custom range is active. */}
+        <div>
+          <label className="text-ink-muted font-bold uppercase" style={{ display: 'block', fontSize: 11, letterSpacing: '0.05em', marginBottom: 6 }}>
+            View
+          </label>
+          <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', opacity: hasCustom ? 0.45 : 1 }}>
+            {VIEWS.map((v) => (
+              <button
+                key={v.key}
+                type="button"
+                onClick={() => resetTo(() => setView(v.key))}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  border: 'none',
+                  borderLeft: v.key === 'upcoming' ? 'none' : '1px solid var(--border)',
+                  background: !hasCustom && view === v.key ? 'var(--brand)' : '#FFFFFF',
+                  color: !hasCustom && view === v.key ? '#FFFFFF' : 'var(--ink)',
+                  cursor: 'pointer',
+                }}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Custom date range — overrides the view toggle when either is set. */}
+        <div>
+          <label className="text-ink-muted font-bold uppercase" style={{ display: 'block', fontSize: 11, letterSpacing: '0.05em', marginBottom: 6 }}>
+            From
+          </label>
+          <input
+            type="date"
+            value={customFrom}
+            max={customTo || undefined}
+            onChange={(e) => resetTo(() => setCustomFrom(e.target.value))}
+            style={{ padding: '6px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#FFFFFF' }}
+          />
+        </div>
+        <div>
+          <label className="text-ink-muted font-bold uppercase" style={{ display: 'block', fontSize: 11, letterSpacing: '0.05em', marginBottom: 6 }}>
+            To
+          </label>
+          <input
+            type="date"
+            value={customTo}
+            min={customFrom || undefined}
+            onChange={(e) => resetTo(() => setCustomTo(e.target.value))}
+            style={{ padding: '6px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#FFFFFF' }}
+          />
+        </div>
+        {hasCustom && (
+          <button
+            type="button"
+            onClick={() => resetTo(() => { setCustomFrom(''); setCustomTo(''); })}
+            className="btn-ghost"
+            style={{ padding: '6px 12px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 8 }}
+          >
+            Clear dates
+          </button>
+        )}
+
+        {/* Practice filter. */}
+        <div>
+          <label className="text-ink-muted font-bold uppercase" style={{ display: 'block', fontSize: 11, letterSpacing: '0.05em', marginBottom: 6 }}>
+            Practice
+          </label>
+          <select
+            value={practiceId}
+            onChange={(e) => resetTo(() => setPracticeId(e.target.value))}
+            style={{ padding: '6px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#FFFFFF', minWidth: 160 }}
+          >
+            <option value="">All practices</option>
+            {practices.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="card-padded">
@@ -101,7 +234,7 @@ export default function AppointmentsScreen() {
 
         {!isLoading && !isError && appointments.length === 0 && (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '24px 0', textAlign: 'center' }}>
-            No upcoming appointments. They appear here once a Dentally sync has run.
+            No appointments match these filters. They appear here once a Dentally sync has run.
           </div>
         )}
 
