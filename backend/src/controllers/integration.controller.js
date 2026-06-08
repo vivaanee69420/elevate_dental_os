@@ -4,7 +4,18 @@ import { providerParamSchema, idParamSchema } from "../models/common.model.js";
 import { verifyState } from "../lib/oauth-state.js";
 
 function frontendUrl() {
-    return process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000';
+    const raw = (process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').trim();
+    // Guarantee an absolute URL with a scheme. A bare host (e.g.
+    // "app.elevate.app") makes `new URL()` throw "Invalid URL", which 500s the
+    // OAuth callback at line 32 BEFORE the token is ever persisted — losing the
+    // one-time auth code. Prepend https:// when no scheme is present, and fall
+    // back to localhost if the value is still unparseable.
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    try {
+        return new URL(withScheme).origin;
+    } catch {
+        return 'http://localhost:3000';
+    }
 }
 
 export const integrationController = {
