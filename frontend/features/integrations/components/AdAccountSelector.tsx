@@ -75,7 +75,8 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
             {a.status && a.status !== 'active' && (
               <Chip colour="amber">{a.status}</Chip>
             )}
-            <span className="text-ink-muted" style={{ fontSize: 11 }}>{a.customer_id}</span>
+            {/* Only show the raw account id when there's no readable name. */}
+            {!a.name && <span className="text-ink-muted" style={{ fontSize: 11 }}>{a.customer_id}</span>}
           </label>
         ))}
       </div>
@@ -92,8 +93,10 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
         >
           {save.isPending ? 'Saving…' : 'Save selection'}
         </button>
-        {save.isSuccess && !dirty && (
-          <span className="text-ink-muted" style={{ fontSize: 12 }}>Saved</span>
+        {!dirty && (
+          <span className="text-ink-muted" style={{ fontSize: 12 }}>
+            {save.isSuccess ? 'Saved' : 'All changes saved — tick or untick an account to update'}
+          </span>
         )}
       </div>
     </div>

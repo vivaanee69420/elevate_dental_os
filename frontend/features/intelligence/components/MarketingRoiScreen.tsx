@@ -8,9 +8,11 @@
 // per channel — the screen leads on spend → leads → CPL → patients → CPA, and
 // shows only a business-level blended paid ROAS. Money is integer PENCE.
 
+import { useState } from 'react';
 import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { useAdAccounts } from '@/features/integrations/hooks';
 import { Panel, PanelHead, NoteFoot, Pill, th, td } from './os-ui';
 import { useMarketingRoi } from '../marketing-roi-hooks';
 import type { MarketingRoi, MktChannel } from '../marketing-roi-api';
@@ -18,7 +20,10 @@ import type { MarketingRoi, MktChannel } from '../marketing-roi-api';
 const gbp = (p: number) => formatPence(p);
 
 export default function MarketingRoiScreen() {
-  const { data, isLoading, isError, error } = useMarketingRoi();
+  // Inline view-level ad-account filter. null = all (honours the Integrations
+  // selection); a customer_id narrows every figure on the page to that account.
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data, isLoading, isError, error } = useMarketingRoi(accountId ? [accountId] : undefined);
 
   return (
     <div className="flex flex-col gap-4">
@@ -27,6 +32,7 @@ export default function MarketingRoiScreen() {
         subtitle="Facebook vs Google vs organic — spend, leads, cost per patient and conversion, per channel and per practice. Real ad spend + CRM lead attribution."
       />
       <ScopePeriodBar />
+      <AdAccountFilter selected={accountId} onSelect={setAccountId} />
 
       {isError ? (
         <Panel><EmptyState message={`Couldn't load marketing data: ${(error as Error)?.message ?? 'unknown error'}`} /></Panel>
@@ -261,5 +267,49 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div>{label}</div>
       <b className="block text-ink text-[13px]">{value}</b>
     </div>
+  );
+}
+
+// View-level ad-account filter. Lists the accounts feeding the marketing views
+// (is_selected, across Meta + Google) and lets the user focus a single one.
+// Hidden when there's nothing to filter (0 or 1 account). Owner-only endpoints —
+// non-owners just don't get the row (queries return no data → renders null).
+function AdAccountFilter({ selected, onSelect }: { selected: string | null; onSelect: (id: string | null) => void }) {
+  const meta = useAdAccounts('meta_ads');
+  const google = useAdAccounts('google_ads');
+  const accounts = [...(meta.data ?? []), ...(google.data ?? [])].filter((a) => a.is_selected);
+  if (accounts.length < 2) return null;
+
+  return (
+    <div className="flex gap-2 flex-wrap items-center -mt-1">
+      <span className="text-[12px] text-ink-muted mr-0.5">Ad account</span>
+      <FilterPill active={selected === null} onClick={() => onSelect(null)}>All accounts</FilterPill>
+      {accounts.map((a) => (
+        <FilterPill
+          key={`${a.provider}-${a.customer_id}`}
+          active={selected === a.customer_id}
+          onClick={() => onSelect(a.customer_id)}
+        >
+          {a.name || a.customer_id}
+        </FilterPill>
+      ))}
+    </div>
+  );
+}
+
+function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'text-[12px] px-3 py-1.5 rounded-xl border whitespace-nowrap transition-colors ' +
+        (active
+          ? 'bg-brand text-white border-brand shadow-panel-sm font-medium'
+          : 'bg-card text-ink border-border hover:border-brand-200')
+      }
+    >
+      {children}
+    </button>
   );
 }
