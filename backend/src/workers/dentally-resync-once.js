@@ -13,6 +13,7 @@
 // explicitly with --all. Per-org isolation: one org's failure never blocks the rest.
 import 'dotenv/config';
 import { syncOneOrg } from '../lib/integrations/dentally-sync.js';
+import { integrationRepository } from '../repositories/integration.repository.js';
 import { serviceClient } from '../lib/supabase.js';
 
 async function loadIntegrations(orgIds) {
@@ -52,6 +53,14 @@ async function loadIntegrations(orgIds) {
             // full:true -> BACKFILL_SINCE window + lifted page cap: re-pulls and
             // upserts all history, overwriting null appointment_type on old rows.
             const r = await syncOneOrg(orgId, row, () => {}, { full: true });
+            // A manual full resync IS the history backfill — record the same
+            // one-time flag the nightly syncAllOrgs() sets, so the next cron run
+            // rides the cheap incremental cursor instead of re-pulling all of
+            // history again. Without this the flag stayed unset on manually
+            // backfilled orgs, forcing a redundant full backfill every night.
+            if (!r.error) {
+                await integrationRepository.mergeConfig(orgId, 'dentally', { history_backfilled: true });
+            }
             const secs = Math.round((Date.now() - t0) / 1000);
             console.log(`[dentally-resync] ${orgId} done in ${secs}s`, JSON.stringify(r));
             results.push({ orgId, ...r });
