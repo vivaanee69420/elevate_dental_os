@@ -1154,7 +1154,7 @@ export const analyticsService = {
           resolvedWin = treatmentWindow('month', periodKey, now);
         }
 
-        const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank] = await Promise.all([
+        const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank, leadRows, treatments] = await Promise.all([
             this.plMargin(orgId, win),
             this.marketingRoi(orgId, win),
             this.clinicians(orgId, win),
@@ -1166,7 +1166,28 @@ export const analyticsService = {
             this.chairAnalytics(orgId, win),
             analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             analytics_repository_1.analyticsRepository.bankSummary(orgId),
+            analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId, resolvedWin.since, resolvedWin.until),
+            analytics_repository_1.analyticsRepository.treatmentsRollupByOrg(orgId, resolvedWin.since, resolvedWin.until),
         ]);
+
+        // Live acquisition funnel for the window. Same locked definitions as
+        // Business Hub: conversionRate = leads reaching treatment / total leads
+        // (lead->treatment). Lets the AI cite the REAL conversion, not only the
+        // baseline goal. Leads + converted summed from the raw rollup so the
+        // null-practice (GHL) bucket isn't dropped.
+        const fnlRate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
+        const fnlNum = (v) => Number(v || 0);
+        const totalLeads = leadRows.reduce((s, r) => s + fnlNum(r.total), 0);
+        const totalConverted = leadRows.reduce((s, r) => s + fnlNum(r.converted), 0);
+        const treatmentsStarted = fnlNum(treatments.started);
+        const funnel = totalLeads > 0 ? {
+            leads: totalLeads,
+            converted: totalConverted,
+            conversionRatePct: fnlRate(totalConverted, totalLeads),
+            leadToStartRatePct: fnlRate(treatmentsStarted, totalLeads),
+            treatmentsStarted,
+            treatmentsCompleted: fnlNum(treatments.completed),
+        } : null;
 
         const cashByPractice = new Map();
         if (Array.isArray(settledRevRows)) {
@@ -1261,6 +1282,7 @@ export const analyticsService = {
                     occupancyPct: p.occupancyPct,
                 })),
             } : null,
+            funnel,
             baseline: health?.baseline || null,
             targets: health?.targets || null,
         };
