@@ -296,6 +296,7 @@ Response:
   "usage": { "input_tokens": 234, "output_tokens": 567 }
 }
 ```
+**Note (Phase B — drill-down tools):** response shapes for all 5 AI surfaces (chat coach, analyst, board report, insights, task generation) are unchanged. Internally the model may now invoke a `get_metrics` tool to fetch figures for other periods or date ranges before composing its final reply; `usage` reflects the sum of all tool-loop turns. JSON-contract surfaces (board report, tasks) enforce output shape via a final schema-formatting turn.
 
 ## Analytics
 

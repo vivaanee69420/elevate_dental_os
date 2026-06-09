@@ -4,6 +4,18 @@
 // ============================================================================
 import Anthropic from "@anthropic-ai/sdk";
 
+// Translate one normalized message to the Anthropic SDK message shape. String
+// content passes through; block arrays map tool_use/tool_result/text.
+function toAnthropicMessage(m) {
+  if (!Array.isArray(m.content)) return { role: m.role, content: m.content };
+  const content = m.content.map((b) => {
+    if (b.type === 'tool_use') return { type: 'tool_use', id: b.id, name: b.name, input: b.input ?? {} };
+    if (b.type === 'tool_result') return { type: 'tool_result', tool_use_id: b.toolUseId, content: b.content };
+    return { type: 'text', text: b.text || '' };
+  });
+  return { role: m.role, content };
+}
+
 export function createAnthropicProvider({ model, apiKey = process.env.ANTHROPIC_API_KEY } = {}) {
   return {
     name: 'anthropic',
@@ -13,7 +25,7 @@ export function createAnthropicProvider({ model, apiKey = process.env.ANTHROPIC_
         throw new Error('No ANTHROPIC_API_KEY');
       }
       const client = new Anthropic({ apiKey });
-      const req = { model, max_tokens: maxTokens, messages };
+      const req = { model, max_tokens: maxTokens, messages: messages.map(toAnthropicMessage) };
       if (system) req.system = system;
       if (tools) req.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
       if (schema) req.output_config = { format: { type: 'json_schema', schema } };
