@@ -12,7 +12,7 @@ Branch: `feat/crm-cluster`. Resume after `/clear`: read this file + `BUILD-CRM-S
 | Phase | Module | Migration | New integration | Status | Commit |
 |---|---|---|---|---|---|
 | B1 | Templates | 000062 | none | ✅ done | 186239e |
-| B2 | Settings (config + aggregator) | 000063 | none | ⬜ | — |
+| B2 | Settings (config + aggregator) | 000063 | none | ✅ done | 7ec9b5c |
 | B3 | Sequences (full live drip engine) | 000064 | Twilio inbound webhook (STOP) | ⬜ | — |
 
 > Suite migration numbers shifted +1: wealth_inputs claimed 000061 mid-flight, so B1=000062, B2=000063, B3=000064.
@@ -36,3 +36,8 @@ hosted + `NOTIFY pgrst, 'reload schema';`. Then commit + tick this table.
 - 2026-06-09 — B1 (Templates) built + verified (backend tests green, tsc/lint clean).
   Migration 000062 (renumbered from 000061 to dodge wealth_inputs) applied on hosted +
   schema reloaded; crm_templates verified (10 cols, trigger, partial index). Next: B2 (Settings).
+- 2026-06-09 — B2 (Settings) built + verified (backend 664 tests green incl. 6 new
+  crm-settings; frontend tsc + lint clean). Migration 000063 (crm_settings, one row/org,
+  trigger) applied on hosted + schema reloaded; verified 11 cols. Aggregator counts:
+  template_count + active_sequence_count (defensive — 0 until B3) + treatment/source
+  from row. SettingsScreen swapped off mock to useCrmSettings(). Next: B3 (Sequences).
