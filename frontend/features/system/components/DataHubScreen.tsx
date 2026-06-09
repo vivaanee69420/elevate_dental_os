@@ -11,6 +11,7 @@ import {
   useImportBatches, useUploadCsv, useApproveBatch, useRejectBatch,
   type Dataset, type ImportResult, type ImportBatch,
 } from '../imports-api';
+import DataQualityPanel from './DataQualityPanel';
 
 const DATASETS: { id: Dataset; label: string }[] = [
   { id: 'payments', label: 'Payments' },
@@ -59,10 +60,16 @@ export default function DataHubScreen() {
       <div className="mb-6">
         <h1 className="display text-3xl font-bold">Data Hub</h1>
         <p className="text-sm text-ink-muted mt-1">
-          Manually feed payments, appointments or patients by CSV. Rows are validated, then a
-          second team member approves before they go live.
+          Monitor data quality and connector health across the group, then manually feed
+          payments, appointments or patients by CSV when a source is incomplete.
         </p>
       </div>
+
+      {/* Data Quality Engine */}
+      <DataQualityPanel />
+
+      {/* Manual feed */}
+      <h2 className="display font-semibold" style={{ fontSize: 19, margin: '24px 0 12px' }}>Manual feed</h2>
 
       {/* Upload */}
       <Card className="mb-4">

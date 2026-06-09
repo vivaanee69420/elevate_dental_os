@@ -481,4 +481,25 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return data || [];
     },
+    // ------------------------------------------------------------------------
+    // Data Quality Engine (Phase 5) — per-practice defect counts in ONE query
+    // via the data_quality_by_practice RPC (appointments is large; no JS scan).
+    async dataQualityByPractice(orgId) {
+        const { data, error } = await supabase_1.serviceClient.rpc('data_quality_by_practice', {
+            p_org: orgId,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
+    // Connector sync state for connector-health (Data Quality panel). Reads the
+    // integrations table directly — provider/status/last_synced_at/last_error.
+    async connectorStates(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('integrations')
+            .select('provider, status, last_synced_at, last_error')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
 };

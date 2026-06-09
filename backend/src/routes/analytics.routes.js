@@ -21,12 +21,17 @@ const val = (0, auth_1.requirePermission)('valuation.view');
 // All persisted mutations below are audited by the audit middleware.
 const finEdit = (0, auth_1.requirePermission)('finance.edit');
 const valEdit = (0, auth_1.requirePermission)('valuation.edit');
+// Data Quality (Phase 5) lives on the Data Hub (system.manage) page, not the
+// finance views — gate it to match so a system admin without finance.view can
+// still see connector + cleanliness health.
+const sys = (0, auth_1.requirePermission)('system.manage');
 router.get('/dashboard', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dashboard));
 router.get('/dashboard-summary', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dashboardSummary));
 router.get('/revenue-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.revenueSeries));
 router.get('/practice-summary', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.practiceSummary));
 router.get('/business-hub', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.businessHub));
 router.get('/leakage', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.leakage));
+router.get('/data-quality', sys, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dataQuality));
 router.get('/ai-insights', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiInsights));
 router.post('/ai-insights/generate', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.generateInsights));
 router.get('/finance-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.financeSeries));
