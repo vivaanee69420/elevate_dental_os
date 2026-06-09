@@ -46,11 +46,17 @@ Commercial hook: "here's £X/yr you're losing → one-click task". Pure compute.
 - Verified: backend `npm test` = 606 pass (71 files); frontend `tsc --noEmit` = 0 errors.
 - NOTE: recall + lapsed pools are modelled shares of revenue (hygiene 12%, lapsed 6%) — flagged in UI; exact figures need patient-level Dentally cohorts (see Phase 6).
 
-### Phase 2 — Board Report Generator
-- [ ] service: assemble exec summary (Claude) + RAG priorities from live analytics
-- [ ] route `POST /api/analytics/board-report` (finance.view); reuse notification.service for email
-- [ ] frontend Reports panel on Business Hub / AI Insights; PDF via print
-- [ ] schedule (daily/weekly/monthly) — reuse workers cron
+### Phase 2 — Board Report Generator  ✅ DONE
+- [x] `lib/claude.js` `generateBoardReport(bundle)` — AI exec summary + RAG priorities (throws on no key → deterministic fallback)
+- [x] `analytics.service.boardReport()` — assembles metrics from live `businessHub` + `revenueLeakage` rollups; `boardReportFallback()` deterministic pack; `renderBoardReportHtml()` SES email body
+- [x] `analytics.service.emailBoardReport()` (SES send, `{sent:false}` not an error) + schedule CRUD wrappers; `boardReport.repository.js` (+ pure `isScheduleDue`)
+- [x] migration `000060_board_report_schedules` (applied on hosted, schema reloaded)
+- [x] routes: `POST /board-report`, `POST /board-report/email` (finEdit), `GET/POST/PATCH/DELETE /board-report/schedules`; `docs/API.md` updated
+- [x] worker cron (daily 06:30 Europe/London) — sends due schedules, stamps `last_sent_at`
+- [x] frontend: `BoardReportScreen.tsx` + `board-report-api.ts` + `board-report-hooks.ts` + `app/(dashboard)/board-report/page.tsx` + nav (Command section) + `ROUTE_PERMISSION['board-report']`; Generate (button, token cost) → exec summary + RAG priorities + KPIs, Export PDF (print), Send now (SES → mailto fallback), Schedule list
+- [x] test `test/board-report.test.mjs` (7 cases: isScheduleDue cadence, claude throws no-key, service assembly + fallback + empty)
+- Verified: backend `npm test` = 613 pass; frontend `tsc --noEmit` + `next lint` clean.
+- NOTE: email-now sends via SES directly to a free-text address (not the notification outbox) — matches the demo's arbitrary-recipient intent; falls back to a client mailto draft when SES is unconfigured.
 
 ### Phase 3 — M&A Acquisition Modeller (buy-side)
 - [ ] `lib/formulas.js`: `calculateAcquisition(inputs)` → EV, NPV, IRR, payback, debt capacity, red flags
@@ -84,3 +90,4 @@ Commercial hook: "here's £X/yr you're losing → one-click task". Pure compute.
 
 - 2026-06-09 — Created tracker. Gap analysis done. Starting Phase 1 (Revenue Leakage).
 - 2026-06-09 — **Phase 1 (Revenue Leakage) COMPLETE.** Backend: formula + 7 tests + repo method + service + controller + route. Frontend: api + hook + screen + page + nav + route-perm. No new integration. 606 backend tests pass, frontend tsc clean. Docs (FORMULAS.md §Revenue Leakage, API.md) updated. Next: Phase 2 (Board Report Generator).
+- 2026-06-09 — **Phase 2 (Board Report Generator) COMPLETE.** AI exec summary + RAG priorities from live `businessHub`+`revenueLeakage` rollups (Claude, deterministic fallback). Backend: claude fn + service (generate/email/schedule CRUD) + repo + controller + 6 routes + migration 000060 (hosted) + worker cron + 7 tests. Frontend: api + hooks + BoardReportScreen (generate / PDF print / send-now SES→mailto / schedule list) + page + nav + route-perm. No new integration. 613 backend tests pass; tsc + lint clean. API.md updated. Next: Phase 3 (M&A Acquisition Modeller).

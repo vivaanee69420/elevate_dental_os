@@ -20,6 +20,8 @@ import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import * as aws_sns_1 from "../lib/aws-sns.js";
 import { notificationService } from "../services/notification.service.js";
+import { analyticsService } from "../services/analytics.service.js";
+import { boardReportRepository, isScheduleDue } from "../repositories/boardReport.repository.js";
 // --------------------------------------------------------------------------
 // Business-health snapshot — daily 02:00 UTC, decides per-org by cadence.
 // Phase 2: replaces stub baseline-copy with formula-driven calc against real
@@ -319,5 +321,37 @@ node_cron_1.default.schedule('* * * * *', async () => {
         console.error('[worker] notification drain failed', err);
     }
 });
+
+// --------------------------------------------------------------------------
+// Board Report Generator delivery — daily 06:30 Europe/London. Scans all
+// active board_report_schedules, sends the ones DUE by cadence (daily = once a
+// day, weekly >7d, monthly >28d), then stamps last_sent_at. Each pack is
+// computed live from the org's current analytics rollups at send time.
+// --------------------------------------------------------------------------
+node_cron_1.default.schedule('30 6 * * *', async () => {
+    let sent = 0;
+    try {
+        const schedules = await boardReportRepository.activeAcrossOrgs();
+        const now = new Date();
+        for (const s of schedules) {
+            if (!isScheduleDue(s.frequency, s.last_sent_at, now)) continue;
+            try {
+                const label = `${s.frequency[0].toUpperCase()}${s.frequency.slice(1)} board pack`;
+                const { delivery } = await analyticsService.emailBoardReport(s.organisation_id, {
+                    recipientEmail: s.recipient_email,
+                    label,
+                });
+                await boardReportRepository.markSent(s.id, now.toISOString());
+                if (delivery.sent) sent++;
+                else console.error(`[worker] board report SES send failed for schedule ${s.id}: ${delivery.error}`);
+            } catch (err) {
+                console.error(`[worker] board report schedule ${s.id} failed`, err);
+            }
+        }
+        if (sent > 0) console.log(`[worker] Board reports: ${sent} sent`);
+    } catch (err) {
+        console.error('[worker] Board report delivery job failed', err);
+    }
+}, { timezone: 'Europe/London' });
 
 console.log('[workers] Started — cron schedules active');

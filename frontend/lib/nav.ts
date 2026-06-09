@@ -24,6 +24,7 @@ export const NAV: NavSection[] = [
     { id: 'deep-dive', label: 'Practice Deep Dive', isNew: true },
     { id: 'task-manager', label: 'Task Manager' },
     { id: 'ai-insights', label: 'AI Analyst', isNew: true },
+    { id: 'board-report', label: 'Board Report', isNew: true },
     { id: 'day', label: 'Day · Cash Collected', isNew: true },
     { id: 'p4g-ai', label: 'Mastermind AI' },
     { id: 'tax', label: 'Tax (MTD)' },

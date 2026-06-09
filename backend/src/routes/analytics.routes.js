@@ -70,4 +70,14 @@ router.get('/pl-sheets/:id/csv', fin, (0, async_handler_1.asyncHandler)(analytic
 router.get('/pl-sheets/:id', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.getPlSheet));
 router.put('/pl-sheets/:id', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.updatePlSheet));
 router.delete('/pl-sheets/:id', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.deletePlSheet));
+
+// Board Report Generator (DentaCFO Phase 2). Generate/email are token-cost +
+// outbound, so POST (never on page load); finance.view gate (board pack exposes
+// group financials). Schedule CRUD: GET = view; mutations = finEdit (audited).
+router.post('/board-report', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.boardReport));
+router.post('/board-report/email', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.emailBoardReport));
+router.get('/board-report/schedules', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.listBoardSchedules));
+router.post('/board-report/schedules', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.createBoardSchedule));
+router.patch('/board-report/schedules/:id', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.updateBoardSchedule));
+router.delete('/board-report/schedules/:id', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.deleteBoardSchedule));
 export default router;

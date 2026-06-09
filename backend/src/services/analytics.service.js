@@ -13,6 +13,8 @@ import * as payRun_repository_1 from "../repositories/pay-run.repository.js";
 import * as valuationInputs_repository_1 from "../repositories/valuationInputs.repository.js";
 import * as chairConfig_repository_1 from "../repositories/chairConfig.repository.js";
 import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
+import { boardReportRepository } from "../repositories/boardReport.repository.js";
+import * as aws_ses_1 from "../lib/aws-ses.js";
 import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
@@ -1927,7 +1929,171 @@ export const analyticsService = {
             truncated: false, // exact SQL rollups — never truncated
         };
     },
+    // ------------------------------------------------------------------------
+    // Board Report Generator (DentaCFO gap module, Phase 2). Assembles a board
+    // pack from the SAME live rollups as Business Hub + Revenue Leakage (no
+    // stored snapshot): group turnover/margin, conversion, banked cash, top vs
+    // weakest practice, and the single biggest recoverable leak. Claude writes
+    // the executive summary + RAG priorities; on any failure / no API key it
+    // falls back to a deterministic, data-driven pack (HTTP 200 always). Money
+    // is integer pence throughout.
+    async boardReport(orgId, { since = null, until = null, label = null, now = () => new Date() } = {}) {
+        const [hub, leak] = await Promise.all([
+            this.businessHub(orgId, { since, until, label, now }),
+            this.revenueLeakage(orgId, { since, until, now }),
+        ]);
+        const g = hub.group;
+        const periodLabel = label || (until ? `${(since || '').slice(0, 10)} → ${until.slice(0, 10)}` : `last ${hub.period.days} days`);
+        // Annualise window turnover by the leakage window length (same window).
+        const days = Math.max(1, leak.windowDays);
+        const revAnnualPence = Math.round((g.revenuePence * 365) / days);
+        const ebitdaWindowPence = Math.round((g.revenuePence * (g.marginPct || 0)) / 100);
+        const practiceRows = hub.practices || [];
+        const top = practiceRows[0] || null; // already sorted by revenue desc
+        // Weakest = highest no-show rate among practices with appointments.
+        const weak = practiceRows
+            .filter((p) => p.appointments > 0)
+            .slice()
+            .sort((a, b) => b.noShowRate - a.noShowRate)[0] || null;
+        const biggest = (leak.lines || [])[0] || null; // sorted by annualPence desc
+
+        const metrics = {
+            revenuePence: g.revenuePence,
+            revenueAnnualisedPence: revAnnualPence,
+            revenueTargetPence: g.revenueTargetPence,
+            marginPct: g.marginPct,
+            ebitdaWindowPence,
+            appointments: g.appointments,
+            noShows: g.noShows,
+            noShowRate: g.noShowRate,
+            noShowTracked: g.noShowTracked,
+            leads: g.leads,
+            conversionRate: g.conversionRate,
+            newPatients: g.newPatients,
+            cashCollectedPence: g.cashCollectedPence,
+            practiceCount: g.practices,
+            leakageAnnualPence: leak.annualTotalPence,
+            leakageMonthlyPence: leak.monthlyTotalPence,
+            leakagePctOfRevenue: leak.asPctOfRevenue,
+            topPractice: top ? { name: top.name, revenuePence: top.revenuePence } : null,
+            weakPractice: weak ? { name: weak.name, noShowRate: weak.noShowRate } : null,
+            biggestLeak: biggest ? { label: biggest.label, annualPence: biggest.annualPence, owner: biggest.owner } : null,
+        };
+
+        const empty = g.revenuePence === 0 && g.appointments === 0 && g.leads === 0;
+        let summary = [];
+        let priorities = [];
+        let basis = 'deterministic';
+        if (!empty) {
+            try {
+                const ai = await claude_1.generateBoardReport({
+                    scopeLabel: 'Group',
+                    periodLabel,
+                    data: metrics,
+                });
+                if (ai.summary.length) { summary = ai.summary; priorities = ai.priorities; basis = 'ai'; }
+            } catch (err) {
+                // fall through to deterministic
+            }
+        }
+        if (!summary.length) ({ summary, priorities } = boardReportFallback(metrics, periodLabel));
+
+        return {
+            generatedAt: now().toISOString(),
+            period: { since: leak.since, until: leak.until, label: periodLabel, days },
+            metrics,
+            summary,
+            priorities,
+            basis,
+            empty,
+        };
+    },
+    // Generate the pack + email it now to one address via SES. Returns the
+    // report plus a delivery result. SES failure (no creds in dev) is NOT an
+    // error — the caller surfaces {sent:false} and the UI offers a mailto draft.
+    async emailBoardReport(orgId, { recipientEmail, since = null, until = null, label = null, now = () => new Date() } = {}) {
+        const report = await this.boardReport(orgId, { since, until, label, now });
+        const html = renderBoardReportHtml(report);
+        const subject = `Board Report — ${report.period.label}`;
+        let delivery;
+        try {
+            const messageId = await aws_ses_1.sendEmail({ to: recipientEmail, subject, html });
+            delivery = { sent: true, messageId, to: recipientEmail };
+        } catch (err) {
+            delivery = { sent: false, error: err.message, to: recipientEmail };
+        }
+        return { report, delivery };
+    },
+    // Schedule CRUD (recurring delivery config). Mutations are audited upstream.
+    listBoardSchedules(orgId) {
+        return boardReportRepository.list(orgId);
+    },
+    createBoardSchedule(orgId, fields, userId) {
+        return boardReportRepository.create(orgId, fields, userId);
+    },
+    updateBoardSchedule(orgId, id, fields) {
+        return boardReportRepository.update(orgId, id, fields);
+    },
+    deleteBoardSchedule(orgId, id) {
+        return boardReportRepository.remove(orgId, id);
+    },
 };
+
+// Deterministic board pack from real metrics — the no-AI fallback. Mirrors the
+// demo's board[] + rag[] shape (exec bullets + 3 RAG-coded priorities), built
+// only from figures already in `metrics`. British English, money in £.
+function boardReportFallback(m, periodLabel) {
+    const summary = [];
+    if (m.revenuePence > 0) {
+        summary.push(`Group turnover ${formulas_1.formatPounds(m.revenuePence)} for ${periodLabel} (~${formulas_1.formatPounds(m.revenueAnnualisedPence)}/yr)${m.marginPct > 0 ? `; EBITDA proxy ${formulas_1.formatPounds(m.ebitdaWindowPence)} at ${m.marginPct}% net margin` : '; connect Xero/QuickBooks for a live margin'}.`);
+    }
+    if (m.topPractice && m.practiceCount > 1) {
+        summary.push(`Revenue concentration: ${m.topPractice.name} is the largest site at ${formulas_1.formatPounds(m.topPractice.revenuePence)} — replicating it is the de-risking priority.`);
+    }
+    if (m.leakageAnnualPence > 0) {
+        summary.push(`Recoverable leakage of ${formulas_1.formatPounds(m.leakageAnnualPence)}/yr identified${m.leakagePctOfRevenue ? ` (${m.leakagePctOfRevenue}% of turnover)` : ''} — the single biggest near-term lever, no capex required.`);
+    }
+    if (m.noShowTracked && m.appointments > 0) {
+        summary.push(`Appointment no-show rate ${m.noShowRate}% across ${m.appointments.toLocaleString('en-GB')} appointments — chair time recoverable without new sites.`);
+    }
+    if (m.leads > 0) {
+        summary.push(`Lead-to-treatment conversion ${m.conversionRate}% on ${m.leads.toLocaleString('en-GB')} leads; ${formulas_1.formatPounds(m.cashCollectedPence)} banked in the window.`);
+    }
+    const priorities = [];
+    if (m.biggestLeak) {
+        priorities.push({ rag: 'red', text: `Recover ${formulas_1.formatPounds(m.biggestLeak.annualPence)}/yr from ${m.biggestLeak.label} — owner: ${m.biggestLeak.owner}. Highest-value, lowest-cost fix.` });
+    }
+    if (m.weakPractice && m.weakPractice.noShowRate > 0) {
+        priorities.push({ rag: 'amber', text: `Cut ${m.weakPractice.name} no-show rate from ${m.weakPractice.noShowRate}% toward the 5% benchmark — owner: Site managers.` });
+    }
+    if (m.topPractice) {
+        priorities.push({ rag: 'green', text: `Protect ${m.topPractice.name}'s production — the group's largest revenue base. Replicate its playbook across sites.` });
+    }
+    return { summary, priorities };
+}
+
+// Render a board pack to a standalone HTML email (British English, no emojis,
+// light theme per project rule 1). Used for SES sends + scheduled delivery.
+function renderBoardReportHtml(report) {
+    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const RAG = { red: '#c0392b', amber: '#c6a253', green: '#2e9e6a' };
+    const bullets = report.summary.map((s) => `<li style="margin:0 0 8px;line-height:1.55">${esc(s)}</li>`).join('');
+    const prios = report.priorities.map((p) =>
+        `<tr><td style="vertical-align:top;padding:6px 10px 6px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${RAG[p.rag] || RAG.amber}"></span></td><td style="padding:6px 0;font-size:13px;line-height:1.5">${esc(p.text)}</td></tr>`).join('');
+    return `<!doctype html><html><body style="margin:0;background:#f6f7f9;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1d21">
+<div style="max-width:640px;margin:0 auto;padding:24px">
+  <div style="background:#fff;border:1px solid #e6e8eb;border-radius:14px;padding:24px 26px">
+    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#8a9099;font-weight:700">Board Report</div>
+    <h1 style="margin:4px 0 2px;font-size:20px">${esc(report.period.label)}</h1>
+    <div style="font-size:12px;color:#8a9099">Generated ${esc(report.generatedAt.slice(0, 10))} · ${report.basis === 'ai' ? 'AI-written from live data' : 'Generated from live data'}</div>
+    <div style="font-weight:700;font-size:12px;color:#8a9099;text-transform:uppercase;letter-spacing:.05em;margin:20px 0 8px">Executive summary</div>
+    <ul style="margin:0;padding-left:18px;font-size:13px;color:#1a1d21">${bullets}</ul>
+    <div style="font-weight:700;font-size:12px;color:#8a9099;text-transform:uppercase;letter-spacing:.05em;margin:20px 0 6px">Priorities</div>
+    <table style="width:100%;border-collapse:collapse">${prios}</table>
+    <div style="border-top:1px solid #e6e8eb;margin-top:20px;padding-top:12px;font-size:11px;color:#8a9099">Generated by Elevate Dental OS — figures computed live from your Dentally / Xero / GoHighLevel data.</div>
+  </div>
+</div></body></html>`;
+}
 
 // Bucket a raw Dentally treatment name into a clinical revenue line. Ordered:
 // implants win over crown/bridge (e.g. "Implant Crown", "Implant - Bridge"),

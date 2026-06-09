@@ -9,7 +9,7 @@ Branch: `feat/dentacfo-modules`. Resume after `/clear`: read this file + `BUILD-
 | Phase | Module | New integration | Status | Commit |
 |---|---|---|---|---|
 | 1 | Revenue Leakage | none | ✅ done | committed (see `git log` HEAD of branch) |
-| 2 | Board Report Generator | none (Claude + SES email) | ⬜ next | — |
+| 2 | Board Report Generator | none (Claude + SES email) | ✅ done | committed (branch HEAD) |
 | 3 | M&A Acquisition Modeller (buy-side) | none | ⬜ | — |
 | 4 | Exit Plan (full 4% personal-wealth model) | none | ⬜ | — |
 | 5 | Data Quality Engine | none | ⬜ | — |
@@ -24,3 +24,4 @@ Backend: formula (+ test + FORMULAS.md if new calc) → repo → service → con
 
 ## Log
 - 2026-06-09 — Phase 1 (Revenue Leakage) built + verified (606 backend tests, tsc clean), committing now.
+- 2026-06-09 — Phase 2 (Board Report Generator) built + verified (613 backend tests, tsc + lint clean). Migration 000060 (board_report_schedules) applied on hosted. No new integration (Claude + SES). Next: Phase 3 (M&A Acquisition Modeller).

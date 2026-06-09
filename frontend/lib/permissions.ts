@@ -49,6 +49,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   financial: 'finance.view',
   payments: 'finance.view',
   leakage: 'finance.view',
+  'board-report': 'finance.view',
   valuation: 'valuation.view',
 
   // Business Health
