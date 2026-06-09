@@ -24,7 +24,7 @@ export const p4gAiService = {
         }
         let result;
         try {
-            result = await (0, claude_1.askPlan4GrowthAI)(body.message, {
+            result = await (0, claude_1.askPlan4GrowthAI)(orgId, body.message, {
                 baseline: health?.baseline, targets: health?.targets, recentSnapshot: snapshots?.[0],
                 liveData,
             }, body.history);
