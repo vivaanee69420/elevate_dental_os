@@ -211,3 +211,36 @@ export const plSheetUpdateSchema = zod_1.z.object({
     lines: zod_1.z.array(sheetLine).max(300).optional(),
     cells: sheetCells.optional(),
 }).refine((o) => Object.keys(o).length > 0, { message: 'no fields to update' });
+
+// ============================================================================
+// Board Report Generator (DentaCFO gap module, Phase 2). The pack is computed
+// live from the same analytics rollups the dashboard uses; the request just
+// scopes the window. Money never crosses this boundary (server-derived).
+// ============================================================================
+// POST /api/analytics/board-report — generate (token cost). Optional window.
+export const boardReportSchema = zod_1.z.object({
+    since: isoDateTime,
+    until: isoDateTime,
+    label: zod_1.z.string().trim().max(60).optional(),
+});
+
+// POST /api/analytics/board-report/email — generate + email now to one address.
+const emailStr = zod_1.z.string().trim().toLowerCase().email().max(254);
+export const boardReportEmailSchema = boardReportSchema.extend({
+    recipient_email: emailStr,
+});
+
+// POST /api/analytics/board-report/schedules — recurring delivery config.
+export const boardScheduleCreateSchema = zod_1.z.object({
+    frequency: zod_1.z.enum(['daily', 'weekly', 'monthly']),
+    recipient_email: emailStr,
+    report_type: zod_1.z.enum(['board', 'financial', 'operational']).default('board'),
+});
+
+// PATCH a schedule — toggle active / change cadence or recipient.
+export const boardScheduleUpdateSchema = zod_1.z.object({
+    frequency: zod_1.z.enum(['daily', 'weekly', 'monthly']).optional(),
+    recipient_email: emailStr.optional(),
+    report_type: zod_1.z.enum(['board', 'financial', 'operational']).optional(),
+    active: zod_1.z.boolean().optional(),
+}).refine((o) => Object.keys(o).length > 0, { message: 'no fields to update' });

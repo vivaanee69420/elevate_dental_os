@@ -233,4 +233,35 @@ export const analyticsController = {
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         res.send(csv);
     },
+    // ---- Board Report Generator (DentaCFO Phase 2) ----
+    // Generate the pack (token cost; POST so it's never run on page load).
+    async boardReport(req, res) {
+        const { since, until, label } = analytics_model_1.boardReportSchema.parse(req.body ?? {});
+        res.json(await analytics_service_1.analyticsService.boardReport(req.user.organisation_id, { since, until, label }));
+    },
+    // Generate + email now to one address. {sent:false} (not an error) when SES
+    // is unconfigured — the UI falls back to a mailto draft.
+    async emailBoardReport(req, res) {
+        const { recipient_email, since, until, label } = analytics_model_1.boardReportEmailSchema.parse(req.body ?? {});
+        res.json(await analytics_service_1.analyticsService.emailBoardReport(req.user.organisation_id, { recipientEmail: recipient_email, since, until, label }));
+    },
+    async listBoardSchedules(req, res) {
+        res.json(await analytics_service_1.analyticsService.listBoardSchedules(req.user.organisation_id));
+    },
+    async createBoardSchedule(req, res) {
+        const fields = analytics_model_1.boardScheduleCreateSchema.parse(req.body ?? {});
+        res.status(201).json(await analytics_service_1.analyticsService.createBoardSchedule(req.user.organisation_id, fields, req.user.id));
+    },
+    async updateBoardSchedule(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const fields = analytics_model_1.boardScheduleUpdateSchema.parse(req.body ?? {});
+        const row = await analytics_service_1.analyticsService.updateBoardSchedule(req.user.organisation_id, id, fields);
+        if (!row) return res.status(404).json({ error: 'Schedule not found' });
+        res.json(row);
+    },
+    async deleteBoardSchedule(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        await analytics_service_1.analyticsService.deleteBoardSchedule(req.user.organisation_id, id);
+        res.status(204).end();
+    },
 };

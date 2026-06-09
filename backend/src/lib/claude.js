@@ -136,6 +136,46 @@ Give 2-4 findings ranked by importance. If the data can't answer the question, s
 }
 
 // ============================================================================
+// BOARD REPORT — Claude writes the executive summary + RAG-coded priorities for
+// the monthly/weekly board pack (DentaCFO gap module, Phase 2). `bundle` is an
+// already-real data digest assembled by the service from live rollups (group
+// totals, leakage, top/weak practice) — never fabricate numbers. Money in the
+// bundle is integer pence; the model talks in £. Throws when no API key so the
+// caller falls back to a deterministic, data-driven summary.
+// ============================================================================
+const RAG_MAP = { red: 'red', amber: 'amber', green: 'green', good: 'green', warn: 'amber', warning: 'amber', bad: 'red', critical: 'red' };
+function normRag(s) { return RAG_MAP[String(s || '').toLowerCase()] || 'amber'; }
+
+export async function generateBoardReport(bundle) {
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error('No ANTHROPIC_API_KEY');
+    const prompt = `Write a board pack for a UK dental practice group from its LIVE numbers. Use ONLY the data provided — reference the actual figures, never invent. Money is integer pence; talk in £ (round sensibly). British English.
+
+SCOPE: ${bundle.scopeLabel} · ${bundle.periodLabel}
+LIVE DATA (real, integer pence unless noted):
+${JSON.stringify(bundle.data)}
+
+Return ONLY valid JSON, no prose/code-fences, of the form:
+{"summary": ["4-6 board-grade sentences, each a standalone bullet citing a real figure — turnover, margin, recoverable leakage, concentration, capacity"], "priorities": [{"rag":"red|amber|green","text":"one prioritised action with the £ value and a named owner role (e.g. COO, Site managers, Reception)"}]}
+Give exactly 3 priorities ranked red→green by urgency. Lead with the biggest recoverable lever.`;
+    const response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 1200,
+        system: 'You are a UK dental group CFO writing a board pack. Return only a single valid JSON object.',
+        messages: [{ role: 'user', content: prompt }],
+    });
+    const text = response.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const obj = JSON.parse(jsonText);
+    const summary = Array.isArray(obj.summary)
+        ? obj.summary.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim())
+        : [];
+    const priorities = Array.isArray(obj.priorities)
+        ? obj.priorities.filter((p) => p && p.text).map((p) => ({ rag: normRag(p.rag), text: String(p.text) }))
+        : [];
+    return { summary, priorities, usage: response.usage };
+}
+
+// ============================================================================
 // AI-INSIGHTS — Claude analyses LIVE rollups (baseline + per-practice/source
 // conversion + revenue projection) and writes insight cards in the exact
 // shape the AI Insights screen renders. Returns [] on any failure so the

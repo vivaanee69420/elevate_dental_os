@@ -346,6 +346,15 @@ Per-org persisted config + editable scenario sheets. **Edits are owner-toggled (
 ### `DELETE /api/analytics/pl-sheets/:id` — delete a sheet (204). finance.**edit**. Audited.
 ### `GET /api/analytics/pl-sheets/:id/csv` — CSV export of a sheet (lines × cols, £ with 2dp from integer pence; `Content-Disposition` attachment). finance.view.
 
+#### Board Report Generator (DentaCFO gap module, Phase 2)
+The pack is assembled LIVE from the same rollups as Business Hub + Revenue Leakage (no stored snapshot). Claude writes the executive summary + RAG-coded priorities; a deterministic, data-driven pack is the fallback when there is no API key or the call fails (HTTP 200 always). Money is integer pence.
+### `POST /api/analytics/board-report` — generate the pack (token cost — never on page load). Body (`boardReportSchema`): optional `since`/`until`/`label` window. Returns `{ generatedAt, period:{since,until,label,days}, metrics:{ revenuePence, revenueAnnualisedPence, revenueTargetPence, marginPct, ebitdaWindowPence, appointments, noShows, noShowRate, noShowTracked, leads, conversionRate, newPatients, cashCollectedPence, practiceCount, leakageAnnualPence, leakageMonthlyPence, leakagePctOfRevenue, topPractice, weakPractice, biggestLeak }, summary:[string], priorities:[{rag:'red'|'amber'|'green',text}], basis:'ai'|'deterministic', empty }`. finance.view.
+### `POST /api/analytics/board-report/email` — generate + email the pack now to one address via SES. Body (`boardReportEmailSchema`): `recipient_email` + optional window. Returns `{ report, delivery:{ sent, messageId?, error?, to } }` — `sent:false` (NOT an error) when SES is unconfigured; the UI falls back to a mailto draft. finance.**edit**. Audited.
+### `GET /api/analytics/board-report/schedules` — list recurring delivery schedules `[{id,organisation_id,frequency,recipient_email,report_type,active,last_sent_at,created_by,created_at}]`. finance.view.
+### `POST /api/analytics/board-report/schedules` — create a schedule (`boardScheduleCreateSchema`: `frequency` daily|weekly|monthly, `recipient_email`, `report_type` board|financial|operational). Returns the row (201). finance.**edit**. Audited. The workers cron (daily 06:30 Europe/London) sends due schedules (daily once/day, weekly >7d, monthly >28d) and stamps `last_sent_at`.
+### `PATCH /api/analytics/board-report/schedules/:id` — partial update (`boardScheduleUpdateSchema`: toggle `active`, change cadence/recipient/type; ≥1 field). 404 when not in this org. finance.**edit**. Audited.
+### `DELETE /api/analytics/board-report/schedules/:id` — delete a schedule (204). finance.**edit**. Audited.
+
 > **Precedence (TODO1, resolved):** `pl_sheets` are a **scenario overlay only**. They are standalone planning/budget grids — they NEVER override the real actuals P&L (`pl`/`pl-margin` stay Xero > manual > zero) and NEVER feed EBITDA or the valuation. This preserves the "finance screen = real actuals or honest empty, never fabricated" guarantee. See FORMULAS.md §16.
 
 **Real-data read path (exact, or zero — never estimated):**
