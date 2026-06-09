@@ -1256,10 +1256,12 @@ export const analyticsService = {
             targets: health?.targets || null,
         };
     },
-    // Interim drop-in (Task 6B re-points this at the cached snapshot). Existing
-    // AI callers keep the same shape.
+    // Back-compat drop-in: existing AI callers get the cached snapshot (which
+    // spreads the same top-level fields plus meta/trailing12) instead of a fresh
+    // assembly each call. Lazy import avoids the analytics <-> ai-context cycle.
     async getLiveContextData(orgId, period = 'current') {
-      return this.assembleLiveContext(orgId, period);
+      const { getSnapshot } = await import("./ai-context.service.js");
+      return getSnapshot(orgId, period);
     },
     async valuation(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
