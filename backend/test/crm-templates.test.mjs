@@ -22,6 +22,10 @@ describe('renderTemplate', () => {
     expect(renderTemplate('{{ first_name }}', { first_name: 'Jo' })).toBe('Jo');
   });
 
+  it('blanks placeholders of any case / shape so no raw {{token}} leaks', () => {
+    expect(renderTemplate('Hi {{First_Name}} {{var2}}', {})).toBe('Hi  ');
+  });
+
   it('leaves text without placeholders untouched', () => {
     expect(renderTemplate('No vars here', {})).toBe('No vars here');
   });
