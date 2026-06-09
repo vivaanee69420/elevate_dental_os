@@ -1137,13 +1137,22 @@ export const analyticsService = {
     // Assemble the live aggregated context for a period. Pure assembly (no cache);
     // ai-context.service wraps this with snapshot caching + meta. period: 'current'
     // | 'YYYY-MM' resolves the window. Returns the same shape it always did.
-    async assembleLiveContext(orgId, period = 'current') {
+    async assembleLiveContext(orgId, opts = 'current') {
+        const o = typeof opts === 'string' ? { period: opts } : (opts || {});
         const now = new Date();
-        const periodKey = (!period || period === 'current')
-          ? `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
-          : period;
-        const win = { scope: 'all', period: 'month', periodKey, now: () => now };
-        const resolvedWin = treatmentWindow('month', periodKey, now);
+        const scope = o.scope || 'all';
+        let win;
+        let resolvedWin;
+        if (o.since && o.until) {
+          win = { scope, period: 'month', since: o.since, until: o.until, now: () => now };
+          resolvedWin = resolveWindow({ since: o.since, until: o.until, now });
+        } else {
+          const periodKey = (!o.period || o.period === 'current')
+            ? `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+            : o.period;
+          win = { scope, period: 'month', periodKey, now: () => now };
+          resolvedWin = treatmentWindow('month', periodKey, now);
+        }
 
         const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank] = await Promise.all([
             this.plMargin(orgId, win),
