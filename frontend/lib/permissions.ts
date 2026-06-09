@@ -48,6 +48,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   workbench: 'finance.view',
   financial: 'finance.view',
   payments: 'finance.view',
+  leakage: 'finance.view',
   valuation: 'valuation.view',
 
   // Business Health

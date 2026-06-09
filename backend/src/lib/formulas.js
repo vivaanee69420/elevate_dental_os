@@ -290,6 +290,44 @@ export function calculateMarketingROI(input) {
     };
 }
 
+// Revenue Leakage — "money left on the table". Five recoverable pools, each
+// scaled by a recoverable-rate (0-100, the share you realistically claw back).
+// All inputs/outputs are integer pence for the window passed in; annualisation
+// is done by the caller (it knows the window length). Mirrors the GM demo's
+// leakageModel but driven by real Dentally/payment rollups.
+export const LEAKAGE_DEFAULT_RATES = { plans: 30, fta: 50, recall: 60, lapsed: 40, collect: 70 };
+// Constants the demo bakes in: hygiene share of revenue feeding recall, and the
+// lapsed-patient share of revenue. Overridable per call.
+export const LEAKAGE_HYGIENE_SHARE = 0.12;
+export const LEAKAGE_LAPSED_SHARE = 0.06;
+
+export function calculateRevenueLeakage(input = {}, rates = {}) {
+    const r = { ...LEAKAGE_DEFAULT_RATES, ...rates };
+    const clamp = (v) => Math.max(0, Math.min(100, Number(v) || 0)) / 100;
+    const {
+        revenuePence = 0,
+        presentedPlanPence = 0,
+        acceptedPlanPence = 0,
+        appointments = 0,
+        noShows = 0,
+        cashCollectedPence = 0,
+        hygieneShare = LEAKAGE_HYGIENE_SHARE,
+        lapsedShare = LEAKAGE_LAPSED_SHARE,
+    } = input;
+    const ftaRate = appointments > 0 ? noShows / appointments : 0;
+    const lostPlanPence = Math.max(0, presentedPlanPence - acceptedPlanPence);
+    const uncollectedPence = Math.max(0, revenuePence - cashCollectedPence);
+    const pools = {
+        plans: pence(lostPlanPence * clamp(r.plans)),
+        fta: pence(revenuePence * ftaRate * clamp(r.fta)),
+        recall: pence(revenuePence * hygieneShare * 0.25 * clamp(r.recall)),
+        lapsed: pence(revenuePence * lapsedShare * clamp(r.lapsed)),
+        collect: pence(uncollectedPence * clamp(r.collect)),
+    };
+    const windowTotalPence = pools.plans + pools.fta + pools.recall + pools.lapsed + pools.collect;
+    return { pools, windowTotalPence, rates: r, ftaRatePct: pct(ftaRate * 100) };
+}
+
 export function calculateProgress(input) {
     if (!input.baseline || !input.target || input.baseline === input.target) {
         return { progressPct: 0, deltaFromBaselinePct: 0, remainingToTarget: 0 };

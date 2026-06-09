@@ -252,6 +252,38 @@ export const analyticsRepository = {
         const row = Array.isArray(data) ? data[0] : data;
         return row || { started: 0, completed: 0, closed_value_pence: 0 };
     },
+    // Treatment-plan private production split by status, in the window — feeds
+    // the Revenue Leakage "lost plans" pool. Presented = all plans started in
+    // the window; accepted = the completed subset. Paginated, org-filtered on
+    // the serviceClient path (no automatic RLS here — rule 3). `treatments_
+    // rollup_by_org` only returns the accepted (closed) side, so this fills in
+    // the presented total it omits.
+    async treatmentPlanValueByStatus(orgId, sinceISO, untilISO = null) {
+        const sinceDate = sinceISO ? new Date(sinceISO).toISOString().slice(0, 10) : null;
+        const untilDate = untilISO ? new Date(untilISO).toISOString().slice(0, 10) : null;
+        const PAGE = 1000;
+        let presentedPence = 0, acceptedPence = 0;
+        for (let from = 0; ; from += PAGE) {
+            let q = supabase_1.serviceClient
+                .from('treatment_plans')
+                .select('private_value_pence, completed, start_date')
+                .eq('organisation_id', orgId)
+                .gt('private_value_pence', 0)
+                .range(from, from + PAGE - 1);
+            if (sinceDate) q = q.gte('start_date', sinceDate);
+            if (untilDate) q = q.lte('start_date', untilDate);
+            const { data, error } = await q;
+            if (error) throw new Error(error.message);
+            const rows = data || [];
+            for (const r of rows) {
+                const v = Number(r.private_value_pence) || 0;
+                presentedPence += v;
+                if (r.completed) acceptedPence += v;
+            }
+            if (rows.length < PAGE) break;
+        }
+        return { presentedPence, acceptedPence };
+    },
     // ------------------------------------------------------------------------
     // Business Hub sources — per-practice rollup across finance + ops + growth.
     async practicesFull(orgId) {

@@ -1727,6 +1727,72 @@ export const analyticsService = {
     // payments), ops (appointments → completed/DNA), growth (leads → conversion).
     // Group revenue target = business_health baseline (a goal). Group margin is
     // REAL only when monthly_financials actuals exist, else 0 (never estimated).
+    // Revenue Leakage — "money left on the table" over the window. Pulls the
+    // same real rollups Business Hub uses (settled turnover, appointments/no-
+    // shows, treatment-plan value, banked receipts) and runs them through
+    // calculateRevenueLeakage. The window total is annualised by the caller's
+    // window length. `rates` (0-100 per pool) tunes the recoverable share.
+    async revenueLeakage(orgId, { days = 90, since = null, until = null, rates = {}, now = () => new Date() } = {}) {
+        const nowMs = now().getTime();
+        const sinceISO = since || new Date(nowMs - days * 86400000).toISOString();
+        const untilISO = until || null;
+        const windowEndMs = untilISO ? Date.parse(untilISO) : nowMs;
+        const windowDays = Math.max(1, Math.round((windowEndMs - Date.parse(sinceISO)) / 86400000));
+        const [revRows, apptRows, planVal, cashRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
+            analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
+            analytics_repository_1.analyticsRepository.treatmentPlanValueByStatus(orgId, sinceISO, untilISO),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO),
+        ]);
+        const num = (v) => Number(v || 0);
+        const revenuePence = revRows.reduce((s, r) => s + num(r.pence), 0);
+        const appointments = apptRows.reduce((s, r) => s + num(r.total), 0);
+        const noShows = apptRows.reduce((s, r) => s + num(r.no_shows), 0);
+        const cashCollectedPence = cashRows.reduce((s, r) => s + num(r.pence), 0);
+        const result = formulas_1.calculateRevenueLeakage(
+            {
+                revenuePence,
+                presentedPlanPence: planVal.presentedPence,
+                acceptedPlanPence: planVal.acceptedPence,
+                appointments,
+                noShows,
+                cashCollectedPence,
+            },
+            rates,
+        );
+        // Annualise the window total + each pool (window may not be a clean month).
+        const annualise = (p) => Math.round((p * 365) / windowDays);
+        const LINE_META = {
+            plans: { label: 'Unaccepted / lost treatment plans', sub: 'Presented but not closed — TCO follow-up', owner: 'COO' },
+            fta: { label: 'Failed appointments (FTA)', sub: 'Lost chair time from no-shows', owner: 'Site managers' },
+            recall: { label: 'Unbooked hygiene recalls', sub: 'Recurring revenue not rebooked', owner: 'Reception' },
+            lapsed: { label: 'Lapsed patients (>12 mo)', sub: 'Reactivation campaign opportunity', owner: 'Marketing' },
+            collect: { label: 'Uncollected / open balances', sub: 'Completed work not yet paid', owner: 'Accounts' },
+        };
+        const lines = Object.entries(result.pools).map(([k, windowPence]) => ({
+            key: k,
+            ...LINE_META[k],
+            windowPence,
+            annualPence: annualise(windowPence),
+            monthlyPence: Math.round(annualise(windowPence) / 12),
+        })).sort((a, b) => b.annualPence - a.annualPence);
+        const annualTotalPence = lines.reduce((s, l) => s + l.annualPence, 0);
+        return {
+            windowDays,
+            since: sinceISO,
+            until: untilISO,
+            rates: result.rates,
+            ftaRatePct: result.ftaRatePct,
+            windowTotalPence: result.windowTotalPence,
+            annualTotalPence,
+            monthlyTotalPence: Math.round(annualTotalPence / 12),
+            asPctOfRevenue: revenuePence > 0
+                ? formulas_1.pct((result.windowTotalPence / revenuePence) * 100)
+                : 0,
+            inputs: { revenuePence, appointments, noShows, cashCollectedPence, ...planVal },
+            lines,
+        };
+    },
     async businessHub(orgId, { days = 90, since = null, until = null, label = null, now = () => new Date() } = {}) {
         // Window: an explicit [since, until] (a picked month/day) takes priority;
         // otherwise fall back to the trailing N-day window (until open).

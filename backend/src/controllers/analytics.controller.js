@@ -71,6 +71,21 @@ export const analyticsController = {
         const label = typeof req.query.label === 'string' ? req.query.label.slice(0, 40) : null;
         res.json(await analytics_service_1.analyticsService.businessHub(req.user.organisation_id, { days, since, until, label }));
     },
+    async leakage(req, res) {
+        const days = Number(req.query.days) || 90;
+        const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+        const since = iso(req.query.since);
+        const until = iso(req.query.until);
+        // Recoverable rates (0-100 per pool) arrive as ?rate_plans=30 etc. Only
+        // the five known keys are read; anything else is ignored. The formula
+        // clamps, but parse defensively so a junk value can't poison the calc.
+        const rates = {};
+        for (const k of ['plans', 'fta', 'recall', 'lapsed', 'collect']) {
+            const v = Number(req.query['rate_' + k]);
+            if (Number.isFinite(v)) rates[k] = v;
+        }
+        res.json(await analytics_service_1.analyticsService.revenueLeakage(req.user.organisation_id, { days, since, until, rates }));
+    },
     async chair(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         const recoverPctPoints = Math.max(0, Math.min(40, Number(req.query.recover) || 10));
