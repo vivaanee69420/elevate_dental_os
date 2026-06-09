@@ -32,6 +32,7 @@ ${context.baseline ? `Baseline (when they joined): ${JSON.stringify(context.base
 ${context.targets ? `Targets: ${JSON.stringify(context.targets)}` : 'No targets set'}
 ${context.currentMetrics ? `Current metrics: ${JSON.stringify(context.currentMetrics)}` : ''}
 ${context.recentSnapshot ? `Most recent snapshot: ${JSON.stringify(context.recentSnapshot)}` : ''}
+${context.liveData ? `Current Live Data (P&L actuals, aged debt, revenue leakage, bank balance, chair occupancy, practice breakdowns, etc. Note: Accrual P&L revenue is in 'pl.revenuePence', cash collected/banked is in 'cash.totalPence', and practice breakdowns are in 'practices'): ${JSON.stringify(context.liveData)}` : ''}
 `.trim();
     const userBlock = delimit('user_data', `Business context:\n${contextString}\n\nQuestion: ${userMessage}`);
     const messages = [

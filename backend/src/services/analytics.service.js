@@ -1133,6 +1133,121 @@ export const analyticsService = {
             };
         }
     },
+    async getLiveContextData(orgId) {
+        const win = { scope: 'all', period: 'month', now: () => new Date() };
+        const resolvedWin = treatmentWindow('month', undefined, win.now());
+
+        const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank] = await Promise.all([
+            this.plMargin(orgId, win),
+            this.marketingRoi(orgId, win),
+            this.clinicians(orgId, win),
+            this.cashByDay(orgId, win),
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, resolvedWin.since, resolvedWin.until),
+            analytics_repository_1.analyticsRepository.allEntities(orgId),
+            this.revenueLeakage(orgId, win),
+            debtService.list(orgId),
+            this.chairAnalytics(orgId, win),
+            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            analytics_repository_1.analyticsRepository.bankSummary(orgId),
+        ]);
+
+        const cashByPractice = new Map();
+        if (Array.isArray(settledRevRows)) {
+            for (const r of settledRevRows) {
+                if (r.practice_id) {
+                    const current = cashByPractice.get(r.practice_id) || 0;
+                    cashByPractice.set(r.practice_id, current + (Number(r.pence) || 0));
+                }
+            }
+        }
+
+        const productionByPractice = new Map();
+        if (clin && Array.isArray(clin.clinicians)) {
+            for (const c of clin.clinicians) {
+                if (c.practiceId) {
+                    const current = productionByPractice.get(c.practiceId) || 0;
+                    productionByPractice.set(c.practiceId, current + (c.productionPence || 0));
+                }
+            }
+        }
+
+        const plByPractice = new Map();
+        if (pl && Array.isArray(pl.entities)) {
+            for (const e of pl.entities) {
+                if (e.id) {
+                    plByPractice.set(e.id, {
+                        revPence: e.revPence,
+                        netPence: e.netPence,
+                        marginPct: e.marginPct,
+                    });
+                }
+            }
+        }
+
+        const practiceBreakdown = entityRows
+            .filter((e) => e.kind === 'practice')
+            .map((e) => {
+                const cashPence = cashByPractice.get(e.id) || 0;
+                const productionPence = productionByPractice.get(e.id) || 0;
+                const plData = plByPractice.get(e.id) || null;
+                return {
+                    name: e.name,
+                    cashPence,
+                    productionPence,
+                    revPence: plData ? plData.revPence : null,
+                    netPence: plData ? plData.netPence : null,
+                    marginPct: plData ? plData.marginPct : null,
+                };
+            });
+        practiceBreakdown.sort((a, b) => b.cashPence - a.cashPence || a.name.localeCompare(b.name));
+
+        return {
+            pl: pl.hasData ? { revenuePence: pl.statement.revPence, netPence: pl.statement.netPence, marginPct: pl.statement.marginPct, basis: pl.basis, entities: pl.entities.map((e) => ({ name: e.name, revPence: e.revPence, netPence: e.netPence, marginPct: e.marginPct })) } : null,
+            marketing: { connected: mkt.connected, paidSpendPence: mkt.paidSpendPence, settledRevenuePence: mkt.settledRevenuePence, blendedRoas: mkt.blendedRoas, channels: mkt.channels.map((c) => ({ label: c.label, spendPence: c.spendPence, leads: c.leads, conversions: c.conversions, cpaPence: c.cpaPence })) },
+            clinicians: clin.applicable === false ? null : { productionAvailable: clin.productionAvailable, totalProductionPence: clin.totalProductionPence, totalFeesPence: clin.totalFeesPence, top: clin.clinicians.slice(0, 5).map((c) => ({ name: c.name, productionPence: c.productionPence, payPct: c.payPct })) },
+            cash: {
+                totalPence: cash.hasData ? cash.totalPence : 0,
+                avgPerDayPence: cash.hasData ? cash.avgPerDayPence : 0,
+                peak: (cash.hasData && cash.peak) ? { label: cash.peak.label, pence: cash.peak.pence } : null,
+                bankBalancePence: bank ? bank.totalPence : 0,
+                bankLastSyncedAt: bank ? bank.lastSyncedAt : null,
+            },
+            practices: practiceBreakdown.map((p) => ({
+                name: p.name,
+                cashPence: p.cashPence,
+                productionPence: p.productionPence,
+                revPence: p.revPence,
+                netPence: p.netPence,
+                marginPct: p.marginPct,
+            })),
+            debt: {
+                outstandingPence: debt.outstanding_pence,
+                overdue90Pence: debt.overdue90_pence,
+                collectionRatePct: debt.collection_rate_pct,
+            },
+            leakage: {
+                totalAnnualLeakagePence: leakage.annualTotalPence,
+                lines: leakage.lines.map((l) => ({
+                    label: l.label,
+                    annualPence: l.annualPence,
+                    owner: l.owner,
+                })),
+            },
+            chairs: chair && chair.applicable !== false ? {
+                totalChairs: chair.group.chairs,
+                occupancyPct: chair.group.occupancyPct,
+                lostPotentialYrPence: chair.group.lostPotentialYrPence,
+                recoverRevYrPence: chair.group.recoverRevYrPence,
+                practices: chair.practices.map((p) => ({
+                    name: p.name,
+                    chairs: p.chairs,
+                    occupancyPct: p.occupancyPct,
+                })),
+            } : null,
+            baseline: health?.baseline || null,
+            targets: health?.targets || null,
+        };
+    },
     async valuation(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
         const b = health?.baseline;
