@@ -34,7 +34,7 @@ export function createGeminiProvider({ model = 'gemini-2.5-flash', apiKey = proc
       }
       if (schema) {
         generationConfig.responseMimeType = 'application/json';
-        generationConfig.responseSchema = schema;
+        generationConfig.responseSchema = cleanSchema(schema);
       }
 
       if (Object.keys(generationConfig).length > 0) {
@@ -75,3 +75,21 @@ export function createGeminiProvider({ model = 'gemini-2.5-flash', apiKey = proc
     },
   };
 }
+
+function cleanSchema(schema) {
+  if (!schema || typeof schema !== 'object') {
+    return schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map(cleanSchema);
+  }
+  const cleaned = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === 'additionalProperties') {
+      continue;
+    }
+    cleaned[key] = cleanSchema(value);
+  }
+  return cleaned;
+}
+

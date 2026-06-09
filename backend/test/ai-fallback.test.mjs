@@ -55,7 +55,7 @@ describe('Gemini and Fallback Provider', () => {
         { role: 'assistant', content: 'hi' },
         { role: 'user', content: 'help' }
       ],
-      schema: { type: 'object' }
+      schema: { type: 'object', additionalProperties: false }
     });
 
     expect(result.text).toBe('Gemini reply');
@@ -73,6 +73,7 @@ describe('Gemini and Fallback Provider', () => {
     expect(payload.contents[1].role).toBe('model'); // mapped from assistant
     expect(payload.contents[2].role).toBe('user');
     expect(payload.generationConfig.responseMimeType).toBe('application/json');
+    expect(payload.generationConfig.responseSchema.additionalProperties).toBeUndefined();
   });
 
   it('falls back to gemini when primary key is missing', async () => {
