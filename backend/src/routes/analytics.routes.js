@@ -11,10 +11,21 @@
 // rule-5 violation (these routes shipped ungated).
 // ============================================================================
 import * as express_1 from "express";
+import * as express_rate_limit_1 from "express-rate-limit";
 import * as async_handler_1 from "../middleware/async-handler.js";
 import * as auth_1 from "../middleware/auth.js";
 import * as analytics_controller_1 from "../controllers/analytics.controller.js";
 const router = (0, express_1.Router)();
+// LLM-backed endpoints carry a per-IP+user rate limiter (costly calls); the
+// per-org monthly token budget is enforced separately in the service layer.
+const aiLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `${req.ip || 'anon'}:${req.user?.id || 'anon'}`,
+    message: { error: 'Too many AI requests. Try again in a minute.' },
+});
 const fin = (0, auth_1.requirePermission)('finance.view');
 const val = (0, auth_1.requirePermission)('valuation.view');
 // Phase 3 edit gates (rule 5: edits are owner-toggled, never finance.view).
@@ -39,7 +50,7 @@ router.get('/leakage', fin, (0, async_handler_1.asyncHandler)(analytics_controll
 router.get('/data-quality', sys, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dataQuality));
 router.get('/retention', grw, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.retention));
 router.get('/ai-insights', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiInsights));
-router.post('/ai-insights/generate', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.generateInsights));
+router.post('/ai-insights/generate', aiLimiter, fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.generateInsights));
 router.get('/finance-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.financeSeries));
 router.get('/cashflow', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashflow));
 router.get('/cashflow-outlook', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashflowOutlook));
@@ -56,7 +67,7 @@ router.get('/treatment-breakdown', fin, (0, async_handler_1.asyncHandler)(analyt
 router.get('/cash-by-day', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashByDay));
 router.get('/marketing-roi', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.marketingRoi));
 router.get('/clinicians', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.clinicians));
-router.post('/ai-ask', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiAsk));
+router.post('/ai-ask', aiLimiter, fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiAsk));
 // Treatment Economics Workbench — pure compute, audit-exempt (/compute/ path).
 router.get('/compute/treatment-models', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentModels));
 router.get('/treatment-fee-benchmarks', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentFeeBenchmarks));
