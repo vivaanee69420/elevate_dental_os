@@ -1113,7 +1113,7 @@ export const analyticsService = {
         };
 
         try {
-            const ai = await claude_1.askAnalyst(q, summary);
+            const ai = await claude_1.askAnalyst(orgId, q, summary);
             const answerFindings = ai.findings && ai.findings.length ? ai.findings : findings.slice(0, 4);
             return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: getProvider().model, practiceBreakdown };
         } catch (err) {
@@ -1964,7 +1964,7 @@ export const analyticsService = {
             return { basis: 'ai', insights: [], error: 'No data to analyse' };
         }
         try {
-            const insights = await claude_1.generateDataInsights({
+            const insights = await claude_1.generateDataInsights(orgId, {
                 baseline,
                 series,
                 practices,
@@ -2239,7 +2239,7 @@ export const analyticsService = {
         let basis = 'deterministic';
         if (!empty) {
             try {
-                const ai = await claude_1.generateBoardReport({
+                const ai = await claude_1.generateBoardReport(orgId, {
                     scopeLabel: 'Group',
                     periodLabel,
                     data: metrics,
