@@ -14,11 +14,12 @@ const MAX_LABEL_LEN = 120;
 export function sanitizeForContext(value) {
   if (value === null || value === undefined) return '';
   let s = String(value);
-  // Drop the business_data closing tag so a label can't terminate the block.
-  s = s.split('</business_data>').join('');
+  // Drop the business_data closing tag (tolerant of internal whitespace/case)
+  // BEFORE collapsing, so a label can't terminate the block.
+  s = s.replace(/<\/business_data\s*>/gi, '');
   // Collapse all control chars + whitespace runs (incl. newlines/tabs) to a space.
   s = s.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (s.length > MAX_LABEL_LEN) s = s.slice(0, MAX_LABEL_LEN);
+  if (s.length > MAX_LABEL_LEN) s = s.slice(0, MAX_LABEL_LEN).trimEnd();
   return s;
 }
 
