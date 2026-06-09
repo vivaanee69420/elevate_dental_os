@@ -50,6 +50,7 @@ export async function buildSnapshot(orgId, periodKey, now = new Date()) {
   for (const l of bundle.leakage?.lines || []) { l.label = sanitizeForContext(l.label); l.owner = sanitizeForContext(l.owner); }
   for (const c of bundle.clinicians?.top || []) c.name = sanitizeForContext(c.name);
   for (const pr of bundle.chairs?.practices || []) pr.name = sanitizeForContext(pr.name);
+  for (const e of bundle.pl?.entities || []) e.name = sanitizeForContext(e.name);
 
   // Trailing-12-month revenue series (per-month actuals).
   const trailing12 = [];
