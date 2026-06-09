@@ -721,6 +721,17 @@ Does net worth (incl. business sale cash) clear the **FIRE number** (the "4% rul
 
 Defaults exported as `FIRE_DEFAULTS`. Tests: `backend/test/formulas-exit-plan.test.mjs` (14 cases).
 
+## Attrition & Retention — `calculateRetention(cohorts, opts)` (DentaCFO gap Phase 6)
+
+Patient retention/attrition economics + the recoverable reactivation revenue pool. `cohorts` = integer patient counts `{ active, lapsed, dormant }` (active <12mo since last visit, lapsed 12–24mo, dormant >24mo — bucketed in Postgres by the `patient_retention_by_practice` RPC). `opts` = `{ avgPatientValuePence, reactivationRate }`.
+
+- **known base** = `active + lapsed + dormant` (distinct patients with a real, non-cancelled past visit). Counts are floored to non-negative integers.
+- **retention%** = `active / known`; **attrition%** = `(lapsed + dormant) / known` (complement; both one-decimal, 0 when no base).
+- **reactivation pool** = `lapsed × avgPatientValue × reactivationRate` (integer pence). **Only lapsed (12–24mo) patients are in the pool** — dormant (>24mo) are treated as largely gone and carry no reactivation value. `reactivatablePatients = round(lapsed × rate)`.
+- `reactivationRate` is clamped to `[0,1]` and defaults to `RETENTION_DEFAULTS.reactivationRate` (0.25 — the share of lapsed patients a recall campaign realistically wins back; accountant-repointable).
+
+The service feeds `avgPatientValuePence` = trailing-12mo settled receipts ÷ active patients per practice (org-blended fallback when a practice banked revenue but has no active patients linked). Appointments with neither a CRM contact nor a Dentally patient id are the **linkage data wall** — flagged (`unlinkedAppts`), never counted in a cohort. Tests: `backend/test/formulas-retention.test.mjs` (6 cases) + `backend/test/analytics-retention.test.mjs` (6 service cases).
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:

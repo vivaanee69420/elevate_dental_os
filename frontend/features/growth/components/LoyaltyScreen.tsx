@@ -15,6 +15,7 @@ import { useMemo } from 'react';
 import { Card, KpiTile } from '@/components/ui';
 import { formatPoundsCompact } from '@/features/_mock';
 import { LOYALTY_PROGRAMS, LOYALTY_REWARDS } from '../data';
+import RetentionPanel from './RetentionPanel';
 
 /** Loyalty & Membership screen. */
 export default function LoyaltyScreen() {
@@ -63,6 +64,10 @@ export default function LoyaltyScreen() {
           deltaTone="up"
         />
       </div>
+
+      {/* Live patient attrition & reactivation (DentaCFO Phase 6) — real Dentally
+          cohorts, distinct from the membership KPIs above. */}
+      <RetentionPanel />
 
       <Card className="mb-4">
         <h2 className="display font-semibold mb-4" style={{ fontSize: 17 }}>
