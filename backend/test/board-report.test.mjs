@@ -34,7 +34,7 @@ describe('claude.generateBoardReport', () => {
   it('throws without ANTHROPIC_API_KEY so the caller can fall back', async () => {
     const prev = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
-    await expect(generateBoardReport({ scopeLabel: 'Group', periodLabel: 'x', data: {} }))
+    await expect(generateBoardReport('org-test', { scopeLabel: 'Group', periodLabel: 'x', data: {} }))
       .rejects.toThrow('No ANTHROPIC_API_KEY');
     if (prev !== undefined) process.env.ANTHROPIC_API_KEY = prev;
   });

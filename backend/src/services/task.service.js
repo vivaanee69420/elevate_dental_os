@@ -112,7 +112,7 @@ export const taskService = {
             return [];
         }
 
-        const { tasks: generated, usage } = await generateTasksFromData(liveData, members);
+        const { tasks: generated, usage } = await generateTasksFromData(orgId, liveData, members);
 
         const validMemberIds = new Set(members.map((m) => m.id));
 
