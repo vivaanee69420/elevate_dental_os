@@ -2043,6 +2043,68 @@ export const analyticsService = {
     deleteBoardSchedule(orgId, id) {
         return boardReportRepository.remove(orgId, id);
     },
+    // ------------------------------------------------------------------------
+    // Data Quality Engine (DentaCFO gap Phase 5). Per-practice "cleanliness"
+    // score + connector health + a prioritised alert list. Reads ONLY data
+    // already in the warehouse (appointments / invoices / integrations) — no new
+    // integration. The score is a weighted blend of present dimensions (coded
+    // appts, linked patients, matched invoices, collection rate); see
+    // scoreCleanliness. associate_id (clinician) is surfaced as a flag, not
+    // scored — it is null on every synced Dentally appt (data wall), so scoring
+    // it would crater every practice. RAG: green >=90, amber >=70, else red.
+    async dataQuality(orgId, { now = () => new Date() } = {}) {
+        const [practices, dqRows, connectors] = await Promise.all([
+            analytics_repository_1.analyticsRepository.practicesFull(orgId),
+            analytics_repository_1.analyticsRepository.dataQualityByPractice(orgId),
+            analytics_repository_1.analyticsRepository.connectorStates(orgId),
+        ]);
+        const num = (v) => Number(v || 0);
+        const nameBy = new Map(practices.map((p) => [p.id, p.name]));
+        const dqBy = new Map(dqRows.map((r) => [r.practice_id, r]));
+        // Union of practice ids: known practices + any practice_id that appears
+        // in the defect rows (a row may reference a non-'practice' kind).
+        const ids = new Set([
+            ...practices.map((p) => p.id),
+            ...dqRows.map((r) => r.practice_id).filter(Boolean),
+        ]);
+        const practiceScores = [...ids].map((pid) => {
+            const r = dqBy.get(pid) || {};
+            const raw = {
+                totalAppts: num(r.total_appts),
+                uncodedAppts: num(r.uncoded_appts),
+                unlinkedAppts: num(r.unlinked_appts),
+                unassignedAppts: num(r.unassigned_appts),
+                totalInvoices: num(r.total_invoices),
+                unmatchedInvoices: num(r.unmatched_invoices),
+                invoicedPence: num(r.invoiced_pence),
+                outstandingPence: num(r.outstanding_pence),
+            };
+            return { practiceId: pid, name: nameBy.get(pid) || 'Unknown practice', ...scoreCleanliness(raw), raw };
+        }).sort((a, b) => a.score - b.score); // worst first
+
+        // Org rollup — record-volume-weighted over practices that have any data.
+        const scored = practiceScores.filter((p) => p.dims.length > 0);
+        const totalRecords = scored.reduce((s, p) => s + p.records, 0);
+        const orgScore = totalRecords > 0
+            ? Math.round(scored.reduce((s, p) => s + p.score * p.records, 0) / totalRecords)
+            : 100;
+        const totals = practiceScores.reduce((acc, p) => {
+            for (const k of Object.keys(acc)) acc[k] += p.raw[k];
+            return acc;
+        }, { totalAppts: 0, uncodedAppts: 0, unlinkedAppts: 0, unassignedAppts: 0, totalInvoices: 0, unmatchedInvoices: 0, invoicedPence: 0, outstandingPence: 0 });
+
+        const connectorHealth = scoreConnectors(connectors, now());
+        const alerts = buildDataQualityAlerts(practiceScores, totals, connectorHealth);
+        return {
+            orgScore,
+            rag: ragBand(orgScore),
+            practices: practiceScores,
+            totals,
+            connectors: connectorHealth,
+            alerts,
+            generatedAt: now().toISOString(),
+        };
+    },
 };
 
 // Deterministic board pack from real metrics — the no-AI fallback. Mirrors the
@@ -2076,6 +2138,128 @@ function boardReportFallback(m, periodLabel) {
         priorities.push({ rag: 'green', text: `Protect ${m.topPractice.name}'s production — the group's largest revenue base. Replicate its playbook across sites.` });
     }
     return { summary, priorities };
+}
+
+// ----------------------------------------------------------------------------
+// Data Quality Engine helpers (Phase 5) — pure, module-scope so the service can
+// be unit-tested with stubbed repositories.
+const CLEANLINESS_WEIGHTS = { coded: 0.30, linked: 0.30, invoiceMatch: 0.20, collection: 0.20 };
+// Per-provider sync staleness budget (hours). Dentally/GHL run nightly (~24h
+// cadence + slack); Xero/QuickBooks pulled less often.
+const CONNECTOR_STALE_HOURS = { dentally: 36, ghl: 36, gohighlevel: 36, xero: 48, quickbooks: 48 };
+const CONNECTOR_STALE_DEFAULT_HOURS = 48;
+const HEALTH_ORDER = { error: 0, expired: 1, disconnected: 2, never: 3, stale: 4, ok: 5 };
+const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 };
+
+function ragBand(score) {
+    if (score >= 90) return 'green';
+    if (score >= 70) return 'amber';
+    return 'red';
+}
+// Clean rate as a 0-100 pct (one decimal). Empty denominator -> 100 (nothing to
+// be wrong about), so a dimension with no records never drags a score down.
+function pctClean(clean, total) {
+    return total > 0 ? Math.round((clean / total) * 1000) / 10 : 100;
+}
+// Per-practice cleanliness 0-100. Only dimensions with a denominator are
+// included; weights re-normalise over the present dimensions so e.g. a practice
+// with no invoices isn't penalised for the invoice dimensions.
+function scoreCleanliness(raw) {
+    const dims = [];
+    if (raw.totalAppts > 0) {
+        dims.push({ key: 'coded', label: 'Appointments coded', weight: CLEANLINESS_WEIGHTS.coded,
+            ratePct: pctClean(raw.totalAppts - raw.uncodedAppts, raw.totalAppts), defects: raw.uncodedAppts, of: raw.totalAppts });
+        dims.push({ key: 'linked', label: 'Patient identity linked', weight: CLEANLINESS_WEIGHTS.linked,
+            ratePct: pctClean(raw.totalAppts - raw.unlinkedAppts, raw.totalAppts), defects: raw.unlinkedAppts, of: raw.totalAppts });
+    }
+    if (raw.totalInvoices > 0) {
+        dims.push({ key: 'invoiceMatch', label: 'Invoices patient-matched', weight: CLEANLINESS_WEIGHTS.invoiceMatch,
+            ratePct: pctClean(raw.totalInvoices - raw.unmatchedInvoices, raw.totalInvoices), defects: raw.unmatchedInvoices, of: raw.totalInvoices });
+    }
+    if (raw.invoicedPence > 0) {
+        dims.push({ key: 'collection', label: 'Collection rate', weight: CLEANLINESS_WEIGHTS.collection,
+            ratePct: pctClean(raw.invoicedPence - raw.outstandingPence, raw.invoicedPence), defects: raw.outstandingPence, of: raw.invoicedPence });
+    }
+    const records = raw.totalAppts + raw.totalInvoices;
+    if (dims.length === 0) {
+        return { score: 100, rag: 'green', dims: [], records, unassignedAppts: raw.unassignedAppts };
+    }
+    const wTotal = dims.reduce((s, d) => s + d.weight, 0);
+    const score = Math.round(dims.reduce((s, d) => s + d.ratePct * d.weight, 0) / wTotal);
+    return { score, rag: ragBand(score), dims, records, unassignedAppts: raw.unassignedAppts };
+}
+// Classify each connector by status + sync staleness.
+function scoreConnectors(rows, now) {
+    const nowMs = now.getTime();
+    return rows.map((c) => {
+        const provider = String(c.provider || '').toLowerCase();
+        const limitH = CONNECTOR_STALE_HOURS[provider] ?? CONNECTOR_STALE_DEFAULT_HOURS;
+        const lastMs = c.last_synced_at ? Date.parse(c.last_synced_at) : null;
+        const ageHours = lastMs ? Math.round((nowMs - lastMs) / 3_600_000) : null;
+        let health = 'ok';
+        if (c.status === 'error') health = 'error';
+        else if (c.status === 'expired') health = 'expired';
+        else if (c.status === 'disconnected') health = 'disconnected';
+        else if (ageHours == null) health = 'never';
+        else if (ageHours > limitH) health = 'stale';
+        return {
+            provider: c.provider,
+            label: connectorLabel(c.provider),
+            status: c.status,
+            lastSyncedAt: c.last_synced_at || null,
+            ageHours,
+            staleAfterHours: limitH,
+            lastError: c.last_error || null,
+            health,
+        };
+    }).sort((a, b) => (HEALTH_ORDER[a.health] ?? 9) - (HEALTH_ORDER[b.health] ?? 9));
+}
+function connectorLabel(provider) {
+    const M = { dentally: 'Dentally', ghl: 'GoHighLevel', gohighlevel: 'GoHighLevel', xero: 'Xero', quickbooks: 'QuickBooks', stripe: 'Stripe', truelayer: 'TrueLayer', gocardless: 'GoCardless' };
+    return M[String(provider || '').toLowerCase()] || provider;
+}
+// Build a single prioritised alert list from connectors + practice scores. A
+// dead connector starves every downstream metric, so connector issues rank
+// first; then red practices; then the worst individual defect pools.
+function buildDataQualityAlerts(practices, totals, connectors) {
+    const alerts = [];
+    for (const c of connectors) {
+        if (c.health === 'error' || c.health === 'expired' || c.health === 'disconnected') {
+            alerts.push({ severity: 'high', area: 'connector', key: `connector:${c.provider}`,
+                text: `${c.label} connector is ${c.health}${c.lastError ? ` — ${c.lastError}` : ''}. Reconnect to keep data flowing.` });
+        } else if (c.health === 'stale') {
+            alerts.push({ severity: 'medium', area: 'connector', key: `connector:${c.provider}`,
+                text: `${c.label} last synced ${c.ageHours}h ago (expected within ${c.staleAfterHours}h). Sync may be stuck.` });
+        }
+    }
+    for (const p of practices) {
+        if (p.dims.length === 0) continue;
+        if (p.rag === 'red') {
+            alerts.push({ severity: 'high', area: 'practice', key: `practice:${p.practiceId}`,
+                text: `${p.name} data cleanliness ${p.score}/100 — below the 70 threshold.` });
+        }
+        const linked = p.dims.find((d) => d.key === 'linked');
+        if (linked && linked.defects > 0 && linked.ratePct < 90) {
+            alerts.push({ severity: 'medium', area: 'practice', key: `linked:${p.practiceId}`,
+                text: `${p.name}: ${linked.defects.toLocaleString('en-GB')} appointments (${pctDefect(linked)}%) have no patient link — names unrecoverable without re-sync.` });
+        }
+        const coded = p.dims.find((d) => d.key === 'coded');
+        if (coded && coded.defects > 0 && coded.ratePct < 90) {
+            alerts.push({ severity: 'medium', area: 'practice', key: `coded:${p.practiceId}`,
+                text: `${p.name}: ${coded.defects.toLocaleString('en-GB')} appointments (${pctDefect(coded)}%) have no treatment code.` });
+        }
+    }
+    if (totals.totalAppts > 0 && totals.unassignedAppts === totals.totalAppts) {
+        alerts.push({ severity: 'low', area: 'org', key: 'org:unassigned',
+            text: `No clinician is mapped on any of ${totals.totalAppts.toLocaleString('en-GB')} appointments — Dentally practitioner mapping not yet wired, so per-associate analytics are unavailable.` });
+    } else if (totals.unassignedAppts > 0) {
+        alerts.push({ severity: 'low', area: 'org', key: 'org:unassigned',
+            text: `${totals.unassignedAppts.toLocaleString('en-GB')} appointments have no clinician assigned.` });
+    }
+    return alerts.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+}
+function pctDefect(dim) {
+    return Math.round((100 - dim.ratePct) * 10) / 10;
 }
 
 // Render a board pack to a standalone HTML email (British English, no emojis,

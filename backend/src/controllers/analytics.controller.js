@@ -86,6 +86,9 @@ export const analyticsController = {
         }
         res.json(await analytics_service_1.analyticsService.revenueLeakage(req.user.organisation_id, { days, since, until, rates }));
     },
+    async dataQuality(req, res) {
+        res.json(await analytics_service_1.analyticsService.dataQuality(req.user.organisation_id));
+    },
     async chair(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         const recoverPctPoints = Math.max(0, Math.min(40, Number(req.query.recover) || 10));
