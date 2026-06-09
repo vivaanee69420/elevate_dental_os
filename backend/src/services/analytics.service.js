@@ -1134,9 +1134,16 @@ export const analyticsService = {
             };
         }
     },
-    async getLiveContextData(orgId) {
-        const win = { scope: 'all', period: 'month', now: () => new Date() };
-        const resolvedWin = treatmentWindow('month', undefined, win.now());
+    // Assemble the live aggregated context for a period. Pure assembly (no cache);
+    // ai-context.service wraps this with snapshot caching + meta. period: 'current'
+    // | 'YYYY-MM' resolves the window. Returns the same shape it always did.
+    async assembleLiveContext(orgId, period = 'current') {
+        const now = new Date();
+        const periodKey = (!period || period === 'current')
+          ? `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+          : period;
+        const win = { scope: 'all', period: 'month', periodKey, now: () => now };
+        const resolvedWin = treatmentWindow('month', periodKey, now);
 
         const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank] = await Promise.all([
             this.plMargin(orgId, win),
@@ -1248,6 +1255,11 @@ export const analyticsService = {
             baseline: health?.baseline || null,
             targets: health?.targets || null,
         };
+    },
+    // Interim drop-in (Task 6B re-points this at the cached snapshot). Existing
+    // AI callers keep the same shape.
+    async getLiveContextData(orgId, period = 'current') {
+      return this.assembleLiveContext(orgId, period);
     },
     async valuation(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
