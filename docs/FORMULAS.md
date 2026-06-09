@@ -661,6 +661,21 @@ allowed for cost/contra lines). They are a **standalone planning artifact**:
 This keeps the "finance screen = real actuals or honest empty, never fabricated"
 guarantee while still giving the owner an editable what-if spreadsheet beside it.
 
+## Revenue Leakage — `calculateRevenueLeakage(input, rates)`
+
+"Money left on the table" over a window. Five recoverable pools, integer pence
+in / integer pence out (annualisation is the caller's job — it knows the window
+length). Each pool is scaled by a recoverable rate (0-100, clamped) — the share
+realistically clawed back. Defaults: `{ plans:30, fta:50, recall:60, lapsed:40, collect:70 }`.
+
+- **plans** = `max(0, presentedPlanPence − acceptedPlanPence) × rate.plans` — unaccepted treatment-plan value (real `treatment_plans` private production, presented vs completed).
+- **fta** = `revenuePence × (noShows / appointments) × rate.fta` — lost chair time from no-shows (real appointment rollup).
+- **recall** = `revenuePence × hygieneShare(0.12) × 0.25 × rate.recall` — unbooked hygiene recalls (modelled share until patient-level cohorts wired).
+- **lapsed** = `revenuePence × lapsedShare(0.06) × rate.lapsed` — reactivation opportunity (modelled share).
+- **collect** = `max(0, revenuePence − cashCollectedPence) × rate.collect` — uncollected/open balances (settled turnover vs banked receipts).
+
+`windowTotalPence` = sum of the five pools. Pools never go negative (accepted>presented or over-collection floor to 0). The service annualises by `× 365 / windowDays` and attaches per-line label/owner metadata. Tests: `backend/test/formulas-leakage.test.mjs` (7 cases).
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:
