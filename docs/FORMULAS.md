@@ -676,6 +676,22 @@ realistically clawed back. Defaults: `{ plans:30, fta:50, recall:60, lapsed:40, 
 
 `windowTotalPence` = sum of the five pools. Pools never go negative (accepted>presented or over-collection floor to 0). The service annualises by `× 365 / windowDays` and attaches per-line label/owner metadata. Tests: `backend/test/formulas-leakage.test.mjs` (7 cases).
 
+## M&A Acquisition Modeller — `calculateAcquisition(input)`
+
+Buy-side deal appraisal (DentaCFO gap Phase 3): model a practice you're considering **buying**, scored against UK dental M&A benchmarks. Pure compute, integer pence in/out, percentages/multiples as plain numbers. Ports the GM demo's `mnaCalc`. Inputs: `targetRevenuePence`, `marginPct`, `multiple` (EV/EBITDA), `growthPct`, `horizonYears` (≥1), `discountPct`, `leverageMultiple` (default 3.5), optional `askingPricePence`.
+
+- **EBITDA** = `targetRevenuePence × marginPct/100`.
+- **EV** (enterprise value) = `EBITDA × multiple`.
+- **debtCapacity** = `EBITDA × leverageMultiple` — supportable acquisition debt (UK dental 3-4×).
+- **equityRequired** = `max(0, EV − debtCapacity)` — cash in after debt.
+- **Cashflow** model: annual cashflow `cf(t) = EBITDA × (1+g)^t`; terminal exit `= EV × (1+g)^H` (exit at the entry multiple), `g = growthPct/100`, `H = round(horizonYears)`.
+- **NPV** = `−EV + Σ_{t=1..H} cf(t)/(1+d)^t + terminal/(1+d)^H`, `d = discountPct/100`.
+- **IRR** = the rate where NPV=0, via 80-step bisection on `[0, 2]` — `null` when the deal isn't value-positive even at 0% discount.
+- **payback** = years of undiscounted cumulative cashflow to recover EV (fractional, linear within the crossing year); `null` if not recovered within 80 yrs.
+- **premium** (only when `askingPricePence` supplied) = `askingPrice − EV` and `% of EV`.
+
+**Red flags** (`flags:[{key,severity,message}]`): negative NPV; IRR null or below the discount hurdle; payback null or >6 yrs; multiple >10×; leverage >4×; margin <12%; asking price >10% above EV. Benchmarks exported as `ACQUISITION_BENCHMARKS`. Tests: `backend/test/formulas-acquisition.test.mjs` (9 cases).
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:

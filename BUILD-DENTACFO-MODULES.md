@@ -58,11 +58,13 @@ Commercial hook: "here's £X/yr you're losing → one-click task". Pure compute.
 - Verified: backend `npm test` = 613 pass; frontend `tsc --noEmit` + `next lint` clean.
 - NOTE: email-now sends via SES directly to a free-text address (not the notification outbox) — matches the demo's arbitrary-recipient intent; falls back to a client mailto draft when SES is unconfigured.
 
-### Phase 3 — M&A Acquisition Modeller (buy-side)
-- [ ] `lib/formulas.js`: `calculateAcquisition(inputs)` → EV, NPV, IRR, payback, debt capacity, red flags
-- [ ] unit test + FORMULAS.md
-- [ ] route `POST /api/analytics/acquisition` (valuation.view)
-- [ ] extend ValuationScreen with buy-side tab
+### Phase 3 — M&A Acquisition Modeller (buy-side)  ✅ DONE
+- [x] `lib/formulas.js`: `calculateAcquisition(input)` + `ACQUISITION_BENCHMARKS` → EBITDA, EV, NPV, IRR (bisection), payback, debt capacity, equity required, asking-price premium, red flags. Faithful port of the demo's `mnaCalc` in integer pence.
+- [x] unit test `test/formulas-acquisition.test.mjs` (9 cases, green) + `docs/FORMULAS.md` §M&A
+- [x] model `acquisitionSchema` + service `computeAcquisition` + controller `acquisition` + route `POST /api/analytics/compute/acquisition` (valuation.view). **Used the `/compute/` path (audit-exempt, slider-driven recompute), not the `/acquisition` originally sketched.** `docs/API.md` updated.
+- [x] frontend: `acquisition-api.ts` + `acquisition-hooks.ts` (debounced `useAcquisition`) + `MnaTab` added as a third tab on the existing `ValuationScreen` (no new page/nav/route-perm — Valuation page already gated `valuation.view`). Inputs grid + multiple/leverage sliders + 6 KPI cards (EV/NPV/IRR/Payback/Debt/Equity) + asking-price gap + red-flag list + benchmark note.
+- Verified: backend `npm test` = 622 pass; frontend `tsc --noEmit` + `next lint` clean. No new integration, no migration.
+- NOTE: pure compute, no persistence (Arch #3). Terminal exit re-applies the entry multiple; cashflows = EBITDA grown at the revenue-growth rate. Sell-side (Current/Sale Planner) tabs untouched.
 
 ### Phase 4 — Exit Plan (full personal-wealth model)
 - [ ] verify/extend `planExitTrajectory` (tax gross-up, freehold rent, sale waterfall, multi-person split)
@@ -91,3 +93,4 @@ Commercial hook: "here's £X/yr you're losing → one-click task". Pure compute.
 - 2026-06-09 — Created tracker. Gap analysis done. Starting Phase 1 (Revenue Leakage).
 - 2026-06-09 — **Phase 1 (Revenue Leakage) COMPLETE.** Backend: formula + 7 tests + repo method + service + controller + route. Frontend: api + hook + screen + page + nav + route-perm. No new integration. 606 backend tests pass, frontend tsc clean. Docs (FORMULAS.md §Revenue Leakage, API.md) updated. Next: Phase 2 (Board Report Generator).
 - 2026-06-09 — **Phase 2 (Board Report Generator) COMPLETE.** AI exec summary + RAG priorities from live `businessHub`+`revenueLeakage` rollups (Claude, deterministic fallback). Backend: claude fn + service (generate/email/schedule CRUD) + repo + controller + 6 routes + migration 000060 (hosted) + worker cron + 7 tests. Frontend: api + hooks + BoardReportScreen (generate / PDF print / send-now SES→mailto / schedule list) + page + nav + route-perm. No new integration. 613 backend tests pass; tsc + lint clean. API.md updated. Next: Phase 3 (M&A Acquisition Modeller).
+- 2026-06-09 — **Phase 3 (M&A Acquisition Modeller, buy-side) COMPLETE.** Faithful pence port of the demo's `mnaCalc` + buy-side red flags. Backend: `calculateAcquisition`/`ACQUISITION_BENCHMARKS` + 9 tests + `acquisitionSchema` + service `computeAcquisition` + controller + route `POST /compute/acquisition` (valuation.view, audit-exempt). Frontend: `acquisition-api.ts` + `acquisition-hooks.ts` + `MnaTab` as a third tab on the existing ValuationScreen (no new page/nav/route-perm). No new integration, no migration. 622 backend tests pass; tsc + lint clean. FORMULAS.md §M&A + API.md updated. Next: Phase 4 (Exit Plan full personal-wealth model).

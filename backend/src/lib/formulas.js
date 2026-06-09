@@ -743,3 +743,112 @@ export function planExitTrajectory({ base, plan, baselinePence, principalSalaryP
         years,
     };
 }
+
+// ── M&A Acquisition Modeller (buy-side, DentaCFO gap Phase 3) ───────────────
+// Model a practice you are considering BUYING: enterprise value, NPV, IRR,
+// payback and debt capacity, scored against UK dental M&A benchmarks. Pure
+// compute, integer pence in/out. Ports the GM demo's `mnaCalc` faithfully
+// (EBITDA × multiple = EV; EBITDA grown at g as annual cashflow; EV grown at g
+// as the terminal exit; discounted at d) and adds buy-side red flags.
+export const ACQUISITION_BENCHMARKS = {
+    leverageMultiple: 3.5, // supportable acquisition debt × EBITDA (UK dental 3-4×)
+    targetIrrPct: 20, // buy-side hurdle 20-25%
+    maxPaybackYears: 6, // 4-6 yrs is normal
+    maxMultiple: 10, // established groups 7-10×; PE-backed 8-12×; >10 = rich
+    minMarginPct: 12, // thin EBITDA margin below this
+    maxLeverageMultiple: 4, // lending norm ceiling
+};
+
+export function calculateAcquisition(input = {}) {
+    const {
+        targetRevenuePence = 0,
+        marginPct = 0,
+        multiple = 0,
+        growthPct = 0,
+        horizonYears = 5,
+        discountPct = 0,
+        leverageMultiple = ACQUISITION_BENCHMARKS.leverageMultiple,
+        askingPricePence = null,
+    } = input;
+    const H = Math.max(1, Math.round(horizonYears));
+    const g = growthPct / 100;
+    const d = discountPct / 100;
+
+    const ebitdaPence = pence(targetRevenuePence * marginPct / 100);
+    const evPence = pence(ebitdaPence * multiple);
+    const debtCapacityPence = pence(ebitdaPence * leverageMultiple);
+    const equityRequiredPence = Math.max(0, evPence - debtCapacityPence);
+
+    // Annual cashflow = EBITDA grown at g; terminal = EV grown at g (exit at the
+    // entry multiple). NPV(r) discounts both back to today against the EV outlay.
+    const cf = (t) => ebitdaPence * Math.pow(1 + g, t);
+    const terminalPence = evPence * Math.pow(1 + g, H);
+    const npvAt = (r) => {
+        let v = -evPence;
+        for (let t = 1; t <= H; t++) v += cf(t) / Math.pow(1 + r, t);
+        v += terminalPence / Math.pow(1 + r, H);
+        return v;
+    };
+    const npvPence = pence(npvAt(d));
+
+    // IRR via bisection — only solvable when the deal is value-positive at r=0.
+    let irrPct = null;
+    if (npvAt(0) > 0) {
+        let lo = 0;
+        let hi = 2;
+        for (let i = 0; i < 80; i++) {
+            const mid = (lo + hi) / 2;
+            if (npvAt(mid) > 0) lo = mid;
+            else hi = mid;
+        }
+        irrPct = pct(((lo + hi) / 2) * 100, 2);
+    }
+
+    // Payback — undiscounted cumulative cashflow to recover the EV outlay.
+    let paybackYears = null;
+    let cum = 0;
+    for (let t = 1; t <= 80; t++) {
+        const prev = cum;
+        cum += cf(t);
+        if (cum >= evPence) {
+            paybackYears = pct((t - 1) + (evPence - prev) / cf(t), 2);
+            break;
+        }
+    }
+
+    // Asking-price gap (optional) — how the seller's price compares to modelled EV.
+    const premiumPence = askingPricePence == null ? null : pence(askingPricePence - evPence);
+    const premiumPct = (askingPricePence == null || evPence === 0)
+        ? null
+        : pct((askingPricePence - evPence) / evPence * 100, 2);
+
+    // Buy-side red flags.
+    const b = ACQUISITION_BENCHMARKS;
+    const flags = [];
+    if (npvPence < 0) flags.push({ key: 'npv', severity: 'high', message: 'Negative NPV — value destroyed at this entry price.' });
+    if (irrPct == null) flags.push({ key: 'irr', severity: 'high', message: 'No positive IRR — returns never recover the entry price.' });
+    else if (irrPct < discountPct) flags.push({ key: 'irr', severity: 'high', message: `IRR ${irrPct}% is below the ${discountPct}% hurdle.` });
+    if (paybackYears == null) flags.push({ key: 'payback', severity: 'medium', message: 'Payback beyond 80 years — EV never recovered.' });
+    else if (paybackYears > b.maxPaybackYears) flags.push({ key: 'payback', severity: 'medium', message: `Payback ${paybackYears} yrs exceeds the ${b.maxPaybackYears}-yr norm.` });
+    if (multiple > b.maxMultiple) flags.push({ key: 'multiple', severity: 'medium', message: `${multiple}× is above the 7-10× bolt-on range.` });
+    if (leverageMultiple > b.maxLeverageMultiple) flags.push({ key: 'leverage', severity: 'medium', message: `${leverageMultiple}× leverage exceeds the 3-4× lending norm.` });
+    if (marginPct < b.minMarginPct) flags.push({ key: 'margin', severity: 'medium', message: `${marginPct}% EBITDA margin is thin for a dental practice.` });
+    if (premiumPct != null && premiumPct > 10) flags.push({ key: 'asking', severity: 'high', message: `Asking price is ${premiumPct}% above modelled EV.` });
+
+    return {
+        ebitdaPence,
+        evPence,
+        debtCapacityPence,
+        equityRequiredPence,
+        terminalPence: pence(terminalPence),
+        npvPence,
+        irrPct,
+        paybackYears,
+        premiumPence,
+        premiumPct,
+        horizonYears: H,
+        leverageMultiple,
+        benchmarks: b,
+        flags,
+    };
+}

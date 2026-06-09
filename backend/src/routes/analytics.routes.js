@@ -54,6 +54,9 @@ router.post('/compute/treatment-economics', fin, (0, async_handler_1.asyncHandle
 // audit-exempt /compute/ path, valuation.view gate same as GET /valuation).
 router.post('/compute/valuation', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuationCompute));
 router.post('/compute/valuation/exit-plan', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuationExitPlan));
+// M&A Acquisition Modeller (buy-side, DentaCFO Phase 3) — same pure-compute,
+// audit-exempt /compute/ path + valuation.view gate as sell-side valuation.
+router.post('/compute/acquisition', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.acquisition));
 
 // Phase 3 / T12 — persisted config. GET = view gate; PUT = edit gate (audited).
 router.get('/valuation-inputs', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.getValuationInputs));

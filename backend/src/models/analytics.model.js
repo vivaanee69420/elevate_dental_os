@@ -115,6 +115,20 @@ export const valuationExitPlanSchema = zod_1.z.object({
     }),
 });
 
+// M&A Acquisition Modeller (POST /compute/acquisition body, DentaCFO Phase 3).
+// Buy-side deal inputs — pure compute, no persistence. Money in pence;
+// percentages/multiples as plain numbers. askingPrice optional (null = no gap).
+export const acquisitionSchema = zod_1.z.object({
+    targetRevenuePence: PENCE.default(0),
+    marginPct: zod_1.z.coerce.number().min(0).max(100).default(0),
+    multiple: zod_1.z.coerce.number().min(0).max(30).default(0),
+    growthPct: zod_1.z.coerce.number().min(-100).max(200).default(0),
+    horizonYears: zod_1.z.coerce.number().int().min(1).max(40).default(5),
+    discountPct: zod_1.z.coerce.number().min(0).max(100).default(0),
+    leverageMultiple: zod_1.z.coerce.number().min(0).max(10).default(3.5),
+    askingPricePence: PENCE.nullable().default(null),
+});
+
 // cashflow-outlook ?months=4&forward=2 — trailing real months + projected months.
 export const outlookQuerySchema = zod_1.z.object({
     months: zod_1.z.coerce.number().int().min(1).max(24).default(4),
