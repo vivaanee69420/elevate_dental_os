@@ -7,7 +7,7 @@
 // ============================================================================
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { isScheduleDue } from '../src/repositories/boardReport.repository.js';
-import { generateBoardReport } from '../src/lib/claude.js';
+import { generateBoardReport } from '../src/lib/gemini.js';
 import { analyticsService } from '../src/services/analytics.service.js';
 
 describe('isScheduleDue', () => {

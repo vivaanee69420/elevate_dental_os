@@ -8,7 +8,7 @@
 // ============================================================================
 import * as business_health_repository_1 from "../repositories/business-health.repository.js";
 import * as errors_1 from "../middleware/errors.js";
-import * as claude_1 from "../lib/claude.js";
+import * as claude_1 from "../lib/gemini.js";
 import * as formulas_1 from "../lib/formulas.js";
 import { analyticsService } from "./analytics.service.js";
 import { METRIC_CATALOG, METRIC_BY_KEY } from "../lib/health-metrics.js";

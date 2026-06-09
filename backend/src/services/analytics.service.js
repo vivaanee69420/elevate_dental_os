@@ -6,7 +6,7 @@
 import * as analytics_repository_1 from "../repositories/analytics.repository.js";
 import { integrationRepository as integration_repository_1 } from "../repositories/integration.repository.js";
 import * as formulas_1 from "../lib/formulas.js";
-import * as claude_1 from "../lib/claude.js";
+import * as claude_1 from "../lib/gemini.js";
 import * as monthlyFinancial_repository_1 from "../repositories/monthlyFinancial.repository.js";
 import * as associate_repository_1 from "../repositories/associate.repository.js";
 import * as payRun_repository_1 from "../repositories/pay-run.repository.js";
