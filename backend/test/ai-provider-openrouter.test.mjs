@@ -43,3 +43,26 @@ describe('openrouter adapter', () => {
     expect(createMock.mock.calls[0][0].response_format).toEqual({ type: 'json_schema', json_schema: { name: 'structured_output', strict: true, schema: { type: 'object' } } });
   });
 });
+
+describe('openrouter adapter block-array content', () => {
+  it('maps tool_use assistant turn and tool_result user turn correctly', async () => {
+    createMock.mockResolvedValue({
+      choices: [{ message: { content: null, tool_calls: [] }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    });
+    const p = createOpenRouterProvider({ model: 'm', apiKey: 'test-key' });
+    await p.chat({
+      messages: [
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'get_metrics', input: { period: '2026-05' } }] },
+        { role: 'user', content: [{ type: 'tool_result', toolUseId: 't1', name: 'get_metrics', content: '{"x":1}' }] },
+      ],
+    });
+    const sent = createMock.mock.calls[0][0].messages;
+    const assistantMsg = sent.find((m) => m.role === 'assistant' && m.tool_calls);
+    expect(assistantMsg.tool_calls[0]).toEqual({ id: 't1', type: 'function', function: { name: 'get_metrics', arguments: '{"period":"2026-05"}' } });
+    expect(assistantMsg.content).toBeNull();
+    const toolMsg = sent.find((m) => m.role === 'tool');
+    expect(toolMsg).toEqual({ role: 'tool', tool_call_id: 't1', content: '{"x":1}' });
+  });
+});

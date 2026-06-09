@@ -7,6 +7,32 @@
 const MAX_RETRIES = 3;
 const RETRY_STATUSES = new Set([429, 503]);
 
+// Parse a JSON string into an object for a functionResponse; non-objects are
+// wrapped so Gemini always receives an object response.
+function asResponseObject(content) {
+  if (content && typeof content === 'object') return content;
+  try {
+    const parsed = JSON.parse(String(content ?? ''));
+    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : { result: parsed };
+  } catch {
+    return { result: String(content ?? '') };
+  }
+}
+
+// Map one normalized message to a Gemini `contents` entry. String content is the
+// Phase 1 path; an array carries text / tool_use / tool_result blocks.
+function toGeminiContent(m) {
+  const role = m.role === 'assistant' ? 'model' : 'user';
+  if (!Array.isArray(m.content)) return { role, parts: [{ text: m.content }] };
+  const parts = m.content.map((b) => {
+    if (b.type === 'tool_use') return { functionCall: { name: b.name, args: b.input ?? {} } };
+    // name is guaranteed by the normalized block contract — the tool-loop runner always sets it.
+    if (b.type === 'tool_result') return { functionResponse: { name: b.name, response: asResponseObject(b.content) } };
+    return { text: b.text || '' };
+  });
+  return { role, parts };
+}
+
 export function createGeminiProvider({ model = 'gemini-2.5-flash-lite', apiKey = process.env.GEMINI_API_KEY } = {}) {
   return {
     name: 'gemini',
@@ -16,16 +42,17 @@ export function createGeminiProvider({ model = 'gemini-2.5-flash-lite', apiKey =
         throw new Error('Missing GEMINI_API_KEY');
       }
 
-      // Map roles: assistant -> model, others stay user
-      const contents = messages.map((m) => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
+      // Map roles: assistant -> model, others stay user; array content carries tool blocks
+      const contents = messages.map(toGeminiContent);
 
       const payload = { contents };
 
       if (system) {
         payload.systemInstruction = { parts: [{ text: system }] };
+      }
+
+      if (tools && tools.length) {
+        payload.tools = [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: cleanSchema(t.inputSchema) })) }];
       }
 
       const generationConfig = {};
@@ -68,15 +95,22 @@ export function createGeminiProvider({ model = 'gemini-2.5-flash-lite', apiKey =
 
         const resObj = await response.json();
         const candidate = resObj.candidates?.[0];
-        let text = candidate?.content?.parts?.[0]?.text || '';
-        if (text.trim().startsWith('```')) {
+        const parts = candidate?.content?.parts || [];
+        let text = '';
+        const toolCalls = [];
+        for (const part of parts) {
+          if (typeof part.text === 'string') text += part.text;
+          if (part.functionCall) {
+            toolCalls.push({ id: `gem_${toolCalls.length}_${part.functionCall.name}`, name: part.functionCall.name, input: part.functionCall.args ?? {} });
+          }
+        }
+        if (!toolCalls.length && text.trim().startsWith('```')) {
           text = text.trim().replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
         }
-        const stopReason = candidate?.finishReason || 'STOP';
+        const stopReason = toolCalls.length ? 'tool_use' : (candidate?.finishReason || 'STOP');
         const inputTokens = resObj.usageMetadata?.promptTokenCount ?? 0;
         const outputTokens = resObj.usageMetadata?.candidatesTokenCount ?? 0;
-
-        return { text, toolCalls: [], usage: { inputTokens, outputTokens }, stopReason };
+        return { text, toolCalls, usage: { inputTokens, outputTokens }, stopReason };
       }
 
       throw lastError ?? new Error('Gemini: max retries exceeded');

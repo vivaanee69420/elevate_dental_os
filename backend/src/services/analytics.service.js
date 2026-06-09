@@ -1113,7 +1113,7 @@ export const analyticsService = {
         };
 
         try {
-            const ai = await claude_1.askAnalyst(q, summary);
+            const ai = await claude_1.askAnalyst(orgId, q, summary);
             const answerFindings = ai.findings && ai.findings.length ? ai.findings : findings.slice(0, 4);
             return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: getProvider().model, practiceBreakdown };
         } catch (err) {
@@ -1137,13 +1137,22 @@ export const analyticsService = {
     // Assemble the live aggregated context for a period. Pure assembly (no cache);
     // ai-context.service wraps this with snapshot caching + meta. period: 'current'
     // | 'YYYY-MM' resolves the window. Returns the same shape it always did.
-    async assembleLiveContext(orgId, period = 'current') {
+    async assembleLiveContext(orgId, opts = 'current') {
+        const o = typeof opts === 'string' ? { period: opts } : (opts || {});
         const now = new Date();
-        const periodKey = (!period || period === 'current')
-          ? `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
-          : period;
-        const win = { scope: 'all', period: 'month', periodKey, now: () => now };
-        const resolvedWin = treatmentWindow('month', periodKey, now);
+        const scope = o.scope || 'all';
+        let win;
+        let resolvedWin;
+        if (o.since && o.until) {
+          win = { scope, period: 'month', since: o.since, until: o.until, now: () => now };
+          resolvedWin = resolveWindow({ since: o.since, until: o.until, now });
+        } else {
+          const periodKey = (!o.period || o.period === 'current')
+            ? `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+            : o.period;
+          win = { scope, period: 'month', periodKey, now: () => now };
+          resolvedWin = treatmentWindow('month', periodKey, now);
+        }
 
         const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank] = await Promise.all([
             this.plMargin(orgId, win),
@@ -1955,7 +1964,7 @@ export const analyticsService = {
             return { basis: 'ai', insights: [], error: 'No data to analyse' };
         }
         try {
-            const insights = await claude_1.generateDataInsights({
+            const insights = await claude_1.generateDataInsights(orgId, {
                 baseline,
                 series,
                 practices,
@@ -2230,7 +2239,7 @@ export const analyticsService = {
         let basis = 'deterministic';
         if (!empty) {
             try {
-                const ai = await claude_1.generateBoardReport({
+                const ai = await claude_1.generateBoardReport(orgId, {
                     scopeLabel: 'Group',
                     periodLabel,
                     data: metrics,

@@ -44,3 +44,18 @@ describe('anthropic adapter', () => {
     expect(createMock.mock.calls[0][0].output_config).toEqual({ format: { type: 'json_schema', schema: { type: 'object' } } });
   });
 });
+
+describe('anthropic adapter block-array content', () => {
+  it('translates tool_use / tool_result blocks to SDK shape', async () => {
+    createMock.mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'end_turn' });
+    const p = createAnthropicProvider({ model: 'm', apiKey: 'k' });
+    await p.chat({ messages: [
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'get_metrics', input: { period: '2026-05' } }] },
+      { role: 'user', content: [{ type: 'tool_result', toolUseId: 't1', name: 'get_metrics', content: '{"x":1}' }] },
+    ] });
+    const sent = createMock.mock.calls[0][0].messages;
+    expect(sent[1].content[0]).toEqual({ type: 'tool_use', id: 't1', name: 'get_metrics', input: { period: '2026-05' } });
+    expect(sent[2].content[0]).toEqual({ type: 'tool_result', tool_use_id: 't1', content: '{"x":1}' });
+  });
+});

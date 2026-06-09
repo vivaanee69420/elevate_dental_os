@@ -27,3 +27,17 @@ export function sanitizeForContext(value) {
 export function buildContextString(snapshot) {
   return delimit('business_data', JSON.stringify(snapshot));
 }
+
+// Sanitize every free-text label inside an assembled context bundle, in place.
+// Mirrors the inline pass in buildSnapshot so the live get_metrics path produces
+// an identically-defended bundle. Returns the same object for chaining.
+export function sanitizeBundle(bundle) {
+  if (!bundle || typeof bundle !== 'object') return bundle;
+  for (const e of bundle.pl?.entities || []) e.name = sanitizeForContext(e.name);
+  for (const p of bundle.practices || []) p.name = sanitizeForContext(p.name);
+  for (const s of bundle.marketing?.channels || []) s.label = sanitizeForContext(s.label);
+  for (const l of bundle.leakage?.lines || []) { l.label = sanitizeForContext(l.label); l.owner = sanitizeForContext(l.owner); }
+  for (const c of bundle.clinicians?.top || []) c.name = sanitizeForContext(c.name);
+  for (const pr of bundle.chairs?.practices || []) pr.name = sanitizeForContext(pr.name);
+  return bundle;
+}
