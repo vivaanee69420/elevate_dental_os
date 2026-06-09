@@ -1,0 +1,25 @@
+name: Sentry Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  sentry-release:
+    name: Create Sentry Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history needed for --auto commit association
+
+      - name: Create Sentry Release
+        uses: getsentry/action-release@v1
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: plan4growth
+          SENTRY_PROJECT: node
+        with:
+          environment: production
