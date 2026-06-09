@@ -109,3 +109,12 @@ export async function invalidatePeriods(orgId, since, until) {
   }
   await aiContextSnapshotRepository.markDirty(orgId, keys);
 }
+
+// Build (if needed) and freeze last month's snapshot. Safe to re-run: re-freezing
+// a final row is a no-op-ish write.
+export async function finalizePreviousMonth(orgId, now = new Date()) {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const periodKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  const snapshot = await buildSnapshot(orgId, periodKey, now);
+  await aiContextSnapshotRepository.upsert(orgId, periodKey, snapshot, true);
+}

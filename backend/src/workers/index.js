@@ -21,6 +21,7 @@ import * as aws_ses_1 from "../lib/aws-ses.js";
 import * as aws_sns_1 from "../lib/aws-sns.js";
 import { notificationService } from "../services/notification.service.js";
 import { analyticsService } from "../services/analytics.service.js";
+import { getSnapshot, finalizePreviousMonth } from "../services/ai-context.service.js";
 import { boardReportRepository, isScheduleDue } from "../repositories/boardReport.repository.js";
 // --------------------------------------------------------------------------
 // Business-health snapshot — daily 02:00 UTC, decides per-org by cadence.
@@ -353,5 +354,29 @@ node_cron_1.default.schedule('30 6 * * *', async () => {
         console.error('[worker] Board report delivery job failed', err);
     }
 }, { timezone: 'Europe/London' });
+
+// --------------------------------------------------------------------------
+// AI context snapshot warm — nightly 02:30 UTC. Build/refresh the current-month
+// snapshot for every org so the first AI call of the day is already cached.
+// --------------------------------------------------------------------------
+node_cron_1.default.schedule('30 2 * * *', async () => {
+    const { data: orgs } = await supabase_1.serviceClient.from('organisations').select('id');
+    for (const o of orgs || []) {
+        try { await getSnapshot(o.id, 'current'); }
+        catch (e) { console.warn('[ai-context] warm failed', o.id, e.message); }
+    }
+});
+
+// --------------------------------------------------------------------------
+// AI context snapshot finalize — day 3 of each month 03:00 UTC. Freeze the
+// previous month for every org (build if needed, then upsert as final).
+// --------------------------------------------------------------------------
+node_cron_1.default.schedule('0 3 3 * *', async () => {
+    const { data: orgs } = await supabase_1.serviceClient.from('organisations').select('id');
+    for (const o of orgs || []) {
+        try { await finalizePreviousMonth(o.id); }
+        catch (e) { console.warn('[ai-context] finalize failed', o.id, e.message); }
+    }
+});
 
 console.log('[workers] Started — cron schedules active');
