@@ -22,6 +22,7 @@ import {
   deleteTask,
   remindTask,
   remindOverdue,
+  generateAiTasks,
   type Task,
   type TaskPriority,
   type TaskStatus,
@@ -333,6 +334,26 @@ export default function TaskManagerScreen() {
     },
   });
 
+  const generateAiMut = useMutation({
+    mutationFn: generateAiTasks,
+    onSuccess: (res) => {
+      invalidate();
+      if (typeof window !== 'undefined')
+        window.alert(`Successfully generated and assigned ${res.tasks.length} new tasks based on live practice metrics!`);
+    },
+    onError: (err) => {
+      if (typeof window !== 'undefined')
+        window.alert(`Failed to generate tasks: ${(err as Error).message}`);
+    },
+  });
+
+  const handleGenerateAiTasks = () => {
+    if (typeof window !== 'undefined' && !window.confirm('Would you like Elevate AI to analyze all practice data and auto-generate & assign 3-5 high-priority tasks for your team?')) {
+      return;
+    }
+    generateAiMut.mutate();
+  };
+
   const overdue = useMemo(() => tasks.filter((t) => isOverdue(t, today)), [tasks, today]);
   const dueToday = useMemo(
     () => tasks.filter((t) => t.status !== 'done' && t.status !== 'cancelled' && t.due_date === today),
@@ -413,6 +434,30 @@ export default function TaskManagerScreen() {
               : 'Tasks assigned across the team · only the owner can add or change tasks'}
           </p>
         </div>
+        {isOwner ? (
+          <button
+            onClick={handleGenerateAiTasks}
+            disabled={generateAiMut.isPending}
+            style={{
+              background: 'linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)',
+              color: '#fff',
+              border: 'none',
+              padding: '10px 18px',
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: generateAiMut.isPending ? 'default' : 'pointer',
+              opacity: generateAiMut.isPending ? 0.7 : 1,
+              boxShadow: '0 4px 6px -1px rgba(79, 70, 229, 0.2), 0 2px 4px -1px rgba(79, 70, 229, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              transition: 'all 0.2s',
+            }}
+          >
+            <span>{generateAiMut.isPending ? '✦ Analyzing & Generating…' : '✦ Generate AI Tasks'}</span>
+          </button>
+        ) : null}
       </div>
 
       {tasksQuery.isError ? (
