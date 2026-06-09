@@ -46,6 +46,15 @@ describe('runToolLoop', () => {
     expect(out.text).toBe('final');
   });
 
+  it('forwards maxTokens to provider.chat on every call', async () => {
+    const provider = fakeProvider([
+      { text: 'answer', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: 'end_turn' },
+    ]);
+    await runToolLoop({ provider, system: 's', messages: [{ role: 'user', content: 'q' }], tools: [{ name: 'get_metrics' }], executors: {}, maxTokens: 999 });
+    expect(provider.chat).toHaveBeenCalledTimes(1);
+    expect(provider.chat.mock.calls[0][0].maxTokens).toBe(999);
+  });
+
   it('does a final schema-formatting turn when a schema is passed', async () => {
     const provider = fakeProvider([
       { text: 'thinking', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: 'end_turn' },

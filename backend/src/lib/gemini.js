@@ -51,6 +51,7 @@ ${context.liveData ? `Current Live Data (P&L actuals, aged debt, revenue leakage
         messages,
         tools: [getMetricsTool],
         executors: { get_metrics: makeGetMetricsExecutor(orgId) },
+        maxTokens: 1024,
     });
     return { reply: result.text, usage: result.usage };
 }
@@ -134,6 +135,7 @@ Give 2-4 findings ranked by importance. If the data can't answer the question, s
         tools: [getMetricsTool],
         executors: { get_metrics: makeGetMetricsExecutor(orgId) },
         schema,
+        maxTokens: 2048,
     });
     let obj;
     try {
@@ -188,8 +190,15 @@ Give exactly 3 priorities ranked red→green by urgency. Lead with the biggest r
         tools: [getMetricsTool],
         executors: { get_metrics: makeGetMetricsExecutor(orgId) },
         schema,
+        maxTokens: 2048,
     });
-    const obj = JSON.parse(res.text);
+    let obj;
+    try {
+        obj = JSON.parse(res.text);
+    } catch (err) {
+        console.error('[generateBoardReport] Failed to parse Gemini JSON response:', res.text?.slice(0, 300));
+        return { summary: [], priorities: [], usage: res.usage };
+    }
     const summary = Array.isArray(obj.summary)
         ? obj.summary.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim())
         : [];
@@ -237,6 +246,7 @@ Return ONLY a valid JSON array (4-6 items). No prose, no code fences.`;
         tools: [getMetricsTool],
         executors: { get_metrics: makeGetMetricsExecutor(orgId) },
         schema,
+        maxTokens: 1500,
     });
     try {
         const arr = JSON.parse(res.text).insights;
@@ -310,6 +320,7 @@ export async function generateTasksFromData(orgId, liveData, members) {
         tools: [getMetricsTool],
         executors: { get_metrics: makeGetMetricsExecutor(orgId) },
         schema,
+        maxTokens: 2548,
     });
 
     try {

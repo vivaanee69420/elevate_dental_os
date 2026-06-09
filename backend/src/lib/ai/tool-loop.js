@@ -10,7 +10,7 @@
 // never a tool parameter, so the model cannot reach another org's data.
 // ============================================================================
 
-export async function runToolLoop({ provider, system, messages, tools, executors = {}, schema, maxRounds = 5, onUsage } = {}) {
+export async function runToolLoop({ provider, system, messages, tools, executors = {}, schema, maxRounds = 5, onUsage, maxTokens } = {}) {
   const convo = messages.map((m) => ({ ...m }));
   let totalIn = 0;
   let totalOut = 0;
@@ -20,7 +20,7 @@ export async function runToolLoop({ provider, system, messages, tools, executors
   // without calling a tool, or when we reach the round cap (maxRounds tool rounds).
   let reply;
   for (let round = 0; round < maxRounds; round++) {
-    reply = await provider.chat({ system, messages: convo, ...(tools && tools.length ? { tools } : {}) });
+    reply = await provider.chat({ system, messages: convo, ...(tools && tools.length ? { tools } : {}), ...(maxTokens ? { maxTokens } : {}) });
     add(reply.usage);
     if (!reply.toolCalls || !reply.toolCalls.length) break; // model answered
 
@@ -49,10 +49,10 @@ export async function runToolLoop({ provider, system, messages, tools, executors
   // the cap was hit while the model still wanted tools, force a plain no-tools
   // answer so a dangling tool call is never returned as the reply.
   if (schema) {
-    reply = await provider.chat({ system, messages: convo, schema });
+    reply = await provider.chat({ system, messages: convo, schema, ...(maxTokens ? { maxTokens } : {}) });
     add(reply.usage);
   } else if (reply && reply.toolCalls && reply.toolCalls.length) {
-    reply = await provider.chat({ system, messages: convo });
+    reply = await provider.chat({ system, messages: convo, ...(maxTokens ? { maxTokens } : {}) });
     add(reply.usage);
   }
 
