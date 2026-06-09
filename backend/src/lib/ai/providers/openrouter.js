@@ -12,11 +12,14 @@ function toOpenAIMessage(m) {
 }
 
 export function createOpenRouterProvider({ model, apiKey = process.env.OPENROUTER_API_KEY } = {}) {
-  const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' });
   return {
     name: 'openrouter',
     model,
     async chat({ system, messages, tools, maxTokens = 1024, schema } = {}) {
+      if (!apiKey) {
+        throw new Error('No OPENROUTER_API_KEY');
+      }
+      const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' });
       const oaiMessages = [];
       if (system) oaiMessages.push({ role: 'system', content: system });
       for (const m of messages) oaiMessages.push(toOpenAIMessage(m));

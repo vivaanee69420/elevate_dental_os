@@ -17,7 +17,7 @@ describe('anthropic adapter', () => {
       usage: { input_tokens: 10, output_tokens: 3 },
       stop_reason: 'end_turn',
     });
-    const p = createAnthropicProvider({ model: 'claude-sonnet-4-6' });
+    const p = createAnthropicProvider({ model: 'claude-sonnet-4-6', apiKey: 'test-key' });
     const r = await p.chat({ system: 'sys', messages: [{ role: 'user', content: 'hi' }] });
     expect(r.text).toBe('hello');
     expect(r.usage).toEqual({ inputTokens: 10, outputTokens: 3 });
@@ -31,7 +31,7 @@ describe('anthropic adapter', () => {
       usage: { input_tokens: 5, output_tokens: 2 },
       stop_reason: 'tool_use',
     });
-    const p = createAnthropicProvider({ model: 'm' });
+    const p = createAnthropicProvider({ model: 'm', apiKey: 'test-key' });
     const r = await p.chat({ messages: [{ role: 'user', content: 'q' }], tools: [{ name: 'get_pl', description: 'd', inputSchema: { type: 'object' } }] });
     expect(r.toolCalls).toEqual([{ id: 'tu_1', name: 'get_pl', input: { period: 'month' } }]);
     expect(createMock.mock.calls[0][0].tools[0]).toEqual({ name: 'get_pl', description: 'd', input_schema: { type: 'object' } });
@@ -39,7 +39,7 @@ describe('anthropic adapter', () => {
 
   it('maps schema to output_config.format', async () => {
     createMock.mockResolvedValue({ content: [{ type: 'text', text: '{}' }], usage: { input_tokens: 1, output_tokens: 1 }, stop_reason: 'end_turn' });
-    const p = createAnthropicProvider({ model: 'm' });
+    const p = createAnthropicProvider({ model: 'm', apiKey: 'test-key' });
     await p.chat({ messages: [{ role: 'user', content: 'q' }], schema: { type: 'object' } });
     expect(createMock.mock.calls[0][0].output_config).toEqual({ format: { type: 'json_schema', schema: { type: 'object' } } });
   });
