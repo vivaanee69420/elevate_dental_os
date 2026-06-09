@@ -11,9 +11,11 @@ Branch: `feat/crm-cluster`. Resume after `/clear`: read this file + `BUILD-CRM-S
 
 | Phase | Module | Migration | New integration | Status | Commit |
 |---|---|---|---|---|---|
-| B1 | Templates | 000061 | none | ⬜ | — |
-| B2 | Settings (config + aggregator) | 000062 | none | ⬜ | — |
-| B3 | Sequences (full live drip engine) | 000063 | Twilio inbound webhook (STOP) | ⬜ | — |
+| B1 | Templates | 000062 | none | ✅ done | 186239e |
+| B2 | Settings (config + aggregator) | 000063 | none | ⬜ | — |
+| B3 | Sequences (full live drip engine) | 000064 | Twilio inbound webhook (STOP) | ⬜ | — |
+
+> Suite migration numbers shifted +1: wealth_inputs claimed 000061 mid-flight, so B1=000062, B2=000063, B3=000064.
 
 Out of scope: Landing Pages (dropped), Workflows/Automations (already built).
 
@@ -31,3 +33,6 @@ hosted + `NOTIFY pgrst, 'reload schema';`. Then commit + tick this table.
 
 ## Log
 - 2026-06-09 — Spec approved, trackers created. Order B1 → B2 → B3. Next: B1 (Templates).
+- 2026-06-09 — B1 (Templates) built + verified (backend tests green, tsc/lint clean).
+  Migration 000062 (renumbered from 000061 to dodge wealth_inputs) applied on hosted +
+  schema reloaded; crm_templates verified (10 cols, trigger, partial index). Next: B2 (Settings).
