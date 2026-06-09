@@ -93,7 +93,7 @@ const SEV_MAP = { good: 'good', positive: 'good', warn: 'warn', warning: 'warn',
 function normSev(s) { return SEV_MAP[String(s || '').toLowerCase()] || 'info'; }
 
 export async function askAnalyst(question, summary) {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('No ANTHROPIC_API_KEY');
+    // Provider throws if the relevant API key is missing (ANTHROPIC_API_KEY or OPENROUTER_API_KEY).
     const prompt = `A UK dental practice group owner asks a question about their LIVE numbers. Answer using ONLY the data provided — reference the actual figures, never invent numbers. Money is shown in pence; talk in £.
 
 SCOPE: ${summary.scopeLabel} · ${summary.periodLabel}
@@ -142,7 +142,7 @@ const RAG_MAP = { red: 'red', amber: 'amber', green: 'green', good: 'green', war
 function normRag(s) { return RAG_MAP[String(s || '').toLowerCase()] || 'amber'; }
 
 export async function generateBoardReport(bundle) {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('No ANTHROPIC_API_KEY');
+    // Provider throws if the relevant API key is missing (ANTHROPIC_API_KEY or OPENROUTER_API_KEY).
     const prompt = `Write a board pack for a UK dental practice group from its LIVE numbers. Use ONLY the data provided — reference the actual figures, never invent. Money is integer pence; talk in £ (round sensibly). British English.
 
 SCOPE: ${bundle.scopeLabel} · ${bundle.periodLabel}
