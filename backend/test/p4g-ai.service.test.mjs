@@ -9,7 +9,11 @@ vi.mock('../src/lib/claude.js', () => ({
 const { p4gAiService } = await import('../src/services/p4g-ai.service.js');
 
 const ORG = 'org-chat';
-beforeEach(() => { supaRec.last = undefined; supaRec.resultProvider = () => ({ data: [], error: null }); });
+beforeEach(() => {
+  supaRec.last = undefined;
+  supaRec.resultProvider = () => ({ data: [], error: null });
+  supaRec.rpcProvider = () => ({ data: [], error: null });
+});
 
 describe('p4gAiService.chat', () => {
   it('records usage after a successful chat', async () => {
