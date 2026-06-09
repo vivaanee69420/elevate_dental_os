@@ -68,6 +68,37 @@ const saleSettingsSchema = zod_1.z.object({
     enterpriseValuePence: PENCE.default(0),
 });
 
+// ── Exit Plan (canonical, faithful to the GM demo `exitCalc`) ────────────────
+// Persisted Exit Plan state — stored in the wealth_inputs.fire JSONB column
+// (the legacy `sale` column is now unused). Money is INTEGER PENCE.
+const AGE = zod_1.z.coerce.number().int().min(18).max(100);
+const personShareSchema = zod_1.z.object({
+    name: zod_1.z.string().trim().max(120).default(''),
+    share: zod_1.z.coerce.number().min(0).max(100).default(1),
+});
+const freeholdSchema = zod_1.z.object({
+    name: zod_1.z.string().trim().max(120).default(''),
+    valuePence: PENCE.default(0),
+    rentPence: PENCE.default(0),
+});
+export const exitPlanInputSchema = zod_1.z.object({
+    incomePence: PENCE.default(0),                                  // annual post-tax income wanted
+    incomePer: zod_1.z.enum(['year', 'month']).default('year'),     // display preference
+    people: zod_1.z.array(personShareSchema).min(1).max(10).default([{ name: 'You', share: 1 }]),
+    currentAge: AGE.default(45),
+    retireAge: AGE.default(57),
+    freeholds: zod_1.z.array(freeholdSchema).max(20).default([]),
+    withdrawPct: zod_1.z.coerce.number().min(2).max(8).default(4),
+    returnPct: zod_1.z.coerce.number().min(0).max(30).default(8),
+    currentValuePence: PENCE.default(0),                           // manual override of group value today
+    useLiveValuation: zod_1.z.boolean().default(true),             // seed currentValue from live midpoint
+    agentPct: zod_1.z.coerce.number().min(0).max(20).default(1.5),
+    cgtPct: zod_1.z.coerce.number().min(0).max(50).default(18),
+    baseCostPence: PENCE.default(0),
+    existingInvestPence: PENCE.default(0),
+    targetSalePence: PENCE.default(0),                             // 0 = use the reverse-solved required sale
+});
+
 // Full persisted blob (PUT /inputs). Every section defaults so a partial body
 // is valid and a never-configured org reads sane empties.
 export const wealthInputsSchema = zod_1.z.object({
@@ -75,9 +106,12 @@ export const wealthInputsSchema = zod_1.z.object({
     liabilities: zod_1.z.array(liabilitySchema).max(100).default([]),
     pensions: zod_1.z.array(pensionSchema).max(100).default([]),
     properties: zod_1.z.array(propertySchema).max(100).default([]),
-    fire: fireSettingsSchema.default({}),
-    sale: saleSettingsSchema.default({}),
+    exit: exitPlanInputSchema.default({}),
 });
+
+// Pure recompute body for the Exit Plan sliders (audit-exempt). The screen posts
+// the full input; currentValuePence is whatever it last seeded from /fire.
+export const exitPlanComputeSchema = exitPlanInputSchema;
 
 // ── pure /compute bodies ─────────────────────────────────────────────────────
 export const saleWaterfallSchema = zod_1.z.object({

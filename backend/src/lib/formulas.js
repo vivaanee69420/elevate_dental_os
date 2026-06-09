@@ -1013,6 +1013,161 @@ export function calculateFirePlan(input = {}) {
     };
 }
 
+// ── Exit Plan — personal endgame (faithful port of the GM demo `exitCalc`) ───
+// "The income you want to retire on → the 4%-rule pot it demands → what the
+// freehold rent + business sale cover → exactly what to grow the group to."
+// This is the canonical DentaCFO Exit Plan (preview/GM-Group-Intelligence-OS_2
+// `exitCalc`), NOT the generic calculateFirePlan above. Money is INTEGER PENCE.
+
+// UK income tax 2025/26 (accountant-repointable). Pence. The personal allowance
+// tapers £1 for every £2 of income over £100,000.
+export const UK_INCOME_TAX = {
+    personalAllowancePence: 1_257_000,   // £12,570
+    taperThresholdPence: 10_000_000,     // £100,000
+    // [upperLimitPence, ratePct] — limits are absolute income thresholds.
+    bands: [
+        [5_027_000, 20],                 // basic rate to £50,270
+        [12_514_000, 40],                // higher rate to £125,140
+        [Infinity, 45],                  // additional rate
+    ],
+};
+
+export const EXIT_PLAN_DEFAULTS = {
+    baseYear: 2026,
+    withdrawPct: 4,      // safe withdrawal rate (the 4% rule)
+    returnPct: 8,        // assumed investment return
+    agentPct: 1.5,       // sale agent / broker fee
+    cgtPct: 18,          // capital gains tax on the sale (BADR default)
+    projectionYears: 30, // drawdown projection horizon
+};
+
+// UK income tax due on a GROSS income (integer pence in, integer pence out).
+export function ukIncomeTaxPence(grossPence) {
+    const g = Math.max(0, Math.round(grossPence));
+    let pa = UK_INCOME_TAX.personalAllowancePence;
+    if (g > UK_INCOME_TAX.taperThresholdPence) {
+        pa = Math.max(0, pa - Math.floor((g - UK_INCOME_TAX.taperThresholdPence) / 2));
+    }
+    let tax = 0, lower = pa;
+    for (const [lim, rate] of UK_INCOME_TAX.bands) {
+        if (g > lower) { tax += (Math.min(g, lim) - lower) * (rate / 100); lower = lim; }
+        if (g <= lim) break;
+    }
+    return Math.round(tax);
+}
+
+// Gross income required to take home `netPence` after UK income tax (bisection).
+export function grossUpPence(netPence) {
+    const net = Math.max(0, Math.round(netPence));
+    if (net <= 0) return 0;
+    let lo = net, hi = net * 3;
+    for (let i = 0; i < 80; i++) {
+        const m = (lo + hi) / 2;
+        if (m - ukIncomeTaxPence(m) < net) lo = m; else hi = m;
+    }
+    return Math.round((lo + hi) / 2);
+}
+
+// The Exit Plan. All money is INTEGER PENCE; ages/percents are plain numbers.
+//   incomePence        desired POST-TAX annual income to retire on
+//   people[]           { name, share } — splitting income across earners, each
+//                      using their own allowance/bands, cuts the gross required
+//   currentAge, retireAge
+//   freeholds[]        { name, valuePence, rentPence } — rent offsets the pot
+//   withdrawPct        safe withdrawal rate (4% rule sizes the pot)
+//   returnPct          investment return for the 30-year drawdown projection
+//   currentValuePence  group value today (live valuation midpoint or override)
+//   agentPct, cgtPct   sale costs; baseCostPence = CGT-free cost base
+//   existingInvestPence already-invested capital added to sale proceeds
+//   targetSalePence    planned sale price (0 → defaults to requiredSale)
+//   baseYear           year-0 of the projection (current year)
+export function calculateExitPlan(input = {}) {
+    const D = EXIT_PLAN_DEFAULTS;
+    const {
+        incomePence = 0,
+        people = [{ name: 'You', share: 1 }],
+        currentAge = 45,
+        retireAge = 57,
+        freeholds = [],
+        withdrawPct = D.withdrawPct,
+        returnPct = D.returnPct,
+        currentValuePence = 0,
+        agentPct = D.agentPct,
+        cgtPct = D.cgtPct,
+        baseCostPence = 0,
+        existingInvestPence = 0,
+        targetSalePence = 0,
+        baseYear = D.baseYear,
+    } = input;
+
+    const annualNetPence = Math.max(0, Math.round(incomePence));
+    const years = Math.max(0, Math.round(retireAge) - Math.round(currentAge));
+    const exitYear = baseYear + years;
+
+    // Income split across people — each share grossed up under its own allowance.
+    const pplIn = (people && people.length ? people : [{ name: 'You', share: 1 }]);
+    const shareSum = pplIn.reduce((s, p) => s + (p.share > 0 ? p.share : 0), 0) || 1;
+    const ppl = pplIn.map((p) => {
+        const netPence = Math.round(annualNetPence * (p.share > 0 ? p.share : 0) / shareSum);
+        const grossPence = grossUpPence(netPence);
+        return { name: p.name || '—', netPence, grossPence, taxPence: grossPence - netPence };
+    });
+    const grossRequiredPence = ppl.reduce((s, p) => s + p.grossPence, 0);
+    const singleGrossPence = grossUpPence(annualNetPence);
+    const taxSavingPence = Math.max(0, singleGrossPence - grossRequiredPence);
+
+    const totalRentPence = freeholds.reduce((s, f) => s + Math.max(0, Math.round(f.rentPence || 0)), 0);
+    const totalFreeholdPence = freeholds.reduce((s, f) => s + Math.max(0, Math.round(f.valuePence || 0)), 0);
+
+    // Pot only has to cover the gross left AFTER freehold rent. 4% rule sizes it.
+    const portfolioGrossPence = Math.max(0, grossRequiredPence - totalRentPence);
+    const wr = Math.max(0.01, withdrawPct) / 100;
+    const potNeededPence = Math.round(portfolioGrossPence / wr);
+    const requiredNetPence = Math.max(0, potNeededPence - Math.round(existingInvestPence));
+
+    // Reverse-solve the sale price that nets `requiredNet` after agent + CGT.
+    const a = agentPct / 100, c = cgtPct / 100;
+    const denom = Math.max(0.01, 1 - a - c);
+    const requiredSalePence = Math.max(0, Math.round((requiredNetPence - c * Math.round(baseCostPence)) / denom));
+    const reqGrowthPct = (years > 0 && currentValuePence > 0)
+        ? pct((Math.pow(requiredSalePence / currentValuePence, 1 / years) - 1) * 100, 2) : 0;
+
+    // Forward waterfall on the planned target (defaults to the required sale).
+    const targetSale = targetSalePence > 0 ? Math.round(targetSalePence) : requiredSalePence;
+    const agentFeePence = Math.round(targetSale * a);
+    const cgtPence = Math.max(0, Math.round((targetSale - Math.round(baseCostPence)) * c));
+    const netProceedsPence = targetSale - agentFeePence - cgtPence;
+    const investablePence = netProceedsPence + Math.round(existingInvestPence);
+    const gapPence = potNeededPence - investablePence;
+    const targetGrowthPct = (years > 0 && currentValuePence > 0)
+        ? pct((Math.pow(targetSale / currentValuePence, 1 / years) - 1) * 100, 2) : 0;
+
+    // 30-year drawdown: pot grows at return%, draws withdraw% each year. With
+    // return > withdrawal the pot AND the income compound upward — never depletes.
+    const r = returnPct / 100;
+    const projection = [];
+    let pot = investablePence;
+    for (let t = 0; t <= D.projectionYears; t++) {
+        const incomeP = Math.round(pot * wr);
+        const growP = Math.round(pot * r);
+        const endP = Math.round(pot * (1 + r) - incomeP);
+        projection.push({ year: exitYear + t, age: Math.round(retireAge) + t, startPence: Math.round(pot), growthPence: growP, incomePence: incomeP, endPence: endP });
+        pot = pot * (1 + r) - incomeP;
+    }
+
+    const onTrack = gapPence <= Math.max(100_000, Math.round(potNeededPence * 0.003));
+
+    return {
+        annualNetPence, years, exitYear,
+        people: ppl, grossRequiredPence, singleGrossPence, taxSavingPence,
+        totalRentPence, totalFreeholdPence, portfolioGrossPence,
+        potNeededPence, requiredNetPence, requiredSalePence, reqGrowthPct,
+        targetSalePence: targetSale, agentFeePence, cgtPence, netProceedsPence,
+        investablePence, gapPence, targetGrowthPct, onTrack,
+        withdrawPct, returnPct, projection,
+    };
+}
+
 // ── Attrition & Retention (DentaCFO Phase 6) ────────────────────────────────
 // reactivationRate = the share of LAPSED patients (12-24mo since last visit) a
 // recall campaign realistically wins back. Dormant patients (>24mo) are treated

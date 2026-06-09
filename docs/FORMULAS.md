@@ -692,11 +692,24 @@ Buy-side deal appraisal (DentaCFO gap Phase 3): model a practice you're consider
 
 **Red flags** (`flags:[{key,severity,message}]`): negative NPV; IRR null or below the discount hurdle; payback null or >6 yrs; multiple >10×; leverage >4×; margin <12%; asking price >10% above EV. Benchmarks exported as `ACQUISITION_BENCHMARKS`. Tests: `backend/test/formulas-acquisition.test.mjs` (9 cases).
 
-## Exit Plan — personal wealth (DentaCFO gap Phase 4)
+## Exit Plan — personal wealth (DentaCFO gap Phase 4, REBUILT)
 
-The owner's **personal** exit (distinct from the business Sale Planner, `planExitTrajectory`). Two pure pence calculators.
+The owner's **personal** exit (distinct from the business Sale Planner, `planExitTrajectory`). The canonical model is `calculateExitPlan` — a faithful pence port of the GM demo's `exitCalc` (`preview/GM-Group-Intelligence-OS_2.html`). The older `calculateSaleWaterfall` / `calculateFirePlan` are retained for the back-compat `/compute/{sale-waterfall,fire}` routes but are no longer what the Exit Plan screen runs.
 
-### `calculateSaleWaterfall(input)` — net cash from a practice sale
+### `calculateExitPlan(input)` — the canonical personal endgame
+
+Six steps, all integer pence; ages/percents plain. Inputs: `incomePence` (desired POST-TAX annual income), `people:[{name,share}]`, `currentAge`, `retireAge`, `freeholds:[{name,valuePence,rentPence}]`, `withdrawPct`, `returnPct`, `currentValuePence` (group value today), `agentPct`, `cgtPct`, `baseCostPence`, `existingInvestPence`, `targetSalePence` (0 → reverse-solved), `baseYear`.
+
+1. **Income gross-up** — each person's share of the post-tax income is grossed up under its **own** UK 2025/26 allowance + bands (`grossUpPence` bisection over `ukIncomeTaxPence`: PA £12,570 tapering £1/£2 over £100k; 20% to £50,270, 40% to £125,140, 45% above). Splitting cuts the total `grossRequired`; `taxSaving = singleGross − grossRequired`.
+2. **Freehold rent offset** — `portfolioGross = max(0, grossRequired − totalRent)`. The pot only funds what rent doesn't.
+3. **The 4% pot** — `potNeeded = portfolioGross / withdrawPct%`.
+4. **Reverse-solve the sale** — `requiredNet = max(0, potNeeded − existingInvest)`; `requiredSale = (requiredNet − cgt%×baseCost) / (1 − agent% − cgt%)`; `reqGrowth = (requiredSale/currentValue)^(1/years) − 1`.
+5. **Forward waterfall** on `targetSale` (defaults to `requiredSale`): `− agentFee − cgt = netProceeds`; `+ existingInvest = investable`; `gap = potNeeded − investable`; `onTrack = gap ≤ max(£1k, potNeeded×0.3%)`.
+6. **30-year drawdown** `projection[t]` — pot grows at `returnPct`, draws `withdrawPct` each year; with return > withdrawal the pot **and** income compound upward (never deplete).
+
+Tax bands exported as `UK_INCOME_TAX`; defaults as `EXIT_PLAN_DEFAULTS`. The service (`wealth.service.exitPlan`) seeds `currentValuePence` from the live valuation midpoint, `existingInvestPence` from liquid (non-business) assets + pension balances, and `freeholds` from buy-to-let / income properties when not entered. Tests: `backend/test/formulas-exit-plan-v2.test.mjs` (12) + `backend/test/wealth.service.test.mjs`.
+
+### `calculateSaleWaterfall(input)` — net cash from a practice sale *(legacy)*
 
 What the owner personally banks after debt, ownership split and UK CGT. Inputs: `enterpriseValuePence`, `businessDebtPence`, `ownerSharePct` (0–100), `acquisitionCostPence` (base cost), `freeholdEquityPence`, `badrLifetimeUsedPence`, plus rate overrides (`badrRatePct`, `cgtHigherRatePct`, `badrLifetimeCapPence`).
 

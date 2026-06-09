@@ -35,21 +35,26 @@ export interface WealthProperty {
   yieldPct: number | null;
   type: 'Residential' | 'Buy-to-let';
 }
-export interface FireSettings {
-  targetAnnualSpendPence: number;
-  withdrawalRatePct: number;
-  growthRatePct: number;
-  annualSavingsPence: number;
-  horizonYears: number;
-}
-export interface SaleSettings {
-  ownerSharePct: number;
-  businessDebtPence: number;
-  freeholdEquityPence: number;
-  acquisitionCostPence: number;
-  badrLifetimeUsedPence: number;
-  useLiveValuation: boolean;
-  enterpriseValuePence: number;
+// ── Exit Plan (canonical, faithful to the GM demo `exitCalc`) ────────────────
+export interface ExitPerson { name: string; share: number }
+export interface ExitFreehold { name: string; valuePence: number; rentPence: number }
+
+export interface ExitPlanInput {
+  incomePence: number;            // annual post-tax income wanted
+  incomePer: 'year' | 'month';    // display preference
+  people: ExitPerson[];
+  currentAge: number;
+  retireAge: number;
+  freeholds: ExitFreehold[];
+  withdrawPct: number;            // safe withdrawal rate (4% rule sizes the pot)
+  returnPct: number;              // investment return for the drawdown projection
+  currentValuePence: number;      // group value today (manual override)
+  useLiveValuation: boolean;      // seed currentValue from the live valuation midpoint
+  agentPct: number;
+  cgtPct: number;
+  baseCostPence: number;
+  existingInvestPence: number;
+  targetSalePence: number;        // 0 = use the reverse-solved required sale
 }
 
 export interface WealthInputs {
@@ -57,8 +62,7 @@ export interface WealthInputs {
   liabilities: WealthLiability[];
   pensions: WealthPension[];
   properties: WealthProperty[];
-  fire: FireSettings;
-  sale: SaleSettings;
+  exit: ExitPlanInput;
   updatedAt: string | null;
 }
 
@@ -71,45 +75,48 @@ export interface NetWorth {
   netWorthPence: number;
 }
 
-export interface SaleWaterfall {
-  equityValuePence: number;
-  ownerEquityProceedsPence: number;
-  ownerGainPence: number;
-  badrGainPence: number;
-  standardGainPence: number;
+export interface ExitProjectionRow {
+  year: number;
+  age: number;
+  startPence: number;
+  growthPence: number;
+  incomePence: number;
+  endPence: number;
+}
+
+export interface ExitPlanResult {
+  annualNetPence: number;
+  years: number;
+  exitYear: number;
+  people: { name: string; netPence: number; grossPence: number; taxPence: number }[];
+  grossRequiredPence: number;
+  singleGrossPence: number;
+  taxSavingPence: number;
+  totalRentPence: number;
+  totalFreeholdPence: number;
+  portfolioGrossPence: number;
+  potNeededPence: number;
+  requiredNetPence: number;
+  requiredSalePence: number;
+  reqGrowthPct: number;
+  targetSalePence: number;
+  agentFeePence: number;
   cgtPence: number;
-  effectiveCgtPct: number;
-  netBusinessProceedsPence: number;
-  freeholdEquityPence: number;
-  totalNetProceedsPence: number;
-}
-
-export interface FirePlan {
-  currentNetWorthPence: number;
-  fireNumberPence: number;
+  netProceedsPence: number;
+  investablePence: number;
   gapPence: number;
-  progressPct: number;
-  sustainableAnnualIncomePence: number;
-  targetAnnualSpendPence: number;
-  withdrawalRatePct: number;
-  growthRatePct: number;
-  annualSavingsPence: number;
-  horizonYears: number;
-  yearsToFire: number | null;
-  requiredAnnualSavingsPence: number;
-  years: { year: number; nwPence: number; hitFire: boolean }[];
+  targetGrowthPct: number;
+  onTrack: boolean;
+  withdrawPct: number;
+  returnPct: number;
+  projection: ExitProjectionRow[];
 }
 
-export interface ExitPlan {
-  valuation: { enterpriseValuePence: number; source: 'live' | 'manual' };
-  waterfall: SaleWaterfall;
-  fire: FirePlan;
-  inputs: {
-    liquidAssetsPence: number;
-    liabilitiesPence: number;
-    fire: FireSettings;
-    sale: SaleSettings;
-  };
+export interface ExitPlanResponse {
+  valuation: { currentValuePence: number; source: 'live' | 'manual' };
+  plan: ExitPlanResult;
+  inputs: ExitPlanInput & { baseYear: number };
+  seeds: { liquidAssetsPence: number; pensionPence: number; existingInvestSeeded: boolean; freeholdsSeeded: boolean };
 }
 
 // Body PUT /inputs accepts — everything optional, server applies defaults.
@@ -127,6 +134,15 @@ export function saveWealthInputs(body: WealthInputsBody): Promise<WealthInputs> 
 export function fetchNetWorth(): Promise<NetWorth> {
   return api<NetWorth>('/api/wealth/net');
 }
-export function fetchExitPlan(): Promise<ExitPlan> {
-  return api<ExitPlan>('/api/wealth/fire');
+// Assembled live Exit Plan (seeds group value + existing investments + freeholds).
+export function fetchExitPlan(): Promise<ExitPlanResponse> {
+  return api<ExitPlanResponse>('/api/wealth/fire');
+}
+// Pure slider recompute (audit-exempt). The screen passes the full input incl.
+// the currentValuePence it seeded from /fire.
+export function computeExitPlan(body: ExitPlanInput): Promise<ExitPlanResult> {
+  return api<ExitPlanResult>('/api/wealth/compute/exit-plan', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
