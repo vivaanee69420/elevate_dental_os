@@ -958,12 +958,72 @@ export const analyticsService = {
     // deterministic findings with no Claude call (graceful, no hard dependency).
     async aiAsk(orgId, { scope = 'all', period = 'month', periodKey, since, until, label, question = '', now = () => new Date() } = {}) {
         const win = { scope, period, periodKey, since, until, label, now };
-        const [pl, mkt, clin, cash] = await Promise.all([
+        const resolvedWin = (since && until)
+            ? resolveWindow({ since, until, label, now: now() })
+            : treatmentWindow('month', (periodKey || '').slice(0, 7), now());
+
+        const [pl, mkt, clin, cash, settledRevRows, entityRows] = await Promise.all([
             this.plMargin(orgId, win),
             this.marketingRoi(orgId, win),
             this.clinicians(orgId, win),
             this.cashByDay(orgId, win),
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, resolvedWin.since, resolvedWin.until),
+            analytics_repository_1.analyticsRepository.allEntities(orgId),
         ]);
+
+        // Aggregate settled cash by practice
+        const cashByPractice = new Map();
+        if (Array.isArray(settledRevRows)) {
+            for (const r of settledRevRows) {
+                if (r.practice_id) {
+                    const current = cashByPractice.get(r.practice_id) || 0;
+                    cashByPractice.set(r.practice_id, current + (Number(r.pence) || 0));
+                }
+            }
+        }
+
+        // Aggregate clinician production by practice
+        const productionByPractice = new Map();
+        if (clin && Array.isArray(clin.clinicians)) {
+            for (const c of clin.clinicians) {
+                if (c.practiceId) {
+                    const current = productionByPractice.get(c.practiceId) || 0;
+                    productionByPractice.set(c.practiceId, current + (c.productionPence || 0));
+                }
+            }
+        }
+
+        // Extract P&L financials by practice
+        const plByPractice = new Map();
+        if (pl && Array.isArray(pl.entities)) {
+            for (const e of pl.entities) {
+                if (e.id) {
+                    plByPractice.set(e.id, {
+                        revPence: e.revPence,
+                        netPence: e.netPence,
+                        marginPct: e.marginPct,
+                    });
+                }
+            }
+        }
+
+        // Construct practice breakdown array
+        const practiceBreakdown = entityRows
+            .filter((e) => e.kind === 'practice')
+            .map((e) => {
+                const cashPence = cashByPractice.get(e.id) || 0;
+                const productionPence = productionByPractice.get(e.id) || 0;
+                const plData = plByPractice.get(e.id) || null;
+                return {
+                    name: e.name,
+                    cashPence,
+                    productionPence,
+                    revPence: plData ? plData.revPence : null,
+                    netPence: plData ? plData.netPence : null,
+                    marginPct: plData ? plData.marginPct : null,
+                };
+            });
+        practiceBreakdown.sort((a, b) => b.cashPence - a.cashPence || a.name.localeCompare(b.name));
 
         // Aggregate the real, data-derived insight cards into Insight-shaped
         // findings ({ sev, t, d, v }), ranked bad > warn > good > info.
@@ -991,7 +1051,7 @@ export const analyticsService = {
         // No question → just the prioritised findings (the screen's default view).
         const q = (question || '').trim();
         if (!q) {
-            return { scope, period, question: '', answer: null, findings, basis: 'rollups', model: null };
+            return { scope, period, question: '', answer: null, findings, basis: 'rollups', model: null, practiceBreakdown };
         }
 
         // Compact, real summary for Claude (small token footprint, no raw dumps).
@@ -1002,13 +1062,21 @@ export const analyticsService = {
                 marketing: { connected: mkt.connected, paidSpendPence: mkt.paidSpendPence, settledRevenuePence: mkt.settledRevenuePence, blendedRoas: mkt.blendedRoas, channels: mkt.channels.map((c) => ({ label: c.label, spendPence: c.spendPence, leads: c.leads, conversions: c.conversions, cpaPence: c.cpaPence })) },
                 clinicians: clin.applicable === false ? null : { productionAvailable: clin.productionAvailable, totalProductionPence: clin.totalProductionPence, totalFeesPence: clin.totalFeesPence, top: clin.clinicians.slice(0, 5).map((c) => ({ name: c.name, productionPence: c.productionPence, payPct: c.payPct })) },
                 cash: cash.hasData ? { totalPence: cash.totalPence, avgPerDayPence: cash.avgPerDayPence, peak: cash.peak && { label: cash.peak.label, pence: cash.peak.pence } } : null,
+                practices: practiceBreakdown.map((p) => ({
+                    name: p.name,
+                    cashPence: p.cashPence,
+                    productionPence: p.productionPence,
+                    revPence: p.revPence,
+                    netPence: p.netPence,
+                    marginPct: p.marginPct,
+                })),
             },
         };
 
         try {
             const ai = await claude_1.askAnalyst(q, summary);
             const answerFindings = ai.findings && ai.findings.length ? ai.findings : findings.slice(0, 4);
-            return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: 'claude-sonnet-4-5' };
+            return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: 'claude-sonnet-4-5', practiceBreakdown };
         } catch (err) {
             // Graceful fallback — no Claude key or a transient error: keyword-match
             // the question against the real findings so the Ask box still works.
@@ -1022,6 +1090,7 @@ export const analyticsService = {
                 basis: 'rollups',
                 model: null,
                 note: 'AI answer unavailable (no model configured) — showing the closest matching findings from your live data.',
+                practiceBreakdown,
             };
         }
     },

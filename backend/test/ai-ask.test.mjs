@@ -52,6 +52,17 @@ describe('aiAsk', () => {
     }
     // Real headline fact: group net margin from monthly_financials (1,000,000 rev / 700,000 net = 70%).
     expect(r.findings.some((f) => /Group net margin/.test(f.t))).toBe(true);
+
+    // Verify practice breakdown
+    expect(r.practiceBreakdown).toBeDefined();
+    expect(r.practiceBreakdown.length).toBe(1);
+    const pb = r.practiceBreakdown[0];
+    expect(pb.name).toBe('Rochester');
+    expect(pb.cashPence).toBe(1500000);
+    expect(pb.productionPence).toBe(0);
+    expect(pb.revPence).toBe(1000000);
+    expect(pb.netPence).toBe(700000);
+    expect(pb.marginPct).toBe(70);
   });
 
   it('findings are ranked bad/warn before info and capped at 8', async () => {
