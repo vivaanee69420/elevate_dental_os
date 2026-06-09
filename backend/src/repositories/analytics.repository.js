@@ -502,4 +502,16 @@ export const analyticsRepository = {
         if (error) throw new Error(error.message);
         return data || [];
     },
+    // Attrition & Retention (Phase 6) — per-practice patient cohorts by last-visit
+    // recency in ONE query via the patient_retention_by_practice RPC (appointments
+    // is large; the per-patient max() can't be done JS-side). p_now is passed for
+    // deterministic windows. Rows: { practice_id, active_patients, lapsed_patients,
+    // dormant_patients, total_patients, unlinked_appts }.
+    async patientRetentionByPractice(orgId, nowISO) {
+        const { data, error } = await supabase_1.serviceClient.rpc('patient_retention_by_practice', {
+            p_org: orgId, p_now: nowISO,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
 };
