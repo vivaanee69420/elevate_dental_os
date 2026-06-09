@@ -18,43 +18,12 @@ import { formatPounds, formatPoundsCompact } from '@/features/_mock';
 // money helper from one module.
 export { formatPounds, formatPoundsCompact };
 
-// ---------------------------------------------------------------------------
-// wealth-net — personal balance sheet
-// ---------------------------------------------------------------------------
-
-/** A single asset line on the personal balance sheet. */
-export interface Asset {
-  name: string;
-  value: number;
-  type: 'Business' | 'Property' | 'Pension' | 'Investments' | 'Cash';
-  growth: number;
-}
-
-/** A single liability line on the personal balance sheet. */
-export interface Liability {
-  name: string;
-  value: number;
-  rate: number;
-}
-
-/** Personal assets, prototype values (whole pounds). */
-export const ASSETS: Asset[] = [
-  { name: 'GM Dental Group equity (5 practices)', value: 4100000, type: 'Business', growth: 12 },
-  { name: 'GM Dental Lab (private valuation)', value: 380000, type: 'Business', growth: 8 },
-  { name: 'Plan4Growth Academy (early-stage value)', value: 220000, type: 'Business', growth: 45 },
-  { name: 'Primary residence — Herne Bay', value: 850000, type: 'Property', growth: 4 },
-  { name: 'BTL Property #1 — Canterbury', value: 320000, type: 'Property', growth: 3.5 },
-  { name: 'SIPP pension fund', value: 285000, type: 'Pension', growth: 7 },
-  { name: 'ISA / S&S portfolio', value: 142000, type: 'Investments', growth: 9 },
-  { name: 'Cash savings', value: 78000, type: 'Cash', growth: 0 },
-];
-
-/** Personal liabilities, prototype values (whole pounds). */
-export const LIABILITIES: Liability[] = [
-  { name: 'Residential mortgage', value: 320000, rate: 4.2 },
-  { name: 'BTL mortgage', value: 180000, rate: 5.1 },
-  { name: 'Business loans (director guarantees)', value: 95000, rate: 6.5 },
-];
+// NOTE: wealth-net (NetWorthScreen) + wealth-fire (FirePlanScreen) are now wired
+// to the live owner-only endpoints via ./api + ./hooks. Their former mock
+// fixtures (ASSETS, LIABILITIES, FIRE, FIRE_NUMBER) were removed. EXIT_OPTIONS
+// below stays mock — there is no backend source for the exit-strategy copy.
+// PROPERTIES / PENSIONS / ANNUAL_ALLOWANCE below remain mock: their endpoints
+// (/api/wealth/property | /pension) are Phase-7 stubs.
 
 // ---------------------------------------------------------------------------
 // wealth-prop — property portfolio
@@ -119,20 +88,8 @@ export const PENSIONS: Pension[] = [
 export const ANNUAL_ALLOWANCE = 60000;
 
 // ---------------------------------------------------------------------------
-// wealth-fire — FIRE plan
+// wealth-fire — FIRE plan (exit-strategy copy only; figures are now live)
 // ---------------------------------------------------------------------------
-
-/** FIRE-plan headline inputs (prototype constants, whole pounds). */
-export const FIRE = {
-  currentNW: 6275000,
-  targetMonthlyIncome: 40000,
-  yearsToFire: 7,
-  /** Annual required savings used in the path table. */
-  annualSavings: 280000,
-} as const;
-
-/** FIRE number = 25x annual expenses (the "4% rule"). */
-export const FIRE_NUMBER = FIRE.targetMonthlyIncome * 12 * 25;
 
 /** One exit-strategy option shown on the FIRE screen. */
 export interface ExitOption {

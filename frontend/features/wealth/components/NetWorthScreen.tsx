@@ -3,24 +3,22 @@
 // (PAGES['wealth-net']). Personal balance sheet: hero net-worth banner plus
 // side-by-side assets/liabilities tables.
 //
-// Data flow:
-//   totalAssets = sum(ASSETS.value)
-//   totalLiab   = sum(LIABILITIES.value)
-//   netWorth    = totalAssets - totalLiab
-//
-// Fed by ../data ASSETS / LIABILITIES; swap to a real /wealth endpoint when
-// it exists. Owner-only screen.
-import { useMemo } from 'react';
-import { ASSETS, LIABILITIES, formatPoundsCompact } from '../data';
+// Data flow (LIVE — GET /api/wealth/net, owner-only):
+//   assets / liabilities / net_worth come back as RAW WHOLE POUNDS from the
+//   business_health.baseline jsonb. The backend only stores the aggregate
+//   totals (no per-line breakdown), so the two cards render the single rolled-up
+//   figure each. formatPoundsCompact expects whole pounds, so the values feed in
+//   directly. Thin/empty baselines come back as 0 and display cleanly as £0.
+import { useNetWorth } from '../hooks';
+import { formatPoundsCompact } from '../data';
 
 /** Net Worth dashboard screen. */
 export default function NetWorthScreen() {
-  // Roll up the balance sheet (prototype arithmetic).
-  const { totalAssets, totalLiab, netWorth } = useMemo(() => {
-    const a = ASSETS.reduce((s, x) => s + x.value, 0);
-    const l = LIABILITIES.reduce((s, x) => s + x.value, 0);
-    return { totalAssets: a, totalLiab: l, netWorth: a - l };
-  }, []);
+  const { data, isLoading, isError } = useNetWorth();
+
+  const totalAssets = data?.assets ?? 0;
+  const totalLiab = data?.liabilities ?? 0;
+  const netWorth = data?.net_worth ?? totalAssets - totalLiab;
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
@@ -34,6 +32,17 @@ export default function NetWorthScreen() {
           investments
         </p>
       </div>
+
+      {isError && (
+        <div
+          className="card-padded"
+          style={{ marginBottom: 16, fontSize: 13 }}
+        >
+          <span className="text-danger">
+            Could not load net-worth data. Please try again.
+          </span>
+        </div>
+      )}
 
       {/* Hero net-worth banner */}
       <div
@@ -60,19 +69,16 @@ export default function NetWorthScreen() {
           className="display font-bold"
           style={{ fontSize: 56, margin: '8px 0' }}
         >
-          {formatPoundsCompact(netWorth)}
+          {isLoading ? '—' : formatPoundsCompact(netWorth)}
         </div>
-        <div
-          className="flex justify-center"
-          style={{ gap: 24, fontSize: 13 }}
-        >
+        <div className="flex justify-center" style={{ gap: 24, fontSize: 13 }}>
           <div>
             <span style={{ opacity: 0.7 }}>Assets:</span>{' '}
-            {formatPoundsCompact(totalAssets)}
+            {isLoading ? '—' : formatPoundsCompact(totalAssets)}
           </div>
           <div>
             <span style={{ opacity: 0.7 }}>Liabilities:</span>{' '}
-            {formatPoundsCompact(totalLiab)}
+            {isLoading ? '—' : formatPoundsCompact(totalLiab)}
           </div>
         </div>
       </div>
@@ -89,32 +95,27 @@ export default function NetWorthScreen() {
           </h2>
           <table className="w-full" style={{ fontSize: 13 }}>
             <tbody>
-              {ASSETS.map((a) => (
-                <tr
-                  key={a.name}
-                  style={{ borderBottom: '1px solid var(--border)' }}
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td style={{ padding: '10px 0' }}>
+                  <strong>All assets</strong>
+                  <div className="text-ink-muted" style={{ fontSize: 11 }}>
+                    Business, property, pensions and investments
+                  </div>
+                </td>
+                <td
+                  className="text-right"
+                  style={{ padding: '10px 0', fontWeight: 600 }}
                 >
-                  <td style={{ padding: '10px 0' }}>
-                    <strong>{a.name}</strong>
-                    <div className="text-ink-muted" style={{ fontSize: 11 }}>
-                      {a.type} · {a.growth}% growth p.a.
-                    </div>
-                  </td>
-                  <td
-                    className="text-right"
-                    style={{ padding: '10px 0', fontWeight: 600 }}
-                  >
-                    {formatPoundsCompact(a.value)}
-                  </td>
-                </tr>
-              ))}
+                  {isLoading ? '—' : formatPoundsCompact(totalAssets)}
+                </td>
+              </tr>
               <tr style={{ fontWeight: 700 }}>
                 <td style={{ padding: '12px 0' }}>Total assets</td>
                 <td
                   className="text-right text-success"
                   style={{ padding: '12px 0' }}
                 >
-                  {formatPoundsCompact(totalAssets)}
+                  {isLoading ? '—' : formatPoundsCompact(totalAssets)}
                 </td>
               </tr>
             </tbody>
@@ -131,32 +132,27 @@ export default function NetWorthScreen() {
           </h2>
           <table className="w-full" style={{ fontSize: 13 }}>
             <tbody>
-              {LIABILITIES.map((l) => (
-                <tr
-                  key={l.name}
-                  style={{ borderBottom: '1px solid var(--border)' }}
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td style={{ padding: '10px 0' }}>
+                  <strong>All liabilities</strong>
+                  <div className="text-ink-muted" style={{ fontSize: 11 }}>
+                    Mortgages and business loans
+                  </div>
+                </td>
+                <td
+                  className="text-right"
+                  style={{ padding: '10px 0', fontWeight: 600 }}
                 >
-                  <td style={{ padding: '10px 0' }}>
-                    <strong>{l.name}</strong>
-                    <div className="text-ink-muted" style={{ fontSize: 11 }}>
-                      {l.rate}% rate
-                    </div>
-                  </td>
-                  <td
-                    className="text-right"
-                    style={{ padding: '10px 0', fontWeight: 600 }}
-                  >
-                    {formatPoundsCompact(l.value)}
-                  </td>
-                </tr>
-              ))}
+                  {isLoading ? '—' : formatPoundsCompact(totalLiab)}
+                </td>
+              </tr>
               <tr style={{ fontWeight: 700 }}>
                 <td style={{ padding: '12px 0' }}>Total liabilities</td>
                 <td
                   className="text-right text-danger"
                   style={{ padding: '12px 0' }}
                 >
-                  {formatPoundsCompact(totalLiab)}
+                  {isLoading ? '—' : formatPoundsCompact(totalLiab)}
                 </td>
               </tr>
             </tbody>
