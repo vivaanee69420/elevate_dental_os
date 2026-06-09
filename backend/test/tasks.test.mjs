@@ -1,7 +1,22 @@
 // Tasks domain — the Owner-only write boundary + repo/service org-scoping.
 // "Only admin can add tasks, others can only see it" is enforced by
 // requireRole('owner') on every mutating route; reads stay open.
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../src/lib/gemini.js', () => ({
+  generateTasksFromData: vi.fn(() => Promise.resolve({
+    tasks: [
+      {
+        title: 'Call outstanding debtors',
+        description: 'Ashford has £1,200 aged debt.',
+        priority: 'high',
+        due_date: '2026-06-20',
+        assigned_to: 'user-1'
+      }
+    ],
+    usage: { inputTokens: 100, outputTokens: 200 }
+  }))
+}));
 import { supaRec } from './setup.js';
 import { requireRole } from '../src/middleware/auth.js';
 import { taskRepository } from '../src/repositories/task.repository.js';
@@ -80,5 +95,47 @@ describe('taskService.update — done side-effect', () => {
     supaRec.resultProvider = () => ({ data: { id: 't1' }, error: null });
     await taskService.update(ORG, 't1', { status: 'in_progress' });
     expect(supaRec.last.updateVals.completed_at).toBeUndefined();
+  });
+});
+
+describe('taskService.generateAiTasks', () => {
+  it('checks budget, fetches members + analytics, inserts mapped tasks, and records usage', async () => {
+    const mockMembers = [{ id: 'user-1', full_name: 'Dr Rao', role: 'practice_manager', email: 'rao@example.com' }];
+    const mockInserted = [{ id: 't-new-1', organisation_id: ORG, title: 'Call outstanding debtors', assigned_to: 'user-1' }];
+
+    supaRec.rpcProvider = (fn) => {
+      return { data: [], error: null };
+    };
+
+    const queries = [];
+    supaRec.resultProvider = (q) => {
+      queries.push(q);
+      if (q.table === 'users') {
+        return { data: mockMembers, error: null };
+      }
+      if (q.table === 'tasks') {
+        return { data: mockInserted, error: null };
+      }
+      if (q.table === 'ai_config') {
+        return { data: { monthly_token_budget: 10000 }, error: null };
+      }
+      if (q.table === 'ai_usage') {
+        return { data: [], error: null };
+      }
+      return { data: [], error: null };
+    };
+
+    const result = await taskService.generateAiTasks(ORG, 'caller-user-id');
+
+    expect(result).toEqual(mockInserted);
+    const tasksQuery = queries.find((q) => q.table === 'tasks');
+    expect(tasksQuery).toBeDefined();
+    expect(tasksQuery.op).toBe('select');
+
+    const insertedRows = tasksQuery.insertVals;
+    expect(insertedRows.length).toBe(1);
+    expect(insertedRows[0].title).toBe('Call outstanding debtors');
+    expect(insertedRows[0].assigned_to).toBe('user-1');
+    expect(insertedRows[0].organisation_id).toBe(ORG);
   });
 });

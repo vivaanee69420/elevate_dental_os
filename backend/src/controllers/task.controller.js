@@ -23,4 +23,8 @@ export const taskController = {
     async remindOverdue(req, res) {
         res.json(await task_service_1.taskService.remindOverdue(req.user.organisation_id, req.user.email));
     },
+    async generateAiTasks(req, res) {
+        const tasks = await task_service_1.taskService.generateAiTasks(req.user.organisation_id, req.user.id);
+        res.json({ tasks });
+    },
 };

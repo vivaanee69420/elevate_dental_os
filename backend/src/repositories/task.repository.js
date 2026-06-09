@@ -22,6 +22,9 @@ export const taskRepository = {
     async create(row) {
         return supabase_1.serviceClient.from('tasks').insert(row).select().single();
     },
+    async createMany(rows) {
+        return supabase_1.serviceClient.from('tasks').insert(rows).select();
+    },
     async update(orgId, id, patch) {
         return supabase_1.serviceClient
             .from('tasks')

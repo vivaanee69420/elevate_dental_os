@@ -221,3 +221,76 @@ Return ONLY a valid JSON array (4-6 items). No prose, no code fences.`;
         }));
     } catch (err) { console.error('Failed to parse data insights:', res.text); return []; }
 }
+
+// ============================================================================
+// AI TASK GENERATION — Gemini analyzes live data and team members, then
+// returns actionable tasks to improve practice performance.
+// ============================================================================
+export async function generateTasksFromData(liveData, members) {
+    const today = new Date().toISOString().split('T')[0];
+    const prompt = `You are a professional UK dental business consultant. Analyze this practice group's live context data and suggest exactly 3-5 high-impact, actionable tasks to improve practice performance (e.g., addressing revenue leakage, aged debt, low chair occupancy, or low marketing ROAS).
+    
+    Assign these tasks to the most suitable team member based on their role and skills:
+    - Receptionists ('reception' role) should handle patient outreach, bookings, and immediate phone/email follow-ups.
+    - Practice Managers ('practice_manager' role) should handle operational audits, chair configuration changes, staff training, and billing issues.
+    - Owners ('owner' role) should handle strategic reviews, large financial decisions, or major process changes.
+    
+    If no team member is suitable, set assigned_to to null or an empty string.
+    
+    Today's date is: ${today}
+    
+    AVAILABLE TEAM MEMBERS:
+    ${JSON.stringify(members.map(m => ({ id: m.id, name: m.full_name, role: m.role, email: m.email })))}
+    
+    LIVE BUSINESS DATA:
+    ${JSON.stringify(liveData)}
+    
+    Return ONLY a valid JSON object with the "tasks" array.
+    Each task MUST contain:
+    - title: short action-oriented verb phrase (e.g., "Contact 90+ day overdue accounts")
+    - description: 1-2 sentence notes explaining the metric/issue being addressed and the expected outcome. Format all money in pounds (£), never pence.
+    - priority: "low" | "normal" | "high" | "urgent"
+    - due_date: "YYYY-MM-DD" (set realistically, e.g., 7 to 14 days from today)
+    - assigned_to: one of the available team member UUIDs, or empty string "" if unassigned.
+    `;
+
+    const schema = {
+        type: 'object', additionalProperties: false, required: ['tasks'],
+        properties: {
+            tasks: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    required: ['title', 'description', 'priority', 'due_date', 'assigned_to'],
+                    properties: {
+                        title: { type: 'string' },
+                        description: { type: 'string' },
+                        priority: { type: 'string', enum: ['low', 'normal', 'high', 'urgent'] },
+                        due_date: { type: 'string' },
+                        assigned_to: { type: 'string' }
+                    }
+                }
+            }
+        }
+    };
+
+    const res = await getProvider().chat({
+        system: 'You are a UK dental business analyst and consultant.',
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 2548,
+        schema
+    });
+
+    try {
+        const obj = JSON.parse(res.text);
+        return {
+            tasks: Array.isArray(obj.tasks) ? obj.tasks : [],
+            usage: res.usage
+        };
+    } catch (err) {
+        console.error('Failed to parse generateTasksFromData response:', res.text);
+        return { tasks: [], usage: res.usage };
+    }
+}
+

@@ -5,6 +5,11 @@
 import * as task_repository_1 from "../repositories/task.repository.js";
 import * as errors_1 from "../middleware/errors.js";
 import { sendEmail } from "../lib/messaging.js";
+import { authRepository } from "../repositories/auth.repository.js";
+import { analyticsService } from "./analytics.service.js";
+import { generateTasksFromData } from "../lib/gemini.js";
+import { checkBudget, recordUsage } from "../lib/ai/guardrails.js";
+
 
 // Compose the reminder email for one task and send it via the messaging
 // facade (per-tenant SES if configured, else platform Postmark). Best-effort:
@@ -93,5 +98,51 @@ export const taskService = {
             }
         }
         return { reminded: results.filter((r) => r.sent).length, total: overdue.length, results };
+    },
+    async generateAiTasks(orgId, userId) {
+        await checkBudget(orgId);
+
+        const { data: members, error: membersError } = await authRepository.listOrgMembers(orgId);
+        if (membersError)
+            throw new errors_1.AppError(membersError.message, 400);
+
+        const liveData = await analyticsService.getLiveContextData(orgId);
+
+        const { tasks: generated, usage } = await generateTasksFromData(liveData, members);
+
+        const validMemberIds = new Set(members.map((m) => m.id));
+
+        const rowsToInsert = generated.map((t) => {
+            let assignedTo = null;
+            if (t.assigned_to && validMemberIds.has(t.assigned_to)) {
+                assignedTo = t.assigned_to;
+            }
+            return {
+                organisation_id: orgId,
+                title: t.title,
+                description: t.description || null,
+                assigned_to: assignedTo,
+                due_date: t.due_date || null,
+                priority: t.priority || 'normal',
+                status: 'open',
+            };
+        });
+
+        if (rowsToInsert.length === 0) {
+            return [];
+        }
+
+        const { data: inserted, error: insertError } = await task_repository_1.taskRepository.createMany(rowsToInsert);
+        if (insertError)
+            throw new errors_1.AppError(insertError.message, 400);
+
+        await recordUsage(orgId, {
+            feature: 'task_generation',
+            model: process.env.AI_MODEL || 'gemini-2.5-flash-lite',
+            usage,
+            userId,
+        });
+
+        return inserted;
     },
 };

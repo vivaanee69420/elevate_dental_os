@@ -63,3 +63,7 @@ export function remindTask(id: string): Promise<Task> {
 export function remindOverdue(): Promise<{ reminded: number; total: number }> {
   return api('/api/tasks/remind-overdue', { method: 'POST' });
 }
+
+export function generateAiTasks(): Promise<{ tasks: Task[] }> {
+  return api<{ tasks: Task[] }>('/api/tasks/generate-ai', { method: 'POST' });
+}

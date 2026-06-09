@@ -16,6 +16,7 @@ const ownerOnly = auth_1.requireRole('owner');
 router.get('/', (0, async_handler_1.asyncHandler)(task_controller_1.taskController.list));
 router.post('/', ownerOnly, (0, async_handler_1.asyncHandler)(task_controller_1.taskController.create));
 router.post('/remind-overdue', ownerOnly, (0, async_handler_1.asyncHandler)(task_controller_1.taskController.remindOverdue));
+router.post('/generate-ai', ownerOnly, (0, async_handler_1.asyncHandler)(task_controller_1.taskController.generateAiTasks));
 router.patch('/:id', ownerOnly, (0, async_handler_1.asyncHandler)(task_controller_1.taskController.update));
 router.delete('/:id', ownerOnly, (0, async_handler_1.asyncHandler)(task_controller_1.taskController.remove));
 router.post('/:id/remind', ownerOnly, (0, async_handler_1.asyncHandler)(task_controller_1.taskController.remind));
