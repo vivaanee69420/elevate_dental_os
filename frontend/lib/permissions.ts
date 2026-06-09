@@ -97,7 +97,9 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   'wealth-net': 'wealth.view',
   'wealth-prop': 'wealth.view',
   'wealth-pen': 'wealth.view',
-  'wealth-fire': 'wealth.view',
+  // Exit Plan moved to the Overview section (boardroom placement), still
+  // wealth.view-gated (exposes personal-wealth / sale figures).
+  'exit-plan': 'wealth.view',
 
   // Training
   'training-library': 'training.view',
