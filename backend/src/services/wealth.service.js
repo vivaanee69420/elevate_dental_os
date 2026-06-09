@@ -11,21 +11,20 @@ import * as wealth_repository_1 from "../repositories/wealth.repository.js";
 import * as analytics_service_1 from "./analytics.service.js";
 import * as formulas_1 from "../lib/formulas.js";
 
-// Defaults a never-configured org reads (mirror wealth.model.js schema defaults
-// so the UI gets a full, stable shape without a saved row).
-const EMPTY_FIRE = {
-    targetAnnualSpendPence: 0, withdrawalRatePct: 4, growthRatePct: 7,
-    annualSavingsPence: 0, horizonYears: 10,
-};
-const EMPTY_SALE = {
-    ownerSharePct: 100, businessDebtPence: 0, freeholdEquityPence: 0,
-    acquisitionCostPence: 0, badrLifetimeUsedPence: 0, useLiveValuation: true,
-    enterpriseValuePence: 0,
+// The canonical Exit Plan defaults a never-configured org reads (mirror the
+// exitPlanInputSchema defaults so the UI gets a full, stable shape without a
+// saved row). Persisted in the wealth_inputs.fire JSONB column.
+const EMPTY_EXIT = {
+    incomePence: 0, incomePer: 'year', people: [{ name: 'You', share: 1 }],
+    currentAge: 45, retireAge: 57, freeholds: [],
+    withdrawPct: 4, returnPct: 8, currentValuePence: 0, useLiveValuation: true,
+    agentPct: 1.5, cgtPct: 18, baseCostPence: 0, existingInvestPence: 0, targetSalePence: 0,
 };
 
 export const wealthService = {
     // Saved personal-wealth inputs in the camelCase shape the screens consume,
-    // or sane empties when never configured.
+    // or sane empties when never configured. The Exit Plan state lives in the
+    // `fire` JSONB column (exposed as `exit`).
     async getInputs(orgId) {
         const row = await wealth_repository_1.wealthRepository.get(orgId);
         return {
@@ -33,21 +32,21 @@ export const wealthService = {
             liabilities: row?.liabilities ?? [],
             pensions: row?.pensions ?? [],
             properties: row?.properties ?? [],
-            fire: { ...EMPTY_FIRE, ...(row?.fire ?? {}) },
-            sale: { ...EMPTY_SALE, ...(row?.sale ?? {}) },
+            exit: { ...EMPTY_EXIT, ...(row?.fire ?? {}) },
             updatedAt: row?.updated_at ?? null,
         };
     },
 
     // Persist the validated blob (wealthInputsSchema output) then read it back.
+    // Exit Plan state is stored in the `fire` column; legacy `sale` is cleared.
     async saveInputs(orgId, inputs, userId) {
         await wealth_repository_1.wealthRepository.upsert(orgId, {
             assets: inputs.assets,
             liabilities: inputs.liabilities,
             pensions: inputs.pensions,
             properties: inputs.properties,
-            fire: inputs.fire,
-            sale: inputs.sale,
+            fire: inputs.exit,
+            sale: {},
         }, userId);
         return this.getInputs(orgId);
     },
@@ -58,6 +57,11 @@ export const wealthService = {
     },
     computeFirePlan(body) {
         return (0, formulas_1.calculateFirePlan)(body);
+    },
+    // Canonical Exit Plan recompute. The screen passes the full input (incl. the
+    // currentValuePence it last seeded from /fire); baseYear is the current year.
+    computeExitPlan(body) {
+        return (0, formulas_1.calculateExitPlan)({ ...body, baseYear: new Date().getFullYear() });
     },
 
     // Personal balance sheet for the Net Worth screen. Totals by class + simple
@@ -84,23 +88,24 @@ export const wealthService = {
         };
     },
 
-    // The assembled live Exit Plan: resolve the business EV (live valuation
-    // midpoint, or a manual override), run the sale waterfall for net cash, then
-    // the FIRE projection using liquid assets + that net cash − liabilities.
-    // Business-type assets are excluded from the liquid pool to avoid double-
-    // counting the business (its realisable value comes from the waterfall).
+    // The assembled live Exit Plan (canonical GM `exitCalc` model): resolve the
+    // group value today (live valuation midpoint, or a manual override), then run
+    // the full plan — income gross-up across people, freehold rent offset, 4%-rule
+    // pot, reverse-solved required sale, forward sale waterfall, and the 30-year
+    // drawdown projection. Seeds currentValuePence into the inputs the screen
+    // echoes back to /compute/exit-plan for live slider recompute.
     async exitPlan(orgId) {
-        const { assets, liabilities, fire, sale } = await this.getInputs(orgId);
+        const { assets, liabilities, pensions, properties, exit } = await this.getInputs(orgId);
 
-        // EV from the live valuation midpoint when asked; fall back to the manual
-        // override on no baseline / error so the screen still computes.
-        let enterpriseValuePence = Math.round(sale.enterpriseValuePence || 0);
+        // Group value today from the live valuation midpoint when asked; fall back
+        // to the manual override on no baseline / error so the screen still computes.
+        let currentValuePence = Math.round(exit.currentValuePence || 0);
         let valuationSource = 'manual';
-        if (sale.useLiveValuation) {
+        if (exit.useLiveValuation) {
             try {
                 const v = await analytics_service_1.analyticsService.valuation(orgId);
                 if (v && !v.error && v.midpoint > 0) {
-                    enterpriseValuePence = Math.round(v.midpoint);
+                    currentValuePence = Math.round(v.midpoint);
                     valuationSource = 'live';
                 }
             } catch {
@@ -108,36 +113,43 @@ export const wealthService = {
             }
         }
 
-        const waterfall = (0, formulas_1.calculateSaleWaterfall)({
-            enterpriseValuePence,
-            businessDebtPence: sale.businessDebtPence,
-            ownerSharePct: sale.ownerSharePct,
-            acquisitionCostPence: sale.acquisitionCostPence,
-            freeholdEquityPence: sale.freeholdEquityPence,
-            badrLifetimeUsedPence: sale.badrLifetimeUsedPence,
-        });
-
+        // Seed existing investments from liquid (non-business) assets + pension
+        // balances when the owner hasn't entered a manual figure — so the sale
+        // waterfall stacks on top of what they already hold.
         const liquidAssetsPence = assets
             .filter((a) => a.liquid && a.type !== 'Business')
             .reduce((s, a) => s + Math.round(a.valuePence || 0), 0);
-        const liabilitiesPence = liabilities.reduce((s, l) => s + Math.round(l.valuePence || 0), 0);
+        const pensionPence = pensions.reduce((s, p) => s + Math.round(p.balancePence || 0), 0);
+        const existingInvestPence = exit.existingInvestPence > 0
+            ? Math.round(exit.existingInvestPence)
+            : liquidAssetsPence + pensionPence;
 
-        const plan = (0, formulas_1.calculateFirePlan)({
-            liquidAssetsPence,
-            liabilitiesPence,
-            businessNetProceedsPence: waterfall.totalNetProceedsPence,
-            targetAnnualSpendPence: fire.targetAnnualSpendPence,
-            withdrawalRatePct: fire.withdrawalRatePct,
-            growthRatePct: fire.growthRatePct,
-            annualSavingsPence: fire.annualSavingsPence,
-            horizonYears: fire.horizonYears,
-        });
+        // Seed freeholds from buy-to-let / income properties when the owner hasn't
+        // added any explicitly (value − mortgage = equity; annualised rent).
+        const seededFreeholds = (exit.freeholds && exit.freeholds.length)
+            ? exit.freeholds
+            : properties
+                .filter((p) => (p.monthlyIncomePence || 0) > 0 || p.type === 'Buy-to-let')
+                .map((p) => ({
+                    name: p.name || p.address || 'Property',
+                    valuePence: Math.max(0, Math.round((p.valuePence || 0) - (p.mortgagePence || 0))),
+                    rentPence: Math.round((p.monthlyIncomePence || 0) * 12),
+                }));
+
+        const resolved = {
+            ...exit,
+            currentValuePence,
+            existingInvestPence,
+            freeholds: seededFreeholds,
+            baseYear: new Date().getFullYear(),
+        };
+        const plan = (0, formulas_1.calculateExitPlan)(resolved);
 
         return {
-            valuation: { enterpriseValuePence, source: valuationSource },
-            waterfall,
-            fire: plan,
-            inputs: { liquidAssetsPence, liabilitiesPence, fire, sale },
+            valuation: { currentValuePence, source: valuationSource },
+            plan,
+            inputs: resolved,
+            seeds: { liquidAssetsPence, pensionPence, existingInvestSeeded: !(exit.existingInvestPence > 0), freeholdsSeeded: !(exit.freeholds && exit.freeholds.length) },
         };
     },
 };

@@ -29,4 +29,9 @@ export const wealthController = {
         const body = wealth_model_1.firePlanSchema.parse(req.body);
         res.json(wealth_service_1.wealthService.computeFirePlan(body));
     },
+    // Canonical Exit Plan slider recompute (audit-exempt).
+    exitPlanCompute(req, res) {
+        const body = wealth_model_1.exitPlanComputeSchema.parse(req.body);
+        res.json(wealth_service_1.wealthService.computeExitPlan(body));
+    },
 };

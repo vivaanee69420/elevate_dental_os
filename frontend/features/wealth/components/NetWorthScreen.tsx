@@ -50,8 +50,7 @@ export default function NetWorthScreen() {
       assets, liabilities,
       pensions: inputs.data.pensions,
       properties: inputs.data.properties,
-      fire: inputs.data.fire,
-      sale: inputs.data.sale,
+      exit: inputs.data.exit,
     });
   };
 

@@ -27,5 +27,6 @@ router.get('/fire', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.
 // Pure recompute (audit-exempt slider endpoints).
 router.post('/compute/sale-waterfall', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.saleWaterfall));
 router.post('/compute/fire', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.firePlan));
+router.post('/compute/exit-plan', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.exitPlanCompute));
 
 export default router;

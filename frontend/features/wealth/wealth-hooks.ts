@@ -6,10 +6,13 @@ import {
   saveWealthInputs,
   fetchNetWorth,
   fetchExitPlan,
+  computeExitPlan,
   type WealthInputs,
   type WealthInputsBody,
   type NetWorth,
-  type ExitPlan,
+  type ExitPlanResponse,
+  type ExitPlanResult,
+  type ExitPlanInput,
 } from './wealth-api';
 
 // Wealth (Exit Plan / FIRE) server state. Owner-only screens. Saving the
@@ -37,10 +40,17 @@ export function useNetWorth() {
 }
 
 export function useExitPlan() {
-  return useQuery<ExitPlan>({
+  return useQuery<ExitPlanResponse>({
     queryKey: FIRE_KEY,
     queryFn: fetchExitPlan,
     staleTime: 60_000,
+  });
+}
+
+// Slider recompute (no persistence). The screen debounces calls to this.
+export function useComputeExitPlan() {
+  return useMutation<ExitPlanResult, Error, ExitPlanInput>({
+    mutationFn: computeExitPlan,
   });
 }
 
