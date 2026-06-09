@@ -16,6 +16,8 @@ import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { boardReportRepository } from "../repositories/boardReport.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
+import { debtService } from "./debt.service.js";
+import { getProvider } from "../lib/ai/index.js";
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -962,13 +964,18 @@ export const analyticsService = {
             ? resolveWindow({ since, until, label, now: now() })
             : treatmentWindow('month', (periodKey || '').slice(0, 7), now());
 
-        const [pl, mkt, clin, cash, settledRevRows, entityRows] = await Promise.all([
+        const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank] = await Promise.all([
             this.plMargin(orgId, win),
             this.marketingRoi(orgId, win),
             this.clinicians(orgId, win),
             this.cashByDay(orgId, win),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, resolvedWin.since, resolvedWin.until),
             analytics_repository_1.analyticsRepository.allEntities(orgId),
+            this.revenueLeakage(orgId, win),
+            debtService.list(orgId),
+            this.chairAnalytics(orgId, win),
+            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            analytics_repository_1.analyticsRepository.bankSummary(orgId),
         ]);
 
         // Aggregate settled cash by practice
@@ -1061,7 +1068,13 @@ export const analyticsService = {
                 pl: pl.hasData ? { revenuePence: pl.statement.revPence, netPence: pl.statement.netPence, marginPct: pl.statement.marginPct, basis: pl.basis, entities: pl.entities.map((e) => ({ name: e.name, revPence: e.revPence, netPence: e.netPence, marginPct: e.marginPct })) } : null,
                 marketing: { connected: mkt.connected, paidSpendPence: mkt.paidSpendPence, settledRevenuePence: mkt.settledRevenuePence, blendedRoas: mkt.blendedRoas, channels: mkt.channels.map((c) => ({ label: c.label, spendPence: c.spendPence, leads: c.leads, conversions: c.conversions, cpaPence: c.cpaPence })) },
                 clinicians: clin.applicable === false ? null : { productionAvailable: clin.productionAvailable, totalProductionPence: clin.totalProductionPence, totalFeesPence: clin.totalFeesPence, top: clin.clinicians.slice(0, 5).map((c) => ({ name: c.name, productionPence: c.productionPence, payPct: c.payPct })) },
-                cash: cash.hasData ? { totalPence: cash.totalPence, avgPerDayPence: cash.avgPerDayPence, peak: cash.peak && { label: cash.peak.label, pence: cash.peak.pence } } : null,
+                cash: {
+                    totalPence: cash.hasData ? cash.totalPence : 0,
+                    avgPerDayPence: cash.hasData ? cash.avgPerDayPence : 0,
+                    peak: (cash.hasData && cash.peak) ? { label: cash.peak.label, pence: cash.peak.pence } : null,
+                    bankBalancePence: bank ? bank.totalPence : 0,
+                    bankLastSyncedAt: bank ? bank.lastSyncedAt : null,
+                },
                 practices: practiceBreakdown.map((p) => ({
                     name: p.name,
                     cashPence: p.cashPence,
@@ -1070,13 +1083,39 @@ export const analyticsService = {
                     netPence: p.netPence,
                     marginPct: p.marginPct,
                 })),
+                debt: {
+                    outstandingPence: debt.outstanding_pence,
+                    overdue90Pence: debt.overdue90_pence,
+                    collectionRatePct: debt.collection_rate_pct,
+                },
+                leakage: {
+                    totalAnnualLeakagePence: leakage.annualTotalPence,
+                    lines: leakage.lines.map((l) => ({
+                        label: l.label,
+                        annualPence: l.annualPence,
+                        owner: l.owner,
+                    })),
+                },
+                chairs: chair && chair.applicable !== false ? {
+                    totalChairs: chair.group.chairs,
+                    occupancyPct: chair.group.occupancyPct,
+                    lostPotentialYrPence: chair.group.lostPotentialYrPence,
+                    recoverRevYrPence: chair.group.recoverRevYrPence,
+                    practices: chair.practices.map((p) => ({
+                        name: p.name,
+                        chairs: p.chairs,
+                        occupancyPct: p.occupancyPct,
+                    })),
+                } : null,
+                baseline: health?.baseline || null,
+                targets: health?.targets || null,
             },
         };
 
         try {
             const ai = await claude_1.askAnalyst(q, summary);
             const answerFindings = ai.findings && ai.findings.length ? ai.findings : findings.slice(0, 4);
-            return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: 'claude-sonnet-4-5', practiceBreakdown };
+            return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: getProvider().model, practiceBreakdown };
         } catch (err) {
             // Graceful fallback — no Claude key or a transient error: keyword-match
             // the question against the real findings so the Ask box still works.

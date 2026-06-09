@@ -83,6 +83,10 @@ const h = vi.hoisted(() => {
         (q.gtes ||= []).push({ col, val });
         return builder;
       },
+      gt(col, val) {
+        (q.gts ||= []).push({ col, val });
+        return builder;
+      },
       lte(col, val) {
         (q.ltes ||= []).push({ col, val });
         return builder;
@@ -105,7 +109,7 @@ const h = vi.hoisted(() => {
       },
       range(from, to) {
         q.range = { from, to };
-        return settle();
+        return builder;
       },
       ilike(col, val) {
         (q.ilikes ||= []).push({ col, val });
