@@ -15,7 +15,9 @@ export const TEMPLATE_VARIABLES = [
   'review_link',
 ];
 
-const PLACEHOLDER_RE = /\{\{\s*([a-z_]+)\s*\}\}/g;
+// Matches any {{ placeholder }} shape — including uppercase / digits — so an
+// unrecognised token is always consumed and blanked, never leaked verbatim.
+const PLACEHOLDER_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
 
 /**
  * Render a template body by replacing {{var}} with values[var].
