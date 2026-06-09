@@ -1,5 +1,5 @@
 // ============================================================================
-// PLAN4GROWTH AI — AI Coach powered by Claude Sonnet 4.6
+// PLAN4GROWTH AI — AI Coach powered by Google Gemini
 // ============================================================================
 import { getProvider } from "./ai/index.js";
 import { delimit } from "./ai/guardrails.js";
@@ -25,6 +25,7 @@ Never:
 - Recommend specific tools/vendors unless asked
 - Diagnose individual patient cases
 - Give medical advice`;
+
 export async function askPlan4GrowthAI(userMessage, context, conversationHistory = []) {
     const contextString = `
 USER'S BUSINESS DATA:
@@ -46,6 +47,7 @@ ${context.liveData ? `Current Live Data (P&L actuals, aged debt, revenue leakage
     });
     return { reply: res.text, usage: res.usage };
 }
+
 // ============================================================================
 // PLAN4GROWTH AI INSIGHTS — Generates the initial business health analysis
 // ============================================================================
@@ -88,13 +90,11 @@ Return ONLY valid JSON array of 5 insights. No other text.`;
 // group's LIVE numbers for the current scope/period, and returns ranked findings
 // in the Insight shape the screen renders ({ sev, t, d, v }). `summary` is a
 // compact, already-real data bundle assembled by the service (no fabrication).
-// Throws when no API key (caller falls back to deterministic findings).
 // ============================================================================
 const SEV_MAP = { good: 'good', positive: 'good', warn: 'warn', warning: 'warn', bad: 'bad', critical: 'bad', danger: 'bad', info: 'info' };
 function normSev(s) { return SEV_MAP[String(s || '').toLowerCase()] || 'info'; }
 
 export async function askAnalyst(question, summary) {
-    // Provider throws if the relevant API key is missing (ANTHROPIC_API_KEY or OPENROUTER_API_KEY).
     const prompt = `A UK dental practice group owner asks a question about their LIVE numbers. Answer using ONLY the data provided — reference the actual figures, never invent numbers. Money is shown in pence; talk in £.
 
 SCOPE: ${summary.scopeLabel} · ${summary.periodLabel}
@@ -132,18 +132,16 @@ Give 2-4 findings ranked by importance. If the data can't answer the question, s
 }
 
 // ============================================================================
-// BOARD REPORT — Claude writes the executive summary + RAG-coded priorities for
+// BOARD REPORT — Gemini writes the executive summary + RAG-coded priorities for
 // the monthly/weekly board pack (DentaCFO gap module, Phase 2). `bundle` is an
 // already-real data digest assembled by the service from live rollups (group
 // totals, leakage, top/weak practice) — never fabricate numbers. Money in the
-// bundle is integer pence; the model talks in £. Throws when no API key so the
-// caller falls back to a deterministic, data-driven summary.
+// bundle is integer pence; the model talks in £.
 // ============================================================================
 const RAG_MAP = { red: 'red', amber: 'amber', green: 'green', good: 'green', warn: 'amber', warning: 'amber', bad: 'red', critical: 'red' };
 function normRag(s) { return RAG_MAP[String(s || '').toLowerCase()] || 'amber'; }
 
 export async function generateBoardReport(bundle) {
-    // Provider throws if the relevant API key is missing (ANTHROPIC_API_KEY or OPENROUTER_API_KEY).
     const prompt = `Write a board pack for a UK dental practice group from its LIVE numbers. Use ONLY the data provided — reference the actual figures, never invent. Money is integer pence; talk in £ (round sensibly). British English.
 
 SCOPE: ${bundle.scopeLabel} · ${bundle.periodLabel}
@@ -175,7 +173,7 @@ Give exactly 3 priorities ranked red→green by urgency. Lead with the biggest r
 }
 
 // ============================================================================
-// AI-INSIGHTS — Claude analyses LIVE rollups (baseline + per-practice/source
+// AI-INSIGHTS — Gemini analyses LIVE rollups (baseline + per-practice/source
 // conversion + revenue projection) and writes insight cards in the exact
 // shape the AI Insights screen renders. Returns [] on any failure so the
 // caller can fall back to the deterministic rule-based insights.

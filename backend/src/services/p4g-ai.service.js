@@ -4,7 +4,7 @@
 // ============================================================================
 import * as p4g_ai_repository_1 from "../repositories/p4g-ai.repository.js";
 import * as errors_1 from "../middleware/errors.js";
-import * as claude_1 from "../lib/claude.js";
+import * as claude_1 from "../lib/gemini.js";
 import { checkBudget, recordUsage } from "../lib/ai/guardrails.js";
 import { analyticsService } from "./analytics.service.js";
 

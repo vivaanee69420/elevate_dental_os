@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { supaRec } from './setup.js';
 
-vi.mock('../src/lib/claude.js', () => ({
+vi.mock('../src/lib/gemini.js', () => ({
   askPlan4GrowthAI: vi.fn(async () => ({ reply: 'ok', usage: { inputTokens: 10, outputTokens: 5 } })),
 }));
 
