@@ -194,8 +194,11 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
             .gte('metric_date', since);
         if (delErr) throw new Error(`ad_metrics clear: ${delErr.message}`);
         if (all.length > 0) {
-            const { error } = await supabase_1.serviceClient.from('ad_metrics').insert(all);
-            if (error) throw new Error(`ad_metrics insert: ${error.message}`);
+            // upsert (not insert) so a boundary/timezone-skew row dated before the
+            // delete window updates in place instead of erroring on the unique key.
+            const { error } = await supabase_1.serviceClient.from('ad_metrics')
+                .upsert(all, { onConflict: 'organisation_id,provider,customer_id,campaign_id,metric_date' });
+            if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
         }
 
         await integrationRepository.upsert(orgId, 'meta_ads', {

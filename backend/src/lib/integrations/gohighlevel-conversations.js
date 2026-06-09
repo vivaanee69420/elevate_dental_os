@@ -105,9 +105,9 @@ async function ourContactMap(orgId) {
 }
 
 // Pull conversation threads + their recent messages into communications.
-// Idempotent: skips messages whose external_id already exists for the org (no
-// ON CONFLICT needed, so no dependence on a unique index). Inbound + outbound
-// (including replies we sent via GHL) both land here, so the Inbox is complete.
+// Idempotent: upserts on (organisation_id, external_id) so re-runs and
+// concurrent syncs never duplicate a message. Inbound + outbound (including
+// replies we sent via GHL) both land here, so the Inbox is complete.
 export async function syncConversations(orgId, integration, { maxConversations = 100, perConv = 50 } = {}) {
     const at = tokenOf(integration);
     const locationId = integration.config?.locationId;
@@ -131,17 +131,19 @@ export async function syncConversations(orgId, integration, { maxConversations =
     }
     let inserted = 0;
     if (rows.length) {
-        const ids = rows.map((r) => r.external_id);
-        const { data: existing } = await supabase_1.serviceClient
-            .from('communications').select('external_id')
-            .eq('organisation_id', orgId).in('external_id', ids);
-        const have = new Set((existing ?? []).map((e) => e.external_id));
-        const fresh = rows.filter((r) => !have.has(r.external_id));
-        if (fresh.length) {
-            const { error } = await supabase_1.serviceClient.from('communications').insert(fresh);
-            if (error) console.warn(`[gohighlevel] conversations insert: ${error.message}`);
-            else inserted = fresh.length;
-        }
+        // Race-proof idempotency: upsert on (organisation_id, external_id) with
+        // ignoreDuplicates, backed by uq_comms_org_extid (partial, external_id NOT
+        // NULL). Two overlapping syncs (cron + manual Refresh) can no longer dup a
+        // message — the DB drops the second write instead of relying on a TOCTOU
+        // select/filter. Dedupe within this batch first (same external_id twice in
+        // one pull would otherwise trip "affect row a second time").
+        const seen = new Set();
+        const batch = rows.filter((r) => r.external_id && !seen.has(r.external_id) && seen.add(r.external_id));
+        const { data, error } = await supabase_1.serviceClient.from('communications')
+            .upsert(batch, { onConflict: 'organisation_id,external_id', ignoreDuplicates: true })
+            .select('id');
+        if (error) console.warn(`[gohighlevel] conversations upsert: ${error.message}`);
+        else inserted = data?.length ?? 0;
     }
     return { conversations: conversations.length, messages: inserted };
 }

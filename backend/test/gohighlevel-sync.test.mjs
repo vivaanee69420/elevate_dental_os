@@ -72,7 +72,7 @@ function fakeDb(plan) {
             select() { return b; },
             insert(v) { q.op = 'insert'; q.vals = v; return b; },
             update(v) { q.op = 'update'; q.vals = v; return b; },
-            upsert(v, o) { q.op = 'upsert'; q.vals = v; q.opts = o; calls.push(q); return Promise.resolve(plan(q)); },
+            upsert(v, o) { q.op = 'upsert'; q.vals = v; q.opts = o; return b; },
             delete() { q.op = 'delete'; return b; },
             eq(c, v) { q.eqs.push([c, v]); return b; },
             ilike(c, v) { q.ilikes.push([c, v]); return b; },
@@ -178,15 +178,16 @@ describe('matchOrCreateContact', () => {
         expect(db.calls.some((c) => c.op === 'update')).toBe(true); // backfilled ghl id
     });
 
-    it('creates a new contact when nothing matches', async () => {
+    it('creates a new contact when nothing matches (upsert on ghl_contact_id, race-proof)', async () => {
         const db = fakeDb((q) => {
-            if (q.op === 'insert') return { data: { id: 'new-contact' }, error: null };
+            if (q.op === 'upsert') return { data: { id: 'new-contact' }, error: null };
             return { data: null, error: null };
         });
         const id = await matchOrCreateContact(org, { ghl_contact_id: 'g9', email: 'new@x.com', phone: '07700900999', first_name: 'New' }, db);
         expect(id).toBe('new-contact');
-        const insert = db.calls.find((c) => c.op === 'insert');
-        expect(insert.vals).toMatchObject({ organisation_id: org, source: 'gohighlevel', ghl_contact_id: 'g9' });
+        const up = db.calls.find((c) => c.op === 'upsert');
+        expect(up.opts).toMatchObject({ onConflict: 'organisation_id,ghl_contact_id' });
+        expect(up.vals).toMatchObject({ organisation_id: org, source: 'gohighlevel', ghl_contact_id: 'g9' });
     });
 });
 
@@ -217,11 +218,12 @@ describe('upsertContact (dedup on pull)', () => {
         expect(db.calls.some((c) => c.op === 'insert')).toBe(false);
     });
 
-    it('inserts a new contact when nothing matches', async () => {
+    it('creates a new contact when nothing matches (upsert on ghl_contact_id, race-proof)', async () => {
         const db = fakeDb(() => ({ data: null, error: null }));
         const r = await upsertContact(org, contactRow(org, { id: 'g9', firstName: 'New', email: 'new@x.com', phone: '07700900999' }), db);
         expect(r).toMatchObject({ action: 'insert' });
-        const insert = db.calls.find((c) => c.op === 'insert');
-        expect(insert.vals).toMatchObject({ organisation_id: org, source: 'gohighlevel', ghl_contact_id: 'g9' });
+        const up = db.calls.find((c) => c.op === 'upsert');
+        expect(up.opts).toMatchObject({ onConflict: 'organisation_id,ghl_contact_id' });
+        expect(up.vals).toMatchObject({ organisation_id: org, source: 'gohighlevel', ghl_contact_id: 'g9' });
     });
 });

@@ -103,8 +103,9 @@ describe('syncOneOrg', () => {
         expect(del.eqs).toEqual(expect.arrayContaining([
             { col: 'organisation_id', val: 'org-1' }, { col: 'provider', val: 'meta_ads' },
         ]));
-        const ins = queries.find((q) => q.table === 'ad_metrics' && q.op === 'insert');
-        expect(ins.insertVals).toEqual(expect.arrayContaining([
+        const ins = queries.find((q) => q.table === 'ad_metrics' && q.op === 'upsert');
+        expect(ins.upsertOpts).toMatchObject({ onConflict: 'organisation_id,provider,customer_id,campaign_id,metric_date' });
+        expect(ins.upsertVals).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 organisation_id: 'org-1', provider: 'meta_ads', customer_id: '1112223333',
                 campaign_id: '7', spend_pence: 300, clicks: 20, conversions: 2,
