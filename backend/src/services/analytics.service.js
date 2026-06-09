@@ -1117,6 +1117,7 @@ export const analyticsService = {
             const answerFindings = ai.findings && ai.findings.length ? ai.findings : findings.slice(0, 4);
             return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: getProvider().model, practiceBreakdown };
         } catch (err) {
+            console.error('[aiAsk] AI call failed:', err.message, err.stack?.split('\n')[1]);
             // Graceful fallback — no Claude key or a transient error: keyword-match
             // the question against the real findings so the Ask box still works.
             const ql = q.toLowerCase();
