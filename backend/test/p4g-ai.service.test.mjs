@@ -6,6 +6,20 @@ vi.mock('../src/lib/gemini.js', () => ({
   askPlan4GrowthAI: vi.fn(async () => ({ reply: 'ok', usage: { inputTokens: 10, outputTokens: 5 } })),
 }));
 
+// Override only getLiveContextData with a non-empty bundle (real DB stub yields
+// no meta.data_coverage, which the new empty-data guard would treat as empty and
+// short-circuit). This test models a normal org WITH data.
+vi.mock('../src/services/analytics.service.js', async (importActual) => {
+  const actual = await importActual();
+  return {
+    ...actual,
+    analyticsService: {
+      ...actual.analyticsService,
+      getLiveContextData: vi.fn(async () => ({ meta: { data_coverage: { financials: true, baseline: true, appointments: true } } })),
+    },
+  };
+});
+
 const { p4gAiService } = await import('../src/services/p4g-ai.service.js');
 
 const ORG = 'org-chat';

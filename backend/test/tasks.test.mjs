@@ -17,6 +17,19 @@ vi.mock('../src/lib/gemini.js', () => ({
     usage: { inputTokens: 100, outputTokens: 200 }
   }))
 }));
+// Override only getLiveContextData with a non-empty bundle (real DB stub yields
+// no meta.data_coverage, which the new empty-data guard would treat as empty and
+// short-circuit generateAiTasks to []). This test models a normal org WITH data.
+vi.mock('../src/services/analytics.service.js', async (importActual) => {
+  const actual = await importActual();
+  return {
+    ...actual,
+    analyticsService: {
+      ...actual.analyticsService,
+      getLiveContextData: vi.fn(async () => ({ meta: { data_coverage: { financials: true, baseline: true, appointments: true } } })),
+    },
+  };
+});
 import { supaRec } from './setup.js';
 import { requireRole } from '../src/middleware/auth.js';
 import { taskRepository } from '../src/repositories/task.repository.js';

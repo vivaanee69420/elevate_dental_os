@@ -107,6 +107,10 @@ export const taskService = {
             throw new errors_1.AppError(membersError.message, 400);
 
         const liveData = await analyticsService.getLiveContextData(orgId);
+        const { isContextEmpty } = await import("./ai-context.service.js");
+        if (isContextEmpty(liveData)) {
+            return [];
+        }
 
         const { tasks: generated, usage } = await generateTasksFromData(liveData, members);
 
