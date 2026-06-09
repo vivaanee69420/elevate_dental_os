@@ -875,3 +875,16 @@ File uploads: use `POST /api/platform/courses/presign` to get an S3 presigned PU
 - `DELETE /api/platform/courses/:id/resources/:resId` — remove a course-level resource. Returns `{ deleted }`.
 
 > **Schema note (migration `000047`):** modules live in `course_modules`; lesson files live in `lesson_files`; lessons carry a `module_id` FK. Migration `000047` is **NOT YET applied on hosted** — apply it + run `NOTIFY pgrst, 'reload schema';` before using any module or lesson-file endpoint in production.
+
+## CRM
+
+### CRM Templates  `/api/crm/templates`
+Reception may GET; owner/practice_manager may mutate. All org-scoped.
+
+- `GET /api/crm/templates?channel=sms|email` -> `{ templates: Template[] }`
+- `POST /api/crm/templates` body `{ channel, name, subject?, body }` -> `Template`
+- `PATCH /api/crm/templates/:id` body `{ channel?, name?, subject?, body?, is_archived? }` -> `Template`
+- `DELETE /api/crm/templates/:id` -> `{ success: true }` (soft delete: sets is_archived)
+
+`Template = { id, organisation_id, channel, name, subject, body, is_archived, created_at, created_by, updated_at }`.
+Bodies/subjects may contain `{{var}}` placeholders: first_name, last_name, treatment, practice, appointment_date, address, review_link.
