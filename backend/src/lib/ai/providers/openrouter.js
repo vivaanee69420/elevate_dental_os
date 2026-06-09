@@ -2,13 +2,22 @@
 // ============================================================================
 // OpenRouter adapter — OpenAI-compatible. Translates the provider contract to
 // /chat/completions and back. Phase 1 handles string-content messages; Phase 2
-// extends toOpenAIMessage() for tool_result block arrays.
+// extends toOpenAIMessages() for tool_result block arrays.
 // ============================================================================
 import OpenAI from "openai";
 
-function toOpenAIMessage(m) {
-  // Phase 1: content is a plain string.
-  return { role: m.role, content: m.content };
+// Normalized message -> OpenAI chat message(s). String content is the Phase 1
+// path. An assistant tool_use block array becomes one assistant message carrying
+// `tool_calls`; a tool_result block array becomes one `role:'tool'` message per
+// result.
+function toOpenAIMessages(m) {
+  if (!Array.isArray(m.content)) return [{ role: m.role, content: m.content }];
+  if (m.role === 'assistant') {
+    const text = m.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const tool_calls = m.content.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } }));
+    return [{ role: 'assistant', content: text || null, ...(tool_calls.length ? { tool_calls } : {}) }];
+  }
+  return m.content.filter((b) => b.type === 'tool_result').map((b) => ({ role: 'tool', tool_call_id: b.toolUseId, content: b.content }));
 }
 
 export function createOpenRouterProvider({ model, apiKey = process.env.OPENROUTER_API_KEY } = {}) {
@@ -22,7 +31,7 @@ export function createOpenRouterProvider({ model, apiKey = process.env.OPENROUTE
       const client = new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' });
       const oaiMessages = [];
       if (system) oaiMessages.push({ role: 'system', content: system });
-      for (const m of messages) oaiMessages.push(toOpenAIMessage(m));
+      for (const m of messages) oaiMessages.push(...toOpenAIMessages(m));
       const req = { model, max_tokens: maxTokens, messages: oaiMessages };
       if (tools) req.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.inputSchema } }));
       if (schema) req.response_format = { type: 'json_schema', json_schema: { name: 'structured_output', strict: true, schema } };
