@@ -5,6 +5,11 @@
 // Cron schedules driven by node-cron
 // ============================================================================
 import "dotenv/config";
+// Sentry MUST load after dotenv (so SENTRY_DSN is populated) and before the
+// jobs run, so the worker process gets its own Sentry init. server.js loads
+// instrument.js too, but workers are a SEPARATE process and would otherwise
+// have no Sentry. No-op when SENTRY_DSN is unset (local/dev).
+import Sentry from "../instrument.js";
 import * as node_cron_1 from "node-cron";
 import * as supabase_1 from "../lib/supabase.js";
 import * as postmark_1 from "../lib/postmark.js";
@@ -23,13 +28,43 @@ import { notificationService } from "../services/notification.service.js";
 import { analyticsService } from "../services/analytics.service.js";
 import { getSnapshot, finalizePreviousMonth } from "../services/ai-context.service.js";
 import { boardReportRepository, isScheduleDue } from "../repositories/boardReport.repository.js";
+
+// --------------------------------------------------------------------------
+// Cron monitoring helper. Wraps every node-cron job in Sentry.withMonitor so
+// Sentry tracks check-ins (started/ok/error), missed runs, and overruns. The
+// monitorConfig is sent on each check-in, so monitors auto-provision in Sentry
+// (no manual dashboard setup). No-op when SENTRY_DSN is unset.
+//
+//   slug       — stable Sentry monitor slug (kebab-case, do not rename)
+//   cronExpr   — same crontab string passed to node-cron
+//   fn         — async job body
+//   opts       — { timezone?, maxRuntime?, checkinMargin? }
+//
+// withMonitor reports the job as ERROR only if fn throws; jobs that swallow
+// errors in their own try/catch will check in OK (runtime/missed monitoring
+// still works). To flag a logic failure to Sentry, let it throw or rethrow.
+// --------------------------------------------------------------------------
+function scheduleMonitored(slug, cronExpr, fn, opts = {}) {
+    const monitorConfig = {
+        schedule: { type: 'crontab', value: cronExpr },
+        checkinMargin: opts.checkinMargin ?? 5,   // minutes a late start tolerated
+        maxRuntime: opts.maxRuntime ?? 30,        // minutes before flagged as overrun
+        ...(opts.timezone ? { timezone: opts.timezone } : {}),
+    };
+    const cronOpts = opts.timezone ? { timezone: opts.timezone } : undefined;
+    return node_cron_1.default.schedule(
+        cronExpr,
+        () => Sentry.withMonitor(slug, fn, monitorConfig),
+        cronOpts,
+    );
+}
 // --------------------------------------------------------------------------
 // Business-health snapshot — daily 02:00 UTC, decides per-org by cadence.
 // Phase 2: replaces stub baseline-copy with formula-driven calc against real
 // payments/leads/appointments tables. Cadence per-org via
 // business_health.snapshot_frequency ('weekly' | 'monthly').
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('0 2 * * *', async () => {
+scheduleMonitored('business-health-snapshot', '0 2 * * *', async () => {
     console.log('[worker] Running snapshot tick');
     const today = new Date();
     const { data: orgs } = await supabase_1.serviceClient
@@ -96,11 +131,11 @@ node_cron_1.default.schedule('0 2 * * *', async () => {
         }
     }
     console.log(`[worker] Snapshot tick complete — ${fired} orgs snapshotted`);
-});
+}, { maxRuntime: 55 });
 // --------------------------------------------------------------------------
 // Weekly digest email — Mondays 07:00 UK time
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('0 6 * * 1', async () => {
+scheduleMonitored('weekly-digest', '0 6 * * 1', async () => {
     console.log('[worker] Running weekly digest');
     const { data: orgs } = await supabase_1.serviceClient
         .from('organisations')
@@ -135,7 +170,7 @@ node_cron_1.default.schedule('0 6 * * 1', async () => {
 // --------------------------------------------------------------------------
 // Workflow runner — every minute, process pending workflow steps
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('* * * * *', async () => {
+scheduleMonitored('workflow-runner', '* * * * *', async () => {
     const { data: runs } = await supabase_1.serviceClient
         .from('workflow_runs')
         .select('*, workflow:workflows(*)')
@@ -190,7 +225,7 @@ node_cron_1.default.schedule('* * * * *', async () => {
                 .eq('id', run.id);
         }
     }
-});
+}, { maxRuntime: 5 });
 // --------------------------------------------------------------------------
 // Dentally sync — daily 03:00 RECONCILIATION backstop. Real-time updates now
 // arrive via the Dentally webhook (POST /webhooks/dentally/:token); this poll
@@ -199,32 +234,32 @@ node_cron_1.default.schedule('* * * * *', async () => {
 // First pull also happens on connect; owners can Refresh on demand via
 // POST /integrations/dentally/sync.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('0 3 * * *', async () => {
+scheduleMonitored('dentally-sync', '0 3 * * *', async () => {
     try {
         const results = await dentally_sync_1.syncAllOrgs();
         if (results.length > 0) console.log(`[worker] Dentally sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] Dentally sync failed', err);
     }
-});
+}, { maxRuntime: 55 });
 // --------------------------------------------------------------------------
 // GoHighLevel inbound sync — nightly at 22:00 UK time, pull
 // contacts/opportunities/conversations + refresh pipeline & workflow caches for
 // orgs with an active gohighlevel integration.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('0 22 * * *', async () => {
+scheduleMonitored('gohighlevel-sync', '0 22 * * *', async () => {
     try {
         const results = await gohighlevel_sync_1.syncAllOrgs();
         if (results.length > 0) console.log(`[worker] GoHighLevel nightly sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] GoHighLevel sync failed', err);
     }
-}, { timezone: 'Europe/London' });
+}, { timezone: 'Europe/London', maxRuntime: 55 });
 // --------------------------------------------------------------------------
 // Xero P&L sync — daily 02:15, pull the month's Profit & Loss into
 // monthly_financials for orgs with an active xero integration.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('15 2 * * *', async () => {
+scheduleMonitored('xero-sync', '15 2 * * *', async () => {
     try {
         const results = await xero_sync_1.syncAllOrgs();
         if (results.length > 0) console.log(`[worker] Xero sync: ${results.length} orgs`);
@@ -236,7 +271,7 @@ node_cron_1.default.schedule('15 2 * * *', async () => {
 // QuickBooks P&L sync — daily 02:30, pull the month's Profit & Loss into
 // monthly_financials for orgs with an active quickbooks integration.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('30 2 * * *', async () => {
+scheduleMonitored('quickbooks-sync', '30 2 * * *', async () => {
     try {
         const results = await quickbooks_sync_1.syncAllOrgs();
         if (results.length > 0) console.log(`[worker] QuickBooks sync: ${results.length} orgs`);
@@ -247,7 +282,7 @@ node_cron_1.default.schedule('30 2 * * *', async () => {
 // Google Ads spend sync — daily 02:45, pull the last 30 days of per-campaign
 // spend/performance into ad_metrics for orgs with an active google_ads
 // integration. Each org's rows are keyed by organisation_id (no cross-tenant).
-node_cron_1.default.schedule('45 2 * * *', async () => {
+scheduleMonitored('google-ads-sync', '45 2 * * *', async () => {
     try {
         const results = await google_ads_sync_1.syncAllOrgs();
         if (results.length > 0) console.log(`[worker] Google Ads sync: ${results.length} orgs`);
@@ -258,7 +293,7 @@ node_cron_1.default.schedule('45 2 * * *', async () => {
 // Meta (Facebook) Ads spend sync — daily 02:50, pull the last 30 days of
 // per-campaign spend/performance into ad_metrics for orgs with an active
 // meta_ads integration. Each org's rows are keyed by organisation_id.
-node_cron_1.default.schedule('50 2 * * *', async () => {
+scheduleMonitored('meta-ads-sync', '50 2 * * *', async () => {
     try {
         const results = await meta_ads_sync_1.syncAllOrgs();
         if (results.length > 0) console.log(`[worker] Meta Ads sync: ${results.length} orgs`);
@@ -272,7 +307,7 @@ node_cron_1.default.schedule('50 2 * * *', async () => {
 // day (skip if last_reminded_at is today). Bumps reminder_count so the Task
 // Manager shows "X sent". Owner-only manual sends use the same email path.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('0 8 * * *', async () => {
+scheduleMonitored('task-overdue-reminders', '0 8 * * *', async () => {
     const today = new Date().toISOString().split('T')[0];
     try {
         const { data: tasks, error } = await supabase_1.serviceClient
@@ -314,14 +349,14 @@ node_cron_1.default.schedule('0 8 * * *', async () => {
 // --------------------------------------------------------------------------
 // Notification outbox drain — every minute.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('* * * * *', async () => {
+scheduleMonitored('notification-outbox-drain', '* * * * *', async () => {
     try {
         const n = await notificationService.drainOnce({ ses: aws_ses_1, sns: aws_sns_1 });
         if (n) console.log(`[worker] drained ${n} notification deliveries`);
     } catch (err) {
         console.error('[worker] notification drain failed', err);
     }
-});
+}, { maxRuntime: 5 });
 
 // --------------------------------------------------------------------------
 // Board Report Generator delivery — daily 06:30 Europe/London. Scans all
@@ -329,7 +364,7 @@ node_cron_1.default.schedule('* * * * *', async () => {
 // day, weekly >7d, monthly >28d), then stamps last_sent_at. Each pack is
 // computed live from the org's current analytics rollups at send time.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('30 6 * * *', async () => {
+scheduleMonitored('board-report-delivery', '30 6 * * *', async () => {
     let sent = 0;
     try {
         const schedules = await boardReportRepository.activeAcrossOrgs();
@@ -359,24 +394,24 @@ node_cron_1.default.schedule('30 6 * * *', async () => {
 // AI context snapshot warm — nightly 02:30 UTC. Build/refresh the current-month
 // snapshot for every org so the first AI call of the day is already cached.
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('30 2 * * *', async () => {
+scheduleMonitored('ai-context-warm', '30 2 * * *', async () => {
     const { data: orgs } = await supabase_1.serviceClient.from('organisations').select('id');
     for (const o of orgs || []) {
         try { await getSnapshot(o.id, 'current'); }
         catch (e) { console.warn('[ai-context] warm failed', o.id, e.message); }
     }
-});
+}, { maxRuntime: 55 });
 
 // --------------------------------------------------------------------------
 // AI context snapshot finalize — day 3 of each month 03:00 UTC. Freeze the
 // previous month for every org (build if needed, then upsert as final).
 // --------------------------------------------------------------------------
-node_cron_1.default.schedule('0 3 3 * *', async () => {
+scheduleMonitored('ai-context-finalize', '0 3 3 * *', async () => {
     const { data: orgs } = await supabase_1.serviceClient.from('organisations').select('id');
     for (const o of orgs || []) {
         try { await finalizePreviousMonth(o.id); }
         catch (e) { console.warn('[ai-context] finalize failed', o.id, e.message); }
     }
-});
+}, { maxRuntime: 55 });
 
 console.log('[workers] Started — cron schedules active');
