@@ -4,20 +4,30 @@
 // ~line 14951). Two card grids: SMS templates (green accent, with char/SMS
 // count) and Email templates (blue accent, with subject line).
 //
-// Data flow: TEMPLATES -> split by channel -> two grids.
+// Data flow: useTemplates() -> split by channel -> two grids.
 
 import { useMemo } from 'react';
-import { TEMPLATES } from '../data';
+import { useTemplates } from '../useTemplates';
 
 /** Message Templates screen. */
 export default function TemplatesScreen() {
+  const { data, isLoading } = useTemplates();
+  const templates = data?.templates ?? [];
   const { sms, email } = useMemo(
     () => ({
-      sms: TEMPLATES.filter((t) => t.channel === 'sms'),
-      email: TEMPLATES.filter((t) => t.channel === 'email'),
+      sms: templates.filter((t) => t.channel === 'sms'),
+      email: templates.filter((t) => t.channel === 'email'),
     }),
-    [],
+    [templates],
   );
+
+  if (isLoading) {
+    return (
+      <div className="mx-auto" style={{ maxWidth: 1280 }}>
+        <p className="text-ink-muted" style={{ fontSize: 13 }}>Loading templates…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
@@ -27,7 +37,7 @@ export default function TemplatesScreen() {
           Message Templates
         </h1>
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          {TEMPLATES.length} templates · used in sequences and one-off messages
+          {templates.length} templates · used in sequences and one-off messages
           · variables: {'{{first_name}}'}, {'{{treatment}}'}, {'{{practice}}'},{' '}
           {'{{appointment_date}}'}
         </p>
