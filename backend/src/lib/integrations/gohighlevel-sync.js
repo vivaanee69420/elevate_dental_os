@@ -253,10 +253,12 @@ export async function upsertContact(orgId, c, db = supabase_1.serviceClient) {
             }
         }
     }
-    const { error } = await db.from('contacts').insert({
+    // upsert on the ghl_contact_id unique index: closes the poll-vs-webhook race
+    // where both miss the lookup above and both insert the same contact.
+    const { error } = await db.from('contacts').upsert({
         organisation_id: orgId, source: 'gohighlevel', ghl_contact_id: c.ghl_contact_id,
         first_name: c.first_name, last_name: c.last_name, email: c.email, phone: c.phone,
-    });
+    }, { onConflict: 'organisation_id,ghl_contact_id' });
     if (error) return { error: error.message };
     return { action: 'insert' };
 }
@@ -288,7 +290,7 @@ export async function matchOrCreateContact(orgId, c, db = supabase_1.serviceClie
             if (data?.length) return data[0].id;
         }
     }
-    const { data: created, error } = await db.from('contacts').insert({
+    const newRow = {
         organisation_id: orgId,
         first_name: c.first_name,
         last_name: c.last_name,
@@ -296,7 +298,20 @@ export async function matchOrCreateContact(orgId, c, db = supabase_1.serviceClie
         phone: c.phone,
         ghl_contact_id: c.ghl_contact_id,
         source: 'gohighlevel',
-    }).select('id').single();
+    };
+    // With a ghl_contact_id, upsert on its unique index so a concurrent writer
+    // (poll vs webhook) that inserted the same contact between our lookup and
+    // here resolves to the existing row instead of erroring/duplicating.
+    if (c.ghl_contact_id) {
+        const { data: up, error } = await db.from('contacts')
+            .upsert(newRow, { onConflict: 'organisation_id,ghl_contact_id' })
+            .select('id').single();
+        if (error) throw new Error(`contact upsert failed: ${error.message}`);
+        return up.id;
+    }
+    // No ghl_contact_id: no unique index to lean on (email/phone collisions are
+    // legitimately shared by families), so this stays a best-effort insert.
+    const { data: created, error } = await db.from('contacts').insert(newRow).select('id').single();
     if (error) throw new Error(`contact insert failed: ${error.message}`);
     return created.id;
 }
