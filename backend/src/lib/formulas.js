@@ -1012,3 +1012,41 @@ export function calculateFirePlan(input = {}) {
         years,
     };
 }
+
+// ── Attrition & Retention (DentaCFO Phase 6) ────────────────────────────────
+// reactivationRate = the share of LAPSED patients (12-24mo since last visit) a
+// recall campaign realistically wins back. Dormant patients (>24mo) are treated
+// as largely gone and are NOT in the reactivation pool. Accountant-repointable.
+export const RETENTION_DEFAULTS = { reactivationRate: 0.25 };
+
+// Patient retention / attrition economics. Cohorts are integer patient counts
+// (active <12mo, lapsed 12-24mo, dormant >24mo since last visit). avgPatient
+// value is integer pence (trailing-12mo revenue per active patient). Returns the
+// retention/attrition rates plus the recoverable reactivation revenue pool —
+// lapsed patients x avg value x recovery rate. Pure; no DB, integer pence.
+export function calculateRetention({ active = 0, lapsed = 0, dormant = 0 } = {}, { avgPatientValuePence = 0, reactivationRate = RETENTION_DEFAULTS.reactivationRate } = {}) {
+    const a = Math.max(0, Math.round(active));
+    const l = Math.max(0, Math.round(lapsed));
+    const d = Math.max(0, Math.round(dormant));
+    const known = a + l + d;
+    // Retention = active share of the entire ever-seen patient base. Attrition is
+    // its complement (lapsed + dormant as a share of all known patients).
+    const retentionRatePct = known > 0 ? Math.round((a / known) * 1000) / 10 : 0;
+    const attritionRatePct = known > 0 ? Math.round(((l + d) / known) * 1000) / 10 : 0;
+    const rate = Math.min(1, Math.max(0, reactivationRate));
+    const avg = Math.max(0, Math.round(avgPatientValuePence));
+    const reactivatablePatients = Math.round(l * rate);
+    const reactivationValuePence = Math.round(l * avg * rate);
+    return {
+        activePatients: a,
+        lapsedPatients: l,
+        dormantPatients: d,
+        knownPatients: known,
+        retentionRatePct,
+        attritionRatePct,
+        reactivationRate: rate,
+        avgPatientValuePence: avg,
+        reactivatablePatients,
+        reactivationValuePence,
+    };
+}

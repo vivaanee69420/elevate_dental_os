@@ -89,6 +89,14 @@ export const analyticsController = {
     async dataQuality(req, res) {
         res.json(await analytics_service_1.analyticsService.dataQuality(req.user.organisation_id));
     },
+    // Attrition & Retention (Phase 6) — scope-aware patient cohorts + reactivation
+    // value. Optional ?rate=0..1 overrides the default recall win-back rate.
+    async retention(req, res) {
+        const q = analytics_model_1.scopeQuerySchema.parse(req.query);
+        const r = Number(req.query.rate);
+        const reactivationRate = Number.isFinite(r) ? Math.min(1, Math.max(0, r)) : undefined;
+        res.json(await analytics_service_1.analyticsService.retention(req.user.organisation_id, { scope: q.scope, reactivationRate }));
+    },
     async chair(req, res) {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         const recoverPctPoints = Math.max(0, Math.min(40, Number(req.query.recover) || 10));

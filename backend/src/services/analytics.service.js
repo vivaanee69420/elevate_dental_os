@@ -2105,6 +2105,107 @@ export const analyticsService = {
             generatedAt: now().toISOString(),
         };
     },
+    // Attrition & Retention (DentaCFO Phase 6). Per-practice patient cohorts by
+    // last-visit recency (active <12mo / lapsed 12-24mo / dormant >24mo), the
+    // group retention + attrition rate, and the RECOVERABLE reactivation revenue
+    // pool (lapsed patients x avg patient value x recall recovery rate).
+    //
+    // DATA LINEAGE / WALLS:
+    //   cohorts        = REAL — distinct patients off Dentally appointments, keyed
+    //                    by COALESCE(contact_id, pms_patient_id), bucketed by their
+    //                    most recent non-cancelled past visit (RPC, p_now-relative).
+    //   avgPatientValue= REAL — trailing-12mo settled receipts / active patients,
+    //                    per practice (org-blended fallback when a practice has
+    //                    revenue but no active patients linked).
+    //   unlinkedAppts  = the linkage data wall (contact_id AND pms_patient_id null)
+    //                    — those patients are unrecoverable, so they're FLAGGED,
+    //                    never counted in a cohort (would understate retention).
+    // Not applicable to academy/lab scope (no patient recall book).
+    async retention(orgId, { scope = 'all', reactivationRate, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        if (resolved.mode === 'academy' || resolved.mode === 'lab') {
+            return { applicable: false, scope: resolved.mode,
+                message: 'Patient retention applies to the dental practices — switch scope to the group or a practice.' };
+        }
+        const nowDate = now();
+        // Trailing 12 months for the average-patient-value denominator.
+        const since = new Date(nowDate);
+        since.setUTCFullYear(since.getUTCFullYear() - 1);
+        const sinceIso = since.toISOString();
+
+        const [practices, retRows, revRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.practicesFull(orgId),
+            analytics_repository_1.analyticsRepository.patientRetentionByPractice(orgId, nowDate.toISOString()),
+            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceIso, null),
+        ]);
+        const num = (v) => Number(v || 0);
+        const nameBy = new Map(practices.map((p) => [p.id, p.name]));
+        const revByPractice = new Map(revRows.map((r) => [r.practice_id, num(r.pence)]));
+        const retBy = new Map(retRows.map((r) => [r.practice_id, r]));
+
+        // Scope filter: a specific practice narrows to that id; otherwise every
+        // practice plus any practice_id seen in the cohort rows.
+        let ids = new Set([
+            ...practices.map((p) => p.id),
+            ...retRows.map((r) => r.practice_id).filter(Boolean),
+        ]);
+        if (resolved.mode === 'entity') ids = new Set([...ids].filter((id) => resolved.practiceIds.includes(id)));
+
+        // Org-blended avg patient value — used as the per-practice fallback when a
+        // practice banked revenue but has no active patients linked (data wall).
+        const orgActiveAll = retRows.reduce((s, r) => s + num(r.active_patients), 0);
+        const orgRev12mAll = revRows.reduce((s, r) => s + num(r.pence), 0);
+        const orgAvgValuePence = orgActiveAll > 0 ? Math.round(orgRev12mAll / orgActiveAll) : 0;
+
+        const rate = reactivationRate == null ? formulas_1.RETENTION_DEFAULTS.reactivationRate : Math.min(1, Math.max(0, reactivationRate));
+
+        const rows = [...ids].map((pid) => {
+            const r = retBy.get(pid) || {};
+            const active = num(r.active_patients), lapsed = num(r.lapsed_patients), dormant = num(r.dormant_patients);
+            const rev12m = revByPractice.get(pid) || 0;
+            const avgPatientValuePence = active > 0 ? Math.round(rev12m / active) : orgAvgValuePence;
+            const calc = (0, formulas_1.calculateRetention)({ active, lapsed, dormant }, { avgPatientValuePence, reactivationRate: rate });
+            return {
+                practiceId: pid,
+                name: nameBy.get(pid) || 'Unknown practice',
+                unlinkedAppts: num(r.unlinked_appts),
+                revenue12mPence: rev12m,
+                rag: retentionRagBand(calc.retentionRatePct),
+                ...calc,
+            };
+        }).sort((a, b) => b.reactivationValuePence - a.reactivationValuePence || b.lapsedPatients - a.lapsedPatients);
+
+        // Group rollup — sum cohorts, blend the avg value over org active patients.
+        const totals = rows.reduce((acc, p) => {
+            acc.active += p.activePatients; acc.lapsed += p.lapsedPatients; acc.dormant += p.dormantPatients;
+            acc.unlinkedAppts += p.unlinkedAppts; acc.revenue12mPence += p.revenue12mPence;
+            return acc;
+        }, { active: 0, lapsed: 0, dormant: 0, unlinkedAppts: 0, revenue12mPence: 0 });
+        const orgAvgValueScopedPence = totals.active > 0 ? Math.round(totals.revenue12mPence / totals.active) : 0;
+        const org = {
+            ...(0, formulas_1.calculateRetention)(
+                { active: totals.active, lapsed: totals.lapsed, dormant: totals.dormant },
+                { avgPatientValuePence: orgAvgValueScopedPence, reactivationRate: rate }),
+            rag: retentionRagBand(totals.active + totals.lapsed + totals.dormant > 0
+                ? Math.round((totals.active / (totals.active + totals.lapsed + totals.dormant)) * 1000) / 10 : 0),
+            unlinkedAppts: totals.unlinkedAppts,
+            revenue12mPence: totals.revenue12mPence,
+        };
+        const hasData = org.knownPatients > 0;
+        const insights = buildRetentionInsights({ org, rows, hasData });
+
+        return {
+            applicable: true,
+            scope,
+            hasData,
+            reactivationRate: rate,
+            org,
+            practices: rows,
+            insights,
+            generatedAt: nowDate.toISOString(),
+            note: 'Cohorts are distinct Dentally patients by last non-cancelled visit. Avg patient value = trailing-12mo settled receipts / active patients. Reactivation pool targets lapsed (12-24mo) patients only — dormant (>24mo) are treated as largely gone. Appointments with no patient identity are flagged, not counted.',
+        };
+    },
 };
 
 // Deterministic board pack from real metrics — the no-AI fallback. Mirrors the
@@ -2260,6 +2361,67 @@ function buildDataQualityAlerts(practices, totals, connectors) {
 }
 function pctDefect(dim) {
     return Math.round((100 - dim.ratePct) * 10) / 10;
+}
+
+// ----------------------------------------------------------------------------
+// Attrition & Retention helpers (Phase 6) — pure, module-scope.
+// Retention RAG: a healthy recall book keeps most of the ever-seen base active.
+function retentionRagBand(retentionRatePct) {
+    if (retentionRatePct >= 80) return 'green';
+    if (retentionRatePct >= 60) return 'amber';
+    return 'red';
+}
+// Decision-Lens cards for Attrition & Retention — derived purely from the real
+// cohort + value rollup. Each { tone, title, body, value }. Honest about the
+// linkage data wall. Returns [] when there is no patient data.
+function buildRetentionInsights({ org, rows, hasData }) {
+    const cards = [];
+    const gbp = (p) => '£' + Math.round((p || 0) / 100).toLocaleString('en-GB');
+    if (!hasData) {
+        cards.push({
+            tone: 'info',
+            title: 'No patient visit history yet',
+            body: 'Retention cohorts come from Dentally appointments keyed by patient. Connect / sync Dentally to populate active, lapsed and dormant patient counts.',
+            value: 'Sync needed',
+        });
+        return cards;
+    }
+    // 1. Headline reactivation opportunity (the whole lapsed pool).
+    if (org.reactivationValuePence > 0) {
+        cards.push({
+            tone: 'good',
+            title: `${gbp(org.reactivationValuePence)}/yr recoverable from lapsed patients`,
+            body: `${org.lapsedPatients.toLocaleString('en-GB')} patients last visited 12-24 months ago. At a ${Math.round(org.reactivationRate * 100)}% recall win-back and ${gbp(org.avgPatientValuePence)} average patient value, that is ${gbp(org.reactivationValuePence)} of low-cost revenue — a recall campaign, not new acquisition.`,
+            value: gbp(org.reactivationValuePence),
+        });
+    }
+    // 2. Retention / attrition rate framing.
+    cards.push({
+        tone: org.retentionRatePct >= 80 ? 'good' : org.retentionRatePct >= 60 ? 'warn' : 'bad',
+        title: `Patient retention ${org.retentionRatePct}%`,
+        body: `${org.activePatients.toLocaleString('en-GB')} of ${org.knownPatients.toLocaleString('en-GB')} known patients are active (visited in the last 12 months). Attrition is ${org.attritionRatePct}% — ${org.lapsedPatients.toLocaleString('en-GB')} lapsed + ${org.dormantPatients.toLocaleString('en-GB')} dormant.`,
+        value: `${org.retentionRatePct}%`,
+    });
+    // 3. Practice with the biggest recoverable pool.
+    const top = rows.find((r) => r.reactivationValuePence > 0);
+    if (top && rows.length > 1) {
+        cards.push({
+            tone: 'info',
+            title: `${top.name} has the largest reactivation pool`,
+            body: `${top.lapsedPatients.toLocaleString('en-GB')} lapsed patients worth ${gbp(top.reactivationValuePence)}/yr if recalled. Prioritise its recall list first.`,
+            value: gbp(top.reactivationValuePence),
+        });
+    }
+    // 4. Data wall — unrecoverable patients.
+    if (org.unlinkedAppts > 0) {
+        cards.push({
+            tone: 'warn',
+            title: 'Some appointments have no patient identity',
+            body: `${org.unlinkedAppts.toLocaleString('en-GB')} appointments carry neither a CRM contact nor a Dentally patient id, so those patients can't be placed in a cohort or recalled. A Dentally re-sync recovers the link.`,
+            value: 'Re-sync',
+        });
+    }
+    return cards;
 }
 
 // Render a board pack to a standalone HTML email (British English, no emojis,

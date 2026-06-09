@@ -25,6 +25,11 @@ const valEdit = (0, auth_1.requirePermission)('valuation.edit');
 // finance views — gate it to match so a system admin without finance.view can
 // still see connector + cleanliness health.
 const sys = (0, auth_1.requirePermission)('system.manage');
+// Attrition & Retention (Phase 6) lives next to Loyalty on the growth side — it
+// is a patient-recall / marketing metric, not a money/valuation view, so it
+// gates on growth.view (the same key the Loyalty page uses), letting a growth
+// manager without finance.view see the recall opportunity.
+const grw = (0, auth_1.requirePermission)('growth.view');
 router.get('/dashboard', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dashboard));
 router.get('/dashboard-summary', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dashboardSummary));
 router.get('/revenue-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.revenueSeries));
@@ -32,6 +37,7 @@ router.get('/practice-summary', fin, (0, async_handler_1.asyncHandler)(analytics
 router.get('/business-hub', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.businessHub));
 router.get('/leakage', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.leakage));
 router.get('/data-quality', sys, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dataQuality));
+router.get('/retention', grw, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.retention));
 router.get('/ai-insights', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiInsights));
 router.post('/ai-insights/generate', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.generateInsights));
 router.get('/finance-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.financeSeries));
