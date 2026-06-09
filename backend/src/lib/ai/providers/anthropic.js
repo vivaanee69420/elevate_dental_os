@@ -5,11 +5,14 @@
 import Anthropic from "@anthropic-ai/sdk";
 
 export function createAnthropicProvider({ model, apiKey = process.env.ANTHROPIC_API_KEY } = {}) {
-  const client = new Anthropic({ apiKey });
   return {
     name: 'anthropic',
     model,
     async chat({ system, messages, tools, maxTokens = 1024, schema } = {}) {
+      if (!apiKey) {
+        throw new Error('No ANTHROPIC_API_KEY');
+      }
+      const client = new Anthropic({ apiKey });
       const req = { model, max_tokens: maxTokens, messages };
       if (system) req.system = system;
       if (tools) req.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }));
