@@ -11,9 +11,10 @@
 import { useState } from 'react';
 import { PageHeader, EmptyState, SkeletonText } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
-import { Panel, PanelHead, NoteFoot, Pill } from './os-ui';
+import { Panel, PanelHead, NoteFoot, Pill, th, td } from './os-ui';
 import { useAiFindings, useAiAsk } from '../ai-ask-hooks';
 import type { AiFinding } from '../ai-ask-api';
+import { formatPence } from '@/lib/format';
 
 export default function AiAnalystScreen() {
   const { data, isLoading, isError, error } = useAiFindings();
@@ -31,6 +32,7 @@ export default function AiAnalystScreen() {
   };
 
   const res = ask.data;
+  const breakdown = data?.practiceBreakdown;
 
   return (
     <div className="flex flex-col gap-4">
@@ -68,6 +70,51 @@ export default function AiAnalystScreen() {
           </div>
         )}
       </Panel>
+
+      {breakdown && breakdown.length > 0 && (
+        <Panel>
+          <PanelHead
+            title="Practice Breakdown"
+            sub="Finances and performance metrics broken down by individual practice in scope."
+          />
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse" style={{ minWidth: 600 }}>
+              <thead>
+                <tr className="border-b border-border">
+                  <th className={`${th} text-left`}>Practice</th>
+                  <th className={`${th} text-right`}>Cash Collected</th>
+                  <th className={`${th} text-right`}>Clinician Production</th>
+                  <th className={`${th} text-right`}>P&L Revenue</th>
+                  <th className={`${th} text-right`}>P&L Net Position</th>
+                  <th className={`${th} text-right`}>Net Margin</th>
+                </tr>
+              </thead>
+              <tbody>
+                {breakdown.map((p) => (
+                  <tr key={p.name} className="border-b border-border last:border-0 hover:bg-brand/[0.01] transition-colors">
+                    <td className={`${td} font-medium`}>{p.name}</td>
+                    <td className={`${td} text-right tabular-nums font-semibold text-emerald-600 dark:text-emerald-400`}>
+                      {formatPence(p.cashPence)}
+                    </td>
+                    <td className={`${td} text-right tabular-nums`}>
+                      {formatPence(p.productionPence)}
+                    </td>
+                    <td className={`${td} text-right tabular-nums`}>
+                      {p.revPence !== null ? formatPence(p.revPence) : <span className="text-ink-soft">—</span>}
+                    </td>
+                    <td className={`${td} text-right tabular-nums ${p.netPence !== null ? (p.netPence < 0 ? 'text-danger' : 'text-ink') : ''}`}>
+                      {p.netPence !== null ? formatPence(p.netPence) : <span className="text-ink-soft">—</span>}
+                    </td>
+                    <td className={`${td} text-right tabular-nums`}>
+                      {p.marginPct !== null ? `${p.marginPct.toFixed(1)}%` : <span className="text-ink-soft">—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      )}
 
       <Panel>
         <PanelHead title="Prioritised Findings" sub="Computed from the current scope/period data. Ranked by impact — start at the top." right={<Pill tone="info">{visible.length} of {findings.length}</Pill>} />

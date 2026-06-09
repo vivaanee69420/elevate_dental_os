@@ -14,6 +14,15 @@ export interface AiFinding {
   v: string;
 }
 
+export interface PracticeBreakdownItem {
+  name: string;
+  cashPence: number;
+  productionPence: number;
+  revPence: number | null;
+  netPence: number | null;
+  marginPct: number | null;
+}
+
 export interface AiAskResult {
   scope: string;
   period: 'month' | 'day';
@@ -24,6 +33,7 @@ export interface AiAskResult {
   basis: 'rollups' | 'claude';
   model: string | null;
   note?: string;
+  practiceBreakdown?: PracticeBreakdownItem[];
 }
 
 export function postAiAsk(scope: string, win: ResolvedWindow, question?: string): Promise<AiAskResult> {
