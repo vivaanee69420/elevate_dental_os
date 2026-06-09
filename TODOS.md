@@ -1,28 +1,11 @@
 # TODOS
 
-## Meta Ads — fill in live credentials (code complete)
+## Meta Ads — DONE (2026-06-09)
 
-**What:** Provide real Meta app credentials so the Meta Ads integration can
-actually connect and sync. The full integration is BUILT and tested
+Integration complete and credentials wired. Full OAuth+spend sync live
 (`backend/src/lib/integrations/meta-ads-provider.js` + `meta-ads-sync.js`,
-nightly cron, `ad_metrics` write path, frontend tile auto-renders). Only the
-secrets are missing.
-
-**Scope when picked up:**
-- Create the Meta app at developers.facebook.com; add the Marketing API.
-- Set `META_APP_ID` / `META_APP_SECRET` in `backend/.env` (placeholders
-  `REPLACE_ME_*` currently) AND on the Railway backend + worker services.
-- Add redirect URI `${BACKEND_PUBLIC_URL}/oauth/meta_ads/callback` under
-  Facebook Login → Settings → Valid OAuth Redirect URIs.
-- Submit for **Meta App Review** to get `ads_read` in production (Meta gates
-  live-account data behind review; dev-mode works only for app admins/testers).
-
-**Why blocked:** no Meta app/credentials yet, and App Review is a Meta-side
-approval we can't shortcut. Until set, the Connect button 500s at authorize.
-
-**Context:** Mirrors the Google Ads provider. Token model differs — Meta has no
-refresh_token (long-lived `fb_exchange_token`), spend is a decimal-string. See
-memory `meta-ads-integration`.
+nightly cron, `ad_metrics` write path, frontend tile auto-renders). See memory
+`meta-ads-integration`.
 
 ## Frontend `src/` migration (deferred)
 
@@ -143,3 +126,34 @@ P3 (maintainability): `chair_utilisation` SLOTS list duplicated in 4 places
 
 P3 (design): Heatmap percentage labels are white on amber `#F59E0B` (~2:1) — fails
 WCAG AA. Use dark ink on light buckets or darken the amber.
+
+## Backend wiring — accurate status (audited 2026-06-09)
+
+The old "~28 screens mock" count was stale. Full per-screen audit found most
+listed screens already call live `api()` hooks. Real state:
+
+**Wired this session (branch `feat/backend-wiring`):**
+- Wealth NetWorthScreen -> `GET /api/wealth/net`
+- Wealth FirePlanScreen -> `GET /api/wealth/fire`
+- Growth ReviewsScreen  -> `GET /api/reviews` (client-side rollups)
+- Growth LoyaltyScreen  -> `GET /api/growth/loyalty` (active/total counts only)
+
+**Still mock — BLOCKED on backend (route is a STUB or absent, not a frontend
+job).** Wiring these now yields empty screens; each needs a real data source
+first:
+- Wealth Pensions / Property — `/api/wealth/pension|property` return `{ note: 'Phase 7' }`
+- Growth Benchmark — `/api/growth/benchmark` returns hardcoded placeholders
+- Training Mentorship / One-to-One — return `{ programmes: [] }` / `{ sessions: [] }`
+- Operations UDA — no `/uda` route exists
+- CRM Templates / Pages / Settings / Sequences — no endpoints
+- Intelligence Tax / Alerts — no endpoints (Alerts is React-state-only by design)
+- Overview Mobile — intentional static marketing page (not a wiring target)
+
+**Partial (cleanup):** Growth MarketingScreen — `useAdSpend` is live but it still
+renders `SOURCE_SUMMARY`/`TREATMENT_SUMMARY` mock alongside. (Owned by active
+marketing session — do not touch concurrently.)
+
+**Caveats on the freshly-wired data:** wealth net/fire read thin
+`business_health.baseline` jsonb (assets/liabilities/savings/targets) — may show
+£0 until populated; loyalty endpoint returns only `{active,total}` (no tier/MRR/
+reward breakdown — richer cards stay static until a `membership_plans` join lands).
