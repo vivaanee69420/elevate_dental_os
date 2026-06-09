@@ -9,6 +9,7 @@ import {
   getMarketingRoi,
   type DateRange,
 } from './api';
+import { getReviews, getLoyaltySummary } from './reviews-loyalty-api';
 
 export function usePracticePerformance(practiceId: string | null = null, range?: DateRange | null) {
   return useQuery({
@@ -65,5 +66,21 @@ export function useMarketingRoi(range?: DateRange | null) {
     queryKey: ['growth', 'marketing-roi', range?.from ?? null, range?.to ?? null],
     queryFn: () => getMarketingRoi(range),
     placeholderData: keepPreviousData,
+  });
+}
+
+/** Aggregated reviews feed (GET /api/reviews) — newest first, capped at 100. */
+export function useReviews() {
+  return useQuery({
+    queryKey: ['growth', 'reviews'],
+    queryFn: () => getReviews(),
+  });
+}
+
+/** Membership counts for the org (GET /api/growth/loyalty). */
+export function useLoyaltySummary() {
+  return useQuery({
+    queryKey: ['growth', 'loyalty'],
+    queryFn: () => getLoyaltySummary(),
   });
 }

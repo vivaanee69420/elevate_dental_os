@@ -1,28 +1,28 @@
 'use client';
 // Loyalty & Membership — pixel-faithful port of
-// preview/elevate-dental-os-v2.html (PAGES.loyalty). Recurring membership
-// plans, a 4-up KPI strip, membership-tier cards, an automated-rewards
-// list, and a top-campaign panel. Fed by the growth mock-data layer; swap
-// to a real membership-billing endpoint when one exists server-side.
+// preview/elevate-dental-os-v2.html (PAGES.loyalty). The KPI strip's member
+// counts are now live (GET /api/growth/loyalty -> { active, total }). The
+// membership-tier template cards, automated-rewards list and top-campaign
+// panel stay static reference UI: the loyalty endpoint carries no per-plan
+// pricing, MRR or reward breakdown, so those are not real data yet.
 // Prototype emoji removed per project rule 7 (no emojis in UI).
 //
 // Data flow:
-//   LOYALTY_PROGRAMS ──┬─► totalMembers, monthlyRevenue ──► KPI strip
-//                       └─► one tier card per programme
-//   LOYALTY_REWARDS ───► active-rewards list
+//   useLoyaltySummary() ──► active / total member counts ──► KPI strip
+//   LOYALTY_PROGRAMS    ──► one tier-template card per programme (static)
+//   LOYALTY_REWARDS     ──► active-rewards list (static)
 
-import { useMemo } from 'react';
 import { Card, KpiTile } from '@/components/ui';
 import { formatPoundsCompact } from '@/features/_mock';
+import { useLoyaltySummary } from '../hooks';
 import { LOYALTY_PROGRAMS, LOYALTY_REWARDS } from '../data';
 
 /** Loyalty & Membership screen. */
 export default function LoyaltyScreen() {
-  const { totalMembers, monthlyRevenue } = useMemo(() => {
-    const m = LOYALTY_PROGRAMS.reduce((s, p) => s + p.members, 0);
-    const r = LOYALTY_PROGRAMS.reduce((s, p) => s + p.members * p.price_month, 0);
-    return { totalMembers: m, monthlyRevenue: r };
-  }, []);
+  const { data, isLoading } = useLoyaltySummary();
+  const active = data?.active ?? 0;
+  const total = data?.total ?? 0;
+  const lapsed = Math.max(0, total - active);
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -40,15 +40,15 @@ export default function LoyaltyScreen() {
       <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <KpiTile
           label="Active members"
-          value={totalMembers.toLocaleString('en-GB')}
-          delta="+86 this month"
+          value={isLoading ? '…' : active.toLocaleString('en-GB')}
+          delta={total ? `${total.toLocaleString('en-GB')} total memberships` : undefined}
           deltaTone="up"
         />
         <KpiTile
-          label="Monthly recurring revenue"
-          value={formatPoundsCompact(monthlyRevenue)}
-          delta={`£${((monthlyRevenue * 12) / 1000).toFixed(0)}k ARR`}
-          deltaTone="up"
+          label="Lapsed / paused"
+          value={isLoading ? '…' : lapsed.toLocaleString('en-GB')}
+          delta={total ? `${Math.round((active / total) * 100)}% active` : undefined}
+          deltaTone={lapsed > 0 ? 'down' : 'up'}
         />
         <KpiTile
           label="Avg LTV (member)"
