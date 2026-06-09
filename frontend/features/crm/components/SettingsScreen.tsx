@@ -4,18 +4,13 @@
 // treatments, lead sources, payment plans, templates/sequences shortcuts,
 // GDPR defaults, integrations and team-and-roles.
 //
-// Static configuration view — no API. Counts derive from the CRM data module.
+// Data flow: useCrmSettings() -> live per-org config + aggregator counts from
+// /api/crm/settings. Treatment values are integer PENCE (display /100).
 
-import {
-  TREATMENTS,
-  TREATMENT_VALUES,
-  SOURCES,
-  PAYMENT_PLANS,
-  TEMPLATES,
-  SEQUENCES,
-} from '../data';
+import { GDPR_BASIS } from '../data';
+import { useCrmSettings } from '../useCrmSettings';
 
-// Connected-channels list — verbatim from the prototype.
+// Connected-channels list — display-only stub (not part of crm_settings).
 const INTEGRATIONS = [
   { n: 'Twilio SMS', connected: true },
   { n: 'Postmark Email', connected: true },
@@ -25,10 +20,21 @@ const INTEGRATIONS = [
   { n: 'Calendly', connected: false },
 ];
 
-const activeSequences = SEQUENCES.filter((s) => s.isActive).length;
-
 /** CRM Settings screen. */
 export default function SettingsScreen() {
+  const { data, isLoading } = useCrmSettings();
+
+  if (isLoading || !data) {
+    return (
+      <div className="mx-auto" style={{ maxWidth: 1280 }}>
+        <p className="text-ink-muted" style={{ fontSize: 13 }}>Loading settings…</p>
+      </div>
+    );
+  }
+
+  const { settings, counts } = data;
+  const basis = GDPR_BASIS[settings.gdpr_default_basis] || GDPR_BASIS.legitimate_interest;
+
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
       {/* Header */}
@@ -50,17 +56,14 @@ export default function SettingsScreen() {
       >
         {/* Treatments */}
         <SettingsCard
-          title={`Treatments (${TREATMENTS.length})`}
+          title={`Treatments (${counts.treatment_count})`}
           blurb="Treatment types offered. Each can have a default value and payment plan."
         >
-          {TREATMENTS.map((t) => (
-            <Row key={t}>
-              <span>{t}</span>
-              <span
-                className="text-ink-muted"
-                style={{ fontWeight: 600 }}
-              >
-                £{(TREATMENT_VALUES[t] || 0).toLocaleString('en-GB')}
+          {settings.treatments.map((t) => (
+            <Row key={t.name}>
+              <span>{t.name}</span>
+              <span className="text-ink-muted" style={{ fontWeight: 600 }}>
+                £{(t.default_value_pence / 100).toLocaleString('en-GB')}
               </span>
             </Row>
           ))}
@@ -68,10 +71,10 @@ export default function SettingsScreen() {
 
         {/* Lead sources */}
         <SettingsCard
-          title={`Lead sources (${SOURCES.length})`}
+          title={`Lead sources (${counts.source_count})`}
           blurb="Where leads come from. Used for source ROI reporting."
         >
-          {SOURCES.map((s) => (
+          {settings.sources.map((s) => (
             <Row key={s}>
               <span>{s}</span>
             </Row>
@@ -79,11 +82,8 @@ export default function SettingsScreen() {
         </SettingsCard>
 
         {/* Payment plans */}
-        <SettingsCard
-          title="Payment plans"
-          blurb="Patient finance options."
-        >
-          {PAYMENT_PLANS.map((p) => (
+        <SettingsCard title="Payment plans" blurb="Patient finance options.">
+          {settings.payment_plans.map((p) => (
             <Row key={p}>
               <span>{p}</span>
             </Row>
@@ -92,7 +92,7 @@ export default function SettingsScreen() {
 
         {/* Templates shortcut */}
         <SettingsCard
-          title={`Message templates (${TEMPLATES.length})`}
+          title={`Message templates (${counts.template_count})`}
           blurb="Reusable SMS and email templates."
         >
           <Pill text="Open templates in the Templates screen" />
@@ -100,8 +100,8 @@ export default function SettingsScreen() {
 
         {/* Sequences shortcut */}
         <SettingsCard
-          title={`Nurturing sequences (${SEQUENCES.length})`}
-          blurb={`${activeSequences} active · automated drip campaigns.`}
+          title="Nurturing sequences"
+          blurb={`${counts.active_sequence_count} active · automated drip campaigns.`}
         >
           <Pill text="Open sequences in the Nurturing screen" />
         </SettingsCard>
@@ -113,14 +113,15 @@ export default function SettingsScreen() {
         >
           <div style={{ fontSize: 12, lineHeight: 1.6 }}>
             <div>
-              <strong>Default basis:</strong> Legitimate interest
+              <strong>Default basis:</strong> {basis.label}
             </div>
             <div>
-              <strong>Consent timeout:</strong> 12 months
+              <strong>Marketing consent default:</strong>{' '}
+              {settings.marketing_default_consent ? 'Opt-in' : 'Opt-out'}
             </div>
             <div>
-              <strong>Data retention:</strong> 7 years (clinical), 2 years
-              (marketing)
+              <strong>Quiet hours:</strong> {settings.quiet_hours_start}–{settings.quiet_hours_end}{' '}
+              ({settings.quiet_hours_tz})
             </div>
             <div>
               <strong>Right-to-be-forgotten:</strong> Auto-anonymise on request
@@ -129,10 +130,7 @@ export default function SettingsScreen() {
         </SettingsCard>
 
         {/* Integrations */}
-        <SettingsCard
-          title="Integrations"
-          blurb="Connected channels and providers."
-        >
+        <SettingsCard title="Integrations" blurb="Connected channels and providers.">
           {INTEGRATIONS.map((i) => (
             <Row key={i.n}>
               <span>{i.n}</span>
@@ -178,10 +176,7 @@ function SettingsCard({
       >
         {title}
       </h3>
-      <p
-        className="text-ink-muted"
-        style={{ fontSize: 12, marginBottom: 10 }}
-      >
+      <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 10 }}>
         {blurb}
       </p>
       {children}
