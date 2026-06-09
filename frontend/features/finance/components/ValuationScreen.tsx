@@ -47,6 +47,8 @@ import {
 } from '../mock';
 import { useValuationCompute, useValuationExitPlan } from '../valuation-hooks';
 import type { ValuationLever } from '../valuation-api';
+import { useAcquisition } from '../acquisition-hooks';
+import { ACQUISITION_DEFAULTS, type AcquisitionInput } from '../acquisition-api';
 
 const BRAND = 'var(--brand)';
 const SUCCESS = 'var(--success)';
@@ -156,7 +158,7 @@ export default function ValuationScreen() {
     }),
     [baseData],
   );
-  const [tab, setTab] = useState<'current' | 'planner'>('current');
+  const [tab, setTab] = useState<'current' | 'planner' | 'mna'>('current');
   const [state, setState] = useState<ValuationState>(() => defaultValuationState());
 
   // Patch helper for the valuation input state.
@@ -290,7 +292,7 @@ export default function ValuationScreen() {
         className="flex gap-1 mb-4"
         style={{ borderBottom: '2px solid var(--border)' }}
       >
-        {(['current', 'planner'] as const).map((t) => {
+        {(['current', 'planner', 'mna'] as const).map((t) => {
           const active = tab === t;
           return (
             <button
@@ -308,7 +310,7 @@ export default function ValuationScreen() {
                 marginBottom: -2,
               }}
             >
-              {t === 'current' ? 'Current Valuation' : 'Sale Planner'}
+              {t === 'current' ? 'Current Valuation' : t === 'planner' ? 'Sale Planner' : 'M&A Modeller'}
             </button>
           );
         })}
@@ -319,7 +321,9 @@ export default function ValuationScreen() {
         >
           {tab === 'planner'
             ? 'Model your exit · adjust EBITDA and see what hits the target'
-            : 'Live snapshot of where you stand today'}
+            : tab === 'mna'
+              ? 'Buy-side · appraise a practice you’re considering acquiring'
+              : 'Live snapshot of where you stand today'}
         </div>
       </div>
 
@@ -339,8 +343,10 @@ export default function ValuationScreen() {
           setDsoTier={setDsoTier}
           reset={reset}
         />
-      ) : (
+      ) : tab === 'planner' ? (
         <PlannerTab base={base} state={state} result={result} />
+      ) : (
+        <MnaTab />
       )}
     </div>
   );
@@ -1780,6 +1786,255 @@ function PlannerTab({
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// M&A ACQUISITION MODELLER (buy-side) — DentaCFO gap Phase 3
+// ---------------------------------------------------------------------------
+// Appraise a practice you're considering BUYING: enterprise value, NPV, IRR,
+// payback, debt capacity and equity required, scored against UK dental M&A
+// benchmarks with red flags. The deal math is server-authoritative
+// (lib/formulas.js → calculateAcquisition, FORMULAS.md §M&A); this tab only
+// holds inputs and renders the result. Debounced compute, no persistence.
+function MnaTab() {
+  const [m, setM] = useState<AcquisitionInput>(() => ({ ...ACQUISITION_DEFAULTS }));
+  const patch = (x: Partial<AcquisitionInput>) => setM((s) => ({ ...s, ...x }));
+  const { data } = useAcquisition(m);
+  const r = data ?? {
+    ebitda: 0,
+    ev: 0,
+    debtCapacity: 0,
+    equityRequired: 0,
+    terminal: 0,
+    npv: 0,
+    irrPct: null as number | null,
+    paybackYears: null as number | null,
+    premium: null as number | null,
+    premiumPct: null as number | null,
+    horizonYears: m.horizonYears,
+    leverageMultiple: m.leverageMultiple,
+    flags: [] as { key: string; severity: 'high' | 'medium'; message: string }[],
+  };
+
+  const npvGood = r.npv >= 0;
+  const irrGood = r.irrPct != null && r.irrPct >= m.discountPct;
+  const pbGood = r.paybackYears != null && r.paybackYears <= 6;
+
+  const NumField = ({
+    label,
+    field,
+    step,
+    prefix,
+    suffix,
+    nullable,
+  }: {
+    label: string;
+    field: keyof AcquisitionInput;
+    step: number;
+    prefix?: string;
+    suffix?: string;
+    nullable?: boolean;
+  }) => {
+    const raw = m[field];
+    return (
+      <div>
+        <label className="text-ink-muted" style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>
+          {label}
+        </label>
+        <div className="flex items-center" style={{ gap: 6 }}>
+          {prefix && <span className="text-ink-muted" style={{ fontSize: 13 }}>{prefix}</span>}
+          <input
+            type="number"
+            step={step}
+            value={raw == null ? '' : (raw as number)}
+            placeholder={nullable ? 'optional' : undefined}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (nullable && v === '') return patch({ [field]: null } as Partial<AcquisitionInput>);
+              const n = parseFloat(v);
+              if (!isNaN(n)) patch({ [field]: n } as Partial<AcquisitionInput>);
+            }}
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          />
+          {suffix && <span className="text-ink-muted" style={{ fontSize: 13 }}>{suffix}</span>}
+        </div>
+      </div>
+    );
+  };
+
+  const Kpi = ({
+    label,
+    value,
+    sub,
+    tone,
+  }: {
+    label: string;
+    value: string;
+    sub: string;
+    tone?: 'good' | 'bad' | null;
+  }) => (
+    <div
+      style={{
+        padding: 16,
+        borderRadius: 12,
+        border: '1px solid var(--border)',
+        borderLeft: `4px solid ${tone === 'good' ? SUCCESS : tone === 'bad' ? DANGER : BRAND}`,
+        background: '#fff',
+      }}
+    >
+      <div className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+        {label}
+      </div>
+      <div className="font-semibold" style={{ fontSize: 22, margin: '4px 0 2px' }}>
+        {value}
+      </div>
+      <div className="text-ink-muted" style={{ fontSize: 11 }}>{sub}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div
+        className="card"
+        style={{ padding: 20, borderRadius: 14, border: '1px solid var(--border)', marginBottom: 16 }}
+      >
+        <h3 className="font-semibold" style={{ fontSize: 16, marginBottom: 4 }}>
+          M&amp;A / Acquisition Modeller
+        </h3>
+        <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 16 }}>
+          Model a practice you&rsquo;re considering buying &mdash; enterprise value, return, payback
+          and debt capacity against UK benchmarks. Sits alongside your own valuation so buy-side and
+          sell-side share one view.
+        </p>
+
+        <div
+          className="grid"
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 16, marginBottom: 8 }}
+        >
+          <NumField label="Target annual revenue" field="targetRevenue" step={50000} prefix="£" />
+          <NumField label="EBITDA margin" field="marginPct" step={1} suffix="%" />
+          <NumField label="Revenue growth / yr" field="growthPct" step={1} suffix="%" />
+          <NumField label="Investment horizon" field="horizonYears" step={1} suffix="yrs" />
+          <NumField label="Discount rate (hurdle)" field="discountPct" step={1} suffix="%" />
+          <NumField label="Asking price" field="askingPrice" step={50000} prefix="£" nullable />
+        </div>
+
+        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 24, marginTop: 8 }}>
+          <SliderRow
+            label="EV / EBITDA multiple"
+            value={`${m.multiple.toFixed(1)}x`}
+            min={5}
+            max={12}
+            step={0.5}
+            onChange={(n) => patch({ multiple: n })}
+          />
+          <SliderRow
+            label="Debt leverage (× EBITDA)"
+            value={`${m.leverageMultiple.toFixed(1)}x`}
+            min={0}
+            max={5}
+            step={0.5}
+            onChange={(n) => patch({ leverageMultiple: n })}
+          />
+        </div>
+      </div>
+
+      <div
+        className="grid"
+        style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}
+      >
+        <Kpi label="Enterprise value" value={formatCurrency(r.ev)} sub={`${formatCurrency(r.ebitda)} EBITDA`} />
+        <Kpi
+          label="NPV"
+          value={formatCurrency(r.npv)}
+          sub={`${npvGood ? 'Value created' : 'Overpaying'} over ${r.horizonYears}y`}
+          tone={npvGood ? 'good' : 'bad'}
+        />
+        <Kpi
+          label="IRR"
+          value={r.irrPct == null ? '—' : `${r.irrPct.toFixed(1)}%`}
+          sub={`Target ≥ ${m.discountPct}%`}
+          tone={r.irrPct == null ? 'bad' : irrGood ? 'good' : 'bad'}
+        />
+        <Kpi
+          label="Payback period"
+          value={r.paybackYears == null ? '10+ yrs' : `${r.paybackYears.toFixed(1)} yrs`}
+          sub="to recover enterprise value"
+          tone={pbGood ? 'good' : null}
+        />
+        <Kpi label="Debt capacity" value={formatCurrency(r.debtCapacity)} sub={`${r.leverageMultiple.toFixed(1)}x supportable debt`} />
+        <Kpi label="Equity required" value={formatCurrency(r.equityRequired)} sub="cash-in after debt" />
+      </div>
+
+      {m.askingPrice != null && r.premium != null && (
+        <div
+          style={{
+            padding: 14,
+            borderRadius: 12,
+            marginBottom: 16,
+            border: '1px solid var(--border)',
+            background: r.premium > 0 ? '#FEF2F2' : '#F0FDF4',
+          }}
+        >
+          <span className="font-semibold" style={{ fontSize: 13 }}>
+            Asking price vs modelled EV:{' '}
+            <span style={{ color: r.premium > 0 ? DANGER : SUCCESS }}>
+              {r.premium > 0 ? '+' : ''}
+              {formatCurrency(r.premium)} ({r.premiumPct != null ? r.premiumPct.toFixed(1) : '0'}%)
+            </span>
+          </span>
+          <span className="text-ink-muted" style={{ fontSize: 12, marginLeft: 8 }}>
+            {r.premium > 0 ? 'paying above intrinsic value' : 'at or below intrinsic value'}
+          </span>
+        </div>
+      )}
+
+      {r.flags.length > 0 && (
+        <div
+          className="card"
+          style={{ padding: 16, borderRadius: 12, border: '1px solid var(--border)', marginBottom: 16 }}
+        >
+          <h4 className="font-semibold" style={{ fontSize: 13, marginBottom: 10 }}>
+            Deal red flags ({r.flags.length})
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {r.flags.map((f) => (
+              <div key={f.key} className="flex items-start" style={{ gap: 8 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: '2px 7px',
+                    borderRadius: 6,
+                    color: '#fff',
+                    background: f.severity === 'high' ? DANGER : '#D97706',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {f.severity === 'high' ? 'HIGH' : 'WATCH'}
+                </span>
+                <span style={{ fontSize: 13 }}>{f.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="text-ink-muted" style={{ fontSize: 11, lineHeight: 1.6 }}>
+        UK dental M&amp;A benchmarks: established groups 7&ndash;10x EBITDA &middot; PE-backed
+        8&ndash;12x &middot; leverage 3&ndash;4x &middot; target IRR 20&ndash;25% &middot; payback
+        4&ndash;6 yrs. Cashflows model EBITDA grown at the revenue-growth rate; the terminal exit
+        re-applies the entry multiple. Buy-side appraisal only &mdash; no data is saved.
+      </p>
     </div>
   );
 }

@@ -487,6 +487,12 @@ export const analyticsService = {
     computeValuationExitPlan(body) {
         return (0, formulas_1.planExitTrajectory)(body);
     },
+    // M&A Acquisition Modeller (buy-side, DentaCFO Phase 3) — EV / NPV / IRR /
+    // payback / debt capacity / red flags for a practice you're considering
+    // buying. Pure compute (Arch #3); no persistence.
+    computeAcquisition(input) {
+        return (0, formulas_1.calculateAcquisition)(input);
+    },
     // Pull monthly_financials actuals and resolve Xero-overrides-manual
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).

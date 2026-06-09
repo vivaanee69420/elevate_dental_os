@@ -174,6 +174,11 @@ export const analyticsController = {
         const body = analytics_model_1.valuationExitPlanSchema.parse(req.body);
         res.json(analytics_service_1.analyticsService.computeValuationExitPlan(body));
     },
+    // M&A Acquisition Modeller (buy-side, DentaCFO Phase 3) — pure compute.
+    acquisition(req, res) {
+        const body = analytics_model_1.acquisitionSchema.parse(req.body);
+        res.json(analytics_service_1.analyticsService.computeAcquisition(body));
+    },
 
     // ── Phase 3 / T12 — persisted config ────────────────────────────────────
     // Saved valuation drivers. GET = valuation.view; PUT = valuation.edit (route
