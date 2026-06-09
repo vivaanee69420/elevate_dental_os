@@ -25,6 +25,7 @@ export const NAV: NavSection[] = [
     { id: 'task-manager', label: 'Task Manager' },
     { id: 'ai-insights', label: 'AI Analyst', isNew: true },
     { id: 'board-report', label: 'Board Report', isNew: true },
+    { id: 'exit-plan', label: 'Exit Plan', isNew: true },
     { id: 'day', label: 'Day · Cash Collected', isNew: true },
     { id: 'p4g-ai', label: 'Mastermind AI' },
     { id: 'tax', label: 'Tax (MTD)' },
@@ -77,7 +78,6 @@ export const NAV: NavSection[] = [
     { id: 'wealth-net', label: 'Net Worth' },
     { id: 'wealth-prop', label: 'Property' },
     { id: 'wealth-pen', label: 'Pensions' },
-    { id: 'wealth-fire', label: 'FIRE Plan' },
   ]},
   { label: 'Training', items: [
     { id: 'training-library', label: 'Module Library' },

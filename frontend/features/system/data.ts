@@ -105,7 +105,7 @@ export const PAGE_META: PageMeta[] = [
   { id: 'wealth-net', label: 'Net Worth', section: 'Wealth', importance: 'major', ownerOnly: true },
   { id: 'wealth-prop', label: 'Property Portfolio', section: 'Wealth', importance: 'major', ownerOnly: true },
   { id: 'wealth-pen', label: 'Pensions', section: 'Wealth', importance: 'major', ownerOnly: true },
-  { id: 'wealth-fire', label: 'FIRE Plan', section: 'Wealth', importance: 'major', ownerOnly: true },
+  { id: 'exit-plan', label: 'Exit Plan', section: 'Overview', importance: 'major', ownerOnly: true },
   // Training
   { id: 'training-library', label: 'Module Library', section: 'Training', importance: 'major' },
   { id: 'training-my', label: 'My Modules', section: 'Training', importance: 'major' },
