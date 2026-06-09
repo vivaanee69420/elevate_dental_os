@@ -14,6 +14,14 @@ export const p4gAiService = {
         const health = await p4g_ai_repository_1.p4gAiRepository.health(orgId);
         const snapshots = await p4g_ai_repository_1.p4gAiRepository.latestSnapshot(orgId);
         const liveData = await analyticsService.getLiveContextData(orgId);
+        const { isContextEmpty, missingSources } = await import("./ai-context.service.js");
+        if (isContextEmpty(liveData)) {
+            const missing = missingSources(liveData);
+            return {
+                reply: `I don't have your live numbers yet. Connect your data to unlock AI insights — missing: ${missing.join(', ')}.`,
+                missing, usage: { inputTokens: 0, outputTokens: 0 },
+            };
+        }
         let result;
         try {
             result = await (0, claude_1.askPlan4GrowthAI)(body.message, {

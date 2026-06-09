@@ -37,6 +37,16 @@ export function isContextEmpty(snapshot) {
   return !c.financials && !c.baseline && !c.appointments;
 }
 
+// Human-facing list of the sources an empty org is missing, for the guard reply.
+export function missingSources(snapshot) {
+  const c = snapshot?.meta?.data_coverage || {};
+  const out = [];
+  if (!c.financials) out.push('financials');
+  if (!c.baseline) out.push('baseline');
+  if (!c.appointments) out.push('appointments');
+  return out;
+}
+
 // Build the aggregated, sanitized context bundle for one org+period. Heavy
 // (runs ~10 rollups); callers reach it through getSnapshot, which caches.
 export async function buildSnapshot(orgId, periodKey, now = new Date()) {
