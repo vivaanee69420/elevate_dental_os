@@ -6,10 +6,15 @@
 // - tenantClient(orgId, role): for per-request user-scoped queries
 // ============================================================================
 import * as supabase_js_1 from "@supabase/supabase-js";
+import jwt from "jsonwebtoken";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+// HS256 symmetric secret (Supabase → Settings → API → JWT Secret). Optional:
+// when set, JWTs are verified locally (no network round trip); when absent,
+// verifyToken falls back to the remote getUser call — behaviour unchanged.
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     throw new Error('Missing required Supabase env vars');
 }
@@ -43,8 +48,32 @@ export function tenantClient(accessToken) {
     });
 }
 
-// Helper to verify a JWT and extract claims
+// Helper to verify a JWT and extract claims.
+//
+// Fast path: when SUPABASE_JWT_SECRET is configured, verify the HS256
+// signature LOCALLY — no network round trip per request. The returned shape is
+// compatible with getUser's data.user; only `.id` (= JWT `sub`) is consumed
+// downstream (org/role/status are loaded fresh from the DB, never trusted from
+// the token).
+//
+// Safety: on ANY local-verify failure (secret absent or wrong, asymmetric-key
+// project where alg !== HS256, bad signature, expired token) it falls back to
+// the proven remote getUser path — so behaviour is never worse than before. A
+// genuinely invalid/expired token still fails: local throws, remote rejects,
+// 401. A misconfigured secret degrades to no-speedup, not breakage.
 export async function verifyToken(token) {
+    if (SUPABASE_JWT_SECRET) {
+        try {
+            const payload = jwt.verify(token, SUPABASE_JWT_SECRET, {
+                algorithms: ['HS256'],
+            });
+            if (payload?.sub) {
+                return { id: payload.sub, email: payload.email };
+            }
+        } catch {
+            // fall through to remote verification
+        }
+    }
     const { data, error } = await serviceClient.auth.getUser(token);
     if (error || !data.user)
         throw new Error('Invalid token');

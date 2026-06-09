@@ -111,8 +111,19 @@ export async function authenticate(req, res, next) {
       access_token: token,
     };
 
-    // RLS-scoped client for per-request queries.
-    req.db = tenantClient(token);
+    // RLS-scoped client for per-request queries. Lazy: repos use serviceClient
+    // (manual org filters), so req.db is read by almost no handler — only build
+    // the tenantClient if something actually touches it, saving a client
+    // allocation on every request.
+    let _db;
+    Object.defineProperty(req, 'db', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (!_db) _db = tenantClient(token);
+        return _db;
+      },
+    });
 
     // Touch last_active_at (fire-and-forget).
     serviceClient
