@@ -27,6 +27,7 @@ import * as comms_routes_1 from "./routes/comms.routes.js";
 import * as payments_routes_1 from "./routes/payments.routes.js";
 import * as pay_runs_routes_1 from "./routes/pay-runs.routes.js";
 import * as workflows_routes_1 from "./routes/workflows.routes.js";
+import * as crm_templates_routes_1 from "./routes/crm-templates.routes.js";
 import * as files_routes_1 from "./routes/files.routes.js";
 import * as csv_import_routes_1 from "./routes/csv-import.routes.js";
 import * as billing_routes_1 from "./routes/billing.routes.js";
@@ -201,6 +202,7 @@ export function buildApp() {
     api.use('/debt', debt_routes_1.default);
     api.use('/pay-runs', pay_runs_routes_1.default);
     api.use('/workflows', workflows_routes_1.default);
+    api.use('/crm/templates', crm_templates_routes_1.default);
     api.use('/files', files_routes_1.default);
     api.use('/imports', csv_import_routes_1.default);
     api.use('/billing', billing_routes_1.default);
