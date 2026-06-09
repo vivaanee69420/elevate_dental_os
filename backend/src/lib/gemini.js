@@ -79,7 +79,7 @@ Return ONLY valid JSON array of 5 insights. No other text.`;
     };
     const res = await getProvider().chat({
         system: 'You are a UK dental business analyst.',
-        messages: [{ role: 'user', content: prompt }], maxTokens: 2048, schema,
+        messages: [{ role: 'user', content: prompt }], maxTokens: 3000, schema,
     });
     try { return JSON.parse(res.text).insights; }
     catch (err) { console.error('Failed to parse Plan4Growth AI insights:', res.text); return []; }
@@ -120,8 +120,14 @@ Give 2-4 findings ranked by importance. If the data can't answer the question, s
             } },
         },
     };
-    const res = await getProvider().chat({ system: 'You are a UK dental business analyst.', messages: [{ role: 'user', content: prompt }], maxTokens: 1200, schema });
-    const obj = JSON.parse(res.text);
+    const res = await getProvider().chat({ system: 'You are a UK dental business analyst.', messages: [{ role: 'user', content: prompt }], maxTokens: 2048, schema });
+    let obj;
+    try {
+        obj = JSON.parse(res.text);
+    } catch (parseErr) {
+        console.error('[askAnalyst] Failed to parse Gemini JSON response:', res.text?.slice(0, 300));
+        throw parseErr;
+    }
     const findings = Array.isArray(obj.findings)
         ? obj.findings.filter((x) => x && x.title).map((x) => ({
             sev: normSev(x.severity), t: String(x.title),
@@ -161,7 +167,7 @@ Give exactly 3 priorities ranked red→green by urgency. Lead with the biggest r
             } },
         },
     };
-    const res = await getProvider().chat({ system: 'You are a UK dental group CFO writing a board pack.', messages: [{ role: 'user', content: prompt }], maxTokens: 1200, schema });
+    const res = await getProvider().chat({ system: 'You are a UK dental group CFO writing a board pack.', messages: [{ role: 'user', content: prompt }], maxTokens: 2048, schema });
     const obj = JSON.parse(res.text);
     const summary = Array.isArray(obj.summary)
         ? obj.summary.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim())
