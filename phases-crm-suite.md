@@ -12,7 +12,7 @@ Branch: `feat/crm-cluster`. Resume after `/clear`: read this file + `BUILD-CRM-S
 | Phase | Module | Migration | New integration | Status | Commit |
 |---|---|---|---|---|---|
 | B1 | Templates | 000062 | none | ✅ done | 186239e |
-| B2 | Settings (config + aggregator) | 000063 | none | ✅ done | 7ec9b5c |
+| B2 | Settings (config + aggregator) | 000063 | none | ✅ done | 44871d3 |
 | B3 | Sequences (full live drip engine) | 000064 | Twilio inbound webhook (STOP) | ⬜ | — |
 
 > Suite migration numbers shifted +1: wealth_inputs claimed 000061 mid-flight, so B1=000062, B2=000063, B3=000064.
