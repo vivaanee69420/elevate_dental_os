@@ -29,7 +29,17 @@ export const p4gAiService = {
                 liveData,
             }, body.history);
         } catch (err) {
-            throw new errors_1.AppError('AI service unavailable', 500);
+            // Don't swallow the real cause — log it and surface a diagnosable
+            // error. A Gemini 429 (RESOURCE_EXHAUSTED / quota / rate limit) is a
+            // transient "busy", not a 500; keep the two distinct so Sentry and
+            // the operator can tell quota exhaustion from an actual code fault.
+            console.error('[p4g-ai] askPlan4GrowthAI failed:', err?.message || err);
+            if (err instanceof errors_1.AppError) throw err;
+            const msg = String(err?.message || err || '');
+            const quota = /\b429\b|RESOURCE_EXHAUSTED|quota|rate limit/i.test(msg);
+            throw quota
+                ? new errors_1.AppError('AI is busy (rate limit) — try again in a moment.', 429)
+                : new errors_1.AppError(`AI service unavailable: ${msg.slice(0, 300)}`, 500);
         }
         await recordUsage(orgId, { feature: 'chat', model: process.env.AI_MODEL || 'claude-sonnet-4-6', usage: result.usage, userId });
         return result;
