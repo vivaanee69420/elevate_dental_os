@@ -58,7 +58,10 @@ export function createGeminiProvider({ model = 'gemini-2.5-flash', apiKey = proc
 
       const resObj = await response.json();
       const candidate = resObj.candidates?.[0];
-      const text = candidate?.content?.parts?.[0]?.text || '';
+      let text = candidate?.content?.parts?.[0]?.text || '';
+      if (text.trim().startsWith('```')) {
+        text = text.trim().replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+      }
       const stopReason = candidate?.finishReason || 'STOP';
       const inputTokens = resObj.usageMetadata?.promptTokenCount ?? 0;
       const outputTokens = resObj.usageMetadata?.candidatesTokenCount ?? 0;
