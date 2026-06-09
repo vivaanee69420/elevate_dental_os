@@ -852,3 +852,163 @@ export function calculateAcquisition(input = {}) {
         flags,
     };
 }
+
+// ── Exit Plan — personal wealth / FIRE (DentaCFO gap Phase 4) ────────────────
+// The owner's PERSONAL exit, not the business sale (that is the Sale Planner,
+// `planExitTrajectory`). Two pure pence calculators:
+//   1. calculateSaleWaterfall — what the owner NETS in cash from selling their
+//      practice equity: debt cleared, equity split by ownership %, UK CGT with
+//      Business Asset Disposal Relief, plus freehold proceeds.
+//   2. calculateFirePlan — does net worth (incl. that sale cash) clear the FIRE
+//      number (the "4% rule": annual spend / withdrawal rate = pot needed), and
+//      the compounding path to get there.
+//
+// UK_TAX is the 2026/27 capital-gains position (England). BADR rate rose to 14%
+// (6 Apr 2025) then 18% (6 Apr 2026); the lifetime cap is £1m of qualifying
+// gains. Gains above the cap fall to the main higher CGT rate (24% on non-
+// residential since 30 Oct 2024). Rates/cap are inputs-with-defaults so the
+// accountant can re-point them in one place when the Budget moves.
+export const UK_TAX = {
+    badrRatePct: 18, // Business Asset Disposal Relief, 2026/27
+    badrLifetimeCapPence: 100_000_000, // £1,000,000 lifetime qualifying gains
+    cgtHigherRatePct: 24, // main higher CGT rate above the BADR cap
+};
+
+export const FIRE_DEFAULTS = {
+    withdrawalRatePct: 4, // the "4% rule" → 25× annual spend
+    growthRatePct: 7, // assumed net real growth on the invested pot
+    horizonYears: 10,
+    maxSolveYears: 50, // cap when solving years-to-FIRE so it always terminates
+};
+
+// What the owner personally banks from a practice sale. Pure; integer pence.
+//   enterpriseValuePence  business EV (e.g. the live valuation midpoint)
+//   businessDebtPence     company debt cleared from EV at completion
+//   ownerSharePct         this owner's equity share (0–100; co-owners take rest)
+//   acquisitionCostPence  owner's original base cost (for the chargeable gain)
+//   freeholdEquityPence   owner's freehold equity sold alongside, already net of
+//                         its own mortgage and any property-specific tax — added
+//                         straight to net cash (kept simple; flagged in UI)
+//   badrLifetimeUsedPence BADR lifetime allowance the owner has already consumed
+export function calculateSaleWaterfall(input = {}) {
+    const {
+        enterpriseValuePence = 0,
+        businessDebtPence = 0,
+        ownerSharePct = 100,
+        acquisitionCostPence = 0,
+        freeholdEquityPence = 0,
+        badrLifetimeUsedPence = 0,
+        badrRatePct = UK_TAX.badrRatePct,
+        cgtHigherRatePct = UK_TAX.cgtHigherRatePct,
+        badrLifetimeCapPence = UK_TAX.badrLifetimeCapPence,
+    } = input;
+
+    const share = Math.min(100, Math.max(0, ownerSharePct)) / 100;
+    const equityValuePence = Math.max(0, pence(enterpriseValuePence) - pence(businessDebtPence));
+    const ownerEquityProceedsPence = pence(equityValuePence * share);
+    const ownerGainPence = Math.max(0, ownerEquityProceedsPence - pence(acquisitionCostPence));
+
+    // BADR taxes qualifying gains up to the remaining lifetime cap at the BADR
+    // rate; the excess falls to the main higher CGT rate.
+    const badrCapRemainingPence = Math.max(0, pence(badrLifetimeCapPence) - pence(badrLifetimeUsedPence));
+    const badrGainPence = Math.min(ownerGainPence, badrCapRemainingPence);
+    const standardGainPence = Math.max(0, ownerGainPence - badrGainPence);
+    const cgtPence = pence(badrGainPence * (badrRatePct / 100) + standardGainPence * (cgtHigherRatePct / 100));
+    const effectiveCgtPct = ownerGainPence > 0 ? pct((cgtPence / ownerGainPence) * 100, 2) : 0;
+
+    const netBusinessProceedsPence = ownerEquityProceedsPence - cgtPence;
+    const totalNetProceedsPence = netBusinessProceedsPence + pence(freeholdEquityPence);
+
+    return {
+        equityValuePence,
+        ownerEquityProceedsPence,
+        ownerGainPence,
+        badrGainPence,
+        standardGainPence,
+        cgtPence,
+        effectiveCgtPct,
+        netBusinessProceedsPence,
+        freeholdEquityPence: pence(freeholdEquityPence),
+        totalNetProceedsPence,
+    };
+}
+
+// Personal FIRE projection. Pure; integer pence.
+//   liquidAssetsPence        marketable personal assets (pensions + ISA + cash +
+//                            investments) — NOT the primary residence
+//   liabilitiesPence         total personal liabilities
+//   businessNetProceedsPence net cash the business would realise on exit (from
+//                            calculateSaleWaterfall.totalNetProceedsPence)
+//   targetAnnualSpendPence   desired post-exit annual income
+//   withdrawalRatePct        safe withdrawal rate (4% → 25× pot)
+//   growthRatePct            assumed net growth on net worth
+//   annualSavingsPence       amount added to the pot each year
+//   horizonYears             planning window for the path + required-savings solve
+export function calculateFirePlan(input = {}) {
+    const {
+        liquidAssetsPence = 0,
+        liabilitiesPence = 0,
+        businessNetProceedsPence = 0,
+        targetAnnualSpendPence = 0,
+        withdrawalRatePct = FIRE_DEFAULTS.withdrawalRatePct,
+        growthRatePct = FIRE_DEFAULTS.growthRatePct,
+        annualSavingsPence = 0,
+        horizonYears = FIRE_DEFAULTS.horizonYears,
+    } = input;
+
+    const wr = Math.max(0.01, withdrawalRatePct) / 100; // guard /0
+    const g = growthRatePct / 100;
+    const H = Math.max(1, Math.round(horizonYears));
+    const savings = pence(annualSavingsPence);
+
+    const currentNetWorthPence = pence(liquidAssetsPence) + pence(businessNetProceedsPence) - pence(liabilitiesPence);
+    const fireNumberPence = pence(targetAnnualSpendPence / wr);
+    const gapPence = Math.max(0, fireNumberPence - currentNetWorthPence);
+    const progressPct = fireNumberPence > 0 ? pct((currentNetWorthPence / fireNumberPence) * 100, 1) : 0;
+    // What 4% of today's net worth would yield — the "are you there yet" income.
+    const sustainableAnnualIncomePence = pence(currentNetWorthPence * wr);
+
+    // Net worth at year y: pot compounds at g; each year's savings compound too
+    // (future value of an ordinary annuity). g==0 degrades to the linear sum.
+    const nwAt = (y) => {
+        const grown = currentNetWorthPence * Math.pow(1 + g, y);
+        const fvSavings = g === 0 ? savings * y : savings * ((Math.pow(1 + g, y) - 1) / g);
+        return pence(grown + fvSavings);
+    };
+
+    const years = [];
+    for (let y = 0; y <= H; y++) {
+        const nwPence = nwAt(y);
+        years.push({ year: y, nwPence, hitFire: nwPence >= fireNumberPence });
+    }
+
+    // Years until net worth first clears the FIRE number (capped so it always
+    // terminates); null if not reached within the cap.
+    let yearsToFire = null;
+    for (let y = 0; y <= FIRE_DEFAULTS.maxSolveYears; y++) {
+        if (nwAt(y) >= fireNumberPence) { yearsToFire = y; break; }
+    }
+
+    // Annual savings needed to hit the FIRE number by the horizon, given growth.
+    // Solve fireNumber = currentNW*(1+g)^H + s * annuityFactor for s, floored 0.
+    const annuityFactor = g === 0 ? H : (Math.pow(1 + g, H) - 1) / g;
+    const potFromGrowthPence = currentNetWorthPence * Math.pow(1 + g, H);
+    const requiredAnnualSavingsPence = annuityFactor > 0
+        ? Math.max(0, pence((fireNumberPence - potFromGrowthPence) / annuityFactor)) : 0;
+
+    return {
+        currentNetWorthPence,
+        fireNumberPence,
+        gapPence,
+        progressPct,
+        sustainableAnnualIncomePence,
+        targetAnnualSpendPence: pence(targetAnnualSpendPence),
+        withdrawalRatePct,
+        growthRatePct,
+        annualSavingsPence: savings,
+        horizonYears: H,
+        yearsToFire,
+        requiredAnnualSavingsPence,
+        years,
+    };
+}

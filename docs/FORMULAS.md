@@ -692,6 +692,35 @@ Buy-side deal appraisal (DentaCFO gap Phase 3): model a practice you're consider
 
 **Red flags** (`flags:[{key,severity,message}]`): negative NPV; IRR null or below the discount hurdle; payback null or >6 yrs; multiple >10×; leverage >4×; margin <12%; asking price >10% above EV. Benchmarks exported as `ACQUISITION_BENCHMARKS`. Tests: `backend/test/formulas-acquisition.test.mjs` (9 cases).
 
+## Exit Plan — personal wealth (DentaCFO gap Phase 4)
+
+The owner's **personal** exit (distinct from the business Sale Planner, `planExitTrajectory`). Two pure pence calculators.
+
+### `calculateSaleWaterfall(input)` — net cash from a practice sale
+
+What the owner personally banks after debt, ownership split and UK CGT. Inputs: `enterpriseValuePence`, `businessDebtPence`, `ownerSharePct` (0–100), `acquisitionCostPence` (base cost), `freeholdEquityPence`, `badrLifetimeUsedPence`, plus rate overrides (`badrRatePct`, `cgtHigherRatePct`, `badrLifetimeCapPence`).
+
+- **equity value** = `max(0, EV − businessDebt)` (company debt cleared at completion).
+- **owner equity proceeds** = `equityValue × ownerShare%`.
+- **chargeable gain** = `max(0, ownerEquityProceeds − acquisitionCost)`.
+- **CGT** — Business Asset Disposal Relief on qualifying gains up to the remaining lifetime cap (`£1m − badrLifetimeUsed`) at **18%** (BADR 2026/27), the excess at the **24%** main higher rate. `cgt = badrGain×18% + standardGain×24%`; `effectiveCgtPct = cgt/gain`.
+- **net business proceeds** = `ownerEquityProceeds − cgt`; **total net proceeds** = `+ freeholdEquity` (freehold treated as already net of its mortgage/property-tax — a documented simplification, flagged in UI).
+
+Tax constants exported as `UK_TAX` (`badrRatePct:18`, `badrLifetimeCapPence:£1m`, `cgtHigherRatePct:24`) — the single place to re-point when the Budget moves.
+
+### `calculateFirePlan(input)` — FIRE number, progress, path
+
+Does net worth (incl. business sale cash) clear the **FIRE number** (the "4% rule"). Inputs: `liquidAssetsPence` (pensions+ISA+cash+investments, ex-residence), `liabilitiesPence`, `businessNetProceedsPence` (from the waterfall), `targetAnnualSpendPence`, `withdrawalRatePct` (default 4), `growthRatePct` (default 7), `annualSavingsPence`, `horizonYears`.
+
+- **current net worth** = `liquidAssets + businessNetProceeds − liabilities`.
+- **FIRE number** = `targetAnnualSpend / (withdrawalRate%)` (4% → 25× spend); **gap** = `max(0, fireNumber − netWorth)`; **progress%** = `netWorth/fireNumber`.
+- **sustainable income** = `netWorth × withdrawalRate%` (what 4% of today's pot yields).
+- **path** `years[y]` = net worth at year `y` = `netWorth×(1+g)^y + savings × FV-annuity` (savings compound; `g=0` degrades to linear `savings×y`). `hitFire` flags the first crossing.
+- **years-to-FIRE** = first `y` (≤ 50) where net worth ≥ FIRE number, else `null`.
+- **required annual savings** = the savings that hit the FIRE number by the horizon: `s = (fireNumber − netWorth×(1+g)^H) / annuityFactor`, floored at 0.
+
+Defaults exported as `FIRE_DEFAULTS`. Tests: `backend/test/formulas-exit-plan.test.mjs` (14 cases).
+
 ## Audit trail
 
 Every calculation result that's saved to the database (e.g., pay run net amounts, valuations) is logged in `audit_log` with:
