@@ -12,7 +12,7 @@ export const analyticsRepository = {
     async baselineMaybe(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('business_health')
-            .select('baseline')
+            .select('baseline, targets')
             .eq('organisation_id', orgId)
             .maybeSingle();
         return data;
