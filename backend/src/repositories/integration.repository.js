@@ -152,7 +152,7 @@ export const integrationRepository = {
     async listAdAccounts(orgId, provider = null) {
         let q = supabase_1.serviceClient
             .from('ad_accounts')
-            .select('provider, customer_id, name, currency, status, is_selected, practice_id')
+            .select('provider, customer_id, name, currency, status, is_selected, practice_id, period_reach, period_frequency, period_impressions, period_window_start, period_window_end, period_synced_at')
             .eq('organisation_id', orgId)
             .order('provider', { ascending: true })
             .order('name', { ascending: true });

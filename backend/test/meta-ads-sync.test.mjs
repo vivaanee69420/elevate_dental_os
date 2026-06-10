@@ -70,6 +70,31 @@ describe('parseInsights', () => {
     });
 });
 
+describe('parseAccountInsight', () => {
+    it('maps an account-level (period, no time_increment) row to the snapshot shape', () => {
+        // Meta returns ONE row for the whole window: reach is deduplicated unique
+        // people and frequency is impressions/reach over the period — the numbers
+        // you cannot rebuild by summing daily rows.
+        const row = {
+            reach: '168000', frequency: '3.9', impressions: '658907', clicks: '9036',
+            spend: '6563.74', actions: [{ action_type: 'lead', value: '910' }],
+        };
+        expect(__test.parseAccountInsight(row)).toEqual({
+            reach: 168000, frequency: 3.9, impressions: 658907, clicks: 9036,
+            spend_pence: 656374, conversions: 910,
+        });
+    });
+    it('defaults reach/impressions/clicks/spend to 0 and frequency to null when absent', () => {
+        expect(__test.parseAccountInsight({})).toEqual({
+            reach: 0, frequency: null, impressions: 0, clicks: 0, spend_pence: 0, conversions: 0,
+        });
+    });
+    it('returns null for missing input', () => {
+        expect(__test.parseAccountInsight(undefined)).toBeNull();
+        expect(__test.parseAccountInsight(null)).toBeNull();
+    });
+});
+
 describe('syncOneOrg', () => {
     beforeEach(() => {
         integrationRepository.upsert.mockReset();
@@ -112,6 +137,42 @@ describe('syncOneOrg', () => {
             }),
         ]));
         expect(integrationRepository.upsert).toHaveBeenCalled();
+    });
+
+    it('queries account-level period reach/frequency and writes it onto ad_accounts', async () => {
+        const queries = [];
+        supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
+        // time_increment=1 => daily campaign rows; no time_increment => the single
+        // period row with deduplicated reach + period frequency.
+        global.fetch = vi.fn(async (url) => {
+            const isDaily = String(url).includes('time_increment=1');
+            return {
+                ok: true, status: 200,
+                json: async () => ({
+                    data: isDaily
+                        ? [{ campaign_id: 7, campaign_name: 'Brand', date_start: '2026-05-10',
+                             spend: '3.00', impressions: '500', clicks: '20', reach: '400', frequency: '1.25' }]
+                        : [{ reach: '168000', frequency: '3.9', impressions: '658907', clicks: '9036', spend: '6563.74' }],
+                    paging: {},
+                }),
+            };
+        });
+
+        const integration = {
+            secrets: encryptSecret(JSON.stringify({ access_token: 'tok' })),
+            config: { account_ids: ['1112223333'] },
+            expires_at: new Date(Date.now() + 30 * 86400_000).toISOString(),
+        };
+        await syncOneOrg('org-1', integration);
+
+        const snap = queries.find((q) => q.table === 'ad_accounts' && q.op === 'update');
+        expect(snap, 'expected an ad_accounts period-snapshot update').toBeTruthy();
+        expect(snap.updateVals).toMatchObject({ period_reach: 168000, period_frequency: 3.9, period_impressions: 658907 });
+        expect(snap.eqs).toEqual(expect.arrayContaining([
+            { col: 'organisation_id', val: 'org-1' },
+            { col: 'provider', val: 'meta_ads' },
+            { col: 'customer_id', val: '1112223333' },
+        ]));
     });
 
     it('marks failed when no credentials are stored', async () => {

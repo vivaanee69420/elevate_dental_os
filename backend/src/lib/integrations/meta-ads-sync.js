@@ -74,6 +74,24 @@ function parseInsights(rows, campaignMeta = {}) {
     return out;
 }
 
+// Map an account-level insight row (queried for the whole window WITHOUT
+// time_increment) to the period-snapshot shape. Reach here is deduplicated
+// unique people across the window and frequency is the period impressions/reach
+// — neither can be rebuilt by summing the daily campaign rows, so they are
+// stored separately on ad_accounts (see syncOneOrg). Returns null for no row.
+function parseAccountInsight(row) {
+    if (!row) return null;
+    const freq = Number(row.frequency);
+    return {
+        reach: Number(row.reach ?? 0),
+        frequency: Number.isFinite(freq) ? freq : null,
+        impressions: Number(row.impressions ?? 0),
+        clicks: Number(row.clicks ?? 0),
+        spend_pence: spendToPence(row.spend),
+        conversions: conversionsFromActions(row.actions),
+    };
+}
+
 function graphBase() {
     return process.env.META_GRAPH_BASE || 'https://graph.facebook.com';
 }
@@ -115,6 +133,22 @@ async function queryAccount(accountId, accessToken, sinceDate) {
         guard++;
     }
     return rows;
+}
+
+// Account-level insight over the WHOLE window (no time_increment) — Meta's
+// deduplicated reach + period frequency for the account. Returns one parsed
+// snapshot object, or null if the account reported nothing. Non-fatal: the
+// caller swallows errors (the daily series still syncs).
+async function queryAccountPeriod(accountId, accessToken, sinceDate) {
+    const until = new Date().toISOString().slice(0, 10);
+    const timeRange = encodeURIComponent(JSON.stringify({ since: sinceDate, until }));
+    const url = `${graphBase()}/${apiVersion()}/act_${accountId}/insights`
+        + `?level=account&time_range=${timeRange}`
+        + `&fields=${INSIGHT_FIELDS}&limit=1&access_token=${encodeURIComponent(accessToken)}`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error?.message || `account insights HTTP ${res.status}`);
+    return parseAccountInsight((body.data ?? [])[0]);
 }
 
 // Campaign-level dimensions (status, objective) — not available on insights.
@@ -170,12 +204,37 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         // one the user lost access to) so one bad account doesn't sink the sync.
         const all = [];
         const skipped = [];
+        const until = new Date().toISOString().slice(0, 10);
         for (const aid of accountIds) {
             try {
                 const meta = await fetchCampaignMeta(aid, access_token).catch(() => ({}));
                 const rows = await queryAccount(aid, access_token, sinceDate);
                 for (const row of parseInsights(rows, meta)) {
                     all.push({ organisation_id: orgId, practice_id: null, provider: 'meta_ads', source: 'meta_ads', customer_id: aid, ...row });
+                }
+                // Period-deduplicated reach/frequency for the account — stored on
+                // ad_accounts, NOT summed from the daily rows above. Non-fatal.
+                try {
+                    const period = await queryAccountPeriod(aid, access_token, sinceDate);
+                    if (period) {
+                        await supabase_1.serviceClient.from('ad_accounts')
+                            .update({
+                                period_reach: period.reach,
+                                period_frequency: period.frequency,
+                                period_impressions: period.impressions,
+                                period_clicks: period.clicks,
+                                period_spend_pence: period.spend_pence,
+                                period_conversions: period.conversions,
+                                period_window_start: sinceDate,
+                                period_window_end: until,
+                                period_synced_at: new Date().toISOString(),
+                            })
+                            .eq('organisation_id', orgId)
+                            .eq('provider', 'meta_ads')
+                            .eq('customer_id', aid);
+                    }
+                } catch (err) {
+                    console.error(`[meta_ads] period reach sync failed for ${aid}:`, err.message);
                 }
             } catch (err) {
                 skipped.push({ aid, error: String(err.message).slice(0, 200) });
@@ -229,4 +288,4 @@ export async function syncAllOrgs() {
     return results;
 }
 
-export const __test = { spendToPence, conversionsFromActions, parseInsights, INSIGHT_FIELDS };
+export const __test = { spendToPence, conversionsFromActions, parseInsights, parseAccountInsight, INSIGHT_FIELDS };

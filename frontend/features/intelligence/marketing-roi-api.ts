@@ -19,7 +19,9 @@ export interface MktChannel {
   spendPence: number;
   impressions: number;
   clicks: number;
-  reach: number;
+  reach: number | null; // period-deduplicated unique reach (Meta only); null for Google / no snapshot
+  reachIsApprox?: boolean; // true when the displayed window != the synced reach window
+  frequency: number | null; // period impressions / unique reach
   adConversions: number; // platform-reported (ad_metrics): Meta lead/pixel actions + Google conversions
   leads: number; // CRM-attributed
   conversions: number; // CRM funnel: leads reaching treatment
@@ -41,7 +43,9 @@ export interface MktAccount {
   spendPence: number;
   impressions: number;
   clicks: number;
-  reach: number;
+  reach: number | null;
+  reachIsApprox?: boolean;
+  frequency: number | null;
   conversions: number;
   cpaPence: number;
   cpcPence: number;
