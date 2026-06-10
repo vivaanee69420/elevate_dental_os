@@ -22,6 +22,7 @@ import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
 import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
+import * as reviews_sync_1 from "../lib/integrations/reviews-sync.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import * as aws_sns_1 from "../lib/aws-sns.js";
 import { notificationService } from "../services/notification.service.js";
@@ -301,6 +302,18 @@ scheduleMonitored('meta-ads-sync', '50 2 * * *', async () => {
         console.error('[worker] Meta Ads sync failed', err);
     }
 });
+// Reviews sync — daily 03:10. Pull Google (Places) + Facebook (Graph) reviews
+// for every org with at least one selected review_source into the reviews table
+// and refresh each source's overall rating + total count. Per-source failures
+// are isolated; one bad place_id or a pending Meta scope won't stop the rest.
+scheduleMonitored('reviews-sync', '10 3 * * *', async () => {
+    try {
+        const results = await reviews_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] Reviews sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] Reviews sync failed', err);
+    }
+}, { maxRuntime: 30 });
 // --------------------------------------------------------------------------
 // Task overdue auto-reminders — daily 08:00 UK time. Email the assignee of
 // every open/in-progress task whose due_date has passed, throttled to once a
