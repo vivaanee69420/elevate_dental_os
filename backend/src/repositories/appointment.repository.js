@@ -3,8 +3,12 @@
 // No business logic here: queries in, rows out (or thrown DB error).
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { pmsHidden } from "../lib/integration-gating.js";
 export const appointmentRepository = {
     async list(orgId, q) {
+        // PMS disconnected → its synced appointments are hidden (rule: untagged
+        // table, wholesale hide while the PMS is revoked).
+        if (await pmsHidden(orgId)) return { rows: [], total: 0 };
         const page = q.page ?? 1;
         const perPage = q.per_page ?? 25;
         const offset = (page - 1) * perPage;

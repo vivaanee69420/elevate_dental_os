@@ -3,8 +3,10 @@
 // No business logic here: queries in, rows out (or thrown DB error).
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { crmHidden } from "../lib/integration-gating.js";
 export const leadRepository = {
     async list(orgId, q) {
+        if (await crmHidden(orgId)) return [];
         let query = supabase_1.serviceClient
             .from('leads')
             .select(`
@@ -67,6 +69,7 @@ export const leadRepository = {
             .eq('organisation_id', orgId);
     },
     async funnelRows(orgId) {
+        if (await crmHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient
             .from('leads')
             .select('status, estimated_value_pence')

@@ -125,6 +125,31 @@ describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
     expect(r.excessCashPence).toBe(3_000_000);
   });
 
+  it('billed production > settled cash → turnover = invoiced, cash = settled (<100%)', async () => {
+    supaRec.resultProvider = () =>
+      ({ data: [], error: null }); // no monthly_financials actuals, no bank
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-03-01', pence: 80_000_000 }], error: null }
+      : fn === 'treatment_revenue_matrix' ? { data: [{ practice_id: 'p1', treatment_name: 'X', fee_pence: 100_000_000, item_count: 3 }], error: null }
+      : { data: [], error: null };
+    const r = await svc.dashboardSummary(ORG_A, { now });
+    expect(r.turnoverBasis).toBe('billed');
+    expect(r.revenuePence).toBe(100_000_000);      // invoiced production
+    expect(r.cashCollectedPence).toBe(80_000_000); // settled receipts → 80% collection
+  });
+
+  it('billed production < settled cash → guard falls back to settled (never >100%)', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-03-01', pence: 90_000_000 }], error: null }
+      : fn === 'treatment_revenue_matrix' ? { data: [{ practice_id: 'p1', fee_pence: 40_000_000, item_count: 1 }], error: null }
+      : { data: [], error: null };
+    const r = await svc.dashboardSummary(ORG_A, { now });
+    expect(r.turnoverBasis).toBe('settled');
+    expect(r.revenuePence).toBe(90_000_000);
+    expect(r.cashCollectedPence).toBe(90_000_000);
+  });
+
   it('custom range scopes revenue to the period (KPIs follow MTD/QTD/etc.)', async () => {
     supaRec.resultProvider = () => ({ data: [], error: null });
     supaRec.rpcProvider = rpcReceipts([{ day: '2026-05-10', pence: 4_200_000 }]);

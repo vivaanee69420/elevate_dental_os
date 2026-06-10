@@ -5,6 +5,7 @@
 // JS-side grouping if the RPC is absent (mirrors the auth_bootstrap pattern).
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { pmsHidden } from "../lib/integration-gating.js";
 
 export const associateRepository = {
     async list(orgId, practiceId) {
@@ -20,6 +21,7 @@ export const associateRepository = {
     },
 
     async appointmentStatsByAssociate(orgId, since) {
+        if (await pmsHidden(orgId)) return new Map();
         const { data, error } = await supabase_1.serviceClient
             .rpc('associate_appointment_stats', { p_org: orgId, p_since: since });
         if (!error && Array.isArray(data)) {

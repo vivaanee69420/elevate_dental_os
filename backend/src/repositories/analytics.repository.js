@@ -2,6 +2,7 @@
 // Analytics repository — Supabase reads for the analytics domain.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { revokedProviders, revokedSources, pmsHidden, crmHidden } from "../lib/integration-gating.js";
 
 // Max rows we read for an in-Node aggregate. Realistic per-org practice +
 // settled-payment counts sit far below this; if it ever trips, the service
@@ -91,20 +92,22 @@ export const analyticsRepository = {
         return data || [];
     },
     async settledPayments(orgId) {
+        const drop = new Set(await revokedSources(orgId, ['dentally', 'quickbooks']));
         const { data, error } = await supabase_1.serviceClient
             .from('payments')
-            .select('practice_id, amount_pence')
+            .select('practice_id, amount_pence, source')
             .eq('organisation_id', orgId)
             .eq('status', 'settled')
             .limit(LIMIT_GUARD);
         if (error)
             throw new Error(error.message);
-        return data || [];
+        return (data || []).filter((p) => !drop.has(p.source));
     },
     // ------------------------------------------------------------------------
     // AI-Insights rolling-window sources. Same service-client tenant rule:
     // the explicit .eq('organisation_id', orgId) IS the only isolation.
     async leadsInWindow(orgId, sinceISO) {
+        if (await crmHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient
             .from('leads')
             .select('status, practice_id, source, estimated_value_pence')
@@ -124,6 +127,8 @@ export const analyticsRepository = {
     // customer_ids (the dynamic, org-isolated account filter). null = no account
     // filter (all of the org's accounts).
     async adMetricsInWindow(orgId, fromDate, toDate, practiceIds = null, accountIds = null) {
+        // Resolve gating BEFORE the main query so it stays the last query issued.
+        const revoked = await revokedProviders(orgId);
         let q = supabase_1.serviceClient
             .from('ad_metrics')
             .select('provider, customer_id, spend_pence, impressions, clicks, reach, conversions, practice_id')
@@ -135,9 +140,12 @@ export const analyticsRepository = {
         if (accountIds !== null) q = q.in('customer_id', accountIds);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
-        return data || [];
+        // Hide a disconnected ad provider's spend (ad_metrics.provider is the
+        // integration id: 'google_ads' | 'meta_ads'). Manual rows have neither.
+        return (data || []).filter((r) => !revoked.has(r.provider));
     },
     async leadsForMarketing(orgId, sinceISO, untilISO, practiceIds = null) {
+        if (await crmHidden(orgId)) return [];
         // Embed the linked contact's practice so leads with no own practice_id
         // (GHL enquiries) can still be attributed to a site via their contact.
         let q = supabase_1.serviceClient
@@ -153,16 +161,17 @@ export const analyticsRepository = {
         return data || [];
     },
     async settledPaymentsInWindow(orgId, sinceISO) {
+        const drop = new Set(await revokedSources(orgId, ['dentally', 'quickbooks']));
         const { data, error } = await supabase_1.serviceClient
             .from('payments')
-            .select('practice_id, amount_pence')
+            .select('practice_id, amount_pence, source')
             .eq('organisation_id', orgId)
             .eq('status', 'settled')
             .gte('processed_at', sinceISO)
             .limit(LIMIT_GUARD);
         if (error)
             throw new Error(error.message);
-        return data || [];
+        return (data || []).filter((p) => !drop.has(p.source));
     },
     // Cashflow sources. bankSummary: total balance + freshest sync (staleness
     // surfaced — a 6-month-old balance must not read as "current").
@@ -193,6 +202,7 @@ export const analyticsRepository = {
             p_since: sinceISO,
             p_practice: practiceId ?? null,
             p_until: untilISO ?? null,
+            p_exclude_sources: await revokedSources(orgId, ['dentally', 'quickbooks']),
         });
         if (error)
             throw new Error(error.message);
@@ -213,11 +223,13 @@ export const analyticsRepository = {
     async settledRevenueByPractice(orgId, sinceISO, untilISO = null) {
         const { data, error } = await supabase_1.serviceClient.rpc('settled_revenue_by_practice', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+            p_exclude_sources: await revokedSources(orgId, ['dentally', 'quickbooks']),
         });
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
     async appointmentsRollupByPractice(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('appointments_rollup_by_practice', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
         });
@@ -229,6 +241,7 @@ export const analyticsRepository = {
     // indistinguishable from a genuine "no missed appointments" at the rollup. We
     // use this to show "—" (not tracked) instead of a misleading 0% no-show rate.
     async hasNoShowData(orgId) {
+        if (await pmsHidden(orgId)) return false;
         const { data, error } = await supabase_1.serviceClient
             .from('appointments')
             .select('id')
@@ -239,6 +252,7 @@ export const analyticsRepository = {
         return (data || []).length > 0;
     },
     async leadsRollupByPractice(orgId, sinceISO = null, untilISO = null) {
+        if (await crmHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('leads_rollup_by_practice', {
             p_org: orgId, p_since: sinceISO ?? null, p_until: untilISO ?? null,
         });
@@ -247,6 +261,7 @@ export const analyticsRepository = {
     },
     // Org-wide treatment rollup (treatment_plans are not practice-attributed).
     async treatmentsRollupByOrg(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return { started: 0, completed: 0, closed_value_pence: 0 };
         const { data, error } = await supabase_1.serviceClient.rpc('treatments_rollup_by_org', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
         });
@@ -261,6 +276,7 @@ export const analyticsRepository = {
     // rollup_by_org` only returns the accepted (closed) side, so this fills in
     // the presented total it omits.
     async treatmentPlanValueByStatus(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return { presentedPence: 0, acceptedPence: 0 };
         const sinceDate = sinceISO ? new Date(sinceISO).toISOString().slice(0, 10) : null;
         const untilDate = untilISO ? new Date(untilISO).toISOString().slice(0, 10) : null;
         const PAGE = 1000;
@@ -307,6 +323,7 @@ export const analyticsRepository = {
     // Dentally appointments carry no price (data wall). Rows: { practice_id,
     // appointment_type, volume }. NULL types collapse to 'Unspecified'.
     async treatmentMixMatrix(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('treatment_mix_matrix', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
         });
@@ -354,6 +371,7 @@ export const analyticsRepository = {
     // Prefers the treatment_revenue_matrix RPC; falls back to a paginated scan.
     // Rows: { practice_id, treatment_name, fee_pence, item_count }.
     async treatmentRevenueMatrix(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('treatment_revenue_matrix', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
         });
@@ -405,6 +423,7 @@ export const analyticsRepository = {
     // Prefers the treatment_breakdown RPC; falls back to a paginated scan.
     // Rows: { treatment_name, fee_pence, item_count, patient_count }.
     async treatmentBreakdown(orgId, sinceISO = null, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('treatment_breakdown', {
             p_org: orgId, p_since: sinceISO ?? null, p_until: untilISO ?? null,
         });
@@ -454,6 +473,7 @@ export const analyticsRepository = {
     // RPC only (no fallback): a JS array_agg-equivalent scan would be heavy and
     // this is a non-critical enhancement — returns [] if the RPC is absent.
     async invoiceCaseRollup(orgId, sinceISO) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('invoice_case_rollup', {
             p_org: orgId, p_since: sinceISO,
         });
@@ -462,6 +482,7 @@ export const analyticsRepository = {
     },
     // Appointments in a rolling window for utilisation / DNA per practice.
     async appointmentsForHub(orgId, sinceISO) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient
             .from('appointments')
             .select('practice_id, status, starts_at')
@@ -474,6 +495,7 @@ export const analyticsRepository = {
     },
     // All leads (any age) for conversion per practice.
     async leadsForHub(orgId) {
+        if (await crmHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient
             .from('leads')
             .select('practice_id, status')
@@ -487,6 +509,7 @@ export const analyticsRepository = {
     // Data Quality Engine (Phase 5) — per-practice defect counts in ONE query
     // via the data_quality_by_practice RPC (appointments is large; no JS scan).
     async dataQualityByPractice(orgId) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('data_quality_by_practice', {
             p_org: orgId,
         });
@@ -510,6 +533,7 @@ export const analyticsRepository = {
     // deterministic windows. Rows: { practice_id, active_patients, lapsed_patients,
     // dormant_patients, total_patients, unlinked_appts }.
     async patientRetentionByPractice(orgId, nowISO) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('patient_retention_by_practice', {
             p_org: orgId, p_now: nowISO,
         });

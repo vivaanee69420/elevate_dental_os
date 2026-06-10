@@ -2,6 +2,7 @@
 // Business Health repository — all Supabase data access for the domain.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { pmsHidden, crmHidden } from "../lib/integration-gating.js";
 export const businessHealthRepository = {
     async getHealth(orgId) {
         const { data } = await supabase_1.serviceClient
@@ -133,6 +134,7 @@ export const businessHealthRepository = {
     // appointments + contacts tables. Returns the RPC's JSON blob (keys may be
     // null when a source signal is absent). p_asof null = current date.
     async patientActuals(orgId, asof = null) {
+        if (await pmsHidden(orgId)) return {};
         const { data, error } = await supabase_1.serviceClient.rpc('health_patient_actuals', {
             p_org: orgId, p_asof: asof ?? null,
         });
@@ -142,6 +144,7 @@ export const businessHealthRepository = {
     // Production KPIs (avg case value, production/associate) from invoice_items
     // within [sinceISO, untilISO). Money in pence; keys null when no source rows.
     async productionActuals(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return {};
         const { data, error } = await supabase_1.serviceClient.rpc('health_production_actuals', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
         });
@@ -166,6 +169,7 @@ export const businessHealthRepository = {
     // GHL/CRM signal; null until lead_response_minutes is populated (e.g. GHL
     // conversations sync) -> the metric stays manual.
     async leadResponseActual(orgId, sinceISO) {
+        if (await crmHidden(orgId)) return null;
         const { data, error } = await supabase_1.serviceClient
             .from('leads')
             .select('last_response_minutes')

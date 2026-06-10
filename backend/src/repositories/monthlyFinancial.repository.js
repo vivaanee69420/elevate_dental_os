@@ -4,8 +4,13 @@
 // the only tenant guard on this path (see CLAUDE.md). Queries in, rows out.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { revokedSources } from "../lib/integration-gating.js";
 
 const LIMIT_GUARD = 5000;
+// monthly_financials.source = integration provider id for synced lines
+// ('xero' | 'quickbooks'); 'manual' rows are owner-entered. Disconnecting an
+// accounting integration hides its imported lines, never the manual ones.
+const FINANCE_SOURCES = ['xero', 'quickbooks'];
 
 export const monthlyFinancialRepository = {
     // Upsert one manual line. The composite-unique index
@@ -29,6 +34,7 @@ export const monthlyFinancialRepository = {
         return row;
     },
     async list(orgId, { from, to, practice_id } = {}) {
+        const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
         let q = supabase_1.serviceClient
             .from('monthly_financials')
             .select('id, period, account_code, dental_bucket, amount_pence, practice_id, source, updated_at')
@@ -38,19 +44,20 @@ export const monthlyFinancialRepository = {
         if (practice_id) q = q.eq('practice_id', practice_id);
         const { data, error } = await q.order('period', { ascending: false }).limit(LIMIT_GUARD);
         if (error) throw new Error(error.message);
-        return data || [];
+        return (data || []).filter((r) => !drop.has(r.source));
     },
     // All rows for an org (both 'manual' and 'xero'/'quickbooks'), for the
     // analytics read path. Source is selected so the reader can apply the
     // Xero-overrides-manual precedence per period+bucket.
     async allForOrg(orgId) {
+        const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
         const { data, error } = await supabase_1.serviceClient
             .from('monthly_financials')
             .select('period, dental_bucket, amount_pence, source, practice_id')
             .eq('organisation_id', orgId)
             .limit(LIMIT_GUARD);
         if (error) throw new Error(error.message);
-        return Array.isArray(data) ? data : [];
+        return (Array.isArray(data) ? data : []).filter((r) => !drop.has(r.source));
     },
     async remove(orgId, id) {
         const { error } = await supabase_1.serviceClient

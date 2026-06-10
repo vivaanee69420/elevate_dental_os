@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 export interface DashboardSummary {
   error?: string;
   basis?: string;
+  turnoverBasis?: 'billed' | 'settled' | 'actuals';
   revenue: number;
   netProfit: number;
   margin: number; // percentage points
@@ -42,6 +43,7 @@ export async function getDashboardSummary(range?: PeriodRange, practiceId?: stri
   if (r?.error) return { error: r.error } as DashboardSummary;
   return {
     basis: r.basis,
+    turnoverBasis: r.turnoverBasis,
     revenue: p(r.revenuePence),
     netProfit: p(r.netProfitPence),
     margin: r.marginPct ?? 0,

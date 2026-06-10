@@ -286,9 +286,16 @@ function mapPaymentStatus(p) {
     // webhook/test fakes that predate the live shape.
     switch (String(p?.state || p?.status || '').toLowerCase()) {
         case 'paid': case 'settled': return 'settled';
+        // unexplained / partially_explained = money RECEIVED, not yet allocated to
+        // an invoice line (a patient credit / deposit sitting on the account). It is
+        // cash in, so it is a settled RECEIPT — not pending debt. `amount` is the
+        // full sum taken; `amount_unexplained` is only the unallocated remainder.
+        // (Mapping these to pending dropped real receipts out of the RECEIVED card
+        // and inflated a fake all-time OUTSTANDING — see dentally-payment-status-misclass.)
+        case 'unexplained': case 'partially_explained': return 'settled';
         case 'failed': case 'declined': return 'failed';
         case 'refunded': case 'reversed': return 'refunded';
-        // unexplained / partially_explained = money in, not yet allocated.
+        // Truly unknown states stay pending (conservative: not counted as received).
         default: return 'pending';
     }
 }
