@@ -61,7 +61,13 @@ export default function MarketingRoiScreen() {
 function MarketingBody({ data }: { data: MarketingRoi }) {
   const { channels, google: g, meta: f } = data;
   const gfTot = (g?.spendPence ?? 0) + (f?.spendPence ?? 0) || 1;
-  const maxLeads = Math.max(...channels.map((c) => c.leads), 1);
+  // Paid channels source their funnel from the ad platforms (Meta/Google
+  // conversions), NOT the CRM — CRM lead attribution to a paid channel is
+  // unreliable. Organic channels stay CRM (the platforms have no view of them).
+  const effLeads = (c: MktChannel) => (c.paid ? c.adConversions : c.leads);
+  const totalEffLeads = channels.reduce((s, c) => s + effLeads(c), 0);
+  const paidAdConv = channels.filter((c) => c.paid).reduce((s, c) => s + c.adConversions, 0);
+  const maxLeads = Math.max(...channels.map(effLeads), 1);
   const maxPLeads = Math.max(...data.byPractice.map((p) => p.leads), 1);
 
   return (
@@ -152,7 +158,7 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
 
       {/* channel efficiency table */}
       <Panel>
-        <PanelHead title="Channel Efficiency" sub="Spend → leads → CPL → patients → CPA → conversion. Real per channel; revenue stays business-level." right={<Pill tone="info">{data.window?.label}</Pill>} />
+        <PanelHead title="Channel Efficiency" sub="Spend → leads → CPL → conversion. Paid rows are platform-reported (Meta/Google); organic is CRM. Patients are CRM-only and can't be split per paid channel." right={<Pill tone="info">{data.window?.label}</Pill>} />
         <div className="overflow-x-auto">
           <table className="w-full border-collapse" style={{ minWidth: 720 }}>
             <thead>
@@ -163,32 +169,38 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
               </tr>
             </thead>
             <tbody>
-              {channels.map((c) => (
-                <tr key={c.key} className="border-b border-border last:border-0">
-                  <td className={td}><span aria-hidden className="inline-block w-2 h-2 rounded-full mr-2" style={{ background: c.color }} />{c.label}</td>
-                  <td className={`${td} text-right tabular-nums`}>{c.paid ? (c.spendPence ? gbp(c.spendPence) : '—') : '—'}</td>
-                  <td className={`${td} text-right tabular-nums`}>{c.leads}</td>
-                  <td className={`${td} text-right tabular-nums`}>{c.cplPence ? gbp(c.cplPence) : '—'}</td>
-                  <td className={`${td} text-right tabular-nums`}>{c.conversions}</td>
-                  <td className={`${td} text-right tabular-nums`}>{c.cpaPence ? gbp(c.cpaPence) : '—'}</td>
-                  <td className={`${td} text-right tabular-nums`}>{c.leadSharePct.toFixed(0)}%</td>
-                  <td className={`${td} text-right tabular-nums`}>{c.convRatePct.toFixed(0)}%</td>
-                </tr>
-              ))}
+              {channels.map((c) => {
+                const lShare = totalEffLeads ? (effLeads(c) / totalEffLeads) * 100 : 0;
+                return (
+                  <tr key={c.key} className="border-b border-border last:border-0">
+                    <td className={td}><span aria-hidden className="inline-block w-2 h-2 rounded-full mr-2" style={{ background: c.color }} />{c.label}</td>
+                    <td className={`${td} text-right tabular-nums`}>{c.paid ? (c.spendPence ? gbp(c.spendPence) : '—') : '—'}</td>
+                    {/* Leads: paid = platform conversions (Meta/Google), organic = CRM */}
+                    <td className={`${td} text-right tabular-nums`}>{c.paid ? c.adConversions.toLocaleString('en-GB') : c.leads}</td>
+                    <td className={`${td} text-right tabular-nums`}>{c.paid ? (c.costPerAdConvPence ? gbp(c.costPerAdConvPence) : '—') : '—'}</td>
+                    {/* Patients (treatment) are CRM-only — never attributable to a paid channel */}
+                    <td className={`${td} text-right tabular-nums`}>{c.paid ? '—' : c.conversions}</td>
+                    <td className={`${td} text-right tabular-nums`}>—</td>
+                    <td className={`${td} text-right tabular-nums`}>{lShare.toFixed(0)}%</td>
+                    {/* Conv %: paid = conversions/clicks, organic = patients/leads */}
+                    <td className={`${td} text-right tabular-nums`}>{c.paid ? `${c.adConvRatePct.toFixed(1)}%` : `${c.convRatePct.toFixed(0)}%`}</td>
+                  </tr>
+                );
+              })}
               <tr className="border-t-2 border-border font-semibold">
                 <td className={td}>All channels</td>
                 <td className={`${td} text-right tabular-nums`}>{gbp(data.paidSpendPence)}</td>
-                <td className={`${td} text-right tabular-nums`}>{data.totalLeads}</td>
-                <td className={`${td} text-right tabular-nums`}>{gbp(data.totalLeads ? Math.round(data.paidSpendPence / data.totalLeads) : 0)}</td>
+                <td className={`${td} text-right tabular-nums`}>{totalEffLeads.toLocaleString('en-GB')}</td>
+                <td className={`${td} text-right tabular-nums`}>{paidAdConv ? gbp(Math.round(data.paidSpendPence / paidAdConv)) : '—'}</td>
                 <td className={`${td} text-right tabular-nums`}>{data.totalConversions}</td>
-                <td className={`${td} text-right tabular-nums`}>{gbp(data.totalConversions ? Math.round(data.paidSpendPence / data.totalConversions) : 0)}</td>
+                <td className={`${td} text-right tabular-nums`}>—</td>
                 <td className={`${td} text-right tabular-nums`}>100%</td>
-                <td className={`${td} text-right tabular-nums`}>{data.totalLeads ? Math.round((data.totalConversions / data.totalLeads) * 100) : 0}%</td>
+                <td className={`${td} text-right tabular-nums`}>—</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <NoteFoot>{data.note}</NoteFoot>
+        <NoteFoot>Spend and leads on paid rows are reported by Meta and Google (conversions = lead/pixel actions + Google conversions). Organic leads come from the CRM. Patients (treatment-started/completed) are CRM-only and aren&apos;t split per paid channel.</NoteFoot>
       </Panel>
 
       {/* per ad account */}
@@ -230,14 +242,14 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
 
       {/* leads by channel */}
       <Panel>
-        <PanelHead title="Leads by Channel" sub="Where enquiries actually come from (CRM-attributed, real)." />
+        <PanelHead title="Leads by Channel" sub="Paid = conversions reported by Meta/Google; organic = CRM-attributed enquiries." />
         {channels.map((c) => (
           <BarRow
             key={c.key}
             name={c.label}
-            sub={`${c.conversions} patients · ${c.convRatePct.toFixed(0)}% conv`}
-            pct={(c.leads / maxLeads) * 100}
-            value={`${c.leads} leads`}
+            sub={c.paid ? `${c.clicks.toLocaleString('en-GB')} clicks · ${c.adConvRatePct.toFixed(1)}% conv` : `${c.conversions} patients · ${c.convRatePct.toFixed(0)}% conv`}
+            pct={(effLeads(c) / maxLeads) * 100}
+            value={c.paid ? `${c.adConversions.toLocaleString('en-GB')} conversions` : `${c.leads} leads`}
             tone={c.paid ? 'bg-brand' : 'bg-success'}
           />
         ))}
