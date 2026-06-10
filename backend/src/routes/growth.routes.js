@@ -59,6 +59,19 @@ async function aggregate(orgId, since) {
     return { leads: leadsR.data ?? [], payments: paymentsR.data ?? [], contacts: contactsR.data ?? [] };
 }
 
+// Patients whose FIRST-EVER appointment falls in [sinceISO, untilISO] (untilISO
+// null = open upper bound). Backed by org_new_patients_count (migration 000072)
+// so "new patients" is real intake, NOT contacts.created_at (= the Dentally sync
+// insert time, which counts the whole patient base after every sync). Returns 0
+// on RPC error/absence so the metric degrades to zero, never throws.
+async function newPatientsCount(orgId, sinceISO, untilISO, practiceId = null) {
+    const { data, error } = await supabase_1.serviceClient.rpc('org_new_patients_count', {
+        p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null, p_practice: practiceId ?? null,
+    });
+    if (error) return 0;
+    return Number(data) || 0;
+}
+
 // Resolve the query window from ?from=&to= (YYYY-MM-DD). from/to take effect
 // ONLY when BOTH are set; otherwise fall back to the 30-day rolling window.
 // Days are EUROPE/LONDON local (the client's timezone, and the timezone Meta/
@@ -90,9 +103,13 @@ function resolveWindow(q) {
 
 router.get('/patients', (0, async_handler_1.asyncHandler)(async (req, res) => {
     const since = new Date(Date.now() - 30 * 86400000).toISOString();
-    const { contacts, leads } = await aggregate(req.user.organisation_id, since);
+    const { leads } = await aggregate(req.user.organisation_id, since);
+    // "New patients" = patients whose first-ever appointment is in-window, NOT
+    // contacts.created_at (that is the Dentally sync insert time, which would
+    // count the whole patient base after each sync). See migration 000072.
+    const newPatients30d = await newPatientsCount(req.user.organisation_id, since, null);
     res.json({
-        new_patients_30d: contacts.length,
+        new_patients_30d: newPatients30d,
         new_leads_30d: leads.length,
         by_source: leads.reduce((acc, l) => { acc[l.source ?? 'unknown'] = (acc[l.source ?? 'unknown'] ?? 0) + 1; return acc; }, {}),
     });
@@ -537,7 +554,7 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     }
     const withAdScope = (q) => (adAccountIds !== null ? q.in('customer_id', adAccountIds) : q);
 
-    const [adR, leadsR, contactsR, paymentsR, healthR] = await Promise.all([
+    const [adR, leadsR, newPatients, paymentsR, healthR] = await Promise.all([
         withAdScope(supabase_1.serviceClient.from('ad_metrics')
             .select('provider, customer_id, spend_pence, impressions, clicks, reach, conversions')
             .eq('organisation_id', orgId)
@@ -546,10 +563,10 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
             .select('source, utm_source, utm_medium, created_at')
             .eq('organisation_id', orgId)
             .gte('created_at', fromISO).lte('created_at', toEndISO)),
-        withPid(supabase_1.serviceClient.from('contacts')
-            .select('id, created_at')
-            .eq('organisation_id', orgId)
-            .gte('created_at', fromISO).lte('created_at', toEndISO)),
+        // New patients = first-ever appointment in-window, NOT contacts.created_at
+        // (= Dentally sync time). Honors the optional per-practice scope (pid).
+        // Drives CAC below. See migration 000072.
+        newPatientsCount(orgId, fromISO, toEndISO, pid),
         withPid(supabase_1.serviceClient.from('payments')
             .select('amount_pence, status, processed_at')
             .eq('organisation_id', orgId)
@@ -561,7 +578,6 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     ]);
     const adRows = adR.data ?? [];
     const leads = leadsR.data ?? [];
-    const newPatients = (contactsR.data ?? []).length;
     const revenue_pence = (paymentsR.data ?? [])
         .filter((p) => p.status === 'settled')
         .reduce((s, p) => s + (p.amount_pence ?? 0), 0);
