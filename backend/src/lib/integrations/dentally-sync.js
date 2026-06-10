@@ -407,6 +407,10 @@ export function patientRow(orgId, p, siteMap) {
         phone: p.mobile_phone ?? p.phone_number ?? null,
         date_of_birth: p.date_of_birth ?? null,
         practice_id: siteMap.get(String(p.site_id)) ?? null,
+        // Real Dentally registration timestamp -> drives the "new patients"
+        // metric (migration 000073). NOT contacts.created_at, which is our
+        // sync insert time. Falls back through Dentally's date variants.
+        pms_registered_at: p.created_at ?? p.registered_at ?? p.date_of_registration ?? null,
     };
 }
 
