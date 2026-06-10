@@ -792,7 +792,9 @@ export const analyticsService = {
         const revByPractice = new Map(inScopeRev.map((r) => [r.practice_id, Number(r.pence) || 0]));
         const leadsByPractice = new Map();
         for (const l of leads) {
-            const id = l.practice_id;
+            // Own practice_id wins; else inherit the linked contact's practice so
+            // GHL enquiries (practice_id null) still attribute to a site.
+            const id = l.practice_id ?? l.contact?.practice_id ?? null;
             if (!id) continue;
             const a = leadsByPractice.get(id) || { leads: 0, conversions: 0 };
             a.leads += 1;

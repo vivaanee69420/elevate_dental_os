@@ -138,9 +138,11 @@ export const analyticsRepository = {
         return data || [];
     },
     async leadsForMarketing(orgId, sinceISO, untilISO, practiceIds = null) {
+        // Embed the linked contact's practice so leads with no own practice_id
+        // (GHL enquiries) can still be attributed to a site via their contact.
         let q = supabase_1.serviceClient
             .from('leads')
-            .select('source, utm_source, utm_medium, status, practice_id, estimated_value_pence, created_at')
+            .select('source, utm_source, utm_medium, status, practice_id, estimated_value_pence, created_at, contact:contacts(practice_id)')
             .eq('organisation_id', orgId)
             .gte('created_at', sinceISO)
             .lt('created_at', untilISO)
