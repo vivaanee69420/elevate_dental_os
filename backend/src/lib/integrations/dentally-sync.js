@@ -82,11 +82,19 @@ function authHeader(secrets) {
     }
 }
 
-// Page through a Dentally collection endpoint. Honours 429 Retry-After and the
-// mandatory User-Agent + date filter. Returns the flat array of items.
-async function fetchAllPages(base, path, auth, params, onPage = null, maxPages = MAX_PAGES) {
-    const out = [];
+// Page through a Dentally collection endpoint, handing each page to `onBatch`
+// as it arrives (then discarding it) instead of buffering the whole resource.
+// Peak memory is one page (~PER_PAGE rows): a full backfill of a large group
+// otherwise accumulated hundreds of thousands of rows in a single array and
+// OOM-killed the (fire-and-forget) sync process mid-pull — a SIGKILL bypasses
+// the catch, so the in-memory progress froze and the bar stranded at its last
+// value. Honours 429 Retry-After and the mandatory User-Agent + date filter.
+// Returns the total record count fetched. onBatch(items, page) is awaited so the
+// upsert's back-pressure paces the fetch; onPage(page, totalPages, fetchedSoFar)
+// drives the progress bar.
+async function streamPages(base, path, auth, params, onBatch, onPage = null, maxPages = MAX_PAGES) {
     let page = 1;
+    let fetched = 0;
     for (;;) {
         const url = new URL(`${base}${path}`);
         for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) {
@@ -122,21 +130,33 @@ async function fetchAllPages(base, path, auth, params, onPage = null, maxPages =
         // Dentally wraps the collection in a key (e.g. { patients: [...], meta }).
         const key = Object.keys(body).find((k) => Array.isArray(body[k]));
         const items = key ? body[key] : [];
-        out.push(...items);
+        fetched += items.length;
+        // Flush this page before fetching the next — never hold more than one
+        // page of rows in memory.
+        if (items.length && onBatch) await onBatch(items, page);
         const totalPages = body.meta?.total_pages;
-        // out.length = records fetched so far this phase, so the UI can show
+        // fetched = records pulled so far this phase, so the UI can show
         // "1,247 records pulled" live (Dentally often omits total_pages, so a
         // running count is the clearest signal of what's happening).
-        if (onPage) onPage(page, totalPages ? Math.min(totalPages, maxPages) : null, out.length);
+        if (onPage) onPage(page, totalPages ? Math.min(totalPages, maxPages) : null, fetched);
         const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
         if (done) break;
         if (page >= maxPages) { // bound a single run; cursor resumes next sync
-            console.warn(`[dentally] ${path}: hit ${maxPages}-page cap (${out.length} rows), stopping this run`);
+            console.warn(`[dentally] ${path}: hit ${maxPages}-page cap (${fetched} rows), stopping this run`);
             break;
         }
         page++;
         await sleep(RATE_DELAY_MS);
     }
+    return fetched;
+}
+
+// Collect every page into a flat array. Thin wrapper over streamPages for the
+// small, unweighted resources (practitioners, users) where buffering the whole
+// set is cheap. The heavy resources stream-upsert per page instead (see pulls).
+async function fetchAllPages(base, path, auth, params, onPage = null, maxPages = MAX_PAGES) {
+    const out = [];
+    await streamPages(base, path, auth, params, (items) => { out.push(...items); }, onPage, maxPages);
     return out;
 }
 
@@ -261,18 +281,40 @@ function mapAppointmentStatus(s) {
 
 function mapPaymentStatus(p) {
     if (p?.paid === true) return 'settled';
+    // Live Dentally /payments `status` vocabulary: paid | unexplained |
+    // partially_explained (verified against the API). `state` kept for the
+    // webhook/test fakes that predate the live shape.
     switch (String(p?.state || p?.status || '').toLowerCase()) {
         case 'paid': case 'settled': return 'settled';
         case 'failed': case 'declined': return 'failed';
-        case 'refunded': return 'refunded';
+        case 'refunded': case 'reversed': return 'refunded';
+        // unexplained / partially_explained = money in, not yet allocated.
         default: return 'pending';
     }
 }
 
+// Dentally sends `method` as a free-text Title-Case label ("Credit Card",
+// "Debit Card", "Cash", "BACS", ...). The old lowercase-snake whitelist null'd
+// every value that didn't match verbatim — ~94% of real rows. Normalise the
+// known labels to our canonical set; for anything unrecognised keep a slug of
+// the raw value rather than dropping the taxonomy. Only empty -> null.
 function mapPaymentMethod(m) {
-    const v = String(m || '').toLowerCase();
-    const allowed = ['card', 'apple_pay', 'google_pay', 'bank_transfer', 'cash', 'direct_debit', 'finance', 'card_on_file', 'pay_link'];
-    return allowed.includes(v) ? v : null;
+    const v = String(m ?? '').trim().toLowerCase();
+    if (!v) return null;
+    const canon = {
+        'card': 'card', 'credit card': 'card', 'debit card': 'card',
+        'card on file': 'card', 'card_on_file': 'card', 'stripe': 'card',
+        'cash': 'cash',
+        'cheque': 'cheque', 'check': 'cheque',
+        'bacs': 'bank_transfer', 'bank transfer': 'bank_transfer',
+        'bank_transfer': 'bank_transfer', 'direct credit': 'bank_transfer',
+        'direct debit': 'direct_debit', 'direct_debit': 'direct_debit',
+        'finance': 'finance',
+        'apple pay': 'apple_pay', 'apple_pay': 'apple_pay',
+        'google pay': 'google_pay', 'google_pay': 'google_pay',
+        'pay link': 'pay_link', 'pay_link': 'pay_link',
+    };
+    return canon[v] ?? v.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 function toPence(amount) {
@@ -470,6 +512,7 @@ export function appointmentRow(orgId, a, siteMap, contactMap, practitionerMap = 
 }
 
 export function paymentRow(orgId, p, siteMap, contactMap) {
+    if (p?.deleted === true) return null; // Dentally soft-deletes; don't ingest
     const practiceId = siteMap.get(String(p.site_id));
     if (!practiceId) return null;
     return {
@@ -578,9 +621,11 @@ export function invoiceRow(orgId, inv, siteMap, contactMap) {
 // ---- pulls ------------------------------------------------------------------
 
 async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/patients', auth, params, onPage, maxPages);
-    const rows = remote.map((p) => patientRow(orgId, p, siteMap));
-    const synced = await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
+    let synced = 0;
+    await streamPages(base, '/patients', auth, params, async (items) => {
+        const rows = items.map((p) => patientRow(orgId, p, siteMap));
+        synced += await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
+    }, onPage, maxPages);
     return { synced };
 }
 
@@ -615,74 +660,86 @@ export function isOpenAppointment(row, now = Date.now()) {
 }
 
 async function pullAppointments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages, { openOnly = false, practitionerMap = new Map() } = {}) {
-    const remote = await fetchAllPages(base, '/appointments', auth, params, onPage, maxPages);
     const now = Date.now();
-    const rows = [];
+    let synced = 0;
     let skipped = 0;       // unmatched practice (NOT NULL practice_id) — a data-mapping gap
     let skippedClosed = 0; // dropped by the first-pull open filter — expected, not a gap
-    for (const a of remote) {
-        const row = appointmentRow(orgId, a, siteMap, contactMap, practitionerMap);
-        if (!row) { skipped++; continue; } // appointments.practice_id is NOT NULL
-        if (openOnly && !isOpenAppointment(row, now)) { skippedClosed++; continue; }
-        rows.push(row);
-    }
-    const synced = await upsertChunked('appointments', rows, 'organisation_id,source,pms_external_id');
+    await streamPages(base, '/appointments', auth, params, async (items) => {
+        const rows = [];
+        for (const a of items) {
+            const row = appointmentRow(orgId, a, siteMap, contactMap, practitionerMap);
+            if (!row) { skipped++; continue; } // appointments.practice_id is NOT NULL
+            if (openOnly && !isOpenAppointment(row, now)) { skippedClosed++; continue; }
+            rows.push(row);
+        }
+        synced += await upsertChunked('appointments', rows, 'organisation_id,source,pms_external_id');
+    }, onPage, maxPages);
     return { synced, skipped, skippedClosed };
 }
 
 async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/payments', auth, params, onPage, maxPages);
-    const rows = [];
+    let synced = 0;
     let skipped = 0;
-    for (const p of remote) {
-        const row = paymentRow(orgId, p, siteMap, contactMap);
-        if (!row) { skipped++; continue; } // payments.practice_id is NOT NULL
-        rows.push(row);
-    }
-    const synced = await upsertChunked('payments', rows, 'organisation_id,source,external_id');
+    await streamPages(base, '/payments', auth, params, async (items) => {
+        const rows = [];
+        for (const p of items) {
+            const row = paymentRow(orgId, p, siteMap, contactMap);
+            if (!row) { skipped++; continue; } // payments.practice_id is NOT NULL
+            rows.push(row);
+        }
+        synced += await upsertChunked('payments', rows, 'organisation_id,source,external_id');
+    }, onPage, maxPages);
     return { synced, skipped };
 }
 
 async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/treatment_plans', auth, params, onPage, maxPages);
-    const rows = remote
-        .filter((tp) => tp && tp.id != null)
-        .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap));
-    const synced = await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
+    let synced = 0;
+    await streamPages(base, '/treatment_plans', auth, params, async (items) => {
+        const rows = items
+            .filter((tp) => tp && tp.id != null)
+            .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap));
+        synced += await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
+    }, onPage, maxPages);
     return { synced };
 }
 
 async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitionerMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/invoice_items', auth, params, onPage, maxPages);
-    const rows = remote
-        .filter((it) => it && it.id != null)
-        .map((it) => invoiceItemRow(orgId, it, invoiceMap, practitionerMap));
-    const synced = await upsertChunked('invoice_items', rows, 'organisation_id,source,pms_external_id');
+    let synced = 0;
+    await streamPages(base, '/invoice_items', auth, params, async (items) => {
+        const rows = items
+            .filter((it) => it && it.id != null)
+            .map((it) => invoiceItemRow(orgId, it, invoiceMap, practitionerMap));
+        synced += await upsertChunked('invoice_items', rows, 'organisation_id,source,pms_external_id');
+    }, onPage, maxPages);
     return { synced };
 }
 
 async function pullInvoices(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
-    const remote = await fetchAllPages(base, '/invoices', auth, params, onPage, maxPages);
-    const rows = [];
-    // Build the transient invoice map in the same pass — invoice_items carry only
-    // invoice_id, so they resolve practice/contact/date through this map. Saves a
-    // second full /invoices pull (the old buildInvoiceMap path).
-    const invoiceMap = new Map();
+    let synced = 0;
     let skipped = 0;
-    for (const inv of remote) {
-        if (inv && inv.id != null) {
-            invoiceMap.set(String(inv.id), {
-                practice_id: siteMap.get(String(inv.site_id)) ?? null,
-                contact_id: contactMap.get(String(inv.patient_id)) ?? null,
-                dated_on: inv.dated_on ?? null,
-                paid: inv.paid === true,
-            });
+    // Build the transient invoice map across pages — invoice_items carry only
+    // invoice_id, so they resolve practice/contact/date through this map. Saves a
+    // second full /invoices pull (the old buildInvoiceMap path). The map holds 4
+    // small fields per invoice (not the full row), so it stays bounded even as
+    // the invoice rows themselves stream out per page.
+    const invoiceMap = new Map();
+    await streamPages(base, '/invoices', auth, params, async (items) => {
+        const rows = [];
+        for (const inv of items) {
+            if (inv && inv.id != null) {
+                invoiceMap.set(String(inv.id), {
+                    practice_id: siteMap.get(String(inv.site_id)) ?? null,
+                    contact_id: contactMap.get(String(inv.patient_id)) ?? null,
+                    dated_on: inv.dated_on ?? null,
+                    paid: inv.paid === true,
+                });
+            }
+            const row = invoiceRow(orgId, inv, siteMap, contactMap);
+            if (!row) { skipped++; continue; } // invoices.practice_id is NOT NULL
+            rows.push(row);
         }
-        const row = invoiceRow(orgId, inv, siteMap, contactMap);
-        if (!row) { skipped++; continue; } // invoices.practice_id is NOT NULL
-        rows.push(row);
-    }
-    const synced = await upsertChunked('invoices', rows, 'organisation_id,source,external_id');
+        synced += await upsertChunked('invoices', rows, 'organisation_id,source,external_id');
+    }, onPage, maxPages);
     return { synced, skipped, invoiceMap };
 }
 
@@ -746,6 +803,32 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             ? new Date(Date.now() - RECENT_MONTHS * 30 * 86400000).toISOString()
             : (integration.last_sync_at ?? new Date(Date.now() - 30 * 86400000).toISOString());
     const maxPages = full ? BACKFILL_MAX_PAGES : recent ? BOOTSTRAP_MAX_PAGES : MAX_PAGES;
+
+    // Resume checkpoint — only the full backfill (the long, OOM-prone, restart-
+    // exposed path). The process can die mid-pull (deploy, dyno recycle, OOM) and
+    // last_sync_at only advances on full completion, so without this a restarted
+    // full pull re-pulls the same 2-year window from page 1 every time. We record
+    // which heavy phases finished, keyed by the backfill window (day-bucketed:
+    // backfillSince() shifts each ms, so an exact-timestamp key would never match
+    // a later run; the window only moves a day at a time). A re-run for the same
+    // day skips finished phases; already-upserted rows are idempotent regardless.
+    const resumeMode = full;
+    const windowKey = since.slice(0, 10);
+    const prevCursor = integration.config?.dentally_sync_cursor;
+    const completedPhases = (resumeMode && prevCursor && prevCursor.window === windowKey)
+        ? new Set(prevCursor.done ?? [])
+        : new Set();
+    const markPhaseDone = async (phaseKey) => {
+        if (!resumeMode) return;
+        completedPhases.add(phaseKey);
+        try {
+            await integrationRepository.mergeConfig(orgId, 'dentally', {
+                dentally_sync_cursor: { window: windowKey, done: [...completedPhases] },
+            });
+        } catch (err) {
+            console.warn(`[dentally] checkpoint write skipped: ${err?.message || err}`);
+        }
+    };
 
     // All three resources pull the same `updated_since` window. The earlier
     // bootstrap fetched upcoming-only appointments (`after=now`) + all-history
@@ -818,11 +901,23 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             console.warn(`[dentally] users pull skipped: ${err?.message || err}`);
         }
         // Patients first so appointment/payment contact resolution sees fresh ids.
-        const patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
+        // Each heavy phase is skipped if a prior run for this window already
+        // finished it (resume after a mid-backfill restart); contactMap still
+        // loads from the already-upserted contacts, so a skipped patients phase
+        // doesn't strand appointment contact resolution.
+        let patients = { synced: 0 };
+        if (!completedPhases.has('patients')) {
+            patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
+            await markPhaseDone('patients');
+        }
         const contactMap = await loadContactMap(orgId);
         // openOnly defaults false: store every appointment in the window
         // (completed history included), not just upcoming diary blocks.
-        const appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { practitionerMap });
+        let appts = { synced: 0, skipped: 0, skippedClosed: 0 };
+        if (!completedPhases.has('appointments')) {
+            appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { practitionerMap });
+            await markPhaseDone('appointments');
+        }
         // The historical `updated_since` pull above is ordered oldest-first and
         // can exhaust the page cap before reaching today — so future bookings
         // (exactly what the Appointments diary screen shows) may never land.
@@ -841,29 +936,47 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 console.warn(`[dentally] upcoming appointments pull skipped: ${err?.message || err}`);
             }
         }
-        const pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
+        let pays = { synced: 0, skipped: 0 };
+        if (!completedPhases.has('payments')) {
+            pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
+            await markPhaseDone('payments');
+        }
         // Treatment plans = production per practitioner (for the Associate Pay
         // Run). Same window as payments; reuse the practitioner + contact maps to
         // resolve associate_id / contact_id. Weighted phase 3; never fail the
         // whole sync if this resource errors.
         let treatmentPlans = { synced: 0 };
-        try {
-            treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_since: since }, practitionerMap, contactMap, reporter(3), maxPages);
-        } catch (err) {
-            console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
+        if (!completedPhases.has('treatment_plans')) {
+            try {
+                treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_since: since }, practitionerMap, contactMap, reporter(3), maxPages);
+                await markPhaseDone('treatment_plans');
+            } catch (err) {
+                console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
+            }
         }
         // Invoices (phase 4) are pulled once and persisted; the same fetch builds
         // the transient invoice map (practice/contact/date per invoice id) that
         // invoice_items needs to resolve each fee line — no second /invoices pull.
-        const invoices = await pullInvoices(orgId, base, auth, invoiceParams, siteMap, contactMap, reporter(4), maxPages);
-        // Invoice items = the real per-treatment fee feed (treatment name +
-        // price), resolved against the invoice map. Weighted phase 5; same
-        // never-fail-the-whole-sync pattern as plans.
+        // Invoices + invoice_items resume as a unit: invoice_items needs the
+        // invoiceMap that the invoices pull builds, so we only skip the invoices
+        // pull once invoice_items (the final data phase) is recorded done —
+        // otherwise a resumed run would feed invoice_items an empty map and null
+        // out every fee line's practice/date.
+        const invoiceStageDone = completedPhases.has('invoice_items');
+        let invoices = { synced: 0, skipped: 0, invoiceMap: new Map() };
         let invoiceItems = { synced: 0 };
-        try {
-            invoiceItems = await pullInvoiceItems(orgId, base, auth, { updated_since: since }, invoices.invoiceMap ?? new Map(), practitionerMap, reporter(5), maxPages);
-        } catch (err) {
-            console.warn(`[dentally] invoice_items pull skipped: ${err?.message || err}`);
+        if (!invoiceStageDone) {
+            invoices = await pullInvoices(orgId, base, auth, invoiceParams, siteMap, contactMap, reporter(4), maxPages);
+            // Invoice items = the real per-treatment fee feed (treatment name +
+            // price), resolved against the invoice map. Weighted phase 5; same
+            // never-fail-the-whole-sync pattern as plans.
+            try {
+                invoiceItems = await pullInvoiceItems(orgId, base, auth, { updated_since: since }, invoices.invoiceMap ?? new Map(), practitionerMap, reporter(5), maxPages);
+            } catch (err) {
+                console.warn(`[dentally] invoice_items pull skipped: ${err?.message || err}`);
+            }
+            await markPhaseDone('invoices');
+            await markPhaseDone('invoice_items');
         }
         // All pulls done; the relink RPCs below are set-based SQL that can take a
         // while on a large org (hundreds of thousands of appointments). Emit an
@@ -890,6 +1003,16 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             relinkedAssociates = typeof data === 'number' ? data : 0;
         } catch (err) {
             console.warn(`[dentally] relink associates skipped: ${err?.message || err}`);
+        }
+        // The full pull completed — last_sync_at now covers the window, so the
+        // resume checkpoint is spent. Clear it so the next full pull starts fresh
+        // rather than skipping phases against a stale window.
+        if (resumeMode) {
+            try {
+                await integrationRepository.mergeConfig(orgId, 'dentally', { dentally_sync_cursor: null });
+            } catch (err) {
+                console.warn(`[dentally] checkpoint clear skipped: ${err?.message || err}`);
+            }
         }
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
@@ -992,4 +1115,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment };
+export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow };

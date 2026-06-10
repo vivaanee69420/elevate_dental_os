@@ -25,14 +25,37 @@ describe('dentally mappers', () => {
         expect(__test.mapAppointmentStatus('cancelled')).toBe('cancelled');
         expect(__test.mapAppointmentStatus('wibble')).toBe('scheduled');
     });
-    it('mapPaymentStatus: paid flag + state', () => {
+    it('mapPaymentStatus: Dentally status strings + legacy paid flag', () => {
+        // Live Dentally /payments status vocabulary (verified against the API).
+        expect(__test.mapPaymentStatus({ status: 'paid' })).toBe('settled');
+        expect(__test.mapPaymentStatus({ status: 'unexplained' })).toBe('pending');
+        expect(__test.mapPaymentStatus({ status: 'partially_explained' })).toBe('pending');
+        // Back-compat with the old fake/webhook shapes.
         expect(__test.mapPaymentStatus({ paid: true })).toBe('settled');
         expect(__test.mapPaymentStatus({ state: 'failed' })).toBe('failed');
         expect(__test.mapPaymentStatus({ state: 'whatever' })).toBe('pending');
     });
-    it('mapPaymentMethod allowlists, else null', () => {
+    it('mapPaymentMethod normalises Dentally Title-Case methods, slugs unknowns', () => {
+        // Dentally sends Title-Case strings ("Credit Card") — the old lowercase
+        // snake whitelist null'd ~94% of real rows. Normalise to our canonical set.
+        expect(__test.mapPaymentMethod('Credit Card')).toBe('card');
+        expect(__test.mapPaymentMethod('Debit Card')).toBe('card');
+        expect(__test.mapPaymentMethod('Cash')).toBe('cash');
+        expect(__test.mapPaymentMethod('BACS')).toBe('bank_transfer');
+        expect(__test.mapPaymentMethod('Direct Debit')).toBe('direct_debit');
         expect(__test.mapPaymentMethod('CARD')).toBe('card');
-        expect(__test.mapPaymentMethod('crypto')).toBeNull();
+        // Unknown but real method: preserve as a slug, never silently null.
+        expect(__test.mapPaymentMethod('Crypto Wallet')).toBe('crypto_wallet');
+        // Only genuinely empty values map to null.
+        expect(__test.mapPaymentMethod('')).toBeNull();
+        expect(__test.mapPaymentMethod(null)).toBeNull();
+    });
+    it('paymentRow: skips Dentally-deleted payments', () => {
+        const siteMap = new Map([['s1', 'prac-1']]);
+        const contactMap = new Map([['pat-1', 'contact-1']]);
+        const base = { id: 'p1', site_id: 's1', patient_id: 'pat-1', amount: '40.0', method: 'Credit Card', status: 'paid', dated_on: '2026-05-10' };
+        expect(__test.paymentRow('org-1', base, siteMap, contactMap)).toMatchObject({ method: 'card', status: 'settled', amount_pence: 4000 });
+        expect(__test.paymentRow('org-1', { ...base, deleted: true }, siteMap, contactMap)).toBeNull();
     });
 });
 
@@ -184,10 +207,99 @@ describe('fetchAllPages', () => {
     });
 });
 
+describe('streamPages (bounded-memory pagination)', () => {
+    it('hands each page to onBatch and never buffers the whole resource', async () => {
+        global.fetch = vi.fn()
+            .mockResolvedValueOnce(page({ appointments: [{ id: 1 }, { id: 2 }], meta: { total_pages: 3 } }))
+            .mockResolvedValueOnce(page({ appointments: [{ id: 3 }, { id: 4 }], meta: { total_pages: 3 } }))
+            .mockResolvedValueOnce(page({ appointments: [{ id: 5 }], meta: { total_pages: 3 } }));
+        const batches = [];
+        const total = await __test.streamPages('https://b', '/appointments', 'Bearer k', { updated_since: 'x' },
+            (items, p) => { batches.push({ p, n: items.length, ids: items.map((i) => i.id) }); });
+        // One batch per page — the caller upserts+discards each, so peak memory is
+        // a single page, not all 5 rows at once.
+        expect(batches.map((b) => b.n)).toEqual([2, 2, 1]);
+        expect(batches.flatMap((b) => b.ids)).toEqual([1, 2, 3, 4, 5]);
+        expect(total).toBe(5); // returns the running count, not an accumulated array
+    });
+});
+
 describe('syncOneOrg', () => {
     beforeEach(() => {
         integrationRepository.upsert.mockReset();
         integrationRepository.markFailed.mockReset();
+        integrationRepository.mergeConfig.mockReset();
+    });
+
+    it('streams appointment upserts one per page (no single buffered upsert of the whole resource)', async () => {
+        const base = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        const apptUpsertSizes = [];
+        supaRec.resultProvider = (q) => {
+            if (q.op === 'upsert' && q.table === 'appointments') apptUpsertSizes.push(q.upsertVals.length);
+            return base(q);
+        };
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            if (u.pathname.endsWith('/appointments') && u.searchParams.get('after') == null) {
+                const p = Number(u.searchParams.get('page'));
+                return page({ appointments: [
+                    { id: `A${p}a`, patient_id: 'P1', site_id: 'S1', start_time: 't', finish_time: 't', state: 'completed' },
+                    { id: `A${p}b`, patient_id: 'P1', site_id: 'S1', start_time: 't', finish_time: 't', state: 'completed' },
+                ], meta: { total_pages: 3 } });
+            }
+            const seg = u.pathname.split('/').pop();
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        const res = await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-01-01T00:00:00Z' });
+        // 3 pages => 3 separate upserts of 2 rows each. The old code buffered all
+        // pages then issued ONE upsert of 6 (the unbounded array that OOM-killed
+        // a large backfill).
+        expect(apptUpsertSizes).toEqual([2, 2, 2]);
+        expect(res.appointments).toBe(6);
+    });
+
+    it('full pull records a per-phase checkpoint and clears it on completion', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        global.fetch = vi.fn(async (url) => {
+            const seg = new URL(url.toString()).pathname.split('/').pop();
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-01-01T00:00:00Z' }, () => {}, { full: true });
+        const cursorCalls = integrationRepository.mergeConfig.mock.calls.filter((c) => 'dentally_sync_cursor' in (c[2] ?? {}));
+        // A checkpoint is written per completed heavy phase, then cleared at the end.
+        expect(cursorCalls.length).toBeGreaterThan(1);
+        expect(cursorCalls.at(-1)[2].dentally_sync_cursor).toBeNull();
+    });
+
+    it('resume: a checkpointed phase for the same window is not re-pulled', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-06-10T00:00:00Z'));
+        const windowKey = new Date(Date.now() - 2 * 365 * 86400000).toISOString().slice(0, 10);
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        const pageOneHits = {};
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            const seg = u.pathname.split('/').pop();
+            if (u.searchParams.get('page') === '1') pageOneHits[seg] = (pageOneHits[seg] ?? 0) + 1;
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', {
+            secrets,
+            config: { dentally_sync_cursor: { window: windowKey, done: ['patients'] } },
+            last_sync_at: '2026-01-01T00:00:00Z',
+        }, () => {}, { full: true });
+        // patients: up-front page-count probe fires (1 hit) but the pull is skipped
+        // by the checkpoint — so exactly 1 page-1 hit, not 2.
+        expect(pageOneHits['patients']).toBe(1);
+        // appointments: not checkpointed -> probe + real pull = 2 page-1 hits.
+        expect(pageOneHits['appointments']).toBe(2);
+        vi.useRealTimers();
     });
 
     it('maps + upserts with practice resolution and skips unmatched-practice rows', async () => {
