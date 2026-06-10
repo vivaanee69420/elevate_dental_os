@@ -95,14 +95,54 @@ router.get('/marketing', (0, async_handler_1.asyncHandler)(async (req, res) => {
     });
 }));
 
+// Loyalty & membership summary — real data from membership_plans + memberships
+// (manual/seeded, org-scoped). Returns active/total member counts, per-tier
+// member breakdown, and MRR (sum of active members * plan monthly price).
+// All money is integer PENCE. No external integration feeds this.
 router.get('/loyalty', (0, async_handler_1.asyncHandler)(async (req, res) => {
-    const { data } = await supabase_1.serviceClient
-        .from('memberships')
-        .select('id, plan_id, status, started_at')
-        .eq('organisation_id', req.user.organisation_id);
+    const orgId = req.user.organisation_id;
+    const [plansRes, membersRes] = await Promise.all([
+        supabase_1.serviceClient
+            .from('membership_plans')
+            .select('id, name, description, monthly_price_pence, benefits, active')
+            .eq('organisation_id', orgId),
+        supabase_1.serviceClient
+            .from('memberships')
+            .select('id, plan_id, status, started_at')
+            .eq('organisation_id', orgId),
+    ]);
+    const plans = plansRes.data ?? [];
+    const members = membersRes.data ?? [];
+    const activeMembers = members.filter((m) => m.status === 'active');
+    const activeByPlan = activeMembers.reduce((acc, m) => {
+        acc[m.plan_id] = (acc[m.plan_id] ?? 0) + 1;
+        return acc;
+    }, {});
+    const tiers = plans
+        .filter((p) => p.active !== false)
+        .map((p) => {
+            const count = activeByPlan[p.id] ?? 0;
+            return {
+                id: p.id,
+                name: p.name,
+                description: p.description ?? null,
+                monthly_price_pence: p.monthly_price_pence,
+                benefits: Array.isArray(p.benefits) ? p.benefits : [],
+                members: count,
+                mrr_pence: count * p.monthly_price_pence,
+            };
+        });
+    const mrr_pence = tiers.reduce((s, t) => s + t.mrr_pence, 0);
     res.json({
-        active: (data ?? []).filter((m) => m.status === 'active').length,
-        total: (data ?? []).length,
+        active: activeMembers.length,
+        total: members.length,
+        mrr_pence,
+        tiers,
+        // No automated-rewards or campaigns table exists yet — return empty so
+        // the UI shows zero/empty states instead of fabricated rows. Wire these
+        // once a loyalty_rewards / loyalty_campaigns source lands.
+        rewards: [],
+        campaigns: [],
     });
 }));
 
