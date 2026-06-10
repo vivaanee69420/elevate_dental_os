@@ -1,6 +1,11 @@
-// Money is integer pence everywhere. Display as £ with en-GB grouping.
+// Money is integer pence everywhere. Display as £ with en-GB grouping and a
+// fixed 2 decimals — bare toLocaleString drops trailing zeros (15108630 ->
+// "151,086.3", 4600 -> "46"), which reads as a broken/missing penny on money cards.
 export function formatPence(pence: number | null | undefined): string {
-  return `£${((pence || 0) / 100).toLocaleString('en-GB')}`;
+  return `£${((pence || 0) / 100).toLocaleString('en-GB', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 export function formatNumber(n: number | null | undefined): string {
