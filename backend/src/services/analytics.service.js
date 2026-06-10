@@ -1479,12 +1479,12 @@ export const analyticsService = {
             netProfitPence = pl.netProfit;
             marginPct = pl.marginPct;
             turnoverBasis = 'actuals';
-        } else if (billedPence > periodRevenue) {
-            // Turnover = invoiced production (billed). Cash collected stays settled
-            // receipts, so the collection rate (cash/turnover) is real (<100%).
-            // Guard: never let turnover drop below banked cash — if invoice coverage
-            // is patchy (billed < settled) we fall back to settled so the rate can't
-            // exceed 100%.
+        } else if (billedPence > 0) {
+            // Turnover = invoiced production (billed) whenever billing data exists,
+            // so it agrees with Group Overview and never collapses to == cash in
+            // short windows (where settled cash for prior work can exceed in-window
+            // billing). Cash collected stays settled receipts; collection rate
+            // (cash/turnover) can legitimately exceed 100% over a short window.
             revenuePence = billedPence;
             turnoverBasis = 'billed';
         }
@@ -2167,6 +2167,11 @@ export const analyticsService = {
         ]);
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         const num = (v) => Number(v || 0);
+        // Turnover = billed production (invoice_items), so Group Overview agrees
+        // with the Command Centre. cashCollected stays settled receipts. revBy
+        // (settled per practice) is surfaced as the per-practice cash figure.
+        const billedBy = new Map();
+        for (const r of revLineRows) billedBy.set(r.practice_id, (billedBy.get(r.practice_id) || 0) + num(r.fee_pence));
         const revBy = new Map(revRows.map((r) => [r.practice_id, num(r.pence)]));
         const apBy = new Map(apptRows.map((r) => [r.practice_id, r]));
         const ldBy = new Map(leadRows.map((r) => [r.practice_id, r]));
@@ -2182,7 +2187,8 @@ export const analyticsService = {
                 practiceId: p.id,
                 name: p.name,
                 chairs: p.chairs || 0,
-                revenuePence: revBy.get(p.id) || 0,
+                revenuePence: billedBy.get(p.id) || 0,      // turnover = invoiced production
+                cashCollectedPence: revBy.get(p.id) || 0,   // settled receipts for this practice
                 appointments,
                 completed: num(ap.completed),
                 noShows,

@@ -138,16 +138,19 @@ describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
     expect(r.cashCollectedPence).toBe(80_000_000); // settled receipts → 80% collection
   });
 
-  it('billed production < settled cash → guard falls back to settled (never >100%)', async () => {
+  it('turnover = invoiced production even when billed < settled cash (collection rate may exceed 100%)', async () => {
+    // Short windows can bank more settled cash (for prior work) than the in-window
+    // billing. Turnover still follows billed production so it agrees with Group
+    // Overview and never collapses to == cash; cash collected stays settled.
     supaRec.resultProvider = () => ({ data: [], error: null });
     supaRec.rpcProvider = (fn) =>
       fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-03-01', pence: 90_000_000 }], error: null }
       : fn === 'treatment_revenue_matrix' ? { data: [{ practice_id: 'p1', fee_pence: 40_000_000, item_count: 1 }], error: null }
       : { data: [], error: null };
     const r = await svc.dashboardSummary(ORG_A, { now });
-    expect(r.turnoverBasis).toBe('settled');
-    expect(r.revenuePence).toBe(90_000_000);
-    expect(r.cashCollectedPence).toBe(90_000_000);
+    expect(r.turnoverBasis).toBe('billed');
+    expect(r.revenuePence).toBe(40_000_000);        // invoiced production
+    expect(r.cashCollectedPence).toBe(90_000_000);  // settled receipts (can exceed turnover)
   });
 
   it('custom range scopes revenue to the period (KPIs follow MTD/QTD/etc.)', async () => {
@@ -484,6 +487,11 @@ describe('CROSS-ORG ISOLATION — dashboard queries pin org', () => {
 describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)', () => {
   // RPC rollups: revenue / appointments / leads aggregated server-side.
   const rollups = (fn) => {
+    // Turnover follows billed production (treatment_revenue_matrix); settled
+    // payments (settled_revenue_by_practice) become per-practice cash collected.
+    // Distinct values so the test proves which source drives turnover.
+    if (fn === 'treatment_revenue_matrix')
+      return { data: [{ practice_id: 'p1', treatment_name: 'X', fee_pence: 120000, item_count: 2 }, { practice_id: 'p2', treatment_name: 'Y', fee_pence: 60000, item_count: 1 }], error: null };
     if (fn === 'settled_revenue_by_practice')
       return { data: [{ practice_id: 'p1', pence: 100000 }, { practice_id: 'p2', pence: 50000 }], error: null };
     if (fn === 'appointments_rollup_by_practice')
@@ -501,7 +509,7 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     supaRec.rpcProvider = rollups;
     const res = await svc.businessHub(ORG_A, { days: 90, now: () => new Date('2026-05-25T00:00:00Z') });
 
-    expect(res.group.revenuePence).toBe(150000);
+    expect(res.group.revenuePence).toBe(180000);          // turnover = billed (120k + 60k)
     expect(res.group.appointments).toBe(3);
     expect(res.group.noShows).toBe(1);
     expect(res.group.leads).toBe(2);
@@ -510,9 +518,9 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.truncated).toBe(false);
 
     expect(res.practices[0]).toMatchObject({
-      name: 'Alpha', revenuePence: 100000, appointments: 2, noShows: 1, noShowRate: 50, leads: 2, conversionRate: 50,
+      name: 'Alpha', revenuePence: 120000, cashCollectedPence: 100000, appointments: 2, noShows: 1, noShowRate: 50, leads: 2, conversionRate: 50,
     });
-    expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 50000, appointments: 1 });
+    expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 60000, cashCollectedPence: 50000, appointments: 1 });
   });
 
   it('noShowTracked reflects whether any no_show appointment exists (— vs 0% in the UI)', async () => {
