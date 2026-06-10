@@ -95,13 +95,20 @@ router.get('/marketing', (0, async_handler_1.asyncHandler)(async (req, res) => {
     });
 }));
 
-// Loyalty & membership summary — real data from membership_plans + memberships
-// (manual/seeded, org-scoped). Returns active/total member counts, per-tier
-// member breakdown, and MRR (sum of active members * plan monthly price).
-// All money is integer PENCE. No external integration feeds this.
+// Loyalty & membership summary — all real, org-scoped data:
+//   - tiers / members / MRR  ← membership_plans + memberships (manual/seeded)
+//   - rewards                ← active workflows (marketing automation engine)
+//   - campaigns              ← ad_metrics (Meta/Google ad spend, last 30 days)
+// Dentally feeds NONE of this. All money is integer PENCE.
 router.get('/loyalty', (0, async_handler_1.asyncHandler)(async (req, res) => {
     const orgId = req.user.organisation_id;
-    const [plansRes, membersRes] = await Promise.all([
+    // Top campaigns window: trailing 30 days (ad_metrics.metric_date is a DATE).
+    const today = new Date();
+    const fromDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+    const toDate = today.toISOString().slice(0, 10);
+    const [plansRes, membersRes, workflowsRes, adRes] = await Promise.all([
         supabase_1.serviceClient
             .from('membership_plans')
             .select('id, name, description, monthly_price_pence, benefits, active')
@@ -110,6 +117,18 @@ router.get('/loyalty', (0, async_handler_1.asyncHandler)(async (req, res) => {
             .from('memberships')
             .select('id, plan_id, status, started_at')
             .eq('organisation_id', orgId),
+        supabase_1.serviceClient
+            .from('workflows')
+            .select('id, name, active, trigger_type, total_runs, successful_runs')
+            .eq('organisation_id', orgId)
+            .eq('active', true)
+            .order('total_runs', { ascending: false }),
+        supabase_1.serviceClient
+            .from('ad_metrics')
+            .select('campaign_name, provider, spend_pence, conversions, leads')
+            .eq('organisation_id', orgId)
+            .gte('metric_date', fromDate)
+            .lte('metric_date', toDate),
     ]);
     const plans = plansRes.data ?? [];
     const members = membersRes.data ?? [];
@@ -133,16 +152,50 @@ router.get('/loyalty', (0, async_handler_1.asyncHandler)(async (req, res) => {
             };
         });
     const mrr_pence = tiers.reduce((s, t) => s + t.mrr_pence, 0);
+    // Automated rewards = active marketing workflows. Detail = run throughput.
+    const rewards = (workflowsRes.data ?? []).map((w) => {
+        const runs = w.total_runs ?? 0;
+        const ok = w.successful_runs ?? 0;
+        const rate = runs > 0 ? Math.round((ok / runs) * 100) : 0;
+        return {
+            id: w.id,
+            title: w.name,
+            detail: runs > 0
+                ? `${runs.toLocaleString('en-GB')} runs · ${rate}% success`
+                : 'Active · no runs yet',
+        };
+    });
+    // Top campaign(s) last 30 days — aggregate ad_metrics rows by campaign.
+    const byCampaign = {};
+    for (const m of adRes.data ?? []) {
+        const key = m.campaign_name || '(unnamed campaign)';
+        const c = byCampaign[key] || (byCampaign[key] = {
+            name: key, provider: m.provider, spend_pence: 0, conversions: 0, leads: 0,
+        });
+        c.spend_pence += m.spend_pence ?? 0;
+        c.conversions += m.conversions ?? 0;
+        c.leads += m.leads ?? 0;
+    }
+    const campaigns = Object.values(byCampaign)
+        .sort((a, b) => b.spend_pence - a.spend_pence)
+        .slice(0, 5)
+        .map((c, i) => {
+            const results = c.conversions || c.leads;
+            const pounds = `£${Math.round(c.spend_pence / 100).toLocaleString('en-GB')}`;
+            return {
+                id: `${c.name}-${i}`,
+                name: c.name,
+                window: i === 0 ? 'Top campaign · last 30 days' : 'Last 30 days',
+                detail: `${results.toLocaleString('en-GB')} results · ${pounds} spend`,
+            };
+        });
     res.json({
         active: activeMembers.length,
         total: members.length,
         mrr_pence,
         tiers,
-        // No automated-rewards or campaigns table exists yet — return empty so
-        // the UI shows zero/empty states instead of fabricated rows. Wire these
-        // once a loyalty_rewards / loyalty_campaigns source lands.
-        rewards: [],
-        campaigns: [],
+        rewards,
+        campaigns,
     });
 }));
 
