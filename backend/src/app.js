@@ -60,6 +60,8 @@ const CORS_ALLOWED = [
     'https://app.elevate.app',
     'https://dev.elevate.app',
     'https://staging.elevate.app',
+    'https://elevatedentalos.co.uk',
+    'https://www.elevatedentalos.co.uk',
     'https://talented-solace-production-cd10.up.railway.app',
     process.env.FRONTEND_URL,
 ].filter(Boolean);
