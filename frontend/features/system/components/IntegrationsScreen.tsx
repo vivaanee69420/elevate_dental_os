@@ -81,6 +81,8 @@ export default function IntegrationsScreen() {
   } | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [locInput, setLocInput] = useState('');
+  // Provider awaiting disconnect confirmation (disconnect hides its data).
+  const [confirmDisconnect, setConfirmDisconnect] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
     kind: 'error' | 'success';
     title: string;
@@ -233,12 +235,19 @@ export default function IntegrationsScreen() {
                           {syncing === p.id ? 'Refreshing…' : 'Refresh data'}
                         </button>
                       )}
+                      <Chip colour="emerald">Connected</Chip>
                       <button
-                        onClick={() => revoke.mutate(p.id)}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                        title="Disconnect"
+                        onClick={() => setConfirmDisconnect(p.id)}
+                        disabled={revoke.isPending}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)',
+                          borderRadius: 6, padding: '4px 8px', fontSize: 11,
+                          color: 'var(--danger, #b91c1c)',
+                          cursor: revoke.isPending ? 'default' : 'pointer',
+                        }}
+                        title="Disconnect and hide this integration's data"
                       >
-                        <Chip colour="emerald">Connected</Chip>
+                        Disconnect
                       </button>
                     </div>
                   ) : (
@@ -290,6 +299,56 @@ export default function IntegrationsScreen() {
                 }}
               >
                 OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmDisconnect && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          }}
+          onClick={() => setConfirmDisconnect(null)}
+        >
+          <div
+            className="card-padded"
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: 'white', maxWidth: 440, width: '90%' }}
+          >
+            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
+              Disconnect {confirmDisconnect}?
+            </h3>
+            <p className="text-ink-muted" style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 16 }}>
+              This stops syncing and hides all data from this integration across the app.
+              Your synced records are kept — reconnecting restores them. Manually-entered data
+              is not affected.
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setConfirmDisconnect(null)}
+                style={{
+                  padding: '8px 14px', border: '1px solid var(--border)',
+                  borderRadius: 6, fontSize: 12, background: 'white', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const provider = confirmDisconnect;
+                  setConfirmDisconnect(null);
+                  revoke.mutate(provider);
+                }}
+                disabled={revoke.isPending}
+                style={{
+                  padding: '8px 14px', background: 'var(--danger, #b91c1c)',
+                  color: 'white', border: 'none', borderRadius: 6,
+                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}
+              >
+                {revoke.isPending ? 'Disconnecting…' : 'Disconnect'}
               </button>
             </div>
           </div>

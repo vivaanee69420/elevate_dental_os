@@ -12,6 +12,7 @@ import { searchPlaces } from "../lib/integrations/google-places.js";
 import { getUserToken, listPages } from "../lib/integrations/meta-reviews.js";
 import { syncOneOrg } from "../lib/integrations/reviews-sync.js";
 import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
+import { isRevoked } from "../lib/integration-gating.js";
 
 const SYNC_PROVIDER = 'reviews';
 const SYNC_STALE_MS = 10 * 60 * 1000;
@@ -52,10 +53,16 @@ export const reviewService = {
     // The whole Reviews screen payload: feed + summary + the account list (so the
     // filter bar can render every source even before any review is synced).
     async list(orgId, filters = {}) {
-        const [reviews, sources] = await Promise.all([
+        let [reviews, sources] = await Promise.all([
             review_repository_1.reviewRepository.list(orgId, filters),
             reviewSourceRepository.list(orgId),
         ]);
+        // Facebook reviews ride on the Meta (meta_ads) connection; disconnecting
+        // it hides them. Google reviews are key-only (no integration) and stay.
+        if (await isRevoked(orgId, 'meta_ads')) {
+            reviews = reviews.filter((r) => r.source !== 'facebook');
+            sources = sources.filter((s) => s.provider !== 'facebook');
+        }
         // Aggregates come from the SELECTED sources (true volume), narrowed to the
         // active filter so the KPIs track the filter bar.
         let active = sources.filter((s) => s.is_selected);

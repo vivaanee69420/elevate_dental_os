@@ -2,16 +2,27 @@
 // Payment repository — all Supabase data access for the payments domain.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { revokedSources } from "../lib/integration-gating.js";
+
+// payments.source is the integration provider id ('dentally' | 'quickbooks');
+// manual rows are 'manual' or null. A disconnected source's rows are hidden.
+const PAYMENT_SOURCES = ['dentally', 'quickbooks'];
+
 export const paymentRepository = {
     async list(orgId, q) {
         const limit = q.limit ?? 25;
         const page = q.page ?? 1;
         const from = (page - 1) * limit;
         const to = from + limit - 1;
+        // Resolve gating first so the payments query stays the last query issued.
+        const drop = await revokedSources(orgId, PAYMENT_SOURCES);
         let query = supabase_1.serviceClient
             .from('payments')
             .select('*, contact:contacts(id, first_name, last_name), practice:practices(id, name)', { count: 'exact' })
             .eq('organisation_id', orgId);
+        // not.in drops the revoked sources; is.null keeps manual rows (NOT IN is
+        // NULL for a null source, which would otherwise exclude them).
+        if (drop.length) query = query.or(`source.is.null,source.not.in.(${drop.join(',')})`);
         if (q.status)
             query = query.eq('status', q.status);
         // Filter + order by processed_at (the REAL payment date). created_at is
@@ -40,6 +51,7 @@ export const paymentRepository = {
             p_since: since ?? null,
             p_until: until ?? null,
             p_practice: practiceId ?? null,
+            p_exclude_sources: await revokedSources(orgId, PAYMENT_SOURCES),
         });
         if (error)
             throw new Error(error.message);
@@ -60,6 +72,7 @@ export const paymentRepository = {
         return data;
     },
     async sourceBreakdown(orgId, since) {
+        const drop = new Set(await revokedSources(orgId, PAYMENT_SOURCES));
         const { data, error } = await supabase_1.serviceClient
             .from('payments')
             .select('source, amount_pence, status')
@@ -67,7 +80,7 @@ export const paymentRepository = {
             .gte('processed_at', since);
         if (error) throw new Error(error.message);
         const out = {};
-        for (const p of data ?? []) {
+        for (const p of (data ?? []).filter((r) => !drop.has(r.source))) {
             const k = p.source ?? 'manual';
             if (!out[k]) out[k] = { count: 0, pence: 0 };
             out[k].count++;

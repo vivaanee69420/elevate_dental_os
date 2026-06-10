@@ -4,8 +4,11 @@
 // (serviceClient path) — the explicit .eq('organisation_id', orgId) is required.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { pmsHidden, revokedSources } from "../lib/integration-gating.js";
 export const debtRepository = {
     async listUnpaid(orgId, { practiceId = null } = {}) {
+        // Unpaid invoices are Dentally-synced (untagged) → hide while PMS revoked.
+        if (await pmsHidden(orgId)) return [];
         let query = supabase_1.serviceClient
             .from('invoices')
             .select('id, amount_outstanding_pence, dated_on, due_on, treatment, patient_name, practice:practices(name), contact:contacts(first_name, last_name)')
@@ -22,9 +25,10 @@ export const debtRepository = {
     // collected (QuickBooks/Xero/Stripe payments), summed in pence. Caller
     // passes a trailing-12-month sinceISO. practiceId scopes to one practice.
     async settledSince(orgId, sinceISO, { practiceId = null } = {}) {
+        const drop = new Set(await revokedSources(orgId, ['dentally', 'quickbooks']));
         let query = supabase_1.serviceClient
             .from('payments')
-            .select('amount_pence')
+            .select('amount_pence, source')
             .eq('organisation_id', orgId)
             .eq('status', 'settled')
             .gte('processed_at', sinceISO)
@@ -32,6 +36,6 @@ export const debtRepository = {
         if (practiceId) query = query.eq('practice_id', practiceId);
         const { data, error } = await query;
         if (error) throw new Error(error.message);
-        return (data ?? []).reduce((s, p) => s + (p.amount_pence ?? 0), 0);
+        return (data ?? []).filter((p) => !drop.has(p.source)).reduce((s, p) => s + (p.amount_pence ?? 0), 0);
     },
 };

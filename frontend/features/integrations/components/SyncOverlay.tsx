@@ -92,7 +92,7 @@ export default function SyncOverlay({
   const subtitle = errored
     ? data?.error
     : stalled
-      ? 'No update for a while — the server may have restarted mid-import, or the connection dropped. Your data keeps importing on the server; close this and check back shortly.'
+      ? 'No update for a while — the import looks like it stopped (a server restart or dropped connection). Whatever was already pulled is saved. Close this, then run the sync again: a full pull resumes from where it left off, it does not start over.'
       : `${phase} · ${pct}%`;
   const barColour = errored ? 'var(--danger, #DC2626)' : stalled ? '#D97706' : 'var(--brand)';
 

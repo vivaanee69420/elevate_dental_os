@@ -2,6 +2,7 @@
 // Pay-run repository — all Supabase data access for the pay-runs domain.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { pmsHidden } from "../lib/integration-gating.js";
 export const payRunRepository = {
     async list(orgId) {
         const { data } = await supabase_1.serviceClient
@@ -34,6 +35,7 @@ export const payRunRepository = {
     // summed from treatment_plans. Prefers the associate_production RPC; falls
     // back to a paginated JS-side sum if the RPC is absent.
     async productionByAssociate(orgId, { start, end }) {
+        if (await pmsHidden(orgId)) return new Map();
         const { data, error } = await supabase_1.serviceClient
             .rpc('associate_production', { p_org: orgId, p_start: start, p_end: end });
         if (!error && Array.isArray(data)) {

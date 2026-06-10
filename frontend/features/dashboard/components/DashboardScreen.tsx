@@ -209,7 +209,13 @@ export default function DashboardScreen() {
         icon: '📈',
         label: 'Turnover',
         value: ccPounds(rev),
-        sub: `${periodLabel} · real settled payments`,
+        sub: `${periodLabel} · ${
+          summary?.turnoverBasis === 'billed'
+            ? 'invoiced production'
+            : summary?.turnoverBasis === 'actuals'
+              ? 'Xero actuals'
+              : 'real settled payments'
+        }`,
         colour: POS,
         link: '/cashflow',
       },

@@ -8,9 +8,11 @@
 // VOLUME mix only: { type, volume }. Revenue/margin are not sourced here.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { pmsHidden } from "../lib/integration-gating.js";
 
 export const treatmentRepository = {
     async mixByType(orgId, { practiceId, since, until }) {
+        if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient
             .rpc('treatment_mix_stats', { p_org: orgId, p_practice: practiceId ?? null, p_since: since, p_until: until ?? null });
         if (!error && Array.isArray(data)) {

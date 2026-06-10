@@ -1,5 +1,44 @@
 # TODOS
 
+## AI assistant — Phase C: durable conversation history (next build)
+
+**Status:** AI is ship-functional. Phases 1 (harden) + B/2 (tool-use chat) are
+done and on `main`. All 5 surfaces work: chat coach, analyst, board report,
+insights, task generation — each drives `get_metrics` via the tool loop, is
+budget-gated + rate-limited, returns schema-enforced JSON, sanitizes/delimits
+context, audits every call, binds `orgId` server-side. The ONLY missing AI
+feature is durable conversation history.
+
+**The gap:** chat history is ephemeral — `P4gAiScreen.tsx` holds `messages` in
+React state and sends it client-side on each `POST /api/p4g-ai/chat`. It is lost
+on page reload, and the client-sent `history` array is a tamper/injection
+surface. No server-side persistence, no windowing, no GDPR erasure.
+
+**Phase C scope (deferred from the snapshot + drill-down design docs):**
+- `ai_conversations` + `ai_messages` tables (next migration in ledger).
+- Rolling-summary windowing (keep last N turns verbatim; summarize older into a
+  running summary once history exceeds a token budget).
+- `snapshot_at` stamping so replayed turns are interpretable against the data
+  shown at the time.
+- Budget accounting for history tokens.
+- GDPR erasure (hard delete; user self-delete + Owner purge on offboarding).
+- Delimit stored history on replay (already delimited in `askPlan4GrowthAI`,
+  but the model must stay authoritative — stop trusting client-sent `history`).
+- Branch off fresh `main`. Collides with nothing now that Phase 2 is merged.
+- Design not yet locked: 4 open decisions (frontend UX scope, windowing trigger,
+  erasure surface, source-of-truth) — brainstorm before plan.
+
+**Phase B small follow-ups (non-blocking):**
+- Budget billed once pre-loop; multi-round tool exchange bills summed usage after
+  (bounded by maxRounds 5; monthly aggregate so minor). Fix = plumb `onUsage`
+  into `runToolLoop` for incremental re-check.
+- Yearly (YYYY) periods deliberately NOT exposed — Phase 1 `treatmentWindow` has
+  no year path (would return current-month data mislabeled). Real yearly rollup =
+  future work (sum monthly snapshots).
+- Prompt-delimiting gap (pre-existing): board/insights/tasks embed
+  `JSON.stringify(data)` bare; only analyst + chat wrap in `<business_data>`. Low
+  risk (structured JSON, not free-text) — route all 5 through `buildContextString`.
+
 ## Meta Ads — fill in live credentials (code complete)
 
 **What:** Provide real Meta app credentials so the Meta Ads integration can
@@ -143,3 +182,28 @@ P3 (maintainability): `chair_utilisation` SLOTS list duplicated in 4 places
 
 P3 (design): Heatmap percentage labels are white on amber `#F59E0B` (~2:1) — fails
 WCAG AA. Use dark ink on light buckets or darken the amber.
+
+## Backend wiring — screens still on mock data (as of 8 Jun 2026)
+
+**Status:** 42 screens live, ~28 still mock. Replace `features/*/data.ts`/`mock.ts`
+with real API per domain.
+
+**Still mock:**
+- **Wealth (4):** Net Worth, Pensions, Property, FIRE Plan
+- **CRM (5):** Today, Enquiries, Templates, Pages, Settings
+- **Marketing/Growth (5):** Marketing, Reviews, Loyalty, Booking, Benchmark
+- **Training (2):** Mentorship Calls, 1-to-1 Coaching
+- **Finance/Intelligence (3):** Financial, Tax, Alerts
+- **Ops/Payments (2):** UDA, Payments
+- **Notifications (2):** Notifications, Notification Preferences
+- **Other (5):** Contacts, Leads, Progress (health), Settings (global), Mobile
+
+**Partial (LIVE but still import mock — cleanup pass):** Inbox, Pipeline,
+Sequences, Cashflow, Profit, Valuation, Pay, KPI Scorecard, AI Insights,
+P4G AI, Team Permissions.
+
+**Verify before assuming mock (heuristic flagged, may take props):** Leads,
+Contacts, Payments, Progress, Mobile.
+
+**Suggested order:** Payments (rollup RPCs already exist — quick win) →
+Wealth block (4, self-contained) → Marketing/Reviews/Loyalty (ties to ad work).

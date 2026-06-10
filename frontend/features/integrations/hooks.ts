@@ -46,7 +46,18 @@ export function useRevoke() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (provider: string) => revokeIntegration(provider),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
+    onSuccess: () => {
+      // Disconnect hides the provider's data server-side; refresh every surface
+      // that reads it so the UI reflects the hide immediately.
+      for (const key of [
+        ['integrations'], ['business-hub'], ['cashflow'], ['payments'],
+        ['payment-summary'], ['practices'], ['finance-series'], ['financial'],
+        ['marketing-roi'], ['reviews'], ['leads'], ['appointments'],
+        ['growth'], ['overview'],
+      ]) {
+        qc.invalidateQueries({ queryKey: key });
+      }
+    },
   });
 }
 

@@ -28,8 +28,15 @@ describe('dentally mappers', () => {
     it('mapPaymentStatus: Dentally status strings + legacy paid flag', () => {
         // Live Dentally /payments status vocabulary (verified against the API).
         expect(__test.mapPaymentStatus({ status: 'paid' })).toBe('settled');
-        expect(__test.mapPaymentStatus({ status: 'unexplained' })).toBe('pending');
-        expect(__test.mapPaymentStatus({ status: 'partially_explained' })).toBe('pending');
+        // unexplained / partially_explained = money RECEIVED, not yet allocated to
+        // an invoice line. It is cash in (a patient credit / deposit), so it counts
+        // as a settled receipt — NOT pending debt. Mapping it to pending double-
+        // wronged the dashboard: it dropped real receipts out of RECEIVED and piled
+        // them into a fake all-time OUTSTANDING. Verified against the live API:
+        // amount is the full sum taken; amount_unexplained is only the unallocated
+        // remainder. (see investigation: dentally-payment-status-misclass)
+        expect(__test.mapPaymentStatus({ status: 'unexplained' })).toBe('settled');
+        expect(__test.mapPaymentStatus({ status: 'partially_explained' })).toBe('settled');
         // Back-compat with the old fake/webhook shapes.
         expect(__test.mapPaymentStatus({ paid: true })).toBe('settled');
         expect(__test.mapPaymentStatus({ state: 'failed' })).toBe('failed');
