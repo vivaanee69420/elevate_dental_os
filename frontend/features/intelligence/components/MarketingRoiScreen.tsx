@@ -110,7 +110,11 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
                 <Stat label="Clicks" value={c.clicks.toLocaleString('en-GB')} />
                 <Stat label="Cost / conv" value={c.costPerAdConvPence ? gbp(c.costPerAdConvPence) : '—'} />
                 <Stat label="Conv rate" value={`${c.adConvRatePct.toFixed(1)}%`} />
-                <Stat label="Reach" value={c.reach ? c.reach.toLocaleString('en-GB') : '—'} />
+                {/* Meta reports unique reach; Google has no reach metric at campaign
+                    grain, so fall back to impressions (a real Google field). */}
+                {c.reach
+                  ? <Stat label="Reach" value={c.reach.toLocaleString('en-GB')} />
+                  : <Stat label="Impressions" value={c.impressions.toLocaleString('en-GB')} />}
               </div>
             ) : (
               // Organic: CRM funnel (no platform spend/metrics).
