@@ -87,8 +87,6 @@ export function GroupPerformanceScreen() {
   const profitPence = g.marginPct > 0 ? Math.round((g.revenuePence * g.marginPct) / 100) : 0;
   const vsBasePct = g.revenueTargetPence > 0
     ? Math.round(((g.revenuePence - g.revenueTargetPence) / g.revenueTargetPence) * 100) : null;
-  const cashPct = pctOf(g.cashCollectedPence, g.revenuePence);
-  const outstandingPence = Math.max(0, g.revenuePence - g.cashCollectedPence);
   const spendPctTurnover = pctOf(spendPence, g.revenuePence, 1);
   const newPts = g.newPatients;
   const avgPatientValuePence = newPts > 0 ? Math.round(g.treatmentsClosedPence / newPts) : 0;
@@ -108,8 +106,13 @@ export function GroupPerformanceScreen() {
       chip: vsBasePct != null ? { text: `${vsBasePct >= 0 ? '▲' : '▼'} ${Math.abs(vsBasePct)}% vs base`, tone: vsBasePct >= 0 ? 'emerald' : 'rose' } : null },
     { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
       chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
-    { label: 'Cash Collected', value: formatPence(g.cashCollectedPence), sub: `${cashPct}% of turnover banked`,
-      chip: outstandingPence > 0 ? { text: `${formatPence(outstandingPence)} outstanding`, tone: 'amber' } : null },
+    // Cash banked = ALL settled receipts in the window, including payments for
+    // treatment invoiced in prior periods (deposits, payment plans, finance,
+    // debtor collection). It is NOT comparable to in-window turnover, so we do
+    // not show a "% of turnover banked" ratio (it routinely exceeds 100% and the
+    // implied "turnover - cash = outstanding" is a fake debtor figure).
+    { label: 'Cash Collected', value: formatPence(g.cashCollectedPence), sub: `Settled receipts banked · ${windowLabel}`,
+      chip: null },
     { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
       chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
     { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',
