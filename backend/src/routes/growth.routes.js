@@ -480,20 +480,32 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     const fromDate = fromISO.slice(0, 10);
     const toDate = (toISO ?? new Date().toISOString()).slice(0, 10);
     const toEndISO = toISO ?? new Date().toISOString();
-    // Optional per-practice scope (Practice Deep Dive). ad_metrics/leads/contacts/
-    // payments all carry practice_id; business_health is org-level (baseline).
+    // Optional per-practice scope (Practice Deep Dive). leads/contacts/payments
+    // carry practice_id; business_health is org-level (baseline). Ad spend is the
+    // exception: ad_metrics.practice_id is always null, so spend is scoped to a
+    // practice via its mapped ad_accounts (account.practice_id, migration 000069)
+    // -> customer_ids, NOT by filtering ad_metrics.practice_id (which yields zero).
     const pid = typeof req.query.practice_id === 'string'
         && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.query.practice_id)
         ? req.query.practice_id : null;
     const withPid = (q) => (pid ? q.eq('practice_id', pid) : q);
     const { ids: accountIds } = await resolveAdAccountFilter(orgId, req.query);
-    const withAccts = (q) => (accountIds !== null ? q.in('customer_id', accountIds) : q);
+    // Resolve the customer_ids this org owns + which practice each maps to.
+    const adAccounts = await integrationRepository.listAdAccounts(orgId, null);
+    // Effective ad-metrics customer_id filter: the selected-account filter,
+    // further narrowed to the practice's accounts when scoped. null = no filter.
+    let adAccountIds = accountIds;
+    if (pid) {
+        const practiceCids = adAccounts.filter((a) => a.practice_id === pid).map((a) => a.customer_id);
+        adAccountIds = accountIds === null ? practiceCids : practiceCids.filter((c) => accountIds.includes(c));
+    }
+    const withAdScope = (q) => (adAccountIds !== null ? q.in('customer_id', adAccountIds) : q);
 
     const [adR, leadsR, contactsR, paymentsR, healthR] = await Promise.all([
-        withAccts(withPid(supabase_1.serviceClient.from('ad_metrics')
+        withAdScope(supabase_1.serviceClient.from('ad_metrics')
             .select('provider, customer_id, spend_pence, impressions, clicks, reach, conversions')
             .eq('organisation_id', orgId)
-            .gte('metric_date', fromDate).lte('metric_date', toDate))),
+            .gte('metric_date', fromDate).lte('metric_date', toDate)),
         withPid(supabase_1.serviceClient.from('leads')
             .select('source, utm_source, utm_medium, created_at')
             .eq('organisation_id', orgId)
@@ -581,8 +593,7 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
             .sort((x, y) => y.spend_pence - x.spend_pence),
         by_account: await (async () => {
             if (byAccount.size === 0) return [];
-            const meta = new Map((await integrationRepository.listAdAccounts(orgId, null))
-                .map((a) => [`${a.provider}::${a.customer_id}`, a]));
+            const meta = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
             return Array.from(byAccount.entries())
                 .map(([k, a]) => ({ ...a, name: meta.get(k)?.name ?? null, currency: meta.get(k)?.currency ?? null, status: meta.get(k)?.status ?? null, ...ratios(a) }))
                 .sort((x, y) => y.spend_pence - x.spend_pence);

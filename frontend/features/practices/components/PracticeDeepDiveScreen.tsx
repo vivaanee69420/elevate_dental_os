@@ -47,12 +47,17 @@ interface MarketingRoi {
   by_provider: ChannelProvider[];
 }
 
-// Per-practice channel ROI (marketing/roi accepts practice_id).
-function usePracticeMarketingRoi(practiceId: string | null) {
+// Per-practice channel ROI (marketing/roi accepts practice_id + from/to). The
+// window comes from the page scope bar so Channel ROI matches the rest of the
+// deep dive (year / month / custom), not a fixed 30-day rolling window.
+function usePracticeMarketingRoi(practiceId: string | null, win: { since: string; until: string }) {
+  const from = win.since.slice(0, 10);
+  // win.until is exclusive (start of next period); backend `to` is the inclusive last day.
+  const to = new Date(Date.parse(win.until) - 86_400_000).toISOString().slice(0, 10);
   return useQuery({
-    queryKey: ['practice-marketing-roi', practiceId],
+    queryKey: ['practice-marketing-roi', practiceId, from, to],
     enabled: !!practiceId,
-    queryFn: () => api<MarketingRoi>(`/api/growth/marketing/roi?practice_id=${practiceId}`),
+    queryFn: () => api<MarketingRoi>(`/api/growth/marketing/roi?practice_id=${practiceId}&from=${from}&to=${to}`),
   });
 }
 
@@ -91,7 +96,7 @@ export function PracticeDeepDiveScreen() {
     [chair.data, scope],
   );
 
-  const roi = usePracticeMarketingRoi(pid);
+  const roi = usePracticeMarketingRoi(pid, win);
   const mixData = (mix.data?.treatments ?? []).slice(0, 8);
   const trendData = (series.data ?? []).map((m) => ({ label: monthLabel(m.month), pence: m.revenue }));
 
