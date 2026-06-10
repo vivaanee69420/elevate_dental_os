@@ -19,6 +19,7 @@
 import { integrationRepository } from "../../repositories/integration.repository.js";
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
+import { londonDaysAgo, londonYmd } from "../tz.js";
 
 const INSIGHT_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,reach,frequency,actions';
 // Incremental window (daily cron); a full backfill pulls 12 months.
@@ -110,13 +111,15 @@ async function ensureToken(orgId, integration) {
     return integrationRepository.getByProvider(orgId, 'meta_ads');
 }
 
-// ISO YYYY-MM-DD `days` ago (UTC).
+// ISO YYYY-MM-DD `days` ago in London local time. Meta interprets time_range
+// in the ad account's timezone (Europe/London for UK accounts), so the window
+// edges must be London days, not UTC.
 function daysAgo(days) {
-    return new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+    return londonDaysAgo(days);
 }
 
 async function queryAccount(accountId, accessToken, sinceDate) {
-    const until = new Date().toISOString().slice(0, 10);
+    const until = londonYmd();
     const timeRange = encodeURIComponent(JSON.stringify({ since: sinceDate, until }));
     let url = `${graphBase()}/${apiVersion()}/act_${accountId}/insights`
         + `?level=campaign&time_increment=1&time_range=${timeRange}`
@@ -141,7 +144,7 @@ async function queryAccount(accountId, accessToken, sinceDate) {
 // null if the account reported nothing. Exported for the live per-window reach
 // cache (meta-reach.js); non-fatal — callers swallow errors.
 export async function fetchAccountPeriodInsight(accountId, accessToken, sinceDate, untilDate) {
-    const until = untilDate || new Date().toISOString().slice(0, 10);
+    const until = untilDate || londonYmd();
     const timeRange = encodeURIComponent(JSON.stringify({ since: sinceDate, until }));
     const url = `${graphBase()}/${apiVersion()}/act_${accountId}/insights`
         + `?level=account&time_range=${timeRange}`
@@ -205,7 +208,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         // one the user lost access to) so one bad account doesn't sink the sync.
         const all = [];
         const skipped = [];
-        const until = new Date().toISOString().slice(0, 10);
+        const until = londonYmd();
         for (const aid of accountIds) {
             try {
                 const meta = await fetchCampaignMeta(aid, access_token).catch(() => ({}));

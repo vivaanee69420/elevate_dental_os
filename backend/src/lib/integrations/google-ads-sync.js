@@ -19,6 +19,7 @@
 import { integrationRepository } from "../../repositories/integration.repository.js";
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
+import { londonDaysAgo, londonYmd } from "../tz.js";
 
 const INCREMENTAL_DAYS = 31;
 const FULL_DAYS = 366;
@@ -42,8 +43,11 @@ function microsToPence(micros) {
     return Number.isFinite(n) ? Math.round(n / 10_000) : 0;
 }
 
+// London-local YYYY-MM-DD `days` ago. Google Ads buckets segments.date by the
+// customer account's timezone (Europe/London for UK accounts), so window edges
+// must be London days, not UTC.
 function daysAgo(days) {
-    return new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+    return londonDaysAgo(days);
 }
 
 // searchStream returns an ARRAY of batches, each { results: [...] }. Flatten to
@@ -129,7 +133,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         // Full backfill pulls 12mo; the nightly cron pulls the rolling window.
         const windowDays = opts.full ? FULL_DAYS : INCREMENTAL_DAYS;
         const sinceDate = daysAgo(windowDays);
-        const untilDate = new Date().toISOString().slice(0, 10);
+        const untilDate = londonYmd();
         const gaql = buildGaql(sinceDate, untilDate);
 
         // Pull each accessible account; skip the ones that error (a Manager
