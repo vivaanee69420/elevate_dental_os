@@ -99,16 +99,30 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
                 {c.label}
                 {!c.paid && <span className="ml-1"><Pill tone="info">organic</Pill></span>}
               </div>
-              <div className="display text-lg font-bold">{c.leadSharePct.toFixed(0)}%</div>
+              <div className="display text-lg font-bold">{c.paid ? `${c.ctrPct.toFixed(1)}%` : `${c.leadSharePct.toFixed(0)}%`}</div>
             </div>
-            <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 mt-3 text-[11px] text-ink-muted">
-              <Stat label="Spend" value={c.paid ? gbp(c.spendPence) : '—'} />
-              <Stat label="Leads" value={String(c.leads)} />
-              <Stat label="Patients" value={String(c.conversions)} />
-              <Stat label="Cost / lead" value={c.cplPence ? gbp(c.cplPence) : '—'} />
-              <Stat label="Cost / patient" value={c.cpaPence ? gbp(c.cpaPence) : '—'} />
-              <Stat label="Conv %" value={`${c.convRatePct.toFixed(0)}%`} />
-            </div>
+            {c.paid ? (
+              // Paid: real platform performance (ad_metrics). Conversions = Meta
+              // lead/pixel actions + Google conversions. CTR shown top-right.
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 mt-3 text-[11px] text-ink-muted">
+                <Stat label="Spend" value={gbp(c.spendPence)} />
+                <Stat label="Conversions" value={c.adConversions.toLocaleString('en-GB')} />
+                <Stat label="Clicks" value={c.clicks.toLocaleString('en-GB')} />
+                <Stat label="Cost / conv" value={c.costPerAdConvPence ? gbp(c.costPerAdConvPence) : '—'} />
+                <Stat label="Conv rate" value={`${c.adConvRatePct.toFixed(1)}%`} />
+                <Stat label="Reach" value={c.reach ? c.reach.toLocaleString('en-GB') : '—'} />
+              </div>
+            ) : (
+              // Organic: CRM funnel (no platform spend/metrics).
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 mt-3 text-[11px] text-ink-muted">
+                <Stat label="Spend" value="—" />
+                <Stat label="Leads" value={String(c.leads)} />
+                <Stat label="Patients" value={String(c.conversions)} />
+                <Stat label="Cost / lead" value="—" />
+                <Stat label="Cost / patient" value="—" />
+                <Stat label="Conv %" value={`${c.convRatePct.toFixed(0)}%`} />
+              </div>
+            )}
           </Panel>
         ))}
       </div>
@@ -116,7 +130,7 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
       {/* head to head */}
       {(g || f) && (
         <Panel>
-          <PanelHead title="Google Ads vs Facebook / Meta" sub="The two budgets you control most directly — spend, leads and cost per patient." />
+          <PanelHead title="Google Ads vs Facebook / Meta" sub="The two budgets you control most directly — spend, platform conversions and cost per conversion." />
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
             <HeadToHead c={g} color="#2f6fb0" />
             <div className="display text-ink-soft">vs</div>
@@ -127,7 +141,7 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
             <span style={{ width: `${((f?.spendPence ?? 0) / gfTot) * 100}%`, background: '#3b5998' }} />
           </div>
           <NoteFoot>
-            Revenue can&apos;t be split between these two without per-touch attribution, so this compares spend, lead volume and cost per patient — the levers you act on. Blended paid ROAS sits at {data.blendedRoas != null ? `${data.blendedRoas.toFixed(2)}×` : 'n/a'} across all paid channels.
+            Conversions, clicks and reach are reported by the ad platforms themselves (Meta lead/pixel actions + Google conversions) — not the same as CRM patients, which can&apos;t be split per channel without per-touch attribution. So this compares spend, platform conversions and cost per conversion — the levers you act on. Blended paid ROAS sits at {data.blendedRoas != null ? `${data.blendedRoas.toFixed(2)}×` : 'n/a'} across all paid channels.
           </NoteFoot>
         </Panel>
       )}
@@ -260,8 +274,8 @@ function HeadToHead({ c, color }: { c: MktChannel | null; color: string }) {
   return (
     <div className={color === '#2f6fb0' ? 'text-right' : ''}>
       <div className="display text-2xl font-bold" style={{ color }}>{gbp(c.spendPence)}</div>
-      <div className="text-xs text-ink-muted">{c.leads} leads · {c.conversions} patients</div>
-      <div className="text-xs text-ink-muted">{c.cpaPence ? `${gbp(c.cpaPence)}/patient` : '—'}</div>
+      <div className="text-xs text-ink-muted">{c.adConversions.toLocaleString('en-GB')} conversions · {c.clicks.toLocaleString('en-GB')} clicks</div>
+      <div className="text-xs text-ink-muted">{c.costPerAdConvPence ? `${gbp(c.costPerAdConvPence)}/conv` : '—'} · {c.adConvRatePct.toFixed(1)}% conv rate</div>
     </div>
   );
 }
