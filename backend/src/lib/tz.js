@@ -76,3 +76,10 @@ export function londonMidnightUTC(ymd) {
 export function londonStartOfDayISO(ymd) {
     return londonMidnightUTC(ymd).toISOString();
 }
+
+// London-local day of week: 0=Sunday .. 6=Saturday.
+const WEEKDAY = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' });
+const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+export function londonWeekday(date = new Date()) {
+    return WEEKDAY_INDEX[WEEKDAY.format(toDate(date))];
+}

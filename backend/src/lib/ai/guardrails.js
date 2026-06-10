@@ -8,6 +8,7 @@
 import { aiUsageRepository } from "../../repositories/ai-usage.repository.js";
 import * as supabase_1 from "../supabase.js";
 import { AppError } from "../../middleware/errors.js";
+import { londonMonthKey } from "../tz.js";
 
 // Defang any literal closing tag inside the content so it can't end the block.
 export function delimit(tag, content) {
@@ -25,8 +26,9 @@ function costPence(model, totalTokens) {
 }
 
 function firstOfMonthISO() {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  // First day of the current London month (the AI token budget resets on the
+  // London calendar month, not the UTC one).
+  return `${londonMonthKey()}-01`;
 }
 
 export async function checkBudget(orgId) {
