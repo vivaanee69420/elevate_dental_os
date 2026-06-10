@@ -257,28 +257,26 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
 
       {/* acquisition by practice */}
       <Panel>
-        <PanelHead title="Acquisition by Practice" sub="Which sites turn enquiries into patients — and the revenue that follows." />
+        <PanelHead title="Acquisition by Practice" sub="Each site's own Meta/Google account — spend, conversions and the revenue that follows." />
         {data.byPracticeAvailable ? (
           <>
             {data.byPractice.map((x) => (
               <BarRow
                 key={x.id}
                 name={x.name}
-                sub={`${x.conversions} patients · ${x.convRatePct.toFixed(0)}% conv${x.roas != null ? ` · ${x.roas.toFixed(2)}× ROAS` : ''}`}
+                sub={`${gbp(x.spendPence)} spend · ${x.conversions} patients${x.roas != null ? ` · ${x.roas.toFixed(2)}× ROAS` : ''}`}
                 pct={(x.leads / maxPLeads) * 100}
-                value={`${x.leads} leads`}
+                value={`${x.leads.toLocaleString('en-GB')} leads`}
                 valueSub={gbp(x.revenuePence)}
-                tone={x.convRatePct >= 30 ? 'bg-success' : x.convRatePct < 15 ? 'bg-danger' : 'bg-brand'}
+                tone={x.roas != null ? (x.roas >= 3.5 ? 'bg-success' : x.roas < 2 ? 'bg-danger' : 'bg-brand') : 'bg-brand'}
               />
             ))}
             <NoteFoot>
-              {data.adSpendPerPracticeAvailable
-                ? 'Ad spend is tagged per practice, so ROAS is shown per site.'
-                : 'Ad spend runs at group level (no practice tag), so per-site ROAS is unavailable — sites rank on leads → patients → revenue, all real.'}
+              Leads and spend are reported per practice by that site&apos;s Meta/Google ad account; patients (treatment) and revenue come from the CRM and settled invoices, so per-site ROAS is real. Accounts not yet mapped to a practice stay in the group totals only.
             </NoteFoot>
           </>
         ) : (
-          <EmptyState message="No practice-tagged leads in this window. Capture practice on each lead to unlock per-site acquisition." />
+          <EmptyState message="No ad account is mapped to a practice in this window. Map each practice's Google/Meta account to unlock per-site acquisition." />
         )}
       </Panel>
     </>
