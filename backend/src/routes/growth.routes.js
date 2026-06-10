@@ -11,6 +11,7 @@ import { AppError } from "../middleware/errors.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
+import { londonYmd, londonDaysAgo, londonStartOfDayISO, londonMidnightUTC } from "../lib/tz.js";
 const router = (0, express_1.Router)();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -58,22 +59,33 @@ async function aggregate(orgId, since) {
     return { leads: leadsR.data ?? [], payments: paymentsR.data ?? [], contacts: contactsR.data ?? [] };
 }
 
-// Resolve the query window from ?from=&to= (YYYY-MM-DD). Mirrors the finance
-// section: from/to take effect ONLY when BOTH are set (to = inclusive end of
-// that day); otherwise fall back to the 30-day rolling window. Returns ISO
-// bounds (toISO null = open-ended rolling window).
+// Resolve the query window from ?from=&to= (YYYY-MM-DD). from/to take effect
+// ONLY when BOTH are set; otherwise fall back to the 30-day rolling window.
+// Days are EUROPE/LONDON local (the client's timezone, and the timezone Meta/
+// Google bucket their data in) — not UTC. Returns both representations:
+//   fromDate/toDate — London YYYY-MM-DD strings for DATE columns
+//                     (ad_metrics.metric_date) and Meta/Google query windows.
+//   fromISO/toEndISO — UTC instants of the London day's start / inclusive end,
+//                     for timestamptz columns (created_at, processed_at).
+// toEndISO is null in the default case (open-ended rolling -> upper bound = now).
 function resolveWindow(q) {
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
     if (q.from && q.to) {
-        const from = new Date(`${q.from}T00:00:00.000Z`);
-        const to = new Date(`${q.to}T23:59:59.999Z`);
-        // Guard malformed dates: an invalid Date.toISOString() throws RangeError,
-        // which would surface as a raw 500. Return a clean 400 instead.
-        if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+        if (!DATE_RE.test(q.from) || !DATE_RE.test(q.to)) {
             throw new AppError('from/to must be valid YYYY-MM-DD dates', 400);
         }
-        return { fromISO: from.toISOString(), toISO: to.toISOString() };
+        const fromISO = londonStartOfDayISO(q.from);
+        // Inclusive end of the London day q.to = next London midnight minus 1ms.
+        const toEndISO = new Date(londonMidnightUTC(q.to).getTime() + 86400_000 - 1).toISOString();
+        if (Number.isNaN(new Date(fromISO).getTime()) || Number.isNaN(new Date(toEndISO).getTime())) {
+            throw new AppError('from/to must be valid YYYY-MM-DD dates', 400);
+        }
+        // toISO alias = toEndISO for callers that bound a timestamptz column.
+        return { fromDate: q.from, toDate: q.to, fromISO, toEndISO, toISO: toEndISO };
     }
-    return { fromISO: new Date(Date.now() - 30 * 86400000).toISOString(), toISO: null };
+    const toDate = londonYmd();
+    const fromDate = londonDaysAgo(30);
+    return { fromDate, toDate, fromISO: londonStartOfDayISO(fromDate), toEndISO: null, toISO: null };
 }
 
 router.get('/patients', (0, async_handler_1.asyncHandler)(async (req, res) => {
@@ -104,12 +116,10 @@ router.get('/marketing', (0, async_handler_1.asyncHandler)(async (req, res) => {
 // Dentally feeds NONE of this. All money is integer PENCE.
 router.get('/loyalty', (0, async_handler_1.asyncHandler)(async (req, res) => {
     const orgId = req.user.organisation_id;
-    // Top campaigns window: trailing 30 days (ad_metrics.metric_date is a DATE).
-    const today = new Date();
-    const fromDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
-        .toISOString()
-        .slice(0, 10);
-    const toDate = today.toISOString().slice(0, 10);
+    // Top campaigns window: trailing 30 London days (ad_metrics.metric_date is a
+    // DATE bucketed in the account's London timezone).
+    const fromDate = londonDaysAgo(30);
+    const toDate = londonYmd();
     const [plansRes, membersRes, workflowsRes, adRes] = await Promise.all([
         supabase_1.serviceClient
             .from('membership_plans')
@@ -372,9 +382,9 @@ router.get('/benchmark', (0, async_handler_1.asyncHandler)(async (req, res) => {
 // intentionally ignored here. Returns per-provider totals, per-campaign rows,
 // a daily spend series for charting, and overall totals. All money in pence.
 router.get('/marketing/ad-spend', (0, async_handler_1.asyncHandler)(async (req, res) => {
-    const { fromISO, toISO } = resolveWindow(req.query);
-    const fromDate = fromISO.slice(0, 10);
-    const toDate = (toISO ?? new Date().toISOString()).slice(0, 10);
+    // London-local day strings drive the ad_metrics.metric_date (DATE) filter
+    // and the live Meta reach window, so they line up with the platforms' buckets.
+    const { fromDate, toDate } = resolveWindow(req.query);
 
     const orgId = req.user.organisation_id;
     const { ids: accountIds } = await resolveAdAccountFilter(orgId, req.query);
@@ -501,10 +511,11 @@ function attributeProvider(lead) {
 }
 router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) => {
     const orgId = req.user.organisation_id;
-    const { fromISO, toISO } = resolveWindow(req.query);
-    const fromDate = fromISO.slice(0, 10);
-    const toDate = (toISO ?? new Date().toISOString()).slice(0, 10);
-    const toEndISO = toISO ?? new Date().toISOString();
+    // London day strings for ad_metrics.metric_date (DATE) + Meta reach window;
+    // UTC instants of the London day bounds for the created_at/processed_at
+    // (timestamptz) filters on leads/contacts/payments.
+    const { fromDate, toDate, fromISO, toEndISO: toEnd } = resolveWindow(req.query);
+    const toEndISO = toEnd ?? new Date().toISOString();
     // Optional per-practice scope (Practice Deep Dive). leads/contacts/payments
     // carry practice_id; business_health is org-level (baseline). Ad spend is the
     // exception: ad_metrics.practice_id is always null, so spend is scoped to a
