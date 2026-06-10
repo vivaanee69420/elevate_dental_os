@@ -1,4 +1,5 @@
 // Helpers for the business-health snapshot worker.
+import { londonParts, londonWeekday, londonYmd } from "./tz.js";
 
 export function getISOWeek(d) {
     const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -20,15 +21,17 @@ export function countBySource(...arrays) {
 }
 
 export function isDueForSnapshot(frequency, today, lastSnapshotAt) {
-    const isMonday = today.getUTCDay() === 1;
-    const isFirstOfMonth = today.getUTCDate() === 1;
+    // Cadence is on the London calendar (client timezone): weekly = London
+    // Monday, monthly = London 1st. The cron fires in UTC but the day/month it
+    // counts as is London's.
+    const isMonday = londonWeekday(today) === 1;
+    const isFirstOfMonth = londonParts(today).day === 1;
     const due = (frequency === 'weekly' && isMonday) ||
                 (frequency === 'monthly' && isFirstOfMonth);
     if (!due) return false;
-    // Idempotency guard: don't re-snapshot if we already did one today.
+    // Idempotency guard: don't re-snapshot if we already did one today (London).
     if (lastSnapshotAt) {
-        const last = new Date(lastSnapshotAt);
-        if (last.toISOString().slice(0, 10) === today.toISOString().slice(0, 10)) return false;
+        if (londonYmd(new Date(lastSnapshotAt)) === londonYmd(today)) return false;
     }
     return true;
 }

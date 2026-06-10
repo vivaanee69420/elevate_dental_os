@@ -20,6 +20,7 @@ import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
+import { londonParts, londonMonthKey } from "../lib/tz.js";
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -591,8 +592,7 @@ export const analyticsService = {
         // the single month of periodKey (legacy month|day path).
         const windowMonths = (since && until)
             ? monthsInWindow(since, until)
-            : [(periodKey || '').slice(0, 7) ||
-                `${now().getUTCFullYear()}-${String(now().getUTCMonth() + 1).padStart(2, '0')}`];
+            : [(periodKey || '').slice(0, 7) || londonMonthKey(now())];
         const monthKey = windowMonths[0];
         const multiMonth = windowMonths.length > 1;
 
@@ -1200,7 +1200,7 @@ export const analyticsService = {
           resolvedWin = resolveWindow({ since: o.since, until: o.until, now });
         } else {
           const periodKey = (!o.period || o.period === 'current')
-            ? `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+            ? londonMonthKey(now)
             : o.period;
           win = { scope, period: 'month', periodKey, now: () => now };
           resolvedWin = treatmentWindow('month', periodKey, now);
@@ -2989,13 +2989,16 @@ const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June',
 // day of pk ('YYYY-MM-DD'). A missing/unparseable pk falls back to the current
 // month from `now` (UTC, stable across server/client).
 function treatmentWindow(period, periodKey, now) {
-    const y0 = now.getUTCFullYear();
-    const m0 = now.getUTCMonth();
+    // "Current" day/month is the LONDON calendar date (client timezone), so a
+    // late-evening request near UTC midnight doesn't resolve to the wrong day.
+    const lp = londonParts(now);
+    const y0 = lp.year;
+    const m0 = lp.month - 1; // 0-indexed to match the rest of this function
     if (period === 'day') {
         const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(periodKey || '');
         const y = m ? Number(m[1]) : y0;
         const mo = m ? Number(m[2]) - 1 : m0;
-        const d = m ? Number(m[3]) : now.getUTCDate();
+        const d = m ? Number(m[3]) : lp.day;
         const since = new Date(Date.UTC(y, mo, d));
         const until = new Date(Date.UTC(y, mo, d + 1));
         return {

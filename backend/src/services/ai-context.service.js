@@ -7,11 +7,14 @@
 // ============================================================================
 import { aiContextSnapshotRepository } from "../repositories/ai-context-snapshot.repository.js";
 import { sanitizeForContext } from "../lib/ai/sanitize.js";
+import { londonMonthKey, londonParts } from "../lib/tz.js";
 
 const TTL_MS = 6 * 60 * 60 * 1000; // 6h: current-period freshness window
 
+// Month key (YYYY-MM) for the London month the instant falls in (the client's
+// timezone), so "current month" doesn't flip a day early near UTC midnight.
 function ym(d) {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  return londonMonthKey(d);
 }
 
 // 'current' -> this UTC month; a literal 'YYYY-MM' / 'YYYY' passes through.
@@ -64,8 +67,9 @@ export async function buildSnapshot(orgId, periodKey, now = new Date()) {
 
   // Trailing-12-month revenue series (per-month actuals).
   const trailing12 = [];
+  const { year: nowY, month: nowM } = londonParts(now); // London month is the anchor
   for (let i = 11; i >= 0; i--) {
-    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const d = new Date(Date.UTC(nowY, (nowM - 1) - i, 1));
     const mk = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
     const pm = await analyticsService.plMargin(orgId, { periodKey: mk });
     trailing12.push({ m: mk, revPence: pm.hasData ? pm.statement.revPence : 0 });

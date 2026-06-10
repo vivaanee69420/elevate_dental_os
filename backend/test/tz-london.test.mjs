@@ -4,7 +4,7 @@
 // Storage stays UTC ISO 8601; these helpers only decide which London day/month
 // an instant falls in, and the UTC instant of a London-local midnight.
 import { describe, it, expect } from 'vitest';
-import { londonYmd, londonDaysAgo, londonMonthKey, londonParts, londonMidnightUTC, londonStartOfDayISO } from '../src/lib/tz.js';
+import { londonYmd, londonDaysAgo, londonMonthKey, londonParts, londonMidnightUTC, londonStartOfDayISO, londonWeekday } from '../src/lib/tz.js';
 
 describe('londonYmd', () => {
     it('rolls to the next day for a late-evening UTC instant during BST (UTC+1)', () => {
@@ -38,6 +38,15 @@ describe('londonMonthKey', () => {
 describe('londonParts', () => {
     it('returns London year/month/day numbers', () => {
         expect(londonParts(new Date('2026-06-10T23:30:00Z'))).toEqual({ year: 2026, month: 6, day: 11 });
+    });
+});
+
+describe('londonWeekday', () => {
+    it('returns 0=Sun..6=Sat in London, honouring the day roll near midnight', () => {
+        expect(londonWeekday(new Date('2026-06-08T12:00:00Z'))).toBe(1); // Mon 8 Jun 2026
+        expect(londonWeekday(new Date('2026-06-07T12:00:00Z'))).toBe(0); // Sun
+        // 2026-06-07 23:30Z = Mon 2026-06-08 00:30 London -> Monday.
+        expect(londonWeekday(new Date('2026-06-07T23:30:00Z'))).toBe(1);
     });
 });
 
