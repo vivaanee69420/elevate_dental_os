@@ -75,7 +75,7 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
       {/* KPI strip */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <KpiTile label="Paid spend" value={data.connected ? gbp(data.paidSpendPence) : 'Not connected'} delta={data.connected ? 'Google + Meta' : 'Connect ad accounts'} />
-        <KpiTile label="Total leads" value={data.totalLeads.toString()} delta={`${data.totalConversions} reached treatment`} />
+        <KpiTile label="Total leads" value={totalEffLeads.toLocaleString('en-GB')} delta={`${paidAdConv.toLocaleString('en-GB')} from paid ads (Meta + Google)`} />
         <KpiTile
           label="Blended paid ROAS"
           value={data.blendedRoas != null ? `${data.blendedRoas.toFixed(2)}×` : '—'}
