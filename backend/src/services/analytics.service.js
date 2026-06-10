@@ -730,13 +730,20 @@ export const analyticsService = {
         const inScopeRev = revRows.filter((r) => !pids || pids.includes(r.practice_id));
 
         // Per-channel accumulators (spend from ad_metrics; leads/conversions from CRM).
-        const ch = new Map(MKT_CHANNELS.map((c) => [c.key, { ...c, spendPence: 0, impressions: 0, clicks: 0, leads: 0, conversions: 0 }]));
+        // `conversions`/`leads` on a channel are the CRM funnel (lead -> patient).
+        // `adConversions`/`reach` are platform-reported (ad_metrics) — lead-form /
+        // pixel actions from Meta + Google conversions. Kept separate so the CRM
+        // funnel stays internally consistent while paid cards can show real
+        // platform performance even when CRM attribution is empty.
+        const ch = new Map(MKT_CHANNELS.map((c) => [c.key, { ...c, spendPence: 0, impressions: 0, clicks: 0, reach: 0, adConversions: 0, leads: 0, conversions: 0 }]));
         for (const a of adRows) {
             const c = ch.get(a.provider);
             if (!c) continue;
             c.spendPence += a.spend_pence || 0;
             c.impressions += a.impressions || 0;
             c.clicks += a.clicks || 0;
+            c.reach += a.reach || 0;
+            c.adConversions += a.conversions || 0;
         }
         for (const l of leads) {
             const c = ch.get(attributeChannel(l));
@@ -751,9 +758,14 @@ export const analyticsService = {
             .map((c) => ({
                 key: c.key, label: c.label, color: c.color, paid: c.paid, group: c.group,
                 spendPence: c.spendPence, impressions: c.impressions, clicks: c.clicks,
+                reach: c.reach, adConversions: c.adConversions,
                 leads: c.leads, conversions: c.conversions,
                 cplPence: c.leads ? Math.round(c.spendPence / c.leads) : 0,
                 cpaPence: c.conversions ? Math.round(c.spendPence / c.conversions) : 0,
+                // Platform-reported economics (from ad_metrics, not CRM).
+                costPerAdConvPence: c.adConversions ? Math.round(c.spendPence / c.adConversions) : 0,
+                ctrPct: c.impressions ? Math.round((c.clicks / c.impressions) * 1000) / 10 : 0,
+                adConvRatePct: c.clicks ? Math.round((c.adConversions / c.clicks) * 1000) / 10 : 0,
                 leadSharePct: totalLeads ? Math.round((c.leads / totalLeads) * 1000) / 10 : 0,
                 convRatePct: c.leads ? Math.round((c.conversions / c.leads) * 1000) / 10 : 0,
             }))

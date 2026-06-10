@@ -19,10 +19,15 @@ export interface MktChannel {
   spendPence: number;
   impressions: number;
   clicks: number;
-  leads: number;
-  conversions: number;
+  reach: number;
+  adConversions: number; // platform-reported (ad_metrics): Meta lead/pixel actions + Google conversions
+  leads: number; // CRM-attributed
+  conversions: number; // CRM funnel: leads reaching treatment
   cplPence: number;
   cpaPence: number;
+  costPerAdConvPence: number; // spend / adConversions
+  ctrPct: number; // clicks / impressions
+  adConvRatePct: number; // adConversions / clicks
   leadSharePct: number;
   convRatePct: number;
 }
