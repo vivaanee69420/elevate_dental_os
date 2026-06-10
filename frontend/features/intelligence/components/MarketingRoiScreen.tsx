@@ -118,7 +118,7 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
                 {/* Meta reports unique reach; Google has no reach metric at campaign
                     grain, so fall back to impressions (a real Google field). */}
                 {c.reach
-                  ? <Stat label="Reach" value={c.reach.toLocaleString('en-GB')} />
+                  ? <Stat label={c.reachIsApprox ? 'Reach (approx)' : 'Reach'} value={`${c.reachIsApprox ? '~' : ''}${c.reach.toLocaleString('en-GB')}`} />
                   : <Stat label="Impressions" value={c.impressions.toLocaleString('en-GB')} />}
               </div>
             ) : (
@@ -227,7 +227,7 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
                     <td className={`${td} text-right tabular-nums`}>{gbp(a.spendPence)}</td>
                     <td className={`${td} text-right tabular-nums`}>{a.impressions.toLocaleString('en-GB')}</td>
                     <td className={`${td} text-right tabular-nums`}>{a.clicks.toLocaleString('en-GB')}</td>
-                    <td className={`${td} text-right tabular-nums`}>{a.reach ? a.reach.toLocaleString('en-GB') : '—'}</td>
+                    <td className={`${td} text-right tabular-nums`}>{a.reach ? `${a.reachIsApprox ? '~' : ''}${a.reach.toLocaleString('en-GB')}` : '—'}</td>
                     <td className={`${td} text-right tabular-nums`}>{a.conversions}</td>
                     <td className={`${td} text-right tabular-nums`}>{a.cpaPence ? gbp(a.cpaPence) : '—'}</td>
                   </tr>

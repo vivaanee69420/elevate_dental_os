@@ -18,6 +18,7 @@ import * as aws_ses_1 from "../lib/aws-ses.js";
 import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
+import { overlayPeriodReach } from "../lib/marketing-reach.js";
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -757,13 +758,31 @@ export const analyticsService = {
             if (CONVERTED_STATUSES.has(l.status)) c.conversions += 1;
         }
 
+        // Period-deduplicated reach overlay (see lib/marketing-reach.js). The
+        // c.reach summed above over-counts unique people ~3x; replace it with
+        // Meta's per-account snapshot stored on ad_accounts.
+        const snapByKey = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+        const scopeKeysByProvider = new Map();
+        for (const a of adRows) {
+            const set = scopeKeysByProvider.get(a.provider) ?? scopeKeysByProvider.set(a.provider, new Set()).get(a.provider);
+            set.add(`${a.provider}::${a.customer_id}`);
+        }
+        const providerReach = (provider, impressions) => overlayPeriodReach(
+            impressions,
+            [...(scopeKeysByProvider.get(provider) ?? [])].map((k) => snapByKey.get(k)).filter(Boolean),
+            fromDate, toDate,
+        );
+
         const totalLeads = leads.length;
         const channels = [...ch.values()]
             .filter((c) => c.leads > 0 || c.spendPence > 0)
-            .map((c) => ({
+            .map((c) => {
+              const pr = providerReach(c.key, c.impressions);
+              return {
                 key: c.key, label: c.label, color: c.color, paid: c.paid, group: c.group,
                 spendPence: c.spendPence, impressions: c.impressions, clicks: c.clicks,
-                reach: c.reach, adConversions: c.adConversions,
+                reach: pr.reach, reachIsApprox: pr.reach_is_approx, frequency: pr.frequency,
+                adConversions: c.adConversions,
                 leads: c.leads, conversions: c.conversions,
                 cplPence: c.leads ? Math.round(c.spendPence / c.leads) : 0,
                 cpaPence: c.conversions ? Math.round(c.spendPence / c.conversions) : 0,
@@ -773,7 +792,8 @@ export const analyticsService = {
                 adConvRatePct: c.clicks ? Math.round((c.adConversions / c.clicks) * 1000) / 10 : 0,
                 leadSharePct: totalLeads ? Math.round((c.leads / totalLeads) * 1000) / 10 : 0,
                 convRatePct: c.leads ? Math.round((c.conversions / c.leads) * 1000) / 10 : 0,
-            }))
+              };
+            })
             .sort((a, b) => b.spendPence - a.spendPence || b.leads - a.leads);
 
         const paidSpendPence = channels.filter((c) => c.paid).reduce((s, c) => s + c.spendPence, 0);
@@ -844,14 +864,19 @@ export const analyticsService = {
             acc.conversions += a.conversions || 0;
         }
         const byAccount = [...acctMap.entries()]
-            .map(([k, a]) => ({
-                ...a,
-                name: acctMeta.get(k)?.name ?? null,
-                currency: acctMeta.get(k)?.currency ?? null,
-                status: acctMeta.get(k)?.status ?? null,
-                cpaPence: a.conversions ? Math.round(a.spendPence / a.conversions) : 0,
-                cpcPence: a.clicks ? Math.round(a.spendPence / a.clicks) : 0,
-            }))
+            .map(([k, a]) => {
+                // Period-deduplicated reach for this account (not the daily sum).
+                const pr = overlayPeriodReach(a.impressions, [snapByKey.get(k)].filter(Boolean), fromDate, toDate);
+                return {
+                    ...a,
+                    reach: pr.reach, reachIsApprox: pr.reach_is_approx, frequency: pr.frequency,
+                    name: acctMeta.get(k)?.name ?? null,
+                    currency: acctMeta.get(k)?.currency ?? null,
+                    status: acctMeta.get(k)?.status ?? null,
+                    cpaPence: a.conversions ? Math.round(a.spendPence / a.conversions) : 0,
+                    cpcPence: a.clicks ? Math.round(a.spendPence / a.clicks) : 0,
+                };
+            })
             .sort((a, b) => b.spendPence - a.spendPence);
 
         return {

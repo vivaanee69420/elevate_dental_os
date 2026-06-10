@@ -124,7 +124,10 @@ export interface AdAggregate {
   spend_pence: number;
   impressions: number;
   clicks: number;
-  reach: number;
+  // Period-deduplicated unique reach (Meta only; null for Google / when no
+  // snapshot). NOT a sum of daily reach — see backend lib/marketing-reach.js.
+  reach: number | null;
+  reach_is_approx?: boolean; // true when the displayed window != the synced window
   leads: number;
   conversions: number;
   ctr: number;             // %
@@ -132,7 +135,7 @@ export interface AdAggregate {
   cpl_pence: number;
   cpa_pence: number;
   cpm_pence: number;       // cost per 1000 impressions
-  frequency: number;       // impressions / reach
+  frequency: number | null; // period impressions / unique reach
   conversion_rate: number; // %
 }
 
@@ -192,7 +195,9 @@ export interface AdProviderRoi {
   spend_pence: number;
   impressions: number;
   clicks: number;
-  reach: number;
+  reach: number | null;
+  reach_is_approx?: boolean;
+  frequency: number | null;
   conversions: number;
   leads: number;
   cpl_pence: number;
@@ -210,7 +215,9 @@ export interface AdAccountRoi {
   spend_pence: number;
   impressions: number;
   clicks: number;
-  reach: number;
+  reach: number | null;
+  reach_is_approx?: boolean;
+  frequency: number | null;
   conversions: number;
   leads: number;
   cpl_pence: number;
