@@ -125,14 +125,17 @@ export function calcPL(m: PLModel): PLCalc {
 export type DateRange = 'mtd' | 'qtd' | '6m' | 'ytd';
 
 export function rangeLabel(r: DateRange): string {
+  // Labels must match the to-date windows in rangeToDates (period start -> now),
+  // NOT trailing periods. YTD = Jan 1 -> now, so "Year to date", not "Last 12
+  // months" (which would be a 12-month trailing window the dashboard never uses).
   return (
     {
-      mtd: 'Last month',
-      qtd: 'Last quarter',
-      ytd: 'Last 12 months',
+      mtd: 'Month to date',
+      qtd: 'Quarter to date',
+      ytd: 'Year to date',
       '6m': 'Last 6 months',
     } as Record<DateRange, string>
-  )[r] || 'Last 12 months';
+  )[r] || 'Year to date';
 }
 
 // Compact pound formatter (£1.2m / £45k).
