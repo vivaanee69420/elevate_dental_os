@@ -68,32 +68,9 @@ export const PRACTICE_SUMMARY: PracticeRow[] = [
 
 // ── Loyalty ────────────────────────────────────────────────────────────────
 
-/** A recurring membership tier (PAGES.loyalty inline array). */
-export interface LoyaltyProgram {
-  name: string;
-  members: number;
-  price_month: number;
-  includes: string;
-}
-
-export const LOYALTY_PROGRAMS: LoyaltyProgram[] = [
-  { name: 'Smile Club Essential', members: 1840, price_month: 14.95, includes: '2 hygiene visits + exam + 10% off' },
-  { name: 'Smile Club Plus', members: 620, price_month: 24.95, includes: '4 hygiene + exam + 15% off + emergency cover' },
-  { name: 'Smile Club Family', members: 142, price_month: 39.95, includes: 'Up to 4 family members · all benefits' },
-];
-
-/** An active automated-reward row (PAGES.loyalty). */
-export interface LoyaltyReward {
-  title: string;
-  detail: string;
-}
-
-export const LOYALTY_REWARDS: LoyaltyReward[] = [
-  { title: 'Birthday hygiene voucher', detail: '412 sent TTM · 18% redemption · £14k revenue generated' },
-  { title: '6-month "we miss you"', detail: '1,180 sent TTM · 11% rebook · £42k revenue' },
-  { title: '5-treatment milestone reward', detail: '84 sent · free whitening · increases referrals 3x' },
-  { title: 'Referral bonus (£50 each)', detail: '68 successful referrals TTM · £12k spent · £140k new patient revenue' },
-];
+// Loyalty & Membership data is served live from GET /api/growth/loyalty
+// (see features/growth/loyalty-api.ts). The former LOYALTY_PROGRAMS /
+// LOYALTY_REWARDS mock arrays were removed when the page went real-data.
 
 // ── Reviews ──────────────────────────────────────────────────────────────────
 
