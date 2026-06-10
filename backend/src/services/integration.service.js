@@ -14,6 +14,7 @@ import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
 import { signWebhookToken } from "../lib/webhook-token.js";
 import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
+import { invalidate as invalidateGating } from "../lib/integration-gating.js";
 
 // Providers that receive real-time webhooks (vs poll-only).
 const WEBHOOK_PROVIDERS = new Set(['dentally']);
@@ -60,6 +61,8 @@ export const integrationService = {
         } catch (err) {
             throw new errors_1.AppError(err.message || 'Connect failed', 400);
         }
+        // Reconnect flips status back to active → un-hide this provider's data now.
+        invalidateGating(orgId);
         // First-connect pull: kick off immediately, but DO NOT await it — the
         // pull can be slow or hang, and blocking the connect response leaves the
         // UI stuck on "Saving…". Fire-and-forget; progress is polled by the UI
@@ -80,7 +83,14 @@ export const integrationService = {
                 console.error('[integrations] gohighlevel bootstrap failed:', err?.message || err);
             });
         } else if (ON_DEMAND_SYNCERS[provider]) {
-            this.syncNow(orgId, provider).catch((err) => {
+            // Ad providers backfill the FULL window (12mo) on first connect, like
+            // the Dentally/GHL bootstraps above. An incremental (31-day) first
+            // pull leaves older months ~30% short: spend/impressions/clicks are
+            // summed from daily ad_metrics rows, so any month with un-synced early
+            // days undercounts. (Reach is immune — it comes from the live
+            // account-level query, not the daily sum.)
+            const full = provider === 'meta_ads' || provider === 'google_ads';
+            this.syncNow(orgId, provider, { full }).catch((err) => {
                 console.error(`[integrations] first-sync ${provider} failed:`, err?.message || err);
             });
         }
@@ -233,7 +243,10 @@ export const integrationService = {
     },
     async revoke(orgId, provider) {
         const { impl } = getProvider(provider);
-        return impl.revoke(orgId);
+        const result = await impl.revoke(orgId);
+        // Data-hiding takes effect immediately (drop the cached status snapshot).
+        invalidateGating(orgId);
+        return result;
     },
     async refresh(orgId, provider) {
         const { impl } = getProvider(provider);
