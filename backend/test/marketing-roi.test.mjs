@@ -80,12 +80,43 @@ describe('marketingRoi', () => {
     for (const c of r.channels) expect('roas' in c).toBe(false);
   });
 
-  it('per-practice acquisition: leads/patients/revenue real; ad spend group-level → no per-site ROAS', async () => {
+  it('per-practice acquisition: patients/revenue real; no account->practice mapping → platform leads 0, no per-site ROAS', async () => {
     stub();
     const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
     expect(r.byPracticeAvailable).toBe(true);
     expect(r.adSpendPerPracticeAvailable).toBe(false);
-    expect(r.byPractice[0]).toMatchObject({ id: 'p1', leads: 3, conversions: 2, revenuePence: 1500000, roas: null });
+    // Leads now come from the ad platforms via the account->practice mapping;
+    // with no mapping, leads are 0. Patients (CRM) + revenue (settled) stay real.
+    expect(r.byPractice[0]).toMatchObject({ id: 'p1', leads: 0, conversions: 2, revenuePence: 1500000, roas: null });
+  });
+
+  it('per-practice acquisition: account->practice mapping attributes platform leads + spend + real per-site ROAS', async () => {
+    const ad = [
+      { provider: 'google_ads', customer_id: 'g1', spend_pence: 200000, impressions: 1000, clicks: 100, conversions: 5, practice_id: null },
+      { provider: 'meta_ads', customer_id: 'm1', spend_pence: 100000, impressions: 800, clicks: 60, conversions: 3, practice_id: null },
+    ];
+    const accounts = [
+      { provider: 'google_ads', customer_id: 'g1', name: 'Rochester Ads', currency: 'GBP', status: 'active', is_selected: true, practice_id: 'p1' },
+      { provider: 'meta_ads', customer_id: 'm1', name: 'Barnet Ads', currency: 'GBP', status: 'active', is_selected: true, practice_id: 'p2' },
+    ];
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'ad_metrics') return { data: ad, error: null };
+      if (q.table === 'leads') return { data: LEADS, error: null };
+      if (q.table === 'practices') return { data: PRACTICES, error: null };
+      if (q.table === 'ad_accounts') return { data: accounts, error: null };
+      return { data: [], error: null };
+    };
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_revenue_by_practice' ? { data: REV, error: null } : { data: [], error: null };
+
+    const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
+    expect(r.adSpendPerPracticeAvailable).toBe(true);
+    const p1 = r.byPractice.find((x) => x.id === 'p1');
+    const p2 = r.byPractice.find((x) => x.id === 'p2');
+    // p1: google account -> 5 platform conversions, 200000 spend, 1500000 revenue -> ROAS 7.5
+    expect(p1).toMatchObject({ leads: 5, conversions: 2, spendPence: 200000, revenuePence: 1500000, roas: 7.5 });
+    // p2: meta account -> 3 conversions, 100000 spend, 500000 revenue -> ROAS 5
+    expect(p2).toMatchObject({ leads: 3, conversions: 1, spendPence: 100000, revenuePence: 500000, roas: 5 });
   });
 
   it('emits a blended-ROAS Decision Lens card', async () => {

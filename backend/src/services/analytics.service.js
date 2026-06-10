@@ -720,12 +720,17 @@ export const analyticsService = {
             : await integration_repository_1.selectedAdAccountIds(orgId, null);
 
         const pids = resolved.practiceIds; // null = whole org
-        const [adRows, leads, revRows, practices] = await Promise.all([
+        const [adRows, leads, revRows, practices, adAccounts] = await Promise.all([
             analytics_repository_1.analyticsRepository.adMetricsInWindow(orgId, fromDate, toDate, pids, accountIds),
             analytics_repository_1.analyticsRepository.leadsForMarketing(orgId, since, until, pids),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since, until),
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
+            integration_repository_1.listAdAccounts(orgId, null),
         ]);
+        // Each practice runs its own ad account, so account.practice_id is how
+        // spend + platform conversions attribute to a site (see migration 000069).
+        const acctPractice = new Map();
+        for (const a of adAccounts) if (a.practice_id) acctPractice.set(`${a.provider}::${a.customer_id}`, a.practice_id);
         const nameById = new Map(practices.map((p) => [p.id, p.name]));
         const inScopeRev = revRows.filter((r) => !pids || pids.includes(r.practice_id));
 
@@ -780,51 +785,53 @@ export const analyticsService = {
         const google = channels.find((c) => c.key === 'google_ads') || null;
         const meta = channels.find((c) => c.key === 'meta_ads') || null;
 
-        // Per-practice acquisition: leads/conversions (CRM) + revenue (settled);
-        // ad spend per practice only when ad_metrics carries practice_id.
+        // Per-practice acquisition. Leads + spend come from the ad platforms
+        // (Meta/Google), attributed via the account->practice mapping; patients
+        // (treatment outcomes) come from the CRM; revenue from settled invoices.
+        // With spend now per-practice, per-site ROAS (revenue/spend) is real.
         const adSpendByPractice = new Map();
+        const adConvByPractice = new Map();
         let adSpendPerPracticeAvailable = false;
         for (const a of adRows) {
-            if (!a.practice_id) continue;
+            const pid = acctPractice.get(`${a.provider}::${a.customer_id}`);
+            if (!pid) continue; // unmapped account -> stays in group totals only
             adSpendPerPracticeAvailable = true;
-            adSpendByPractice.set(a.practice_id, (adSpendByPractice.get(a.practice_id) || 0) + (a.spend_pence || 0));
+            adSpendByPractice.set(pid, (adSpendByPractice.get(pid) || 0) + (a.spend_pence || 0));
+            adConvByPractice.set(pid, (adConvByPractice.get(pid) || 0) + (a.conversions || 0));
         }
         const revByPractice = new Map(inScopeRev.map((r) => [r.practice_id, Number(r.pence) || 0]));
-        const leadsByPractice = new Map();
+        // CRM patients per practice (treatment outcome). Own practice_id wins,
+        // else inherit the linked contact's practice (the patient's home site).
+        const patientsByPractice = new Map();
         for (const l of leads) {
-            // Own practice_id wins; else inherit the linked contact's practice so
-            // GHL enquiries (practice_id null) still attribute to a site.
             const id = l.practice_id ?? l.contact?.practice_id ?? null;
-            if (!id) continue;
-            const a = leadsByPractice.get(id) || { leads: 0, conversions: 0 };
-            a.leads += 1;
-            if (CONVERTED_STATUSES.has(l.status)) a.conversions += 1;
-            leadsByPractice.set(id, a);
+            if (!id || !CONVERTED_STATUSES.has(l.status)) continue;
+            patientsByPractice.set(id, (patientsByPractice.get(id) || 0) + 1);
         }
-        const practiceIdsSeen = new Set([...leadsByPractice.keys(), ...revByPractice.keys(), ...adSpendByPractice.keys()]);
+        const practiceIdsSeen = new Set([...adConvByPractice.keys(), ...revByPractice.keys(), ...adSpendByPractice.keys(), ...patientsByPractice.keys()]);
         const byPractice = [...practiceIdsSeen]
             .filter((id) => nameById.has(id))
             .map((id) => {
-                const lp = leadsByPractice.get(id) || { leads: 0, conversions: 0 };
+                const leadsP = adConvByPractice.get(id) || 0;       // platform conversions
+                const patients = patientsByPractice.get(id) || 0;   // CRM treatment outcomes
                 const spendPence = adSpendByPractice.get(id) || 0;
                 const revenuePence = revByPractice.get(id) || 0;
                 return {
                     id, name: nameById.get(id),
-                    leads: lp.leads, conversions: lp.conversions,
-                    convRatePct: lp.leads ? Math.round((lp.conversions / lp.leads) * 1000) / 10 : 0,
+                    leads: leadsP, conversions: patients,
+                    convRatePct: leadsP ? Math.round((patients / leadsP) * 1000) / 10 : 0,
                     revenuePence,
                     spendPence,
-                    cpaPence: lp.conversions && spendPence ? Math.round(spendPence / lp.conversions) : 0,
+                    cpaPence: patients && spendPence ? Math.round(spendPence / patients) : 0,
                     roas: spendPence ? Math.round((revenuePence / spendPence) * 100) / 100 : null,
                 };
             })
-            .sort((a, b) => b.leads - a.leads || b.revenuePence - a.revenuePence);
+            .sort((a, b) => b.spendPence - a.spendPence || b.revenuePence - a.revenuePence);
 
         const insights = buildMarketingInsights({ channels, blendedRoas, paidSpendPence, settledRevenuePence, connected: adRows.length > 0, adSpendPerPracticeAvailable });
 
         // Per-account spend breakdown (the selected ad accounts), labelled from
-        // the ad_accounts dimension. Org-isolated.
-        const adAccounts = await integration_repository_1.listAdAccounts(orgId, null);
+        // the ad_accounts dimension (already loaded above). Org-isolated.
         const acctMeta = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
         const acctMap = new Map();
         for (const a of adRows) {
