@@ -8,11 +8,15 @@
 
 import { useEffect, useState } from 'react';
 import { Chip } from '@/components/ui';
-import { useAdAccounts, useSetAdAccountSelection } from '@/features/integrations/hooks';
+import { useAdAccounts, useSetAdAccountSelection, useSyncIntegration } from '@/features/integrations/hooks';
 
 export default function AdAccountSelector({ provider, label }: { provider: string; label: string }) {
   const { data: accounts, isLoading } = useAdAccounts(provider);
   const save = useSetAdAccountSelection(provider);
+  // Full 12-month backfill. The Refresh button only pulls the incremental
+  // (~31-day) window, so historical months show low spend/impressions/clicks
+  // (summed from daily rows) until a full pull lands. Fire-and-forget server-side.
+  const backfill = useSyncIntegration();
   // Local checkbox state, seeded from the server selection.
   const [selected, setSelected] = useState<Record<string, boolean>>({});
 
@@ -98,6 +102,21 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
             {save.isSuccess ? 'Saved' : 'All changes saved — tick or untick an account to update'}
           </span>
         )}
+      </div>
+
+      <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
+        <button
+          onClick={() => backfill.mutate({ provider, full: true })}
+          disabled={backfill.isPending}
+          style={{ ...linkBtn, fontWeight: 700, cursor: backfill.isPending ? 'default' : 'pointer' }}
+        >
+          {backfill.isPending ? 'Starting backfill…' : 'Backfill 12 months'}
+        </button>
+        <p className="text-ink-muted" style={{ fontSize: 11, marginTop: 4 }}>
+          {backfill.isSuccess
+            ? 'Backfill started — it runs in the background; spend/impressions update in a minute or two.'
+            : 'Re-pulls 12 months of spend, impressions and clicks. Use if historical months look low (the daily Refresh only fetches the last ~31 days).'}
+        </p>
       </div>
     </div>
   );
