@@ -5,18 +5,24 @@
 // revenue-by-line, profit-contribution, and a decision lens.
 //
 // Wired to live data only. Real feeds today: Dentally (turnover, appts,
-// no-show, leads, conversion via /api/analytics/business-hub) and GHL/ads
-// (spend, leads, ROAS via /api/growth/marketing/roi). Anything with no source
-// yet — treatment-value closed, cash collected, per-entity profit/margin/ROAS,
-// revenue/profit by treatment line — renders zero or an empty state. Those fill
-// in once Xero (P&L) and a treatment-production/price feed are connected.
+// no-show, leads, conversion via /api/analytics/business-hub) and the ad
+// platforms — real Google Ads + Meta spend/leads/ROAS via the scope/period-aware
+// /api/analytics/marketing-roi (ad_metrics + CRM lead attribution). The marketing
+// snapshot reacts to the global Scope/Period bar AND a dynamic per-provider
+// ad-account filter directly above it. Anything with no source yet — treatment-
+// value closed, cash collected, per-entity profit/margin/ROAS, revenue/profit by
+// treatment line — renders zero or an empty state. Those fill in once Xero (P&L)
+// and a treatment-production/price feed are connected.
 
+import { useState } from 'react';
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
 import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type ChipColour } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice, type RevenueLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
-import { useMarketingRoi } from '@/features/growth/hooks';
+import { useMarketingRoi } from '@/features/intelligence/marketing-roi-hooks';
+import type { MarketingRoi } from '@/features/intelligence/marketing-roi-api';
+import { AdAccountFilter } from '@/features/intelligence/AdAccountFilter';
 
 const DASH = '—';
 
@@ -44,7 +50,12 @@ function HeadlineCard({ c }: { c: HeadlineKpi }) {
 export function GroupPerformanceScreen() {
   const { scope } = useScopePeriod();
   const { data, isLoading, isError } = useBusinessHub();
-  const { data: roi } = useMarketingRoi();
+  // Dynamic per-provider ad-account filter for the marketing snapshot. null = all
+  // selected accounts for that provider; a customer_id narrows to one account.
+  const [metaId, setMetaId] = useState<string | null>(null);
+  const [googleId, setGoogleId] = useState<string | null>(null);
+  const accountIds = [metaId, googleId].filter(Boolean) as string[];
+  const { data: roi } = useMarketingRoi(accountIds.length ? accountIds : undefined);
 
   if (isLoading)
     return (
@@ -70,8 +81,8 @@ export function GroupPerformanceScreen() {
   // ROAS, cost/patient). Group profit needs a P&L margin (Xero/QuickBooks) and
   // shows "—" until connected; ad-derived cards show "—" until ads are mapped.
   const connected = !!roi?.connected;
-  const spendPence = connected ? roi!.spend_pence : 0;
-  const roas = connected ? roi!.roas : 0;
+  const spendPence = connected ? roi!.paidSpendPence : 0;
+  const roas = connected ? (roi!.blendedRoas ?? 0) : 0;
 
   const profitPence = g.marginPct > 0 ? Math.round((g.revenuePence * g.marginPct) / 100) : 0;
   const vsBasePct = g.revenueTargetPence > 0
@@ -117,8 +128,9 @@ export function GroupPerformanceScreen() {
       chip: g.treatmentsClosedPence > 0 ? { text: `${formatPence(g.treatmentsClosedPence)} attributed`, tone: 'emerald' } : null },
   ];
 
-  const channels = roi?.connected ? roi.by_provider : [];
-  const adAccounts = roi?.connected ? (roi.by_account ?? []) : [];
+  // Paid channels only (Google + Meta) — real spend/leads from ad_metrics.
+  const channels = roi?.connected ? roi.channels.filter((c) => c.paid) : [];
+  const adAccounts = roi?.connected ? (roi.byAccount ?? []) : [];
   const lens = buildLens(practices, g.marginPct, roi);
 
   // Clinical revenue lines from Dentally invoice items (group-wide).
@@ -140,15 +152,23 @@ export function GroupPerformanceScreen() {
           body="Treatment plans and GHL leads aren't attributed per practice, so the four headline KPIs cover the whole group. The Business Performance table below narrows to the selected practice." />
       )}
 
-      {/* Marketing Snapshot — per ad provider (GHL/ads). Revenue + ROAS are
-          account-level only (not served per provider), so they show as —. */}
+      {/* Dynamic ad-account filter — built from the org's REAL connected Google
+          and Meta accounts. Narrows the marketing snapshot per provider; hides
+          itself when there are fewer than two accounts to choose between. */}
+      <AdAccountFilter metaId={metaId} googleId={googleId} onSelectMeta={setMetaId} onSelectGoogle={setGoogleId} />
+
+      {/* Marketing Snapshot — real Google + Meta spend/leads per channel, reactive
+          to the Scope/Period bar and the ad-account filter above. Per-channel
+          revenue/ROAS isn't attributable, so they show as — (blended ROAS only). */}
       <Card>
         <div className="flex items-start justify-between gap-2">
           <div>
             <h3 className="display text-lg font-semibold">Marketing Snapshot</h3>
-            <p className="text-sm text-ink-muted mt-0.5">Spend, leads and conversions across your paid channels.</p>
+            <p className="text-sm text-ink-muted mt-0.5">Real Google Ads + Meta spend, leads and conversions across your paid channels.</p>
           </div>
-          {roi?.connected && roi.roas > 0 && <Chip colour="emerald">{roi.roas.toFixed(2)}× blended ROAS</Chip>}
+          {roi?.connected && roi.blendedRoas != null && roi.blendedRoas > 0 && (
+            <Chip colour="emerald">{roi.blendedRoas.toFixed(2)}× blended ROAS</Chip>
+          )}
         </div>
         {channels.length === 0 ? (
           <EmptyState message="No ad spend in this window. Connect Google Ads / Meta in Data Hub." />
@@ -156,16 +176,19 @@ export function GroupPerformanceScreen() {
           <>
             <div className="grid gap-3 mt-3 grid-cols-1 md:grid-cols-3">
               {channels.map((c) => (
-                <div key={c.provider} className="rounded-xl border border-border p-4">
+                <div key={c.key} className="rounded-xl border border-border p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold capitalize">{c.provider.replace('_', ' ')}</span>
-                    <span className="display text-2xl font-bold">{DASH}</span>
+                    <span className="text-sm font-semibold flex items-center gap-2">
+                      <span aria-hidden className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: c.color }} />
+                      {c.label}
+                    </span>
+                    <span className="display text-2xl font-bold">{c.ctrPct > 0 ? `${c.ctrPct.toFixed(1)}%` : DASH}</span>
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
-                    <ChannelStat label="Spend" value={formatPence(c.spend_pence)} />
-                    <ChannelStat label="Revenue" value={DASH} />
-                    <ChannelStat label="Leads" value={formatNumber(c.leads)} />
-                    <ChannelStat label="New pts" value={formatNumber(c.conversions)} />
+                    <ChannelStat label="Spend" value={formatPence(c.spendPence)} />
+                    <ChannelStat label="Cost / lead" value={c.costPerAdConvPence ? formatPence(c.costPerAdConvPence) : DASH} />
+                    <ChannelStat label="Leads" value={formatNumber(c.adConversions)} />
+                    <ChannelStat label="Clicks" value={formatNumber(c.clicks)} />
                   </div>
                 </div>
               ))}
@@ -186,14 +209,14 @@ export function GroupPerformanceScreen() {
                     </thead>
                     <tbody>
                       {adAccounts.map((a) => (
-                        <tr key={`${a.provider}-${a.customer_id}`}>
+                        <tr key={`${a.provider}-${a.customerId}`}>
                           <td>
-                            <strong>{a.name || a.customer_id}</strong>
+                            <strong>{a.name || a.customerId}</strong>
                             <span className="text-ink-muted ml-1 capitalize" style={{ fontSize: 11 }}>
                               {a.provider.replace('_', ' ')}{a.currency ? ` · ${a.currency}` : ''}
                             </span>
                           </td>
-                          <td className="right">{formatPence(a.spend_pence)}</td>
+                          <td className="right">{formatPence(a.spendPence)}</td>
                           <td className="right">{formatNumber(a.impressions)}</td>
                           <td className="right">{formatNumber(a.clicks)}</td>
                           <td className="right">{formatNumber(a.reach)}</td>
@@ -339,7 +362,7 @@ function ChannelStat({ label, value }: { label: string; value: string }) {
 type Lens = { tone: 'good' | 'warn' | 'bad' | 'info'; icon: JSX.Element; title: string; body: string };
 
 // Decision Lens — derived from live Dentally + ads data only.
-function buildLens(rows: HubPractice[], marginPct: number, roi: ReturnType<typeof useMarketingRoi>['data']): Lens[] {
+function buildLens(rows: HubPractice[], marginPct: number, roi: MarketingRoi | undefined): Lens[] {
   if (!rows.length) return [];
   const out: Lens[] = [];
 
@@ -350,10 +373,13 @@ function buildLens(rows: HubPractice[], marginPct: number, roi: ReturnType<typeo
   if (worstNoShow && worstNoShow.noShowRate > 0)
     out.push({ tone: 'warn', icon: <AlertTriangle size={16} />, title: `${worstNoShow.name} no-show rate ${worstNoShow.noShowRate}%`, body: `${formatNumber(worstNoShow.noShows)} missed appointments — reminders, deposits and speed-to-lead are the cheapest fix.` });
 
-  if (roi?.connected && roi.by_provider.length > 0) {
-    const top = [...roi.by_provider].sort((a, b) => a.cpl_pence - b.cpl_pence).find((p) => p.leads > 0);
+  const paid = roi?.connected ? roi.channels.filter((c) => c.paid) : [];
+  if (paid.length > 0) {
+    const top = [...paid]
+      .filter((p) => p.adConversions > 0 && p.costPerAdConvPence > 0)
+      .sort((a, b) => a.costPerAdConvPence - b.costPerAdConvPence)[0];
     if (top)
-      out.push({ tone: 'info', icon: <Gem size={16} />, title: `${top.provider} is your cheapest channel`, body: `${formatPence(top.cpl_pence)} per lead from ${formatPence(top.spend_pence)} spend — shift budget to the winner.` });
+      out.push({ tone: 'info', icon: <Gem size={16} />, title: `${top.label} is your cheapest channel`, body: `${formatPence(top.costPerAdConvPence)} per lead from ${formatPence(top.spendPence)} spend — shift budget to the winner.` });
   }
 
   out.push({ tone: marginPct >= 18 ? 'good' : 'bad', icon: <TrendingDown size={16} />, title: marginPct > 0 ? `Group net margin ${marginPct}%` : 'No margin data yet', body: marginPct >= 18 ? 'Healthy against the ~18% dental benchmark.' : marginPct > 0 ? 'Below the ~18% benchmark — wage ratio and lab/materials are the usual leak.' : 'Connect Xero for live P&L margin.' });
