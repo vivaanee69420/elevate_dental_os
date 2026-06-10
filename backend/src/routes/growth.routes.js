@@ -10,6 +10,7 @@ import * as formulas_1 from "../lib/formulas.js";
 import { AppError } from "../middleware/errors.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
+import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 const router = (0, express_1.Router)();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -437,14 +438,19 @@ router.get('/marketing/ad-spend', (0, async_handler_1.asyncHandler)(async (req, 
         add(byDate.get(dk), r);
     }
 
-    // Overlay Meta's period-deduplicated reach/frequency (stored on ad_accounts)
-    // in place of the daily-summed values, which over-count reach ~3x and
-    // collapse frequency toward 1 (reach is unique people, not additive across
-    // days). snapByKey holds the per-account snapshot; scopeKeys are the accounts
-    // that actually have rows in this window.
-    const snapByKey = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+    // Overlay Meta's period-deduplicated reach/frequency in place of the daily-
+    // summed values, which over-count reach ~3x and collapse frequency toward 1
+    // (reach is unique people, NOT additive across days). Primary source is a
+    // live per-window Meta query for the EXACT [from,to] being displayed (cached,
+    // exact for any window); the rolling snapshot on ad_accounts is the fallback
+    // when the live query is unavailable (token issue / Google). scopeKeys are
+    // the accounts that actually have rows in this window.
     const scopeKeys = Array.from(byAccount.keys());
-    const snapsFor = (keys) => keys.map((k) => snapByKey.get(k)).filter(Boolean);
+    const metaCids = scopeKeys.filter((k) => k.startsWith('meta_ads::')).map((k) => k.split('::')[1]);
+    const liveReach = await fetchPeriodReach(orgId, metaCids, fromDate, toDate);
+    const fallbackByKey = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+    const snapFor = (key) => liveReach.get(key) ?? fallbackByKey.get(key);
+    const snapsFor = (keys) => keys.map(snapFor).filter(Boolean);
     const overlayReach = (obj, snaps) => {
         const o = overlayPeriodReach(obj.impressions, snaps, fromDate, toDate);
         return { ...obj, reach: o.reach, frequency: o.frequency, reach_is_approx: o.reach_is_approx };
@@ -590,6 +596,16 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     const ltv_pence = formulas_1.ltvFromBaseline(healthR.data?.baseline);
     const cac_pence = newPatients ? Math.round(totals.spend_pence / newPatients) : 0;
 
+    // Period-deduplicated reach overlay (see /marketing/ad-spend): live per-window
+    // Meta query for the exact [from,to], cached; rolling ad_accounts snapshot as
+    // fallback. Replaces the daily-summed reach in by_provider/by_account.
+    const roiScopeKeys = Array.from(byAccount.keys());
+    const roiMetaCids = roiScopeKeys.filter((k) => k.startsWith('meta_ads::')).map((k) => k.split('::')[1]);
+    const roiLiveReach = await fetchPeriodReach(orgId, roiMetaCids, fromDate, toDate);
+    const roiFallback = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+    const roiSnapFor = (key) => roiLiveReach.get(key) ?? roiFallback.get(key);
+    const roiSnapsFor = (keys) => keys.map(roiSnapFor).filter(Boolean);
+
     res.json({
         connected: adRows.length > 0,
         window: { from: fromDate, to: toDate },
@@ -607,25 +623,18 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         ltv_cac_ratio: ltv_pence && cac_pence ? +(ltv_pence / cac_pence).toFixed(2) : 0,
         ...ratios(totals),
         account_filter: accountIds, // null = all; [] = none; [...] = explicit
-        by_provider: (() => {
-            // Same period-reach overlay as /marketing/ad-spend: replace the
-            // daily-summed reach with Meta's deduplicated per-account snapshot.
-            const snapByKey = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
-            const scopeKeys = Array.from(byAccount.keys());
-            const snapsFor = (keys) => keys.map((k) => snapByKey.get(k)).filter(Boolean);
-            return Array.from(byProvider.entries())
-                .map(([provider, a]) => {
-                    const o = overlayPeriodReach(a.impressions, snapsFor(scopeKeys.filter((k) => k.startsWith(`${provider}::`))), fromDate, toDate);
-                    return { provider, ...a, reach: o.reach, frequency: o.frequency, reach_is_approx: o.reach_is_approx, ...ratios(a) };
-                })
-                .sort((x, y) => y.spend_pence - x.spend_pence);
-        })(),
+        by_provider: Array.from(byProvider.entries())
+            .map(([provider, a]) => {
+                const o = overlayPeriodReach(a.impressions, roiSnapsFor(roiScopeKeys.filter((k) => k.startsWith(`${provider}::`))), fromDate, toDate);
+                return { provider, ...a, reach: o.reach, frequency: o.frequency, reach_is_approx: o.reach_is_approx, ...ratios(a) };
+            })
+            .sort((x, y) => y.spend_pence - x.spend_pence),
         by_account: (() => {
             if (byAccount.size === 0) return [];
             const meta = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
             return Array.from(byAccount.entries())
                 .map(([k, a]) => {
-                    const o = overlayPeriodReach(a.impressions, [meta.get(k)].filter(Boolean), fromDate, toDate);
+                    const o = overlayPeriodReach(a.impressions, roiSnapsFor([k]), fromDate, toDate);
                     return { ...a, reach: o.reach, frequency: o.frequency, reach_is_approx: o.reach_is_approx, name: meta.get(k)?.name ?? null, currency: meta.get(k)?.currency ?? null, status: meta.get(k)?.status ?? null, ...ratios(a) };
                 })
                 .sort((x, y) => y.spend_pence - x.spend_pence);

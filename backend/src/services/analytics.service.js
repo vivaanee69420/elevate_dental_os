@@ -19,6 +19,7 @@ import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from
 import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
+import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -759,17 +760,22 @@ export const analyticsService = {
         }
 
         // Period-deduplicated reach overlay (see lib/marketing-reach.js). The
-        // c.reach summed above over-counts unique people ~3x; replace it with
-        // Meta's per-account snapshot stored on ad_accounts.
-        const snapByKey = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+        // c.reach summed above over-counts unique people ~3x; replace it with a
+        // live per-window Meta query for the EXACT window (cached), falling back
+        // to the rolling ad_accounts snapshot when the live query is unavailable.
         const scopeKeysByProvider = new Map();
+        const scopeMetaCids = new Set();
         for (const a of adRows) {
             const set = scopeKeysByProvider.get(a.provider) ?? scopeKeysByProvider.set(a.provider, new Set()).get(a.provider);
             set.add(`${a.provider}::${a.customer_id}`);
+            if (a.provider === 'meta_ads' && a.customer_id) scopeMetaCids.add(a.customer_id);
         }
+        const liveReach = await fetchPeriodReach(orgId, [...scopeMetaCids], fromDate, toDate);
+        const fallbackByKey = new Map(adAccounts.map((a) => [`${a.provider}::${a.customer_id}`, a]));
+        const snapForKey = (k) => liveReach.get(k) ?? fallbackByKey.get(k);
         const providerReach = (provider, impressions) => overlayPeriodReach(
             impressions,
-            [...(scopeKeysByProvider.get(provider) ?? [])].map((k) => snapByKey.get(k)).filter(Boolean),
+            [...(scopeKeysByProvider.get(provider) ?? [])].map(snapForKey).filter(Boolean),
             fromDate, toDate,
         );
 
@@ -866,7 +872,7 @@ export const analyticsService = {
         const byAccount = [...acctMap.entries()]
             .map(([k, a]) => {
                 // Period-deduplicated reach for this account (not the daily sum).
-                const pr = overlayPeriodReach(a.impressions, [snapByKey.get(k)].filter(Boolean), fromDate, toDate);
+                const pr = overlayPeriodReach(a.impressions, [snapForKey(k)].filter(Boolean), fromDate, toDate);
                 return {
                     ...a,
                     reach: pr.reach, reachIsApprox: pr.reach_is_approx, frequency: pr.frequency,
@@ -1442,18 +1448,29 @@ export const analyticsService = {
             sinceISO = since.toISOString();
             untilISO = null;
         }
-        const [dayRows, actuals, bank] = await Promise.all([
+        const [dayRows, actuals, bank, billedRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             this._actualsBundle(orgId, practiceId),
             // Bank balance is org-level (not per practice) → only used for "All".
             practiceId ? Promise.resolve({ totalPence: 0 }) : analytics_repository_1.analyticsRepository.bankSummary(orgId),
+            // Billed production (invoiced fees) for the SAME window — the accrual
+            // turnover number. Grouped RPC (small row count). Empty when PMS hidden.
+            // Never let a billing-source failure break the dashboard → fall back to
+            // settled receipts for turnover.
+            analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, sinceISO, untilISO).catch(() => []),
         ]);
         const periodRevenue = (Array.isArray(dayRows) ? dayRows : []).reduce((s, r) => s + Number(r.pence || 0), 0);
         const bankPence = bank.totalPence || 0;
+        // Invoiced production banked into the window — scoped to the practice when
+        // one is selected (the matrix carries practice_id; the RPC is org-wide).
+        const billedPence = (Array.isArray(billedRows) ? billedRows : [])
+            .filter((r) => !practiceId || r.practice_id === practiceId)
+            .reduce((s, r) => s + (Number(r.fee_pence) || 0), 0);
         // Real costs only apply to the trailing window (monthly_financials is
         // annual, not period-sliceable) — for a custom range, costs/profit are 0.
         const useActuals = !ranged && actuals.hasAny && (actuals.annual.revenue || 0) > 0;
         let revenuePence = periodRevenue, totalCostsPence = 0, netProfitPence = 0, marginPct = 0;
+        let turnoverBasis = 'settled';
         if (useActuals) {
             const inp = plInputFromBuckets(actuals.annual);
             const pl = (0, formulas_1.calculatePL)(inp);
@@ -1461,9 +1478,19 @@ export const analyticsService = {
             totalCostsPence = pl.totalCosts;
             netProfitPence = pl.netProfit;
             marginPct = pl.marginPct;
+            turnoverBasis = 'actuals';
+        } else if (billedPence > periodRevenue) {
+            // Turnover = invoiced production (billed). Cash collected stays settled
+            // receipts, so the collection rate (cash/turnover) is real (<100%).
+            // Guard: never let turnover drop below banked cash — if invoice coverage
+            // is patchy (billed < settled) we fall back to settled so the rate can't
+            // exceed 100%.
+            revenuePence = billedPence;
+            turnoverBasis = 'billed';
         }
         return {
             basis: useActuals ? 'actuals' : 'revenue-only',
+            turnoverBasis,
             revenuePence,
             netProfitPence,
             marginPct,

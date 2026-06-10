@@ -135,12 +135,13 @@ async function queryAccount(accountId, accessToken, sinceDate) {
     return rows;
 }
 
-// Account-level insight over the WHOLE window (no time_increment) — Meta's
-// deduplicated reach + period frequency for the account. Returns one parsed
-// snapshot object, or null if the account reported nothing. Non-fatal: the
-// caller swallows errors (the daily series still syncs).
-async function queryAccountPeriod(accountId, accessToken, sinceDate) {
-    const until = new Date().toISOString().slice(0, 10);
+// Account-level insight over an arbitrary window (no time_increment) — Meta's
+// deduplicated reach + period frequency for the account. `untilDate` defaults
+// to today (the rolling sync window). Returns one parsed snapshot object, or
+// null if the account reported nothing. Exported for the live per-window reach
+// cache (meta-reach.js); non-fatal — callers swallow errors.
+export async function fetchAccountPeriodInsight(accountId, accessToken, sinceDate, untilDate) {
+    const until = untilDate || new Date().toISOString().slice(0, 10);
     const timeRange = encodeURIComponent(JSON.stringify({ since: sinceDate, until }));
     const url = `${graphBase()}/${apiVersion()}/act_${accountId}/insights`
         + `?level=account&time_range=${timeRange}`
@@ -215,7 +216,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
                 // Period-deduplicated reach/frequency for the account — stored on
                 // ad_accounts, NOT summed from the daily rows above. Non-fatal.
                 try {
-                    const period = await queryAccountPeriod(aid, access_token, sinceDate);
+                    const period = await fetchAccountPeriodInsight(aid, access_token, sinceDate);
                     if (period) {
                         await supabase_1.serviceClient.from('ad_accounts')
                             .update({
