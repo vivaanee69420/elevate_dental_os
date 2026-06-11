@@ -10,6 +10,8 @@ export interface HubPractice {
   name: string;
   chairs: number;
   revenuePence: number;
+  treatmentsClosedPence: number; // plan fees billed (sold), this practice
+  treatmentsPaidPence: number;   // plan fees paid (collected), this practice
   appointments: number;
   completed: number;
   noShows: number;
@@ -42,7 +44,8 @@ export interface BusinessHub {
     newPatients: number;           // leads reaching treatment (real Dentally/GHL)
     treatmentsStarted: number;     // plans started in window (Dentally)
     treatmentsCompleted: number;   // accepted/completed plan count in window
-    treatmentsClosedPence: number; // private value of completed plans in window
+    treatmentsClosedPence: number; // plan fees BILLED in window (sold) — invoice_items
+    treatmentsPaidPence: number;   // plan fees PAID in window (collected) — invoice_paid subset
     cashCollectedPence: number;    // settled receipts banked in window
     turnoverDeltaPct: number | null; // turnover vs prior same-length period; null => no base
     cashDeltaPct: number | null;     // cash vs prior same-length period; null => no base

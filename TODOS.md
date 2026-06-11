@@ -207,3 +207,25 @@ Contacts, Payments, Progress, Mobile.
 
 **Suggested order:** Payments (rollup RPCs already exist — quick win) →
 Wealth block (4, self-contained) → Marketing/Reviews/Loyalty (ties to ad work).
+
+## Dentally payments reconcile — 2 follow-ups (found 2026-06-10)
+
+From `node --env-file=backend/.env backend/scripts/dentally-reconcile-all.mjs
+1a5f888a-0dfe-4802-acf8-6003665089ad 2026-05-10 2026-06-10`. 3/4 practices
+reconcile exactly; total DB vs Dentally diff −£687.
+
+1. **`payments_method_check` rejects `other` + `cheque`.** 46 in-window payments
+   skipped on upsert: Dentally method `"Other"` → `mapPaymentMethod` slug
+   `'other'`, not in the CHECK enum
+   (`20260101000001_schema.sql:362`: card, apple_pay, google_pay, bank_transfer,
+   cash, direct_debit, finance, card_on_file, pay_link). `mapPaymentMethod` also
+   emits `'cheque'` (cheque/check) which is ALSO absent — latent twin bug, any
+   cheque payment hits the same wall. Fix: add `'other'` + `'cheque'` to the
+   constraint (new migration + `NOTIFY pgrst`), then re-run reconcile to land
+   the 46 skipped rows.
+
+2. **Ashford +1 row / +£687 (DB higher than Dentally).** DB holds one in-window
+   payment the live Dentally window no longer reports — a row re-dated/deleted in
+   Dentally that lingers in DB, or a pre-existing duplicate. Not inserted by the
+   run (run only upserted matches). Hunt the stale Ashford payment (~£687) and
+   delete/mark deleted.

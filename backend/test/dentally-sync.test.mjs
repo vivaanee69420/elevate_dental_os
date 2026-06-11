@@ -10,7 +10,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), mergeConfig: vi.fn() },
 }));
 
-const { syncOneOrg, syncAllOrgs, bootstrapOnConnect, invoiceRow, __test } = await import('../src/lib/integrations/dentally-sync.js');
+const { syncOneOrg, syncAllOrgs, bootstrapOnConnect, invoiceRow, selectStaleAppointmentIds, __test } = await import('../src/lib/integrations/dentally-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 describe('dentally mappers', () => {
@@ -24,6 +24,17 @@ describe('dentally mappers', () => {
         expect(__test.mapAppointmentStatus('finished')).toBe('completed');
         expect(__test.mapAppointmentStatus('cancelled')).toBe('cancelled');
         expect(__test.mapAppointmentStatus('wibble')).toBe('scheduled');
+    });
+
+    it('mapAppointmentStatus handles the live Title-Case, space-separated states', () => {
+        // The real /appointments `state` is "Did not attend" / "In surgery" /
+        // "Cancelled" / "Completed" — NOT snake_case. Spaces must normalise or
+        // DNA falls through to 'scheduled' and no_show never populates.
+        expect(__test.mapAppointmentStatus('Did not attend')).toBe('no_show');
+        expect(__test.mapAppointmentStatus('Cancelled')).toBe('cancelled');
+        expect(__test.mapAppointmentStatus('Completed')).toBe('completed');
+        expect(__test.mapAppointmentStatus('Confirmed')).toBe('confirmed');
+        expect(__test.mapAppointmentStatus('In surgery')).toBe('in_progress');
     });
     it('mapPaymentStatus: Dentally status strings + legacy paid flag', () => {
         // Live Dentally /payments status vocabulary (verified against the API).
@@ -115,6 +126,37 @@ describe('authHeader', () => {
     });
 });
 
+describe('selectStaleAppointmentIds (delete-reconciliation safety)', () => {
+    const rows = (ids) => ids.map((x) => ({ id: `row-${x}`, pms_external_id: String(x) }));
+    it('flags only rows whose pms id Dentally no longer returns', () => {
+        const our = rows([1, 2, 3, 4]);
+        const remote = new Set(['1', '2', '4']); // 3 deleted in Dentally
+        const { ids, aborted } = selectStaleAppointmentIds(our, remote);
+        expect(aborted).toBeNull();
+        expect(ids).toEqual(['row-3']);
+    });
+    it('aborts (deletes nothing) when the remote set is empty — a bad/partial pull', () => {
+        const { ids, aborted } = selectStaleAppointmentIds(rows([1, 2, 3]), new Set());
+        expect(aborted).toBe('empty_remote');
+        expect(ids).toEqual([]);
+    });
+    it('aborts when it would delete more than half the window (silent shape change)', () => {
+        const our = rows([1, 2, 3, 4]);
+        const remote = new Set(['1']); // would delete 3 of 4 -> implausible
+        const { ids, aborted } = selectStaleAppointmentIds(our, remote);
+        expect(aborted).toBe('safety_threshold');
+        expect(ids).toEqual([]);
+    });
+    it('no-ops cleanly on an empty window', () => {
+        expect(selectStaleAppointmentIds([], new Set())).toEqual({ ids: [], aborted: null });
+    });
+    it('keeps rows present in Dentally even at the boundary (no false delete)', () => {
+        const our = rows([10, 11]);
+        const remote = new Set(['10', '11']);
+        expect(selectStaleAppointmentIds(our, remote).ids).toEqual([]);
+    });
+});
+
 describe('invoiceItemRow', () => {
     const ORG = 'org-1';
     const invoiceMap = new Map([
@@ -166,7 +208,7 @@ describe('fetchAllPages', () => {
         global.fetch = vi.fn()
             .mockResolvedValueOnce(page({ patients: [{ id: 1 }], meta: { total_pages: 2 } }))
             .mockResolvedValueOnce(page({ patients: [{ id: 2 }], meta: { total_pages: 2 } }));
-        const out = await __test.fetchAllPages('https://api.dentally.co/v1', '/patients', 'Bearer k', { updated_since: 'x' });
+        const out = await __test.fetchAllPages('https://api.dentally.co/v1', '/patients', 'Bearer k', { updated_after: 'x' });
         expect(out.map((p) => p.id)).toEqual([1, 2]);
         const headers = global.fetch.mock.calls[0][1].headers;
         expect(headers['User-Agent']).toMatch(/ElevateOS/);
@@ -221,7 +263,7 @@ describe('streamPages (bounded-memory pagination)', () => {
             .mockResolvedValueOnce(page({ appointments: [{ id: 3 }, { id: 4 }], meta: { total_pages: 3 } }))
             .mockResolvedValueOnce(page({ appointments: [{ id: 5 }], meta: { total_pages: 3 } }));
         const batches = [];
-        const total = await __test.streamPages('https://b', '/appointments', 'Bearer k', { updated_since: 'x' },
+        const total = await __test.streamPages('https://b', '/appointments', 'Bearer k', { updated_after: 'x' },
             (items, p) => { batches.push({ p, n: items.length, ids: items.map((i) => i.id) }); });
         // One batch per page — the caller upserts+discards each, so peak memory is
         // a single page, not all 5 rows at once.
@@ -304,8 +346,9 @@ describe('syncOneOrg', () => {
         // patients: up-front page-count probe fires (1 hit) but the pull is skipped
         // by the checkpoint — so exactly 1 page-1 hit, not 2.
         expect(pageOneHits['patients']).toBe(1);
-        // appointments: not checkpointed -> probe + real pull = 2 page-1 hits.
-        expect(pageOneHits['appointments']).toBe(2);
+        // appointments: not checkpointed -> probe + real pull (2) + the delete-
+        // reconciliation's own windowed id pull (1) = 3 page-1 hits.
+        expect(pageOneHits['appointments']).toBe(3);
         vi.useRealTimers();
     });
 
@@ -416,13 +459,13 @@ describe('syncOneOrg', () => {
         expect(invoiceListPulls).toBe(2);
     });
 
-    it('recent mode: all three resources pull the same ~12-month updated_since window (no open-only `after`)', async () => {
+    it('recent mode: all three resources pull the same ~12-month updated_after window (no open-only `after`)', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const seen = [];
         global.fetch = vi.fn(async (url) => {
             const u = new URL(url.toString());
-            seen.push({ path: u.pathname, updated_since: u.searchParams.get('updated_since'), after: u.searchParams.get('after') });
+            seen.push({ path: u.pathname, updated_after: u.searchParams.get('updated_after'), dated_after: u.searchParams.get('dated_after'), after: u.searchParams.get('after') });
             return page({ patients: [], meta: { total_pages: 1 } });
         });
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
@@ -435,22 +478,29 @@ describe('syncOneOrg', () => {
         expect(patients.length).toBeGreaterThan(0);
         expect(payments.length).toBeGreaterThan(0);
         expect(appts.length).toBeGreaterThan(0);
-        // Patients + payments pull the bounded 1-year window via updated_since.
-        for (const s of [...patients, ...payments]) {
+        // Patients pull the bounded 1-year window via updated_after.
+        for (const s of patients) {
             expect(s.after).toBeNull();
-            expect(Math.abs(new Date(s.updated_since).getTime() - expected12)).toBeLessThan(86400000);
+            expect(Math.abs(new Date(s.updated_after).getTime() - expected12)).toBeLessThan(86400000);
+        }
+        // Payments have NO updated_after on Dentally — bounded by dated_after
+        // (date-only) on the same ~12-month window instead.
+        for (const s of payments) {
+            expect(s.after).toBeNull();
+            expect(s.updated_after).toBeNull();
+            expect(Math.abs(new Date(s.dated_after).getTime() - expected12)).toBeLessThan(2 * 86400000);
         }
         // Appointments are pulled BOTH ways on bootstrap: the 1-year history via
-        // updated_since (for Associates / Treatment Mix / Pay) AND the upcoming
+        // updated_after (for Associates / Treatment Mix / Pay) AND the upcoming
         // book via `after=now` (for the live Appointments diary — a separate
         // query so years of history can't crowd future bookings out under the
         // page cap).
-        const apptHistory = appts.filter((s) => s.updated_since != null);
+        const apptHistory = appts.filter((s) => s.updated_after != null);
         const apptUpcoming = appts.filter((s) => s.after != null);
         expect(apptHistory.length).toBeGreaterThan(0);
         expect(apptUpcoming.length).toBeGreaterThan(0);
         for (const s of apptHistory) {
-            expect(Math.abs(new Date(s.updated_since).getTime() - expected12)).toBeLessThan(86400000);
+            expect(Math.abs(new Date(s.updated_after).getTime() - expected12)).toBeLessThan(86400000);
         }
         for (const s of apptUpcoming) {
             expect(Math.abs(new Date(s.after).getTime() - Date.now())).toBeLessThan(86400000);
@@ -497,7 +547,7 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         };
         const seen = [];
         global.fetch = vi.fn(async (url) => {
-            seen.push(new URL(url.toString()).searchParams.get('updated_since'));
+            seen.push(new URL(url.toString()).searchParams.get('updated_after'));
             return page({ patients: [], meta: { total_pages: 1 } });
         });
         const res = await syncAllOrgs();
@@ -519,7 +569,7 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         };
         const seen = [];
         global.fetch = vi.fn(async (url) => {
-            seen.push(new URL(url.toString()).searchParams.get('updated_since'));
+            seen.push(new URL(url.toString()).searchParams.get('updated_after'));
             return page({ patients: [], meta: { total_pages: 1 } });
         });
         const res = await syncAllOrgs();
@@ -601,19 +651,19 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
-    it('full backfill uses a 2-year updated_since window, not the 30d/last_sync window', async () => {
+    it('full backfill uses a 2-year updated_after window, not the 30d/last_sync window', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const seen = [];
         global.fetch = vi.fn(async (url) => {
-            seen.push(new URL(url.toString()).searchParams.get('updated_since'));
+            seen.push(new URL(url.toString()).searchParams.get('updated_after'));
             return page({ patients: [], meta: { total_pages: 1 } });
         });
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { full: true });
         // every WINDOWED resource pull asked for the most-recent 2 years, ignoring
         // last_sync_at. The /users roster pull is deliberately unwindowed (full
-        // team every sync), so it carries no updated_since (null) — skip it.
+        // team every sync), so it carries no updated_after (null) — skip it.
         const windowed = seen.filter(Boolean);
         expect(windowed.length).toBeGreaterThan(0);
         const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();

@@ -38,9 +38,9 @@ function pctOf(n: number, d: number, dp = 0): number {
 // One headline scorecard tile: label, big value, sub-line, optional status chip.
 function HeadlineCard({ c }: { c: HeadlineKpi }) {
   return (
-    <div className="card-padded flex flex-col">
+    <div className="card-padded flex flex-col min-w-0">
       <div className="text-xs text-ink-muted uppercase tracking-wide">{c.label}</div>
-      <div className="display text-2xl font-bold mt-1">{c.value}</div>
+      <div className="display text-xl font-bold tabular-nums tracking-tight mt-1">{c.value}</div>
       <div className="text-xs text-ink-muted mt-1">{c.sub}</div>
       {c.chip && <div className="mt-2"><Chip colour={c.chip.tone}>{c.chip.text}</Chip></div>}
     </div>
@@ -75,6 +75,13 @@ export function GroupPerformanceScreen() {
   const isGroupScope = scope === 'all' || scope === 'practices' || scope === 'academy' || scope === 'lab';
   const practices = isGroupScope ? data.practices : data.practices.filter((p) => p.practiceId === scope);
   const maxTurnover = Math.max(1, ...data.practices.map((p) => p.revenuePence));
+  // Treatments Closed + turnover ARE practice-attributed (invoice_items feed), so
+  // a specific practice scopes them to that row. Leads/new-patients are NOT, so
+  // avg-value / rev-per-lead stay group-wide (handled below on g.*).
+  const scopedRow = isGroupScope ? null : data.practices.find((p) => p.practiceId === scope) ?? null;
+  const closedPence = scopedRow ? scopedRow.treatmentsClosedPence : g.treatmentsClosedPence;
+  const paidPence = scopedRow ? scopedRow.treatmentsPaidPence : g.treatmentsPaidPence;
+  const closedTurnoverBase = scopedRow ? scopedRow.revenuePence : g.revenuePence;
 
   // Headline KPIs — the group business scorecard. Real feeds: Dentally
   // (turnover, cash banked, treatments, leads) + ads via marketing ROI (spend,
@@ -89,7 +96,8 @@ export function GroupPerformanceScreen() {
   const newPts = g.newPatients;
   const avgPatientValuePence = newPts > 0 ? Math.round(g.treatmentsClosedPence / newPts) : 0;
   const costPerPatientPence = connected && newPts > 0 ? Math.round(spendPence / newPts) : 0;
-  const closedPctTurnover = pctOf(g.treatmentsClosedPence, g.revenuePence);
+  const closedPctTurnover = pctOf(closedPence, closedTurnoverBase);
+  const collectedPct = pctOf(paidPence, closedPence); // share of billed plan fees collected
   // Treatments started is a COUNT, not a % of leads: Dentally treatment plans
   // (existing patients) and GHL leads (new marketing) are different populations,
   // so "started ÷ leads" can exceed 100% and means nothing.
@@ -127,8 +135,10 @@ export function GroupPerformanceScreen() {
       chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null },
   ];
   const headlineFunnel: HeadlineKpi[] = [
-    { label: 'Treatments Closed', value: formatPence(g.treatmentsClosedPence), sub: `Treatment value accepted · ${windowLabel}`,
-      chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover`, tone: 'emerald' } : null },
+    { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Billed plan revenue (sold) · ${windowLabel}`,
+      chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
+    { label: 'Treatments Paid', value: formatPence(paidPence), sub: `Collected plan revenue (paid invoices) · ${windowLabel}`,
+      chip: collectedPct > 0 ? { text: `${collectedPct}% of billed collected`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null },
     { label: 'Lead → Start Rate', value: `${g.leadToStartRate}%`, sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads`,
       chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} accepted`, tone: 'emerald' } : null },
     { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: 'Paid spend ÷ treatments started',
@@ -149,16 +159,16 @@ export function GroupPerformanceScreen() {
   return (
     <div className="flex flex-col gap-4">
       {/* Headline scorecard — money + acquisition (row 1), lead→treatment funnel (row 2) */}
-      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
         {headlineTop.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
-      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
         {headlineFunnel.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
 
       {!isGroupScope && (
-        <AlertRow tone="info" title="Funnel KPIs stay group-wide"
-          body="Treatment plans and GHL leads aren't attributed per practice, so the four headline KPIs cover the whole group. The Business Performance table below narrows to the selected practice." />
+        <AlertRow tone="info" title="Some funnel KPIs stay group-wide"
+          body="Treatments Closed narrows to the selected practice (real invoiced fees). Lead-based KPIs (lead→start, cost/treatment, revenue/lead) stay group-wide — GHL leads aren't attributed per practice. The Business Performance table below narrows to the selected practice." />
       )}
 
       {/* Dynamic ad-account filter — built from the org's REAL connected Google
@@ -247,7 +257,7 @@ export function GroupPerformanceScreen() {
       <div className="grid gap-4 lg:grid-cols-2 items-start">
         <Card>
           <h3 className="display text-lg font-semibold">Business Performance</h3>
-          <p className="text-sm text-ink-muted mt-0.5 mb-3">Turnover is live from Dentally. Cash, profit, margin and ROAS need Xero + ad mapping — shown once connected.</p>
+          <p className="text-sm text-ink-muted mt-0.5 mb-3">Turnover and Closed are live from Dentally. Cash, profit, margin and ROAS need Xero + ad mapping — shown once connected.</p>
           <div className="overflow-x-auto">
           <table className="table">
             <thead>
@@ -274,7 +284,7 @@ export function GroupPerformanceScreen() {
                     </div>
                   </td>
                   <td className="right">{DASH}</td>
-                  <td className="right">{DASH}</td>
+                  <td className="right">{formatPence(p.treatmentsClosedPence)}</td>
                   <td className="right">{DASH}</td>
                   <td className="right">{DASH}</td>
                   <td className="right">{DASH}</td>
@@ -284,7 +294,7 @@ export function GroupPerformanceScreen() {
                 <td><strong>Group</strong></td>
                 <td className="right">{formatPence(g.revenuePence)}</td>
                 <td className="right">{DASH}</td>
-                <td className="right">{DASH}</td>
+                <td className="right">{formatPence(g.treatmentsClosedPence)}</td>
                 <td className="right">{DASH}</td>
                 <td className="right">{g.marginPct > 0 ? `${g.marginPct}%` : DASH}</td>
                 <td className="right">{DASH}</td>

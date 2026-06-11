@@ -27,10 +27,10 @@ export function GroupOverviewScreen() {
   const headlineRevenue = isGroupScope
     ? data?.group.revenuePence ?? 0
     : inScope.reduce((s, p) => s + p.revenuePence, 0);
-  // Leads/conversion are ALWAYS the group total, even at practice scope. GHL is
-  // connected as a single location serving every practice, so leads carry no
-  // practice_id and can't be split per-practice without fabricating attribution.
-  // Showing the org-wide figure (labelled "group") is the honest view.
+  // Leads/conversion are ALWAYS the group total, even at practice scope. They
+  // come from the paid channels (Google Ads + Meta), which run at the group
+  // level and carry no practice_id — can't be split per-practice without
+  // fabricating attribution. Org-wide figure (labelled "group") is the honest view.
   const leadsValue = data?.group.leads ?? 0;
   const conversionValue = data?.group.conversionRate ?? 0;
 
@@ -52,7 +52,7 @@ export function GroupOverviewScreen() {
 
       {data && scope !== 'academy' && scope !== 'lab' && (
         <>
-          <div className="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
             <KpiTile label="Turnover" value={formatPence(headlineRevenue)} delta={data.period.label ?? `${data.period.days}-day window`} />
             <KpiTile label="Margin" value={`${data.group.marginPct}%`} delta="net, from actuals" deltaTone={data.group.marginPct >= 18 ? 'up' : data.group.marginPct > 0 ? 'muted' : 'down'} />
             <KpiTile label="Appointments" value={inScopeSum(inScope, 'appointments').toLocaleString('en-GB')} delta={`${inScopeSum(inScope, 'completed').toLocaleString('en-GB')} completed`} />
@@ -60,8 +60,8 @@ export function GroupOverviewScreen() {
               value={data.group.noShowTracked ? `${rate(inScopeSum(inScope, 'noShows'), inScopeSum(inScope, 'appointments'))}%` : '—'}
               delta={data.group.noShowTracked ? `${inScopeSum(inScope, 'noShows').toLocaleString('en-GB')} no-shows` : 'not tracked in Dentally'}
               deltaTone="down" />
-            <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={isGroupScope ? 'all sources' : 'group — all practices'} />
-            <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'lead → booked' : 'group — all practices'} deltaTone="up" />
+            <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={isGroupScope ? 'Google + Meta Ads' : 'Google + Meta — all practices'} />
+            <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'Google + Meta → booked' : 'Google + Meta — all practices'} deltaTone="up" />
           </div>
         </>
       )}

@@ -594,6 +594,11 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
         return { data: [{ practice_id: 'p1', total: 1, converted: 0 }, { practice_id: null, total: 9, converted: 2 }], error: null };
       if (fn === 'treatments_rollup_by_org')
         return { data: [{ started: 4, completed: 3, closed_value_pence: 120000 }], error: null };
+      // Closed VALUE now comes from real invoiced plan fees per practice (distinct
+      // RPC), NOT the rollup's planned-estimate closed_value_pence (120000). Group
+      // total = sum of the per-practice rows. Prove it overrides the estimate.
+      if (fn === 'treatments_closed_revenue_by_practice')
+        return { data: [{ practice_id: 'p1', closed_value_pence: 180000, paid_value_pence: 96000 }], error: null };
       return { data: [], error: null };
     };
     const res = await svc.businessHub(ORG_A, { days: 90 });
@@ -601,7 +606,10 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.group.conversionRate).toBe(20);   // 2 / 10
     expect(res.practices[0].leads).toBe(1);      // per-practice row still excludes the null bucket
     expect(res.group.treatmentsStarted).toBe(4);
-    expect(res.group.treatmentsClosedPence).toBe(120000);
+    expect(res.group.treatmentsClosedPence).toBe(180000); // billed plan fees, not 120000 estimate
+    expect(res.group.treatmentsPaidPence).toBe(96000);    // collected (paid) subset
+    expect(res.practices[0].treatmentsClosedPence).toBe(180000); // attributed per practice (invoice_items feed)
+    expect(res.practices[0].treatmentsPaidPence).toBe(96000);
     expect(res.group.leadToStartRate).toBe(40);  // 4 started / 10 leads
   });
 
