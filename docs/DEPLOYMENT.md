@@ -193,12 +193,26 @@ railway domain  # e.g., elevate-api-production.up.railway.app
 # Railway dashboard → Settings → Custom Domain → api.elevate.app
 ```
 
-Create a SECOND service for workers in the same project:
+Create a SECOND service for workers in the same project. The web service runs
+`server.js` and does **not** start the cron jobs — node-cron lives in
+`workers/index.js`, which only runs if a persistent process executes it. Without
+this service, **zero crons fire** (and nothing shows in Sentry).
+
 1. Railway dashboard → New Service → from same repo
-2. Set start command: `node src/workers/index.js`
-3. Use same env vars — in particular `INTEGRATIONS_SECRET_KEY` MUST be identical
+2. Root directory: `backend`
+3. Start command: `npm run worker` (= `node src/workers/index.js`)
+4. Config-as-code: point the service's config path at `backend/railway.worker.json`
+   (pins `numReplicas: 1` + restart-on-failure). **Single replica is mandatory** —
+   node-cron schedules in-process, so 2+ replicas double-fire every job.
+5. Leave Railway's own **Cron Schedule** panel EMPTY. node-cron handles timing and
+   the process must stay alive 24/7; a Railway cron schedule would kill/restart it
+   and the jobs would never reach their scheduled times. (Railway Cron Schedule is
+   only for the one-shot `*-once.js` scripts that call `process.exit`.)
+6. Use same env vars — in particular `INTEGRATIONS_SECRET_KEY` MUST be identical
    to the web service's value, or the worker cannot decrypt stored integration
-   tokens (Dentally/Xero) and every poll fails with `no_auth`.
+   tokens (Dentally/Xero) and every poll fails with `no_auth`. Set `SENTRY_DSN`
+   too, or cron check-ins never reach Sentry.
+7. After deploy, confirm logs show `[workers] Started — cron schedules active`.
 
 ## 9. Deploy frontend (Railway)
 
