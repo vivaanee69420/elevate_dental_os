@@ -456,6 +456,28 @@ describe('syncOneOrg', () => {
             expect(Math.abs(new Date(s.after).getTime() - Date.now())).toBeLessThan(86400000);
         }
     });
+
+    it('always requests cancelled + DNA appointments (cancelled=true on every /appointments pull)', async () => {
+        // Dentally's GET /appointments defaults cancelled=false, silently dropping
+        // BOTH cancelled and did_not_attend rows. Without cancelled=true we store
+        // zero no_show rows (no-show rate shows "—") and undercount Dentally's
+        // "found" total by the cancelled volume. Probe + history + upcoming pulls
+        // must all carry the flag, or the gap reopens. (regression: see
+        // dentally appointment cancelled/DNA sync gap)
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        const apptCalls = [];
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            if (u.pathname.includes('/appointments')) apptCalls.push(u.searchParams.get('cancelled'));
+            return page({ patients: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { recent: true });
+
+        expect(apptCalls.length).toBeGreaterThan(0);
+        for (const c of apptCalls) expect(c).toBe('true');
+    });
 });
 
 describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {

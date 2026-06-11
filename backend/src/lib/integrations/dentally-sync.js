@@ -847,7 +847,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // — and therefore associate_id / appointment_type / production analytics —
     // empty. A bounded 2-year historical pull is the deliberate trade: a few
     // more pages on connect for a dataset every module can actually use.
-    const apptParams = { updated_since: since };
+    // `cancelled: true` is REQUIRED — Dentally's GET /appointments defaults to
+    // cancelled=false, which silently drops BOTH cancelled AND did_not_attend
+    // (DNA) appointments. Without it we never store a single no_show row (so the
+    // no-show rate shows "—, not tracked") and our appointment totals understate
+    // Dentally's "found" count by the cancelled volume (~19% at a busy site).
+    // mapAppointmentStatus already maps cancelled -> 'cancelled' and DNA ->
+    // 'no_show'; this just stops the API from withholding those rows.
+    const apptParams = { updated_since: since, cancelled: true };
     const patientParams = { updated_since: since };
     const payParams = { updated_since: since };
     const invoiceParams = { updated_since: since };
@@ -941,7 +948,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         let upcomingSynced = 0;
         if (recent) {
             try {
-                const upcoming = await pullAppointments(orgId, base, auth, { after: new Date().toISOString() }, siteMap, contactMap, null, maxPages, { practitionerMap });
+                const upcoming = await pullAppointments(orgId, base, auth, { after: new Date().toISOString(), cancelled: true }, siteMap, contactMap, null, maxPages, { practitionerMap });
                 upcomingSynced = upcoming.synced ?? 0;
             } catch (err) {
                 console.warn(`[dentally] upcoming appointments pull skipped: ${err?.message || err}`);
