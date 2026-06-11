@@ -25,6 +25,11 @@ export const appointmentRepository = {
             query = query.eq('practice_id', q.practice_id);
         if (q.associate_id)
             query = query.eq('associate_id', q.associate_id);
+        // Default: real patient appointments only (drop patient-less diary blocks
+        // — lunch / not-working / nurse-cover / empty slots — which have no
+        // pms_patient_id). patients_only=false includes them.
+        if (q.patients_only !== 'false')
+            query = query.not('pms_patient_id', 'is', null);
         query = query.range(offset, offset + perPage - 1);
         const { data, error, count } = await query;
         if (error)

@@ -18,6 +18,7 @@ export interface HubPractice {
   noShowRate: number;     // percentage points
   leads: number;
   conversionRate: number; // percentage points
+  newPatients: number;    // Dentally registrations (joined date) in window, this practice
 }
 
 export interface RevenueLine {
@@ -40,8 +41,9 @@ export interface BusinessHub {
     noShowRate: number;
     noShowTracked: boolean; // false => Dentally never synced a no_show state; render "—"
     leads: number;
+    leadsBySource: { source: string; leads: number }[]; // Google Ads / Meta Ads / GHL — named sections
     conversionRate: number;
-    newPatients: number;           // leads reaching treatment (real Dentally/GHL)
+    newPatients: number;           // booked Dentally new-patient appointments (real PMS)
     treatmentsStarted: number;     // plans started in window (Dentally)
     treatmentsCompleted: number;   // accepted/completed plan count in window
     treatmentsClosedPence: number; // plan fees BILLED in window (sold) — invoice_items

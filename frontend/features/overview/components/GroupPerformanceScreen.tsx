@@ -20,6 +20,7 @@ import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type C
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice, type RevenueLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
+import { DecisionLens } from '@/features/_shared/DecisionLens';
 import { useMarketingRoi } from '@/features/intelligence/marketing-roi-hooks';
 import type { MarketingRoi } from '@/features/intelligence/marketing-roi-api';
 import { AdAccountFilter } from '@/features/intelligence/AdAccountFilter';
@@ -93,7 +94,10 @@ export function GroupPerformanceScreen() {
 
   const profitPence = g.marginPct > 0 ? Math.round((g.revenuePence * g.marginPct) / 100) : 0;
   const spendPctTurnover = pctOf(spendPence, g.revenuePence, 1);
-  const newPts = g.newPatients;
+  // New patients follow the practice scope (Dentally registrations are
+  // practice-attributed): a selected practice shows that site's count, group
+  // scope shows the sum. avgPatientValue/costPerPatient below derive from it.
+  const newPts = scopedRow ? scopedRow.newPatients : g.newPatients;
   const avgPatientValuePence = newPts > 0 ? Math.round(g.treatmentsClosedPence / newPts) : 0;
   const costPerPatientPence = connected && newPts > 0 ? Math.round(spendPence / newPts) : 0;
   const closedPctTurnover = pctOf(closedPence, closedTurnoverBase);
@@ -131,7 +135,7 @@ export function GroupPerformanceScreen() {
       chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
     { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',
       chip: roas > 0 ? { text: roasLabel, tone: roasTone } : null },
-    { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'Leads reaching treatment',
+    { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'New-patient exams booked (Dentally)',
       chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null },
   ];
   const headlineFunnel: HeadlineKpi[] = [
@@ -307,9 +311,7 @@ export function GroupPerformanceScreen() {
         <Card>
           <h3 className="display text-lg font-semibold mb-1">Decision Lens</h3>
           <p className="text-sm text-ink-muted mb-3">What to act on this week.</p>
-          {lens.length === 0
-            ? <EmptyState message="No standout actions yet." />
-            : lens.map((a, i) => <AlertRow key={i} tone={a.tone} icon={a.icon} title={a.title} body={a.body} />)}
+          <DecisionLens surface="group" fallback={lens} />
         </Card>
       </div>
 

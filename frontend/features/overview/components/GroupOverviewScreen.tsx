@@ -28,11 +28,16 @@ export function GroupOverviewScreen() {
     ? data?.group.revenuePence ?? 0
     : inScope.reduce((s, p) => s + p.revenuePence, 0);
   // Leads/conversion are ALWAYS the group total, even at practice scope. They
-  // come from the paid channels (Google Ads + Meta), which run at the group
-  // level and carry no practice_id — can't be split per-practice without
+  // come from the paid channels (Google Ads + Meta) + the CRM, which run at the
+  // group level and carry no practice_id — can't be split per-practice without
   // fabricating attribution. Org-wide figure (labelled "group") is the honest view.
   const leadsValue = data?.group.leads ?? 0;
   const conversionValue = data?.group.conversionRate ?? 0;
+  // Named per-source sections under the Leads total: every acquisition source
+  // (Google / Meta / GHL), shown even at zero so the mix is explicit.
+  const leadsBreakdown = (data?.group.leadsBySource ?? [])
+    .map((s) => `${s.source.split(' ')[0]} ${s.leads.toLocaleString('en-GB')}`)
+    .join(' · ');
 
   return (
     <div className="flex flex-col gap-4">
@@ -60,8 +65,8 @@ export function GroupOverviewScreen() {
               value={data.group.noShowTracked ? `${rate(inScopeSum(inScope, 'noShows'), inScopeSum(inScope, 'appointments'))}%` : '—'}
               delta={data.group.noShowTracked ? `${inScopeSum(inScope, 'noShows').toLocaleString('en-GB')} no-shows` : 'not tracked in Dentally'}
               deltaTone="down" />
-            <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={isGroupScope ? 'Google + Meta Ads' : 'Google + Meta — all practices'} />
-            <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'Google + Meta → booked' : 'Google + Meta — all practices'} deltaTone="up" />
+            <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={leadsBreakdown || (isGroupScope ? 'Google · Meta · GHL' : 'all sources — all practices')} />
+            <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'leads → new patients booked' : 'all sources — all practices'} deltaTone="up" />
           </div>
         </>
       )}

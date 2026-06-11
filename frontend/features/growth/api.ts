@@ -103,6 +103,76 @@ export function getPracticePatients(
   return api<PracticePatientsResponse>(`/api/growth/practice-patients?${params.toString()}`);
 }
 
+/** Curated Dentally patient detail (contacts.pms_patient). All fields null until
+ * the patient is re-synced after migration 000082, or for non-Dentally contacts. */
+export interface PatientPmsDetail {
+  title: string | null;
+  first_name: string | null;
+  middle_name: string | null;
+  last_name: string | null;
+  preferred_name: string | null;
+  gender: boolean | null; // true = male, false = female (Dentally convention)
+  date_of_birth: string | null;
+  email_address: string | null;
+  mobile_phone: string | null;
+  home_phone: string | null;
+  work_phone: string | null;
+  preferred_phone_number: number | null;
+  recall_method: string | null;
+  use_email: boolean | null;
+  use_sms: boolean | null;
+  marketing: number | boolean | null;
+  address_line_1: string | null;
+  address_line_2: string | null;
+  county: string | null;
+  town: string | null;
+  postcode: string | null;
+  nhs_number: string | null;
+  ni_number: string | null;
+  occupation: string | null;
+  payment_plan_id: number | null;
+  active: boolean | null;
+  dentist_id: number | null;
+  dentist_recall_date: string | null;
+  dentist_recall_interval: number | null;
+  hygienist_id: number | null;
+  hygienist_recall_date: string | null;
+  hygienist_recall_interval: number | null;
+  emergency_contact_name: string | null;
+  emergency_contact_relationship: string | null;
+  emergency_contact_phone: string | null;
+  medical_alert: boolean | null;
+  medical_alert_text: string | null;
+  acquisition_source_id: string | null;
+  image_url: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** Full single-patient record powering the detail dialog. */
+export interface PatientDetailResponse {
+  id: string;
+  name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  date_of_birth: string | null;
+  address: string | null;
+  postcode: string | null;
+  source: string | null;
+  pms_external_id: string | null;
+  last_visit_date: string | null;
+  next_recall_date: string | null;
+  created_at: string;
+  practice_id: string | null;
+  detail: PatientPmsDetail | null;
+}
+
+export function getPatientDetail(id: string) {
+  return api<PatientDetailResponse>(`/api/growth/practice-patients/${id}`);
+}
+
 export function getRecentBookings(
   practiceId?: string | null,
   range?: DateRange | null,
@@ -248,6 +318,6 @@ export interface MarketingRoiResponse {
   by_account: AdAccountRoi[];
 }
 
-export function getMarketingRoi(range?: DateRange | null) {
-  return api<MarketingRoiResponse>(`/api/growth/marketing/roi${filterQS(null, range)}`);
+export function getMarketingRoi(practiceId?: string | null, range?: DateRange | null) {
+  return api<MarketingRoiResponse>(`/api/growth/marketing/roi${filterQS(practiceId, range)}`);
 }

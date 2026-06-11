@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   getPracticePerformance,
   getPracticePatients,
+  getPatientDetail,
   getBookingSummary,
   getRecentBookings,
   getAdSpend,
@@ -27,6 +28,15 @@ export function usePracticePatients(
     queryFn: () => getPracticePatients(practiceId as string, page, perPage),
     enabled: !!practiceId,
     placeholderData: keepPreviousData,
+  });
+}
+
+/** Single patient detail for the dialog. Only fetches when an id is set (dialog open). */
+export function usePatientDetail(id: string | null) {
+  return useQuery({
+    queryKey: ['growth', 'patient-detail', id],
+    queryFn: () => getPatientDetail(id as string),
+    enabled: !!id,
   });
 }
 
@@ -59,11 +69,12 @@ export function useAdSpend(range?: DateRange | null) {
   });
 }
 
-/** Marketing ROI cross-cut (spend x leads x revenue x new patients). */
-export function useMarketingRoi(range?: DateRange | null) {
+/** Marketing ROI cross-cut (spend x leads x revenue x new patients).
+ *  practiceId scopes via ad_accounts.practice_id; range overrides the default window. */
+export function useMarketingRoi(practiceId?: string | null, range?: DateRange | null) {
   return useQuery({
-    queryKey: ['growth', 'marketing-roi', range?.from ?? null, range?.to ?? null],
-    queryFn: () => getMarketingRoi(range),
+    queryKey: ['growth', 'marketing-roi', practiceId ?? null, range?.from ?? null, range?.to ?? null],
+    queryFn: () => getMarketingRoi(practiceId, range),
     placeholderData: keepPreviousData,
   });
 }

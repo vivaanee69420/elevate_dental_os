@@ -3,7 +3,7 @@
 // (hourly rate, weekly hours, scheduled hours, attendance), so this is an
 // identity/role/practice directory, not a wage/rota view. Source: /api/staff.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import { useStaff, type StaffRow } from '../staff-api';
 import { SkeletonKpiRow, SkeletonTable } from '@/components/ui';
@@ -19,8 +19,16 @@ export default function StaffScreen() {
   // Practice filter is dynamic: PracticeTabs builds from /api/practices, which
   // is the org's Dentally-site-derived practice list (auto-hidden if ≤1).
   const [practiceId, setPracticeId] = useState<string | null>(null);
+  const [role, setRole] = useState('');
   const { data, isLoading, isError, error } = useStaff(practiceId ?? undefined);
   const staff: StaffRow[] = data?.staff ?? [];
+
+  // Distinct roles in the current (practice-scoped) roster, for the filter options.
+  const roleOptions = useMemo(
+    () => Array.from(new Set(staff.map((s) => s.role).filter((r): r is string => !!r))).sort((a, b) => a.localeCompare(b)),
+    [staff],
+  );
+  const visible = role ? staff.filter((s) => s.role === role) : staff;
 
   const th: React.CSSProperties = {
     padding: '12px 16px',
@@ -57,6 +65,23 @@ export default function StaffScreen() {
       {/* Dynamic practice filter — tabs come from the org's Dentally sites. */}
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
 
+      {/* Role filter — options derived from the current roster. */}
+      <div className="mb-4 flex items-center gap-2">
+        <label className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>
+          Role
+        </label>
+        <select
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+          style={{ padding: '8px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#FFFFFF', minWidth: 180 }}
+        >
+          <option value="">All roles</option>
+          {roleOptions.map((r) => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+        </select>
+      </div>
+
       {isLoading && (
         <>
           <SkeletonKpiRow count={4} className="mb-4" />
@@ -82,9 +107,11 @@ export default function StaffScreen() {
 
           {/* Roster table */}
           <div className="card" style={{ overflow: 'hidden' }}>
-            {staff.length === 0 ? (
+            {visible.length === 0 ? (
               <p className="text-ink-muted" style={{ fontSize: 13, padding: '16px 20px' }}>
-                No staff synced yet. Connect Dentally and run a sync to populate this.
+                {staff.length === 0
+                  ? 'No staff synced yet. Connect Dentally and run a sync to populate this.'
+                  : `No staff with role "${role}".`}
               </p>
             ) : (
               <table className="w-full" style={{ fontSize: 13 }}>
@@ -99,7 +126,7 @@ export default function StaffScreen() {
                   </tr>
                 </thead>
                 <tbody>
-                  {staff.map((p) => (
+                  {visible.map((p) => (
                     <tr key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '12px 16px' }}>
                         <strong>{p.full_name}</strong>

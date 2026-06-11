@@ -75,9 +75,25 @@ export interface SyncResponse {
   [k: string]: unknown;
 }
 
-export function syncIntegration(provider: string, full = false) {
+// Dentally collections that a scoped pull can target. Omitting `resources`
+// (or passing all) pulls everything — the default backfill.
+export type DentallySyncResource = 'patients' | 'appointments' | 'payments' | 'treatment_plans' | 'invoices';
+
+export function syncIntegration(provider: string, full = false, resources?: DentallySyncResource[]) {
   const qs = full ? '?full=true' : '';
-  return api<SyncResponse>(`/api/integrations/${provider}/sync${qs}`, { method: 'POST' });
+  const body = resources && resources.length ? JSON.stringify({ resources }) : undefined;
+  return api<SyncResponse>(`/api/integrations/${provider}/sync${qs}`, { method: 'POST', body });
+}
+
+// Global "Refresh all": fire an incremental pull for every connected provider
+// (Dentally, GoHighLevel, Google Ads, Meta Ads, QuickBooks). Latest data only,
+// never a full backfill. Returns the providers that started.
+export interface SyncAllResponse {
+  started: string[];
+}
+
+export function syncAllIntegrations() {
+  return api<SyncAllResponse>('/api/integrations/sync-all', { method: 'POST' });
 }
 
 export interface DetectedSiteId {

@@ -123,6 +123,10 @@ const h = vi.hoisted(() => {
         (q.nots ||= []).push({ col, op, val });
         return builder;
       },
+      is(col, val) {
+        (q.iss ||= []).push({ col, val });
+        return builder;
+      },
       maybeSingle: () => settle(),
       single: () => settle(),
       then: (resolve, reject) => settle().then(resolve, reject),

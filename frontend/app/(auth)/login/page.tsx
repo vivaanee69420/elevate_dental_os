@@ -26,7 +26,7 @@ export default function LoginPage() {
     }
     // The route decides the destination: /dashboard for tenants,
     // /platform/overview for a platform superadmin.
-    router.push(data.redirect || '/dashboard');
+    router.push(data.redirect || '/business-hub');
     router.refresh();
   }
 

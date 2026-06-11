@@ -74,6 +74,9 @@ export default function AppointmentsScreen() {
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [practiceId, setPracticeId] = useState('');
+  // Patient appointments only by default — Dentally also syncs patient-less diary
+  // blocks (lunch / not-working / nurse-cover / empty slots) that show no name.
+  const [showBlocks, setShowBlocks] = useState(false);
   const [page, setPage] = useState(1);
 
   const { data: practiceData } = usePractices();
@@ -105,6 +108,7 @@ export default function AppointmentsScreen() {
   if (from) params.set('from', from);
   if (to) params.set('to', to);
   if (practiceId) params.set('practice_id', practiceId);
+  if (showBlocks) params.set('patients_only', 'false');
   params.set('page', String(page));
   params.set('per_page', String(PER_PAGE));
   const qs = params.toString();
@@ -215,6 +219,18 @@ export default function AppointmentsScreen() {
             ))}
           </select>
         </div>
+
+        {/* Diary blocks toggle. Off by default: the list shows real patient
+            appointments only. Dentally syncs lunch / not-working / nurse-cover /
+            empty slots as patient-less rows with no name — on to include them. */}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, cursor: 'pointer', paddingBottom: 6 }}>
+          <input
+            type="checkbox"
+            checked={showBlocks}
+            onChange={(e) => resetTo(() => setShowBlocks(e.target.checked))}
+          />
+          Show diary blocks
+        </label>
       </div>
 
       <div className="card-padded">

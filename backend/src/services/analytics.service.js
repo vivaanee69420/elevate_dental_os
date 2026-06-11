@@ -945,8 +945,14 @@ export const analyticsService = {
         const productionAvailable = [...prodMap.values()].some((v) => v > 0);
         const appointmentsAvailable = apptMap.size > 0;
 
+        // Dentally never sends pay terms, so an associate with no owner-set split
+        // carries the seed default (45% pay / 50% lab). Fees/net computed off the
+        // default are ESTIMATES, not real pay — flag them so the UI can say so
+        // rather than presenting a precise £ the practice never agreed.
+        const DEFAULT_PAY_PCT = 4500; // basis points
         const clinicians = scoped.map((a) => {
-            const payPct = (a.pay_pct ?? 4500) / 100;        // basis points → %
+            const payDefault = a.pay_pct == null || a.pay_pct === DEFAULT_PAY_PCT;
+            const payPct = (a.pay_pct ?? DEFAULT_PAY_PCT) / 100;  // basis points → %
             const labSplitPct = (a.lab_split_pct ?? 5000) / 100;
             const productionPence = prodMap.get(a.id) || 0;
             const feesPence = Math.round(productionPence * payPct / 100);
@@ -959,15 +965,27 @@ export const analyticsService = {
                 practiceId: a.primary_practice_id,
                 practiceName: a.practice?.name || '—',
                 active: a.active !== false,
-                payPct, labSplitPct,
+                payPct, labSplitPct, payDefault,
                 productionPence, feesPence, netToPracticePence,
                 appointments: stats.total, completed: stats.completed, noShows: stats.no_shows,
             };
-        }).sort((x, y) => y.productionPence - x.productionPence || y.appointments - x.appointments);
+        })
+            // Dentally creates a separate practitioner record per site, so a group
+            // roster carries many dead duplicates: leavers and per-site shells with
+            // no activity (e.g. 216 rows where only ~55 are active and ~22 produced
+            // this period). Showing all of them buries the real clinicians under a
+            // wall of empty rows. Keep a row only if the clinician is active OR has
+            // real production/appointments in THIS window — so a leaver who still
+            // produced in the period stays visible (honest), but idle shells drop.
+            .filter((c) => c.active || c.productionPence > 0 || c.appointments > 0)
+            .sort((x, y) => y.productionPence - x.productionPence || y.appointments - x.appointments);
 
         const totalProductionPence = clinicians.reduce((s, c) => s + c.productionPence, 0);
         const totalFeesPence = clinicians.reduce((s, c) => s + c.feesPence, 0);
         const totalNetPence = clinicians.reduce((s, c) => s + c.netToPracticePence, 0);
+        // Fees/net are ESTIMATED while any producing clinician is on the default
+        // split — true once every clinician with production has owner-set terms.
+        const payTermsEstimated = clinicians.some((c) => c.payDefault && c.productionPence > 0);
 
         // NHS/UDA — owner-entered contract per practice. Completed UDA needs the
         // treatment_plan feed (not yet populated), so it's flagged unavailable.
@@ -997,9 +1015,12 @@ export const analyticsService = {
             totalProductionPence,
             totalFeesPence,
             totalNetPence,
+            payTermsEstimated,
             nhs,
             insights,
-            note: 'Roster, pay splits and NHS contract are live. Production £ is from completed Dentally treatment plans; appointment counts need practitioner-tagged appointments. Lab cost / operating-cost-per-surgery per clinician have no real per-clinician source and are omitted (use the Treatment Workbench).',
+            note: payTermsEstimated
+                ? 'Roster shows active clinicians plus anyone with production or appointments in this period (idle per-site duplicate records from Dentally are hidden). Production £ is from completed Dentally treatment plans; appointment counts are practitioner-tagged appointments. Associate fees and Net to practice are ESTIMATED at the default 45% split — Dentally does not provide pay terms, so set each clinician\'s real split under Team for these to reflect actual pay. NHS contract is owner-entered. Lab cost / operating-cost-per-surgery per clinician have no real per-clinician source and are omitted (use the Treatment Workbench).'
+                : 'Roster shows active clinicians plus anyone with production or appointments in this period (idle per-site duplicate records from Dentally are hidden). Pay splits and NHS contract are live. Production £ is from completed Dentally treatment plans; appointment counts are practitioner-tagged appointments. Lab cost / operating-cost-per-surgery per clinician have no real per-clinician source and are omitted (use the Treatment Workbench).',
         };
     },
     // AI Analyst (GM Intelligence OS). Prioritised, £-ranked findings over the
@@ -1569,11 +1590,20 @@ export const analyticsService = {
     async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null } = {}) {
         const ref = now();
         const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
-        const [actuals, dayRows] = await Promise.all([
+        const [actuals, dayRows, billedRows] = await Promise.all([
             this._actualsBundle(orgId, practiceId),
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
+            // Billed production by month (invoice_items) — the accrual turnover feed
+            // the Business Hub uses, so Value & Growth's TTM base agrees with the
+            // dashboard turnover instead of settled cash. Read only the keys we want
+            // (untilISO omitted to avoid a month-boundary off-by-one). Never let a
+            // billing-source failure break the series → fall back to settled cash.
+            analytics_repository_1.analyticsRepository.billedRevenueByMonth(orgId, sinceISO, null, practiceId).catch(() => []),
         ]);
         const revByMonth = this._monthlyRevenueFromDays(dayRows);
+        const billedByMonth = new Map(
+            (Array.isArray(billedRows) ? billedRows : []).map((r) => [String(r.month), Number(r.pence) || 0]),
+        );
         let actualCostMonths = 0;
         let revenueOnlyMonths = 0;
         const series = keys.map((month) => {
@@ -1583,7 +1613,10 @@ export const analyticsService = {
                 return { ...financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month)), costsAvailable: true };
             }
             // No real cost source → exact revenue, costs and profit 0 (not estimated).
-            const revenue = revByMonth.get(month) || 0;
+            // Turnover basis matches Business Hub: prefer billed production (invoice_
+            // items) when present, else settled cash receipts.
+            const billed = billedByMonth.get(month) || 0;
+            const revenue = billed > 0 ? billed : (revByMonth.get(month) || 0);
             if (revenue > 0) revenueOnlyMonths++;
             return {
                 month,
@@ -2072,6 +2105,64 @@ export const analyticsService = {
         }
     },
     // ------------------------------------------------------------------------
+    // Decision Lens (AI) — surface-specific "what to act on now" cards, cached
+    // per org+surface+scope+period on a 6h TTL (refresh=true forces a rebuild).
+    // Assembles the surface's already-aggregated rollups server-side, hands them
+    // to Gemini, and returns {basis:'ai', items:[...]}. On any failure returns
+    // {basis:'unavailable', items:[]} — the frontend then renders its
+    // deterministic rule-based lens, so the card is never blank.
+    async decisionLens(orgId, { surface = 'group', scope = 'all', period = 'month', periodKey = null, since = null, until = null, label = null, refresh = false, now = () => new Date() } = {}) {
+        const cacheKey = [scope, period, since || '', until || '', label || ''].join('|');
+        const TTL_MS = 6 * 3600 * 1000;
+        if (!refresh) {
+            const cached = await analytics_repository_1.analyticsRepository.getDecisionLensCache(orgId, surface, cacheKey).catch(() => null);
+            if (cached?.items && (now().getTime() - Date.parse(cached.generated_at)) < TTL_MS)
+                return { basis: 'ai', cached: true, generatedAt: cached.generated_at, items: cached.items };
+        }
+        const periodLabel = label || (until ? `${(since || '').slice(0, 10)} → ${until.slice(0, 10)}` : period);
+        let data = {};
+        let scopeLabel = 'Group';
+        try {
+            if (surface === 'marketing') {
+                const roi = await this.marketingRoi(orgId, { scope, period, periodKey, since, until, label, now });
+                scopeLabel = roi.scope && roi.scope !== 'all' && roi.scope !== 'practices' ? (roi.byPractice?.[0]?.name || 'Practice') : 'Group';
+                data = {
+                    paidSpendPence: roi.paidSpendPence, blendedRoas: roi.blendedRoas, settledRevenuePence: roi.settledRevenuePence,
+                    totalLeads: roi.totalLeads, totalConversions: roi.totalConversions,
+                    channels: (roi.channels || []).map((c) => ({ label: c.label, paid: c.paid, spendPence: c.spendPence, adConversions: c.adConversions, leads: c.leads, costPerAdConvPence: c.costPerAdConvPence, costPerLeadPence: c.cplPence })),
+                    byPractice: roi.byPractice,
+                };
+            }
+            else if (surface === 'clinicians') {
+                data = await this.clinicians(orgId, { scope, period, periodKey, since, until, label, now });
+                scopeLabel = data?.scope === 'practice' ? 'Practice' : 'Group';
+            }
+            else { // group | day
+                const hub = await this.businessHub(orgId, { since, until, label, now });
+                const scoped = (scope !== 'all' && scope !== 'practices') ? hub.practices.find((p) => p.practiceId === scope) : null;
+                scopeLabel = scoped?.name || 'Group';
+                data = {
+                    group: hub.group,
+                    practices: (hub.practices || []).map((p) => ({ name: p.name, revenuePence: p.revenuePence, treatmentsClosedPence: p.treatmentsClosedPence, appointments: p.appointments, noShows: p.noShows, noShowRate: p.noShowRate, newPatients: p.newPatients, leads: p.leads })),
+                    revenueByLine: hub.revenueByLine,
+                    focus: surface === 'day' ? 'cash_collected' : 'group',
+                };
+            }
+        }
+        catch (err) {
+            return { basis: 'unavailable', items: [], error: 'Could not assemble data' };
+        }
+        try {
+            const items = await claude_1.generateDecisionLens(orgId, { surface, scopeLabel, periodLabel, data });
+            if (!items.length) return { basis: 'unavailable', items: [] };
+            await analytics_repository_1.analyticsRepository.upsertDecisionLensCache(orgId, surface, cacheKey, items).catch(() => {});
+            return { basis: 'ai', cached: false, generatedAt: new Date().toISOString(), items };
+        }
+        catch (err) {
+            return { basis: 'unavailable', items: [] };
+        }
+    },
+    // ------------------------------------------------------------------------
     // Business Hub — group totals + per-practice comparison. EXACT per-practice
     // rollups via Postgres GROUP BY RPCs (no 1000-row cap): revenue (settled
     // payments), ops (appointments → completed/DNA), growth (leads → conversion).
@@ -2151,7 +2242,11 @@ export const analyticsService = {
         // Leads are windowed only when an upper bound is set (month/day mode); in
         // the trailing-days mode they stay all-time, as before.
         const leadSinceISO = untilISO ? sinceISO : null;
-        const [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows] = await Promise.all([
+        // Ad-platform lead window as YYYY-MM-DD (ad_metrics.metric_date is a date).
+        // Upper bound is inclusive of the last full day; trailing mode runs to today.
+        const adFromDate = sinceISO.slice(0, 10);
+        const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 86400000) : now()).toISOString().slice(0, 10);
+        const [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -2165,9 +2260,19 @@ export const analyticsService = {
             // Cash banked in window — settled receipts (payments processed), org-wide.
             // Distinct from turnover (settled invoices); the gap is outstanding/debtors.
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO),
+            // Real ad-platform leads (Google + Meta conversions) + Dentally new
+            // patients by registration ("joined") date — matches Dentally's New
+            // Patients report. Live sources for the Leads / New Patients KPIs (CRM
+            // `leads` is empty for Dentally-only orgs).
+            analytics_repository_1.analyticsRepository.adLeadsByProvider(orgId, adFromDate, adToDate),
+            analytics_repository_1.analyticsRepository.newPatientsRegisteredByPractice(orgId, sinceISO, untilISO),
         ]);
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         const num = (v) => Number(v || 0);
+        // Per-practice new patients (Dentally registration date) -> map by practice.
+        // null-practice rows (unassigned patients) fold into the group total only.
+        const newPatientsBy = new Map();
+        for (const r of newPatientRows) newPatientsBy.set(r.practice_id, num(r.new_patients));
         // Turnover = billed production (invoice_items), so Group Overview agrees
         // with the Command Centre. cashCollected stays settled receipts. revBy
         // (settled per practice) is surfaced as the per-practice cash figure.
@@ -2208,21 +2313,38 @@ export const analyticsService = {
                 noShowRate: rate(noShows, appointments),
                 leads,
                 conversionRate: rate(converted, leads),
+                newPatients: newPatientsBy.get(p.id) || 0, // Dentally registrations, this practice
             };
         }).sort((a, b) => b.revenuePence - a.revenuePence);
 
-        // Group totals (sum of exact per-practice rows). totalConverted recomputed
-        // from raw rollups so it isn't lost to per-practice rounding.
+        // Group totals (sum of exact per-practice rows).
         const sum = (k) => practiceRows.reduce((s, p) => s + p[k], 0);
         const totalRevenue = sum('revenuePence');
         const totalAppts = sum('appointments');
         const totalNoShows = sum('noShows');
-        // Leads + converted from the raw rollups, not the per-practice rows:
-        // GHL leads arrive with a null practice_id, so summing practiceRows
-        // would silently drop them (they never match a practice). The raw
-        // leadRows include the null-practice bucket.
-        const totalLeads = leadRows.reduce((s, r) => s + num(r.total), 0);
-        const totalConverted = leadRows.reduce((s, r) => s + num(r.converted), 0);
+        // CRM (GHL) leads from the raw rollups, not the per-practice rows: GHL
+        // leads arrive with a null practice_id, so summing practiceRows would
+        // silently drop them (they never match a practice). The raw leadRows
+        // include the null-practice bucket.
+        const crmLeads = leadRows.reduce((s, r) => s + num(r.total), 0);
+        // Leads come from ALL acquisition sources, surfaced as named sections so
+        // the card isn't just the (often-empty) GHL/CRM feed: Google Ads + Meta
+        // report lead-form / pixel conversions in ad_metrics; GHL is the CRM
+        // enquiry feed. Total = sum of every source.
+        const googleLeads = num(adLeadsBy.get('google_ads'));
+        const metaLeads = num(adLeadsBy.get('meta_ads'));
+        const leadsBySource = [
+            { source: 'Google Ads', leads: googleLeads },
+            { source: 'Meta Ads', leads: metaLeads },
+            { source: 'GHL / CRM', leads: crmLeads },
+        ];
+        const totalLeads = leadsBySource.reduce((s, x) => s + x.leads, 0);
+        // New patients = patients registered (Dentally "joined" date) in the
+        // window — matches Dentally's New Patients report, NOT the old CRM
+        // "converted leads" proxy (0 for Dentally-only orgs). Group total sums
+        // EVERY row (incl. any null-practice patients), so it isn't lost by the
+        // per-practice mapping. conversionRate = new patients per lead.
+        const newPatients = newPatientRows.reduce((s, r) => s + num(r.new_patients), 0);
         // Treatment funnel (org-wide; treatment_plans are not practice-attributed).
         const treatmentsStarted = num(treatments.started);
         const treatmentsCompleted = num(treatments.completed);
@@ -2308,8 +2430,9 @@ export const analyticsService = {
                 noShowRate: rate(totalNoShows, totalAppts),
                 noShowTracked, // false => no_show state never synced; show "—" not 0%
                 leads: totalLeads,
-                conversionRate: rate(totalConverted, totalLeads),
-                newPatients: totalConverted, // leads reaching treatment (real Dentally/GHL)
+                leadsBySource, // named per-source breakdown (Google / Meta / GHL)
+                conversionRate: rate(newPatients, totalLeads), // new patients booked per lead
+                newPatients, // booked Dentally new-patient appointments (real PMS)
                 treatmentsStarted,
                 treatmentsCompleted, // accepted/completed plan count in window
                 treatmentsClosedPence, // billed (sold) plan fees

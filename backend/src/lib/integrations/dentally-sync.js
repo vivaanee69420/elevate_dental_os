@@ -417,14 +417,87 @@ export function patientRow(orgId, p, siteMap) {
         type: 'patient',
         first_name: p.first_name ?? null,
         last_name: p.last_name ?? null,
-        email: p.email_address ?? p.email ?? null,
-        phone: p.mobile_phone ?? p.phone_number ?? null,
+        // Dentally returns email only as `email_address`. The old `?? p.email`
+        // fallback referenced a field Dentally never sends, so it was dead.
+        email: p.email_address ?? null,
+        // Dentally has mobile_phone / home_phone / work_phone (no `phone_number`,
+        // the old fallback was dead). A patient with only a home/work number used
+        // to store null -> the list showed "—". Walk the three real fields.
+        phone: p.mobile_phone ?? p.home_phone ?? p.work_phone ?? null,
         date_of_birth: p.date_of_birth ?? null,
+        // Populate the typed address/postcode/recall columns the sync used to
+        // leave empty. address_line_1 -> address (single col); recall = whichever
+        // of the dentist/hygienist due dates is set.
+        address: p.address_line_1 ?? null,
+        postcode: p.postcode ?? null,
+        next_recall_date: p.dentist_recall_date ?? p.hygienist_recall_date ?? null,
         practice_id: siteMap.get(String(p.site_id)) ?? null,
         // Real Dentally registration timestamp -> drives the "new patients"
         // metric (migration 000073). NOT contacts.created_at, which is our
         // sync insert time. Falls back through Dentally's date variants.
         pms_registered_at: p.created_at ?? p.registered_at ?? p.date_of_registration ?? null,
+        // Full curated Dentally patient detail (migration 000082) — backs the
+        // read-only patient detail dialog. Display-only PII; excluded from the
+        // AI context snapshot.
+        pms_patient: patientDetailBlob(p),
+    };
+}
+
+// Whitelist the Dentally patient fields we surface in the detail dialog. Pure
+// pick (no nesting) so we never store unexpected nested objects/arrays, and the
+// shape stays stable for the frontend. null-coalesce everything to null.
+function patientDetailBlob(p) {
+    const pick = (k) => p[k] ?? null;
+    return {
+        title: pick('title'),
+        first_name: pick('first_name'),
+        middle_name: pick('middle_name'),
+        last_name: pick('last_name'),
+        preferred_name: pick('preferred_name'),
+        // Dentally gender is a boolean (true = male, false = female).
+        gender: typeof p.gender === 'boolean' ? p.gender : null,
+        date_of_birth: pick('date_of_birth'),
+        // Contact
+        email_address: pick('email_address'),
+        mobile_phone: pick('mobile_phone'),
+        home_phone: pick('home_phone'),
+        work_phone: pick('work_phone'),
+        preferred_phone_number: pick('preferred_phone_number'),
+        recall_method: pick('recall_method'),
+        use_email: typeof p.use_email === 'boolean' ? p.use_email : null,
+        use_sms: typeof p.use_sms === 'boolean' ? p.use_sms : null,
+        marketing: pick('marketing'),
+        // Address
+        address_line_1: pick('address_line_1'),
+        address_line_2: pick('address_line_2'),
+        county: pick('county'),
+        town: pick('town'),
+        postcode: pick('postcode'),
+        // Identifiers / misc
+        nhs_number: pick('nhs_number'),
+        ni_number: pick('ni_number'),
+        occupation: pick('occupation'),
+        payment_plan_id: pick('payment_plan_id'),
+        active: typeof p.active === 'boolean' ? p.active : null,
+        // Recalls
+        dentist_id: pick('dentist_id'),
+        dentist_recall_date: pick('dentist_recall_date'),
+        dentist_recall_interval: pick('dentist_recall_interval'),
+        hygienist_id: pick('hygienist_id'),
+        hygienist_recall_date: pick('hygienist_recall_date'),
+        hygienist_recall_interval: pick('hygienist_recall_interval'),
+        // Emergency contact
+        emergency_contact_name: pick('emergency_contact_name'),
+        emergency_contact_relationship: pick('emergency_contact_relationship'),
+        emergency_contact_phone: pick('emergency_contact_phone_normalized') ?? pick('emergency_contact_phone'),
+        // Clinical flag (summary text included — display only, never sent to AI)
+        medical_alert: typeof p.medical_alert === 'boolean' ? p.medical_alert : null,
+        medical_alert_text: pick('medical_alert_text'),
+        // Provenance
+        acquisition_source_id: pick('acquisition_source_id'),
+        image_url: pick('image_url'),
+        created_at: pick('created_at'),
+        updated_at: pick('updated_at'),
     };
 }
 
@@ -439,6 +512,11 @@ export function practitionerRow(orgId, p, siteMap) {
         || p.name
         || [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
         || `Practitioner ${p.id}`;
+    // contract_targets is an array (a practitioner can hold several NHS contracts);
+    // total UDA/UOA target = sum across them. 0 -> null so the UI shows "—" not "0".
+    const targets = Array.isArray(p.contract_targets) ? p.contract_targets : [];
+    const udaTarget = targets.reduce((s, t) => s + (Number(t.uda_target) || 0), 0) || null;
+    const uoaTarget = targets.reduce((s, t) => s + (Number(t.uoa_target) || 0), 0) || null;
     return {
         organisation_id: orgId,
         pms_external_id: String(p.id),
@@ -446,6 +524,19 @@ export function practitionerRow(orgId, p, siteMap) {
         email: u.email ?? p.email_address ?? p.email ?? null,
         primary_practice_id: siteMap.get(String(p.site_id)) ?? null,
         active: p.active !== false,
+        // Dentally user.id — the human behind the practitioner record. The SAME
+        // person has a SEPARATE practitioner row per site (distinct practitioner.id
+        // + site_id) but ONE shared user.id, so this is the key the roster groups
+        // on to collapse per-site duplicates into one clinician (migration 000081).
+        pms_user_id: u.id != null ? String(u.id) : null,
+        // Practitioner-endpoint metadata (migration 000080). Dentally is the source
+        // for these synced practitioners, so a missing value legitimately clears it.
+        gdc_number: p.gdc_number ?? null,
+        nhs_number: p.nhs_number ?? null,
+        colour: p.colour ?? null,
+        dentally_role: u.role ?? null,
+        uda_target: udaTarget,
+        uoa_target: uoaTarget,
     };
 }
 
@@ -658,6 +749,18 @@ async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages) {
     return { synced };
 }
 
+// Practitioners-only sync — cheap (the whole-practice clinician set, a handful of
+// pages). Pulls EVERY practitioner (no updated_after filter) so it backfills the
+// practitioner-endpoint metadata (gdc/colour/role/uda_target) + pms_user_id on
+// existing rows without running the heavy patients/appointments/invoice phases.
+export async function syncPractitionersOnly(orgId, integration) {
+    const base = integration.config?.base_url ?? DEFAULT_BASE;
+    const auth = authHeader(integration.secrets);
+    if (!auth) return { error: 'no_auth' };
+    const siteMap = await loadSiteMap(orgId);
+    return pullPractitioners(orgId, base, auth, {}, siteMap, BACKFILL_MAX_PAGES);
+}
+
 // Dentally `/users` -> staff roster. Small set (whole-practice team), so one
 // unfiltered pull each sync; upsert is idempotent on (org, source, pms id).
 async function pullUsers(orgId, base, auth, params, siteMap, maxPages) {
@@ -863,14 +966,79 @@ async function pullInvoices(orgId, base, auth, params, siteMap, contactMap, onPa
 
 // ---- webhook apply (real-time, single record) -------------------------------
 // Map+upsert ONE record pushed by a Dentally webhook, reusing the row builders
-// above. resourceType ∈ patient|appointment|payment|invoice. create/update both upsert
-// (idempotent). Returns a small result for logging. Field/event shapes are the
-// documented v1 assumptions — verify against the live webhook during UAT.
+// above. resourceType ∈ patient|appointment|payment|invoice|invoice_item|
+// treatment_plan. create/update both upsert (idempotent). invoice events also
+// persist any embedded line items; standalone invoice_item events resolve their
+// parent context from the invoices table. Returns a small result for logging.
+// Field/event shapes are the documented v1 assumptions — verify against the live
+// webhook during UAT.
+// Build { dentally invoice id -> { practice_id, contact_id, dated_on, paid } }
+// from the invoices already stored in our table, so a webhook invoice_item
+// (which carries only invoice_id) resolves the practice/contact/date/paid it
+// needs — the same 4 fields the poll's transient invoiceMap supplies. An invoice
+// we have not stored yet simply maps to nothing; the item still upserts and the
+// parent context backfills when the next poll links it (propagate_invoice_paid).
+async function loadInvoiceContext(orgId, invoiceIds) {
+    const ids = [...new Set((invoiceIds ?? []).filter((v) => v != null).map(String))];
+    const map = new Map();
+    if (!ids.length) return map;
+    const { data } = await supabase_1.serviceClient
+        .from('invoices')
+        .select('external_id, practice_id, contact_id, dated_on, paid')
+        .eq('organisation_id', orgId)
+        .eq('source', 'dentally')
+        .in('external_id', ids);
+    for (const inv of data ?? []) {
+        map.set(String(inv.external_id), {
+            practice_id: inv.practice_id ?? null,
+            contact_id: inv.contact_id ?? null,
+            dated_on: inv.dated_on ?? null,
+            paid: inv.paid ?? null,
+        });
+    }
+    return map;
+}
+
+// Targeted relink: attach THIS just-upserted patient's contact to any of its own
+// appointments left orphaned (contact_id null) by out-of-order webhook delivery —
+// the appointment landing before its patient. Scoped to the single patient (one
+// indexed UPDATE on pms_patient_id), so a patient-import burst costs one cheap
+// statement per event, NOT a full-table relink every time. The `is null` guard
+// touches only genuine orphans. The poll's org-wide
+// relink_dentally_appointment_contacts stays the backstop for anything missed.
+async function relinkPatientAppointments(orgId, pmsPatientId) {
+    if (pmsPatientId == null) return;
+    const pid = String(pmsPatientId);
+    try {
+        const { data: contact } = await supabase_1.serviceClient
+            .from('contacts')
+            .select('id')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .eq('pms_external_id', pid)
+            .maybeSingle();
+        if (!contact?.id) return;
+        await supabase_1.serviceClient
+            .from('appointments')
+            .update({ contact_id: contact.id })
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .eq('pms_patient_id', pid)
+            .is('contact_id', null);
+    } catch (err) {
+        console.warn(`[dentally] webhook patient relink skipped: ${err?.message || err}`);
+    }
+}
+
 export async function applyWebhookEvent(orgId, resourceType, record) {
     if (!record || record.id == null) return { ignored: 'no_record_id' };
     const siteMap = await loadSiteMap(orgId);
     if (resourceType === 'patient') {
         await upsertChunked('contacts', [patientRow(orgId, record, siteMap)], 'organisation_id,source,pms_external_id');
+        // A patient arriving after its appointments leaves those rows' contact_id
+        // null; relink just this patient's orphans now rather than waiting for the
+        // nightly poll (scoped — no full-table relink per event).
+        await relinkPatientAppointments(orgId, record.id);
         return { table: 'contacts', applied: 1 };
     }
     const contactMap = await loadContactMap(orgId);
@@ -891,14 +1059,58 @@ export async function applyWebhookEvent(orgId, resourceType, record) {
         const row = invoiceRow(orgId, record, siteMap, contactMap);
         if (!row) return { skipped: 'unmatched_practice' };
         await upsertChunked('invoices', [row], 'organisation_id,source,external_id');
-        return { table: 'invoices', applied: 1 };
+        // Dentally invoice payloads usually embed their line items. Persist them
+        // inline (the REAL per-treatment fees) so production data does not depend
+        // on a separate invoice_item delivery; the parent context is THIS record,
+        // so no lookup is needed. Items carrying no own invoice_id inherit it.
+        const items = Array.isArray(record.invoice_items) ? record.invoice_items : [];
+        let itemsApplied = 0;
+        if (items.length) {
+            const practitionerMap = await loadPractitionerMap(orgId);
+            const invCtx = new Map([[String(record.id), {
+                practice_id: siteMap.get(String(record.site_id)) ?? null,
+                contact_id: contactMap.get(String(record.patient_id)) ?? null,
+                dated_on: record.dated_on ?? null,
+                paid: record.paid === true,
+            }]]);
+            const rows = items
+                .filter((it) => it && it.id != null)
+                .map((it) => invoiceItemRow(orgId, { ...it, invoice_id: it.invoice_id ?? record.id }, invCtx, practitionerMap));
+            itemsApplied = await upsertChunked('invoice_items', rows, 'organisation_id,source,pms_external_id');
+        }
+        return { table: 'invoices', applied: 1, invoice_items: itemsApplied };
+    }
+    if (resourceType === 'invoice_item') {
+        // Standalone item event: only invoice_id is present, so resolve the
+        // practice/contact/date/paid from the parent invoice in our table.
+        const invCtx = await loadInvoiceContext(orgId, [record.invoice_id]);
+        const practitionerMap = await loadPractitionerMap(orgId);
+        const row = invoiceItemRow(orgId, record, invCtx, practitionerMap);
+        await upsertChunked('invoice_items', [row], 'organisation_id,source,pms_external_id');
+        return { table: 'invoice_items', applied: 1 };
+    }
+    if (resourceType === 'treatment_plan') {
+        // Associate production (the figure the Pay Run needs). associateMap is the
+        // practitioner->associate map; contactMap resolves the patient.
+        const associateMap = await loadPractitionerMap(orgId);
+        const row = treatmentPlanRow(orgId, record, associateMap, contactMap);
+        await upsertChunked('treatment_plans', [row], 'organisation_id,source,pms_external_id');
+        return { table: 'treatment_plans', applied: 1 };
     }
     return { ignored: resourceType };
 }
 
 // ---- orchestration ----------------------------------------------------------
 
-export async function syncOneOrg(orgId, integration, onProgress = () => {}, { full = false, recent = false } = {}) {
+export async function syncOneOrg(orgId, integration, onProgress = () => {}, { full = false, recent = false, resources = null } = {}) {
+    // Resource selection — scope the pull to specific collections so a user who
+    // only needs, say, patients isn't forced to wait out the heavy payments +
+    // invoices phases (pure waste for their case). `resources` is an array of
+    // keys (patients|appointments|payments|treatment_plans|invoices); null/empty
+    // = pull everything (the default). `invoices` implies invoice_items — they're
+    // pulled together and resolve through the same in-run invoice map.
+    const selective = Array.isArray(resources) && resources.length > 0;
+    const want = (k) => !selective || resources.includes(k);
     const base = integration.config?.base_url ?? DEFAULT_BASE;
     const auth = authHeader(integration.secrets);
     if (!auth) {
@@ -930,7 +1142,11 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // backfillSince() shifts each ms, so an exact-timestamp key would never match
     // a later run; the window only moves a day at a time). A re-run for the same
     // day skips finished phases; already-upserted rows are idempotent regardless.
-    const resumeMode = full;
+    // Resume only the unscoped full backfill (the long, OOM-prone path). A
+    // selective run is short and the user explicitly asked for those resources,
+    // so honour the pick every time rather than skipping a phase a prior run
+    // happened to finish.
+    const resumeMode = full && !selective;
     const windowKey = since.slice(0, 10);
     const prevCursor = integration.config?.dentally_sync_cursor;
     const completedPhases = (resumeMode && prevCursor && prevCursor.window === windowKey)
@@ -988,13 +1204,17 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // invoices, freezing the bar mid-sync; and the bar hit the 99 ceiling after
     // invoices while invoice_items + the relink RPCs still ran with no feedback.
     const PHASES = ['patients', 'appointments', 'payments', 'treatment_plans', 'invoices', 'invoice_items'];
+    // Only probe (and below, only pull) the selected resources. An unselected
+    // phase contributes 0 pages to the weighted total and is never fetched, so
+    // the bar paces over exactly the work that runs.
+    const probe = (k, path, params) => want(k) ? fetchPageCount(base, path, auth, params, maxPages) : Promise.resolve(0);
     const [patientPages, apptPages, payPages, planPages, invoicePages, itemPages] = await Promise.all([
-        fetchPageCount(base, '/patients', auth, patientParams, maxPages),
-        fetchPageCount(base, '/appointments', auth, apptParams, maxPages),
-        fetchPageCount(base, '/payments', auth, payParams, maxPages),
-        fetchPageCount(base, '/treatment_plans', auth, { updated_after: since }, maxPages),
-        fetchPageCount(base, '/invoices', auth, invoiceParams, maxPages),
-        fetchPageCount(base, '/invoice_items', auth, { updated_after: since }, maxPages),
+        probe('patients', '/patients', patientParams),
+        probe('appointments', '/appointments', apptParams),
+        probe('payments', '/payments', payParams),
+        probe('treatment_plans', '/treatment_plans', { updated_after: since }),
+        probe('invoices', '/invoices', invoiceParams),
+        probe('invoices', '/invoice_items', { updated_after: since }),
     ]);
     const phaseTotals = [patientPages, apptPages, payPages, planPages, invoicePages, itemPages];
     const reporter = (idx) => (page, totalPages, count) => {
@@ -1014,13 +1234,17 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // Practitioners + staff are small (whole-practice team), so they aren't
         // weighted, but we emit a phase label + live count so the overlay shows
         // "Practitioners · N pulled" instead of dead air at pct 0 before patients.
-        onProgress({ phase: 'practitioners', pct: 0, count: 0 });
         let practitioners = { synced: 0 };
-        try {
-            practitioners = await pullPractitioners(orgId, base, auth, patientParams, siteMap, maxPages);
-            onProgress({ phase: 'practitioners', pct: 0, count: practitioners.synced });
-        } catch (err) {
-            console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
+        // Practitioners resolve associate_id on appointments + treatment_plans;
+        // skip the pull when neither is selected (e.g. a patients-only run).
+        if (want('appointments') || want('treatment_plans')) {
+            onProgress({ phase: 'practitioners', pct: 0, count: 0 });
+            try {
+                practitioners = await pullPractitioners(orgId, base, auth, patientParams, siteMap, maxPages);
+                onProgress({ phase: 'practitioners', pct: 0, count: practitioners.synced });
+            } catch (err) {
+                console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
+            }
         }
         const practitionerMap = await loadPractitionerMap(orgId);
         // Team roster from /users (cheap). Non-fatal: a failure here must not
@@ -1039,7 +1263,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // loads from the already-upserted contacts, so a skipped patients phase
         // doesn't strand appointment contact resolution.
         let patients = { synced: 0 };
-        if (!completedPhases.has('patients')) {
+        if (want('patients') && !completedPhases.has('patients')) {
             patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
             await markPhaseDone('patients');
         }
@@ -1047,7 +1271,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // openOnly defaults false: store every appointment in the window
         // (completed history included), not just upcoming diary blocks.
         let appts = { synced: 0, skipped: 0, skippedClosed: 0 };
-        if (!completedPhases.has('appointments')) {
+        if (want('appointments') && !completedPhases.has('appointments')) {
             appts = await pullAppointments(orgId, base, auth, apptParams, siteMap, contactMap, reporter(1), maxPages, { practitionerMap });
             await markPhaseDone('appointments');
         }
@@ -1061,7 +1285,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // the cap (full) or ride the changed-since cursor (incremental), so they
         // already capture future bookings.
         let upcomingSynced = 0;
-        if (recent) {
+        if (recent && want('appointments')) {
             try {
                 const upcoming = await pullAppointments(orgId, base, auth, { after: new Date().toISOString(), cancelled: true }, siteMap, contactMap, null, maxPages, { practitionerMap });
                 upcomingSynced = upcoming.synced ?? 0;
@@ -1077,7 +1301,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // abort the sync. Skipped on the bootstrap (recent) pull, whose appointment
         // set is deliberately partial (open-only / page-capped history).
         let pruned = { deleted: 0 };
-        if (!recent) {
+        if (!recent && want('appointments')) {
             try {
                 const wMs = 35 * 86400000;
                 const reconSince = new Date(Date.now() - wMs).toISOString();
@@ -1093,7 +1317,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             }
         }
         let pays = { synced: 0, skipped: 0 };
-        if (!completedPhases.has('payments')) {
+        if (want('payments') && !completedPhases.has('payments')) {
             pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
             await markPhaseDone('payments');
         }
@@ -1102,7 +1326,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // resolve associate_id / contact_id. Weighted phase 3; never fail the
         // whole sync if this resource errors.
         let treatmentPlans = { synced: 0 };
-        if (!completedPhases.has('treatment_plans')) {
+        if (want('treatment_plans') && !completedPhases.has('treatment_plans')) {
             try {
                 treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_after: since }, practitionerMap, contactMap, reporter(3), maxPages);
                 await markPhaseDone('treatment_plans');
@@ -1121,7 +1345,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         const invoiceStageDone = completedPhases.has('invoice_items');
         let invoices = { synced: 0, skipped: 0, invoiceMap: new Map() };
         let invoiceItems = { synced: 0 };
-        if (!invoiceStageDone) {
+        if (want('invoices') && !invoiceStageDone) {
             invoices = await pullInvoices(orgId, base, auth, invoiceParams, siteMap, contactMap, reporter(4), maxPages);
             // Invoice items = the real per-treatment fee feed (treatment name +
             // price), resolved against the invoice map. Weighted phase 5; same
@@ -1137,28 +1361,39 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // All pulls done; the relink RPCs below are set-based SQL that can take a
         // while on a large org (hundreds of thousands of appointments). Emit an
         // explicit "linking" phase at the 99 ceiling so the bar shows real work
-        // instead of looking frozen at 99% while these run.
-        onProgress({ phase: 'linking', pct: 99, count: 0 });
+        // instead of looking frozen at 99% while these run. Each relink touches
+        // appointments, so only run the ones whose inputs were actually pulled —
+        // a payments-only run has nothing to relink.
+        const doRelinkContacts = want('patients') || want('appointments');
+        const doRelinkAssociates = want('appointments');
+        const doRepaid = want('invoices');
+        if (doRelinkContacts || doRelinkAssociates || doRepaid) {
+            onProgress({ phase: 'linking', pct: 99, count: 0 });
+        }
         // Backfill contact_id for any appointment that has a Dentally patient id
         // but no linked contact yet (patient pulled in another run, or a row
         // from before this column existed). Set-based; cheap; never cross-tenant.
         let relinked = 0;
-        try {
-            const { data } = await supabase_1.serviceClient.rpc('relink_dentally_appointment_contacts', { p_org: orgId });
-            relinked = typeof data === 'number' ? data : 0;
-        } catch (err) {
-            console.warn(`[dentally] relink contacts skipped: ${err?.message || err}`);
+        if (doRelinkContacts) {
+            try {
+                const { data } = await supabase_1.serviceClient.rpc('relink_dentally_appointment_contacts', { p_org: orgId });
+                relinked = typeof data === 'number' ? data : 0;
+            } catch (err) {
+                console.warn(`[dentally] relink contacts skipped: ${err?.message || err}`);
+            }
         }
         // Same pattern for associate_id: appointments persist pms_practitioner_id,
         // so a practitioner pulled/mapped after the appointment was synced (or a
         // /practitioners pull that only succeeds on a later run) backfills
         // associate_id without a full appointment re-pull.
         let relinkedAssociates = 0;
-        try {
-            const { data } = await supabase_1.serviceClient.rpc('relink_dentally_appointment_associates', { p_org: orgId });
-            relinkedAssociates = typeof data === 'number' ? data : 0;
-        } catch (err) {
-            console.warn(`[dentally] relink associates skipped: ${err?.message || err}`);
+        if (doRelinkAssociates) {
+            try {
+                const { data } = await supabase_1.serviceClient.rpc('relink_dentally_appointment_associates', { p_org: orgId });
+                relinkedAssociates = typeof data === 'number' ? data : 0;
+            } catch (err) {
+                console.warn(`[dentally] relink associates skipped: ${err?.message || err}`);
+            }
         }
         // Reconcile invoice_items.invoice_paid to the invoices table's current paid
         // status. Dentally bumps an invoice's updated_at when it's paid but NOT its
@@ -1166,11 +1401,13 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // never the items — leaving invoice_paid stale and the Treatments Paid card
         // under-reporting. Set-based; cheap; org-scoped.
         let repaidItems = 0;
-        try {
-            const { data } = await supabase_1.serviceClient.rpc('propagate_invoice_paid', { p_org: orgId });
-            repaidItems = typeof data === 'number' ? data : 0;
-        } catch (err) {
-            console.warn(`[dentally] propagate invoice_paid skipped: ${err?.message || err}`);
+        if (doRepaid) {
+            try {
+                const { data } = await supabase_1.serviceClient.rpc('propagate_invoice_paid', { p_org: orgId });
+                repaidItems = typeof data === 'number' ? data : 0;
+            } catch (err) {
+                console.warn(`[dentally] propagate invoice_paid skipped: ${err?.message || err}`);
+            }
         }
         // The full pull completed — last_sync_at now covers the window, so the
         // resume checkpoint is spent. Clear it so the next full pull starts fresh

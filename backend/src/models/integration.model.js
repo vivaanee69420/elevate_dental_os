@@ -23,8 +23,14 @@ export const webhookSecretSchema = zod_1.z.object({
     secret: zod_1.z.string().max(500),
 });
 // On-demand pull: ?full=true (query) or { full: true } (body) re-pulls window.
+// resources (optional) scopes a Dentally pull to specific collections — e.g.
+// ['patients'] pulls ONLY patients, skipping the heavy payments/invoices phases.
+// Omitted/empty = pull everything (the default full sync). 'invoices' bundles
+// invoice_items (they resolve through the same in-run invoice map).
+export const DENTALLY_SYNC_RESOURCES = ['patients', 'appointments', 'payments', 'treatment_plans', 'invoices'];
 export const syncBodySchema = zod_1.z.object({
     full: zod_1.z.boolean().optional(),
+    resources: zod_1.z.array(zod_1.z.enum(DENTALLY_SYNC_RESOURCES)).optional(),
 });
 // Ad-account selection (Google Ads / Meta Ads): the customer_ids to include in
 // the marketing views. The rest are deselected. Empty array = select none.

@@ -9,10 +9,11 @@
 // UDA-completed each flag when their Dentally feed isn't populated, instead of
 // fabricating. Money is integer PENCE.
 
-import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState } from '@/components/ui';
+import { PageHeader, KpiTile, BarRow, EmptyState } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill, ScopeNote, th, td } from './os-ui';
+import { DecisionLens } from '@/features/_shared/DecisionLens';
 import { useClinicians } from '../clinicians-hooks';
 import type { Clinicians } from '../clinicians-api';
 
@@ -64,18 +65,14 @@ function CliniciansBody({ data }: { data: Clinicians }) {
     <>
       <div className="grid gap-3 grid-cols-1 md:grid-cols-3">
         <KpiTile label={`Production · ${data.window?.label ?? ''}`} value={data.productionAvailable ? gbp(data.totalProductionPence) : '—'} delta={`${roster.length} clinicians in scope`} />
-        <KpiTile label="Associate / clinician fees" value={data.productionAvailable ? gbp(data.totalFeesPence) : '—'} delta={data.productionAvailable ? `${pct(feeRatio)} of production` : 'awaiting production feed'} />
-        <KpiTile label="Net to practice" value={data.productionAvailable ? gbp(data.totalNetPence) : '—'} delta="after associate pay (pre lab/opex)" deltaTone={data.totalNetPence >= 0 ? 'up' : 'down'} />
+        <KpiTile label="Associate / clinician fees" value={data.productionAvailable ? gbp(data.totalFeesPence) : '—'} delta={data.productionAvailable ? (data.payTermsEstimated ? `est. at ${pct(feeRatio)} default split — set real terms in Team` : `${pct(feeRatio)} of production`) : 'awaiting production feed'} />
+        <KpiTile label="Net to practice" value={data.productionAvailable ? gbp(data.totalNetPence) : '—'} delta={data.payTermsEstimated ? 'estimated — pay terms not yet set' : 'after associate pay (pre lab/opex)'} deltaTone={data.totalNetPence >= 0 ? 'up' : 'down'} />
       </div>
 
-      {data.insights.length > 0 && (
-        <Panel>
-          <PanelHead title="Decision Lens" sub="What to act on across the clinical team." />
-          {data.insights.map((a, i) => (
-            <AlertRow key={i} tone={a.tone} title={a.title} body={a.body} tag={a.value ? <Pill tone={a.tone}>{a.value}</Pill> : undefined} />
-          ))}
-        </Panel>
-      )}
+      <Panel>
+        <PanelHead title="Decision Lens" sub="What to act on across the clinical team." />
+        <DecisionLens surface="clinicians" fallback={data.insights} />
+      </Panel>
 
       {/* Production / activity by clinician */}
       <Panel>
@@ -113,7 +110,7 @@ function CliniciansBody({ data }: { data: Clinicians }) {
                   <td className={td}>{c.name}{!c.active && <span className="ml-1"><Pill tone="warn">inactive</Pill></span>}</td>
                   <td className={td}>{c.role}</td>
                   <td className={td}>{c.practiceName}</td>
-                  <td className={`${td} text-right`}>{c.payPct}%</td>
+                  <td className={`${td} text-right`}>{c.payPct}%{c.payDefault && <span className="ml-1 text-ink-muted text-xs">(default)</span>}</td>
                   <td className={`${td} text-right`}>{c.labSplitPct}%</td>
                   <td className={`${td} text-right tabular-nums`}>{data.productionAvailable ? gbp(c.productionPence) : '—'}</td>
                   <td className={`${td} text-right tabular-nums`}>{data.productionAvailable ? gbp(c.feesPence) : '—'}</td>

@@ -12,6 +12,7 @@ import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState, SkeletonKpiRow, Skel
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill } from './os-ui';
+import { DecisionLens } from '@/features/_shared/DecisionLens';
 import { useCashByDay } from '../cash-by-day-hooks';
 
 export default function DayScreen() {
@@ -73,13 +74,7 @@ export default function DayScreen() {
 
           <Panel>
             <PanelHead title="Decision Lens" sub="What to act on for collections this week." />
-            {data.insights.length ? (
-              data.insights.map((a, i) => (
-                <AlertRow key={i} tone={a.tone} title={a.title} body={a.body} tag={a.value ? <Pill tone={a.tone}>{a.value}</Pill> : undefined} />
-              ))
-            ) : (
-              <p className="text-sm text-ink-muted">No collection alerts in the current scope.</p>
-            )}
+            <DecisionLens surface="day" fallback={data.insights} />
           </Panel>
         </>
       )}

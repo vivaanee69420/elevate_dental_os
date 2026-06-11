@@ -22,7 +22,7 @@ import { useState } from 'react';
 import { Skeleton } from '@/components/ui';
 import { poundsCompact, monthShort } from '../mock';
 import { useCashflow, useCashflowOutlook } from '../hooks';
-import { useBusinessHub } from '@/features/overview/business-hub-api';
+import { useBusinessHub, type HubWindow } from '@/features/overview/business-hub-api';
 import { useMarketingRoi } from '@/features/growth/hooks';
 import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
@@ -84,9 +84,15 @@ export default function CashflowScreen() {
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
   const { data, isLoading, isError } = useCashflow(13, practiceId, range);
   const { data: outlook } = useCashflowOutlook(4, 2, practiceId);
-  // Context strip — group KPIs (90-day window) + live paid-marketing efficiency.
-  const { data: hub } = useBusinessHub(90);
-  const { data: roi } = useMarketingRoi();
+  // Context strip — group KPIs + live paid-marketing efficiency, both following
+  // the page's practice + period filters. Custom [from,to] → explicit window;
+  // "Recent" (no range) → trailing 90 days. Practice scope is applied client-side
+  // off hub.practices (business-hub has no practice_id param), mirroring Business Hub.
+  const hubWin: HubWindow = range.from && range.to
+    ? { since: range.from, until: range.to }
+    : { days: 90 };
+  const { data: hub } = useBusinessHub(hubWin);
+  const { data: roi } = useMarketingRoi(practiceId, range);
   const weeks = data?.weeks ?? [];
   const hasData = weeks.length > 0;
   // Real closing balance only — no projection, no comparison line.
@@ -137,26 +143,35 @@ export default function CashflowScreen() {
         </div>
       )}
 
-      {/* Context strip — group KPIs (90d) + live paid-marketing efficiency.
+      {/* Context strip — group KPIs + live paid-marketing efficiency, scoped to the
+          page's practice + period filters.
           Group revenue is settled receipts (cash basis = cash collected);
           profit is contribution from the baseline margin. Ad metrics are real
           when an ad account is connected, else honest "not connected". */}
       {hub && (() => {
         const g = hub.group;
-        const turnover = g.revenuePence / 100;
+        // Practice scope: turnover, conversion + new patients ARE practice-attributed
+        // (Dentally), so a selected practice narrows them to that row. Target + margin
+        // only exist group-wide — drop the vs-target chip when a practice is picked.
+        const pr = practiceId ? hub.practices.find((p) => p.practiceId === practiceId) ?? null : null;
+        const turnover = (pr ? pr.revenuePence : g.revenuePence) / 100;
         const target = g.revenueTargetPence / 100;
-        const vsTarget = target > 0 ? (turnover / target - 1) * 100 : null;
+        const vsTarget = !pr && target > 0 ? (turnover / target - 1) * 100 : null;
         const profit = turnover * (g.marginPct || 0) / 100;
+        const conversion = pr ? pr.conversionRate : g.conversionRate;
+        const newPatients = pr ? pr.newPatients : g.newPatients;
         const connected = !!roi?.connected;
         const spend = connected ? roi!.spend_pence / 100 : null;
         const spendPctTurn = spend != null && turnover > 0 ? (spend / turnover) * 100 : null;
         const roas = connected ? roi!.roas : 0;
+        const costPerPatient = spend != null && newPatients > 0 ? spend / newPatients : null;
+        const periodSub = range.from && range.to ? 'Selected period' : 'Last 90 days';
         return (
           <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}>
             <StripKpi
               label="Group turnover"
               value={gbp(turnover)}
-              sub="Settled receipts · 90 days"
+              sub={`Settled receipts · ${periodSub}`}
               tag={vsTarget != null ? `${vsTarget >= 0 ? '▲' : '▼'} ${Math.abs(vsTarget).toFixed(0)}% vs target` : undefined}
               tone={vsTarget != null && vsTarget >= 0 ? 'good' : 'warn'}
             />
@@ -167,8 +182,8 @@ export default function CashflowScreen() {
             />
             <StripKpi
               label="New patients"
-              value={connected ? String(roi!.new_patients) : '—'}
-              sub={connected && roi!.cac_pence ? `${gbp(roi!.cac_pence / 100)} cost / patient` : 'Connect ads'}
+              value={String(newPatients)}
+              sub={costPerPatient != null ? `${gbp(costPerPatient)} cost / patient` : 'New-patient exams (Dentally)'}
             />
             <StripKpi
               label="Marketing spend"
@@ -186,8 +201,8 @@ export default function CashflowScreen() {
             />
             <StripKpi
               label="Lead conversion"
-              value={`${(g.conversionRate || 0).toFixed(0)}%`}
-              sub="Lead → appointment · 90 days"
+              value={`${(conversion || 0).toFixed(0)}%`}
+              sub={`Lead → appointment · ${periodSub}`}
             />
           </div>
         );

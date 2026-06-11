@@ -589,9 +589,12 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
       : { data: [], error: null };
     supaRec.rpcProvider = (fn) => {
-      // p1 has 1 lead; GHL leads arrive with practice_id null (9 leads, 2 converted).
+      // p1 has 1 lead; GHL leads arrive with practice_id null (9 leads). Ad feeds
+      // empty here, so group leads = the 10 CRM leads.
       if (fn === 'leads_rollup_by_practice')
         return { data: [{ practice_id: 'p1', total: 1, converted: 0 }, { practice_id: null, total: 9, converted: 2 }], error: null };
+      // 2 new patients by payment plan -> conversionRate = 2/10 leads = 20%.
+      if (fn === 'org_new_patients_registered_by_practice') return { data: [{ practice_id: 'p1', new_patients: 2 }], error: null };
       if (fn === 'treatments_rollup_by_org')
         return { data: [{ started: 4, completed: 3, closed_value_pence: 120000 }], error: null };
       // Closed VALUE now comes from real invoiced plan fees per practice (distinct
@@ -602,8 +605,8 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
       return { data: [], error: null };
     };
     const res = await svc.businessHub(ORG_A, { days: 90 });
-    expect(res.group.leads).toBe(10);            // 1 practice-attributed + 9 null-practice
-    expect(res.group.conversionRate).toBe(20);   // 2 / 10
+    expect(res.group.leads).toBe(10);            // 1 practice-attributed + 9 null-practice (CRM; ad feeds empty)
+    expect(res.group.conversionRate).toBe(20);   // 2 new patients / 10 leads
     expect(res.practices[0].leads).toBe(1);      // per-practice row still excludes the null bucket
     expect(res.group.treatmentsStarted).toBe(4);
     expect(res.group.treatmentsClosedPence).toBe(180000); // billed plan fees, not 120000 estimate
@@ -611,6 +614,33 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.practices[0].treatmentsClosedPence).toBe(180000); // attributed per practice (invoice_items feed)
     expect(res.practices[0].treatmentsPaidPence).toBe(96000);
     expect(res.group.leadToStartRate).toBe(40);  // 4 started / 10 leads
+  });
+
+  it('leads come from ALL sources (Google + Meta ad conversions + GHL) with a named breakdown; new patients are booked Dentally exams', async () => {
+    // CRM/GHL leads empty (Dentally-only org) — the old path showed Leads 0.
+    // Real leads live in ad_metrics.conversions; new patients in appointments.
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : q.table === 'ad_metrics' ? { data: [{ provider: 'google_ads', conversions: 21 }, { provider: 'meta_ads', conversions: 1376 }], error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'leads_rollup_by_practice') return { data: [], error: null }; // GHL empty
+      if (fn === 'treatments_rollup_by_org') return { data: [{ started: 310, completed: 152, closed_value_pence: 0 }], error: null };
+      if (fn === 'org_new_patients_registered_by_practice') return { data: [{ practice_id: 'p1', new_patients: 35 }], error: null };
+      return { data: [], error: null };
+    };
+    const res = await svc.businessHub(ORG_A, { since: '2026-06-01T00:00:00.000Z', until: '2026-07-01T00:00:00.000Z', label: 'Jun 2026' });
+
+    expect(res.group.leads).toBe(1397);                  // 21 + 1376 + 0 (GHL)
+    expect(res.group.leadsBySource).toEqual([
+      { source: 'Google Ads', leads: 21 },
+      { source: 'Meta Ads', leads: 1376 },
+      { source: 'GHL / CRM', leads: 0 },
+    ]);
+    expect(res.group.newPatients).toBe(35);              // new patients by payment plan (Dentally)
+    expect(res.group.conversionRate).toBe(2.5);          // 35 new patients / 1397 leads
+    expect(res.group.leadToStartRate).toBe(22.2);        // 310 started / 1397 leads
   });
 
   it('revenueByLine buckets invoice-item treatments into clinical lines, summed group-wide, sorted desc', async () => {

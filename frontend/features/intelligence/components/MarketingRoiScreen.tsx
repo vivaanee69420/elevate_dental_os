@@ -9,11 +9,12 @@
 // shows only a business-level blended paid ROAS. Money is integer PENCE.
 
 import { useState } from 'react';
-import { PageHeader, KpiTile, BarRow, AlertRow, EmptyState, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
+import { PageHeader, KpiTile, BarRow, EmptyState, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { AdAccountFilter } from '../AdAccountFilter';
 import { Panel, PanelHead, NoteFoot, Pill, th, td } from './os-ui';
+import { DecisionLens } from '@/features/_shared/DecisionLens';
 import { useMarketingRoi } from '../marketing-roi-hooks';
 import type { MarketingRoi, MktChannel } from '../marketing-roi-api';
 
@@ -85,14 +86,10 @@ function MarketingBody({ data }: { data: MarketingRoi }) {
       </div>
 
       {/* Decision Lens */}
-      {data.insights.length > 0 && (
-        <Panel>
-          <PanelHead title="Decision Lens" sub="Where the acquisition budget is working — and where it isn't." />
-          {data.insights.map((a, i) => (
-            <AlertRow key={i} tone={a.tone} title={a.title} body={a.body} tag={a.value ? <Pill tone={a.tone}>{a.value}</Pill> : undefined} />
-          ))}
-        </Panel>
-      )}
+      <Panel>
+        <PanelHead title="Decision Lens" sub="Where the acquisition budget is working — and where it isn't." />
+        <DecisionLens surface="marketing" fallback={data.insights} />
+      </Panel>
 
       {/* channel cards */}
       <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(220px,1fr))]">
