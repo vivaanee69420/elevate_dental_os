@@ -85,8 +85,6 @@ export function GroupPerformanceScreen() {
   const roas = connected ? (roi!.blendedRoas ?? 0) : 0;
 
   const profitPence = g.marginPct > 0 ? Math.round((g.revenuePence * g.marginPct) / 100) : 0;
-  const vsBasePct = g.revenueTargetPence > 0
-    ? Math.round(((g.revenuePence - g.revenueTargetPence) / g.revenueTargetPence) * 100) : null;
   const spendPctTurnover = pctOf(spendPence, g.revenuePence, 1);
   const newPts = g.newPatients;
   const avgPatientValuePence = newPts > 0 ? Math.round(g.treatmentsClosedPence / newPts) : 0;
@@ -100,18 +98,17 @@ export function GroupPerformanceScreen() {
   const roasTone: ChipColour = roas >= 4 ? 'emerald' : roas >= 2 ? 'amber' : 'rose';
   const roasLabel = roas >= 4 ? 'Strong' : roas >= 2 ? 'Watch' : 'Weak';
 
-  // Real collection rate — trailing-12mo settled cash ÷ trailing-12mo billed
-  // (matched window, server-side). null until a billing feed exists. ~100% is
-  // healthy; well below means cash is lagging billing (debtors building).
-  const collRate = g.collectionRatePct;
-  const collectionChip = collRate != null
-    ? { text: `${collRate}% collected · 12mo`, tone: (collRate >= 95 ? 'emerald' : collRate >= 85 ? 'amber' : 'rose') as ChipColour }
-    : null;
+  // Period-over-period delta chips — turnover and cash vs the prior same-length
+  // window (server-side, like-for-like). null base => no chip. Up = emerald.
+  const deltaChip = (pct: number | null): { text: string; tone: ChipColour } | null =>
+    pct == null ? null : { text: `${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct)}% vs ${g.prevPeriodLabel}`, tone: pct >= 0 ? 'emerald' : 'rose' };
+  const turnoverChip = deltaChip(g.turnoverDeltaPct);
+  const cashChip = deltaChip(g.cashDeltaPct);
 
   // Row 1 — money + acquisition headline. Row 2 — the lead→treatment funnel.
   const headlineTop: HeadlineKpi[] = [
     { label: 'Group Turnover', value: formatPence(g.revenuePence), sub: `${windowLabel} · ${g.practices} ${g.practices === 1 ? 'entity' : 'entities'}`,
-      chip: vsBasePct != null ? { text: `${vsBasePct >= 0 ? '▲' : '▼'} ${Math.abs(vsBasePct)}% vs base`, tone: vsBasePct >= 0 ? 'emerald' : 'rose' } : null },
+      chip: turnoverChip },
     { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
       chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
     // Cash banked = ALL settled receipts in the window, including payments for
@@ -119,10 +116,9 @@ export function GroupPerformanceScreen() {
     // debtor collection). It is NOT comparable to in-window turnover, so we never
     // show a "% of turnover banked" ratio (it routinely exceeds 100% and the
     // implied "turnover - cash = outstanding" is a fake debtor figure). The chip
-    // instead shows the REAL collection rate: trailing-12mo cash vs the billing
-    // it actually pays down (matched window, computed server-side).
+    // is a like-for-like delta vs the prior same-length period instead.
     { label: 'Cash Collected', value: formatPence(g.cashCollectedPence), sub: `Settled receipts banked · ${windowLabel}`,
-      chip: collectionChip },
+      chip: cashChip },
     { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
       chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
     { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',

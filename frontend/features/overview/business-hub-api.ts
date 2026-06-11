@@ -44,9 +44,11 @@ export interface BusinessHub {
     treatmentsCompleted: number;   // accepted/completed plan count in window
     treatmentsClosedPence: number; // private value of completed plans in window
     cashCollectedPence: number;    // settled receipts banked in window
-    collectionRatePct: number | null; // trailing-12mo cash / billed; null => no billing feed
-    trailing12BilledPence: number; // invoiced production over trailing 12mo
-    trailing12CashPence: number;   // settled receipts over trailing 12mo
+    turnoverDeltaPct: number | null; // turnover vs prior same-length period; null => no base
+    cashDeltaPct: number | null;     // cash vs prior same-length period; null => no base
+    prevPeriodLabel: string;         // label for the comparison period ("May 2026")
+    prevRevenuePence: number;        // turnover in the prior period
+    prevCashPence: number;           // settled receipts in the prior period
     leadToStartRate: number;       // treatmentsStarted / leads, percentage points
   };
   practices: HubPractice[];

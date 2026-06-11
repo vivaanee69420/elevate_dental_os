@@ -2217,25 +2217,27 @@ export const analyticsService = {
         // Cash banked = sum of settled receipts in the window (real payments).
         const cashCollectedPence = cashRows.reduce((s, r) => s + num(r.pence), 0);
 
-        // Collection rate — the ONLY honest cash-vs-billing ratio. In-window cash
-        // banks prior-period invoices (deposits, plans, finance, debtor chasing),
-        // so dividing in-window cash by in-window turnover structurally exceeds
-        // 100% and means nothing. Instead compare cash to the billing it actually
-        // pays down over a matched TRAILING-12-MONTH window (independent of the
-        // user's selected period): settled receipts ÷ invoiced production. The
-        // invoice_items feed only goes back ~12mo (Dentally connect window), so
-        // trailing-12 is also the widest window where both feeds overlap.
-        const t12SinceISO = new Date(now().getTime() - 365 * 86400000).toISOString();
-        const [t12BillRows, t12CashRows] = await Promise.all([
-            analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, t12SinceISO, null),
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, t12SinceISO, null, null),
+        // Period-over-period deltas — turnover and cash vs the SAME-LENGTH window
+        // immediately before the selected one (Jun vs May, this-year vs last-year,
+        // trailing-30d vs the prior 30d). Compared like-for-like (in-window vs
+        // in-window of equal length), so unlike cash-vs-turnover this is an honest
+        // ratio. Same RPCs, shifted window.
+        const winMs = untilISO
+            ? (new Date(untilISO).getTime() - new Date(sinceISO).getTime())
+            : days * 86400000;
+        const prevUntilISO = sinceISO;
+        const prevSinceISO = new Date(new Date(sinceISO).getTime() - winMs).toISOString();
+        const [prevBillRows, prevCashRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, prevSinceISO, prevUntilISO),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, prevSinceISO, null, prevUntilISO),
         ]);
-        const trailing12BilledPence = t12BillRows.reduce((s, r) => s + num(r.fee_pence), 0);
-        const trailing12CashPence = t12CashRows.reduce((s, r) => s + num(r.pence), 0);
-        // null when there is no billing feed to measure against (don't show 0%).
-        const collectionRatePct = trailing12BilledPence > 0
-            ? Math.round((trailing12CashPence / trailing12BilledPence) * 1000) / 10
-            : null;
+        const prevRevenuePence = prevBillRows.reduce((s, r) => s + num(r.fee_pence), 0);
+        const prevCashPence = prevCashRows.reduce((s, r) => s + num(r.pence), 0);
+        // null when there's no prior-period base (don't show ±∞ / a fake 0%).
+        const pctDelta = (cur, prev) => (prev > 0 ? Math.round(((cur - prev) / prev) * 1000) / 10 : null);
+        const turnoverDeltaPct = pctDelta(totalRevenue, prevRevenuePence);
+        const cashDeltaPct = pctDelta(cashCollectedPence, prevCashPence);
+        const prevPeriodLabel = prevWindowLabel(sinceISO, untilISO, days);
 
         // Revenue by clinical line — bucket the per-treatment invoiced fee feed
         // (invoice_items, real Dentally data) into ~8 clinical categories. Group-
@@ -2294,11 +2296,13 @@ export const analyticsService = {
                 treatmentsCompleted, // accepted/completed plan count in window
                 treatmentsClosedPence,
                 cashCollectedPence, // settled receipts banked in window
-                // Real collection rate over a matched trailing-12mo window (cash
-                // vs the billing it pays down). null => no billing feed yet.
-                collectionRatePct,
-                trailing12BilledPence,
-                trailing12CashPence,
+                // Like-for-like deltas vs the prior same-length period (null when
+                // no prior base). prevPeriodLabel names it for the chip ("May 2026").
+                turnoverDeltaPct,
+                cashDeltaPct,
+                prevPeriodLabel,
+                prevRevenuePence,
+                prevCashPence,
                 leadToStartRate: rate(treatmentsStarted, totalLeads),
             },
             practices: practiceRows,
@@ -2840,6 +2844,28 @@ function categoriseTreatmentLine(name) {
         if (rx.test(n)) return line;
     }
     return 'Other';
+}
+
+// Human label for the comparison (previous) window of a period-over-period delta.
+// Recognises calendar month / year / single day; falls back to "prev Nd" for a
+// trailing-days window or "prev period" otherwise. All UTC (windows are ISO/UTC).
+function prevWindowLabel(sinceISO, untilISO, days) {
+    const d = new Date(sinceISO);
+    if (untilISO) {
+        const spanDays = Math.round((new Date(untilISO).getTime() - d.getTime()) / 86400000);
+        if (spanDays <= 1) { // single day
+            const p = new Date(d.getTime() - 86400000);
+            return p.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+        }
+        if (d.getUTCDate() === 1 && spanDays >= 27 && spanDays <= 31) { // calendar month
+            const p = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
+            return p.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+        }
+        if (d.getUTCMonth() === 0 && d.getUTCDate() === 1 && spanDays >= 360) // calendar year
+            return String(d.getUTCFullYear() - 1);
+        return 'prev period';
+    }
+    return `prev ${days}d`;
 }
 
 // ----------------------------------------------------------------------------
