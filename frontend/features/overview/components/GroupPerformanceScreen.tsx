@@ -100,6 +100,14 @@ export function GroupPerformanceScreen() {
   const roasTone: ChipColour = roas >= 4 ? 'emerald' : roas >= 2 ? 'amber' : 'rose';
   const roasLabel = roas >= 4 ? 'Strong' : roas >= 2 ? 'Watch' : 'Weak';
 
+  // Real collection rate — trailing-12mo settled cash ÷ trailing-12mo billed
+  // (matched window, server-side). null until a billing feed exists. ~100% is
+  // healthy; well below means cash is lagging billing (debtors building).
+  const collRate = g.collectionRatePct;
+  const collectionChip = collRate != null
+    ? { text: `${collRate}% collected · 12mo`, tone: (collRate >= 95 ? 'emerald' : collRate >= 85 ? 'amber' : 'rose') as ChipColour }
+    : null;
+
   // Row 1 — money + acquisition headline. Row 2 — the lead→treatment funnel.
   const headlineTop: HeadlineKpi[] = [
     { label: 'Group Turnover', value: formatPence(g.revenuePence), sub: `${windowLabel} · ${g.practices} ${g.practices === 1 ? 'entity' : 'entities'}`,
@@ -108,11 +116,13 @@ export function GroupPerformanceScreen() {
       chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
     // Cash banked = ALL settled receipts in the window, including payments for
     // treatment invoiced in prior periods (deposits, payment plans, finance,
-    // debtor collection). It is NOT comparable to in-window turnover, so we do
-    // not show a "% of turnover banked" ratio (it routinely exceeds 100% and the
-    // implied "turnover - cash = outstanding" is a fake debtor figure).
+    // debtor collection). It is NOT comparable to in-window turnover, so we never
+    // show a "% of turnover banked" ratio (it routinely exceeds 100% and the
+    // implied "turnover - cash = outstanding" is a fake debtor figure). The chip
+    // instead shows the REAL collection rate: trailing-12mo cash vs the billing
+    // it actually pays down (matched window, computed server-side).
     { label: 'Cash Collected', value: formatPence(g.cashCollectedPence), sub: `Settled receipts banked · ${windowLabel}`,
-      chip: null },
+      chip: collectionChip },
     { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
       chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
     { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',

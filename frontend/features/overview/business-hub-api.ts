@@ -44,6 +44,9 @@ export interface BusinessHub {
     treatmentsCompleted: number;   // accepted/completed plan count in window
     treatmentsClosedPence: number; // private value of completed plans in window
     cashCollectedPence: number;    // settled receipts banked in window
+    collectionRatePct: number | null; // trailing-12mo cash / billed; null => no billing feed
+    trailing12BilledPence: number; // invoiced production over trailing 12mo
+    trailing12CashPence: number;   // settled receipts over trailing 12mo
     leadToStartRate: number;       // treatmentsStarted / leads, percentage points
   };
   practices: HubPractice[];

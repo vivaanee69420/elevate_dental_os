@@ -2217,6 +2217,26 @@ export const analyticsService = {
         // Cash banked = sum of settled receipts in the window (real payments).
         const cashCollectedPence = cashRows.reduce((s, r) => s + num(r.pence), 0);
 
+        // Collection rate — the ONLY honest cash-vs-billing ratio. In-window cash
+        // banks prior-period invoices (deposits, plans, finance, debtor chasing),
+        // so dividing in-window cash by in-window turnover structurally exceeds
+        // 100% and means nothing. Instead compare cash to the billing it actually
+        // pays down over a matched TRAILING-12-MONTH window (independent of the
+        // user's selected period): settled receipts ÷ invoiced production. The
+        // invoice_items feed only goes back ~12mo (Dentally connect window), so
+        // trailing-12 is also the widest window where both feeds overlap.
+        const t12SinceISO = new Date(now().getTime() - 365 * 86400000).toISOString();
+        const [t12BillRows, t12CashRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, t12SinceISO, null),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, t12SinceISO, null, null),
+        ]);
+        const trailing12BilledPence = t12BillRows.reduce((s, r) => s + num(r.fee_pence), 0);
+        const trailing12CashPence = t12CashRows.reduce((s, r) => s + num(r.pence), 0);
+        // null when there is no billing feed to measure against (don't show 0%).
+        const collectionRatePct = trailing12BilledPence > 0
+            ? Math.round((trailing12CashPence / trailing12BilledPence) * 1000) / 10
+            : null;
+
         // Revenue by clinical line — bucket the per-treatment invoiced fee feed
         // (invoice_items, real Dentally data) into ~8 clinical categories. Group-
         // wide (sums across practices); the card is "where group turnover comes
@@ -2274,6 +2294,11 @@ export const analyticsService = {
                 treatmentsCompleted, // accepted/completed plan count in window
                 treatmentsClosedPence,
                 cashCollectedPence, // settled receipts banked in window
+                // Real collection rate over a matched trailing-12mo window (cash
+                // vs the billing it pays down). null => no billing feed yet.
+                collectionRatePct,
+                trailing12BilledPence,
+                trailing12CashPence,
                 leadToStartRate: rate(treatmentsStarted, totalLeads),
             },
             practices: practiceRows,
