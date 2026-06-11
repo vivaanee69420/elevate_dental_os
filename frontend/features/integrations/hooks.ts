@@ -5,6 +5,7 @@ import {
   revokeIntegration,
   submitBrokerKey,
   syncIntegration,
+  syncAllIntegrations,
   detectSiteIds,
   getSyncProgress,
   listPractices,
@@ -17,6 +18,7 @@ import {
   listAdAccounts,
   setAdAccountSelection,
   type ConnectInput,
+  type DentallySyncResource,
 } from './api';
 
 export function useIntegrations() {
@@ -65,8 +67,10 @@ export function useSyncIntegration() {
   const qc = useQueryClient();
   return useMutation({
     // full=true re-pulls the whole window (backfill after mapping practices).
-    mutationFn: ({ provider, full = false }: { provider: string; full?: boolean }) =>
-      syncIntegration(provider, full),
+    // resources scopes the pull to specific Dentally collections (e.g. patients
+    // only); omitted = pull everything.
+    mutationFn: ({ provider, full = false, resources }: { provider: string; full?: boolean; resources?: DentallySyncResource[] }) =>
+      syncIntegration(provider, full, resources),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['integrations'] });
       // Synced rows feed these screens — refresh them after a pull.
@@ -75,6 +79,15 @@ export function useSyncIntegration() {
       qc.invalidateQueries({ queryKey: ['payments'] });
       qc.invalidateQueries({ queryKey: ['payment-summary'] });
     },
+  });
+}
+
+// Global "Refresh all" — fires an incremental pull across every connected
+// provider. Pulls run fire-and-forget server-side, so the caller is responsible
+// for refreshing data surfaces after a settle delay (see GlobalRefresh).
+export function useSyncAll() {
+  return useMutation({
+    mutationFn: () => syncAllIntegrations(),
   });
 }
 

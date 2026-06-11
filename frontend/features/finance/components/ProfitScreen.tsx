@@ -49,21 +49,44 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
 export default function ProfitScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const rangeActive = !!(range.from && range.to);
+  // Two series. The filtered window drives the chart + monthly breakdown. The
+  // fixed last-12-months series drives the KPI cards, so "Annual revenue",
+  // "Avg monthly revenue" and "This month" do NOT shift when a date filter is
+  // applied — they always reflect the rolling year / current month.
   const { data, isLoading, isError } = useFinanceSeries(practiceId, range);
+  const { data: annualData, isLoading: annualLoading } = useFinanceSeries(practiceId, null);
   const [plModalOpen, setPlModalOpen] = useState(false);
   const basisLabel = BASIS_LABEL[data?.basis ?? 'revenue-only'] ?? BASIS_LABEL['revenue-only'];
+
+  const ZERO = { revenue: 0, associate_pay: 0, staff_costs: 0, lab_materials: 0, opex: 0, profit: 0 };
+
+  // Filtered window — chart + monthly breakdown table.
   const series = data?.months ?? [];
   const costsAvailable = !!data?.costsAvailable;
   const hasData = series.length > 0;
-  const annual = hasData
-    ? annualTotal(series)
-    : { revenue: 0, associate_pay: 0, staff_costs: 0, lab_materials: 0, opex: 0, profit: 0 };
-  // The series is real revenue per month; "has revenue" drives the empty state
-  // (a 12-month window of all-zero months means no real settled payments).
+  const filteredTotal = hasData ? annualTotal(series) : ZERO;
+  const filteredHasRevenue = filteredTotal.revenue > 0;
+  const filteredMargin =
+    filteredTotal.revenue > 0
+      ? ((filteredTotal.profit / filteredTotal.revenue) * 100).toFixed(1)
+      : '0';
+
+  // Fixed last-12-months — KPI cards (independent of the date filter).
+  const annualSeries = annualData?.months ?? [];
+  const annualCostsAvailable = !!annualData?.costsAvailable;
+  const annual = annualSeries.length ? annualTotal(annualSeries) : ZERO;
+  // "has revenue" over the rolling year drives the page-level empty state.
   const hasRevenue = annual.revenue > 0;
-  const latest = hasData ? series[series.length - 1] : null;
+  // "This month" = latest month of the fixed rolling series (current month).
+  const latest = annualSeries.length ? annualSeries[annualSeries.length - 1] : null;
   const annualMargin =
     annual.revenue > 0 ? ((annual.profit / annual.revenue) * 100).toFixed(1) : '0';
+  // Avg monthly = rolling-year revenue spread across the months that actually
+  // have revenue (so a partial-year practice isn't divided by a flat 12).
+  const revenueMonths = annualSeries.filter((m) => m.revenue > 0).length;
+  const avgMonthlyRevenue = revenueMonths > 0 ? Math.round(annual.revenue / revenueMonths) : 0;
+
   const chartData = series.map((m) => ({
     month: monthShort(m.month),
     Revenue: m.revenue,
@@ -88,15 +111,17 @@ export default function ProfitScreen() {
       .join('');
     const html = `<!doctype html><html><head><meta charset=utf-8><title>P&L — ${new Date().toLocaleDateString(
       'en-GB',
-    )}</title><style>body{font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:32px}h1{font-size:20px;margin:0}.sub{color:var(--ink-muted);font-size:11px;margin:4px 0 20px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 10px;border-bottom:1px solid var(--border);text-align:left}.r{text-align:right}tfoot td{font-weight:700;border-top:2px solid #1F2937}.f{color:#9CA3AF;font-size:10px;margin-top:18px}@media print{body{margin:14mm}}</style></head><body><h1>Profit &amp; Loss</h1><div class=sub>12-month rolling P&amp;L · ${esc(basisLabel)} · ${esc(
+    )}</title><style>body{font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:#1F2937;margin:32px}h1{font-size:20px;margin:0}.sub{color:var(--ink-muted);font-size:11px;margin:4px 0 20px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 10px;border-bottom:1px solid var(--border);text-align:left}.r{text-align:right}tfoot td{font-weight:700;border-top:2px solid #1F2937}.f{color:#9CA3AF;font-size:10px;margin-top:18px}@media print{body{margin:14mm}}</style></head><body><h1>Profit &amp; Loss</h1><div class=sub>${
+      rangeActive ? `${esc(range.from!)} to ${esc(range.to!)}` : '12-month rolling'
+    } P&amp;L · ${esc(basisLabel)} · ${esc(
       new Date().toLocaleString('en-GB'),
     )}</div><table><thead><tr><th>Month</th><th class=r>Revenue</th><th class=r>Associate</th><th class=r>Staff</th><th class=r>Lab/mat</th><th class=r>OpEx</th><th class=r>Profit</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td>TOTAL</td><td class=r>${poundsCompact(
-      annual.revenue,
-    )}</td><td class=r>${poundsCompact(annual.associate_pay)}</td><td class=r>${poundsCompact(
-      annual.staff_costs,
-    )}</td><td class=r>${poundsCompact(annual.lab_materials)}</td><td class=r>${poundsCompact(
-      annual.opex,
-    )}</td><td class=r>${poundsCompact(annual.profit)}</td></tr></tfoot></table><div class=f>Elevate Dental OS — baseline-derived projection, not financial advice.</div></body></html>`;
+      filteredTotal.revenue,
+    )}</td><td class=r>${poundsCompact(filteredTotal.associate_pay)}</td><td class=r>${poundsCompact(
+      filteredTotal.staff_costs,
+    )}</td><td class=r>${poundsCompact(filteredTotal.lab_materials)}</td><td class=r>${poundsCompact(
+      filteredTotal.opex,
+    )}</td><td class=r>${poundsCompact(filteredTotal.profit)}</td></tr></tfoot></table><div class=f>Elevate Dental OS — baseline-derived projection, not financial advice.</div></body></html>`;
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(html);
@@ -197,33 +222,51 @@ export default function ProfitScreen() {
       <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <Kpi
           label="Annual revenue"
-          value={isLoading ? '…' : poundsCompact(annual.revenue)}
+          value={annualLoading ? '…' : poundsCompact(annual.revenue)}
           delta="Real · last 12 months"
         />
         <Kpi
           label="Annual profit"
-          value={isLoading ? '…' : poundsCompact(annual.profit)}
-          delta={costsAvailable ? `${annualMargin}% margin` : 'no cost data (£0)'}
+          value={annualLoading ? '…' : poundsCompact(annual.profit)}
+          delta={annualCostsAvailable ? `${annualMargin}% margin` : 'no cost data (£0)'}
         />
         <Kpi
           label="Avg monthly revenue"
-          value={isLoading ? '…' : poundsCompact(Math.round(annual.revenue / 12))}
+          value={annualLoading ? '…' : poundsCompact(avgMonthlyRevenue)}
+          delta={revenueMonths > 0 ? `over ${revenueMonths} mo with revenue` : undefined}
         />
         <Kpi
-          label="This month"
-          value={isLoading ? '…' : poundsCompact(latest?.revenue ?? 0)}
+          label={rangeActive ? 'Selected period' : 'This month'}
+          value={
+            rangeActive
+              ? isLoading
+                ? '…'
+                : poundsCompact(filteredTotal.revenue)
+              : annualLoading
+                ? '…'
+                : poundsCompact(latest?.revenue ?? 0)
+          }
+          delta={
+            rangeActive
+              ? series.length === 1
+                ? monthLabel(series[0].month)
+                : `${series.length} months`
+              : latest
+                ? monthLabel(latest.month)
+                : undefined
+          }
         />
       </div>
 
       <div className="card-padded mb-4">
         <h2 className="display text-lg font-semibold mb-5">
-          Revenue &amp; profit — last 12 months
+          Revenue &amp; profit — {rangeActive ? 'selected period' : 'last 12 months'}
         </h2>
         {isLoading ? (
           <Skeleton className="w-full" style={{ height: 240 }} />
-        ) : !hasRevenue ? (
+        ) : !filteredHasRevenue ? (
           <div className="text-ink-muted" style={{ fontSize: 13, padding: '60px 0' }}>
-            No settled payments in the last 12 months
+            No settled payments in {rangeActive ? 'the selected period' : 'the last 12 months'}
             {practiceId ? ' for this practice.' : '.'}
           </div>
         ) : (
@@ -317,31 +360,33 @@ export default function ProfitScreen() {
                   );
                 })}
               <tr className="bg-bg font-bold">
-                <td style={{ padding: '10px 24px' }}>TOTAL (12mo)</td>
-                <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {poundsCompact(annual.revenue)}
+                <td style={{ padding: '10px 24px' }}>
+                  {rangeActive ? `TOTAL (${series.length}mo selected)` : 'TOTAL (12mo)'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {costsAvailable ? poundsCompact(annual.associate_pay) : '—'}
+                  {poundsCompact(filteredTotal.revenue)}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {costsAvailable ? poundsCompact(annual.staff_costs) : '—'}
+                  {costsAvailable ? poundsCompact(filteredTotal.associate_pay) : '—'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {costsAvailable ? poundsCompact(annual.lab_materials) : '—'}
+                  {costsAvailable ? poundsCompact(filteredTotal.staff_costs) : '—'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 16px' }}>
-                  {costsAvailable ? poundsCompact(annual.opex) : '—'}
+                  {costsAvailable ? poundsCompact(filteredTotal.lab_materials) : '—'}
+                </td>
+                <td className="text-right" style={{ padding: '10px 16px' }}>
+                  {costsAvailable ? poundsCompact(filteredTotal.opex) : '—'}
                 </td>
                 <td
                   className={`text-right ${costsAvailable ? '' : 'text-ink-muted'}`}
                   style={{ padding: '10px 16px', color: costsAvailable ? 'var(--success)' : undefined }}
                 >
-                  {costsAvailable ? poundsCompact(annual.profit) : '—'}
+                  {costsAvailable ? poundsCompact(filteredTotal.profit) : '—'}
                 </td>
                 <td className="text-right" style={{ padding: '10px 24px' }}>
                   {costsAvailable ? (
-                    <span className="chip chip-emerald">{annualMargin}%</span>
+                    <span className="chip chip-emerald">{filteredMargin}%</span>
                   ) : (
                     <span className="text-ink-muted">—</span>
                   )}

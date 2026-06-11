@@ -7,6 +7,12 @@ export const appointmentListQuerySchema = zod_1.z.object({
     to: zod_1.z.string().optional(),
     practice_id: zod_1.z.string().uuid().optional(),
     associate_id: zod_1.z.string().uuid().optional(),
+    // Patient appointments only (default). Dentally also syncs patient-less diary
+    // blocks (lunch / not-working / nurse-cover / empty slots) which carry no
+    // pms_patient_id; excluding them keeps the list to real, named appointments —
+    // same convention as the occurred-appointment rollup (migration 000076). Pass
+    // patients_only=false to include diary blocks.
+    patients_only: zod_1.z.enum(['true', 'false']).optional().default('true'),
     // Pagination. Query params arrive as strings, so coerce; default 25/page.
     page: zod_1.z.coerce.number().int().min(1).optional().default(1),
     per_page: zod_1.z.coerce.number().int().min(1).max(100).optional().default(25),

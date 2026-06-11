@@ -11,7 +11,7 @@ export const associateRepository = {
     async list(orgId, practiceId) {
         let query = supabase_1.serviceClient
             .from('associates')
-            .select('id, full_name, pay_pct, joined_date, active, primary_practice_id, practice:practices!associates_primary_practice_id_fkey(name)')
+            .select('id, full_name, pay_pct, joined_date, active, pms_user_id, gdc_number, colour, dentally_role, uda_target, primary_practice_id, practice:practices!associates_primary_practice_id_fkey(name)')
             .eq('organisation_id', orgId)
             .order('full_name', { ascending: true });
         if (practiceId) query = query.eq('primary_practice_id', practiceId);
@@ -32,6 +32,27 @@ export const associateRepository = {
             return map;
         }
         return this._statsFallback(orgId, since);
+    },
+
+    // Per-associate production (invoice_items) + UDA/conversion (treatment_plans)
+    // over the window, in one RPC. Empty Map when PMS data is gated/absent. No JS
+    // fallback: both source tables are Dentally-only, so a missing RPC -> no money
+    // metrics rather than a wrong guess.
+    async metricsByAssociate(orgId, since) {
+        if (await pmsHidden(orgId)) return new Map();
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('associate_metrics', { p_org: orgId, p_since: since });
+        if (error || !Array.isArray(data)) return new Map();
+        const map = new Map();
+        for (const r of data) {
+            map.set(r.associate_id, {
+                production_pence: Number(r.production_pence) || 0,
+                uda_delivered: Number(r.uda_delivered) || 0,
+                plans_total: Number(r.plans_total) || 0,
+                plans_completed: Number(r.plans_completed) || 0,
+            });
+        }
+        return map;
     },
 
     async _statsFallback(orgId, since) {

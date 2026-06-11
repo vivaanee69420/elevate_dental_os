@@ -16,7 +16,14 @@ const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion:
 function parseDentallyEvent(body) {
     const ev = String(body.event ?? body.topic ?? body.resource_type ?? body.type ?? '').toLowerCase();
     let resourceType = null;
-    if (ev.includes('appointment')) resourceType = 'appointment';
+    // Order matters: the most specific labels first. 'invoice_item' contains
+    // 'invoice', and a treatment-plan event must not be eaten by 'payment'/etc.
+    // These feed REAL fee + production data (invoice_items = per-treatment fees,
+    // treatment_plans = associate production) that the daily poll alone carried.
+    if (ev.includes('invoice_item') || ev.includes('invoice item')) resourceType = 'invoice_item';
+    else if (ev.includes('invoice')) resourceType = 'invoice';
+    else if (ev.includes('treatment_plan') || ev.includes('treatment plan')) resourceType = 'treatment_plan';
+    else if (ev.includes('appointment')) resourceType = 'appointment';
     else if (ev.includes('payment')) resourceType = 'payment';
     else if (ev.includes('patient')) resourceType = 'patient';
     const data = body.data ?? body.payload ?? body.resource ?? body.record ?? null;

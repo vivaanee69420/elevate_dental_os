@@ -77,6 +77,29 @@ describe('applyWebhookEvent — single record upsert', () => {
     expect(r).toEqual({ table: 'contacts', applied: 1 });
   });
 
+  it('patient webhook scopes relink to its OWN orphan appointments (no full-table relink)', async () => {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'practices') return { data: [{ id: 'p1', pms_site_id: '5' }], error: null };
+      if (q.table === 'contacts' && q.op === 'select') return { data: { id: 'c1' }, error: null };
+      return { data: [], error: null };
+    };
+    const r = await applyWebhookEvent(ORG, 'patient', { id: 7, site_id: 5, first_name: 'A' });
+    expect(r).toEqual({ table: 'contacts', applied: 1 });
+    // Last DB op is a scoped UPDATE on appointments — keyed to this patient,
+    // guarded to orphan rows only. No RPC, no full-table relink.
+    expect(supaRec.last).toMatchObject({ table: 'appointments', op: 'update', updateVals: { contact_id: 'c1' } });
+    expect(supaRec.last.eqs).toEqual(expect.arrayContaining([{ col: 'pms_patient_id', val: '7' }]));
+    expect(supaRec.last.iss).toEqual([{ col: 'contact_id', val: null }]);
+  });
+
+  it('patient webhook with no orphan contact resolved does not UPDATE appointments', async () => {
+    // contacts select returns nothing -> early return, last op stays the upsert.
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', pms_site_id: '5' }], error: null } : { data: [], error: null };
+    await applyWebhookEvent(ORG, 'patient', { id: 7, site_id: 5, first_name: 'A' });
+    expect(supaRec.last).not.toMatchObject({ table: 'appointments', op: 'update' });
+  });
+
   it('appointment with unmapped practice is skipped', async () => {
     supaRec.resultProvider = () => ({ data: [], error: null }); // empty siteMap
     const r = await applyWebhookEvent(ORG, 'appointment', { id: 1, site_id: 99, patient_id: 7 });
@@ -85,6 +108,69 @@ describe('applyWebhookEvent — single record upsert', () => {
 
   it('ignores a record with no id', async () => {
     expect(await applyWebhookEvent(ORG, 'patient', {})).toEqual({ ignored: 'no_record_id' });
+  });
+
+  it('invoice → invoices upsert AND persists embedded line items', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices'
+        ? { data: [{ id: 'p1', pms_site_id: '5' }], error: null }
+        : { data: [], error: null };
+    const r = await applyWebhookEvent(ORG, 'invoice', {
+      id: 100, site_id: 5, patient_id: 7, dated_on: '2026-01-01', paid: true,
+      invoice_items: [{ id: 201, name: 'Crown', item_price: '500.00', total_price: '500.00', quantity: 1 }],
+    });
+    expect(r).toMatchObject({ table: 'invoices', applied: 1, invoice_items: 1 });
+  });
+
+  it('standalone invoice_item resolves parent context from the invoices table', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'invoices'
+        ? { data: [{ external_id: '100', practice_id: 'p1', contact_id: 'c1', dated_on: '2026-01-01', paid: true }], error: null }
+        : { data: [], error: null };
+    const r = await applyWebhookEvent(ORG, 'invoice_item', {
+      id: 201, invoice_id: 100, name: 'Crown', item_price: '500.00', total_price: '500.00', quantity: 1,
+    });
+    expect(r).toEqual({ table: 'invoice_items', applied: 1 });
+  });
+
+  it('treatment_plan → treatment_plans upsert (associate production)', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    const r = await applyWebhookEvent(ORG, 'treatment_plan', {
+      id: 301, practitioner_id: 11, patient_id: 7, private_treatment_value: '1200.00', completed: true,
+    });
+    expect(r).toEqual({ table: 'treatment_plans', applied: 1 });
+  });
+});
+
+describe('parseDentallyEvent — resource classification (via webhookService)', () => {
+  const SECRET = 'topsecret-key';
+  const sign = (raw) => crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
+  beforeEach(() => {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'integrations')
+        return { data: { status: 'active', config: { webhook_secret: SECRET } }, error: null };
+      if (q.table === 'practices')
+        return { data: [{ id: 'p1', pms_site_id: '5' }], error: null };
+      return { data: [], error: null };
+    };
+  });
+  const fire = async (event, data) => {
+    const token = signWebhookToken(ORG);
+    const raw = Buffer.from(JSON.stringify({ event, data }));
+    return webhookService.dentally(token, raw, sign(raw));
+  };
+
+  it('classifies invoice_item BEFORE invoice (substring trap)', async () => {
+    const r = await fire('invoice_item.created', { id: 201, invoice_id: 100 });
+    expect(r).toMatchObject({ resourceType: 'invoice_item' });
+  });
+  it('classifies a plain invoice event', async () => {
+    const r = await fire('invoice.updated', { id: 100, site_id: 5 });
+    expect(r).toMatchObject({ resourceType: 'invoice' });
+  });
+  it('classifies treatment_plan (not eaten by payment/patient)', async () => {
+    const r = await fire('treatment_plan.completed', { id: 301, practitioner_id: 11 });
+    expect(r).toMatchObject({ resourceType: 'treatment_plan' });
   });
 });
 

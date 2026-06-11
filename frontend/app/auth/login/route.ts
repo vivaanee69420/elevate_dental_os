@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     if (error) {
       return NextResponse.json({ error: 'Sign in failed' }, { status: 401 });
     }
-    return NextResponse.json({ success: true, redirect: '/dashboard' });
+    return NextResponse.json({ success: true, redirect: '/business-hub' });
   }
 
   // Only a plain 401 (unknown / wrong tenant credentials) is ambiguous enough

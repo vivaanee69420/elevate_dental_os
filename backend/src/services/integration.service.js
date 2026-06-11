@@ -31,6 +31,11 @@ const ON_DEMAND_SYNCERS = {
     gohighlevel: gohighlevel_sync_1.syncOneOrg,
 };
 
+// Providers the global "Refresh all" button pulls — Dentally, GoHighLevel,
+// Google Ads, Meta Ads, QuickBooks. Always INCREMENTAL (latest data only, never
+// a full/historical backfill).
+const REFRESH_ALL_PROVIDERS = ['dentally', 'gohighlevel', 'google_ads', 'meta_ads', 'quickbooks'];
+
 export const integrationService = {
     async list(orgId) {
         const connected = await integration_repository_1.integrationRepository.list(orgId);
@@ -100,7 +105,7 @@ export const integrationService = {
     // On-demand pull for a connected provider (Refresh button + first-connect).
     // full=true ignores the incremental cursor (re-pulls the default window) so a
     // backfill after mapping practices re-pulls previously-skipped rows.
-    async syncNow(orgId, provider, { full = false } = {}) {
+    async syncNow(orgId, provider, { full = false, resources = null } = {}) {
         const syncer = ON_DEMAND_SYNCERS[provider];
         if (!syncer)
             throw new errors_1.AppError(`Provider ${provider} does not support on-demand sync`, 400);
@@ -127,13 +132,32 @@ export const integrationService = {
         // Reset page/totalPages too so a new run never briefly shows the prior run's page number.
         setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null, page: 0, totalPages: null });
         try {
-            const result = await syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }), { full });
+            const result = await syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }), { full, resources });
             setProgress(orgId, provider, { running: false, pct: 100, done: true });
             return { ok: true, provider, full, ...result };
         } catch (err) {
             setProgress(orgId, provider, { running: false, done: true, error: err.message });
             throw err;
         }
+    },
+    // Global "Refresh all": fire an INCREMENTAL pull (full=false) for every
+    // connected provider in REFRESH_ALL_PROVIDERS. Fire-and-forget per provider —
+    // each streams its own progress + stamps last_sync_at; syncNow's concurrency
+    // guard skips any provider already mid-sync. Never backfills.
+    async syncAll(orgId) {
+        const connected = await integration_repository_1.integrationRepository.list(orgId);
+        const targets = connected.filter(
+            (i) => i.status === 'active'
+                && REFRESH_ALL_PROVIDERS.includes(i.provider)
+                && ON_DEMAND_SYNCERS[i.provider],
+        );
+        const started = [];
+        for (const row of targets) {
+            this.syncNow(orgId, row.provider, { full: false })
+                .catch((err) => console.error(`[integrations] refresh-all ${row.provider} failed:`, err?.message || err));
+            started.push(row.provider);
+        }
+        return { started };
     },
     // Dentally first-connect automation: detect sites -> auto-create+map
     // practices -> pull the recent window, as ONE sequential run sharing the

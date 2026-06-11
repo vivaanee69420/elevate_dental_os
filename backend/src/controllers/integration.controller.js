@@ -66,12 +66,19 @@ export const integrationController = {
     // live percentage and the syncer stamps last_sync_at/last_error on the row.
     async sync(req, res) {
         const { provider } = providerParamSchema.parse(req.params);
-        const { full: bodyFull } = integration_model_1.syncBodySchema.parse(req.body ?? {});
+        const { full: bodyFull, resources } = integration_model_1.syncBodySchema.parse(req.body ?? {});
         const full = req.query.full === 'true' || bodyFull === true;
         const { organisation_id } = req.user;
-        integration_service_1.integrationService.syncNow(organisation_id, provider, { full })
+        integration_service_1.integrationService.syncNow(organisation_id, provider, { full, resources: resources ?? null })
             .catch((err) => console.error(`[integrations] sync ${provider} failed:`, err?.message || err));
-        res.json({ started: true, provider, full });
+        res.json({ started: true, provider, full, resources: resources ?? null });
+    },
+    // Global "Refresh all" — fire an incremental pull for every connected
+    // provider (Dentally, GHL, Google/Meta Ads, QuickBooks). Fire-and-forget:
+    // returns the providers that started; the UI polls per-provider progress.
+    async syncAll(req, res) {
+        const { started } = await integration_service_1.integrationService.syncAll(req.user.organisation_id);
+        res.json({ started });
     },
     // Live progress of the running/last sync (in-memory). Polled by the UI bar.
     async syncProgress(req, res) {

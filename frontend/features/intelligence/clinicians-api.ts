@@ -15,6 +15,7 @@ export interface Clinician {
   active: boolean;
   payPct: number;
   labSplitPct: number;
+  payDefault: boolean;
   productionPence: number;
   feesPence: number;
   netToPracticePence: number;
@@ -45,6 +46,7 @@ export interface Clinicians {
   window?: { since: string; until: string; label: string };
   productionAvailable: boolean;
   appointmentsAvailable: boolean;
+  payTermsEstimated: boolean;
   clinicians: Clinician[];
   totalProductionPence: number;
   totalFeesPence: number;
@@ -59,7 +61,7 @@ export interface Clinicians {
 }
 
 const EMPTY: Omit<Clinicians, 'applicable' | 'scope'> = {
-  productionAvailable: false, appointmentsAvailable: false, clinicians: [],
+  productionAvailable: false, appointmentsAvailable: false, payTermsEstimated: false, clinicians: [],
   totalProductionPence: 0, totalFeesPence: 0, totalNetPence: 0,
   nhs: { available: false, completedAvailable: false, practices: [] }, insights: [],
 };

@@ -297,6 +297,43 @@ router.get('/practice-patients', (0, async_handler_1.asyncHandler)(async (req, r
     });
 }));
 
+// Single patient detail — full contact row + the curated Dentally patient blob
+// (migration 000082). Backs the patient detail dialog. Org-scoped + type-gated
+// so this can only ever return a patient belonging to the caller's org.
+router.get('/practice-patients/:id', (0, async_handler_1.asyncHandler)(async (req, res) => {
+    const orgId = req.user.organisation_id;
+    const id = String(req.params.id ?? '');
+    if (!UUID_RE.test(id)) throw new AppError('patient id must be a UUID', 400);
+    const { data } = await supabase_1.serviceClient
+        .from('contacts')
+        .select('id, first_name, last_name, email, phone, date_of_birth, address, postcode, source, pms_external_id, last_visit_date, next_recall_date, created_at, pms_patient, practice_id')
+        .eq('organisation_id', orgId)
+        .eq('type', 'patient')
+        .eq('id', id)
+        .maybeSingle();
+    if (!data) throw new AppError('patient not found', 404);
+    res.json({
+        id: data.id,
+        name: [data.first_name, data.last_name].filter(Boolean).join(' ') || null,
+        first_name: data.first_name ?? null,
+        last_name: data.last_name ?? null,
+        email: data.email ?? null,
+        phone: data.phone ?? null,
+        date_of_birth: data.date_of_birth ?? null,
+        address: data.address ?? null,
+        postcode: data.postcode ?? null,
+        source: data.source ?? null,
+        pms_external_id: data.pms_external_id ?? null,
+        last_visit_date: data.last_visit_date ?? null,
+        next_recall_date: data.next_recall_date ?? null,
+        created_at: data.created_at,
+        practice_id: data.practice_id ?? null,
+        // Full Dentally detail (null for non-Dentally contacts or patients not
+        // yet re-synced since migration 000082 landed).
+        detail: data.pms_patient ?? null,
+    });
+}));
+
 router.get('/booking', (0, async_handler_1.asyncHandler)(async (req, res) => {
     const orgId = req.user.organisation_id;
     const { fromISO, toISO } = resolveWindow(req.query);

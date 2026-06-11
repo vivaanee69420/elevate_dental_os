@@ -56,7 +56,7 @@ export async function middleware(req: NextRequest) {
     return NextResponse.redirect(new URL('/login', req.url));
   }
   if (session && isAuthPage) {
-    return NextResponse.redirect(new URL('/dashboard', req.url));
+    return NextResponse.redirect(new URL('/business-hub', req.url));
   }
 
   // NOTE: per-route permission enforcement is NOT done here. A blocking

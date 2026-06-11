@@ -29,6 +29,9 @@ export const treatmentRepository = {
                 .from('appointments')
                 .select('appointment_type')
                 .eq('organisation_id', orgId)
+                // With-patients only — matches appointments_rollup_by_practice
+                // (000076) so the Treatments screen agrees with the Business Hub.
+                .not('pms_patient_id', 'is', null)
                 .gte('starts_at', since);
             if (until) query = query.lte('starts_at', until);
             if (practiceId) query = query.eq('practice_id', practiceId);

@@ -16,7 +16,17 @@ import {
   useSyncIntegration,
   useFinishSync,
 } from '../hooks';
+import type { DentallySyncResource } from '../api';
 import SyncOverlay from './SyncOverlay';
+
+// Selectable Dentally collections for a scoped backfill. Order = pull order.
+const SYNC_RESOURCES: { key: DentallySyncResource; label: string }[] = [
+  { key: 'patients', label: 'Patients' },
+  { key: 'appointments', label: 'Appointments' },
+  { key: 'payments', label: 'Payments' },
+  { key: 'treatment_plans', label: 'Treatment plans' },
+  { key: 'invoices', label: 'Invoices' },
+];
 
 function Row({ id, name, current }: { id: string; name: string; current: string | null }) {
   const save = useSetPracticeSiteId();
@@ -61,14 +71,35 @@ export default function DentallyPracticeMapping() {
   const sync = useSyncIntegration();
   const finishSync = useFinishSync();
   const [syncing, setSyncing] = useState(false);
+  // Which collections to pull. Default = all (the full backfill). Untick the
+  // heavy ones (payments/invoices) for a fast, scoped pull — e.g. patients only.
+  const [selected, setSelected] = useState<Set<DentallySyncResource>>(
+    () => new Set(SYNC_RESOURCES.map((r) => r.key)),
+  );
   const practices = data?.practices ?? [];
   const unmapped = practices.filter((p) => !p.pms_site_id).length;
+  const allSelected = selected.size === SYNC_RESOURCES.length;
 
-  // Pull all history (full backfill). The on-connect pull only fetches the last
-  // 24 months; this re-pulls everything for practices that want the full record.
+  function toggle(key: DentallySyncResource) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  // Pull history (full backfill), scoped to the ticked collections. The
+  // on-connect pull only fetches the last 24 months; this re-pulls everything.
+  // When everything is ticked we send no `resources` so the backend takes the
+  // unscoped path (keeps its mid-backfill resume checkpoint); a partial pick
+  // sends the explicit list.
   async function pullFullHistory() {
+    if (!selected.size) return;
     setSyncing(true);
-    await sync.mutateAsync({ provider: 'dentally', full: true });
+    const resources = allSelected
+      ? undefined
+      : SYNC_RESOURCES.map((r) => r.key).filter((k) => selected.has(k));
+    await sync.mutateAsync({ provider: 'dentally', full: true, resources });
   }
 
   return (
@@ -93,20 +124,40 @@ export default function DentallyPracticeMapping() {
         )}
       </p>
 
+      <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        {SYNC_RESOURCES.map((r) => (
+          <label
+            key={r.key}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer' }}
+          >
+            <input
+              type="checkbox"
+              checked={selected.has(r.key)}
+              disabled={syncing}
+              onChange={() => toggle(r.key)}
+            />
+            {r.label}
+          </label>
+        ))}
+      </div>
+
       <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
           onClick={pullFullHistory}
-          disabled={syncing}
+          disabled={syncing || selected.size === 0}
           style={{
             padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
             border: 'none', background: 'var(--brand)', color: 'white',
-            cursor: syncing ? 'default' : 'pointer',
+            cursor: syncing || selected.size === 0 ? 'default' : 'pointer',
+            opacity: selected.size === 0 ? 0.6 : 1,
           }}
         >
-          {syncing ? 'Pulling…' : 'Pull full history'}
+          {syncing ? 'Pulling…' : allSelected ? 'Pull full history' : 'Pull selected'}
         </button>
         <span className="text-ink-muted" style={{ fontSize: 11 }}>
-          Optional — pulls all-time data, can take a few minutes.
+          {allSelected
+            ? 'Optional — pulls all-time data, can take a few minutes.'
+            : 'Pulls only the ticked collections — faster than a full backfill.'}
         </span>
       </div>
 

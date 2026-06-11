@@ -6,19 +6,31 @@
 // intentionally dropped here — CRM/lead concepts, not PMS data.
 //
 // Clicking a practice name expands its full patient roster (paginated, from
-// GET /api/growth/practice-patients). Filters mirror finance: PracticeTabs +
-// DateRangeFilter.
+// GET /api/growth/practice-patients). Scope + period come from the global
+// ScopePeriod context (ScopePeriodBar), same as the Business Hub / analytics
+// views — a specific practice narrows to one card; the period sets the window.
 //
 // Data flow:
+//   useScopePeriod() ──> scope (practiceId) + win ──> {from,to} day window
 //   usePracticePerformance(practiceId, range) ──> one card per practice ──> 4-up grid
 //   usePracticePatients(practiceId, page)      ──> expandable patient table
 
 import { useState } from 'react';
 import { Card, Chip, Skeleton, SkeletonKpiRow } from '@/components/ui';
 import { formatPence } from '@/lib/format';
-import PracticeTabs from '@/features/practices/PracticeTabs';
-import DateRangeFilter, { type DateRange } from '@/features/finance/components/DateRangeFilter';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { useScopePeriod, type ResolvedWindow } from '@/features/_shared/scope-context';
 import { usePracticePerformance, usePracticePatients } from '../hooks';
+import PatientDetailModal from './PatientDetailModal';
+
+// The growth endpoint takes from/to as inclusive YYYY-MM-DD days; the global
+// window is [since, until) ISO instants. until is exclusive (start of next day),
+// so the inclusive last day = until - 1 day.
+function winToRange(win: ResolvedWindow): { from: string; to: string } {
+  const from = win.since.slice(0, 10);
+  const to = new Date(Date.parse(win.until) - 86_400_000).toISOString().slice(0, 10);
+  return { from, to };
+}
 
 const PATIENTS_PER_PAGE = 10;
 
@@ -41,6 +53,7 @@ function Metric({ label, value, brand }: { label: string; value: string; brand?:
  * its page state resets when a different practice is opened. */
 function PracticePatients({ practiceId }: { practiceId: string }) {
   const [page, setPage] = useState(1);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const { data, isLoading } = usePracticePatients(practiceId, page, PATIENTS_PER_PAGE);
   const patients = data?.patients ?? [];
   const total = data?.total ?? 0;
@@ -74,7 +87,20 @@ function PracticePatients({ practiceId }: { practiceId: string }) {
             <tr><td className="p-2 text-ink-muted" colSpan={4}>No patients for this practice.</td></tr>
           )}
           {patients.map((pt) => (
-            <tr key={pt.id} className="border-b border-border">
+            <tr
+              key={pt.id}
+              className="border-b border-border hover:bg-bg"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setSelectedId(pt.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelectedId(pt.id);
+                }
+              }}
+            >
               <td className="p-2 font-semibold">
                 {pt.name ?? <span className="text-ink-muted">Unknown</span>}
               </td>
@@ -113,18 +139,22 @@ function PracticePatients({ practiceId }: { practiceId: string }) {
           </span>
         </div>
       )}
+
+      <PatientDetailModal patientId={selectedId} onClose={() => setSelectedId(null)} />
     </div>
   );
 }
 
 /** Practices & Patients screen: a stack of per-practice performance cards. */
 export default function PatientsScreen() {
-  const [practiceId, setPracticeId] = useState<string | null>(null);
-  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const { scope, win } = useScopePeriod();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // 'all'/'practices' => every practice (null filter); otherwise scope is a practiceId.
+  const practiceId = scope === 'all' || scope === 'practices' ? null : scope;
+  const range = winToRange(win);
   const { data, isLoading, error } = usePracticePerformance(practiceId, range);
   const practices = data?.practices ?? [];
-  const windowLabel = range.from && range.to ? `${range.from} → ${range.to}` : 'Last 30 days';
+  const windowLabel = win.label;
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -135,8 +165,7 @@ export default function PatientsScreen() {
         </p>
       </div>
 
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
-      <DateRangeFilter value={range} onChange={setRange} />
+      <ScopePeriodBar />
 
       {isLoading && <SkeletonKpiRow count={4} className="mb-4" />}
       {error && (

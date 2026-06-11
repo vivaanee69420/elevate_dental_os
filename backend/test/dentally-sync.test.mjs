@@ -352,6 +352,34 @@ describe('syncOneOrg', () => {
         vi.useRealTimers();
     });
 
+    it('selective resources pulls ONLY the named collections, skipping the rest', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        const pageOneHits = {};
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            const seg = u.pathname.split('/').pop();
+            if (u.searchParams.get('page') === '1') pageOneHits[seg] = (pageOneHits[seg] ?? 0) + 1;
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-01-01T00:00:00Z' }, () => {}, {
+            full: true,
+            resources: ['patients'],
+        });
+        // patients selected -> up-front probe (1) + real pull (1) = 2 page-1 hits.
+        expect(pageOneHits['patients']).toBe(2);
+        // Every unselected heavy collection is neither probed nor pulled: the
+        // whole point — a patients-only run never touches payments/invoices.
+        expect(pageOneHits['payments'] ?? 0).toBe(0);
+        expect(pageOneHits['appointments'] ?? 0).toBe(0);
+        expect(pageOneHits['invoices'] ?? 0).toBe(0);
+        expect(pageOneHits['invoice_items'] ?? 0).toBe(0);
+        expect(pageOneHits['treatment_plans'] ?? 0).toBe(0);
+        // practitioners feed appointment/treatment resolution only -> skipped too.
+        expect(pageOneHits['practitioners'] ?? 0).toBe(0);
+    });
+
     it('maps + upserts with practice resolution and skips unmatched-practice rows', async () => {
         const queries = [];
         supaRec.resultProvider = (q) => {

@@ -144,6 +144,63 @@ export const analyticsRepository = {
         // integration id: 'google_ads' | 'meta_ads'). Manual rows have neither.
         return (data || []).filter((r) => !revoked.has(r.provider));
     },
+    // Real ad-platform leads (ad_metrics.conversions) summed by provider in the
+    // window. Powers the Business Hub "Leads" KPI: Google + Meta report lead-form
+    // / pixel conversions even when the CRM `leads` table is empty. Revoked
+    // providers are hidden (same rule as adMetricsInWindow). Whole-org (no
+    // practice/account filter) — the group Leads card is not account-scoped.
+    // Returns Map<provider, conversions>.
+    async adLeadsByProvider(orgId, fromDate, toDate) {
+        const revoked = await revokedProviders(orgId);
+        const { data, error } = await supabase_1.serviceClient
+            .from('ad_metrics')
+            .select('provider, conversions')
+            .eq('organisation_id', orgId)
+            .gte('metric_date', fromDate)
+            .lte('metric_date', toDate)
+            .limit(LIMIT_GUARD);
+        if (error) throw new Error(error.message);
+        const by = new Map();
+        for (const r of (data || [])) {
+            if (revoked.has(r.provider)) continue;
+            by.set(r.provider, (by.get(r.provider) || 0) + (r.conversions || 0));
+        }
+        return by;
+    },
+    // New patients in the window, PER PRACTICE — patients whose Dentally
+    // registration date (contacts.pms_registered_at, the "joined" date) falls in
+    // the window, grouped by practice. Matches Dentally's "New Patients per Month"
+    // report per location (e.g. Ashford May 2026 = 93). Pure registration (no
+    // first-appointment fallback — that over-counts vs Dentally). pms-hidden orgs
+    // return []. Rows: { practice_id, new_patients }.
+    // Decision Lens AI cache (one row per org+surface+cache_key). Org-isolated
+    // via the explicit organisation_id filter (serviceClient path).
+    async getDecisionLensCache(orgId, surface, cacheKey) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('ai_decision_lens')
+            .select('items, generated_at')
+            .eq('organisation_id', orgId)
+            .eq('surface', surface)
+            .eq('cache_key', cacheKey)
+            .maybeSingle();
+        if (error) throw new Error(error.message);
+        return data || null;
+    },
+    async upsertDecisionLensCache(orgId, surface, cacheKey, items) {
+        const { error } = await supabase_1.serviceClient
+            .from('ai_decision_lens')
+            .upsert({ organisation_id: orgId, surface, cache_key: cacheKey, items, generated_at: new Date().toISOString() },
+                { onConflict: 'organisation_id,surface,cache_key' });
+        if (error) throw new Error(error.message);
+    },
+    async newPatientsRegisteredByPractice(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('org_new_patients_registered_by_practice', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
     async leadsForMarketing(orgId, sinceISO, untilISO, practiceIds = null) {
         if (await crmHidden(orgId)) return [];
         // Embed the linked contact's practice so leads with no own practice_id
@@ -359,6 +416,9 @@ export const analyticsRepository = {
                 .from('appointments')
                 .select('practice_id, appointment_type')
                 .eq('organisation_id', orgId)
+                // With-patients only — matches appointments_rollup_by_practice
+                // (000076) so the Treatments screen agrees with the Business Hub.
+                .not('pms_patient_id', 'is', null)
                 .gte('starts_at', sinceISO);
             if (untilISO) query = query.lt('starts_at', untilISO);
             // Stable order required across .range() windows (PostgREST gives no
@@ -432,6 +492,49 @@ export const analyticsRepository = {
             const sep = key.indexOf('|');
             return { practice_id: key.slice(0, sep), treatment_name: key.slice(sep + 1), fee_pence: v.fee, item_count: v.count };
         });
+    },
+    // Billed turnover bucketed by calendar month — real invoiced production from
+    // invoice_items (Dentally feed), the SAME accrual turnover source the Business
+    // Hub uses. Feeds the Value & Growth valuation base so its TTM revenue agrees
+    // with dashboard turnover instead of settled cash. Prefers the
+    // billed_revenue_by_month RPC; falls back to a paginated scan. practiceId
+    // scopes to one practice (null = whole org). Rows: { month:'YYYY-MM', pence }.
+    async billedRevenueByMonth(orgId, sinceISO, untilISO = null, practiceId = null) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('billed_revenue_by_month', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null, p_practice: practiceId ?? null,
+        });
+        if (!error && Array.isArray(data)) {
+            return data.map((r) => ({ month: String(r.month), pence: Number(r.pence) || 0 }));
+        }
+        return this._billedRevenueByMonthFallback(orgId, sinceISO, untilISO, practiceId);
+    },
+    async _billedRevenueByMonthFallback(orgId, sinceISO, untilISO = null, practiceId = null) {
+        const sinceDate = String(sinceISO).slice(0, 10);
+        const untilDate = untilISO ? String(untilISO).slice(0, 10) : null;
+        const agg = new Map(); // 'YYYY-MM' -> pence
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+            let query = supabase_1.serviceClient
+                .from('invoice_items')
+                .select('invoiced_on, fee_pence')
+                .eq('organisation_id', orgId)
+                .gte('invoiced_on', sinceDate);
+            if (untilDate) query = query.lt('invoiced_on', untilDate);
+            if (practiceId) query = query.eq('practice_id', practiceId);
+            const { data, error } = await query
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(error.message);
+            const rows = data ?? [];
+            for (const r of rows) {
+                const key = String(r.invoiced_on).slice(0, 7);
+                if (key.length !== 7) continue;
+                agg.set(key, (agg.get(key) || 0) + (Number(r.fee_pence) || 0));
+            }
+            if (rows.length < PAGE) break;
+        }
+        return [...agg.entries()].map(([month, pence]) => ({ month, pence }));
     },
     // Flat "by treatment" breakdown — real invoiced fee + distinct patient count
     // grouped by treatment_name alone (no practice split), from invoice_items.

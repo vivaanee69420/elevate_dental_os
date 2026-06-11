@@ -162,6 +162,17 @@ export const analyticsController = {
             scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
+    // Decision Lens (AI) — surface-specific "what to act on now" cards, cached
+    // 6h. ?surface=group|marketing|clinicians|day, ?refresh=1 forces a rebuild.
+    async decisionLens(req, res) {
+        const q = analytics_model_1.scopeQuerySchema.parse(req.query);
+        const ALLOWED = new Set(['group', 'marketing', 'clinicians', 'day']);
+        const surface = ALLOWED.has(req.query.surface) ? req.query.surface : 'group';
+        const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+        res.json(await analytics_service_1.analyticsService.decisionLens(req.user.organisation_id, {
+            surface, scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label, refresh,
+        }));
+    },
     // Real case-fee benchmarks (from Dentally invoice_items) to seed the
     // workbench. Patient fee only; costs stay owner-entered.
     async treatmentFeeBenchmarks(req, res) {

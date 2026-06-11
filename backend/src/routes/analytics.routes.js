@@ -51,6 +51,7 @@ router.get('/data-quality', sys, (0, async_handler_1.asyncHandler)(analytics_con
 router.get('/retention', grw, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.retention));
 router.get('/ai-insights', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiInsights));
 router.post('/ai-insights/generate', aiLimiter, fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.generateInsights));
+router.get('/decision-lens', aiLimiter, fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.decisionLens));
 router.get('/finance-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.financeSeries));
 router.get('/cashflow', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashflow));
 router.get('/cashflow-outlook', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashflowOutlook));

@@ -1,10 +1,11 @@
 'use client';
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { canAccessRoute, type Permissions } from '@/lib/permissions';
 import { NAV, type NavItem, type NavSection } from '@/lib/nav';
 import { useMe } from '@/hooks/useMe';
+import { useSidebar, HamburgerIcon } from '@/components/layout/sidebar-context';
 
 // Sidebar — the app shell's primary navigation.
 //
@@ -19,10 +20,100 @@ import { useMe } from '@/hooks/useMe';
 // Overview routes have no key and are always visible. If /auth/me fails we
 // treat the user as having no permissions (only Overview shows).
 
+// Per-section stroke icons (lucide-style, 24-grid). Keeps the visual language
+// on-theme — no new deps, inherits currentColor from the section header.
+const SECTION_ICONS: Record<string, string> = {
+  Overview: 'M4 5h6v6H4zM14 5h6v4h-6zM14 13h6v6h-6zM4 15h6v4H4z',
+  Finance: 'M12 3v18M8 7h6a3 3 0 0 1 0 6H6m0 4h8',
+  'Business Health': 'M3 12h4l2 5 4-12 2 7h6',
+  Operations: 'M8 2v4M16 2v4M3 9h18M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z',
+  Growth: 'M3 17l6-6 4 4 7-7M14 8h7v7',
+  'Elevate CRM': 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
+  Wealth: 'M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6',
+  Training: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5',
+  System: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.92.68 2 2 0 1 1-3.96 0 1.65 1.65 0 0 0-2.92-.68 2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a2 2 0 1 1 0-3.96 1.65 1.65 0 0 0-.68-2.92 2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 2.92-.68 2 2 0 1 1 3.96 0 1.65 1.65 0 0 0 2.92.68 2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0 .42 2.74z',
+};
+
+function SectionIcon({ label }: { label: string }) {
+  const d = SECTION_ICONS[label];
+  if (!d) return null;
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="shrink-0"
+      aria-hidden="true"
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+
+function initials(name: string): string {
+  return name
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase())
+    .join('');
+}
+
+const MIN_W = 208;
+const MAX_W = 384;
+const DEFAULT_W = 256;
+const WIDTH_KEY = 'sidebar:w';
+
 export function Sidebar() {
   const pathname = usePathname();
   const { data: me } = useMe();
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+
+  const { collapsed, toggle: toggleCollapsed } = useSidebar();
+
+  // Drag-to-resize width. Persisted to localStorage; clamped MIN..MAX.
+  const [width, setWidth] = useState(DEFAULT_W);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(WIDTH_KEY));
+    if (saved >= MIN_W && saved <= MAX_W) setWidth(saved);
+  }, []);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setDragging(true);
+  }, []);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: MouseEvent) => {
+      const w = Math.min(MAX_W, Math.max(MIN_W, e.clientX));
+      setWidth(w);
+    };
+    const onUp = () => {
+      setDragging(false);
+      setWidth((w) => {
+        localStorage.setItem(WIDTH_KEY, String(w));
+        return w;
+      });
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [dragging]);
 
   const role = me?.role || 'reception';
   // Effective permissions from /auth/me. If the call failed (me === null),
@@ -47,76 +138,145 @@ export function Sidebar() {
     return label === 'Overview' || label === 'Elevate CRM';
   }
 
+  const displayName = me?.full_name || me?.email || '';
+
   return (
-    <aside className="w-64 bg-card border-r border-border h-screen sticky top-0 overflow-y-auto">
-      <div className="p-4 border-b border-border flex items-center gap-2">
-        <div className="w-8 h-8 rounded-md bg-brand text-white flex items-center justify-center font-display font-bold">
+    <aside
+      style={{
+        width: collapsed ? 0 : width,
+        transition: dragging ? 'none' : 'width 0.18s ease',
+      }}
+      className={`relative shrink-0 bg-card h-screen sticky top-0 flex flex-col overflow-hidden ${
+        collapsed ? 'border-0' : 'border-r border-border'
+      }`}
+    >
+      {/* Brand header */}
+      <div className="px-4 py-4 border-b border-border flex items-center gap-2.5">
+        <div className="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-br from-brand to-brand-700 text-white flex items-center justify-center font-display font-bold text-lg shadow-panel-sm">
           E
         </div>
-        <Link href="/dashboard" className="font-display text-lg font-semibold text-ink">
-          Elevate <span className="text-ink-muted font-normal">Dental OS</span>
+        <Link href="/business-hub" className="leading-tight min-w-0 flex-1">
+          <span className="block font-display text-[17px] font-semibold text-ink">Elevate</span>
+          <span className="block text-[11px] uppercase tracking-[0.14em] text-ink-muted">
+            Dental OS
+          </span>
         </Link>
+        <button
+          onClick={toggleCollapsed}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+          className="shrink-0 w-8 h-8 -mr-1 rounded-lg text-ink-muted hover:text-brand hover:bg-bg flex items-center justify-center transition"
+        >
+          <HamburgerIcon />
+        </button>
       </div>
 
+      {/* User card */}
       {me && (
-        <div className="px-3 py-2 mx-3 mt-3 bg-bg rounded-lg text-xs">
-          <div className="font-semibold text-ink">{me.full_name || me.email}</div>
-          <div className="text-ink-muted capitalize">{role.replace('_', ' ')}</div>
+        <div className="mx-3 mt-3 px-3 py-2.5 bg-bg rounded-xl flex items-center gap-2.5">
+          <div className="w-8 h-8 shrink-0 rounded-full bg-brand-50 text-brand flex items-center justify-center text-xs font-semibold ring-1 ring-brand-100">
+            {initials(displayName) || 'U'}
+          </div>
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold text-ink truncate">{displayName}</div>
+            <div className="text-[11px] text-ink-muted capitalize">{role.replace('_', ' ')}</div>
+          </div>
         </div>
       )}
 
-      <nav className="p-3 space-y-1">
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
         {NAV.filter(canSeeSection).map((section) => {
           const items = section.items.filter(canSeeItem);
           if (items.length === 0) return null;
           const hasActive = items.some((i) => pathname === `/${i.id}`);
           const open = sectionOpen(section.label, hasActive);
           return (
-            <div key={section.label}>
+            <div key={section.label} className="pb-1">
               <button
-                onClick={() =>
-                  setOpenSections((s) => ({ ...s, [section.label]: !open }))
-                }
-                className="w-full text-left text-[11px] uppercase tracking-wider font-semibold text-ink-muted px-3 py-2 flex justify-between items-center hover:text-ink"
+                onClick={() => setOpenSections((s) => ({ ...s, [section.label]: !open }))}
+                className={`group w-full text-left text-[11px] uppercase tracking-wider font-semibold px-3 py-2 flex items-center gap-2 rounded-lg transition ${
+                  hasActive ? 'text-brand' : 'text-ink-muted hover:text-ink hover:bg-bg'
+                }`}
               >
-                <span>{section.label}</span>
-                <span
-                  className="text-[9px]"
-                  style={{
-                    transform: open ? 'rotate(90deg)' : 'none',
-                    transition: 'transform 0.15s',
-                  }}
+                <SectionIcon label={section.label} />
+                <span className="flex-1">{section.label}</span>
+                <svg
+                  width="11"
+                  height="11"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0 transition-transform duration-200"
+                  style={{ transform: open ? 'rotate(90deg)' : 'none' }}
+                  aria-hidden="true"
                 >
-                  ▶
-                </span>
+                  <path d="M9 6l6 6-6 6" />
+                </svg>
               </button>
-              {open &&
-                items.map((item) => {
-                  const active = pathname === `/${item.id}`;
-                  return (
-                    <Link
-                      key={item.id}
-                      href={`/${item.id}`}
-                      aria-current={active ? 'page' : undefined}
-                      className={`flex items-center gap-2 px-6 py-2 text-sm rounded-lg mx-2 transition ${
-                        active
-                          ? 'bg-brand-50 text-brand font-medium'
-                          : 'text-ink-muted hover:bg-bg hover:text-ink'
-                      }`}
-                    >
-                      <span>{item.label}</span>
-                      {item.isNew && (
-                        <span className="text-[9px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded px-1 py-0.5">
-                          New
-                        </span>
-                      )}
-                    </Link>
-                  );
-                })}
+              <div
+                className="overflow-hidden transition-all duration-200"
+                style={{ maxHeight: open ? `${items.length * 44 + 8}px` : '0px' }}
+              >
+                <div className="mt-0.5 space-y-0.5">
+                  {items.map((item) => {
+                    const active = pathname === `/${item.id}`;
+                    return (
+                      <Link
+                        key={item.id}
+                        href={`/${item.id}`}
+                        aria-current={active ? 'page' : undefined}
+                        className={`group relative flex items-center gap-2 pl-7 pr-3 py-2 text-[13px] rounded-lg mx-1 transition ${
+                          active
+                            ? 'bg-brand-50 text-brand font-semibold'
+                            : 'text-ink-muted hover:bg-bg hover:text-ink'
+                        }`}
+                      >
+                        {/* active rail */}
+                        <span
+                          className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-1 rounded-full bg-brand transition-all ${
+                            active ? 'h-4 opacity-100' : 'h-0 opacity-0 group-hover:h-2 group-hover:opacity-40'
+                          }`}
+                        />
+                        <span className="truncate">{item.label}</span>
+                        {item.isNew && (
+                          <span className="ml-auto shrink-0 text-[9px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded px-1 py-0.5">
+                            New
+                          </span>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           );
         })}
       </nav>
+
+      {/* Drag handle — stretch sidebar width */}
+      {!collapsed && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          onMouseDown={onMouseDown}
+          onDoubleClick={() => {
+            setWidth(DEFAULT_W);
+            localStorage.setItem(WIDTH_KEY, String(DEFAULT_W));
+          }}
+          title="Drag to resize · double-click to reset"
+          className="group absolute top-0 right-0 h-full w-1.5 translate-x-1/2 cursor-col-resize z-10"
+        >
+          <span
+            className={`absolute inset-y-0 left-1/2 -translate-x-1/2 w-px transition-colors ${
+              dragging ? 'bg-brand w-0.5' : 'bg-transparent group-hover:bg-brand-200'
+            }`}
+          />
+        </div>
+      )}
     </aside>
   );
 }

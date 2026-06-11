@@ -5,9 +5,15 @@ export type AssociateRow = {
   id: string;
   full_name: string;
   practice: string | null;
+  practices: string[];
+  practice_count: number;
   pay_pct: number | null;
   joined_date: string | null;
   active: boolean;
+  gdc_number: string | null;
+  colour: string | null;
+  role: string | null;
+  uda_target: number | null;
   treatments: number;
   appointments_total: number;
   no_shows: number;
