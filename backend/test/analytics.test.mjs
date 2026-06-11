@@ -523,33 +523,42 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 60000, cashCollectedPence: 50000, appointments: 1 });
   });
 
-  it('collectionRatePct = trailing-12mo settled cash / billed (not in-window cash / turnover)', async () => {
+  it('period-over-period deltas compare this window to the prior same-length one (Jun vs May)', async () => {
     supaRec.resultProvider = (q) =>
       q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
       : { data: [], error: null };
-    supaRec.rpcProvider = (fn) => {
+    // RPCs are window-aware: current window (Jun) vs prior (May) keyed by p_since.
+    supaRec.rpcProvider = (fn, params) => {
+      const isPrev = params?.p_since && params.p_since < '2026-06-01';
       if (fn === 'treatment_revenue_matrix')
-        return { data: [{ practice_id: 'p1', treatment_name: 'X', fee_pence: 200000, item_count: 1 }], error: null };
+        return { data: [{ practice_id: 'p1', treatment_name: 'X', fee_pence: isPrev ? 100000 : 112000, item_count: 1 }], error: null };
       if (fn === 'settled_receipts_by_day')
-        return { data: [{ day: '2026-01-01', pence: 100000 }, { day: '2026-02-01', pence: 90000 }], error: null };
+        return { data: [{ day: '2026-05-01', pence: isPrev ? 100000 : 108000 }], error: null };
       return { data: [], error: null };
     };
-    const res = await svc.businessHub(ORG_A, { days: 30 });
-    expect(res.group.trailing12BilledPence).toBe(200000);
-    expect(res.group.trailing12CashPence).toBe(190000);
-    expect(res.group.collectionRatePct).toBe(95);   // 190k / 200k — a real, matched-window ratio
+    const res = await svc.businessHub(ORG_A, { since: '2026-06-01T00:00:00.000Z', until: '2026-07-01T00:00:00.000Z', label: 'Jun 2026' });
+    expect(res.group.revenuePence).toBe(112000);
+    expect(res.group.prevRevenuePence).toBe(100000);
+    expect(res.group.turnoverDeltaPct).toBe(12);   // (112k-100k)/100k
+    expect(res.group.cashDeltaPct).toBe(8);        // (108k-100k)/100k
+    expect(res.group.prevPeriodLabel).toBe('May 2026');
   });
 
-  it('collectionRatePct is null when there is no billing feed to measure against', async () => {
+  it('delta is null when the prior period has no base (avoids a fake 0% / ±∞)', async () => {
     supaRec.resultProvider = (q) =>
       q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
       : { data: [], error: null };
-    supaRec.rpcProvider = (fn) =>
-      fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-01-01', pence: 50000 }], error: null } : { data: [], error: null };
-    const res = await svc.businessHub(ORG_A, { days: 30 });
-    expect(res.group.collectionRatePct).toBeNull();  // no billed -> don't show a fake 0%
+    supaRec.rpcProvider = (fn, params) => {
+      const isPrev = params?.p_since && params.p_since < '2026-06-01';
+      if (fn === 'treatment_revenue_matrix' && !isPrev)
+        return { data: [{ practice_id: 'p1', treatment_name: 'X', fee_pence: 50000, item_count: 1 }], error: null };
+      return { data: [], error: null }; // prior window empty
+    };
+    const res = await svc.businessHub(ORG_A, { since: '2026-06-01T00:00:00.000Z', until: '2026-07-01T00:00:00.000Z' });
+    expect(res.group.turnoverDeltaPct).toBeNull();
+    expect(res.group.cashDeltaPct).toBeNull();
   });
 
   it('noShowTracked reflects whether any no_show appointment exists (— vs 0% in the UI)', async () => {
