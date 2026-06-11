@@ -23,9 +23,9 @@ export function KpiTile({ label, value, delta, deltaTone = 'muted' }: KpiTilePro
       ? 'text-danger'
       : 'text-ink-muted';
   return (
-    <div className="card-padded">
-      <div className="text-xs text-ink-muted uppercase">{label}</div>
-      <div className="display text-2xl font-bold mt-1">{value}</div>
+    <div className="card-padded flex flex-col min-w-0">
+      <div className="text-xs text-ink-muted uppercase tracking-wide">{label}</div>
+      <div className="display text-xl font-bold tabular-nums tracking-tight mt-1">{value}</div>
       {delta && <div className={`text-xs mt-1 ${toneClass}`}>{delta}</div>}
     </div>
   );

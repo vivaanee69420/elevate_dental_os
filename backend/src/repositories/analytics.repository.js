@@ -269,6 +269,21 @@ export const analyticsRepository = {
         const row = Array.isArray(data) ? data[0] : data;
         return row || { started: 0, completed: 0, closed_value_pence: 0 };
     },
+    // "Treatments Closed" value, REAL feed, PER PRACTICE: invoiced treatment-plan
+    // fees in the window (invoice_items.fee_pence where treatment_plan_id is set),
+    // grouped by practice_id (100% populated on invoice_items). Same feed as
+    // turnover, so Closed and turnover are comparable AND practice-scopable —
+    // unlike the planned-estimate private_value_pence the rollup RPC returns (only
+    // on ~22% of completed plans, and org-wide because treatment_plans carry no
+    // practice_id). Rows: { practice_id, closed_value_pence }.
+    async treatmentsClosedRevenueByPractice(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('treatments_closed_revenue_by_practice', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
     // Treatment-plan private production split by status, in the window — feeds
     // the Revenue Leakage "lost plans" pool. Presented = all plans started in
     // the window; accepted = the completed subset. Paginated, org-filtered on

@@ -2151,12 +2151,13 @@ export const analyticsService = {
         // Leads are windowed only when an upper bound is set (month/day mode); in
         // the trailing-days mode they stay all-time, as before.
         const leadSinceISO = untilISO ? sinceISO : null;
-        const [practices, revRows, apptRows, leadRows, treatments, actuals, health, noShowTracked, revLineRows, cashRows] = await Promise.all([
+        const [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId, leadSinceISO, untilISO),
             analytics_repository_1.analyticsRepository.treatmentsRollupByOrg(orgId, sinceISO, untilISO),
+            analytics_repository_1.analyticsRepository.treatmentsClosedRevenueByPractice(orgId, sinceISO, untilISO),
             this._actualsBundle(orgId),
             analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             analytics_repository_1.analyticsRepository.hasNoShowData(orgId),
@@ -2172,6 +2173,16 @@ export const analyticsService = {
         // (settled per practice) is surfaced as the per-practice cash figure.
         const billedBy = new Map();
         for (const r of revLineRows) billedBy.set(r.practice_id, (billedBy.get(r.practice_id) || 0) + num(r.fee_pence));
+        // Treatments-Closed value per practice (real invoiced plan fees) — same
+        // invoice_items feed as turnover, so it's practice-attributed too. closed =
+        // billed (sold); paid = the collected subset (invoice_paid), matches
+        // Dentally's "Paid" filter. The gap is debtors.
+        const closedBy = new Map();
+        const paidBy = new Map();
+        for (const r of closedRows) {
+            closedBy.set(r.practice_id, (closedBy.get(r.practice_id) || 0) + num(r.closed_value_pence));
+            paidBy.set(r.practice_id, (paidBy.get(r.practice_id) || 0) + num(r.paid_value_pence));
+        }
         const revBy = new Map(revRows.map((r) => [r.practice_id, num(r.pence)]));
         const apBy = new Map(apptRows.map((r) => [r.practice_id, r]));
         const ldBy = new Map(leadRows.map((r) => [r.practice_id, r]));
@@ -2188,6 +2199,8 @@ export const analyticsService = {
                 name: p.name,
                 chairs: p.chairs || 0,
                 revenuePence: billedBy.get(p.id) || 0,      // turnover = invoiced production
+                treatmentsClosedPence: closedBy.get(p.id) || 0, // plan fees billed (sold), this practice
+                treatmentsPaidPence: paidBy.get(p.id) || 0,     // plan fees paid (collected), this practice
                 cashCollectedPence: revBy.get(p.id) || 0,   // settled receipts for this practice
                 appointments,
                 completed: num(ap.completed),
@@ -2213,7 +2226,12 @@ export const analyticsService = {
         // Treatment funnel (org-wide; treatment_plans are not practice-attributed).
         const treatmentsStarted = num(treatments.started);
         const treatmentsCompleted = num(treatments.completed);
-        const treatmentsClosedPence = num(treatments.closed_value_pence);
+        // "Closed" value = REAL invoiced treatment-plan fees in the window (same
+        // feed as turnover), not the planned private estimate the rollup returns.
+        // Group total = sum of the per-practice rows (invoice_items always carry a
+        // practice_id, so nothing is dropped). Closed = billed; Paid = collected.
+        const treatmentsClosedPence = sum('treatmentsClosedPence');
+        const treatmentsPaidPence = sum('treatmentsPaidPence');
         // Cash banked = sum of settled receipts in the window (real payments).
         const cashCollectedPence = cashRows.reduce((s, r) => s + num(r.pence), 0);
 
@@ -2294,7 +2312,8 @@ export const analyticsService = {
                 newPatients: totalConverted, // leads reaching treatment (real Dentally/GHL)
                 treatmentsStarted,
                 treatmentsCompleted, // accepted/completed plan count in window
-                treatmentsClosedPence,
+                treatmentsClosedPence, // billed (sold) plan fees
+                treatmentsPaidPence,   // collected (paid) plan fees
                 cashCollectedPence, // settled receipts banked in window
                 // Like-for-like deltas vs the prior same-length period (null when
                 // no prior base). prevPeriodLabel names it for the chip ("May 2026").
