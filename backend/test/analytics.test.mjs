@@ -523,6 +523,35 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 60000, cashCollectedPence: 50000, appointments: 1 });
   });
 
+  it('collectionRatePct = trailing-12mo settled cash / billed (not in-window cash / turnover)', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'treatment_revenue_matrix')
+        return { data: [{ practice_id: 'p1', treatment_name: 'X', fee_pence: 200000, item_count: 1 }], error: null };
+      if (fn === 'settled_receipts_by_day')
+        return { data: [{ day: '2026-01-01', pence: 100000 }, { day: '2026-02-01', pence: 90000 }], error: null };
+      return { data: [], error: null };
+    };
+    const res = await svc.businessHub(ORG_A, { days: 30 });
+    expect(res.group.trailing12BilledPence).toBe(200000);
+    expect(res.group.trailing12CashPence).toBe(190000);
+    expect(res.group.collectionRatePct).toBe(95);   // 190k / 200k — a real, matched-window ratio
+  });
+
+  it('collectionRatePct is null when there is no billing feed to measure against', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-01-01', pence: 50000 }], error: null } : { data: [], error: null };
+    const res = await svc.businessHub(ORG_A, { days: 30 });
+    expect(res.group.collectionRatePct).toBeNull();  // no billed -> don't show a fake 0%
+  });
+
   it('noShowTracked reflects whether any no_show appointment exists (— vs 0% in the UI)', async () => {
     // No no_show row anywhere -> tracked=false so the UI renders "—" not a
     // misleading 0% (Dentally feeds that never sync a DNA state look like this).
