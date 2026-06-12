@@ -91,6 +91,12 @@ export default function SyncOverlay({
   // Per-phase rows in pull order (insertion order of the server's phases map).
   const phaseList = data?.phases ? Object.values(data.phases) : [];
   const activeIdx = data?.phase ? phaseList.findIndex((p) => p.phase === data.phase) : -1;
+  // When the run is parallel (server-declared), phases track independently — a
+  // phase is complete only via its own `done` flag, never by position (a later
+  // phase moving doesn't mean an earlier one finished). Sequential providers keep
+  // the position fallback so phases that don't emit a done flag still tick off as
+  // the next one starts.
+  const hasParallel = !!data?.parallel;
 
   const title = errored ? 'Sync failed' : stalled ? 'Still importing in the background' : `Syncing ${providerLabel} data`;
   const subtitle = errored
@@ -150,11 +156,13 @@ export default function SyncOverlay({
         {phaseList.length > 0 ? (
           <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {phaseList.map((p, i) => {
-              // Phases are listed in pull order; the active one splits completed
-              // (before it) from waiting (after it). activeIdx -1 = still starting.
-              const isComplete = !errored && (done || (activeIdx >= 0 && i < activeIdx));
-              const isActive = !done && !errored && !stalled && i === activeIdx;
-              const isPending = !isComplete && !isActive && !stalled && (activeIdx < 0 || i > activeIdx);
+              // Complete: the whole sync is done, OR this phase flagged itself
+              // done, OR (sequential only) a later phase is already active.
+              const isComplete = !errored && (done || p.done || (!hasParallel && activeIdx >= 0 && i < activeIdx));
+              // Active: started (own pct > 0) or it's the current phase, and not
+              // yet complete. Under parallel, multiple rows are active at once.
+              const isActive = !isComplete && !done && !errored && !stalled && (p.pct > 0 || i === activeIdx);
+              const isPending = !isComplete && !isActive && !stalled;
               const label = PHASE_LABEL[p.phase] ?? p.phase;
               const dot = isComplete ? '#16A34A' : isActive ? 'var(--brand)' : isPending ? 'var(--border)' : '#D97706';
               const right = isComplete

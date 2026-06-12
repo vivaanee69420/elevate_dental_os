@@ -145,19 +145,35 @@ export function phasePct(idx, nPhases, page, totalPages) {
 
 // --- DB-bound sync -------------------------------------------------------
 
-// GHL GET by absolute URL with one 429 retry honoring retry-after (+500ms).
-async function ghlFetchUrl(url, accessToken) {
+// GHL GET by absolute URL with bounded 429 retries (retry-after, else
+// exponential backoff). Contacts + opportunities now paginate CONCURRENTLY, so
+// the request rate roughly doubles and GHL's burst limit (~100 req / 10s)
+// returns 429 in waves; a single retry isn't enough (the retry hits the still-
+// open window and the page is dropped, failing the whole pull). Up to 4 attempts
+// lets a page ride out a sustained burst.
+async function ghlFetchUrl(url, accessToken, retries = 4) {
     const doFetch = () => fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}`, Version: API_VERSION, Accept: 'application/json' },
     });
-    let res = await doFetch();
-    if (res.status === 429) {
-        const retryAfter = parseInt(res.headers.get('retry-after') ?? '2', 10);
-        await new Promise((r) => setTimeout(r, retryAfter * 1000 + 500));
+    let res;
+    for (let attempt = 0; attempt <= retries; attempt++) {
         res = await doFetch();
+        if (res.status !== 429 || attempt === retries) break;
+        const ra = parseInt(res.headers.get('retry-after') ?? '0', 10);
+        const wait = (ra > 0 ? ra * 1000 : 1000 * 2 ** attempt) + 500;
+        await new Promise((r) => setTimeout(r, wait));
     }
     if (!res.ok) throw new Error(`GHL ${url} → ${res.status}`);
     return res.json();
+}
+
+// A phase's OWN progress (0-100), independent of the other phases — drives the
+// separate per-phase percentages in the overlay. Uses page/totalPages when GHL
+// reports a total, else a soft asymptote so the bar always advances.
+function withinPct(page, totalPages) {
+    return totalPages && totalPages > 0
+        ? Math.min(100, Math.round((page / totalPages) * 100))
+        : Math.min(99, Math.round((1 - 1 / (page + 1)) * 100));
 }
 
 // Single-page GHL GET (pipeline detection — not a full paginate).
@@ -472,25 +488,49 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
     // (routine cap) so it stays fast; matches the Dentally precedent of pulling
     // patients every sync. Opportunities are a second phase.
     const withContacts = true;
-    const nPhases = 2;
 
     try {
         // Pre-register the phases this run will walk, in order, so the overlay
         // lists every resource (Contacts, Opportunities, Conversations) as
         // "Waiting" up front instead of revealing each only as it starts.
-        onProgress({ expectedPhases: ['contacts', 'opportunities', 'conversations'] });
+        // `parallel: true` tells the UI this run's phases track independently
+        // (contacts + opportunities fetch concurrently), so it uses each phase's
+        // own `done` flag for completion instead of sequential position.
+        onProgress({ expectedPhases: ['contacts', 'opportunities', 'conversations'], parallel: true });
+
+        // Each phase tracks its OWN percentage independently (phasePct) so the UI
+        // shows separate live bars; the overall top bar is the average across the
+        // three phases. `report` recomputes overall on every per-phase tick.
+        const own = { contacts: 0, opportunities: 0, conversations: 0 };
+        const overall = () => Math.min(99, Math.round((own.contacts + own.opportunities + own.conversations) / 3));
+        const report = (phase, page, totalPages, count) => {
+            own[phase] = withinPct(page, totalPages);
+            onProgress({ phase, pct: overall(), phasePct: own[phase], page, totalPages, count });
+        };
+        const phaseDone = (phase, count) => {
+            own[phase] = 100;
+            onProgress({ phase, pct: overall(), phasePct: 100, phaseDone: true, ...(count != null ? { count } : {}) });
+        };
+
+        // Contacts + opportunities are independent GHL reads — fetch them
+        // CONCURRENTLY so both phase bars advance at once. (Each endpoint still
+        // paginates internally by cursor, which is unavoidably sequential.) The
+        // opportunity UPSERT below waits for contacts — it resolves each opp's
+        // contact from the synced book — but the network pulls fully overlap, so
+        // wall-clock is max(contacts, opps) instead of their sum.
         let contactsSynced = 0;
-        let oppIdx = 0;
-        if (withContacts) {
-            contactsSynced = await pullContacts(orgId, access_token, locationId,
-                (page, totalPages, count) => onProgress({ phase: 'contacts', pct: phasePct(0, nPhases, page, totalPages), page, totalPages, count }),
-                maxPages);
-            oppIdx = 1;
-        }
-        const opportunities = await ghlFetchAll('/opportunities/search', access_token, locationId, {
-            arrayKey: 'opportunities', locationParam: 'location_id', maxPages,
-            onPage: (page, totalPages, count) => onProgress({ phase: 'opportunities', pct: phasePct(oppIdx, nPhases, page, totalPages), page, totalPages, count }),
-        });
+        const [cs, opportunities] = await Promise.all([
+            withContacts
+                ? pullContacts(orgId, access_token, locationId,
+                    (page, totalPages, count) => report('contacts', page, totalPages, count), maxPages)
+                : Promise.resolve(0),
+            ghlFetchAll('/opportunities/search', access_token, locationId, {
+                arrayKey: 'opportunities', locationParam: 'location_id', maxPages,
+                onPage: (page, totalPages, count) => report('opportunities', page, totalPages, count),
+            }),
+        ]);
+        contactsSynced = cs;
+        phaseDone('contacts', contactsSynced);
         // Cache the pipeline definitions (id/name + ordered stages) on the
         // integration config so the Pipeline screen can render them dynamically,
         // and build a stageId -> name map to stamp on each lead. Non-fatal.
@@ -532,17 +572,23 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
             const results = await Promise.all(batch.map((opp) =>
                 upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap)));
             synced += results.filter((r) => r.ok).length;
-            // Keep `count` at the pulled total (set during the fetch phase) — only
-            // advance pct/at — so the copy stays "N opportunities pulled so far".
-            onProgress({ phase: 'opportunities', pct: phasePct(oppIdx, nPhases, i + batch.length, opportunities.length) });
+            // Advance the opportunities phase across the link/write step too (its
+            // own bar from the fetch already sits near 100); keeps `at` fresh.
+            report('opportunities', i + batch.length, opportunities.length, opportunities.length);
         }
+        phaseDone('opportunities', opportunities.length);
+
         // Conversations -> communications (Inbox). Runs after contacts so the
         // ghl_contact_id -> contact map is fresh. Non-fatal: a failure here must
-        // not abort the contacts/opportunities sync.
+        // not abort the contacts/opportunities sync. Wrap its progress so the
+        // conversations phase reports its OWN percentage (walked / total threads).
         let conversations = { conversations: 0, messages: 0 };
         try {
-            onProgress({ phase: 'conversations', pct: 99 });
-            conversations = await syncConversations(orgId, integration, { onProgress });
+            report('conversations', 0, null, 0);
+            conversations = await syncConversations(orgId, integration, {
+                onProgress: (p) => report('conversations', p.count ?? 0, p.totalPages ?? null, p.count ?? 0),
+            });
+            phaseDone('conversations', conversations.conversations);
         } catch (err) {
             console.warn(`[gohighlevel] conversations sync skipped: ${err?.message || err}`);
         }
