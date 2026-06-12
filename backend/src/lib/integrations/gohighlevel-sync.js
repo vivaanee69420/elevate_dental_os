@@ -29,6 +29,7 @@
 
 import { integrationRepository } from '../../repositories/integration.repository.js';
 import { integrationAccountRepository } from '../../repositories/integration-account.repository.js';
+import { ghlAppointmentRepository } from '../../repositories/ghl-appointment.repository.js';
 import { decryptSecret } from '../crypto.js';
 import { GoHighLevelProvider } from './gohighlevel-provider.js';
 import { syncConversations } from './gohighlevel-conversations.js';
@@ -128,6 +129,45 @@ export function mapWebhookEventType(raw) {
     if (t.includes('opportunity')) return t.includes('delete') ? 'opportunity_delete' : 'opportunity';
     if (t.includes('contact')) return t.includes('delete') ? 'contact_delete' : 'contact';
     return null;
+}
+
+// Normalise a GHL appointmentStatus string to our internal vocab.
+// Input is lowercased + trimmed before matching so casing variants are handled.
+export function mapAppointmentStatus(raw) {
+    const s = String(raw ?? '').trim().toLowerCase();
+    if (s === 'showed') return 'showed';
+    if (s === 'noshow' || s === 'no-show' || s === 'no_show') return 'noshow';
+    if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+    if (s === 'confirmed') return 'confirmed';
+    if (s === 'new' || s === 'booked') return 'booked';
+    if (s === 'invalid') return 'invalid';
+    return 'booked'; // default for anything unrecognised / null / empty
+}
+
+// Parse a GHL time value (ISO string OR epoch-ms numeric string OR number) to
+// an ISO string. Returns null if the value is absent or produces an invalid Date.
+function parseGhlTime(x) {
+    if (x == null || x === '') return null;
+    // Numeric-string epoch ms (e.g. "1750000000000")
+    const d = /^\d+$/.test(String(x)) ? new Date(Number(x)) : new Date(x);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// Shape one GHL calendar event into a ghl_appointments DB row. Pure (no I/O).
+export function appointmentRow(orgId, account, event, calendarName, contactMap) {
+    return {
+        organisation_id: orgId,
+        integration_account_id: account.id,
+        practice_id: account.practice_id ?? null,
+        contact_id: (event.contactId && contactMap?.get(String(event.contactId))) ?? null,
+        ghl_event_id: String(event.id),
+        ghl_calendar_id: event.calendarId != null ? String(event.calendarId) : null,
+        calendar_name: calendarName ?? null,
+        title: event.title ?? null,
+        status: mapAppointmentStatus(event.appointmentStatus),
+        starts_at: parseGhlTime(event.startTime),
+        ends_at: parseGhlTime(event.endTime),
+    };
 }
 
 // Overall progress %, two-phase (contacts then opportunities) on the bootstrap /
@@ -668,6 +708,55 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
     return syncOneOrg(orgId, integration, onProgress, { recent: true });
 }
 
+// --- GHL calendar + appointment sync (Phase 3 of syncAccount) ---------------
+
+// List all calendars for a GHL location. Returns [{ id, name }].
+// On any error (missing scope, 401, network) returns [] — callers treat empty
+// as "no calendars" and skip the phase, not as a hard failure.
+export async function fetchCalendars(accessToken, locationId) {
+    if (!accessToken || !locationId) return [];
+    const body = await ghlFetch('/calendars/', accessToken, locationId, 'locationId');
+    return (body.calendars ?? []).map((c) => ({ id: String(c.id), name: c.name ?? c.id }));
+}
+
+// Pull all calendar events in a ±90-day window for every calendar in the
+// location, then upsert them via ghlAppointmentRepository. Defensive: a
+// per-calendar failure is caught and logged without aborting the others.
+// Returns { appointments: <total upserted>, calendars: <number of calendars> }.
+export async function pullAppointments(orgId, account, accessToken, locationId, contactMap, onProgress = () => {}) {
+    const calendars = await fetchCalendars(accessToken, locationId);
+    if (!calendars.length) return { appointments: 0, calendars: 0 };
+    const now = Date.now();
+    const startTime = String(now - 90 * 86_400_000);
+    const endTime = String(now + 90 * 86_400_000);
+    let total = 0;
+    for (let i = 0; i < calendars.length; i++) {
+        const cal = calendars[i];
+        try {
+            // ghlFetch uses new URL(API_BASE + path) then url.searchParams.set(locationParam, locationId).
+            // Constructing the path with existing query params is safe — URL() parses the ?-portion
+            // correctly and searchParams.set appends the locationId without clobbering other params.
+            const path = `/calendars/events?calendarId=${encodeURIComponent(cal.id)}&startTime=${startTime}&endTime=${endTime}`;
+            const body = await ghlFetch(path, accessToken, locationId, 'locationId');
+            const events = body.events ?? [];
+            const rows = events
+                .map((e) => appointmentRow(orgId, account, e, cal.name, contactMap))
+                .filter((r) => r.ghl_event_id);
+            total += await ghlAppointmentRepository.upsertMany(rows);
+        } catch (err) {
+            console.warn(`[gohighlevel] account ${account.id} calendar ${cal.id} events skipped: ${err?.message || err}`);
+        }
+        onProgress({
+            phase: 'appointments',
+            pct: Math.round(((i + 1) / calendars.length) * 100),
+            page: i + 1,
+            totalPages: calendars.length,
+            count: total,
+        });
+    }
+    return { appointments: total, calendars: calendars.length };
+}
+
 // Account-driven sync: same pull/upsert engine as syncOneOrg, but creds come
 // from an integration_accounts row (its own PIT + locationId), pipelines/last_sync
 // persist to the account row. This is the multi-subaccount path.
@@ -707,8 +796,16 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
             const r = await upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap);
             if (r.ok) synced++;
         }
+        // Phase 3: calendar appointments — DEFENSIVE. A missing calendars scope
+        // on the PIT (404/401) must never break contacts+opportunities sync.
+        let apptResult = { appointments: 0 };
+        try {
+            apptResult = await pullAppointments(orgId, account, access_token, locationId, oppContactMap, onProgress);
+        } catch (err) {
+            console.warn(`[gohighlevel] account ${accountId} appointments phase skipped: ${err?.message || err}`);
+        }
         await integrationAccountRepository.markSynced(orgId, accountId);
-        return { contacts: contactsSynced, opportunities: synced, total: opportunities.length };
+        return { contacts: contactsSynced, opportunities: synced, total: opportunities.length, appointments: apptResult.appointments };
     } catch (err) {
         // Don't let a markFailed failure mask the real sync error.
         try {

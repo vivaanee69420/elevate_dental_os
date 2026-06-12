@@ -13,12 +13,13 @@ function Card({ label, value, sub }: { label: string; value: string; sub?: strin
 
 export function GhlKpiCards({ totals }: { totals: GhlTotals }) {
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-7">
       <Card label="Contacts" value={formatNumber(totals.contacts.total)} sub={`${formatNumber(totals.contacts.new)} new`} />
       <Card label="Leads" value={formatNumber(totals.leads.total)} sub={`${formatNumber(totals.leads.open)} open`} />
       <Card label="Pipeline value" value={formatPence(totals.leads.pipelineValuePence)} />
       <Card label="Conversion" value={`${totals.leads.conversionPct}%`} sub={`${formatNumber(totals.leads.won)} won / ${formatNumber(totals.leads.lost)} lost`} />
       <Card label="Conversations" value={formatNumber(totals.conversations.total)} sub={`${formatNumber(totals.conversations.inbound)} in / ${formatNumber(totals.conversations.outbound)} out`} />
+      <Card label="Appointments" value={formatNumber(totals.appointments.total)} sub={`${formatNumber(totals.appointments.upcoming)} upcoming`} />
       <Card label="Sync health" value={`${totals.sync.active}/${totals.sync.accounts}`} sub="active subaccounts" />
     </div>
   );

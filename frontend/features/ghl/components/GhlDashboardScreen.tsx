@@ -7,6 +7,7 @@ import { GhlKpiCards } from './GhlKpiCards';
 import { PipelineByStage } from './PipelineByStage';
 import { SourceBreakdown } from './SourceBreakdown';
 import { ConversationActivity } from './ConversationActivity';
+import { AppointmentsPanel } from './AppointmentsPanel';
 import { SyncHealthTable } from './SyncHealthTable';
 import { SubaccountFilterBar } from './SubaccountFilterBar';
 
@@ -52,7 +53,10 @@ export default function GhlDashboardScreen() {
             <PipelineByStage stages={data.totals.leads.byStage} />
             <SourceBreakdown sources={data.totals.contacts.bySource} />
           </div>
-          <ConversationActivity conversations={data.totals.conversations} />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <ConversationActivity conversations={data.totals.conversations} />
+            <AppointmentsPanel appointments={data.totals.appointments} />
+          </div>
           <div>
             <h2 className="mb-2 text-sm font-semibold text-slate-900">Subaccount breakdown</h2>
             <SyncHealthTable accounts={data.perAccount} />
