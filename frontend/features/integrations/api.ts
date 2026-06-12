@@ -153,10 +153,22 @@ export function createPractice(body: { name: string; pms_site_id?: string; chair
 }
 
 // --- Real-time webhook config (Dentally) ------------------------------------
+export interface WebhookLive {
+  available: boolean; // false when the API key can't read webhooks (e.g. 403)
+  registered?: boolean;
+  status?: 'delivering' | 'disabled' | 'failing' | 'idle' | 'unregistered';
+  active?: boolean;
+  failedDeliveries?: number;
+  successfulDeliveries?: number;
+  lastDeliveredAt?: string | null;
+  reason?: string;
+}
+
 export interface WebhookInfo {
   provider: string;
   url: string;
   configured: boolean; // true once a verifying secret is set
+  live?: WebhookLive | null; // live provider-side status (best-effort)
 }
 
 export function getWebhookInfo(provider: string) {

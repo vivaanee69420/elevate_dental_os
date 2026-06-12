@@ -172,6 +172,46 @@ describe('parseDentallyEvent — resource classification (via webhookService)', 
     const r = await fire('treatment_plan.completed', { id: 301, practitioner_id: 11 });
     expect(r).toMatchObject({ resourceType: 'treatment_plan' });
   });
+
+  // --- payload-shape tolerance: Dentally's exact envelope is not contractually
+  //     fixed, so the receiver must still create records whether the resource is
+  //     under `data`, under its singular key, or the body IS the resource. -----
+  const fireRaw = async (bodyObj) => {
+    const token = signWebhookToken(ORG);
+    const raw = Buffer.from(JSON.stringify(bodyObj));
+    return webhookService.dentally(token, raw, sign(raw));
+  };
+
+  it('creates a record when the resource is nested under its singular key (no data wrapper)', async () => {
+    const r = await fireRaw({ event: 'appointment.created', appointment: { id: 1, site_id: 5, patient_id: 7, start_time: 't' } });
+    expect(r).toMatchObject({ resourceType: 'appointment', count: 1 });
+    expect(r.results[0]).toMatchObject({ table: 'appointments', applied: 1 });
+  });
+
+  it('infers the resource type from the body when there is no event string', async () => {
+    const r = await fireRaw({ patient: { id: 7, site_id: 5, first_name: 'A' } });
+    expect(r).toMatchObject({ resourceType: 'patient', count: 1 });
+  });
+});
+
+describe('applyWebhookEvent — delete events remove rows (no resurrection)', () => {
+  it('appointment.deleted deletes the row instead of upserting it', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    const r = await applyWebhookEvent(ORG, 'appointment', { id: 1 }, 'delete');
+    expect(r).toEqual({ table: 'appointments', deleted: 1 });
+    expect(supaRec.last).toMatchObject({ table: 'appointments', op: 'delete' });
+    expect(supaRec.last.eqs).toEqual(expect.arrayContaining([
+      { col: 'source', val: 'dentally' },
+      { col: 'pms_external_id', val: '1' },
+    ]));
+  });
+
+  it('payment.deleted keys on external_id', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    const r = await applyWebhookEvent(ORG, 'payment', { id: 9 }, 'delete');
+    expect(r).toEqual({ table: 'payments', deleted: 1 });
+    expect(supaRec.last.eqs).toEqual(expect.arrayContaining([{ col: 'external_id', val: '9' }]));
+  });
 });
 
 describe('webhookService.dentally — token + HMAC gate', () => {
