@@ -826,7 +826,7 @@ CREATE TABLE IF NOT EXISTS integration_accounts (
   external_account_id TEXT NOT NULL,       -- GHL locationId
   practice_id UUID REFERENCES practices(id) ON DELETE SET NULL,
   label TEXT,
-  secrets BYTEA,                           -- encrypted PIT JSON, same format as integrations.secrets
+  secrets TEXT,                            -- encrypted PIT (base64), same TEXT format as integrations.secrets on hosted
   config JSONB NOT NULL DEFAULT '{}'::JSONB,
   status TEXT NOT NULL DEFAULT 'active',   -- active | failed | revoked
   webhook_token TEXT,
