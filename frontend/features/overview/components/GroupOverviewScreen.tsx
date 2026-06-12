@@ -11,6 +11,7 @@ import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { formatPence } from '@/lib/format';
 import { useBusinessHub, type HubPractice } from '../business-hub-api';
+import { GhlSummaryCards } from '@/features/ghl/components/GhlSummaryCards';
 
 export function GroupOverviewScreen() {
   const { scope } = useScopePeriod();
@@ -68,6 +69,8 @@ export function GroupOverviewScreen() {
             <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={leadsBreakdown || (isGroupScope ? 'Google · Meta · GHL' : 'all sources — all practices')} />
             <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'leads → new patients booked' : 'all sources — all practices'} deltaTone="up" />
           </div>
+
+          <GhlSummaryCards />
         </>
       )}
     </div>
