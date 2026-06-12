@@ -15,6 +15,17 @@ import { formatPence } from '@/lib/format';
 
 type Selected = { kind: 'lead'; lead: Lead } | { kind: 'msg'; comm: Communication };
 
+// Lookback window for the "New leads" list. 'recent' = since the start of
+// yesterday (buffers the nightly GHL sync lag); the rest are rolling day counts.
+type WindowKey = 'today' | 'recent' | '7d' | '30d' | 'all';
+const WINDOWS: { key: WindowKey; label: string; days: number }[] = [
+  { key: 'today', label: 'Today', days: 0 },
+  { key: 'recent', label: 'Since yesterday', days: 1 },
+  { key: '7d', label: 'Last 7 days', days: 7 },
+  { key: '30d', label: 'Last 30 days', days: 30 },
+  { key: 'all', label: 'All time', days: Infinity },
+];
+
 const OPEN_FOLLOWUP: Lead['status'][] = ['new', 'contact_attempted', 'contact_made'];
 const CLOSED: Lead['status'][] = ['not_proceeding', 'treatment_completed', 'failed_to_attend'];
 
@@ -40,10 +51,20 @@ export default function TodayScreen() {
   const leads: Lead[] = leadData?.leads ?? [];
   const comms = commData?.communications ?? [];
   const [selected, setSelected] = useState<Selected | null>(null);
+  const [windowKey, setWindowKey] = useState<WindowKey>('recent');
 
   const { newLeads, followUps, messages, activeCount } = useMemo(() => {
-    const start = new Date(); start.setHours(0, 0, 0, 0);
-    const startMs = start.getTime();
+    // Window start = local midnight minus N days. 'recent' (N=1) buffers the
+    // nightly GHL sync lag: leads land ~22:00 carrying GHL's real createdAt, so
+    // a strict calendar-today filter reads 0 every morning even when leads
+    // flowed overnight. 'all' (N=Infinity) treats every open lead as new.
+    const days = WINDOWS.find((w) => w.key === windowKey)?.days ?? 1;
+    let startMs = 0;
+    if (Number.isFinite(days)) {
+      const start = new Date(); start.setHours(0, 0, 0, 0);
+      start.setDate(start.getDate() - days);
+      startMs = start.getTime();
+    }
 
     const open = leads.filter((l) => !CLOSED.includes(l.status));
     const newLeads = open
@@ -57,10 +78,11 @@ export default function TodayScreen() {
       .filter((c) => c.direction === 'inbound')
       .slice(0, 20);
     return { newLeads, followUps, messages, activeCount: open.length };
-  }, [leads, comms]);
+  }, [leads, comms, windowKey]);
 
+  const windowLabel = WINDOWS.find((w) => w.key === windowKey)?.label ?? 'Recent';
   const counters = [
-    { label: 'New leads today', value: newLeads.length, colour: '#3B82F6' },
+    { label: `New leads · ${windowLabel}`, value: newLeads.length, colour: '#3B82F6' },
     { label: 'Needs follow-up', value: followUps.length, colour: 'var(--warning)' },
     { label: 'Recent messages', value: messages.length, colour: '#8B5CF6' },
     { label: 'Active leads', value: activeCount, colour: 'var(--success)' },
@@ -68,11 +90,23 @@ export default function TodayScreen() {
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
-      <div className="mb-6">
-        <h1 className="display font-bold" style={{ fontSize: 28 }}>Today</h1>
-        <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          {isLoading ? 'Loading…' : `${newLeads.length} new leads · ${followUps.length} to follow up · ${messages.length} recent messages`}
-        </p>
+      <div className="mb-6 flex" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div>
+          <h1 className="display font-bold" style={{ fontSize: 28 }}>Today</h1>
+          <p className="text-ink-muted" style={{ fontSize: 13 }}>
+            {isLoading ? 'Loading…' : `${newLeads.length} new leads · ${followUps.length} to follow up · ${messages.length} recent messages`}
+          </p>
+        </div>
+        <select
+          value={windowKey}
+          onChange={(e) => setWindowKey(e.target.value as WindowKey)}
+          aria-label="New leads window"
+          style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', fontSize: 13, background: 'white', cursor: 'pointer' }}
+        >
+          {WINDOWS.map((w) => (
+            <option key={w.key} value={w.key}>{w.label}</option>
+          ))}
+        </select>
       </div>
 
       <div className="grid gap-3 mb-5" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
@@ -85,7 +119,7 @@ export default function TodayScreen() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <Section title="New leads today" empty="No new leads today.">
+        <Section title={`New leads · ${windowLabel}`} empty="No new leads in this window.">
           {newLeads.map((l) => (
             <Row key={l.id} title={nameOf(l)} sub={l.treatment} tag={l.source ?? undefined} ago={agoLabel(minsSince(l.created_at))} onClick={() => setSelected({ kind: 'lead', lead: l })} />
           ))}
