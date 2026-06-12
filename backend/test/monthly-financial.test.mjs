@@ -10,6 +10,7 @@ const {
   bucketsByPeriod,
   plInputFromBuckets,
   financeSeriesRowFromBuckets,
+  sumBucketsInWindow,
   monthlyFinancialService,
 } = await import('../src/services/monthlyFinancial.service.js');
 const repo = (await import('../src/repositories/monthlyFinancial.repository.js'))
@@ -193,6 +194,58 @@ describe('analytics read path — actuals surface on the finance screens', () =>
     // COGS = lab 2m (associates 0, materials 0) → gross 80%; total costs 5m → net 50%
     expect(r.ratios.find((x) => x.key === 'grossMarginPct')).toMatchObject({ value: 80, estimated: false });
     expect(r.ratios.find((x) => x.key === 'netMarginPct')).toMatchObject({ value: 50, estimated: false });
+  });
+});
+
+describe('sumBucketsInWindow — period-sliced actuals', () => {
+  const byPeriod = new Map([
+    ['2025-12', { revenue: 1_000, staff: 100 }],
+    ['2026-01', { revenue: 2_000, staff: 200, lab: 50 }],
+    ['2026-02', { revenue: 3_000, staff: 300 }],
+    ['2026-03', { revenue: 4_000, staff: 400 }],
+  ]);
+
+  it('sums only the periods the [from,to] day-range covers (month-inclusive)', () => {
+    const out = sumBucketsInWindow(byPeriod, '2026-01-01', '2026-02-28');
+    expect(out).toEqual({ revenue: 5_000, staff: 500, lab: 50 });
+  });
+
+  it('includes the endpoint months regardless of day-of-month', () => {
+    const out = sumBucketsInWindow(byPeriod, '2026-01-15', '2026-03-10');
+    expect(out).toEqual({ revenue: 9_000, staff: 900, lab: 50 });
+  });
+
+  it('accepts a plain object and returns {} when nothing falls in range', () => {
+    expect(sumBucketsInWindow({ '2024-05': { revenue: 9 } }, '2026-01-01', '2026-03-31')).toEqual({});
+  });
+});
+
+describe('dashboardSummary — net profit on a custom range (regression)', () => {
+  // monthly_financials + bank + baseline; settled receipts RPC drives cash only.
+  const withActualsAndRpc = (rows) => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials' ? { data: rows, error: null }
+        : q.table === 'bank_accounts' ? { data: [], error: null }
+        : { data: { baseline: { revenue: 1_200_000 } }, error: null };
+    // settled_receipts_by_day + treatment_revenue_matrix → empty (profit comes
+    // from actuals, not these). Any unstubbed RPC returns [].
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+  };
+
+  it('slices actuals to the window so net profit is non-zero for a ranged request', async () => {
+    withActualsAndRpc([
+      { period: '2026-01', dental_bucket: 'revenue', amount_pence: 5_000_000, source: 'manual' },
+      { period: '2026-01', dental_bucket: 'staff', amount_pence: 1_000_000, source: 'manual' },
+      { period: '2026-02', dental_bucket: 'revenue', amount_pence: 5_000_000, source: 'manual' },
+      { period: '2026-02', dental_bucket: 'staff', amount_pence: 1_000_000, source: 'manual' },
+      // outside the window — must NOT be counted
+      { period: '2025-06', dental_bucket: 'revenue', amount_pence: 9_000_000, source: 'manual' },
+    ]);
+    const r = await svc.dashboardSummary(ORG_A, { from: '2026-01-01', to: '2026-02-28' });
+    expect(r.turnoverBasis).toBe('actuals');
+    expect(r.revenuePence).toBe(10_000_000);   // 5m + 5m, 2025-06 excluded
+    expect(r.totalCostsPence).toBe(2_000_000);  // 1m + 1m staff
+    expect(r.netProfitPence).toBe(8_000_000);   // was 0 before the window-slice fix
   });
 });
 

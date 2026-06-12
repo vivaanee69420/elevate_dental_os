@@ -68,6 +68,16 @@ opex:overhead+other }` (`financeSeriesRowFromBuckets`).
 
 Annual P&L (`pl`) sums the trailing ≤12 entered periods.
 
+**Command-Centre `dashboard-summary` (period-sliced costs/profit):** `period` is
+`YYYY-MM`, so actuals are fully sliceable. For a custom [from,to] range (the
+MTD/QTD/6M/YTD chips all send concrete dates) the dashboard sums the bucket
+actuals for **only the periods the window covers** (`sumBucketsInWindow`,
+month-inclusive on both ends) before `calculatePL`; with no range it uses the
+trailing-12 annual sum. Costs are org-level (`monthly_financials.practice_id` is
+NULL), so a **practice-scoped** ranged request with no per-practice cost split
+still yields 0 costs/profit. (Earlier the summary forced costs/profit to 0 for
+*any* ranged request — net profit was structurally 0 on the dashboard.)
+
 ### 1b. Profit Benchmarking — `calculateProfitBenchmark`
 
 The actual cost/profit ratios of a P&L against the **UK dental group benchmarks**.
@@ -362,11 +372,20 @@ where `cac_pence = ad_spend / new_patients`. Healthy benchmark ≥ 3.
 ## 8. Marketing ROI
 
 ```
-costPerLead = adSpend / leads
+costPerLead = adSpend / (crmAttributedLeads || platformConversions)
 costPerTreatment = adSpend / treatmentsConverted
 ROAS = totalRevenue / adSpend     (return on ad spend, expressed as multiple)
 conversionPct = treatments / leads × 100
 ```
+
+**CPL denominator (`/marketing/roi`):** preferred denominator is CRM leads
+attributed to an ad provider (`attributeProvider` matches `utm_source/medium/source`
+against `/google|adwords/` and `/facebook|meta|instagram|fb|ig/`). GHL-synced leads
+carry `source='gohighlevel'` with **no UTM**, so they attribute to nothing and
+`adLeads` collapses to 0 — which made CPL structurally 0. Fallback: the ad
+platforms' own `conversions` counts (`ad_metrics.conversions`, the same source the
+Business Hub leads roll-up uses). `leads_from_ads` in the response is this proxy;
+`crm_attributed_leads` carries the raw CRM-matched count.
 
 Benchmarks:
 - Good CPL UK dental: £30–80 (general), £100–200 (implants)

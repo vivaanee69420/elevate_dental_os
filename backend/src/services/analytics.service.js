@@ -15,7 +15,7 @@ import * as chairConfig_repository_1 from "../repositories/chairConfig.repositor
 import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { boardReportRepository } from "../repositories/boardReport.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
-import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets } from "./monthlyFinancial.service.js";
+import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
@@ -1525,13 +1525,19 @@ export const analyticsService = {
         const billedPence = (Array.isArray(billedRows) ? billedRows : [])
             .filter((r) => !practiceId || r.practice_id === practiceId)
             .reduce((s, r) => s + (Number(r.fee_pence) || 0), 0);
-        // Real costs only apply to the trailing window (monthly_financials is
-        // annual, not period-sliceable) — for a custom range, costs/profit are 0.
-        const useActuals = !ranged && actuals.hasAny && (actuals.annual.revenue || 0) > 0;
+        // monthly_financials.period is 'YYYY-MM' — fully period-sliceable. For a
+        // custom [from,to] range, sum the bucket actuals for the periods the
+        // window covers; otherwise use the trailing-12 annual sum. Costs are
+        // org-level (practice_id null), so a practice-scoped request with no
+        // per-practice cost split still yields 0 actuals — acceptable.
+        const actualBuckets = ranged
+            ? sumBucketsInWindow(actuals.byPeriod, from, to)
+            : actuals.annual;
+        const useActuals = actuals.hasAny && ((actualBuckets.revenue || 0) > 0);
         let revenuePence = periodRevenue, totalCostsPence = 0, netProfitPence = 0, marginPct = 0;
         let turnoverBasis = 'settled';
         if (useActuals) {
-            const inp = plInputFromBuckets(actuals.annual);
+            const inp = plInputFromBuckets(actualBuckets);
             const pl = (0, formulas_1.calculatePL)(inp);
             revenuePence = inp.revenue;
             totalCostsPence = pl.totalCosts;
