@@ -101,22 +101,17 @@ export default function SyncOverlay({
   const barColour = errored ? 'var(--danger, #DC2626)' : stalled ? '#D97706' : 'var(--brand)';
 
   return (
-    // Non-blocking toast pinned top-right: no full-screen backdrop, so the rest
-    // of the app stays fully usable while the import runs in the background.
+    // Non-blocking toast card. Positioning + stacking is owned by the global
+    // SyncToastProvider's fixed column (top-right), so this renders as a plain
+    // card and re-enables pointer events on itself (the column disables them).
     <div
+      className="card-padded"
       style={{
-        position: 'fixed', top: 16, right: 16, zIndex: 2000,
-        maxWidth: 360, pointerEvents: 'none',
+        background: 'white', minWidth: 300, maxWidth: 360, textAlign: 'left',
+        boxShadow: '0 10px 40px rgba(0,0,0,0.18)', position: 'relative',
+        border: '1px solid var(--border)', borderRadius: 12, pointerEvents: 'auto',
       }}
     >
-      <div
-        className="card-padded"
-        style={{
-          background: 'white', minWidth: 300, maxWidth: 360, textAlign: 'left',
-          boxShadow: '0 10px 40px rgba(0,0,0,0.18)', position: 'relative',
-          border: '1px solid var(--border)', borderRadius: 12, pointerEvents: 'auto',
-        }}
-      >
         {/* Always-present escape hatch — the user is never trapped behind a
             frozen bar. Refreshes data + unmounts via the parent's onDone. */}
         <button
@@ -205,7 +200,6 @@ export default function SyncOverlay({
             Close
           </button>
         )}
-      </div>
     </div>
   );
 }
