@@ -1,278 +1,112 @@
 'use client';
-// GoHighLevel management panel. Shown on the Integrations screen once GHL is
-// connected. Two jobs:
-//   1. Pull full history — the on-connect bootstrap pulls contacts +
-//      opportunities; this re-pulls everything on demand.
-//   2. Pipeline stage mapping — map each GHL pipeline stage to an Elevate lead
-//      status. Until set, the sync falls back to a name heuristic (backend
-//      mapStage). Owner-only on the backend.
+// GoHighLevel subaccount manager. Lists every connected GHL Location (each mapped
+// 1:1 to a practice), lets the owner add a subaccount (paste a Private Integration
+// Token + Location ID + pick a practice), map/sync/disconnect each, and copy the
+// per-subaccount webhook URL to paste into that location's GHL settings.
 
 import { useState } from 'react';
-import {
-  usePipelines,
-  useSetStageMappings,
-  useSyncIntegration,
-  useSubmitBrokerKey,
-} from '../hooks';
-import { useSyncToast } from '../sync-toast';
+import { useQueryClient } from '@tanstack/react-query';
+import { useGhlAccounts, useAddGhlAccount, usePractices } from '../hooks';
+import { syncGhlAccount } from '../api';
+import GhlAccountRow from './GhlAccountRow';
 
-// Elevate lead statuses + friendly labels (mirrors backend ELEVATE_STATUSES).
-const ELEVATE_STATUSES: { value: string; label: string }[] = [
-  { value: 'new', label: 'New' },
-  { value: 'contact_attempted', label: 'Contact attempted' },
-  { value: 'contact_made', label: 'Contact made' },
-  { value: 'consultation_booked', label: 'Consultation booked' },
-  { value: 'consultation_attended', label: 'Consultation attended' },
-  { value: 'treatment_started', label: 'Treatment started' },
-  { value: 'treatment_completed', label: 'Treatment completed' },
-  { value: 'not_proceeding', label: 'Not proceeding' },
-  { value: 'failed_to_attend', label: 'Failed to attend' },
-];
+export default function GoHighLevelPanel() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useGhlAccounts();
+  const practicesQ = usePractices();
+  const add = useAddGhlAccount();
 
-export default function GoHighLevelPanel({
-  initialMappings = {},
-  locationId = null,
-}: {
-  initialMappings?: Record<string, string>;
-  locationId?: string | null;
-}) {
-  const { data, isLoading, error } = usePipelines('gohighlevel');
-  const saveMappings = useSetStageMappings('gohighlevel');
-  const sync = useSyncIntegration();
-  const submitKey = useSubmitBrokerKey();
+  const [showAdd, setShowAdd] = useState(false);
+  const [token, setToken] = useState('');
+  const [locId, setLocId] = useState('');
+  const [practiceId, setPracticeId] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
 
-  // Global sync toast — survives navigation. `syncing` drives button state.
-  const { start: startSyncToast, active } = useSyncToast();
-  const syncing = active.has('gohighlevel');
-  // Working copy of stage -> status, seeded from the saved config.
-  const [mappings, setMappings] = useState<Record<string, string>>(initialMappings);
-  const [saved, setSaved] = useState(false);
-  // Stage mapping is fully automatic (backend infers status from the stage name).
-  // Hide the per-stage override table behind an advanced toggle so the panel
-  // isn't a wall of dropdowns. Open it automatically if any override is set.
-  const [showMapping, setShowMapping] = useState(Object.keys(initialMappings).length > 0);
+  const accounts = data?.accounts ?? [];
+  const practices = practicesQ.data?.practices ?? [];
 
-  // Reconnect / replace-credentials form (API keys are write-only — never
-  // returned by the API — so we show the Location ID + a masked indicator and
-  // let the owner paste a fresh token + location to re-link).
-  const [showReconnect, setShowReconnect] = useState(false);
-  const [keyInput, setKeyInput] = useState('');
-  const [locInput, setLocInput] = useState(locationId ?? '');
-
-  const pipelines = data?.pipelines ?? [];
-
-  // Replace the stored API key + Location ID, then bootstrap-pull.
-  async function reconnect() {
-    if (!keyInput.trim() || !locInput.trim()) return;
-    await submitKey.mutateAsync({ provider: 'gohighlevel', apiKey: keyInput.trim(), locationId: locInput.trim() });
-    setKeyInput('');
-    setShowReconnect(false);
-    startSyncToast('gohighlevel'); // overlay polls the bootstrap the backend kicks off
+  // Per-account sync + add-bootstrap run server-side with no progress stream;
+  // refetch the list shortly after so status/last_sync update.
+  function refetchSoon() {
+    setTimeout(() => qc.invalidateQueries({ queryKey: ['ghl-accounts'] }), 6000);
   }
 
-  // Incremental: pull new/changed contacts + opportunities since last sync.
-  async function syncNew() {
-    startSyncToast('gohighlevel');
-    await sync.mutateAsync({ provider: 'gohighlevel', full: false });
+  async function submitAdd() {
+    if (!token.trim() || !locId.trim()) return;
+    await add.mutateAsync({ token: token.trim(), locationId: locId.trim(), practiceId: practiceId || null });
+    setToken(''); setLocId(''); setPracticeId(''); setShowAdd(false);
+    setNotice('Subaccount connected. Initial sync is running — contacts and leads will appear shortly.');
+    refetchSoon();
   }
 
-  async function pullFullHistory() {
-    startSyncToast('gohighlevel');
-    await sync.mutateAsync({ provider: 'gohighlevel', full: true });
-  }
-
-  function setStage(stageId: string, status: string) {
-    setMappings((m) => {
-      const next = { ...m };
-      if (status) next[stageId] = status;
-      else delete next[stageId];
-      return next;
-    });
-    setSaved(false);
-  }
-
-  async function save() {
-    await saveMappings.mutateAsync(mappings);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  function onSync(id: string, full: boolean) {
+    syncGhlAccount(id, full).catch(() => {});
+    setNotice('Sync started. New data will appear shortly.');
+    refetchSoon();
   }
 
   return (
     <div className="card-padded" style={{ marginBottom: 20 }}>
-      <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-        GoHighLevel
-      </h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>GoHighLevel subaccounts</h2>
+        <button onClick={() => setShowAdd((v) => !v)} style={{ padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'white', cursor: 'pointer' }}>
+          {showAdd ? 'Cancel' : 'Add subaccount'}
+        </button>
+      </div>
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-        Your contacts and opportunities were pulled automatically on connect and
-        refresh hourly. Pipeline stages map to Elevate lead statuses automatically
-        from the stage name — only open Customise if a stage lands in the wrong
-        column.
+        Connect each GoHighLevel location with its own Private Integration Token and map it to a practice.
+        Contacts and opportunities sync into that practice, and the practice filter scopes them everywhere.
       </p>
 
-      {/* Connection — view current Location ID + replace credentials. */}
-      <div style={{ marginBottom: 16, padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#F8FAFC' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 12 }}>
-            <div><span className="text-ink-muted">API key:</span> <span style={{ fontFamily: 'monospace' }}>•••••••• set</span></div>
-            <div><span className="text-ink-muted">Location ID:</span>{' '}
-              <span style={{ fontFamily: 'monospace' }}>{locationId || '—'}</span>
-            </div>
-          </div>
-          <button
-            onClick={() => { setShowReconnect((v) => !v); setLocInput(locationId ?? ''); }}
-            style={{
-              padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-              border: '1px solid var(--border)', background: 'white', cursor: 'pointer',
-            }}
-          >
-            {showReconnect ? 'Cancel' : 'Reconnect / replace key'}
-          </button>
+      {notice && (
+        <div style={{ marginBottom: 12, padding: '8px 10px', fontSize: 12, borderRadius: 6, background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#047857' }}>
+          {notice}
         </div>
-        {showReconnect && (
-          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 420 }}>
-            <input
-              type="password"
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              placeholder="New Private Integration Token (pit-…)"
-              style={{ padding: '8px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6 }}
-            />
-            <input
-              type="text"
-              value={locInput}
-              onChange={(e) => setLocInput(e.target.value)}
-              placeholder="Location ID"
-              style={{ padding: '8px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6 }}
-            />
-            <div>
-              <button
-                onClick={reconnect}
-                disabled={!keyInput.trim() || !locInput.trim() || submitKey.isPending}
-                style={{
-                  padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', color: 'white',
-                  background: keyInput.trim() && locInput.trim() ? 'var(--brand)' : '#9CA3AF',
-                  cursor: keyInput.trim() && locInput.trim() && !submitKey.isPending ? 'pointer' : 'default',
-                }}
-              >
-                {submitKey.isPending ? 'Saving…' : 'Save & re-sync'}
-              </button>
-              <span className="text-ink-muted" style={{ fontSize: 10, marginLeft: 10 }}>
-                The token must be created inside the same GHL sub-account as the Location ID.
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
+      )}
 
-      <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <button
-          onClick={syncNew}
-          disabled={syncing}
-          style={{
-            padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-            border: 'none', background: 'var(--brand)', color: 'white',
-            cursor: syncing ? 'default' : 'pointer',
-          }}
-        >
-          {syncing ? 'Syncing…' : 'Sync new data'}
-        </button>
-        <button
-          onClick={pullFullHistory}
-          disabled={syncing}
-          style={{
-            padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-            border: '1px solid var(--border)', background: 'white', color: 'var(--ink)',
-            cursor: syncing ? 'default' : 'pointer',
-          }}
-        >
-          Pull full history
-        </button>
-        <span className="text-ink-muted" style={{ fontSize: 11 }}>
-          Sync pulls new/changed records; full history re-pulls everything (slower).
-        </span>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <h3 style={{ fontSize: 13, fontWeight: 600, margin: 0 }}>Pipeline stage mapping</h3>
-        <span className="text-ink-muted" style={{ fontSize: 11 }}>Automatic — stages map from their name</span>
-        <button
-          onClick={() => setShowMapping((v) => !v)}
-          style={{
-            marginLeft: 'auto', padding: '4px 10px', fontSize: 11, fontWeight: 700, borderRadius: 6,
-            border: '1px solid var(--border)', background: 'white', color: 'var(--ink)', cursor: 'pointer',
-          }}
-        >
-          {showMapping ? 'Hide overrides' : 'Customise'}
-        </button>
-      </div>
-      {!showMapping ? null : isLoading ? (
-        <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading pipelines…</div>
-      ) : error ? (
-        <div style={{ fontSize: 12, color: 'var(--danger)' }}>
-          Couldn&apos;t load pipelines: {(error as Error).message}
-        </div>
-      ) : pipelines.length === 0 ? (
-        <div className="text-ink-muted" style={{ fontSize: 13 }}>
-          No pipelines found on this GoHighLevel location.
-        </div>
-      ) : (
-        <>
-          {pipelines.map((p) => (
-            <div key={p.id} style={{ marginBottom: 14 }}>
-              <div className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>
-                {p.name}
-              </div>
-              <table className="w-full">
-                <thead>
-                  <tr className="text-ink-muted" style={{ textAlign: 'left', fontSize: 11 }}>
-                    <th style={{ padding: '4px' }}>GHL stage</th>
-                    <th style={{ padding: '4px' }}>Elevate status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {p.stages.map((s) => (
-                    <tr key={s.id} style={{ borderTop: '1px solid var(--border)' }}>
-                      <td style={{ padding: '8px 4px', fontSize: 13 }}>{s.name}</td>
-                      <td style={{ padding: '8px 4px', width: 240 }}>
-                        <select
-                          value={mappings[s.id] ?? ''}
-                          onChange={(e) => setStage(s.id, e.target.value)}
-                          style={{
-                            width: '100%', padding: '6px 8px', fontSize: 12,
-                            border: '1px solid var(--border)', borderRadius: 6, background: 'white',
-                          }}
-                        >
-                          <option value="">Auto (from stage name)</option>
-                          {ELEVATE_STATUSES.map((st) => (
-                            <option key={st.value} value={st.value}>{st.label}</option>
-                          ))}
-                        </select>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ))}
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
-            <button
-              onClick={save}
-              disabled={saveMappings.isPending}
-              style={{
-                padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-                border: 'none', color: 'white', background: 'var(--brand)',
-                cursor: saveMappings.isPending ? 'default' : 'pointer',
-              }}
-            >
-              {saveMappings.isPending ? 'Saving…' : 'Save mapping'}
+      {showAdd && (
+        <div style={{ marginBottom: 16, padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#F8FAFC', display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460 }}>
+          <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Private Integration Token (pit-…)" style={inp} />
+          <input type="text" value={locId} onChange={(e) => setLocId(e.target.value)} placeholder="Location ID" style={inp} />
+          <select value={practiceId} onChange={(e) => setPracticeId(e.target.value)} style={inp}>
+            <option value="">Map to practice (optional now, required to scope)</option>
+            {practices.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <div>
+            <button onClick={submitAdd} disabled={!token.trim() || !locId.trim() || add.isPending}
+              style={{ padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', color: 'white', background: token.trim() && locId.trim() ? 'var(--brand)' : '#9CA3AF', cursor: 'pointer' }}>
+              {add.isPending ? 'Validating…' : 'Connect & sync'}
             </button>
-            {saved && (
-              <span style={{ fontSize: 11, color: 'var(--success, #047857)' }}>Saved</span>
-            )}
+            {add.isError && <span style={{ fontSize: 11, color: 'var(--danger)', marginLeft: 10 }}>{(add.error as Error).message}</span>}
           </div>
-        </>
+          <span className="text-ink-muted" style={{ fontSize: 10 }}>The token must be created inside the same GHL sub-account as the Location ID.</span>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="text-ink-muted" style={{ fontSize: 13 }}>Loading subaccounts…</div>
+      ) : accounts.length === 0 ? (
+        <div className="text-ink-muted" style={{ fontSize: 13 }}>No subaccounts connected yet. Add one above.</div>
+      ) : (
+        <table className="w-full">
+          <thead>
+            <tr className="text-ink-muted" style={{ textAlign: 'left', fontSize: 11 }}>
+              <th style={{ padding: 4 }}>Subaccount</th>
+              <th style={{ padding: 4 }}>Practice</th>
+              <th style={{ padding: 4 }}>Status</th>
+              <th style={{ padding: 4 }}>Webhook URL</th>
+              <th style={{ padding: 4 }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {accounts.map((a) => (
+              <GhlAccountRow key={a.id} account={a} practices={practices} onSync={onSync} />
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
 }
+
+const inp: React.CSSProperties = { padding: '8px 10px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6 };
