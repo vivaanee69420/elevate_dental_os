@@ -12,10 +12,9 @@ import {
   usePipelines,
   useSetStageMappings,
   useSyncIntegration,
-  useFinishSync,
   useSubmitBrokerKey,
 } from '../hooks';
-import SyncOverlay from './SyncOverlay';
+import { useSyncToast } from '../sync-toast';
 
 // Elevate lead statuses + friendly labels (mirrors backend ELEVATE_STATUSES).
 const ELEVATE_STATUSES: { value: string; label: string }[] = [
@@ -40,10 +39,11 @@ export default function GoHighLevelPanel({
   const { data, isLoading, error } = usePipelines('gohighlevel');
   const saveMappings = useSetStageMappings('gohighlevel');
   const sync = useSyncIntegration();
-  const finishSync = useFinishSync();
   const submitKey = useSubmitBrokerKey();
 
-  const [syncing, setSyncing] = useState(false);
+  // Global sync toast — survives navigation. `syncing` drives button state.
+  const { start: startSyncToast, active } = useSyncToast();
+  const syncing = active.has('gohighlevel');
   // Working copy of stage -> status, seeded from the saved config.
   const [mappings, setMappings] = useState<Record<string, string>>(initialMappings);
   const [saved, setSaved] = useState(false);
@@ -67,17 +67,17 @@ export default function GoHighLevelPanel({
     await submitKey.mutateAsync({ provider: 'gohighlevel', apiKey: keyInput.trim(), locationId: locInput.trim() });
     setKeyInput('');
     setShowReconnect(false);
-    setSyncing(true); // overlay polls the bootstrap the backend kicks off
+    startSyncToast('gohighlevel'); // overlay polls the bootstrap the backend kicks off
   }
 
   // Incremental: pull new/changed contacts + opportunities since last sync.
   async function syncNew() {
-    setSyncing(true);
+    startSyncToast('gohighlevel');
     await sync.mutateAsync({ provider: 'gohighlevel', full: false });
   }
 
   async function pullFullHistory() {
-    setSyncing(true);
+    startSyncToast('gohighlevel');
     await sync.mutateAsync({ provider: 'gohighlevel', full: true });
   }
 
@@ -99,12 +99,6 @@ export default function GoHighLevelPanel({
 
   return (
     <div className="card-padded" style={{ marginBottom: 20 }}>
-      {syncing && (
-        <SyncOverlay
-          provider="gohighlevel"
-          onDone={() => { finishSync(); setSyncing(false); }}
-        />
-      )}
       <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
         GoHighLevel
       </h2>

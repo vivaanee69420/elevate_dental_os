@@ -14,10 +14,9 @@ import {
   usePractices,
   useSetPracticeSiteId,
   useSyncIntegration,
-  useFinishSync,
 } from '../hooks';
 import type { DentallySyncResource } from '../api';
-import SyncOverlay from './SyncOverlay';
+import { useSyncToast } from '../sync-toast';
 
 // Selectable Dentally collections for a scoped backfill. Order = pull order.
 const SYNC_RESOURCES: { key: DentallySyncResource; label: string }[] = [
@@ -69,8 +68,9 @@ function Row({ id, name, current }: { id: string; name: string; current: string 
 export default function DentallyPracticeMapping() {
   const { data, isLoading } = usePractices();
   const sync = useSyncIntegration();
-  const finishSync = useFinishSync();
-  const [syncing, setSyncing] = useState(false);
+  // Global sync toast — survives navigation. `syncing` drives button state.
+  const { start: startSyncToast, active } = useSyncToast();
+  const syncing = active.has('dentally');
   // Which collections to pull. Default = all (the full backfill). Untick the
   // heavy ones (payments/invoices) for a fast, scoped pull — e.g. patients only.
   const [selected, setSelected] = useState<Set<DentallySyncResource>>(
@@ -95,7 +95,7 @@ export default function DentallyPracticeMapping() {
   // sends the explicit list.
   async function pullFullHistory() {
     if (!selected.size) return;
-    setSyncing(true);
+    startSyncToast('dentally');
     const resources = allSelected
       ? undefined
       : SYNC_RESOURCES.map((r) => r.key).filter((k) => selected.has(k));
@@ -104,12 +104,6 @@ export default function DentallyPracticeMapping() {
 
   return (
     <div className="card-padded" style={{ marginBottom: 20 }}>
-      {syncing && (
-        <SyncOverlay
-          provider="dentally"
-          onDone={() => { finishSync(); setSyncing(false); }}
-        />
-      )}
       <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
         Dentally practice mapping
       </h2>

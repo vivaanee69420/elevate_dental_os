@@ -15,7 +15,6 @@ import {
   useSubmitBrokerKey,
   useRevoke,
   useSyncIntegration,
-  useFinishSync,
 } from '@/features/integrations/hooks';
 
 // Providers with a real on-demand pull (Refresh button + first-connect sync).
@@ -28,7 +27,7 @@ import DentallyPracticeMapping from '@/features/integrations/components/Dentally
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
-import SyncOverlay from '@/features/integrations/components/SyncOverlay';
+import { useSyncToast } from '@/features/integrations/sync-toast';
 
 // Map an OAuth callback error code to a human title + message. Known codes get
 // specific guidance; anything else falls back to the raw message.
@@ -72,8 +71,8 @@ export default function IntegrationsScreen() {
   const submitKey = useSubmitBrokerKey();
   const revoke = useRevoke();
   const sync = useSyncIntegration();
-  const finishSync = useFinishSync();
-  const [syncing, setSyncing] = useState<string | null>(null);
+  // Global sync toast — survives navigation; per-provider button state via active.
+  const { start: startSyncToast, active } = useSyncToast();
   const [brokerModal, setBrokerModal] = useState<{
     provider: string;
     hint: string;
@@ -152,11 +151,11 @@ export default function IntegrationsScreen() {
     setBrokerModal(null);
     setKeyInput('');
     setLocInput('');
-    if (SYNCABLE.has(provider)) setSyncing(provider);
+    if (SYNCABLE.has(provider)) startSyncToast(provider);
   }
 
   async function handleRefresh(provider: string) {
-    setSyncing(provider);
+    startSyncToast(provider);
     // Fire-and-forget on the server (returns immediately); the overlay polls
     // progress and clears itself via onDone. Incremental pull (latest changes
     // since the last sync) — full history is the separate button on the
@@ -166,12 +165,6 @@ export default function IntegrationsScreen() {
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
-      {syncing && (
-        <SyncOverlay
-          provider={syncing}
-          onDone={() => { finishSync(); setSyncing(null); }}
-        />
-      )}
       <div className="mb-6">
         <h1 className="display font-bold" style={{ fontSize: 28 }}>Integrations</h1>
         <p className="text-ink-muted" style={{ fontSize: 13 }}>
@@ -224,15 +217,15 @@ export default function IntegrationsScreen() {
                       {SYNCABLE.has(p.id) && (
                         <button
                           onClick={() => handleRefresh(p.id)}
-                          disabled={syncing === p.id}
+                          disabled={active.has(p.id)}
                           style={{
                             background: 'none', border: '1px solid var(--border)',
                             borderRadius: 6, padding: '4px 8px', fontSize: 11,
-                            cursor: syncing === p.id ? 'default' : 'pointer',
+                            cursor: active.has(p.id) ? 'default' : 'pointer',
                           }}
                           title="Pull latest data now"
                         >
-                          {syncing === p.id ? 'Refreshing…' : 'Refresh data'}
+                          {active.has(p.id) ? 'Refreshing…' : 'Refresh data'}
                         </button>
                       )}
                       <Chip colour="emerald">Connected</Chip>
