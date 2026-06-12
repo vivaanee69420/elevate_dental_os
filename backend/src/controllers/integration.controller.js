@@ -36,7 +36,12 @@ export const integrationController = {
     // JWT, so the org is recovered from the HMAC-signed `state` (not req.user).
     // Always redirects back to the frontend integrations page — never returns JSON.
     async oauthCallback(req, res) {
-        const provider = req.params.provider;
+        // Public redirect slug aliases: GHL's marketplace blocks a redirect URI
+        // containing "highlevel"/"ghl", so its callback is registered under
+        // `leadconnector`. Map it back to the internal provider key (which is
+        // also what the signed OAuth state carries).
+        const PROVIDER_ALIAS = { leadconnector: 'gohighlevel' };
+        const provider = PROVIDER_ALIAS[req.params.provider] || req.params.provider;
         // QuickBooks returns the company id as `realmId` on the callback query;
         // other OAuth providers only carry code + state. Forward it through.
         const { code, state, realmId, error: oauthError } = req.query;
