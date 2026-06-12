@@ -141,14 +141,14 @@ export function GroupPerformanceScreen() {
   const headlineFunnel: HeadlineKpi[] = [
     { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Billed plan revenue (sold) · ${windowLabel}`,
       chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
-    { label: 'Treatments Paid', value: formatPence(paidPence), sub: `Collected plan revenue (paid invoices) · ${windowLabel}`,
+    { label: 'Plan Fees Collected', value: formatPence(paidPence), sub: `Plan treatment fees on paid invoices · ${windowLabel}`,
       chip: collectedPct > 0 ? { text: `${collectedPct}% of billed collected`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null },
     { label: 'Lead → Start Rate', value: `${g.leadToStartRate}%`, sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads`,
       chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} accepted`, tone: 'emerald' } : null },
     { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: 'Paid spend ÷ treatments started',
       chip: connected && spendPence > 0 ? { text: `${formatPence(spendPence)} paid`, tone: 'amber' } : null },
-    { label: 'Revenue / Lead', value: formatPence(revPerLead), sub: 'Attributed value ÷ leads',
-      chip: g.treatmentsClosedPence > 0 ? { text: `${formatPence(g.treatmentsClosedPence)} attributed`, tone: 'emerald' } : null },
+    { label: 'Revenue / Lead', value: formatPence(revPerLead), sub: 'Dentally plan fees ÷ leads (Google · Meta · GHL)',
+      chip: g.treatmentsClosedPence > 0 ? { text: `${formatPence(g.treatmentsClosedPence)} plan revenue`, tone: 'emerald' } : null },
   ];
 
   // Paid channels only (Google + Meta) — real spend/leads from ad_metrics.
