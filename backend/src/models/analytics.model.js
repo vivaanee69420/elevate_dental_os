@@ -137,10 +137,12 @@ export const outlookQuerySchema = zod_1.z.object({
 });
 
 export const seriesQuerySchema = zod_1.z.object({
-    months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
+    months: zod_1.z.coerce.number().int().min(1).max(24).default(12),
     practice_id: zod_1.z.string().uuid().optional(),
     from: dateStr,
     to: dateStr,
+    accounting_method: zod_1.z.enum(['accrual', 'cash']).default('accrual'),
+    integration_account_id: zod_1.z.string().uuid().optional(),
 });
 
 // ai-insights ?days=30 — rolling window for the leads/payments rollups.
