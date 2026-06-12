@@ -56,6 +56,32 @@ export const integrationAccountRepository = {
         return data;
     },
 
+    // Upsert a per-company account row keyed by its external id (QB realmId).
+    // Updates secrets/config/status if the company is already connected, else
+    // inserts. Returns the account id. Used by the QuickBooks OAuth callback.
+    async upsertByExternalId(orgId, provider, externalId, fields) {
+        const existing = await this.getByLocation(orgId, provider, externalId);
+        if (existing) {
+            await this.update(orgId, existing.id, fields);
+            return existing.id;
+        }
+        const row = await this.insert(orgId, { provider, external_account_id: String(externalId), ...fields });
+        return row.id;
+    },
+
+    // Per-account rotating-refresh-token claim (optimistic, JSONB-flag based).
+    // Only the caller that flips config.refreshing from falsey -> true proceeds;
+    // mirrors integration.repository.claimRefresh for the single-row path.
+    async claimRefresh(orgId, id) {
+        const row = await this.getByIdWithSecrets(orgId, id);
+        if (!row || row.config?.refreshing) return false;
+        await this.mergeConfig(orgId, id, { refreshing: true });
+        return true;
+    },
+    async clearRefresh(orgId, id) {
+        await this.mergeConfig(orgId, id, { refreshing: false });
+    },
+
     // Webhook routing — resolves an account from its random token (no org filter:
     // the token IS the credential). Returns the full row including practice_id.
     async getByWebhookToken(token) {
