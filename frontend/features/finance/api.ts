@@ -26,11 +26,18 @@ export interface FinanceMonth {
 // full P&L (revenue + costs) from connected QuickBooks companies only.
 export type FinanceSource = 'combined' | 'dentally' | 'quickbooks';
 
+// QuickBooks-parity matrix options: report-window length + accounting basis.
+export interface FinanceSeriesOpts {
+  months?: number;                       // default 12 (max 24, backend-capped)
+  accountingMethod?: 'accrual' | 'cash'; // default accrual
+}
+
 export async function getFinanceSeries(
   practiceId?: string | null,
   range?: DateRange | null,
   source: FinanceSource = 'combined',
   accountId?: string | null,
+  opts?: FinanceSeriesOpts,
 ): Promise<{
   error?: string;
   basis?: 'actuals' | 'mixed' | 'revenue-only';
@@ -39,10 +46,12 @@ export async function getFinanceSeries(
   months: FinanceMonth[];
 }> {
   // QuickBooks is scoped by company (accountId), not practice — drop practice_id.
+  const months = opts?.months ?? 12;
   const pp = source !== 'quickbooks' && practiceId ? `&practice_id=${practiceId}` : '';
   const sp = source !== 'combined' ? `&source=${source}` : '';
   const ap = source === 'quickbooks' && accountId ? `&account_id=${accountId}` : '';
-  const r = await api(`/api/analytics/finance-series?months=12${pp}${sp}${ap}${rangeQS(range)}`);
+  const am = `&accounting_method=${opts?.accountingMethod ?? 'accrual'}`;
+  const r = await api(`/api/analytics/finance-series?months=${months}${pp}${sp}${ap}${am}${rangeQS(range)}`);
   if (r?.error) return { error: r.error, costsAvailable: false, months: [] };
   return {
     basis: r.basis,

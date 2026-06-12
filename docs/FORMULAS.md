@@ -58,6 +58,27 @@ flag in §1b). Per-org `xero_account_map` overrides can force any account → `a
 Manual is the fallback when no synced row exists for that period+bucket.
 (`bucketsByPeriod` in `services/monthlyFinancial.service.js`.)
 
+### 1a-i. Dual accounting basis (QuickBooks parity — migration 000089)
+
+`monthly_financials.accounting_method` is `'accrual'` (default, and the value
+for all pre-existing rows) or `'cash'`. The column drives cost-bucket resolution
+at read time inside `bucketsByPeriod` → `_actualsBundle` → `financeSeries`:
+
+- **Accrual basis** (default): includes all rows with `accounting_method =
+  'accrual'` **plus** rows where the column is NULL (manual and Xero rows
+  predate the column and are inherently accrual — treated as accrual). This is
+  the traditional P&L view matching Xero and manual-entry data.
+- **Cash basis**: surfaces **only** rows with `accounting_method = 'cash'`.
+  These come exclusively from the QuickBooks Cash-basis ProfitAndLoss report
+  pull. No manual or Xero rows appear in this view.
+
+The QuickBooks sync pulls **both** the Accrual and Cash ProfitAndLoss reports
+for each period and persists two distinct sets of `monthly_financials` rows,
+each stamped with the corresponding `accounting_method`. Callers select the
+basis via the `accounting_method` query parameter on `finance-series`
+(default: `accrual`). The `pl` annual sum and `dashboard-summary` cost/profit
+paths also respect the selected basis when QuickBooks rows are present.
+
 **Bucket → `calculatePL` cost lines** (`plInputFromBuckets`):
 ```
 revenue          = bucket.revenue

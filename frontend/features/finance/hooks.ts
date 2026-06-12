@@ -14,6 +14,7 @@ import {
   deleteMonthlyFinancial,
   type ManualPaymentInput,
   type MonthlyFinancialInput,
+  type FinanceSeriesOpts,
   type DateRange,
   type FinanceSource,
 } from './api';
@@ -23,10 +24,14 @@ export function useFinanceSeries(
   range?: DateRange | null,
   source: FinanceSource = 'combined',
   accountId: string | null = null,
+  opts?: FinanceSeriesOpts,
 ) {
   return useQuery({
-    queryKey: ['finance-series', practiceId, range?.from ?? null, range?.to ?? null, source, accountId],
-    queryFn: () => getFinanceSeries(practiceId, range, source, accountId),
+    queryKey: [
+      'finance-series', practiceId, range?.from ?? null, range?.to ?? null,
+      source, accountId, opts?.months ?? 12, opts?.accountingMethod ?? 'accrual',
+    ],
+    queryFn: () => getFinanceSeries(practiceId, range, source, accountId, opts),
   });
 }
 

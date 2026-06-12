@@ -51,11 +51,12 @@ export const monthlyFinancialRepository = {
     // Xero-overrides-manual precedence per period+bucket. Optional filters scope
     // the read to one provider (source) and/or one connected company
     // (accountId = integration_account_id) — used by the /profit source toggle.
+    // accounting_method is selected so the service layer can split cash vs accrual.
     async allForOrg(orgId, { source = null, accountId = null } = {}) {
         const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
         let q = supabase_1.serviceClient
             .from('monthly_financials')
-            .select('period, dental_bucket, amount_pence, source, practice_id, integration_account_id')
+            .select('period, dental_bucket, amount_pence, source, practice_id, integration_account_id, accounting_method')
             .eq('organisation_id', orgId)
             .limit(LIMIT_GUARD);
         if (source) q = q.eq('source', source);

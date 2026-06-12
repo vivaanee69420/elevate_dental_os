@@ -381,7 +381,14 @@ Owner-only section (rule 5 / nav `ownerOnly`). Reads gated `wealth.view`; the pe
   `monthly_financials` revenue actual). Costs/profit = `monthly_financials`
   actuals when present, else **0** (not estimated). Per-month `costsAvailable`;
   response `costsAvailable`. `basis`: `actuals` | `mixed` | `revenue-only`.
-  Always returns the full 12-month window.
+  Returns up to 24 months (window capped at 24). Additional query parameters:
+  - `accounting_method` — `accrual` | `cash`, default `accrual`. Selects the
+    accounting basis for cost lines. `accrual` includes manual + Xero + accrual
+    QuickBooks rows (rows without the column are treated as accrual). `cash`
+    returns only rows sourced from the QuickBooks Cash-basis ProfitAndLoss pull.
+  - `integration_account_id` — UUID, optional. Filters cost rows to one
+    connected QuickBooks company (an `integration_accounts` row). Omit for
+    org-wide costs across all connected companies.
 - `financial` — revenue = `monthly_financials` actual else exact settled-payment
   TTM. Margins are real only when a cost source exists, else **0** (not 100%).
   Balance sheet = real bank cash only; every other line **0**. Nothing flagged

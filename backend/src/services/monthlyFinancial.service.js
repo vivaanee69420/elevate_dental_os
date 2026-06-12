@@ -17,10 +17,15 @@ const SYNCED_SOURCES = new Set(['xero', 'quickbooks']);
 // pence. For each period+bucket: if any synced (Xero/QuickBooks) row exists, use
 // the sum of synced rows and ignore manual rows for that bucket; else use the
 // sum of manual rows. Pure — exported for the analytics read path + tests.
-export function bucketsByPeriod(rows) {
+export function bucketsByPeriod(rows, { accountingMethod = 'accrual' } = {}) {
     const acc = new Map(); // period -> bucket -> { synced, manual, hasSynced }
     for (const r of Array.isArray(rows) ? rows : []) {
         if (!r.period || !r.dental_bucket) continue;
+        // Accounting basis: rows carry accounting_method ('accrual'|'cash'); rows
+        // predating the column (or manual/xero) are treated as accrual. Cash basis
+        // surfaces ONLY explicit cash rows (the QB cash pull).
+        const rowMethod = r.accounting_method || 'accrual';
+        if (rowMethod !== accountingMethod) continue;
         if (!acc.has(r.period)) acc.set(r.period, {});
         const byBucket = acc.get(r.period);
         const cell = byBucket[r.dental_bucket] ||
