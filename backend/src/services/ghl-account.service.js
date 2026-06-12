@@ -74,7 +74,9 @@ export const ghlAccountService = {
         try {
             return await integrationAccountRepository.update(orgId, id, patch);
         } catch (err) {
-            if (/duplicate key|unique/i.test(err.message)) {
+            // Only the (org, practice_id) partial unique index maps to this 409.
+            // Match its name specifically so an unrelated failure isn't misreported.
+            if (/idx_integration_accounts_practice/i.test(err.message)) {
                 throw new errors_1.AppError('That practice is already linked to another subaccount', 409);
             }
             throw err;
