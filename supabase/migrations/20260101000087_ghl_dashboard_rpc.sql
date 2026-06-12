@@ -1,4 +1,4 @@
--- 20260101000086_ghl_dashboard_rpc.sql
+-- 20260101000087_ghl_dashboard_rpc.sql
 -- Live aggregate for the GHL CRM dashboard. Groups GHL-sourced contacts, leads
 -- (opportunities), and conversations (communications) by practice_id for an org
 -- over a [since, until) window. One row per practice bucket; the caller sums for
@@ -58,55 +58,77 @@ stable
 security definer
 set search_path = public
 as $$
-  with c as (
+  with
+  -- contacts: raw rows first, then pre-group per (practice_id, source)
+  c_rows as (
+    select practice_id,
+           coalesce(source, 'unknown') as source,
+           created_at
+    from public.contacts
+    where organisation_id = p_org
+      and ghl_contact_id is not null
+      and (p_practice is null or practice_id = p_practice)
+  ),
+  c_src as (
+    -- genuinely distinct (practice_id, source) counts — no window-function trick
+    select practice_id, source, count(*) as cnt
+    from c_rows
+    group by practice_id, source
+  ),
+  c as (
     select
-      practice_id,
+      r.practice_id,
       count(*) as total,
-      count(*) filter (where created_at >= p_since and created_at < p_until) as new_in,
+      count(*) filter (where r.created_at >= p_since and r.created_at < p_until) as new_in,
       coalesce(
-        jsonb_object_agg(source, src_count) filter (where source is not null),
+        (select jsonb_object_agg(s.source, s.cnt)
+         from c_src s
+         where s.practice_id is not distinct from r.practice_id),
         '{}'::jsonb
       ) as by_source
-    from (
-      select practice_id, coalesce(source, 'unknown') as source,
-             created_at,
-             count(*) over (partition by practice_id, coalesce(source, 'unknown')) as src_count
-      from public.contacts
-      where organisation_id = p_org
-        and ghl_contact_id is not null
-        and (p_practice is null or practice_id = p_practice)
-    ) raw
-    group by practice_id
+    from c_rows r
+    group by r.practice_id
+  ),
+  -- leads: raw rows first, then pre-group per (practice_id, stage)
+  l_rows as (
+    select practice_id,
+           coalesce(ghl_stage_name, 'Unstaged') as stage,
+           status,
+           estimated_value_pence,
+           created_at
+    from public.leads
+    where organisation_id = p_org
+      and source = 'gohighlevel'
+      and (p_practice is null or practice_id = p_practice)
+  ),
+  l_stage as (
+    -- genuinely distinct (practice_id, stage) counts
+    select practice_id, stage, count(*) as cnt
+    from l_rows
+    group by practice_id, stage
   ),
   l as (
     select
-      practice_id,
+      r.practice_id,
       count(*) as total,
-      count(*) filter (where created_at >= p_since and created_at < p_until) as new_in,
+      count(*) filter (where r.created_at >= p_since and r.created_at < p_until) as new_in,
       -- open = none of the terminal won/lost statuses
-      count(*) filter (where status not in (
+      count(*) filter (where r.status not in (
         'treatment_started', 'treatment_completed', 'not_proceeding', 'failed_to_attend'
       )) as open_cnt,
       -- won = treatment underway or completed
-      count(*) filter (where status in ('treatment_started', 'treatment_completed')) as won_cnt,
+      count(*) filter (where r.status in ('treatment_started', 'treatment_completed')) as won_cnt,
       -- lost = not proceeding or failed to attend
-      count(*) filter (where status in ('not_proceeding', 'failed_to_attend')) as lost_cnt,
-      coalesce(sum(estimated_value_pence), 0) as value_pence,
+      count(*) filter (where r.status in ('not_proceeding', 'failed_to_attend')) as lost_cnt,
+      coalesce(sum(r.estimated_value_pence), 0) as value_pence,
       coalesce(
-        jsonb_object_agg(stage, stage_count) filter (where stage is not null),
+        (select jsonb_object_agg(s.stage, s.cnt)
+         from l_stage s
+         where s.practice_id is not distinct from r.practice_id),
         '{}'::jsonb
       ) as by_stage
-    from (
-      select practice_id,
-             coalesce(ghl_stage_name, 'Unstaged') as stage,
-             status, estimated_value_pence, created_at,
-             count(*) over (partition by practice_id, coalesce(ghl_stage_name, 'Unstaged')) as stage_count
-      from public.leads
-      where organisation_id = p_org
-        and source = 'gohighlevel'
-        and (p_practice is null or practice_id = p_practice)
-    ) raw
-    group by practice_id
+    from l_rows r
+    group by r.practice_id
   ),
   -- communications has no practice_id; derive it by joining to contacts.
   -- Rows with no contact_id fall into practice_id = NULL (unmapped bucket).
