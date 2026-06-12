@@ -45,7 +45,7 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
-export function ScopePeriodBar() {
+export function ScopePeriodBar({ hideScope = false }: { hideScope?: boolean } = {}) {
   const {
     scope, mode, monthKey, customSince, customUntil,
     setScope, setMode, setMonthKey, setYearKey, setCustom,
@@ -61,16 +61,18 @@ export function ScopePeriodBar() {
   return (
     <div className="flex flex-col gap-2.5 mb-4">
       {/* Scope pills — All practices + every synced practice (data-driven). */}
-      <div className="flex gap-2 flex-wrap items-center">
-        <Pill active={scope === 'all'} onClick={() => setScope('all')}>
-          All practices
-        </Pill>
-        {practices?.map((p) => (
-          <Pill key={p.id} active={scope === p.id} onClick={() => setScope(p.id)}>
-            {p.name}
+      {!hideScope && (
+        <div className="flex gap-2 flex-wrap items-center">
+          <Pill active={scope === 'all'} onClick={() => setScope('all')}>
+            All practices
           </Pill>
-        ))}
-      </div>
+          {practices?.map((p) => (
+            <Pill key={p.id} active={scope === p.id} onClick={() => setScope(p.id)}>
+              {p.name}
+            </Pill>
+          ))}
+        </div>
+      )}
 
       {/* Period pills. */}
       <div className="flex gap-2 flex-wrap items-center">

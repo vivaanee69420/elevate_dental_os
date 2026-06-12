@@ -5,7 +5,6 @@ import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useGhlDashboard } from '../hooks';
 import { GhlKpiCards } from './GhlKpiCards';
 import { PipelineByStage } from './PipelineByStage';
-import { SourceBreakdown } from './SourceBreakdown';
 import { ConversationActivity } from './ConversationActivity';
 import { AppointmentsPanel } from './AppointmentsPanel';
 import { SyncHealthTable } from './SyncHealthTable';
@@ -22,12 +21,9 @@ export default function GhlDashboardScreen() {
 
   return (
     <div className="space-y-4 p-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-slate-900">GoHighLevel Dashboard</h1>
-          <p className="text-[13px] text-slate-500">Consolidated across all connected subaccounts.</p>
-        </div>
-        <ScopePeriodBar />
+      <div>
+        <h1 className="text-lg font-semibold text-slate-900">GoHighLevel Dashboard</h1>
+        <p className="text-[13px] text-slate-500">Consolidated across all connected subaccounts.</p>
       </div>
 
       {data && data.perAccount.length > 0 ? (
@@ -37,6 +33,7 @@ export default function GhlDashboardScreen() {
           onSelect={setAccountId}
         />
       ) : null}
+      <ScopePeriodBar hideScope />
 
       {isLoading ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500">Loading...</div>
@@ -49,10 +46,7 @@ export default function GhlDashboardScreen() {
       ) : (
         <>
           <GhlKpiCards totals={data.totals} />
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <PipelineByStage stages={data.totals.leads.byStage} />
-            <SourceBreakdown sources={data.totals.contacts.bySource} />
-          </div>
+          <PipelineByStage stages={data.totals.leads.byStage} />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <ConversationActivity conversations={data.totals.conversations} />
             <AppointmentsPanel appointments={data.totals.appointments} />
