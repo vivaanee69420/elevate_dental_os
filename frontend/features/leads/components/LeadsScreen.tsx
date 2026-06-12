@@ -3,6 +3,11 @@ import { PageHeader, DataTable, StatusBadge, EmptyState, type Column } from '@/c
 import { formatPence, formatDate, formatNumber } from '@/lib/format';
 import { useLeads } from '../hooks';
 import { useMarketingRoi } from '@/features/growth/hooks';
+import { useScopePeriod } from '@/features/_shared/scope-context';
+
+// A real practice scope is a UUID; 'all' and any group sentinel must not be sent
+// as practice_id (backend validates it as a uuid).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const columns: Column<any>[] = [
   { header: 'Name', render: (l) => `${l.contact?.first_name ?? ''} ${l.contact?.last_name ?? ''}` },
@@ -47,7 +52,10 @@ function LeadAcquisition() {
 }
 
 export default function LeadsScreen() {
-  const { data } = useLeads();
+  // Scope the leads list to the globally-selected practice (= GHL subaccount).
+  const { scope } = useScopePeriod();
+  const practiceId = scope !== 'all' && UUID_RE.test(scope) ? scope : undefined;
+  const { data } = useLeads(practiceId ? { practice_id: practiceId } : {});
   return (
     <div className="max-w-7xl mx-auto">
       <PageHeader title="Leads" subtitle="All enquiries across practices" />

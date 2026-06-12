@@ -11,7 +11,12 @@ import { useMemo, useState } from 'react';
 import { useLeads, usePipelines } from '@/features/leads/hooks';
 import type { Lead, LeadStatus } from '@/features/leads/api';
 import { formatPence } from '@/lib/format';
+import { useScopePeriod } from '@/features/_shared/scope-context';
 import { CRM_TEAL, agoLabel } from '../data';
+
+// A real practice scope is a UUID; 'all' and any group sentinel must not be sent
+// as practice_id (backend validates it as a uuid).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Fallback columns (no GHL pipeline) — verbatim from the prototype.
 const FALLBACK_STAGES: { key: string; label: string; colour: string; byStatus: LeadStatus }[] = [
@@ -43,11 +48,16 @@ export default function PipelineScreen() {
   const pipelines = pData?.pipelines ?? [];
   const [picked, setPicked] = useState<string | null>(null);
   const selectedId = picked ?? pipelines[0]?.id ?? null;
+  // Scope to the globally-selected practice (= GHL subaccount).
+  const { scope } = useScopePeriod();
+  const practiceId = scope !== 'all' && UUID_RE.test(scope) ? scope : undefined;
   // Fetch the selected pipeline's leads server-side (a pipeline can have 300+
   // leads, so client-side slicing of a 100-row page would drop most).
-  const { data, isLoading, error } = useLeads(
-    selectedId ? { ghl_pipeline_id: selectedId, limit: 500 } : { limit: 500 },
-  );
+  const { data, isLoading, error } = useLeads({
+    ...(selectedId ? { ghl_pipeline_id: selectedId } : {}),
+    ...(practiceId ? { practice_id: practiceId } : {}),
+    limit: 500,
+  });
   const leads: Lead[] = data?.leads ?? [];
   const selectedPipeline = pipelines.find((p) => p.id === selectedId) ?? null;
   const dynamic = !!selectedPipeline;
