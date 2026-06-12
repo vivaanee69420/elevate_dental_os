@@ -645,14 +645,23 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         acc.leads += 1;
     }
     totals.leads = adLeads;
+    // CRM leads synced from GHL carry source='gohighlevel' with no UTM, so
+    // attributeProvider() matches none and adLeads collapses to 0 — which made
+    // CPL structurally zero. Fall back to the ad platforms' own conversion counts
+    // as the lead proxy (same source the Business Hub leads roll-up uses).
+    const adLeadProxy = adLeads || totals.conversions;
 
     // Derived ratios. roas/cac/cpl are business-level (revenue & new patients
-    // are not split per provider), so they live on totals only.
-    const ratios = (a) => ({
-        cpl_pence: a.leads ? Math.round(a.spend_pence / a.leads) : 0,
-        cpa_pence: a.conversions ? Math.round(a.spend_pence / a.conversions) : 0,
-        cpc_pence: a.clicks ? Math.round(a.spend_pence / a.clicks) : 0,
-    });
+    // are not split per provider), so they live on totals only. CPL prefers
+    // CRM-attributed leads, falling back to platform conversions when absent.
+    const ratios = (a) => {
+        const cplDenom = a.leads || a.conversions;
+        return {
+            cpl_pence: cplDenom ? Math.round(a.spend_pence / cplDenom) : 0,
+            cpa_pence: a.conversions ? Math.round(a.spend_pence / a.conversions) : 0,
+            cpc_pence: a.clicks ? Math.round(a.spend_pence / a.clicks) : 0,
+        };
+    };
 
     // Patient LTV from the saved baseline → LTV:CAC (the headline acquisition-
     // quality ratio for the Valuation screen). 0 when no baseline / no patient
@@ -677,7 +686,8 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         impressions: totals.impressions,
         clicks: totals.clicks,
         conversions: totals.conversions,
-        leads_from_ads: adLeads,
+        leads_from_ads: adLeadProxy,
+        crm_attributed_leads: adLeads,
         total_leads: leads.length,
         new_patients: newPatients,
         revenue_pence,

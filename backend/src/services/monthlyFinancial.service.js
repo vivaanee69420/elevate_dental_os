@@ -40,6 +40,23 @@ export function bucketsByPeriod(rows) {
     return out;
 }
 
+// Sum resolved buckets for the periods a [from,to] day-range covers. period keys
+// are 'YYYY-MM'; endpoints are compared at month granularity (inclusive on both
+// ends). Pure — the dashboard read path uses this to slice actuals to a custom
+// range instead of collapsing costs/profit to zero. Exported for tests.
+export function sumBucketsInWindow(byPeriod, fromYmd, toYmd) {
+    const lo = (fromYmd || '').slice(0, 7);
+    const hi = (toYmd || '').slice(0, 7);
+    const out = {};
+    const entries = byPeriod instanceof Map ? byPeriod.entries() : Object.entries(byPeriod || {});
+    for (const [period, buckets] of entries) {
+        if (lo && period < lo) continue;
+        if (hi && period > hi) continue;
+        for (const [k, v] of Object.entries(buckets)) out[k] = (out[k] || 0) + v;
+    }
+    return out;
+}
+
 // Map a resolved bucket set -> { revenue, costs } shaped for formulas.calculatePL.
 // Actuals carry no 'associates'/'property'/'marketing' bucket (those live inside
 // 'staff'/'overhead' depending on how the org books them), and 'tax' is below the
