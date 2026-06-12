@@ -137,7 +137,7 @@ export const outlookQuerySchema = zod_1.z.object({
 });
 
 export const seriesQuerySchema = zod_1.z.object({
-    months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
+    months: zod_1.z.coerce.number().int().min(1).max(24).default(12),
     practice_id: zod_1.z.string().uuid().optional(),
     from: dateStr,
     to: dateStr,
@@ -146,6 +146,8 @@ export const seriesQuerySchema = zod_1.z.object({
     source: zod_1.z.enum(['combined', 'dentally', 'quickbooks']).optional(),
     // QBO company scope (integration_account_id) — only meaningful when source=quickbooks.
     account_id: zod_1.z.string().uuid().optional(),
+    // P&L accounting basis (cash vs accrual). Cash rows come from the QB Cash pull.
+    accounting_method: zod_1.z.enum(['accrual', 'cash']).default('accrual'),
 });
 
 // ai-insights ?days=30 — rolling window for the leads/payments rollups.

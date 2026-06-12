@@ -503,12 +503,12 @@ export const analyticsService = {
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
     // hasAny=false ⇒ callers fall back to the baseline projection unchanged.
-    async _actualsBundle(orgId, practiceId = null, { source = null, accountId = null } = {}) {
+    async _actualsBundle(orgId, practiceId = null, { source = null, accountId = null, accountingMethod = 'accrual' } = {}) {
         const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId, { source, accountId });
         const rows = practiceId
             ? (Array.isArray(all) ? all : []).filter((r) => r.practice_id === practiceId)
             : all;
-        const byPeriod = bucketsByPeriod(rows);
+        const byPeriod = bucketsByPeriod(rows, { accountingMethod });
         const periods = [...byPeriod.keys()].sort();
         const recent = periods.slice(-12);
         const annual = {};
@@ -1642,7 +1642,7 @@ export const analyticsService = {
     //             non-zero-revenue month has real costs.
     // basis: 'actuals' (all real costs) | 'mixed' | 'revenue-only' (real revenue,
     // costs/profit 0 — connect Xero for costs).
-    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null, source = 'combined', accountId = null } = {}) {
+    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null, source = 'combined', accountId = null, accountingMethod = 'accrual' } = {}) {
         const ref = now();
         const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
         const src = (source === 'dentally' || source === 'quickbooks') ? source : 'combined';
@@ -1652,7 +1652,7 @@ export const analyticsService = {
         // scoped to one connected company (accountId). No Dentally revenue feed,
         // and no practice scoping — a QB company is not practice-mapped.
         if (src === 'quickbooks') {
-            const actuals = await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId });
+            const actuals = await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId, accountingMethod });
             let qbMonths = 0;
             const series = keys.map((month) => {
                 if (actuals.byPeriod.has(month)) {
@@ -1669,7 +1669,7 @@ export const analyticsService = {
             // cost actuals bundle is skipped and costs/profit stay £0 (not estimated).
             src === 'dentally'
                 ? Promise.resolve({ byPeriod: new Map(), annual: {}, hasAny: false, periodsCovered: 0 })
-                : this._actualsBundle(orgId, practiceId),
+                : this._actualsBundle(orgId, practiceId, { accountingMethod }),
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             // Billed production by month (invoice_items) — the accrual turnover feed
             // the Business Hub uses, so Value & Growth's TTM base agrees with the

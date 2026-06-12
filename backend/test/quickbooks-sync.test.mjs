@@ -194,7 +194,9 @@ describe('syncAccount', () => {
 
         const res = await syncAccount('org-1', 'acc-1');
 
-        expect(res.lines).toBe(2);
+        // P&L is pulled once per accounting basis (accrual + cash); the mocked
+        // report returns the same 2 lines each time -> 2 bases x 2 lines = 4.
+        expect(res.lines).toBe(4);
         const del = queries.find((q) => q.table === 'monthly_financials' && q.op === 'delete');
         expect(del.eqs).toEqual(expect.arrayContaining([
             { col: 'organisation_id', val: 'org-1' },

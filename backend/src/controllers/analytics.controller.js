@@ -15,7 +15,15 @@ export const analyticsController = {
     },
     async financeSeries(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months, practiceId: q.practice_id, from: q.from, to: q.to, source: q.source, accountId: q.account_id }));
+        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, {
+            months: q.months,
+            practiceId: q.practice_id,
+            from: q.from,
+            to: q.to,
+            source: q.source,
+            accountId: q.account_id,
+            accountingMethod: q.accounting_method,
+        }));
     },
     async cashflowOutlook(req, res) {
         const q = analytics_model_1.outlookQuerySchema.parse(req.query);
