@@ -692,6 +692,21 @@ Owner only. Fetches GHL pipelines + stages for the subaccount using its stored t
 ### `POST /api/integrations/gohighlevel/accounts/:id/stage-mappings`
 Owner only. Body `{ mappings: { [stageId]: status } }`. Persists the GHL stage → Elevate status mapping into `integration_accounts.config.stage_mappings`. Returns `{ ok: true, stage_mappings }`.
 
+### `GET /api/integrations/quickbooks/accounts`
+Owner only. Lists every connected QuickBooks company (one `integration_accounts` row per QBO realm; **no practice mapping** — each company is an independent entity). Returns `{ accounts: [{ id, realm_id, company_name, label, status, last_sync_at, last_error, created_at }] }` (secrets never returned).
+
+### `POST /api/integrations/quickbooks/accounts/connect`
+Owner only. Begins connecting another QuickBooks company. Returns `{ redirectUrl }` (the Intuit OAuth URL); the browser hands off there. The public callback `/oauth/quickbooks/callback` exchanges the code, captures `realmId`, fetches the company name, upserts the `integration_accounts` row, and fires a first full sync.
+
+### `POST /api/integrations/quickbooks/accounts/:id/sync?full=true`
+Owner only. Fires a background sync for one company. `?full=true` re-pulls the 12-month backfill. Fire-and-forget — returns `{ started: true, accountId, full }`.
+
+### `DELETE /api/integrations/quickbooks/accounts/:id`
+Owner only. Disconnects a company: revokes the credential row and purges that company's rows from `monthly_financials` / `bank_accounts` / `invoices` / `payments` (all stamped with `integration_account_id`). Returns `{ ok: true }`.
+
+### `GET /api/finance/quickbooks?accountId=&period=YYYY-MM&from=&to=`
+finance.view. Finance > QuickBooks dashboard data, summed across all companies (`accountId` omitted) or scoped to one. `period` pins a month; `from`/`to` (date or month) window it; default = trailing 12 months. Returns `{ window:{fromPeriod,toPeriod}, summary:{revenuePence,expensesPence,netProfitPence,netMarginPct,cashAtBankPence,receivablesPence,receiptsPence}, byBucket:{revenue,staff,lab,materials,overhead,tax,other}, trend:[{period,revenuePence,expensesPence,netProfitPence}], companies:[{accountId,companyName,revenuePence,expensesPence,netProfitPence,netMarginPct,cashAtBankPence,receivablesPence,receiptsPence}] (only in the summed view), accounts:[{id,companyName,status}] }`. Money in integer PENCE. Cash/receivables are point-in-time snapshots; revenue/expenses/receipts are windowed.
+
 **Connect styles.** `dentally` (and `soe`) are `broker_key`: connect returns
 `{ requiresKeyPaste, pasteHint }`; the owner pastes the Dentally Bearer token
 (encrypted at rest). Dentally is pull-only — the token authenticates our polling
