@@ -18,6 +18,7 @@ const EMPTY_EXIT = {
     incomePence: 0, incomePer: 'year', people: [{ name: 'You', share: 1 }],
     currentAge: 45, retireAge: 57, freeholds: [],
     withdrawPct: 4, returnPct: 8, currentValuePence: 0, useLiveValuation: true,
+    ebitdaMarginPct: 18,
     agentPct: 1.5, cgtPct: 18, baseCostPence: 0, existingInvestPence: 0, targetSalePence: 0,
 };
 
@@ -99,14 +100,29 @@ export const wealthService = {
 
         // Group value today from the live valuation midpoint when asked; fall back
         // to the manual override on no baseline / error so the screen still computes.
+        // valuation() seeds from the manual baseline first, else from REAL synced
+        // turnover (invoice_items TTM) at the owner's assumed EBITDA margin.
         let currentValuePence = Math.round(exit.currentValuePence || 0);
         let valuationSource = 'manual';
+        let valuationDetail = null;
         if (exit.useLiveValuation) {
             try {
-                const v = await analytics_service_1.analyticsService.valuation(orgId);
-                if (v && !v.error && v.midpoint > 0) {
-                    currentValuePence = Math.round(v.midpoint);
-                    valuationSource = 'live';
+                const v = await analytics_service_1.analyticsService.valuation(orgId, {
+                    marginPct: exit.ebitdaMarginPct,
+                });
+                const mid = v && !v.error ? (v.midPoint ?? v.midpoint ?? 0) : 0;
+                if (mid > 0) {
+                    currentValuePence = Math.round(mid);
+                    // 'live' = manual baseline; 'real-turnover' = seeded from Dentally turnover.
+                    valuationSource = v.basis === 'real-turnover' ? 'real-turnover' : 'live';
+                    valuationDetail = {
+                        basis: v.basis ?? 'baseline',
+                        annualRevenuePence: v.annualRevenuePence ?? null,
+                        ebitdaMarginPct: v.ebitdaMarginPct ?? null,
+                        ebitdaPence: v.ebitdaPence ?? null,
+                        revenueMultiple: v.revenueMultiple ?? null,
+                        revenueMultipleValuePence: v.revenueMultipleValuePence ?? null,
+                    };
                 }
             } catch {
                 // keep the manual override
@@ -146,7 +162,7 @@ export const wealthService = {
         const plan = (0, formulas_1.calculateExitPlan)(resolved);
 
         return {
-            valuation: { currentValuePence, source: valuationSource },
+            valuation: { currentValuePence, source: valuationSource, detail: valuationDetail },
             plan,
             inputs: resolved,
             seeds: { liquidAssetsPence, pensionPence, existingInvestSeeded: !(exit.existingInvestPence > 0), freeholdsSeeded: !(exit.freeholds && exit.freeholds.length) },

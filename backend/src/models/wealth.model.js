@@ -92,6 +92,7 @@ export const exitPlanInputSchema = zod_1.z.object({
     returnPct: zod_1.z.coerce.number().min(0).max(30).default(8),
     currentValuePence: PENCE.default(0),                           // manual override of group value today
     useLiveValuation: zod_1.z.boolean().default(true),             // seed currentValue from live midpoint
+    ebitdaMarginPct: zod_1.z.coerce.number().min(0).max(100).default(18), // assumed margin for the real-turnover seed
     agentPct: zod_1.z.coerce.number().min(0).max(20).default(1.5),
     cgtPct: zod_1.z.coerce.number().min(0).max(50).default(18),
     baseCostPence: PENCE.default(0),

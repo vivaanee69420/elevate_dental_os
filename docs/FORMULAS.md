@@ -147,6 +147,33 @@ ebitda = netProfit + depreciation + amortisation + interest + tax
 
 **Accountant action**: Confirm or override the 4% D&A approximation per practice mix.
 
+### 2a. Real-turnover valuation seed (`valuationFromTurnover`)
+
+Source: `backend/src/lib/formulas.js` (`valuationFromTurnover`). Used by
+`analyticsService.valuation()` when **no manual `business_health` baseline** is set,
+so the Exit Plan / Value & Growth screens reflect real synced data instead of
+returning "No baseline set" (£0). Dentally carries **revenue but no cost side**, so
+EBITDA is an **assumed margin** on the real trailing-12-month invoiced turnover
+(`invoice_items`, the same accrual turnover feed as the dashboards). The private
+share is derived from `nhs_charge` and drives the §2 multiple tier.
+
+```
+annualRevenue = Σ invoice_items.fee_pence over the trailing 12 months
+privateRevenuePct = privateTurnover / totalTurnover × 100   (nhs_charge = false ⇒ private)
+ebitda   = annualRevenue × ebitdaMarginPct / 100            [default 18%, owner-adjustable]
+valuation = calculateValuation({ annualRevenue, ebitda, privateRevenuePct })   [§2 multiples]
+midPoint  = (principalLed + dso) / 2                         [primary group value]
+
+revenueMultipleValuePence = annualRevenue × revenueMultiple  [default 1.15×, cross-check only]
+```
+
+Precedence in `valuation()`: **manual baseline** → **real-turnover seed** → `{ error: 'No baseline set' }`.
+The EBITDA-margin valuation is the primary figure; the revenue-multiple line is a
+sanity cross-check shown beside it.
+
+**Accountant action**: Confirm the default **18% EBITDA margin** and **1.15× revenue
+multiple** for the group mix; both are owner-adjustable on the Exit Plan screen.
+
 ---
 
 ## 3. Associate Pay

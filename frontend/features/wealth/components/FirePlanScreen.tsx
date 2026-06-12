@@ -109,6 +109,21 @@ export default function FirePlanScreen() {
   const set = (patch: Partial<ExitPlanInput>) => setInp({ ...inp, ...patch });
   const valuationSource = seed.data.valuation.source;
 
+  // Real-turnover seed: there is no manual baseline, so the group value is valued
+  // from the live Dentally turnover at an assumed EBITDA margin. Recover the
+  // buyer-type multiple from the seed (midpoint ÷ EBITDA) so the margin slider
+  // can live-update the group value client-side, exactly matching the server.
+  const vdetail = seed.data.valuation.detail;
+  const isRealTurnover = valuationSource === 'real-turnover' && !!vdetail;
+  const tierMultiple = isRealTurnover && vdetail?.ebitdaPence
+    ? seed.data.valuation.currentValuePence / vdetail.ebitdaPence
+    : 0;
+  const setMargin = (m: number) => {
+    const rev = vdetail?.annualRevenuePence ?? 0;
+    const newVal = Math.round((rev * m / 100) * tierMultiple);
+    set({ ebitdaMarginPct: m, currentValuePence: newVal, useLiveValuation: true });
+  };
+
   // Income shown in the chosen unit; stored internally as ANNUAL pence.
   const incomeShownPounds = toPounds(inp.incomePer === 'month' ? Math.round(inp.incomePence / 12) : inp.incomePence);
   const setIncomeShown = (pounds: number) =>
@@ -262,9 +277,21 @@ export default function FirePlanScreen() {
             onChange={(n) => set({ baseCostPence: toPence(n) })} />
           <NumField label="Existing investments (£)" value={toPounds(inp.existingInvestPence)} step={50000}
             onChange={(n) => set({ existingInvestPence: toPence(n) })} />
+          {isRealTurnover && inp.useLiveValuation && (
+            <NumField label="Assumed EBITDA margin" suffix="%" value={inp.ebitdaMarginPct} step={1}
+              onChange={(n) => setMargin(n)} />
+          )}
         </div>
-        {seed.data.valuation.source === 'live' && inp.useLiveValuation && (
+        {valuationSource === 'live' && inp.useLiveValuation && (
           <p className="text-ink-muted" style={{ fontSize: 10, marginBottom: 8 }}>Group value seeded live from the valuation midpoint — edit to override.</p>
+        )}
+        {isRealTurnover && inp.useLiveValuation && vdetail && (
+          <p className="text-ink-muted" style={{ fontSize: 10, marginBottom: 8 }}>
+            No manual baseline set — group value seeded from real turnover{' '}
+            <strong>{formatPence(vdetail.annualRevenuePence ?? 0)}</strong> (last 12 months, Dentally) at{' '}
+            {inp.ebitdaMarginPct}% EBITDA margin. Revenue-multiple cross-check:{' '}
+            <strong>{formatPence(vdetail.revenueMultipleValuePence ?? 0)}</strong> ({vdetail.revenueMultiple ?? 0}× turnover). Edit any field to override.
+          </p>
         )}
 
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: 13, maxWidth: 460 }}>
