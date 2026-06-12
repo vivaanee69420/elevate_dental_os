@@ -111,7 +111,6 @@ export default function IntegrationsScreen() {
   const connectedCount = integrations.filter((i) => i.status === 'active').length;
   const dentallyConnected = statusOf('dentally', integrations) === 'active';
   const ghlConnected = statusOf('gohighlevel', integrations) === 'active';
-  const ghlMappings = (rowOf('gohighlevel', integrations)?.config?.stage_mappings ?? {}) as Record<string, string>;
   const googleAdsConnected = statusOf('google_ads', integrations) === 'active';
   const metaAdsConnected = statusOf('meta_ads', integrations) === 'active';
 
@@ -180,7 +179,7 @@ export default function IntegrationsScreen() {
 
       {dentallyConnected && <DentallyPracticeMapping />}
       {dentallyConnected && <DentallyWebhookPanel />}
-      {ghlConnected && <GoHighLevelPanel initialMappings={ghlMappings} locationId={(rowOf('gohighlevel', integrations)?.config?.locationId as string) ?? null} />}
+      {ghlConnected && <GoHighLevelPanel />}
       {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
       {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
 
