@@ -17,6 +17,11 @@ import {
   setStageMappings,
   listAdAccounts,
   setAdAccountSelection,
+  listGhlAccounts,
+  addGhlAccount,
+  updateGhlAccount,
+  removeGhlAccount,
+  syncGhlAccount,
   type ConnectInput,
   type DentallySyncResource,
 } from './api';
@@ -193,5 +198,46 @@ export function useSetAdAccountSelection(provider: string) {
       qc.invalidateQueries({ queryKey: ['marketing-roi'] });
       qc.invalidateQueries({ queryKey: ['business-hub'] });
     },
+  });
+}
+
+// GoHighLevel multi-subaccount management.
+export function useGhlAccounts() {
+  return useQuery({
+    queryKey: ['ghl-accounts'],
+    queryFn: listGhlAccounts,
+    staleTime: 30_000,
+  });
+}
+
+export function useAddGhlAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { token: string; locationId: string; practiceId?: string | null; label?: string }) =>
+      addGhlAccount(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ghl-accounts'] }),
+  });
+}
+
+export function useUpdateGhlAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; practiceId?: string | null; label?: string }) =>
+      updateGhlAccount(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ghl-accounts'] }),
+  });
+}
+
+export function useRemoveGhlAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => removeGhlAccount(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ghl-accounts'] }),
+  });
+}
+
+export function useSyncGhlAccount() {
+  return useMutation({
+    mutationFn: ({ id, full }: { id: string; full?: boolean }) => syncGhlAccount(id, full),
   });
 }
