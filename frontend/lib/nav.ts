@@ -38,6 +38,7 @@ export const NAV: NavSection[] = [
     { id: 'profit', label: 'Profit & Loss' },
     { id: 'financial', label: 'P&L & Margin' },
     { id: 'payments', label: 'Patient Payments' },
+    { id: 'quickbooks', label: 'QuickBooks', isNew: true },
     { id: 'leakage', label: 'Revenue Leakage', isNew: true },
     { id: 'valuation', label: 'Value & Growth' },
   ]},

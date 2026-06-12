@@ -24,6 +24,7 @@ import { DecisionLens } from '@/features/_shared/DecisionLens';
 import { useMarketingRoi } from '@/features/intelligence/marketing-roi-hooks';
 import type { MarketingRoi } from '@/features/intelligence/marketing-roi-api';
 import { AdAccountFilter } from '@/features/intelligence/AdAccountFilter';
+import { QuickBooksGroupSection } from './QuickBooksGroupSection';
 
 const DASH = '—';
 
@@ -169,6 +170,9 @@ export function GroupPerformanceScreen() {
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
         {headlineFunnel.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
+
+      {/* QuickBooks group roll-up — summed across every connected company. */}
+      <QuickBooksGroupSection />
 
       {!isGroupScope && (
         <AlertRow tone="info" title="Some funnel KPIs stay group-wide"
