@@ -503,8 +503,8 @@ export const analyticsService = {
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
     // hasAny=false ⇒ callers fall back to the baseline projection unchanged.
-    async _actualsBundle(orgId, practiceId = null) {
-        const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId);
+    async _actualsBundle(orgId, practiceId = null, { source = null, accountId = null } = {}) {
+        const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId, { source, accountId });
         const rows = practiceId
             ? (Array.isArray(all) ? all : []).filter((r) => r.practice_id === practiceId)
             : all;
@@ -562,18 +562,28 @@ export const analyticsService = {
     // never the baseline projection (FORMULAS §1a). When there is no real cost
     // source we return costsAvailable:false and no rows — the client shows a
     // "connect Xero / enter actuals" empty state rather than fabricating ratios.
-    async plBenchmark(orgId, { practiceId = null } = {}) {
-        const actuals = await this._actualsBundle(orgId, practiceId);
+    async plBenchmark(orgId, { practiceId = null, source = 'combined', accountId = null } = {}) {
+        const src = (source === 'dentally' || source === 'quickbooks') ? source : 'combined';
+        // Dentally carries no cost data, so a cost/profit benchmark is meaningless
+        // for that source → honest empty state (never an estimate, FORMULAS §1b).
+        if (src === 'dentally') {
+            return { costsAvailable: false, basis: 'none', revenue: 0, rows: [], overspendPence: 0, periodsCovered: 0, source: 'dentally' };
+        }
+        // QuickBooks source: benchmark built only from QBO actuals (optionally one
+        // company); a QB company is not practice-mapped, so practiceId is ignored.
+        const actuals = src === 'quickbooks'
+            ? await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId })
+            : await this._actualsBundle(orgId, practiceId);
         const a = actuals.annual || {};
         const revenue = a.revenue || 0;
         const costTotal = (a.staff || 0) + (a.lab || 0) + (a.materials || 0) + (a.overhead || 0) + (a.other || 0);
         if (!actuals.hasAny || revenue <= 0 || costTotal <= 0) {
-            return { costsAvailable: false, basis: 'none', revenue, rows: [], overspendPence: 0, periodsCovered: actuals.periodsCovered };
+            return { costsAvailable: false, basis: 'none', revenue, rows: [], overspendPence: 0, periodsCovered: actuals.periodsCovered, source: src };
         }
         const plInput = plInputFromBuckets(a);
         const pl = (0, formulas_1.calculatePL)(plInput);
         const result = (0, formulas_1.calculateProfitBenchmark)({ revenue: plInput.revenue, costs: plInput.costs, netProfit: pl.netProfit });
-        return { ...result, marginPct: pl.marginPct, netProfit: pl.netProfit, totalCosts: pl.totalCosts, costsAvailable: true, basis: 'actuals', periodsCovered: actuals.periodsCovered };
+        return { ...result, marginPct: pl.marginPct, netProfit: pl.netProfit, totalCosts: pl.totalCosts, costsAvailable: true, basis: 'actuals', periodsCovered: actuals.periodsCovered, source: src };
     },
     // P&L & Margin (GM Intelligence OS, T11). Scope/period-aware group P&L
     // statement + per-entity breakdown from REAL monthly_financials actuals
@@ -1632,11 +1642,34 @@ export const analyticsService = {
     //             non-zero-revenue month has real costs.
     // basis: 'actuals' (all real costs) | 'mixed' | 'revenue-only' (real revenue,
     // costs/profit 0 — connect Xero for costs).
-    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null } = {}) {
+    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null, source = 'combined', accountId = null } = {}) {
         const ref = now();
         const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
+        const src = (source === 'dentally' || source === 'quickbooks') ? source : 'combined';
+
+        // QuickBooks source: the P&L is built ENTIRELY from QBO actuals
+        // (revenue + costs in monthly_financials, source='quickbooks'), optionally
+        // scoped to one connected company (accountId). No Dentally revenue feed,
+        // and no practice scoping — a QB company is not practice-mapped.
+        if (src === 'quickbooks') {
+            const actuals = await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId });
+            let qbMonths = 0;
+            const series = keys.map((month) => {
+                if (actuals.byPeriod.has(month)) {
+                    qbMonths++;
+                    return { ...financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month)), costsAvailable: true };
+                }
+                return { month, revenue: 0, associatePay: 0, staffCosts: 0, labMaterials: 0, opex: 0, profit: 0, costsAvailable: false };
+            });
+            return { basis: qbMonths > 0 ? 'actuals' : 'revenue-only', costsAvailable: qbMonths > 0, source: 'quickbooks', months: series };
+        }
+
         const [actuals, dayRows, billedRows] = await Promise.all([
-            this._actualsBundle(orgId, practiceId),
+            // Dentally source: revenue only — Dentally provides no cost data, so the
+            // cost actuals bundle is skipped and costs/profit stay £0 (not estimated).
+            src === 'dentally'
+                ? Promise.resolve({ byPeriod: new Map(), annual: {}, hasAny: false, periodsCovered: 0 })
+                : this._actualsBundle(orgId, practiceId),
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             // Billed production by month (invoice_items) — the accrual turnover feed
             // the Business Hub uses, so Value & Growth's TTM base agrees with the
@@ -1677,7 +1710,7 @@ export const analyticsService = {
         const basis = revenueOnlyMonths === 0 && actualCostMonths > 0 ? 'actuals'
             : actualCostMonths > 0 && revenueOnlyMonths > 0 ? 'mixed'
             : 'revenue-only';
-        return { basis, costsAvailable: revenueOnlyMonths === 0 && actualCostMonths > 0, months: series };
+        return { basis, costsAvailable: revenueOnlyMonths === 0 && actualCostMonths > 0, source: src, months: series };
     },
     // 13-week REAL cash view (backward-looking, no projection, no baseline).
     // Each week = EXACT settled receipts that week (RPC daily sums bucketed by
