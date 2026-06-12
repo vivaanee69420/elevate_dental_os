@@ -678,7 +678,7 @@ CREATE TABLE IF NOT EXISTS monthly_financials (
   practice_id UUID REFERENCES practices(id),
   period TEXT NOT NULL,
   account_code TEXT NOT NULL,
-  dental_bucket TEXT CHECK (dental_bucket IN ('revenue','staff','lab','materials','overhead','tax','other')),
+  dental_bucket TEXT CHECK (dental_bucket IN ('revenue','associates','staff','lab','materials','overhead','tax','other')),
   amount_pence INTEGER NOT NULL,
   source TEXT NOT NULL DEFAULT 'xero',
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -692,7 +692,7 @@ CREATE TABLE IF NOT EXISTS xero_account_map (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
   account_code TEXT NOT NULL,
-  dental_bucket TEXT NOT NULL CHECK (dental_bucket IN ('revenue','staff','lab','materials','overhead','tax','other')),
+  dental_bucket TEXT NOT NULL CHECK (dental_bucket IN ('revenue','associates','staff','lab','materials','overhead','tax','other')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_xero_account_map ON xero_account_map (organisation_id, account_code);

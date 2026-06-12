@@ -576,7 +576,7 @@ export const analyticsService = {
             : await this._actualsBundle(orgId, practiceId);
         const a = actuals.annual || {};
         const revenue = a.revenue || 0;
-        const costTotal = (a.staff || 0) + (a.lab || 0) + (a.materials || 0) + (a.overhead || 0) + (a.other || 0);
+        const costTotal = (a.associates || 0) + (a.staff || 0) + (a.lab || 0) + (a.materials || 0) + (a.overhead || 0) + (a.other || 0);
         if (!actuals.hasAny || revenue <= 0 || costTotal <= 0) {
             return { costsAvailable: false, basis: 'none', revenue, rows: [], overspendPence: 0, periodsCovered: actuals.periodsCovered, source: src };
         }

@@ -43,7 +43,15 @@ Finance shows **real data or zero — never an estimate**:
   baseline is used only by the Overview/Command-Centre screens.
 
 Actuals are stored per `dental_bucket`:
-`revenue, staff, lab, materials, overhead, tax, other`.
+`revenue, associates, staff, lab, materials, overhead, tax, other`.
+
+The sync heuristic (`heuristicBucket` in `xero-sync.js` / `quickbooks-sync.js`)
+splits **fee-earning clinician pay** into `associates` — account names matching
+`associate|locum|principal|hygien|therapist|self-employed|dentist` are tested
+**before** the staff line (so "Associate salary" / "Principal salary" don't fold
+into support staff). When the org's chart of accounts doesn't name clinicians
+separately, `associates` stays 0 and the Dentist line reads 0% (see the honesty
+flag in §1b). Per-org `xero_account_map` overrides can force any account → `associates`.
 
 **Precedence (per period + bucket):** synced accounting actuals
 (`source = xero|quickbooks`) **override** manual entries (`source = manual`).
@@ -53,18 +61,19 @@ Manual is the fallback when no synced row exists for that period+bucket.
 **Bucket → `calculatePL` cost lines** (`plInputFromBuckets`):
 ```
 revenue          = bucket.revenue
+costs.associates = bucket.associates   (clinician pay split by the sync heuristic)
 costs.staff      = bucket.staff
 costs.lab        = bucket.lab
 costs.materials  = bucket.materials
 costs.other      = bucket.overhead + bucket.other
-costs.associates = costs.property = costs.marketing = 0   (no actuals bucket)
+costs.property   = costs.marketing = 0   (no dedicated actuals bucket; sit in overhead)
 tax → EXCLUDED from operating costs (below the operating line; the baseline
       P&L has no tax cost line, so excluding it keeps actuals comparable)
 ```
-Actuals carry no separate associate/property/marketing bucket — those sit inside
-`staff`/`overhead` depending on how the org books them. `finance-series` groups
-the same buckets as `{ associatePay:0, staffCosts:staff, labMaterials:lab+materials,
-opex:overhead+other }` (`financeSeriesRowFromBuckets`).
+`property`/`marketing` have no separate actuals bucket — those sit inside
+`overhead`. `finance-series` groups the buckets as `{ associatePay:associates,
+staffCosts:staff, labMaterials:lab+materials, opex:overhead+other }`
+(`financeSeriesRowFromBuckets`).
 
 Annual P&L (`pl`) sums the trailing ≤12 entered periods.
 
@@ -112,12 +121,13 @@ Per category: `variancePts = actualPct − benchmarkPct`.
 `overspendPence` = Σ (cost lines above their benchmark) — the recoverable margin
 ("move a line to benchmark, it drops to the bottom line"). Profit is excluded.
 
-**Honesty flag (`dentistStaffSeparable`):** Xero books associate pay inside the
-`staff`/`overhead` buckets, so actuals carry **no** `associates` bucket (it is 0 —
-see §1a). When `associates = 0` the Dentist row shows 0% (a false "Lean") and Staff
-is inflated. `calculateProfitBenchmark` sets `dentistStaffSeparable = false` so the
-UI combines/annotates the two lines instead of reading the green dentist row as a
-real saving. It is `true` only when a real `associates` figure exists.
+**Honesty flag (`dentistStaffSeparable`):** when the org's chart of accounts does
+NOT name clinicians separately, the sync heuristic can't split them, so `associates`
+stays 0 — the Dentist row shows 0% (a false "Lean") and Staff is inflated. In that
+case `calculateProfitBenchmark` sets `dentistStaffSeparable = false` so the UI
+combines/annotates the two lines instead of reading the green dentist row as a real
+saving. It is `true` once a real `associates` figure exists (the heuristic matched
+named clinician accounts, or an account was mapped to `associates`).
 
 **Real data or zero:** `plBenchmark` uses `monthly_financials` actuals only — never
 the baseline projection (it is a Finance screen, §1a). No actuals / no cost source ⇒
