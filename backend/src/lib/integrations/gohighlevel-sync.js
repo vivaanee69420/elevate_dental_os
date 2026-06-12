@@ -717,7 +717,12 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
         await integrationAccountRepository.markSynced(orgId, accountId);
         return { contacts: contactsSynced, opportunities: synced, total: opportunities.length };
     } catch (err) {
-        await integrationAccountRepository.markFailed(orgId, accountId, String(err.message));
+        // Don't let a markFailed failure mask the real sync error.
+        try {
+            await integrationAccountRepository.markFailed(orgId, accountId, String(err.message));
+        } catch (markErr) {
+            console.error(`[gohighlevel] account ${accountId} markFailed failed:`, markErr?.message || markErr);
+        }
         throw err;
     }
 }
