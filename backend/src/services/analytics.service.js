@@ -502,12 +502,12 @@ export const analyticsService = {
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
     // hasAny=false ⇒ callers fall back to the baseline projection unchanged.
-    async _actualsBundle(orgId, practiceId = null) {
-        const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId);
+    async _actualsBundle(orgId, practiceId = null, { accountingMethod = 'accrual', integrationAccountId = null } = {}) {
+        const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId, { integrationAccountId });
         const rows = practiceId
             ? (Array.isArray(all) ? all : []).filter((r) => r.practice_id === practiceId)
             : all;
-        const byPeriod = bucketsByPeriod(rows);
+        const byPeriod = bucketsByPeriod(rows, { accountingMethod });
         const periods = [...byPeriod.keys()].sort();
         const recent = periods.slice(-12);
         const annual = {};
@@ -1631,11 +1631,11 @@ export const analyticsService = {
     //             non-zero-revenue month has real costs.
     // basis: 'actuals' (all real costs) | 'mixed' | 'revenue-only' (real revenue,
     // costs/profit 0 — connect Xero for costs).
-    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null } = {}) {
+    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null, accountingMethod = 'accrual', integrationAccountId = null } = {}) {
         const ref = now();
         const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
         const [actuals, dayRows, billedRows] = await Promise.all([
-            this._actualsBundle(orgId, practiceId),
+            this._actualsBundle(orgId, practiceId, { accountingMethod, integrationAccountId }),
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             // Billed production by month (invoice_items) — the accrual turnover feed
             // the Business Hub uses, so Value & Growth's TTM base agrees with the
