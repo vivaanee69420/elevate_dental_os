@@ -30,6 +30,10 @@ import * as supabase_1 from "../supabase.js";
 const MINOR_VERSION = '65';
 const BUCKETS = ['revenue', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
 const BACKFILL_MONTHS = 12;
+// QuickBooks reports each P&L on a Cash or Accrual basis; we store both.
+// 'accrual' is QB's default (omit the param); 'cash' adds accounting_method=Cash.
+const ACCOUNTING_METHODS = ['accrual', 'cash'];
+const QBO_METHOD_PARAM = { accrual: 'Accrual', cash: 'Cash' };
 const QUERY_PAGE = 1000;
 
 function apiBase() {
@@ -232,36 +236,44 @@ async function ensureAccountToken(orgId, account) {
     return integrationAccountRepository.getByIdWithSecrets(orgId, account.id);
 }
 
-// 1. P&L -> monthly_financials, one period at a time. Delete-then-insert THIS
-// company's rows (scoped by integration_account_id; never touches Xero or another
-// QB company).
+// 1. P&L -> monthly_financials, per period AND per accounting basis. Delete-then-
+// insert THIS company's rows scoped by integration_account_id + accounting_method,
+// so cash and accrual never clobber each other and never touch Xero/another QB co.
 async function pullProfitAndLoss(orgId, accountId, realmId, accessToken, accountMap, months) {
     let totalLines = 0;
     for (const { period, from, to } of lastNMonths(months)) {
-        const report = await qboReport(realmId, accessToken, 'ProfitAndLoss', { start_date: from, end_date: to });
-        const rows = parseReportRows(report).map((r) => ({
-            organisation_id: orgId,
-            practice_id: null,
-            integration_account_id: accountId,
-            period,
-            account_code: String(r.account),
-            dental_bucket: mapBucket(r.account, r.section, accountMap),
-            amount_pence: toPence(r.amount),
-            source: 'quickbooks',
-        }));
-        const { error: delErr } = await supabase_1.serviceClient
-            .from('monthly_financials')
-            .delete()
-            .eq('organisation_id', orgId)
-            .eq('period', period)
-            .eq('source', 'quickbooks')
-            .eq('integration_account_id', accountId);
-        if (delErr) throw new Error(`monthly_financials clear: ${delErr.message}`);
-        if (rows.length > 0) {
-            const { error } = await supabase_1.serviceClient.from('monthly_financials').insert(rows);
-            if (error) throw new Error(`monthly_financials insert: ${error.message}`);
+        for (const method of ACCOUNTING_METHODS) {
+            const report = await qboReport(realmId, accessToken, 'ProfitAndLoss', {
+                start_date: from,
+                end_date: to,
+                accounting_method: QBO_METHOD_PARAM[method],
+            });
+            const rows = parseReportRows(report).map((r) => ({
+                organisation_id: orgId,
+                practice_id: null,
+                integration_account_id: accountId,
+                period,
+                account_code: String(r.account),
+                dental_bucket: mapBucket(r.account, r.section, accountMap),
+                amount_pence: toPence(r.amount),
+                source: 'quickbooks',
+                accounting_method: method,
+            }));
+            const { error: delErr } = await supabase_1.serviceClient
+                .from('monthly_financials')
+                .delete()
+                .eq('organisation_id', orgId)
+                .eq('period', period)
+                .eq('source', 'quickbooks')
+                .eq('integration_account_id', accountId)
+                .eq('accounting_method', method);
+            if (delErr) throw new Error(`monthly_financials clear: ${delErr.message}`);
+            if (rows.length > 0) {
+                const { error } = await supabase_1.serviceClient.from('monthly_financials').insert(rows);
+                if (error) throw new Error(`monthly_financials insert: ${error.message}`);
+            }
+            totalLines += rows.length;
         }
-        totalLines += rows.length;
     }
     return totalLines;
 }
@@ -440,5 +452,5 @@ export async function syncAllOrgs() {
 
 export const __test = {
     toPence, heuristicBucket, mapBucket, parseReportRows, parseBalanceSheetBanks,
-    lastNMonths, mapInvoiceRow, mapPaymentRow, dedupeReceipts,
+    lastNMonths, mapInvoiceRow, mapPaymentRow, dedupeReceipts, ACCOUNTING_METHODS,
 };
