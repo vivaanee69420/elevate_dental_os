@@ -10,9 +10,16 @@
 // surface the toast for provider p. The toast self-removes via onDone when the
 // sync completes or the user closes it.
 
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import SyncOverlay from './components/SyncOverlay';
-import { useFinishSync } from './hooks';
+import { useFinishSync, useIntegrations } from './hooks';
+import { getSyncProgress } from './api';
+
+// Providers that run a pollable on-demand sync (mirrors the backend set).
+const SYNCABLE = new Set(['dentally', 'gohighlevel', 'google_ads', 'meta_ads', 'quickbooks', 'xero']);
+// A sync whose last progress write is older than this is treated as dead (the
+// web process restarted) — don't resurrect its toast on reload.
+const FRESH_MS = 120_000;
 
 interface SyncToastCtx {
   active: Set<string>;
@@ -43,6 +50,29 @@ export function SyncToastProvider({ children }: { children: ReactNode }) {
       return next;
     });
   }, []);
+
+  // Reload self-resurrect: a sync keeps running server-side across a full page
+  // reload, but client toast state is lost. On first mount, check each connected
+  // provider's progress once and re-show any sync that is still running and
+  // fresh — so refreshing the page doesn't make the import look like it stopped.
+  const { data: integrationsData } = useIntegrations();
+  const resurrectedRef = useRef(false);
+  useEffect(() => {
+    if (resurrectedRef.current || !integrationsData) return;
+    resurrectedRef.current = true;
+    const connected = (integrationsData.integrations ?? []).filter(
+      (i) => i.status === 'active' && SYNCABLE.has(i.provider),
+    );
+    connected.forEach(async (i) => {
+      try {
+        const p = await getSyncProgress(i.provider);
+        const fresh = !!p?.at && Date.now() - p.at < FRESH_MS;
+        if (p?.running && !p.done && fresh) start(i.provider);
+      } catch {
+        // owner-only endpoint / transient error — just skip resurrection.
+      }
+    });
+  }, [integrationsData, start]);
 
   return (
     <Ctx.Provider value={{ active, start }}>

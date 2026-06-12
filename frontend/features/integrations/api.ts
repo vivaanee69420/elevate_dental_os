@@ -121,14 +121,18 @@ export interface SyncProgress {
   // Per-phase breakdown accumulated server-side (insertion order = pull order),
   // so the UI can show each resource's pull, not just the active phase.
   phases?: Record<string, SyncPhaseProgress>;
+  // True when phases run concurrently (each tracks its own pct + done flag); the
+  // UI then uses per-phase `done` for completion instead of sequential position.
+  parallel?: boolean;
 }
 
 export interface SyncPhaseProgress {
   phase: string;
   count: number;
-  pct: number;
+  pct: number; // this phase's OWN progress (0-100), independent of other phases
   page: number;
   totalPages: number | null;
+  done?: boolean; // explicit completion — set when a phase finishes (parallel-safe)
 }
 
 export function getSyncProgress(provider: string) {

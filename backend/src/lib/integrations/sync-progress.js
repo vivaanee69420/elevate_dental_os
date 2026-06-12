@@ -25,19 +25,30 @@ export function setProgress(orgId, provider, patch) {
         phases[patch.phase] = {
             phase: patch.phase,
             count: patch.count ?? cur.count ?? 0,
-            pct: patch.pct ?? cur.pct ?? 0,
+            // The phase's OWN progress (0-100, independent of other phases) when
+            // the caller sends `phasePct` — this is what lets parallel phases each
+            // track separately in the UI. Falls back to the overall `pct` for
+            // callers that don't distinguish (sequential providers).
+            pct: patch.phasePct ?? patch.pct ?? cur.pct ?? 0,
             page: patch.page ?? cur.page ?? 0,
             totalPages: patch.totalPages ?? cur.totalPages ?? null,
+            // Explicit completion flag — set when a phase finishes. Lets the UI
+            // mark a phase done by signal instead of by position, which is what
+            // makes concurrent (parallel) phases render correctly.
+            done: patch.phaseDone ?? cur.done ?? false,
         };
         next.phases = phases;
     }
+    // The per-phase directives are not part of the top-level snapshot.
+    delete next.phasePct;
+    delete next.phaseDone;
     // Pre-seed expected phases (in order, count 0) so the UI can list not-yet-
     // reached phases as "Waiting". Does NOT touch the active `phase`; only adds
     // entries that don't exist yet. The directive itself is not persisted.
     if (Array.isArray(patch.expectedPhases)) {
         const phases = { ...(next.phases || {}) };
         for (const ph of patch.expectedPhases) {
-            if (!phases[ph]) phases[ph] = { phase: ph, count: 0, pct: 0, page: 0, totalPages: null };
+            if (!phases[ph]) phases[ph] = { phase: ph, count: 0, pct: 0, page: 0, totalPages: null, done: false };
         }
         next.phases = phases;
         delete next.expectedPhases;

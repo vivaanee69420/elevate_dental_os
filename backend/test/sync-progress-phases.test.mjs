@@ -61,4 +61,23 @@ describe('setProgress — per-phase breakdown', () => {
     expect(phases.contacts.count).toBe(1240); // preserved
     expect(phases.opportunities.count).toBe(0); // newly seeded
   });
+
+  it('phasePct sets the phase OWN pct independent of the overall top-bar pct', () => {
+    // Two phases run in parallel: overall is the average, each phase its own.
+    setProgress(ORG, PROVIDER, { phase: 'contacts', pct: 30, phasePct: 60, count: 600 });
+    setProgress(ORG, PROVIDER, { phase: 'opportunities', pct: 30, phasePct: 0, count: 0 });
+    const prog = getProgress(ORG, PROVIDER);
+    expect(prog.pct).toBe(30); // top-level overall
+    expect(prog.phases.contacts.pct).toBe(60); // own pct, not the overall
+    expect(prog.phases.opportunities.pct).toBe(0);
+    expect(prog.phasePct).toBeUndefined(); // directive not persisted at top level
+  });
+
+  it('phaseDone flags a phase complete without ending the whole sync', () => {
+    setProgress(ORG, PROVIDER, { phase: 'contacts', phasePct: 100, phaseDone: true, count: 1240 });
+    const prog = getProgress(ORG, PROVIDER);
+    expect(prog.phases.contacts.done).toBe(true);
+    expect(prog.done).toBeFalsy(); // sync itself not done
+    expect(prog.phaseDone).toBeUndefined(); // directive not persisted at top level
+  });
 });
