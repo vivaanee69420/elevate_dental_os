@@ -185,6 +185,16 @@ async function ghlFetch(path, accessToken, locationId, locationParam = 'location
     return ghlFetchUrl(url.toString(), accessToken);
 }
 
+// Validate a Private Integration Token against a Location: GET /locations/{id}.
+// Returns { id, name } on success; throws on a bad token/location (used by
+// addAccount to reject invalid credentials before persisting).
+export async function fetchLocation(accessToken, locationId) {
+    const url = `${API_BASE}/locations/${encodeURIComponent(locationId)}`;
+    const body = await ghlFetchUrl(url, accessToken);
+    const loc = body.location ?? body;
+    return { id: loc.id ?? locationId, name: loc.name ?? null };
+}
+
 // Page through a GHL collection endpoint. GHL paginates via meta.nextPageUrl
 // (preferred — carries startAfter/startAfterId baked in) and falls back to
 // startAfter/startAfterId query params. arrayKey is the response key holding the
