@@ -89,6 +89,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   'crm-sequences': 'crm.view',
   'crm-templates': 'crm.view',
   'crm-reports': 'crm.view',
+  'ghl-dashboard': 'crm.view',
   'crm-settings': 'crm.manage',
   workflows: 'crm.view',
   pages: 'crm.view',
