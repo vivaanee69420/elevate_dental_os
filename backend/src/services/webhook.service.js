@@ -9,6 +9,7 @@ import { verifyWebhookToken } from "../lib/webhook-token.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { applyWebhookEvent } from "../lib/integrations/dentally-sync.js";
+import { applyWebhookEvent as applyGhlWebhookEvent, mapWebhookEventType as mapGhlEventType } from "../lib/integrations/gohighlevel-sync.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
 // Resource keys, most specific first: 'invoice_item' contains 'invoice', and a
@@ -51,6 +52,33 @@ function parseDentallyEvent(body) {
     if (data == null && body.id != null && body.data == null && body.event == null) data = body;
     const records = Array.isArray(data) ? data : data ? [data] : [];
     return { resourceType, action, records };
+}
+
+// Map a GoHighLevel webhook envelope -> { events: [{ eventType, record }] }. GHL
+// ships two flavours: marketplace events ({ type:'ContactCreate', locationId,
+// ...fields }) and workflow-action webhooks (user-shaped JSON). Parse tolerantly:
+// the event label may be `type`/`event`/`eventType`; resource fields usually sit
+// at root but may nest under `contact`/`opportunity`. When no label is present,
+// infer from the keys (pipeline fields -> opportunity, else contact).
+function parseGhlEvent(body) {
+    if (!body || typeof body !== 'object') return { events: [] };
+    const arr = Array.isArray(body) ? body : [body];
+    const out = [];
+    for (const item of arr) {
+        if (!item || typeof item !== 'object') continue;
+        const rawType = item.type ?? item.event ?? item.eventType ?? item.webhookType ?? '';
+        let eventType = mapGhlEventType(rawType);
+        const record = item.opportunity ?? item.contact ?? item;
+        if (!eventType) {
+            if (item.pipelineId != null || item.pipelineStageId != null || item.opportunity != null) {
+                eventType = 'opportunity';
+            } else if (record && (record.email != null || record.firstName != null || record.phone != null || item.contact != null)) {
+                eventType = 'contact';
+            }
+        }
+        if (eventType && record) out.push({ eventType, record });
+    }
+    return { events: out };
 }
 
 function timingSafeHexEqual(a, b) {

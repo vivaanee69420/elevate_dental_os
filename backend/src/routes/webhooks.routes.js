@@ -11,6 +11,9 @@ router.post('/stripe', (0, async_handler_1.asyncHandler)(webhook_controller_1.we
 // Dentally real-time webhook. :token (signed) identifies the org; HMAC verified
 // in the service. Raw body parser mounted on /webhooks/dentally in app.js.
 router.post('/dentally/:token', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.dentally));
+// GoHighLevel real-time webhook. :token routes to a subaccount (per-account
+// webhook_token) or, for legacy URLs, the signed org token. JSON body (no raw mount).
+router.post('/gohighlevel/:token', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.gohighlevel));
 router.post('/postmark/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.postmarkInbound));
 router.post('/twilio/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.twilioInbound));
 router.post('/ses-events', (0, async_handler_1.asyncHandler)(ses_event_controller_1.sesEventController.handle));
