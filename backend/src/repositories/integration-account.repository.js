@@ -107,24 +107,27 @@ export const integrationAccountRepository = {
     },
 
     async markSynced(orgId, id) {
-        await this._client()
+        const { error } = await this._client()
             .from('integration_accounts')
             .update({ last_sync_at: new Date().toISOString(), last_error: null, status: 'active' })
             .eq('organisation_id', orgId).eq('id', id);
+        if (error) throw new Error(error.message);
     },
 
     async markFailed(orgId, id, lastError) {
-        await this._client()
+        const { error } = await this._client()
             .from('integration_accounts')
             .update({ status: 'failed', last_error: String(lastError).slice(0, 500) })
             .eq('organisation_id', orgId).eq('id', id);
+        if (error) throw new Error(error.message);
     },
 
     async markRevoked(orgId, id) {
-        await this._client()
+        const { error } = await this._client()
             .from('integration_accounts')
             .update({ status: 'revoked', secrets: null })
             .eq('organisation_id', orgId).eq('id', id);
+        if (error) throw new Error(error.message);
     },
 
     // All active GHL accounts across every org — for the worker.
