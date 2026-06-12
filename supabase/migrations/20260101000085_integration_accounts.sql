@@ -8,7 +8,7 @@ create table if not exists integration_accounts (
   external_account_id text not null,      -- GHL locationId
   practice_id uuid references practices(id) on delete set null,
   label text,
-  secrets bytea,                          -- encrypted PIT JSON, same format as integrations.secrets
+  secrets text,                           -- encrypted PIT (base64), same TEXT format as integrations.secrets on hosted
   config jsonb not null default '{}'::jsonb,
   status text not null default 'active',  -- active | failed | revoked
   webhook_token text,
@@ -53,7 +53,7 @@ select
        and (select count(*) from practices p2 where p2.organisation_id = i.organisation_id) = 1
      limit 1),
   'GoHighLevel',
-  i.secrets,
+  i.secrets::text,
   coalesce(i.config, '{}'::jsonb),
   coalesce(i.status, 'active'),
   gen_random_uuid()::text
