@@ -814,3 +814,34 @@ CREATE TABLE IF NOT EXISTS ai_context_snapshots (
 );
 
 COMMENT ON SCHEMA public IS 'Elevate Dental OS — Production schema v1.0';
+
+-- ============================================================================
+-- INTEGRATION ACCOUNTS (per-subaccount credentials; migration 000084)
+-- One row per GHL Location. Single-account providers (Dentally, Xero) unaffected.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS integration_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,                  -- 'gohighlevel'
+  external_account_id TEXT NOT NULL,       -- GHL locationId
+  practice_id UUID REFERENCES practices(id) ON DELETE SET NULL,
+  label TEXT,
+  secrets BYTEA,                           -- encrypted PIT JSON, same format as integrations.secrets
+  config JSONB NOT NULL DEFAULT '{}'::JSONB,
+  status TEXT NOT NULL DEFAULT 'active',   -- active | failed | revoked
+  webhook_token TEXT,
+  last_sync_at TIMESTAMPTZ,
+  last_error TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (organisation_id, provider, external_account_id)
+);
+CREATE INDEX IF NOT EXISTS idx_integration_accounts_org_provider
+  ON integration_accounts(organisation_id, provider);
+-- 1 subaccount : 1 practice (only for gohighlevel, only when mapped).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_accounts_practice
+  ON integration_accounts(organisation_id, practice_id)
+  WHERE practice_id IS NOT NULL AND provider = 'gohighlevel';
+-- Fast webhook routing by the random per-account token.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_accounts_webhook_token
+  ON integration_accounts(webhook_token) WHERE webhook_token IS NOT NULL;
