@@ -24,6 +24,7 @@ export function SyncHealthTable({
             <th className="px-4 py-2 text-right font-medium">Contacts</th>
             <th className="px-4 py-2 text-right font-medium">Leads</th>
             <th className="px-4 py-2 text-right font-medium">Conversations</th>
+            <th className="px-4 py-2 text-right font-medium">Appointments</th>
             <th className="px-4 py-2 font-medium">Last sync</th>
           </tr>
         </thead>
@@ -44,6 +45,7 @@ export function SyncHealthTable({
               <td className="px-4 py-2 text-right text-slate-900">{formatNumber(a.contacts)}</td>
               <td className="px-4 py-2 text-right text-slate-900">{formatNumber(a.leads)}</td>
               <td className="px-4 py-2 text-right text-slate-900">{formatNumber(a.conversations)}</td>
+              <td className="px-4 py-2 text-right text-slate-900">{formatNumber(a.appointments)}</td>
               <td className="px-4 py-2 text-slate-500">{a.lastSyncAt ? formatDate(a.lastSyncAt) : 'never'}</td>
             </tr>
           ))}

@@ -17,6 +17,9 @@ function stubAccounts(accounts) {
 function stubAggregate(rows) {
   vi.spyOn(ghlDashboardRepository, 'aggregate').mockResolvedValue(rows);
 }
+function stubAppointments(rows) {
+  vi.spyOn(ghlDashboardRepository, 'aggregateAppointments').mockResolvedValue(rows);
+}
 
 describe('getDashboard', () => {
   it('sums rows into totals and computes conversion %', async () => {
@@ -33,6 +36,10 @@ describe('getDashboard', () => {
         leads_total: 2, leads_new: 0, leads_open: 1, leads_won: 1, leads_lost: 0, pipeline_value_pence: 100000,
         leads_by_stage: { New: 1, Won: 1 },
         conversations_total: 4, conversations_inbound: 1, conversations_outbound: 3, conversations_last7d: 0 },
+    ]);
+    stubAppointments([
+      { practice_id: 'p1', appts_total: 12, appts_in_window: 5, appts_upcoming: 3, appts_showed: 4, appts_noshow: 1, appts_cancelled: 2, appts_booked: 5, appts_by_calendar: { 'New Patient': 8, 'Review': 4 } },
+      { practice_id: 'p2', appts_total: 6, appts_in_window: 3, appts_upcoming: 1, appts_showed: 2, appts_noshow: 0, appts_cancelled: 1, appts_booked: 2, appts_by_calendar: { 'New Patient': 3, 'Follow-up': 3 } },
     ]);
 
     const out = await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: null, practiceId: null });
@@ -52,20 +59,34 @@ describe('getDashboard', () => {
     expect(out.totals.sync.accounts).toBe(2);
     expect(out.totals.sync.active).toBe(2);
 
+    // appointments totals
+    expect(out.totals.appointments.total).toBe(18);
+    expect(out.totals.appointments.upcoming).toBe(4);
+    expect(out.totals.appointments.showed).toBe(6);
+    expect(out.totals.appointments.byCalendar).toEqual([
+      { calendar: 'New Patient', count: 11 },
+      { calendar: 'Review', count: 4 },
+      { calendar: 'Follow-up', count: 3 },
+    ]);
+
     expect(out.perAccount).toHaveLength(2);
     const ashford = out.perAccount.find((a) => a.accountId === 'a1');
     expect(ashford).toMatchObject({
       label: 'Ashford', practiceId: 'p1', contacts: 10, leads: 8,
       pipelineValuePence: 500000, conversations: 20, status: 'active',
+      appointments: 12, appointmentsUpcoming: 3,
     });
   });
 
   it('returns zeroed totals and empty perAccount when no accounts', async () => {
     stubAccounts([]);
     stubAggregate([]);
+    stubAppointments([]);
     const out = await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: null, practiceId: null });
     expect(out.totals.contacts.total).toBe(0);
     expect(out.totals.leads.conversionPct).toBe(0);
+    expect(out.totals.appointments.total).toBe(0);
+    expect(out.totals.appointments.byCalendar).toEqual([]);
     expect(out.perAccount).toEqual([]);
   });
 
@@ -79,6 +100,7 @@ describe('getDashboard', () => {
         leads_open: 0, leads_won: 0, leads_lost: 0, pipeline_value_pence: 0, leads_by_stage: {},
         conversations_total: 0, conversations_inbound: 0, conversations_outbound: 0, conversations_last7d: 0 },
     ]);
+    stubAppointments([]);
     const out = await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: null, practiceId: null });
     expect(out.totals.contacts.total).toBe(11);
     const unmapped = out.perAccount.find((a) => a.accountId === null);
@@ -91,7 +113,19 @@ describe('getDashboard', () => {
       { id: 'a2', label: 'Maidstone', practice_id: 'p2', status: 'active', last_sync_at: null, last_error: null },
     ]);
     const spy = vi.spyOn(ghlDashboardRepository, 'aggregate').mockResolvedValue([]);
+    stubAppointments([]);
     await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: 'a2', practiceId: null });
     expect(spy).toHaveBeenCalledWith('org-1', WINDOW.since, WINDOW.until, 'p2');
+  });
+
+  it('scopes appointments aggregate to the account practice when accountId given', async () => {
+    stubAccounts([
+      { id: 'a1', label: 'Ashford', practice_id: 'p1', status: 'active', last_sync_at: null, last_error: null },
+      { id: 'a2', label: 'Maidstone', practice_id: 'p2', status: 'active', last_sync_at: null, last_error: null },
+    ]);
+    stubAggregate([]);
+    const apptSpy = vi.spyOn(ghlDashboardRepository, 'aggregateAppointments').mockResolvedValue([]);
+    await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: 'a2', practiceId: null });
+    expect(apptSpy).toHaveBeenCalledWith('org-1', WINDOW.since, WINDOW.until, 'p2');
   });
 });
