@@ -104,7 +104,7 @@ export function extractContact(opp) {
 // One GHL contact record (from the /contacts pull or a Contact webhook) -> a
 // contacts row. Pure (no I/O) so the pull and the webhook map IDENTICALLY,
 // mirroring the Dentally row-builder precedent.
-export function contactRow(orgId, c, practiceId = null) {
+export function contactRow(orgId, c) {
     const name = c.name ?? `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim();
     const [first, ...rest] = (name || 'Unknown').split(' ');
     return {
@@ -115,7 +115,6 @@ export function contactRow(orgId, c, practiceId = null) {
         last_name: c.lastName ?? (rest.join(' ') || null),
         email: c.email ? String(c.email).toLowerCase() : null,
         phone: c.phone ?? null,
-        ...(practiceId ? { practice_id: practiceId } : {}),
     };
 }
 
@@ -252,14 +251,13 @@ async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationPa
 //   3. normalised phone -> same as email
 //   4. none             -> insert a new gohighlevel contact
 // Linking on match (not inserting) is what prevents duplicates across sources.
-export async function upsertContact(orgId, c, db = supabase_1.serviceClient, practiceId = null) {
+export async function upsertContact(orgId, c, db = supabase_1.serviceClient) {
     if (c.ghl_contact_id) {
         const { data } = await db.from('contacts').select('id')
             .eq('organisation_id', orgId).eq('ghl_contact_id', c.ghl_contact_id).maybeSingle();
         if (data) {
             await db.from('contacts').update({
                 first_name: c.first_name, last_name: c.last_name, email: c.email, phone: c.phone,
-                ...(practiceId ? { practice_id: practiceId } : {}),
             }).eq('id', data.id);
             return { id: data.id, action: 'update' };
         }
@@ -268,7 +266,7 @@ export async function upsertContact(orgId, c, db = supabase_1.serviceClient, pra
         const { data } = await db.from('contacts').select('id')
             .eq('organisation_id', orgId).ilike('email', c.email).maybeSingle();
         if (data) {
-            await db.from('contacts').update({ ghl_contact_id: c.ghl_contact_id, ...(practiceId ? { practice_id: practiceId } : {}) }).eq('id', data.id);
+            await db.from('contacts').update({ ghl_contact_id: c.ghl_contact_id }).eq('id', data.id);
             return { id: data.id, action: 'merge_email' };
         }
     }
@@ -278,7 +276,7 @@ export async function upsertContact(orgId, c, db = supabase_1.serviceClient, pra
             const { data } = await db.from('contacts').select('id')
                 .eq('organisation_id', orgId).ilike('phone', `%${norm}%`).limit(1);
             if (data?.length) {
-                await db.from('contacts').update({ ghl_contact_id: c.ghl_contact_id, ...(practiceId ? { practice_id: practiceId } : {}) }).eq('id', data[0].id);
+                await db.from('contacts').update({ ghl_contact_id: c.ghl_contact_id }).eq('id', data[0].id);
                 return { id: data[0].id, action: 'merge_phone' };
             }
         }
@@ -288,7 +286,6 @@ export async function upsertContact(orgId, c, db = supabase_1.serviceClient, pra
     const { error } = await db.from('contacts').upsert({
         organisation_id: orgId, source: 'gohighlevel', ghl_contact_id: c.ghl_contact_id,
         first_name: c.first_name, last_name: c.last_name, email: c.email, phone: c.phone,
-        ...(practiceId ? { practice_id: practiceId } : {}),
     }, { onConflict: 'organisation_id,ghl_contact_id' });
     if (error) return { error: error.message };
     return { action: 'insert' };
@@ -296,7 +293,7 @@ export async function upsertContact(orgId, c, db = supabase_1.serviceClient, pra
 
 // Match an existing contact, else create one. Priority: ghl_contact_id →
 // email (case-insensitive) → normalised phone. Returns the contact id.
-export async function matchOrCreateContact(orgId, c, db = supabase_1.serviceClient, practiceId = null) {
+export async function matchOrCreateContact(orgId, c, db = supabase_1.serviceClient) {
     if (c.ghl_contact_id) {
         const { data } = await db.from('contacts').select('id')
             .eq('organisation_id', orgId).eq('ghl_contact_id', c.ghl_contact_id).maybeSingle();
@@ -329,7 +326,6 @@ export async function matchOrCreateContact(orgId, c, db = supabase_1.serviceClie
         phone: c.phone,
         ghl_contact_id: c.ghl_contact_id,
         source: 'gohighlevel',
-        ...(practiceId ? { practice_id: practiceId } : {}),
     };
     // With a ghl_contact_id, upsert on its unique index so a concurrent writer
     // (poll vs webhook) that inserted the same contact between our lookup and
@@ -366,11 +362,11 @@ async function ensureFreshToken(orgId, integration) {
 // (ghl_contact_id -> our id), when supplied, resolves the contact in O(1) from
 // the already-synced contact book instead of 3 lookups per opportunity — only
 // opps whose contact isn't found fall back to match-or-create.
-export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = supabase_1.serviceClient, contactMap = null, stageNameMap = null, practiceId = null) {
+export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = supabase_1.serviceClient, contactMap = null, stageNameMap = null) {
     if (!opp || opp.id == null) return { ok: false, skipped: 'no_opportunity_id' };
     const contact = extractContact(opp);
     let contactId = contactMap && contact.ghl_contact_id ? (contactMap.get(String(contact.ghl_contact_id)) ?? null) : null;
-    if (!contactId) contactId = await matchOrCreateContact(orgId, contact, db, practiceId);
+    if (!contactId) contactId = await matchOrCreateContact(orgId, contact, db);
     // Stage name: prefer the payload, else resolve the id from the pipeline map.
     const stageName = opp.stageName ?? opp.pipelineStageName
         ?? (stageNameMap && opp.pipelineStageId ? stageNameMap.get(String(opp.pipelineStageId)) : null)
@@ -399,7 +395,6 @@ export async function upsertOpportunity(orgId, opp, stageMappings = {}, db = sup
         sync_status: 'synced',
         source: 'gohighlevel',
         ...(createdIso ? { created_at: createdIso } : {}),
-        ...(practiceId ? { practice_id: practiceId } : {}),
     }, { onConflict: 'organisation_id,ghl_opportunity_id' });
     if (error) return { ok: false, error: error.message };
     return { ok: true };
@@ -436,7 +431,7 @@ async function loadContactDedupMaps(orgId) {
 // email/phone -> link the GHL id onto that row (dedup, no duplicate). This keeps
 // the same dedup guarantee as upsertContact but at a few dozen queries instead
 // of ~3 per contact — an 8k pull goes from ~an hour to seconds.
-async function pullContacts(orgId, accessToken, locationId, onPage, maxPages, practiceId = null) {
+async function pullContacts(orgId, accessToken, locationId, onPage, maxPages) {
     const remote = await ghlFetchAll('/contacts/', accessToken, locationId, {
         arrayKey: 'contacts', locationParam: 'locationId', maxPages, onPage,
     });
@@ -445,7 +440,7 @@ async function pullContacts(orgId, accessToken, locationId, onPage, maxPages, pr
     const toLink = []; // { id, ghl_contact_id } — existing non-GHL row to relink
     for (const rc of remote) {
         if (!rc || rc.id == null) continue;
-        const r = contactRow(orgId, rc, practiceId);
+        const r = contactRow(orgId, rc);
         const g = String(r.ghl_contact_id);
         if (byGhl.has(g)) { toUpsert.push(r); continue; } // already linked -> refresh
         const e = r.email ? String(r.email).toLowerCase() : null;
@@ -478,7 +473,7 @@ async function pullContacts(orgId, accessToken, locationId, onPage, maxPages, pr
     }
     for (const lk of toLink) {
         const { error } = await supabase_1.serviceClient.from('contacts')
-            .update({ ghl_contact_id: lk.ghl_contact_id, ...(practiceId ? { practice_id: practiceId } : {}) }).eq('id', lk.id).eq('organisation_id', orgId);
+            .update({ ghl_contact_id: lk.ghl_contact_id }).eq('id', lk.id).eq('organisation_id', orgId);
         if (!error) synced++;
     }
     if (failed) console.warn(`[gohighlevel] contacts: skipped ${failed} unstorable row(s)`);
@@ -624,17 +619,17 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
 // mapWebhookEventType. Reuses the same row builders / upsert path as the poll.
 // Opportunity delete removes the GHL-mastered lead; contact delete is ignored
 // (never cascade-delete a contact from a CRM event). Idempotent.
-export async function applyWebhookEvent(orgId, eventType, record, practiceId = null) {
+export async function applyWebhookEvent(orgId, eventType, record) {
     if (!eventType) return { ignored: 'unknown_event' };
     if (!record || record.id == null) return { ignored: 'no_record_id' };
     if (eventType === 'contact') {
-        await upsertContact(orgId, contactRow(orgId, record, practiceId), supabase_1.serviceClient, practiceId);
+        await upsertContact(orgId, contactRow(orgId, record), supabase_1.serviceClient);
         return { table: 'contacts', applied: 1 };
     }
     if (eventType === 'opportunity') {
         const integration = await integrationRepository.getByProvider(orgId, 'gohighlevel');
         const stageMappings = integration?.config?.stage_mappings ?? {};
-        const r = await upsertOpportunity(orgId, record, stageMappings, supabase_1.serviceClient, null, null, practiceId);
+        const r = await upsertOpportunity(orgId, record, stageMappings, supabase_1.serviceClient, null, null);
         return r.ok ? { table: 'leads', applied: 1 } : { skipped: r.error ?? r.skipped };
     }
     if (eventType === 'opportunity_delete') {
@@ -674,9 +669,8 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
 }
 
 // Account-driven sync: same pull/upsert engine as syncOneOrg, but creds come
-// from an integration_accounts row (its own PIT + locationId), every contact/
-// lead is stamped with account.practice_id, and pipelines/last_sync persist to
-// the account row. This is the multi-subaccount path.
+// from an integration_accounts row (its own PIT + locationId), pipelines/last_sync
+// persist to the account row. This is the multi-subaccount path.
 export async function syncAccount(orgId, accountId, onProgress = () => {}, { full = false, recent = false } = {}) {
     const account = await integrationAccountRepository.getByIdWithSecrets(orgId, accountId);
     if (!account || account.status === 'revoked' || !account.secrets) {
@@ -685,14 +679,13 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
     const { access_token } = JSON.parse(decryptSecret(account.secrets));
     const locationId = account.external_account_id;
     if (!access_token || !locationId) return { synced: 0, skipped: 'no_location' };
-    const practiceId = account.practice_id ?? null;
     const stageMappings = account.config?.stage_mappings ?? {};
     const maxPages = (full || recent) ? BOOTSTRAP_MAX_PAGES : MAX_PAGES;
     const nPhases = 2;
     try {
         const contactsSynced = await pullContacts(orgId, access_token, locationId,
             (page, totalPages, count) => onProgress({ phase: 'contacts', pct: phasePct(0, nPhases, page, totalPages), page, totalPages, count }),
-            maxPages, practiceId);
+            maxPages);
         const opportunities = await ghlFetchAll('/opportunities/search', access_token, locationId, {
             arrayKey: 'opportunities', locationParam: 'location_id', maxPages,
             onPage: (page, totalPages, count) => onProgress({ phase: 'opportunities', pct: phasePct(1, nPhases, page, totalPages), page, totalPages, count }),
@@ -711,7 +704,7 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
         const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
         let synced = 0;
         for (const opp of opportunities) {
-            const r = await upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap, practiceId);
+            const r = await upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap);
             if (r.ok) synced++;
         }
         await integrationAccountRepository.markSynced(orgId, accountId);

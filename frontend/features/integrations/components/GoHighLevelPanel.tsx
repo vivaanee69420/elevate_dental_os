@@ -6,24 +6,21 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useGhlAccounts, useAddGhlAccount, usePractices } from '../hooks';
+import { useGhlAccounts, useAddGhlAccount } from '../hooks';
 import { syncGhlAccount } from '../api';
 import GhlAccountRow from './GhlAccountRow';
 
 export default function GoHighLevelPanel() {
   const qc = useQueryClient();
   const { data, isLoading } = useGhlAccounts();
-  const practicesQ = usePractices();
   const add = useAddGhlAccount();
 
   const [showAdd, setShowAdd] = useState(false);
   const [token, setToken] = useState('');
   const [locId, setLocId] = useState('');
-  const [practiceId, setPracticeId] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
 
   const accounts = data?.accounts ?? [];
-  const practices = practicesQ.data?.practices ?? [];
 
   // Per-account sync + add-bootstrap run server-side with no progress stream;
   // refetch the list shortly after so status/last_sync update.
@@ -33,8 +30,8 @@ export default function GoHighLevelPanel() {
 
   async function submitAdd() {
     if (!token.trim() || !locId.trim()) return;
-    await add.mutateAsync({ token: token.trim(), locationId: locId.trim(), practiceId: practiceId || null });
-    setToken(''); setLocId(''); setPracticeId(''); setShowAdd(false);
+    await add.mutateAsync({ token: token.trim(), locationId: locId.trim() });
+    setToken(''); setLocId(''); setShowAdd(false);
     setNotice('Subaccount connected. Initial sync is running — contacts and leads will appear shortly.');
     refetchSoon();
   }
@@ -54,8 +51,8 @@ export default function GoHighLevelPanel() {
         </button>
       </div>
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-        Connect each GoHighLevel location with its own Private Integration Token and map it to a practice.
-        Contacts and opportunities sync into that practice, and the practice filter scopes them everywhere.
+        Connect each GoHighLevel location with its own Private Integration Token.
+        Contacts and opportunities sync in automatically.
       </p>
 
       {notice && (
@@ -68,17 +65,6 @@ export default function GoHighLevelPanel() {
         <div style={{ marginBottom: 16, padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#F8FAFC', display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460 }}>
           <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Private Integration Token (pit-…)" style={inp} />
           <input type="text" value={locId} onChange={(e) => setLocId(e.target.value)} placeholder="Location ID" style={inp} />
-          <select value={practiceId} onChange={(e) => setPracticeId(e.target.value)} style={inp}>
-            <option value="">Map to practice (optional now, required to scope)</option>
-            {practices.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-          <div>
-            <button onClick={submitAdd} disabled={!token.trim() || !locId.trim() || add.isPending}
-              style={{ padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', color: 'white', background: token.trim() && locId.trim() ? 'var(--brand)' : '#9CA3AF', cursor: 'pointer' }}>
-              {add.isPending ? 'Validating…' : 'Connect & sync'}
-            </button>
-            {add.isError && <span style={{ fontSize: 11, color: 'var(--danger)', marginLeft: 10 }}>{(add.error as Error).message}</span>}
-          </div>
           <span className="text-ink-muted" style={{ fontSize: 10 }}>The token must be created inside the same GHL sub-account as the Location ID.</span>
         </div>
       )}
@@ -92,7 +78,6 @@ export default function GoHighLevelPanel() {
           <thead>
             <tr className="text-ink-muted" style={{ textAlign: 'left', fontSize: 11 }}>
               <th style={{ padding: 4 }}>Subaccount</th>
-              <th style={{ padding: 4 }}>Practice</th>
               <th style={{ padding: 4 }}>Status</th>
               <th style={{ padding: 4 }}>Webhook URL</th>
               <th style={{ padding: 4 }}>Actions</th>
@@ -100,7 +85,7 @@ export default function GoHighLevelPanel() {
           </thead>
           <tbody>
             {accounts.map((a) => (
-              <GhlAccountRow key={a.id} account={a} practices={practices} onSync={onSync} />
+              <GhlAccountRow key={a.id} account={a} onSync={onSync} />
             ))}
           </tbody>
         </table>

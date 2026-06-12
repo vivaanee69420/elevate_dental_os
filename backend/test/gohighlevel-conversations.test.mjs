@@ -1,6 +1,9 @@
-// GoHighLevel conversations — pure mappers (channel + message -> communications row).
-import { describe, it, expect } from 'vitest';
-import { mapMessageChannel, messageRow } from '../src/lib/integrations/gohighlevel-conversations.js';
+// GoHighLevel conversations — pure mappers (channel + message -> communications row)
+// + the paginated syncConversations pull.
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mapMessageChannel, messageRow, syncConversations } from '../src/lib/integrations/gohighlevel-conversations.js';
+import { encryptSecret } from '../src/lib/crypto.js';
+import { supaRec } from './setup.js';
 
 describe('mapMessageChannel', () => {
     it('maps GHL message types to our channel enum', () => {
@@ -35,5 +38,66 @@ describe('messageRow', () => {
     });
     it('returns null for an unmappable channel', () => {
         expect(messageRow('o', { id: 'm3', messageType: 'TYPE_WEBCHAT', body: 'x' }, 'c', 'cv')).toBeNull();
+    });
+});
+
+describe('syncConversations pagination', () => {
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    // Regression for the empty-Inbox bug: the pull must page through ALL threads
+    // (not the first 100) by advancing the GHL cursor (startAfterDate=<last
+    // sort[0]>), and each page's messages must upsert. The root cause of the live
+    // bug (a PARTIAL unique index that PostgREST's ON CONFLICT could not infer)
+    // is guarded by migration 000084 + a full-index re-run, not reproducible
+    // against the in-memory Supabase fake; this test pins the pagination control
+    // flow that surfaces all of it.
+    it('pages via the cursor until a short page and upserts every page', async () => {
+        const integration = {
+            secrets: encryptSecret(JSON.stringify({ access_token: 'tok' })),
+            config: { locationId: 'loc-1' },
+        };
+        let upsertedRows = 0;
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'communications' && q.upsertVals) {
+                const rows = q.upsertVals;
+                upsertedRows += rows.length;
+                return { data: rows.map((_, i) => ({ id: `id-${i}` })), error: null };
+            }
+            return { data: [], error: null }; // empty contact map (ourContactMap)
+        };
+        const searchCalls = [];
+        global.fetch = vi.fn(async (url) => {
+            const u = String(url);
+            if (u.includes('/conversations/search')) {
+                searchCalls.push(u);
+                const page2 = u.includes('startAfterDate=');
+                const conversations = page2
+                    ? [{ id: 'c3', contactId: 'gc3', sort: [300] }]                              // 1 < limit 2 -> stop
+                    : [{ id: 'c1', contactId: 'gc1', sort: [100] }, { id: 'c2', contactId: 'gc2', sort: [200] }];
+                return { ok: true, status: 200, json: async () => ({ conversations, total: 3 }) };
+            }
+            const id = u.match(/conversations\/([^/]+)\/messages/)[1];
+            return {
+                ok: true, status: 200,
+                json: async () => ({ messages: { messages: [{ id: `m-${id}`, messageType: 'TYPE_SMS', direction: 'inbound', body: 'hi' }] } }),
+            };
+        });
+
+        const res = await syncConversations('org-1', integration, { pageSize: 2, concurrency: 2, perConv: 5 });
+
+        expect(searchCalls.length).toBe(2);                     // page 1 + page 2, then short page stops
+        expect(searchCalls[0]).not.toContain('startAfterDate');
+        expect(searchCalls[1]).toContain('startAfterDate=200'); // cursor = page 1's last sort[0]
+        expect(res.conversations).toBe(3);
+        expect(res.messages).toBe(3);                           // 3 threads x 1 message
+        expect(upsertedRows).toBe(3);
+    });
+
+    it('returns zero without a locationId (cannot scope the GHL search)', async () => {
+        const integration = { secrets: encryptSecret(JSON.stringify({ access_token: 'tok' })), config: {} };
+        global.fetch = vi.fn();
+        const res = await syncConversations('org-1', integration);
+        expect(res).toEqual({ conversations: 0, messages: 0 });
+        expect(global.fetch).not.toHaveBeenCalled();
     });
 });
