@@ -17,7 +17,16 @@ const PROVIDER = 'gohighlevel';
 export const ghlAccountService = {
     async listAccounts(orgId) {
         const accounts = await integrationAccountRepository.list(orgId, PROVIDER);
-        return { accounts };
+        // Decorate each account with the webhook URL the owner pastes into that GHL
+        // location's settings (the random webhook_token IS the per-account webhook
+        // credential — owner-facing, like the Dentally webhook-info URL).
+        const base = process.env.BACKEND_PUBLIC_URL || process.env.APP_URL || 'http://localhost:8080';
+        return {
+            accounts: accounts.map((a) => ({
+                ...a,
+                webhook_url: a.webhook_token ? `${base}/webhooks/gohighlevel/${a.webhook_token}` : null,
+            })),
+        };
     },
 
     async addAccount(orgId, { token, locationId, practiceId = null, label = null }) {
