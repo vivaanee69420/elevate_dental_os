@@ -46,8 +46,12 @@ export const ghlDashboardService = {
     const rows = await ghlDashboardRepository.aggregate(orgId, since, until, practiceFilter);
     const byPractice = new Map(rows.map((r) => [r.practice_id, r]));
 
+    const apptRows = await ghlDashboardRepository.aggregateAppointments(orgId, since, until, practiceFilter);
+    const apptByPractice = new Map(apptRows.map((r) => [r.practice_id, r]));
+
     const perAccount = accounts.map((a) => {
       const r = byPractice.get(a.practice_id) ?? {};
+      const ar = apptByPractice.get(a.practice_id) ?? {};
       return {
         accountId: a.id,
         label: a.label || 'GoHighLevel',
@@ -60,13 +64,17 @@ export const ghlDashboardService = {
         pipelineValuePence: num(r.pipeline_value_pence),
         conversionPct: conversionPct(num(r.leads_won), num(r.leads_lost)),
         conversations: num(r.conversations_total),
+        appointments: num(ar.appts_total),
+        appointmentsUpcoming: num(ar.appts_upcoming),
       };
     });
 
     const mappedPractices = new Set(accounts.map((a) => a.practice_id));
     const unmappedRows = rows.filter((r) => !mappedPractices.has(r.practice_id));
-    if (unmappedRows.length) {
+    const unmappedApptRows = apptRows.filter((r) => !mappedPractices.has(r.practice_id));
+    if (unmappedRows.length || unmappedApptRows.length) {
       const u = unmappedRows;
+      const ua = unmappedApptRows;
       perAccount.push({
         accountId: null,
         label: 'Unmapped',
@@ -82,10 +90,13 @@ export const ghlDashboardService = {
           u.reduce((s, r) => s + num(r.leads_lost), 0),
         ),
         conversations: u.reduce((s, r) => s + num(r.conversations_total), 0),
+        appointments: ua.reduce((s, r) => s + num(r.appts_total), 0),
+        appointmentsUpcoming: ua.reduce((s, r) => s + num(r.appts_upcoming), 0),
       });
     }
 
     const sum = (f) => rows.reduce((s, r) => s + num(r[f]), 0);
+    const apptSum = (f) => apptRows.reduce((s, r) => s + num(r[f]), 0);
     const wonTotal = sum('leads_won');
     const lostTotal = sum('leads_lost');
 
@@ -110,6 +121,16 @@ export const ghlDashboardService = {
         inbound: sum('conversations_inbound'),
         outbound: sum('conversations_outbound'),
         last7d: sum('conversations_last7d'),
+      },
+      appointments: {
+        total: apptSum('appts_total'),
+        inWindow: apptSum('appts_in_window'),
+        upcoming: apptSum('appts_upcoming'),
+        showed: apptSum('appts_showed'),
+        noshow: apptSum('appts_noshow'),
+        cancelled: apptSum('appts_cancelled'),
+        booked: apptSum('appts_booked'),
+        byCalendar: mergeCounts(apptRows.map((r) => r.appts_by_calendar), 'calendar'),
       },
       sync: {
         accounts: accounts.length,
