@@ -141,6 +141,11 @@ export const seriesQuerySchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid().optional(),
     from: dateStr,
     to: dateStr,
+    // /profit source toggle: 'combined' (default) = Dentally revenue + all-source
+    // costs; 'dentally' = revenue only; 'quickbooks' = full P&L from QBO actuals.
+    source: zod_1.z.enum(['combined', 'dentally', 'quickbooks']).optional(),
+    // QBO company scope (integration_account_id) — only meaningful when source=quickbooks.
+    account_id: zod_1.z.string().uuid().optional(),
 });
 
 // ai-insights ?days=30 — rolling window for the leads/payments rollups.

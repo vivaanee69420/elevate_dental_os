@@ -18,8 +18,10 @@ import { useState } from 'react';
 import { Skeleton } from '@/components/ui';
 import { annualTotal, poundsCompact, monthLabel, monthShort } from '../mock';
 import { useFinanceSeries } from '../hooks';
+import type { FinanceSource } from '../api';
 import FinanceToolbar from './FinanceToolbar';
 import ManualPLModal from './ManualPLModal';
+import ProfitSourceBar from './ProfitSourceBar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import DateRangeFilter, { type DateRange } from './DateRangeFilter';
 
@@ -49,15 +51,24 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
 export default function ProfitScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const [source, setSource] = useState<FinanceSource>('combined');
+  const [qboAccountId, setQboAccountId] = useState<string | null>(null);
   const rangeActive = !!(range.from && range.to);
   // Two series. The filtered window drives the chart + monthly breakdown. The
   // fixed last-12-months series drives the KPI cards, so "Annual revenue",
   // "Avg monthly revenue" and "This month" do NOT shift when a date filter is
   // applied — they always reflect the rolling year / current month.
-  const { data, isLoading, isError } = useFinanceSeries(practiceId, range);
-  const { data: annualData, isLoading: annualLoading } = useFinanceSeries(practiceId, null);
+  const { data, isLoading, isError } = useFinanceSeries(practiceId, range, source, qboAccountId);
+  const { data: annualData, isLoading: annualLoading } = useFinanceSeries(practiceId, null, source, qboAccountId);
   const [plModalOpen, setPlModalOpen] = useState(false);
-  const basisLabel = BASIS_LABEL[data?.basis ?? 'revenue-only'] ?? BASIS_LABEL['revenue-only'];
+  // Per-source provenance line under the title. QuickBooks/Dentally override the
+  // generic basis copy so it's clear which feed the P&L is being built from.
+  const SOURCE_NOTE: Record<FinanceSource, string> = {
+    combined: BASIS_LABEL[data?.basis ?? 'revenue-only'] ?? BASIS_LABEL['revenue-only'],
+    dentally: 'Dentally — real settled/billed revenue · no cost data, profit £0',
+    quickbooks: 'QuickBooks — real P&L (revenue + costs) from connected companies',
+  };
+  const basisLabel = SOURCE_NOTE[source];
 
   const ZERO = { revenue: 0, associate_pay: 0, staff_costs: 0, lab_materials: 0, opex: 0, profit: 0 };
 
@@ -185,7 +196,14 @@ export default function ProfitScreen() {
 
       <ManualPLModal open={plModalOpen} onClose={() => setPlModalOpen(false)} practiceId={practiceId} />
 
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <ProfitSourceBar
+        source={source}
+        onSourceChange={setSource}
+        accountId={qboAccountId}
+        onAccountChange={setQboAccountId}
+      />
+      {/* QuickBooks is scoped by company, not practice — hide the practice tabs. */}
+      {source !== 'quickbooks' && <PracticeTabs value={practiceId} onChange={setPracticeId} />}
       <DateRangeFilter value={range} onChange={setRange} />
 
       <FinanceToolbar />
@@ -200,21 +218,37 @@ export default function ProfitScreen() {
       )}
       {!hasRevenue && !isError && !isLoading && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
-          <div className="font-semibold">No settled payments in the last 12 months</div>
-          <div className="text-sm text-ink-muted">
-            Revenue here is real settled payments
-            {practiceId ? ' for this practice' : ''}. Once Dentally/Stripe
-            payments land, the P&amp;L fills in automatically.
-          </div>
+          {source === 'quickbooks' ? (
+            <>
+              <div className="font-semibold">No QuickBooks P&amp;L in the last 12 months</div>
+              <div className="text-sm text-ink-muted">
+                This view is built only from connected QuickBooks companies
+                {qboAccountId ? ' (selected company)' : ''}. Connect a QuickBooks
+                company and sync, or switch the data source above.
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="font-semibold">No settled payments in the last 12 months</div>
+              <div className="text-sm text-ink-muted">
+                Revenue here is real settled payments
+                {practiceId ? ' for this practice' : ''}. Once Dentally/Stripe
+                payments land, the P&amp;L fills in automatically.
+              </div>
+            </>
+          )}
         </div>
       )}
-      {!costsAvailable && !isError && !isLoading && hasRevenue && (
+      {!costsAvailable && !isError && !isLoading && hasRevenue && source !== 'quickbooks' && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">Costs &amp; profit shown as £0</div>
           <div className="text-sm text-ink-muted">
             Revenue is real (settled payments). We have no cost data — Dentally
             doesn&rsquo;t provide it — so cost and profit lines are £0, not
-            estimated. Connect Xero or enter P&amp;L actuals for real costs.
+            estimated.
+            {source === 'dentally'
+              ? ' Switch to QuickBooks or Combined for cost data.'
+              : ' Connect Xero/QuickBooks or enter P&L actuals for real costs.'}
           </div>
         </div>
       )}

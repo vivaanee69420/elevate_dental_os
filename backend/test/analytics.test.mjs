@@ -104,6 +104,101 @@ describe('financeSeries — exact real revenue, costs/profit real-or-zero', () =
   });
 });
 
+describe('financeSeries — /profit data-source toggle', () => {
+  const now = () => new Date(2026, 4, 15); // May 2026
+
+  it('source=quickbooks → P&L built ONLY from QBO actuals (rev+costs), Dentally feed ignored', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials'
+        ? {
+            data: [
+              { period: '2026-05', dental_bucket: 'revenue', amount_pence: 5_000_000, source: 'quickbooks', practice_id: null, integration_account_id: 'qbo-1' },
+              { period: '2026-05', dental_bucket: 'staff', amount_pence: 1_000_000, source: 'quickbooks', practice_id: null, integration_account_id: 'qbo-1' },
+            ],
+            error: null,
+          }
+        : { data: [], error: null };
+    // A settled-receipts feed exists but MUST NOT leak into the QuickBooks view.
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-05-02', pence: 9_999 }]);
+    const fs = await svc.financeSeries(ORG_A, { months: 12, now, source: 'quickbooks' });
+    const may = fs.months.find((m) => m.month === '2026-05');
+    expect(may.revenue).toBe(5_000_000); // QBO revenue bucket, not the 9_999 receipts
+    expect(may.staffCosts).toBe(1_000_000);
+    expect(may.profit).toBe(4_000_000);
+    expect(may.costsAvailable).toBe(true);
+    expect(fs.source).toBe('quickbooks');
+    expect(fs.costsAvailable).toBe(true);
+  });
+
+  it('source=quickbooks scopes the read to source=quickbooks (+ account when set)', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
+    let captured;
+    const orig = supaRec.resultProvider;
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'monthly_financials') captured = q;
+      return orig(q);
+    };
+    await svc.financeSeries(ORG_A, { months: 12, now, source: 'quickbooks', accountId: 'qbo-1' });
+    expect(captured.eqs.find((e) => e.col === 'source')?.val).toBe('quickbooks');
+    expect(captured.eqs.find((e) => e.col === 'integration_account_id')?.val).toBe('qbo-1');
+  });
+
+  it('source=dentally → revenue from receipts; costs/profit forced £0 even when cost actuals exist', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials'
+        ? { data: [{ period: '2026-05', dental_bucket: 'staff', amount_pence: 1_000_000, source: 'xero', practice_id: null }], error: null }
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-05-02', pence: 6_000_000 }]);
+    const fs = await svc.financeSeries(ORG_A, { months: 12, now, source: 'dentally' });
+    const may = fs.months.find((m) => m.month === '2026-05');
+    expect(may.revenue).toBe(6_000_000); // real settled receipts
+    expect(may.staffCosts).toBe(0); // Xero/manual cost actuals ignored for Dentally
+    expect(may.profit).toBe(0);
+    expect(may.costsAvailable).toBe(false);
+    expect(fs.source).toBe('dentally');
+  });
+});
+
+describe('plBenchmark — /profit data-source toggle', () => {
+  it('source=dentally → honest empty (Dentally has no cost data), no actuals read', async () => {
+    let read = false;
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'monthly_financials') read = true;
+      return { data: [], error: null };
+    };
+    const r = await svc.plBenchmark(ORG_A, { source: 'dentally' });
+    expect(r.costsAvailable).toBe(false);
+    expect(r.rows).toEqual([]);
+    expect(r.source).toBe('dentally');
+    expect(read).toBe(false); // short-circuits before touching monthly_financials
+  });
+
+  it('source=quickbooks → benchmark from QBO actuals only, scoped source=quickbooks', async () => {
+    let captured;
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'monthly_financials') {
+        captured = q;
+        return {
+          data: [
+            { period: '2026-05', dental_bucket: 'revenue', amount_pence: 10_000_000, source: 'quickbooks', practice_id: null, integration_account_id: 'qbo-1' },
+            { period: '2026-05', dental_bucket: 'staff', amount_pence: 2_000_000, source: 'quickbooks', practice_id: null, integration_account_id: 'qbo-1' },
+            { period: '2026-05', dental_bucket: 'lab', amount_pence: 1_000_000, source: 'quickbooks', practice_id: null, integration_account_id: 'qbo-1' },
+          ],
+          error: null,
+        };
+      }
+      return { data: [], error: null };
+    };
+    const r = await svc.plBenchmark(ORG_A, { source: 'quickbooks', accountId: 'qbo-1' });
+    expect(r.costsAvailable).toBe(true);
+    expect(r.source).toBe('quickbooks');
+    expect(r.rows.length).toBeGreaterThan(0);
+    expect(captured.eqs.find((e) => e.col === 'source')?.val).toBe('quickbooks');
+    expect(captured.eqs.find((e) => e.col === 'integration_account_id')?.val).toBe('qbo-1');
+  });
+});
+
 describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
   const now = () => new Date(2026, 4, 15);
 

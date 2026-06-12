@@ -15,7 +15,7 @@ export const analyticsController = {
     },
     async financeSeries(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months, practiceId: q.practice_id, from: q.from, to: q.to }));
+        res.json(await analytics_service_1.analyticsService.financeSeries(req.user.organisation_id, { months: q.months, practiceId: q.practice_id, from: q.from, to: q.to, source: q.source, accountId: q.account_id }));
     },
     async cashflowOutlook(req, res) {
         const q = analytics_model_1.outlookQuerySchema.parse(req.query);
@@ -44,8 +44,8 @@ export const analyticsController = {
         res.json(await analytics_service_1.analyticsService.pl(req.user.organisation_id, { practiceId }));
     },
     async plBenchmark(req, res) {
-        const { practice_id: practiceId } = practiceQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.plBenchmark(req.user.organisation_id, { practiceId }));
+        const q = analytics_model_1.seriesQuerySchema.parse(req.query);
+        res.json(await analytics_service_1.analyticsService.plBenchmark(req.user.organisation_id, { practiceId: q.practice_id, source: q.source, accountId: q.account_id }));
     },
     // P&L & Margin (Intelligence OS) — scope/period-aware group statement +
     // per-entity P&L from real monthly_financials actuals.
