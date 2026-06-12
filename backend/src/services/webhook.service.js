@@ -206,10 +206,9 @@ export const webhookService = {
 
         const { events } = parseGhlEvent(body);
         if (!events || events.length === 0) return { received: true, ignored: true };
-        const practiceId = account.practice_id ?? null;
         const results = [];
         for (const { eventType, record } of events) {
-            results.push(await applyGhlWebhookEvent(orgId, eventType, record, practiceId));
+            results.push(await applyGhlWebhookEvent(orgId, eventType, record));
         }
         return { received: true, count: results.length, results };
     },

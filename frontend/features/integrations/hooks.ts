@@ -213,7 +213,7 @@ export function useGhlAccounts() {
 export function useAddGhlAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { token: string; locationId: string; practiceId?: string | null; label?: string }) =>
+    mutationFn: (body: { token: string; locationId: string; label?: string }) =>
       addGhlAccount(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ghl-accounts'] }),
   });
@@ -222,7 +222,7 @@ export function useAddGhlAccount() {
 export function useUpdateGhlAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: { id: string; practiceId?: string | null; label?: string }) =>
+    mutationFn: ({ id, ...body }: { id: string; label?: string }) =>
       updateGhlAccount(id, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ghl-accounts'] }),
   });

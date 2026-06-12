@@ -18,15 +18,22 @@ function tokenOf(integration) {
     return JSON.parse(decryptSecret(integration.secrets)).access_token;
 }
 
-// GHL fetch with one 429 retry honouring retry-after (+500ms).
-async function ghl(path, accessToken, { method = 'GET', body } = {}) {
+// GHL fetch with bounded 429 retries honouring retry-after with exponential
+// backoff. A full conversations backfill fires thousands of message pulls at
+// concurrency, and GHL's burst limit (~100 req / 10s) returns 429 in waves; a
+// single retry wasn't enough (the retry itself hit the still-open window and the
+// thread was dropped). Up to 4 attempts with growing backoff lets a thread ride
+// out a sustained burst instead of being skipped.
+async function ghl(path, accessToken, { method = 'GET', body, retries = 4 } = {}) {
     const headers = { Authorization: `Bearer ${accessToken}`, Version: API_VERSION, Accept: 'application/json' };
     if (body) headers['Content-Type'] = 'application/json';
-    let res = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-    if (res.status === 429) {
-        const ra = parseInt(res.headers.get('retry-after') ?? '2', 10);
-        await new Promise((r) => setTimeout(r, ra * 1000 + 500));
+    let res;
+    for (let attempt = 0; attempt <= retries; attempt++) {
         res = await fetch(`${API_BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+        if (res.status !== 429 || attempt === retries) break;
+        const ra = parseInt(res.headers.get('retry-after') ?? '0', 10);
+        const wait = (ra > 0 ? ra * 1000 : 1000 * 2 ** attempt) + 500;
+        await new Promise((r) => setTimeout(r, wait));
     }
     if (!res.ok) throw new Error(`GHL ${path} → ${res.status} ${(await res.text()).slice(0, 200)}`);
     return res.json();
@@ -104,56 +111,87 @@ async function ourContactMap(orgId) {
     return map;
 }
 
-// Pull conversation threads + their recent messages into communications.
-// Idempotent: upserts on (organisation_id, external_id) so re-runs and
-// concurrent syncs never duplicate a message. Inbound + outbound (including
-// replies we sent via GHL) both land here, so the Inbox is complete.
-export async function syncConversations(orgId, integration, { maxConversations = 100, perConv = 50, onProgress = null } = {}) {
+// Run fn over items with at most `limit` in flight. Per-conversation message
+// pulls are I/O-bound HTTP; sequential was ~0.75s/thread (35min for a 2.8k-thread
+// account). Bounded concurrency keeps a full backfill to a few minutes without
+// hammering GHL past its rate limit (the 429 retry in ghl() absorbs bursts).
+async function mapLimit(items, limit, fn) {
+    const out = new Array(items.length);
+    let i = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length || 1) }, async () => {
+        while (i < items.length) {
+            const idx = i++;
+            out[idx] = await fn(items[idx], idx);
+        }
+    });
+    await Promise.all(workers);
+    return out;
+}
+
+// Idempotent upsert of communications rows. Backed by the FULL unique index
+// uq_comms_org_extid (000084). The earlier PARTIAL index (000067, WHERE
+// external_id IS NOT NULL) could not be inferred by PostgREST's ON CONFLICT, so
+// every conversation sync raised "no unique or exclusion constraint matching the
+// ON CONFLICT specification" and silently stored 0 — the Inbox stayed empty.
+// Dedupe within the batch first (same external_id twice in one pull would trip
+// "affect row a second time"). Returns the count actually inserted (ignored dups
+// are not selected back).
+async function upsertMessages(rows) {
+    if (!rows.length) return 0;
+    const seen = new Set();
+    const batch = rows.filter((r) => r.external_id && !seen.has(r.external_id) && seen.add(r.external_id));
+    const { data, error } = await supabase_1.serviceClient.from('communications')
+        .upsert(batch, { onConflict: 'organisation_id,external_id', ignoreDuplicates: true })
+        .select('id');
+    if (error) { console.warn(`[gohighlevel] conversations upsert: ${error.message}`); return 0; }
+    return data?.length ?? 0;
+}
+
+// Pull ALL conversation threads + their recent messages into communications.
+// Paginates /conversations/search via the GHL cursor (each conversation carries
+// `sort: [lastMessageDate]`; the next page is startAfterDate=<last sort[0]>) until
+// the account is exhausted or maxConversations is reached. Inbound + outbound
+// (including replies we sent via GHL) both land here, so the Inbox is complete.
+// Idempotent — safe to re-run nightly; the upsert drops messages already stored.
+export async function syncConversations(orgId, integration, { maxConversations = 5000, perConv = 50, pageSize = 100, concurrency = 8, onProgress = null } = {}) {
     const at = tokenOf(integration);
     const locationId = integration.config?.locationId;
     if (!at || !locationId) return { conversations: 0, messages: 0 };
     const cmap = await ourContactMap(orgId);
-    const convRes = await ghl(`/conversations/search?locationId=${locationId}&limit=${Math.min(maxConversations, 100)}`, at);
-    const conversations = convRes.conversations ?? [];
-    const total = conversations.length;
-    // Stream the per-conversation count so the overlay shows a live "X pulled"
-    // and `at` stays fresh while we walk threads one message-pull at a time
-    // (otherwise this phase looks frozen for its whole duration).
-    onProgress?.({ phase: 'conversations', pct: 99, count: 0, page: 0, totalPages: total });
-    const rows = [];
-    let walked = 0;
-    for (const c of conversations) {
-        const contactId = cmap.get(String(c.contactId)) ?? null;
-        try {
-            const mRes = await ghl(`/conversations/${c.id}/messages?limit=${perConv}`, at);
-            const msgs = mRes.messages?.messages ?? mRes.messages ?? [];
-            for (const m of msgs) {
-                const row = messageRow(orgId, m, contactId, c.id);
-                if (row) rows.push(row);
-            }
-        } catch (e) {
-            console.warn(`[gohighlevel] messages for conversation ${c.id} skipped: ${e.message}`);
-        }
-        walked++;
-        if (onProgress && (walked % 5 === 0 || walked === total)) {
-            onProgress({ phase: 'conversations', pct: 99, count: walked, page: walked, totalPages: total });
-        }
-    }
+    onProgress?.({ phase: 'conversations', pct: 99, count: 0, page: 0, totalPages: null });
+    let cursor = null;
+    let convCount = 0;
     let inserted = 0;
-    if (rows.length) {
-        // Race-proof idempotency: upsert on (organisation_id, external_id) with
-        // ignoreDuplicates, backed by uq_comms_org_extid (partial, external_id NOT
-        // NULL). Two overlapping syncs (cron + manual Refresh) can no longer dup a
-        // message — the DB drops the second write instead of relying on a TOCTOU
-        // select/filter. Dedupe within this batch first (same external_id twice in
-        // one pull would otherwise trip "affect row a second time").
-        const seen = new Set();
-        const batch = rows.filter((r) => r.external_id && !seen.has(r.external_id) && seen.add(r.external_id));
-        const { data, error } = await supabase_1.serviceClient.from('communications')
-            .upsert(batch, { onConflict: 'organisation_id,external_id', ignoreDuplicates: true })
-            .select('id');
-        if (error) console.warn(`[gohighlevel] conversations upsert: ${error.message}`);
-        else inserted = data?.length ?? 0;
+    while (convCount < maxConversations) {
+        const limit = Math.min(pageSize, maxConversations - convCount);
+        const q = `/conversations/search?locationId=${locationId}&limit=${limit}` +
+            (cursor != null ? `&startAfterDate=${cursor}` : '');
+        const convRes = await ghl(q, at);
+        const conversations = convRes.conversations ?? [];
+        if (!conversations.length) break;
+        convCount += conversations.length;
+        // Fetch each thread's messages concurrently, then upsert the page. Stream
+        // the running thread count so the overlay shows live progress and `at`
+        // stays fresh through a multi-thousand-thread backfill.
+        const perConvRows = await mapLimit(conversations, concurrency, async (c) => {
+            const contactId = cmap.get(String(c.contactId)) ?? null;
+            try {
+                const mRes = await ghl(`/conversations/${c.id}/messages?limit=${perConv}`, at);
+                const msgs = mRes.messages?.messages ?? mRes.messages ?? [];
+                return msgs.map((m) => messageRow(orgId, m, contactId, c.id)).filter(Boolean);
+            } catch (e) {
+                console.warn(`[gohighlevel] messages for conversation ${c.id} skipped: ${e.message}`);
+                return [];
+            }
+        });
+        inserted += await upsertMessages(perConvRows.flat());
+        onProgress?.({ phase: 'conversations', pct: 99, count: convCount, page: convCount, totalPages: null });
+        // Advance the cursor to the oldest thread on this page. Stop on a short
+        // page (account exhausted) or a missing cursor.
+        const last = conversations[conversations.length - 1];
+        const next = last?.sort?.[0] ?? last?.lastMessageDate ?? null;
+        if (next == null || conversations.length < limit) break;
+        cursor = next;
     }
-    return { conversations: conversations.length, messages: inserted };
+    return { conversations: convCount, messages: inserted };
 }
