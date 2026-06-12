@@ -816,7 +816,7 @@ CREATE TABLE IF NOT EXISTS ai_context_snapshots (
 COMMENT ON SCHEMA public IS 'Elevate Dental OS — Production schema v1.0';
 
 -- ============================================================================
--- INTEGRATION ACCOUNTS (per-subaccount credentials; migration 000084)
+-- INTEGRATION ACCOUNTS (per-subaccount credentials; migration 000085)
 -- One row per GHL Location. Single-account providers (Dentally, Xero) unaffected.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS integration_accounts (
