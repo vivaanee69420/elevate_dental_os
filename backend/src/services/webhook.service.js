@@ -7,6 +7,7 @@ import * as webhook_repository_1 from "../repositories/webhook.repository.js";
 import * as errors_1 from "../middleware/errors.js";
 import { verifyWebhookToken } from "../lib/webhook-token.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { applyWebhookEvent } from "../lib/integrations/dentally-sync.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
@@ -126,6 +127,63 @@ export const webhookService = {
             results.push(await applyWebhookEvent(orgId, resourceType, rec, action));
         }
         return { received: true, resourceType, action, count: results.length, results };
+    },
+    // GoHighLevel real-time webhook. orgToken (signed, in the URL) identifies the
+    // tenant. GHL workflow webhooks don't HMAC the body, so the unguessable token
+    // is the primary auth; an owner may additionally set a shared secret
+    // (integrations.config.webhook_secret) that must arrive as the x-webhook-secret
+    // header or ?secret= query. Each event upserts via the SAME row builders the
+    // poller uses (applyWebhookEvent), so webhook + nightly poll stay consistent;
+    // the poll remains the reconciliation backstop for any missed delivery.
+    async gohighlevel(routeToken, body, providedSecret) {
+        // Preferred: the route token is a per-account random webhook_token →
+        // resolves org + practice in one lookup (multi-subaccount path).
+        let account = await integrationAccountRepository.getByWebhookToken(routeToken);
+        let orgId;
+        if (account) {
+            if (account.status === 'revoked') throw new errors_1.AppError('gohighlevel not connected', 404);
+            orgId = account.organisation_id;
+        } else {
+            // Back-compat: a legacy signed-org token (pre-multi-account URLs).
+            try {
+                orgId = verifyWebhookToken(routeToken);
+            } catch {
+                throw new errors_1.AppError('invalid webhook token', 401);
+            }
+            // Resolve the account by the payload's locationId, else the org's sole account.
+            const evtLoc = body && !Array.isArray(body) ? (body.locationId ?? body.location_id) : null;
+            if (evtLoc) account = await integrationAccountRepository.getByLocation(orgId, 'gohighlevel', evtLoc);
+            if (!account) {
+                const accounts = await integrationAccountRepository.list(orgId, 'gohighlevel');
+                const active = accounts.filter((a) => a.status === 'active');
+                account = active.length === 1 ? active[0] : null;
+            }
+            if (!account || account.status === 'revoked') {
+                throw new errors_1.AppError('gohighlevel not connected', 404);
+            }
+        }
+
+        // Optional shared-secret hardening (per-account config.webhook_secret).
+        const secret = account.config?.webhook_secret;
+        if (secret) {
+            if (!providedSecret || !timingSafeHexEqual(String(providedSecret), secret)) {
+                throw new errors_1.AppError('invalid signature', 401);
+            }
+        }
+        // Defensive tenant check: a payload locationId must match this account's.
+        const evtLoc = body && !Array.isArray(body) ? (body.locationId ?? body.location_id) : null;
+        if (account.external_account_id && evtLoc && String(evtLoc) !== String(account.external_account_id)) {
+            return { received: true, ignored: 'location_mismatch' };
+        }
+
+        const { events } = parseGhlEvent(body);
+        if (!events || events.length === 0) return { received: true, ignored: true };
+        const practiceId = account.practice_id ?? null;
+        const results = [];
+        for (const { eventType, record } of events) {
+            results.push(await applyGhlWebhookEvent(orgId, eventType, record, practiceId));
+        }
+        return { received: true, count: results.length, results };
     },
     async postmarkInbound() {
         // Process inbound email → create communication record
