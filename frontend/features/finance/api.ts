@@ -21,14 +21,27 @@ export interface FinanceMonth {
   costsAvailable: boolean; // true only when this month's costs are real (Xero/manual)
 }
 
-export async function getFinanceSeries(practiceId?: string | null, range?: DateRange | null): Promise<{
+export interface FinanceSeriesOpts {
+  months?: number;                       // default 12 (max 24, backend-capped)
+  accountingMethod?: 'accrual' | 'cash'; // default accrual
+  integrationAccountId?: string | null;  // QBO company filter
+}
+
+export async function getFinanceSeries(
+  practiceId?: string | null,
+  range?: DateRange | null,
+  opts?: FinanceSeriesOpts,
+): Promise<{
   error?: string;
   basis?: 'actuals' | 'mixed' | 'revenue-only';
   costsAvailable: boolean;
   months: FinanceMonth[];
 }> {
+  const months = opts?.months ?? 12;
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
-  const r = await api(`/api/analytics/finance-series?months=12${pp}${rangeQS(range)}`);
+  const am = `&accounting_method=${opts?.accountingMethod ?? 'accrual'}`;
+  const ia = opts?.integrationAccountId ? `&integration_account_id=${opts.integrationAccountId}` : '';
+  const r = await api(`/api/analytics/finance-series?months=${months}${pp}${rangeQS(range)}${am}${ia}`);
   if (r?.error) return { error: r.error, costsAvailable: false, months: [] };
   return {
     basis: r.basis,
@@ -44,6 +57,24 @@ export async function getFinanceSeries(practiceId?: string | null, range?: DateR
       costsAvailable: !!m.costsAvailable,
     })),
   };
+}
+
+export interface QuickbooksAccount {
+  id: string;
+  company_name: string | null;
+  label: string | null;
+  status: string;
+}
+
+export async function getQuickbooksAccounts(): Promise<QuickbooksAccount[]> {
+  const r = await api('/api/integrations/quickbooks/accounts');
+  if (r?.error) return [];
+  return (r.accounts ?? []).map((a: any) => ({
+    id: a.id,
+    company_name: a.company_name ?? null,
+    label: a.label ?? null,
+    status: a.status,
+  }));
 }
 
 export interface CashflowWeek {

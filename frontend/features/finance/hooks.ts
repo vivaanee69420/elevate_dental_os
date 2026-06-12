@@ -7,19 +7,36 @@ import {
   getProfitBenchmark,
   getValuationBase,
   getPaymentSourceBreakdown,
+  getQuickbooksAccounts,
   recordManualPayment,
   recordMonthlyFinancial,
   listMonthlyFinancials,
   deleteMonthlyFinancial,
   type ManualPaymentInput,
   type MonthlyFinancialInput,
+  type FinanceSeriesOpts,
   type DateRange,
 } from './api';
 
-export function useFinanceSeries(practiceId: string | null = null, range?: DateRange | null) {
+export function useFinanceSeries(
+  practiceId: string | null = null,
+  range?: DateRange | null,
+  opts?: FinanceSeriesOpts,
+) {
   return useQuery({
-    queryKey: ['finance-series', practiceId, range?.from ?? null, range?.to ?? null],
-    queryFn: () => getFinanceSeries(practiceId, range),
+    queryKey: [
+      'finance-series', practiceId, range?.from ?? null, range?.to ?? null,
+      opts?.months ?? 12, opts?.accountingMethod ?? 'accrual', opts?.integrationAccountId ?? null,
+    ],
+    queryFn: () => getFinanceSeries(practiceId, range, opts),
+  });
+}
+
+export function useQuickbooksAccounts() {
+  return useQuery({
+    queryKey: ['quickbooks-accounts'],
+    queryFn: getQuickbooksAccounts,
+    staleTime: 5 * 60 * 1000,
   });
 }
 
