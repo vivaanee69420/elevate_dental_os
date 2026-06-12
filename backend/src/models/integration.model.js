@@ -37,3 +37,14 @@ export const syncBodySchema = zod_1.z.object({
 export const adAccountSelectionSchema = zod_1.z.object({
     selected_ids: zod_1.z.array(zod_1.z.string()),
 });
+// GoHighLevel multi-subaccount management schemas.
+export const ghlAccountCreateSchema = zod_1.z.object({
+    token: zod_1.z.string().min(8),
+    locationId: zod_1.z.string().min(1),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+    label: zod_1.z.string().max(120).optional(),
+});
+export const ghlAccountUpdateSchema = zod_1.z.object({
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+    label: zod_1.z.string().max(120).optional(),
+});

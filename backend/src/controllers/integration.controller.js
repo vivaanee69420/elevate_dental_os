@@ -2,6 +2,11 @@ import * as integration_service_1 from "../services/integration.service.js";
 import * as integration_model_1 from "../models/integration.model.js";
 import { providerParamSchema, idParamSchema } from "../models/common.model.js";
 import { verifyState } from "../lib/oauth-state.js";
+import { ghlAccountService } from "../services/ghl-account.service.js";
+import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
+import { decryptSecret } from "../lib/crypto.js";
+import { ghlAccountCreateSchema, ghlAccountUpdateSchema } from "../models/integration.model.js";
 
 function frontendUrl() {
     const raw = (process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').trim();
@@ -129,5 +134,45 @@ export const integrationController = {
     async remove(req, res) {
         const { id } = idParamSchema.parse(req.params);
         res.json(await integration_service_1.integrationService.remove(req.user.organisation_id, id));
+    },
+    // --- GoHighLevel subaccounts -------------------------------------------
+    async ghlAccountsList(req, res) {
+        res.json(await ghlAccountService.listAccounts(req.user.organisation_id));
+    },
+    async ghlAccountCreate(req, res) {
+        const body = ghlAccountCreateSchema.parse(req.body);
+        res.json(await ghlAccountService.addAccount(req.user.organisation_id, body));
+    },
+    async ghlAccountUpdate(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const body = ghlAccountUpdateSchema.parse(req.body);
+        res.json(await ghlAccountService.updateAccount(req.user.organisation_id, id, body));
+    },
+    async ghlAccountRemove(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await ghlAccountService.removeAccount(req.user.organisation_id, id));
+    },
+    async ghlAccountSync(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const orgId = req.user.organisation_id;
+        const full = req.query.full === 'true';
+        syncAccount(orgId, id, () => {}, { full })
+            .catch((err) => console.error('[ghl-account] sync failed:', err?.message || err));
+        res.json({ started: true, accountId: id, full });
+    },
+    async ghlAccountPipelines(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const orgId = req.user.organisation_id;
+        const acc = await integrationAccountRepository.getByIdWithSecrets(orgId, id);
+        if (!acc || !acc.secrets) { res.json({ pipelines: [], error: 'no_auth' }); return; }
+        const { access_token } = JSON.parse(decryptSecret(acc.secrets));
+        res.json(await detectPipelinesForToken(access_token, acc.external_account_id));
+    },
+    async ghlAccountStageMappings(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const { mappings } = integration_model_1.stageMappingsSchema.parse(req.body);
+        const orgId = req.user.organisation_id;
+        await integrationAccountRepository.mergeConfig(orgId, id, { stage_mappings: mappings });
+        res.json({ ok: true, stage_mappings: mappings });
     },
 };

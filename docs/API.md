@@ -671,6 +671,27 @@ select none. Selection is the default account filter for the marketing views
 (pull-all, filter-on-read: deselecting never deletes synced history). Returns
 `{ ok, accounts }`.
 
+### `GET /api/integrations/gohighlevel/accounts`
+Owner only. Lists all GHL subaccounts for the org. Returns `{ accounts: [{ id, label, external_account_id, practice_id, config, last_sync_at, last_error, created_at }] }`.
+
+### `POST /api/integrations/gohighlevel/accounts`
+Owner only. Body `{ token, locationId, practiceId?, label? }`. Adds a new GHL subaccount (encrypts the token, upserts the row). Returns the created account row.
+
+### `PATCH /api/integrations/gohighlevel/accounts/:id`
+Owner only. Body `{ practiceId?, label? }`. Updates the practice mapping or display label for the subaccount. Returns the updated account row.
+
+### `DELETE /api/integrations/gohighlevel/accounts/:id`
+Owner only. Removes the subaccount row (and its encrypted secrets) for the org. Returns `{ ok: true }`.
+
+### `POST /api/integrations/gohighlevel/accounts/:id/sync?full=true`
+Owner only. Fires a background sync for the specified subaccount. Query `?full=true` re-pulls the full window. Fire-and-forget — returns immediately `{ started: true, accountId, full }`.
+
+### `GET /api/integrations/gohighlevel/accounts/:id/pipelines`
+Owner only. Fetches GHL pipelines + stages for the subaccount using its stored token. Returns `{ pipelines: [{ id, name, stages: [{ id, name }] }] }`. Returns `{ pipelines: [], error: 'no_auth' }` if no credentials are stored.
+
+### `POST /api/integrations/gohighlevel/accounts/:id/stage-mappings`
+Owner only. Body `{ mappings: { [stageId]: status } }`. Persists the GHL stage → Elevate status mapping into `integration_accounts.config.stage_mappings`. Returns `{ ok: true, stage_mappings }`.
+
 **Connect styles.** `dentally` (and `soe`) are `broker_key`: connect returns
 `{ requiresKeyPaste, pasteHint }`; the owner pastes the Dentally Bearer token
 (encrypted at rest). Dentally is pull-only — the token authenticates our polling
