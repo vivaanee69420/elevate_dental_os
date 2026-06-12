@@ -303,10 +303,19 @@ export const integrationService = {
             throw err;
         }
         const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
+        // Live status of the webhook on the provider side — a stored secret alone
+        // does NOT mean events are flowing (the hook may be disabled or every
+        // delivery may be failing on a secret mismatch). Best-effort; degrades to
+        // null when the API key can't read webhooks (e.g. read-restricted -> 403).
+        let live = null;
+        if (provider === 'dentally') {
+            live = await dentally_sync_1.getWebhookHealth(orgId, integration);
+        }
         return {
             provider,
             url: `${base}/webhooks/${provider}/${token}`,
             configured: !!integration?.config?.webhook_secret,
+            live,
         };
     },
     // Store/replace the per-org webhook signing secret (the value the owner also

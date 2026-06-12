@@ -26,16 +26,40 @@ export default function DentallyWebhookPanel() {
     setSecret('');
   }
 
+  // Live state of the hook on Dentally's side. A stored secret alone does NOT
+  // mean events flow — the hook may be disabled or every delivery failing.
+  const live = data?.live;
+  const badge = (() => {
+    if (!live || live.available === false) {
+      return data?.configured
+        ? { dot: '#9CA3AF', text: 'secret set', tip: null }
+        : { dot: '#9CA3AF', text: 'not set up', tip: null };
+    }
+    switch (live.status) {
+      case 'delivering':
+        return { dot: '#047857', text: 'live', tip: `Delivering. ${live.successfulDeliveries} successful.` };
+      case 'disabled':
+        return { dot: '#DC2626', text: 'disabled on Dentally', tip: `Dentally disabled this hook after ${live.failedDeliveries} failed deliveries. Re-enable it in Dentally → Settings → Webhooks.` };
+      case 'failing':
+        return { dot: '#DC2626', text: 'every delivery failing', tip: `Active but ${live.failedDeliveries} deliveries failed and none succeeded — the signing secret below must exactly match the one set on the Dentally webhook.` };
+      case 'idle':
+        return { dot: '#D97706', text: 'enabled, awaiting events', tip: 'Registered and enabled; no events delivered yet.' };
+      default:
+        return { dot: '#DC2626', text: 'not registered on Dentally', tip: 'Add the URL below as a webhook in Dentally → Settings → Webhooks.' };
+    }
+  })();
+
   return (
     <div className="card-padded" style={{ marginBottom: 20 }}>
       <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
         Real-time webhook
-        {data?.configured && (
-          <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--success, #047857)' }}>
-            • active
-          </span>
-        )}
+        <span style={{ marginLeft: 8, fontSize: 11, color: badge.dot }}>
+          • {badge.text}
+        </span>
       </h2>
+      {badge.tip && (
+        <p style={{ fontSize: 11, color: badge.dot, marginBottom: 8 }}>{badge.tip}</p>
+      )}
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
         Dentally pushes changes here instantly (a daily sync reconciles anything
         missed). In Dentally → Settings → Webhooks: add this URL for patient,

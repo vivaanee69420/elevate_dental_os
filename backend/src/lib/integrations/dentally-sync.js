@@ -1030,8 +1030,89 @@ async function relinkPatientAppointments(orgId, pmsPatientId) {
     }
 }
 
-export async function applyWebhookEvent(orgId, resourceType, record) {
+// ---- webhook health (read-only) ---------------------------------------------
+// Classify the live state of OUR Dentally webhook so a disabled/failing/mismatched
+// hook is VISIBLE in the owner UI instead of silently dead. Pure + unit-tested.
+// We match the webhook by the org's token payload (base64url(orgId)) embedded in
+// the URL, so it is robust to host/path changes and never matches another org.
+export function classifyWebhook(webhooks, orgId) {
+    const frag = Buffer.from(String(orgId)).toString('base64url');
+    const ours = (Array.isArray(webhooks) ? webhooks : []).find(
+        (w) => typeof w?.url === 'string' && w.url.includes('/webhooks/dentally/') && w.url.includes(frag)
+    );
+    if (!ours) return { registered: false, status: 'unregistered' };
+    const failed = Number(ours.failed_deliveries || 0);
+    const ok = Number(ours.successful_deliveries || 0);
+    let status;
+    if (!ours.active) status = 'disabled';            // Dentally auto-disables after repeated failures
+    else if (ok > 0) status = 'delivering';            // proven working
+    else if (failed > 0) status = 'failing';           // active but nothing lands → secret mismatch / 4xx
+    else status = 'idle';                              // active, no events yet
+    return {
+        registered: true,
+        status,
+        id: ours.id ?? null,
+        active: !!ours.active,
+        events: ours.events ?? null,
+        failedDeliveries: failed,
+        successfulDeliveries: ok,
+        lastDeliveredAt: ours.last_delivered_at ?? null,
+    };
+}
+
+// Best-effort live status of the org's Dentally webhook. Never throws — returns
+// { available:false, reason } when the key cannot read webhooks (e.g. a
+// read-restricted API key returns 403) so the UI degrades to the stored-secret hint.
+export async function getWebhookHealth(orgId, integration = null) {
+    try {
+        const integ = integration || (await integrationRepository.getByProvider(orgId, 'dentally'));
+        if (!integ || integ.status === 'revoked') return { available: false, reason: 'not_connected' };
+        const auth = authHeader(integ.secrets);
+        if (!auth) return { available: false, reason: 'no_credentials' };
+        const base = integ.config?.base_url ?? DEFAULT_BASE;
+        const res = await fetchWithTimeout(new URL(`${base}/webhooks`), {
+            headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
+        });
+        if (!res.ok) return { available: false, reason: `http_${res.status}` };
+        const body = await res.json();
+        const list = body.webhooks || body.data || body;
+        return { available: true, ...classifyWebhook(list, orgId) };
+    } catch (err) {
+        return { available: false, reason: err?.message || 'error' };
+    }
+}
+
+// Table + external-id column per resourceType (the upsert conflict key's id col),
+// shared by the create/update path and the delete path.
+const WEBHOOK_TABLE = {
+    patient: ['contacts', 'pms_external_id'],
+    appointment: ['appointments', 'pms_external_id'],
+    payment: ['payments', 'external_id'],
+    invoice: ['invoices', 'external_id'],
+    invoice_item: ['invoice_items', 'pms_external_id'],
+    treatment_plan: ['treatment_plans', 'pms_external_id'],
+};
+
+// Remove a record Dentally reports deleted, keyed by org+source+external id, so
+// a `*.deleted` event does not get upserted back into existence.
+async function deleteByExternal(table, orgId, idCol, externalId) {
+    const { error } = await supabase_1.serviceClient
+        .from(table)
+        .delete()
+        .eq('organisation_id', orgId)
+        .eq('source', 'dentally')
+        .eq(idCol, String(externalId));
+    if (error) throw new Error(`${table} webhook delete: ${error.message}`);
+}
+
+export async function applyWebhookEvent(orgId, resourceType, record, action = 'upsert') {
     if (!record || record.id == null) return { ignored: 'no_record_id' };
+    if (action === 'delete') {
+        const m = WEBHOOK_TABLE[resourceType];
+        if (!m) return { ignored: resourceType };
+        await deleteByExternal(m[0], orgId, m[1], record.id);
+        return { table: m[0], deleted: 1 };
+    }
     const siteMap = await loadSiteMap(orgId);
     if (resourceType === 'patient') {
         await upsertChunked('contacts', [patientRow(orgId, record, siteMap)], 'organisation_id,source,pms_external_id');
@@ -1521,4 +1602,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow };
+export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow, classifyWebhook };
