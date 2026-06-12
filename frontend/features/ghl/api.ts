@@ -2,7 +2,7 @@
 // GHL consolidated dashboard — live aggregate across all subaccounts (or one).
 import { api } from '@/lib/api';
 
-export interface CountEntry { source?: string; stage?: string; count: number }
+export interface CountEntry { source?: string; stage?: string; calendar?: string; count: number }
 
 export interface GhlTotals {
   contacts: { total: number; new: number; bySource: CountEntry[] };
@@ -11,6 +11,11 @@ export interface GhlTotals {
     pipelineValuePence: number; conversionPct: number; byStage: CountEntry[];
   };
   conversations: { total: number; inbound: number; outbound: number; last7d: number };
+  appointments: {
+    total: number; inWindow: number; upcoming: number;
+    showed: number; noshow: number; cancelled: number; booked: number;
+    byCalendar: CountEntry[];
+  };
   sync: { accounts: number; active: number; failed: number; lastSyncAt: string | null };
 }
 
@@ -26,6 +31,8 @@ export interface GhlPerAccount {
   pipelineValuePence: number;
   conversionPct: number;
   conversations: number;
+  appointments: number;
+  appointmentsUpcoming: number;
 }
 
 export interface GhlDashboardResponse {
