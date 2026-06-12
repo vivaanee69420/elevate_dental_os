@@ -681,11 +681,20 @@ CREATE TABLE IF NOT EXISTS monthly_financials (
   dental_bucket TEXT CHECK (dental_bucket IN ('revenue','staff','lab','materials','overhead','tax','other')),
   amount_pence INTEGER NOT NULL,
   source TEXT NOT NULL DEFAULT 'xero',
+  accounting_method TEXT NOT NULL DEFAULT 'accrual' CHECK (accounting_method IN ('accrual', 'cash')),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_monthly_financials
-  ON monthly_financials (organisation_id, period, account_code, COALESCE(practice_id, '00000000-0000-0000-0000-000000000000'::uuid), source);
+  ON monthly_financials (
+    organisation_id,
+    period,
+    account_code,
+    COALESCE(integration_account_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    COALESCE(practice_id, '00000000-0000-0000-0000-000000000000'::uuid),
+    source,
+    accounting_method
+  );
 CREATE TRIGGER monthly_financials_updated_at BEFORE UPDATE ON monthly_financials FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TABLE IF NOT EXISTS xero_account_map (
