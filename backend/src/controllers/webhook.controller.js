@@ -10,6 +10,12 @@ export const webhookController = {
         const sig = req.headers['x-dentally-signature'] || req.headers['x-signature'];
         res.json(await webhook_service_1.webhookService.dentally(req.params.token, req.body, sig));
     },
+    async gohighlevel(req, res) {
+        // No raw mount on /webhooks/gohighlevel, so req.body is parsed JSON.
+        // Optional shared secret may arrive as a header or a ?secret= query.
+        const secret = req.headers['x-webhook-secret'] || req.headers['x-wh-secret'] || req.query.secret;
+        res.json(await webhook_service_1.webhookService.gohighlevel(req.params.token, req.body, secret));
+    },
     async postmarkInbound(_req, res) {
         res.json(await webhook_service_1.webhookService.postmarkInbound());
     },
