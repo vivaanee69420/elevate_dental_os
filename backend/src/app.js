@@ -38,6 +38,7 @@ import * as oauth_routes_1 from "./routes/oauth.routes.js";
 import * as p4g_ai_routes_1 from "./routes/p4g-ai.routes.js";
 import * as analytics_routes_1 from "./routes/analytics.routes.js";
 import * as monthly_financials_routes_1 from "./routes/monthlyFinancials.routes.js";
+import * as finance_quickbooks_routes_1 from "./routes/finance-quickbooks.routes.js";
 import * as permissions_routes_1 from "./routes/permissions.routes.js";
 import * as members_routes_1 from "./routes/members.routes.js";
 import * as memberships_routes_1 from "./routes/memberships.routes.js";
@@ -215,6 +216,7 @@ export function buildApp() {
     api.use('/p4g-ai', p4g_ai_routes_1.default);
     api.use('/analytics', analytics_routes_1.default);
     api.use('/monthly-financials', monthly_financials_routes_1.default);
+    api.use('/finance/quickbooks', finance_quickbooks_routes_1.default);
     api.use('/memberships', memberships_routes_1.default);
     api.use('/reviews', reviews_routes_1.default);
     api.use('/admin/permissions', permissions_routes_1.default);
