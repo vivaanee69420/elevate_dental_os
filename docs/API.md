@@ -766,7 +766,9 @@ Response shape:
 }
 ```
 
-`perAccount` includes an `accountId: null` "Unmapped" row when GHL contacts/leads exist without a practice mapping. All money fields (`pipelineValuePence`) are integer pence. Backed by Postgres RPC `ghl_dashboard_aggregate` (migration `20260101000087_ghl_dashboard_rpc.sql`; **not yet applied on hosted** — depends on `000085_integration_accounts`).
+`perAccount` includes an `accountId: null` "Unmapped" row when GHL contacts/leads exist without a practice mapping. All money fields (`pipelineValuePence`) are integer pence. Backed by Postgres RPC `ghl_dashboard_aggregate` (migration `20260101000087_ghl_dashboard_rpc.sql`; applied on hosted).
+
+`totals` also carries an `appointments` block (GHL calendar bookings, synced into `ghl_appointments`): `{ total, inWindow, upcoming, showed, noshow, cancelled, booked, byCalendar:[{calendar,count}] }`; each `perAccount` entry adds `appointments` + `appointmentsUpcoming`. Backed by RPC `ghl_appointments_aggregate` (migration `20260101000088_ghl_appointments.sql`; applied on hosted). `noshow`/`showed`/`cancelled`/`booked` are windowed by `starts_at`; `upcoming` = `starts_at >= now()`.
 
 **Connect styles.** `dentally` (and `soe`) are `broker_key`: connect returns
 `{ requiresKeyPaste, pasteHint }`; the owner pastes the Dentally Bearer token
