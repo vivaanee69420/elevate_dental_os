@@ -73,6 +73,7 @@ export const NAV: NavSection[] = [
     { id: 'crm-enquiries', label: 'Enquiries' },
     { id: 'contacts', label: 'Contacts' },
     { id: 'crm-reports', label: 'CRM Reports' },
+    { id: 'ghl-dashboard', label: 'GHL Dashboard', isNew: true },
     { id: 'workflows', label: 'Automations' },
   ]},
   { label: 'Wealth', items: [

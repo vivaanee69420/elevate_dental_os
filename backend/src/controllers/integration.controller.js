@@ -7,7 +7,8 @@ import { quickbooksAccountService } from "../services/quickbooks-account.service
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { decryptSecret } from "../lib/crypto.js";
-import { ghlAccountCreateSchema, ghlAccountUpdateSchema } from "../models/integration.model.js";
+import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema } from "../models/integration.model.js";
+import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
 
 function frontendUrl() {
     const raw = (process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').trim();
@@ -194,5 +195,18 @@ export const integrationController = {
     async qbAccountRemove(req, res) {
         const { id } = idParamSchema.parse(req.params);
         res.json(await quickbooksAccountService.removeAccount(req.user.organisation_id, id));
+    },
+    async ghlDashboard(req, res) {
+        const q = ghlDashboardQuerySchema.parse(req.query);
+        // Default to the trailing 30 days (day-granular, UTC) when no window given.
+        const now = new Date();
+        const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+        const since = q.since ?? new Date(todayMs - 29 * 86_400_000).toISOString();
+        const until = q.until ?? new Date(todayMs + 86_400_000).toISOString();
+        res.json(await ghlDashboardService.getDashboard(req.user.organisation_id, {
+            since, until,
+            accountId: q.accountId ?? null,
+            practiceId: q.practiceId ?? null,
+        }));
     },
 };
