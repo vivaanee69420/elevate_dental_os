@@ -221,6 +221,15 @@ export const analyticsController = {
         const cfg = analytics_model_1.chairConfigSchema.parse(req.body);
         res.json(await analytics_service_1.analyticsService.saveChairConfig(req.user.organisation_id, cfg, req.user.id));
     },
+    // Group turnover source toggle (dentally | quickbooks | both). Read by the
+    // board report. GET = finance.view; PUT = finance.edit (owner-toggled).
+    async getTurnoverSource(req, res) {
+        res.json({ turnoverSource: await analytics_service_1.analyticsService.getTurnoverSource(req.user.organisation_id) });
+    },
+    async putTurnoverSource(req, res) {
+        const { turnoverSource } = analytics_model_1.turnoverSourceSchema.parse(req.body);
+        res.json(await analytics_service_1.analyticsService.saveTurnoverSource(req.user.organisation_id, turnoverSource, req.user.id));
+    },
 
     // ── Phase 3 / T13 — editable P&L scenario sheets ────────────────────────
     // Scenario overlay only (never feeds actuals). GET = finance.view; mutations
@@ -263,14 +272,16 @@ export const analyticsController = {
     // ---- Board Report Generator (DentaCFO Phase 2) ----
     // Generate the pack (token cost; POST so it's never run on page load).
     async boardReport(req, res) {
-        const { since, until, label } = analytics_model_1.boardReportSchema.parse(req.body ?? {});
-        res.json(await analytics_service_1.analyticsService.boardReport(req.user.organisation_id, { since, until, label }));
+        const { since, until, label, scope } = analytics_model_1.boardReportSchema.parse(req.body ?? {});
+        const practiceId = scope && scope !== 'all' ? scope : null;
+        res.json(await analytics_service_1.analyticsService.boardReport(req.user.organisation_id, { since, until, label, practiceId }));
     },
     // Generate + email now to one address. {sent:false} (not an error) when SES
     // is unconfigured — the UI falls back to a mailto draft.
     async emailBoardReport(req, res) {
-        const { recipient_email, since, until, label } = analytics_model_1.boardReportEmailSchema.parse(req.body ?? {});
-        res.json(await analytics_service_1.analyticsService.emailBoardReport(req.user.organisation_id, { recipientEmail: recipient_email, since, until, label }));
+        const { recipient_email, since, until, label, scope } = analytics_model_1.boardReportEmailSchema.parse(req.body ?? {});
+        const practiceId = scope && scope !== 'all' ? scope : null;
+        res.json(await analytics_service_1.analyticsService.emailBoardReport(req.user.organisation_id, { recipientEmail: recipient_email, since, until, label, practiceId }));
     },
     async listBoardSchedules(req, res) {
         res.json(await analytics_service_1.analyticsService.listBoardSchedules(req.user.organisation_id));
