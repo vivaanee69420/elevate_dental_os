@@ -1307,6 +1307,19 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     };
 
     try {
+        // Pre-register the phases this run will walk, in execution order, so the
+        // overlay lists every resource up front (as "Waiting") instead of
+        // revealing each only as it starts. Mirror the run conditions below so an
+        // unselected/skipped resource is never listed.
+        const expectedPhases = [];
+        if (want('appointments') || want('treatment_plans')) expectedPhases.push('practitioners');
+        expectedPhases.push('staff');
+        for (const p of PHASES) {
+            if (p === 'invoice_items' ? want('invoices') : want(p)) expectedPhases.push(p);
+        }
+        if (want('patients') || want('appointments') || want('invoices')) expectedPhases.push('linking');
+        onProgress({ expectedPhases });
+
         const siteMap = await loadSiteMap(orgId);
         // Practitioners first (cheap, no separate progress phase) so the
         // appointment pull can resolve associate_id. Use the same updated_after
