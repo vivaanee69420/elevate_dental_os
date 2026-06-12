@@ -19,6 +19,29 @@ import { invalidate as invalidateGating } from "../lib/integration-gating.js";
 // Providers that receive real-time webhooks (vs poll-only).
 const WEBHOOK_PROVIDERS = new Set(['dentally']);
 
+// A long pull has legitimately-silent stretches (bulk upserts, the per-record
+// link loop, conversations) where the syncer emits NO progress for minutes. The
+// UI treats a frozen progress `at` as "the import stopped" after ~75s, so a
+// healthy long pull falsely reads as stalled at its last percentage (the classic
+// "stuck at 99%"). Re-stamp the in-memory progress every HEARTBEAT_MS while the
+// awaited syncer runs to keep `at` fresh. When the process genuinely dies the
+// interval dies with it, so a real stall still freezes `at` and trips the UI
+// guard as intended. The empty patch only refreshes `at` (setProgress always
+// stamps it) — phase/pct/count are preserved.
+const HEARTBEAT_MS = 20_000;
+export async function runWithHeartbeat(orgId, provider, run) {
+    const beat = setInterval(() => {
+        const cur = getProgress(orgId, provider);
+        if (cur?.running && !cur.done) setProgress(orgId, provider, {});
+    }, HEARTBEAT_MS);
+    if (typeof beat.unref === 'function') beat.unref(); // never hold the event loop open
+    try {
+        return await run();
+    } finally {
+        clearInterval(beat);
+    }
+}
+
 // Providers that expose a real on-demand pull (button + first-connect sync).
 // The broker provider's own .sync() is a stub; the real pull is the standalone
 // per-provider syncOneOrg, dispatched here.
@@ -132,7 +155,8 @@ export const integrationService = {
         // Reset page/totalPages too so a new run never briefly shows the prior run's page number.
         setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null, page: 0, totalPages: null });
         try {
-            const result = await syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }), { full, resources });
+            const result = await runWithHeartbeat(orgId, provider, () =>
+                syncer(orgId, arg, (p) => setProgress(orgId, provider, { running: true, ...p }), { full, resources }));
             setProgress(orgId, provider, { running: false, pct: 100, done: true });
             return { ok: true, provider, full, ...result };
         } catch (err) {
@@ -177,11 +201,12 @@ export const integrationService = {
         }
         setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null, page: 0, totalPages: null });
         try {
-            const result = await dentally_sync_1.bootstrapOnConnect(
-                orgId,
-                integration,
-                (p) => setProgress(orgId, provider, { running: true, ...p }),
-            );
+            const result = await runWithHeartbeat(orgId, provider, () =>
+                dentally_sync_1.bootstrapOnConnect(
+                    orgId,
+                    integration,
+                    (p) => setProgress(orgId, provider, { running: true, ...p }),
+                ));
             setProgress(orgId, provider, { running: false, pct: 100, done: true });
             return { ok: true, provider, ...result };
         } catch (err) {
@@ -204,11 +229,12 @@ export const integrationService = {
         }
         setProgress(orgId, provider, { running: true, pct: 0, phase: 'starting', done: false, error: null, page: 0, totalPages: null });
         try {
-            const result = await gohighlevel_sync_1.bootstrapOnConnect(
-                orgId,
-                integration,
-                (p) => setProgress(orgId, provider, { running: true, ...p }),
-            );
+            const result = await runWithHeartbeat(orgId, provider, () =>
+                gohighlevel_sync_1.bootstrapOnConnect(
+                    orgId,
+                    integration,
+                    (p) => setProgress(orgId, provider, { running: true, ...p }),
+                ));
             setProgress(orgId, provider, { running: false, pct: 100, done: true });
             return { ok: true, provider, ...result };
         } catch (err) {

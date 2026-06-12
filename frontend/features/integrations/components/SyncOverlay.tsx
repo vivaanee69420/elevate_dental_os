@@ -1,7 +1,8 @@
 'use client';
-// Full-screen sync loader with a live percentage bar. Polls the server's
-// in-memory progress (~1/s) while mounted, and calls onDone when the sync
-// finishes so the parent can refresh data + unmount the overlay.
+// Non-blocking sync toast (top-right) with a live percentage bar. Polls the
+// server's in-memory progress (~1/s) while mounted, and calls onDone when the
+// sync finishes so the parent can refresh data + unmount the overlay. No
+// backdrop — the app stays usable while the import runs in the background.
 //
 // Progress lives in the web process's memory and is lost on restart (deploy,
 // dyno recycle). Without a guard, that strands the bar at its last value
@@ -87,6 +88,9 @@ export default function SyncOverlay({
   const pct = maxPct.current;
   const phase = PHASE_LABEL[data?.phase ?? 'starting'] ?? data?.phase ?? 'Working…';
   const providerLabel = PROVIDER_LABEL[provider] ?? provider;
+  // Per-phase rows in pull order (insertion order of the server's phases map).
+  const phaseList = data?.phases ? Object.values(data.phases) : [];
+  const activeIdx = data?.phase ? phaseList.findIndex((p) => p.phase === data.phase) : -1;
 
   const title = errored ? 'Sync failed' : stalled ? 'Still importing in the background' : `Syncing ${providerLabel} data`;
   const subtitle = errored
@@ -97,18 +101,20 @@ export default function SyncOverlay({
   const barColour = errored ? 'var(--danger, #DC2626)' : stalled ? '#D97706' : 'var(--brand)';
 
   return (
+    // Non-blocking toast pinned top-right: no full-screen backdrop, so the rest
+    // of the app stays fully usable while the import runs in the background.
     <div
       style={{
-        position: 'fixed', inset: 0, zIndex: 2000,
-        background: 'rgba(255,255,255,0.72)', backdropFilter: 'blur(2px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        position: 'fixed', top: 16, right: 16, zIndex: 2000,
+        maxWidth: 360, pointerEvents: 'none',
       }}
     >
       <div
         className="card-padded"
         style={{
-          background: 'white', minWidth: 320, maxWidth: 420, textAlign: 'center',
-          boxShadow: '0 10px 40px rgba(0,0,0,0.12)', position: 'relative',
+          background: 'white', minWidth: 300, maxWidth: 360, textAlign: 'left',
+          boxShadow: '0 10px 40px rgba(0,0,0,0.18)', position: 'relative',
+          border: '1px solid var(--border)', borderRadius: 12, pointerEvents: 'auto',
         }}
       >
         {/* Always-present escape hatch — the user is never trapped behind a
@@ -125,7 +131,7 @@ export default function SyncOverlay({
         >
           ×
         </button>
-        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, paddingRight: 18 }}>
           {title}
         </div>
         <div className="text-ink-muted" style={{ fontSize: 12, marginBottom: 14 }}>
@@ -141,19 +147,51 @@ export default function SyncOverlay({
             }}
           />
         </div>
-        <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 12 }}>
-          {/* Live record count is the clearest "what's happening" signal —
-              Dentally usually omits total_pages, so we lead with records pulled,
-              fall back to page-of-total when present, then a generic message. */}
-          {data?.count
-            ? `${data.count.toLocaleString('en-GB')} ${(PHASE_LABEL[data?.phase ?? ''] ?? 'records').toLowerCase()} pulled so far`
-            : data?.totalPages
-              ? `Page ${data.page ?? 0} of ${data.totalPages}`
-              : `Pulling from ${providerLabel} — large accounts take a little longer.`}
-        </div>
+        {/* Per-phase breakdown — one row per resource as the sync reaches it
+            (Contacts, Opportunities, Conversations…). Phases arrive in pull
+            order; the active one shows count + live %, completed ones a tick +
+            final count, not-yet-reached ones "Waiting". Falls back to a single
+            line before any phase is known. */}
+        {phaseList.length > 0 ? (
+          <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {phaseList.map((p, i) => {
+              // Phases are listed in pull order; the active one splits completed
+              // (before it) from waiting (after it). activeIdx -1 = still starting.
+              const isComplete = !errored && (done || (activeIdx >= 0 && i < activeIdx));
+              const isActive = !done && !errored && !stalled && i === activeIdx;
+              const isPending = !isComplete && !isActive && !stalled && (activeIdx < 0 || i > activeIdx);
+              const label = PHASE_LABEL[p.phase] ?? p.phase;
+              const dot = isComplete ? '#16A34A' : isActive ? 'var(--brand)' : isPending ? 'var(--border)' : '#D97706';
+              const right = isComplete
+                ? (p.count ? `${p.count.toLocaleString('en-GB')} pulled` : 'Done')
+                : isPending
+                  ? 'Waiting'
+                  : (p.count ? `${p.count.toLocaleString('en-GB')} · ${p.pct}%` : `${p.pct}%`);
+              return (
+                <div key={p.phase} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 999, background: dot, flex: '0 0 auto' }} />
+                    <span style={{ color: 'var(--ink)' }}>{label}</span>
+                  </span>
+                  <span className="text-ink-muted" style={{ flex: '0 0 auto' }}>{right}</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 12 }}>
+            {/* Before any phase is reported: lead with records pulled, fall back
+                to page-of-total when present, then a generic message. */}
+            {data?.count
+              ? `${data.count.toLocaleString('en-GB')} ${(PHASE_LABEL[data?.phase ?? ''] ?? 'records').toLowerCase()} pulled so far`
+              : data?.totalPages
+                ? `Page ${data.page ?? 0} of ${data.totalPages}`
+                : `Pulling from ${providerLabel} — large accounts take a little longer.`}
+          </div>
+        )}
         {!errored && !stalled && (
-          <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 6 }}>
-            Sit back for a few minutes while we pull your data — you can leave this open, it will finish on its own.
+          <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 8 }}>
+            You can keep working — this runs in the background and finishes on its own.
           </div>
         )}
         {(errored || stalled) && (

@@ -118,6 +118,17 @@ export interface SyncProgress {
   totalPages?: number | null;
   count?: number; // records fetched so far in the current phase
   at?: number; // server epoch ms of the last progress write — used to detect a stalled/lost sync
+  // Per-phase breakdown accumulated server-side (insertion order = pull order),
+  // so the UI can show each resource's pull, not just the active phase.
+  phases?: Record<string, SyncPhaseProgress>;
+}
+
+export interface SyncPhaseProgress {
+  phase: string;
+  count: number;
+  pct: number;
+  page: number;
+  totalPages: number | null;
 }
 
 export function getSyncProgress(provider: string) {

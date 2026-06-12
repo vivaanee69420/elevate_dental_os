@@ -39,6 +39,7 @@ const PER_PAGE = 100;
 const MAX_PAGES = 50;            // routine/incremental cap (~5k rows/resource) — bounded so a foreground Refresh stays fast
 const BOOTSTRAP_MAX_PAGES = 500; // full-history / on-connect pull cap (~50k rows/resource)
 const UPSERT_CHUNK = 500;
+const OPP_CONCURRENCY = 10;       // parallel opportunity upserts (bounded so we stay under GHL/DB limits)
 
 export const ELEVATE_STATUSES = [
     'new', 'contact_attempted', 'contact_made', 'consultation_booked',
@@ -474,6 +475,10 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
     const nPhases = 2;
 
     try {
+        // Pre-register the phases this run will walk, in order, so the overlay
+        // lists every resource (Contacts, Opportunities, Conversations) as
+        // "Waiting" up front instead of revealing each only as it starts.
+        onProgress({ expectedPhases: ['contacts', 'opportunities', 'conversations'] });
         let contactsSynced = 0;
         let oppIdx = 0;
         if (withContacts) {
@@ -514,18 +519,30 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
         // Resolve opp contacts from the already-synced contact book (one scan)
         // instead of 3 lookups per opportunity.
         const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
+        // Upsert opportunities in bounded-concurrency batches rather than one DB
+        // round-trip at a time: a 2.6k-opp account was ~2.6k sequential awaits
+        // (minutes of silent work that tripped the UI stall guard). Each upsert is
+        // idempotent (onConflict on ghl_opportunity_id) and resolves its contact
+        // from oppContactMap in memory, so OPP_CONCURRENCY parallel writes are safe
+        // and finish in seconds. Emit progress per batch so `at` stays fresh (no
+        // false "stuck" stall) and the bar advances through the link phase.
         let synced = 0;
-        for (const opp of opportunities) {
-            const r = await upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap);
-            if (r.ok) synced++;
+        for (let i = 0; i < opportunities.length; i += OPP_CONCURRENCY) {
+            const batch = opportunities.slice(i, i + OPP_CONCURRENCY);
+            const results = await Promise.all(batch.map((opp) =>
+                upsertOpportunity(orgId, opp, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap)));
+            synced += results.filter((r) => r.ok).length;
+            // Keep `count` at the pulled total (set during the fetch phase) — only
+            // advance pct/at — so the copy stays "N opportunities pulled so far".
+            onProgress({ phase: 'opportunities', pct: phasePct(oppIdx, nPhases, i + batch.length, opportunities.length) });
         }
         // Conversations -> communications (Inbox). Runs after contacts so the
         // ghl_contact_id -> contact map is fresh. Non-fatal: a failure here must
         // not abort the contacts/opportunities sync.
         let conversations = { conversations: 0, messages: 0 };
         try {
-            onProgress({ phase: 'conversations', pct: 99, page: 0, totalPages: null, count: 0 });
-            conversations = await syncConversations(orgId, integration);
+            onProgress({ phase: 'conversations', pct: 99 });
+            conversations = await syncConversations(orgId, integration, { onProgress });
         } catch (err) {
             console.warn(`[gohighlevel] conversations sync skipped: ${err?.message || err}`);
         }

@@ -108,14 +108,20 @@ async function ourContactMap(orgId) {
 // Idempotent: upserts on (organisation_id, external_id) so re-runs and
 // concurrent syncs never duplicate a message. Inbound + outbound (including
 // replies we sent via GHL) both land here, so the Inbox is complete.
-export async function syncConversations(orgId, integration, { maxConversations = 100, perConv = 50 } = {}) {
+export async function syncConversations(orgId, integration, { maxConversations = 100, perConv = 50, onProgress = null } = {}) {
     const at = tokenOf(integration);
     const locationId = integration.config?.locationId;
     if (!at || !locationId) return { conversations: 0, messages: 0 };
     const cmap = await ourContactMap(orgId);
     const convRes = await ghl(`/conversations/search?locationId=${locationId}&limit=${Math.min(maxConversations, 100)}`, at);
     const conversations = convRes.conversations ?? [];
+    const total = conversations.length;
+    // Stream the per-conversation count so the overlay shows a live "X pulled"
+    // and `at` stays fresh while we walk threads one message-pull at a time
+    // (otherwise this phase looks frozen for its whole duration).
+    onProgress?.({ phase: 'conversations', pct: 99, count: 0, page: 0, totalPages: total });
     const rows = [];
+    let walked = 0;
     for (const c of conversations) {
         const contactId = cmap.get(String(c.contactId)) ?? null;
         try {
@@ -127,6 +133,10 @@ export async function syncConversations(orgId, integration, { maxConversations =
             }
         } catch (e) {
             console.warn(`[gohighlevel] messages for conversation ${c.id} skipped: ${e.message}`);
+        }
+        walked++;
+        if (onProgress && (walked % 5 === 0 || walked === total)) {
+            onProgress({ phase: 'conversations', pct: 99, count: walked, page: walked, totalPages: total });
         }
     }
     let inserted = 0;
