@@ -74,6 +74,30 @@ describe('wealthService.exitPlan', () => {
     expect(r.valuation.currentValuePence).toBe(500_000_00);
   });
 
+  it('seeds from the real-turnover valuation (no baseline) + passes the EBITDA margin through', async () => {
+    let seenOpts = null;
+    wealthRepository.get = async () => ({
+      assets: [], liabilities: [], pensions: [], properties: [],
+      fire: exitBlob({ ebitdaMarginPct: 20 }),
+    });
+    analyticsService.valuation = async (_org, opts) => {
+      seenOpts = opts;
+      return {
+        midPoint: 6_435_000_00, midpoint: 6_435_000_00, basis: 'real-turnover',
+        annualRevenuePence: 5_000_000_00, ebitdaMarginPct: 20, ebitdaPence: 1_000_000_00,
+        revenueMultiple: 1.15, revenueMultipleValuePence: 5_750_000_00,
+      };
+    };
+
+    const r = await wealthService.exitPlan(ORG);
+    expect(seenOpts).toEqual({ marginPct: 20 });             // slider flows to valuation()
+    expect(r.valuation.source).toBe('real-turnover');
+    expect(r.valuation.currentValuePence).toBe(6_435_000_00);
+    expect(r.valuation.detail.basis).toBe('real-turnover');
+    expect(r.valuation.detail.annualRevenuePence).toBe(5_000_000_00);
+    expect(r.valuation.detail.revenueMultipleValuePence).toBe(5_750_000_00);
+  });
+
   it('seeds existing investments from liquid assets + pensions when not entered', async () => {
     wealthRepository.get = async () => ({
       assets: [

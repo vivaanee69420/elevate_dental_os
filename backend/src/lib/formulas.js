@@ -112,6 +112,46 @@ export function calculateValuation(input) {
     };
 }
 
+// ── Real-turnover valuation seed (DentaCFO Exit Plan) ────────────────────────
+// Value the group from the REAL synced turnover (invoice_items TTM) when there
+// is no manual baseline or Xero EBITDA. Dentally carries revenue but no cost
+// side, so EBITDA is an assumed margin on turnover (owner-adjustable). Returns
+// the EBITDA-multiple valuation (primary, via calculateValuation's buyer-type
+// multiples) PLUS a direct revenue-multiple cross-check, so the owner sees both
+// reference points. All integer pence.
+//   annualRevenuePence  TTM billed turnover (integer pence)
+//   ebitdaMarginPct     assumed EBITDA margin, default 18 (clamped 0..100)
+//   privateRevenuePct   private share, drives the multiple tier (default 100)
+//   revenueMultiple     goodwill multiple of turnover for the cross-check (default 1.15)
+export function valuationFromTurnover({
+    annualRevenuePence,
+    ebitdaMarginPct = 18,
+    privateRevenuePct = 100,
+    revenueMultiple = 1.15,
+} = {}) {
+    const revenue = Math.max(0, Math.round(annualRevenuePence || 0));
+    const marginPct = Math.min(100, Math.max(0, ebitdaMarginPct ?? 18));
+    const privatePct = Math.min(100, Math.max(0, privateRevenuePct ?? 100));
+    const revMult = Math.max(0, revenueMultiple ?? 1.15);
+    const ebitdaPence = pence((revenue * marginPct) / 100);
+    const valuation = calculateValuation({
+        annualRevenue: revenue,
+        ebitda: ebitdaPence,
+        nhsRevenuePct: 100 - privatePct,
+        privateRevenuePct: privatePct,
+    });
+    return {
+        annualRevenuePence: revenue,
+        ebitdaMarginPct: marginPct,
+        ebitdaPence,
+        ...valuation, // principalLed, associateLed, dso, midPoint, highRange, lowRange
+        midpoint: valuation.midPoint, // lowercase alias for consumers
+        privateRevenuePct: privatePct,
+        revenueMultiple: revMult,
+        revenueMultipleValuePence: pence(revenue * revMult),
+    };
+}
+
 export function calculateAssociatePay(input) {
     const grossPence = pence((input.productionPence * input.payPct) / 10000);
     const labDeductionPence = pence((input.labCostPence * input.labSplitPct) / 10000);

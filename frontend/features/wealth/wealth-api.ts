@@ -50,6 +50,7 @@ export interface ExitPlanInput {
   returnPct: number;              // investment return for the drawdown projection
   currentValuePence: number;      // group value today (manual override)
   useLiveValuation: boolean;      // seed currentValue from the live valuation midpoint
+  ebitdaMarginPct: number;        // assumed EBITDA margin for the real-turnover seed
   agentPct: number;
   cgtPct: number;
   baseCostPence: number;
@@ -113,7 +114,18 @@ export interface ExitPlanResult {
 }
 
 export interface ExitPlanResponse {
-  valuation: { currentValuePence: number; source: 'live' | 'manual' };
+  valuation: {
+    currentValuePence: number;
+    source: 'live' | 'manual' | 'real-turnover';
+    detail?: {
+      basis: 'baseline' | 'real-turnover';
+      annualRevenuePence: number | null;
+      ebitdaMarginPct: number | null;
+      ebitdaPence: number | null;
+      revenueMultiple: number | null;
+      revenueMultipleValuePence: number | null;
+    } | null;
+  };
   plan: ExitPlanResult;
   inputs: ExitPlanInput & { baseYear: number };
   seeds: { liquidAssetsPence: number; pensionPence: number; existingInvestSeeded: boolean; freeholdsSeeded: boolean };

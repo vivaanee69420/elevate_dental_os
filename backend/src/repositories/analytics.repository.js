@@ -536,6 +536,39 @@ export const analyticsRepository = {
         }
         return [...agg.entries()].map(([month, pence]) => ({ month, pence }));
     },
+    // Trailing billed turnover + private/NHS split from invoice_items (real
+    // Dentally feed) over [sinceISO, untilISO). Feeds the real-turnover Exit
+    // Plan valuation seed when no manual baseline / Xero EBITDA exists. The
+    // private share drives the valuation multiple tier. Paginated scan (no RPC
+    // needed — a single SUM over a 12-month window). Returns integer pence.
+    async turnoverTTM(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return { totalPence: 0, privatePence: 0 };
+        const sinceDate = String(sinceISO).slice(0, 10);
+        const untilDate = untilISO ? String(untilISO).slice(0, 10) : null;
+        let totalPence = 0;
+        let privatePence = 0;
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+            let query = supabase_1.serviceClient
+                .from('invoice_items')
+                .select('fee_pence, nhs_charge')
+                .eq('organisation_id', orgId)
+                .gte('invoiced_on', sinceDate);
+            if (untilDate) query = query.lt('invoiced_on', untilDate);
+            const { data, error } = await query
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(error.message);
+            const rows = data ?? [];
+            for (const r of rows) {
+                const fee = Number(r.fee_pence) || 0;
+                totalPence += fee;
+                if (!r.nhs_charge) privatePence += fee;
+            }
+            if (rows.length < PAGE) break;
+        }
+        return { totalPence, privatePence };
+    },
     // Flat "by treatment" breakdown — real invoiced fee + distinct patient count
     // grouped by treatment_name alone (no practice split), from invoice_items.
     // Prefers the treatment_breakdown RPC; falls back to a paginated scan.

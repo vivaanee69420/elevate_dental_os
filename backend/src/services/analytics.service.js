@@ -1367,21 +1367,59 @@ export const analyticsService = {
       const { getSnapshot } = await import("./ai-context.service.js");
       return getSnapshot(orgId, period);
     },
-    async valuation(orgId) {
+    // Group valuation midpoint. Precedence: (1) the manual business_health
+    // baseline (revenue+profit you typed in Setup & Targets); (2) when no
+    // baseline exists, seed from the REAL synced turnover (invoice_items TTM)
+    // with an assumed EBITDA margin — so the Exit Plan / Value & Growth screens
+    // reflect what the app already knows instead of returning "No baseline set"
+    // (and £0). `opts.marginPct` overrides the assumed margin (Exit Plan slider).
+    // Always exposes a lowercase `midpoint` alias + a `basis` tag for the UI.
+    async valuation(orgId, { marginPct } = {}) {
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
         const b = health?.baseline;
-        if (!b?.revenue || !b?.profit)
-            return { error: 'No baseline set' };
-        const revenuePence = b.revenue * 100;
-        const profitPence = b.profit * 100;
-        const ebitdaPence = profitPence + Math.round(revenuePence * 0.04); // add back D&A
-        const result = (0, formulas_1.calculateValuation)({
-            annualRevenue: revenuePence,
-            ebitda: ebitdaPence,
-            nhsRevenuePct: 100 - (b.private_pct || 50),
-            privateRevenuePct: b.private_pct || 50,
+        if (b?.revenue && b?.profit) {
+            const revenuePence = b.revenue * 100;
+            const profitPence = b.profit * 100;
+            const ebitdaPence = profitPence + Math.round(revenuePence * 0.04); // add back D&A
+            const result = (0, formulas_1.calculateValuation)({
+                annualRevenue: revenuePence,
+                ebitda: ebitdaPence,
+                nhsRevenuePct: 100 - (b.private_pct || 50),
+                privateRevenuePct: b.private_pct || 50,
+            });
+            return { ...result, midpoint: result.midPoint, basis: 'baseline',
+                annualRevenuePence: revenuePence, ebitdaPence };
+        }
+        // No baseline → real-turnover seed (trailing 12 months).
+        const real = await this._realTurnoverValuation(orgId, marginPct);
+        if (real)
+            return real;
+        return { error: 'No baseline set' };
+    },
+    // Value the group from real invoiced turnover (invoice_items TTM) + an
+    // assumed EBITDA margin. Returns null when there is no turnover to value
+    // (caller then yields the legacy "No baseline set"). Pure money in pence.
+    async _realTurnoverValuation(orgId, marginPct) {
+        const until = new Date();
+        const since = new Date(until);
+        since.setFullYear(since.getFullYear() - 1);
+        let totalPence = 0;
+        let privatePence = 0;
+        try {
+            ({ totalPence, privatePence } = await analytics_repository_1.analyticsRepository
+                .turnoverTTM(orgId, since.toISOString(), until.toISOString()));
+        } catch {
+            return null;
+        }
+        if (!(totalPence > 0))
+            return null;
+        const privateRevenuePct = Math.round((100 * privatePence) / totalPence);
+        const v = (0, formulas_1.valuationFromTurnover)({
+            annualRevenuePence: totalPence,
+            ebitdaMarginPct: marginPct ?? 18,
+            privateRevenuePct,
         });
-        return result;
+        return { ...v, basis: 'real-turnover' };
     },
     async kpis(orgId) {
         const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
