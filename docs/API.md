@@ -707,6 +707,67 @@ Owner only. Disconnects a company: revokes the credential row and purges that co
 ### `GET /api/finance/quickbooks?accountId=&period=YYYY-MM&from=&to=`
 finance.view. Finance > QuickBooks dashboard data, summed across all companies (`accountId` omitted) or scoped to one. `period` pins a month; `from`/`to` (date or month) window it; default = trailing 12 months. Returns `{ window:{fromPeriod,toPeriod}, summary:{revenuePence,expensesPence,netProfitPence,netMarginPct,cashAtBankPence,receivablesPence,receiptsPence}, byBucket:{revenue,staff,lab,materials,overhead,tax,other}, trend:[{period,revenuePence,expensesPence,netProfitPence}], companies:[{accountId,companyName,revenuePence,expensesPence,netProfitPence,netMarginPct,cashAtBankPence,receivablesPence,receiptsPence}] (only in the summed view), accounts:[{id,companyName,status}] }`. Money in integer PENCE. Cash/receivables are point-in-time snapshots; revenue/expenses/receipts are windowed.
 
+### `GET /api/integrations/gohighlevel/dashboard`
+Auth: `owner` or `practice_manager`. Consolidated GoHighLevel metrics aggregated across all connected subaccounts for the org (or scoped to one via `accountId`).
+
+Query params:
+- `accountId` (uuid, optional) — scope to a single subaccount.
+- `practiceId` (uuid, optional) — scope to a specific practice.
+- `since` / `until` (ISO datetime strings, optional) — window for new/recent counts; defaults to trailing 30 days.
+
+Response shape:
+```json
+{
+  "period": { "since": "2026-05-13T00:00:00Z", "until": "2026-06-12T23:59:59Z" },
+  "totals": {
+    "contacts": {
+      "total": 0,
+      "new": 0,
+      "bySource": [{ "source": "string", "count": 0 }]
+    },
+    "leads": {
+      "total": 0,
+      "new": 0,
+      "open": 0,
+      "won": 0,
+      "lost": 0,
+      "pipelineValuePence": 0,
+      "conversionPct": 0,
+      "byStage": [{ "stage": "string", "count": 0 }]
+    },
+    "conversations": {
+      "total": 0,
+      "inbound": 0,
+      "outbound": 0,
+      "last7d": 0
+    },
+    "sync": {
+      "accounts": 0,
+      "active": 0,
+      "failed": 0,
+      "lastSyncAt": "2026-06-12T22:00:00Z"
+    }
+  },
+  "perAccount": [
+    {
+      "accountId": "uuid | null",
+      "label": "string",
+      "practiceId": "uuid | null",
+      "status": "active | error | pending",
+      "lastSyncAt": "2026-06-12T22:00:00Z",
+      "lastError": "string | null",
+      "contacts": 0,
+      "leads": 0,
+      "pipelineValuePence": 0,
+      "conversionPct": 0,
+      "conversations": 0
+    }
+  ]
+}
+```
+
+`perAccount` includes an `accountId: null` "Unmapped" row when GHL contacts/leads exist without a practice mapping. All money fields (`pipelineValuePence`) are integer pence. Backed by Postgres RPC `ghl_dashboard_aggregate` (migration `20260101000087_ghl_dashboard_rpc.sql`; **not yet applied on hosted** — depends on `000085_integration_accounts`).
+
 **Connect styles.** `dentally` (and `soe`) are `broker_key`: connect returns
 `{ requiresKeyPaste, pasteHint }`; the owner pastes the Dentally Bearer token
 (encrypted at rest). Dentally is pull-only — the token authenticates our polling
