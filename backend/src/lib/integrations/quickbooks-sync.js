@@ -1,32 +1,29 @@
-// QuickBooks Online sync — four pulls per active org integration:
+// QuickBooks Online sync — MULTI-ACCOUNT. One org can connect N QBO companies
+// (one integration_accounts row per realmId). Each company syncs independently
+// and every written row is stamped with integration_account_id so the Finance QB
+// dashboard can filter by company and one company's delete-then-insert never
+// wipes another's rows. Four pulls per company:
 //
-//   1. ProfitAndLoss report  -> monthly_financials  (source='quickbooks')
+//   1. ProfitAndLoss report  -> monthly_financials  (source='quickbooks', integration_account_id)
 //      Backfills the last 12 months on first connect / full refresh; the nightly
-//      cron refreshes the current month only (cheap, keeps the live month fresh).
-//   2. BalanceSheet report   -> bank_accounts        (source='quickbooks')
-//      Cash/bank balances -> the Cashflow opening balance (Sigma balance_pence).
-//   3. Invoice query (Balance>0) -> invoices         (source='quickbooks')
-//      Unpaid invoices = debtors -> the Debt Recovery page.
-//   4. Payment query         -> payments             (source='quickbooks')
-//      Customer receipts -> the Cashflow weekly receipts (settled_receipts_by_day).
-//      DEDUPED against existing non-QBO settled payments (date+amount) so the same
-//      income recorded in both Stripe and QBO is NOT double-counted.
+//      cron refreshes the current month only.
+//   2. BalanceSheet report   -> bank_accounts        (source='quickbooks', integration_account_id)
+//      Cash/bank balances -> the Cashflow opening balance.
+//   3. Invoice query (Balance>0) -> invoices         (source='quickbooks', integration_account_id)
+//      Unpaid invoices = debtors -> Debt Recovery.
+//   4. Payment query         -> payments             (source='quickbooks', integration_account_id)
+//      Customer receipts -> Cashflow weekly receipts. DEDUPED against existing
+//      non-QBO settled payments (date+amount).
 //
-// Xero stays a parallel accounting source — every table is keyed by `source`, so
-// connecting one provider never clobbers the other's rows.
+// external_id is written as '<realmId>:<entityId>' so two companies never collide
+// on the (org, source, external_id) unique indexes. Xero stays a parallel source.
 //
 //   GET .../v3/company/{realmId}/reports/{ProfitAndLoss|BalanceSheet}?start_date=&end_date=&minorversion=65
 //   GET .../v3/company/{realmId}/query?query=SELECT ... &minorversion=65
 //     Authorization: Bearer <access_token>   Accept: application/json
-//
-// Access tokens expire in 1 hour, so we refresh before the call when near expiry.
-//
-// UAT: report JSON shapes (Rows.Row + Header.ColData / ColData / Summary) and the
-// QueryResponse.{Invoice,Payment} shapes are the documented QBO v3 forms — verify
-// against a live/sandbox company. The bank/cash extraction and the receipt dedupe
-// (date+amount) are heuristics; confirm them on real data.
 
-import { integrationRepository } from "../../repositories/integration.repository.js";
+import { integrationAccountRepository } from "../../repositories/integration-account.repository.js";
+import { refreshAccountToken } from "./quickbooks-provider.js";
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 
@@ -44,8 +41,7 @@ function toPence(amount) {
     return Number.isFinite(n) ? Math.round(n * 100) : 0;
 }
 
-// Heuristic bucket from the account name + the section it sits under. Used when
-// the org hasn't mapped the account code explicitly in xero_account_map.
+// Heuristic bucket from the account name + the section it sits under.
 function heuristicBucket(accountName, sectionTitle) {
     const s = `${sectionTitle || ''} ${accountName || ''}`.toLowerCase();
     if (/income|revenue|sales|turnover/.test(s)) return 'revenue';
@@ -63,11 +59,7 @@ function mapBucket(accountName, sectionTitle, accountMap) {
     return heuristicBucket(accountName, sectionTitle);
 }
 
-// Walk QuickBooks' nested report rows (shared by P&L and Balance Sheet). The root
-// is report.Rows.Row. A SECTION row carries Header.ColData (title in cell 0) +
-// nested Rows.Row + a Summary row. A LEAF row carries ColData directly: cell 0 =
-// account name, the LAST cell = the amount. Summary rows are skipped (their totals
-// would double-count). Returns flat [{account, amount, section}].
+// Walk QuickBooks' nested report rows (shared by P&L and Balance Sheet).
 function parseReportRows(report) {
     const out = [];
     const walk = (rows, sectionTitle) => {
@@ -90,21 +82,18 @@ function parseReportRows(report) {
     return out;
 }
 
-// Pull the cash/bank leaf accounts out of a Balance Sheet report. A leaf counts
-// as cash when its account name OR its enclosing section mentions bank/cash.
 function parseBalanceSheetBanks(report) {
     return parseReportRows(report)
         .filter((r) => /bank|cash/i.test(r.section) || /bank|cash/i.test(r.account))
         .map((r) => ({ account: r.account, amount: r.amount }));
 }
 
-// Last N calendar months as {period:'YYYY-MM', from:'YYYY-MM-01', to}. Index 0 is
-// the current month (to = today); older months close on their last day.
+// Last N calendar months as {period:'YYYY-MM', from:'YYYY-MM-01', to}.
 function lastNMonths(n) {
     const out = [];
     const now = new Date();
     let y = now.getUTCFullYear();
-    let m = now.getUTCMonth(); // 0-based
+    let m = now.getUTCMonth();
     for (let i = 0; i < n; i++) {
         const period = `${y}-${String(m + 1).padStart(2, '0')}`;
         const from = `${period}-01`;
@@ -119,14 +108,15 @@ function lastNMonths(n) {
     return out;
 }
 
-function mapInvoiceRow(orgId, practiceId, inv) {
+function mapInvoiceRow(orgId, accountId, realmId, practiceId, inv) {
     const outstanding = toPence(inv.Balance);
     return {
         organisation_id: orgId,
         practice_id: practiceId,
+        integration_account_id: accountId,
         contact_id: null,
         source: 'quickbooks',
-        external_id: String(inv.Id),
+        external_id: `${realmId}:${inv.Id}`,
         amount_pence: toPence(inv.TotalAmt),
         amount_outstanding_pence: outstanding,
         dated_on: inv.TxnDate ?? null,
@@ -137,12 +127,13 @@ function mapInvoiceRow(orgId, practiceId, inv) {
     };
 }
 
-function mapPaymentRow(orgId, practiceId, p, date, pence) {
+function mapPaymentRow(orgId, accountId, realmId, practiceId, p, date, pence) {
     return {
         organisation_id: orgId,
         practice_id: practiceId,
+        integration_account_id: accountId,
         source: 'quickbooks',
-        external_id: String(p.Id),
+        external_id: `${realmId}:${p.Id}`,
         amount_pence: pence,
         currency: 'GBP',
         method: 'bank_transfer',
@@ -152,25 +143,18 @@ function mapPaymentRow(orgId, practiceId, p, date, pence) {
     };
 }
 
-// Drop QBO receipts that coincide (same day + same amount) with an already-stored
-// non-QBO settled payment — the practice's QBO ledger often re-records the same
-// Stripe/GoCardless income, and both feed settled_receipts_by_day. Conservative:
-// only an exact date+amount match is dropped.
-function dedupeReceipts(orgId, practiceId, payments, existingKeys) {
+function dedupeReceipts(orgId, accountId, realmId, practiceId, payments, existingKeys) {
     const rows = [];
     let deduped = 0;
     for (const p of payments) {
         const date = String(p.TxnDate ?? '').slice(0, 10);
         const pence = toPence(p.TotalAmt);
         if (existingKeys.has(`${date}|${pence}`)) { deduped++; continue; }
-        rows.push(mapPaymentRow(orgId, practiceId, p, date, pence));
+        rows.push(mapPaymentRow(orgId, accountId, realmId, practiceId, p, date, pence));
     }
     return { rows, deduped };
 }
 
-// Shared with Xero — xero_account_map is an account-name -> bucket override table;
-// an org that connects only QuickBooks simply has no rows and falls back to the
-// heuristic.
 async function loadAccountMap(orgId) {
     const { data } = await supabase_1.serviceClient
         .from('xero_account_map')
@@ -183,7 +167,8 @@ async function loadAccountMap(orgId) {
 
 // QBO has no practice/site concept (one company per realm). Receivables + receipts
 // land on the org's first practice (invoices.practice_id / payments.practice_id are
-// both NOT NULL). Null when the org has no practice yet -> those pulls are skipped.
+// NOT NULL). The real company discriminator is integration_account_id; practice is
+// incidental. Null when the org has no practice yet -> those pulls are skipped.
 async function defaultPracticeId(orgId) {
     const { data } = await supabase_1.serviceClient
         .from('practices')
@@ -194,8 +179,6 @@ async function defaultPracticeId(orgId) {
     return data?.[0]?.id ?? null;
 }
 
-// date|amount keys of existing settled receipts that did NOT come from QBO, for
-// the dedupe pass. Bounded to the pull window.
 async function loadSettledKeys(orgId, sinceIso) {
     const { data } = await supabase_1.serviceClient
         .from('payments')
@@ -221,7 +204,6 @@ async function qboReport(realmId, accessToken, name, params) {
     return res.json();
 }
 
-// Run a QBO query, following STARTPOSITION pagination until a short page returns.
 async function qboQueryAll(realmId, accessToken, selectWhere, entity) {
     const out = [];
     let start = 1;
@@ -241,24 +223,26 @@ async function qboQueryAll(realmId, accessToken, selectWhere, entity) {
     return out;
 }
 
-// Ensure a fresh access token (refresh when within 60s of expiry / already expired).
-async function ensureToken(orgId, integration) {
-    const expiresAt = integration.expires_at ? new Date(integration.expires_at).getTime() : 0;
-    if (expiresAt && expiresAt - Date.now() > 60_000) return integration;
-    const { QuickBooksProvider } = await import('./quickbooks-provider.js');
-    await QuickBooksProvider.refresh(orgId);
-    return integrationRepository.getByProvider(orgId, 'quickbooks');
+// Ensure a fresh access token for THIS company (refresh when within 60s of
+// expiry). Reads expires_at off the account row's config; reloads after refresh.
+async function ensureAccountToken(orgId, account) {
+    const expiresAt = account.config?.expires_at ? new Date(account.config.expires_at).getTime() : 0;
+    if (expiresAt && expiresAt - Date.now() > 60_000) return account;
+    await refreshAccountToken(orgId, account.id);
+    return integrationAccountRepository.getByIdWithSecrets(orgId, account.id);
 }
 
-// 1. P&L -> monthly_financials, one period at a time. Each period is a
-// delete-then-insert of this provider's rows (idempotent; never touches Xero).
-async function pullProfitAndLoss(orgId, realmId, accessToken, accountMap, months) {
+// 1. P&L -> monthly_financials, one period at a time. Delete-then-insert THIS
+// company's rows (scoped by integration_account_id; never touches Xero or another
+// QB company).
+async function pullProfitAndLoss(orgId, accountId, realmId, accessToken, accountMap, months) {
     let totalLines = 0;
     for (const { period, from, to } of lastNMonths(months)) {
         const report = await qboReport(realmId, accessToken, 'ProfitAndLoss', { start_date: from, end_date: to });
         const rows = parseReportRows(report).map((r) => ({
             organisation_id: orgId,
             practice_id: null,
+            integration_account_id: accountId,
             period,
             account_code: String(r.account),
             dental_bucket: mapBucket(r.account, r.section, accountMap),
@@ -270,7 +254,8 @@ async function pullProfitAndLoss(orgId, realmId, accessToken, accountMap, months
             .delete()
             .eq('organisation_id', orgId)
             .eq('period', period)
-            .eq('source', 'quickbooks');
+            .eq('source', 'quickbooks')
+            .eq('integration_account_id', accountId);
         if (delErr) throw new Error(`monthly_financials clear: ${delErr.message}`);
         if (rows.length > 0) {
             const { error } = await supabase_1.serviceClient.from('monthly_financials').insert(rows);
@@ -281,14 +266,15 @@ async function pullProfitAndLoss(orgId, realmId, accessToken, accountMap, months
     return totalLines;
 }
 
-// 2. Balance Sheet cash/bank -> bank_accounts (delete-then-insert this provider's
-// rows so closed accounts drop). Point-in-time snapshot, not a window.
-async function pullBalanceSheet(orgId, realmId, accessToken) {
+// 2. Balance Sheet cash/bank -> bank_accounts (delete-then-insert this company's
+// rows). external_id prefixed with realmId.
+async function pullBalanceSheet(orgId, accountId, realmId, accessToken) {
     const report = await qboReport(realmId, accessToken, 'BalanceSheet', {});
     const rows = parseBalanceSheetBanks(report).map((b) => ({
         organisation_id: orgId,
+        integration_account_id: accountId,
         source: 'quickbooks',
-        external_id: String(b.account),
+        external_id: `${realmId}:${b.account}`,
         display_name: b.account,
         account_type: 'bank',
         balance_pence: toPence(b.amount),
@@ -299,7 +285,8 @@ async function pullBalanceSheet(orgId, realmId, accessToken) {
         .from('bank_accounts')
         .delete()
         .eq('organisation_id', orgId)
-        .eq('source', 'quickbooks');
+        .eq('source', 'quickbooks')
+        .eq('integration_account_id', accountId);
     if (delErr) throw new Error(`bank_accounts clear: ${delErr.message}`);
     if (rows.length > 0) {
         const { error } = await supabase_1.serviceClient.from('bank_accounts').insert(rows);
@@ -308,21 +295,21 @@ async function pullBalanceSheet(orgId, realmId, accessToken) {
     return { accounts: rows.length };
 }
 
-// 3. Unpaid invoices -> invoices (debtors). Delete-then-insert this provider's
-// rows so an invoice paid off since the last sync disappears from Debt Recovery.
-async function pullReceivables(orgId, realmId, accessToken, practiceId) {
+// 3. Unpaid invoices -> invoices (debtors). Delete-then-insert this company's rows.
+async function pullReceivables(orgId, accountId, realmId, accessToken, practiceId) {
     if (!practiceId) return { skipped: 'no_practice' };
     const invoices = await qboQueryAll(
         realmId, accessToken,
         "SELECT Id, TxnDate, DueDate, TotalAmt, Balance, CustomerRef FROM Invoice WHERE Balance > '0'",
         'Invoice',
     );
-    const rows = invoices.map((inv) => mapInvoiceRow(orgId, practiceId, inv));
+    const rows = invoices.map((inv) => mapInvoiceRow(orgId, accountId, realmId, practiceId, inv));
     const { error: delErr } = await supabase_1.serviceClient
         .from('invoices')
         .delete()
         .eq('organisation_id', orgId)
-        .eq('source', 'quickbooks');
+        .eq('source', 'quickbooks')
+        .eq('integration_account_id', accountId);
     if (delErr) throw new Error(`invoices clear: ${delErr.message}`);
     if (rows.length > 0) {
         const { error } = await supabase_1.serviceClient.from('invoices').insert(rows);
@@ -331,12 +318,11 @@ async function pullReceivables(orgId, realmId, accessToken, practiceId) {
     return { count: rows.length };
 }
 
-// 4. Customer receipts -> payments (cashflow weekly receipts). Deduped against
-// existing non-QBO settled payments, then delete-then-insert this provider's rows
-// across the pull window (so re-syncs are idempotent without wiping older months).
-async function pullReceipts(orgId, realmId, accessToken, practiceId, months) {
+// 4. Customer receipts -> payments. Deduped against existing non-QBO settled
+// payments, then delete-then-insert this company's rows across the pull window.
+async function pullReceipts(orgId, accountId, realmId, accessToken, practiceId, months) {
     if (!practiceId) return { skipped: 'no_practice' };
-    const since = lastNMonths(months).at(-1).from; // earliest period start (YYYY-MM-01)
+    const since = lastNMonths(months).at(-1).from;
     const sinceIso = new Date(`${since}T00:00:00Z`).toISOString();
     const payments = await qboQueryAll(
         realmId, accessToken,
@@ -344,12 +330,13 @@ async function pullReceipts(orgId, realmId, accessToken, practiceId, months) {
         'Payment',
     );
     const existingKeys = await loadSettledKeys(orgId, sinceIso);
-    const { rows, deduped } = dedupeReceipts(orgId, practiceId, payments, existingKeys);
+    const { rows, deduped } = dedupeReceipts(orgId, accountId, realmId, practiceId, payments, existingKeys);
     const { error: delErr } = await supabase_1.serviceClient
         .from('payments')
         .delete()
         .eq('organisation_id', orgId)
         .eq('source', 'quickbooks')
+        .eq('integration_account_id', accountId)
         .gte('processed_at', sinceIso);
     if (delErr) throw new Error(`payments clear: ${delErr.message}`);
     if (rows.length > 0) {
@@ -364,64 +351,89 @@ async function safePull(fn, label) {
     try {
         return await fn();
     } catch (err) {
-        // Secondary pulls are best-effort: a Balance Sheet / receivables / receipts
-        // failure must not fail (or mark failed) the primary P&L sync.
         console.warn(`[quickbooks] ${label} pull failed: ${err.message}`);
         return { error: String(err.message).slice(0, 200) };
     }
 }
 
-export async function syncOneOrg(orgId, integrationArg, onProgress, opts = {}) {
-    let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'quickbooks');
-    if (!integration?.secrets) {
-        await integrationRepository.markFailed(orgId, 'quickbooks', 'no_auth: no stored credentials');
+// Sync ONE QuickBooks company (integration_accounts row).
+export async function syncAccount(orgId, accountId, onProgress = () => {}, opts = {}) {
+    let account = await integrationAccountRepository.getByIdWithSecrets(orgId, accountId);
+    if (!account?.secrets) {
+        await integrationAccountRepository.markFailed(orgId, accountId, 'no_auth: no stored credentials');
         return { error: 'no_auth' };
     }
     try {
-        integration = await ensureToken(orgId, integration);
-        const realmId = integration.config?.realm_id;
-        if (!realmId) throw new Error('no QuickBooks company (realmId) connected');
-        const { access_token } = JSON.parse(decryptSecret(integration.secrets));
-        // First connect (no last_sync_at) or an explicit full refresh backfills 12
-        // months of P&L; the nightly cron just refreshes the current month.
-        const months = opts.months ?? ((opts.full || !integration.last_sync_at) ? BACKFILL_MONTHS : 1);
+        account = await ensureAccountToken(orgId, account);
+        const realmId = account.config?.realm_id;
+        if (!realmId) throw new Error('no QuickBooks company (realmId) on account');
+        const { access_token } = JSON.parse(decryptSecret(account.secrets));
+        const months = opts.months ?? ((opts.full || !account.last_sync_at) ? BACKFILL_MONTHS : 1);
         const accountMap = await loadAccountMap(orgId);
 
         onProgress?.({ pct: 10, phase: 'profit_and_loss' });
-        const lines = await pullProfitAndLoss(orgId, realmId, access_token, accountMap, months);
+        const lines = await pullProfitAndLoss(orgId, accountId, realmId, access_token, accountMap, months);
 
         const practiceId = await defaultPracticeId(orgId);
         onProgress?.({ pct: 55, phase: 'balance_sheet' });
-        const banks = await safePull(() => pullBalanceSheet(orgId, realmId, access_token), 'balance_sheet');
+        const banks = await safePull(() => pullBalanceSheet(orgId, accountId, realmId, access_token), 'balance_sheet');
         onProgress?.({ pct: 70, phase: 'receivables' });
-        const receivables = await safePull(() => pullReceivables(orgId, realmId, access_token, practiceId), 'receivables');
+        const receivables = await safePull(() => pullReceivables(orgId, accountId, realmId, access_token, practiceId), 'receivables');
         onProgress?.({ pct: 85, phase: 'receipts' });
-        const receipts = await safePull(() => pullReceipts(orgId, realmId, access_token, practiceId, months), 'receipts');
+        const receipts = await safePull(() => pullReceipts(orgId, accountId, realmId, access_token, practiceId, months), 'receipts');
 
-        await integrationRepository.upsert(orgId, 'quickbooks', {
-            last_sync_at: new Date().toISOString(), last_error: null, status: 'active',
-        });
-        return { lines, months, period: lastNMonths(1)[0].period, banks, receivables, receipts };
+        await integrationAccountRepository.markSynced(orgId, accountId);
+        return { accountId, lines, months, period: lastNMonths(1)[0].period, banks, receivables, receipts };
     } catch (err) {
-        await integrationRepository.markFailed(orgId, 'quickbooks', String(err.message).slice(0, 500));
+        await integrationAccountRepository.markFailed(orgId, accountId, String(err.message).slice(0, 500));
         throw err;
     }
 }
 
+// Sync ALL of an org's active QuickBooks companies. Coarse aggregate progress
+// (each company advances the bar by its share). Used by the integration.service
+// syncNow path (via the syncOneOrg compatibility wrapper) and the worker.
+export async function syncAllAccounts(orgId, onProgress = () => {}, opts = {}) {
+    const accounts = (await integrationAccountRepository.list(orgId, 'quickbooks'))
+        .filter((a) => a.status === 'active');
+    const results = [];
+    const n = accounts.length || 1;
+    let done = 0;
+    for (const a of accounts) {
+        try {
+            const r = await syncAccount(orgId, a.id, (p) => {
+                const base = Math.round((done / n) * 100);
+                onProgress?.({ ...p, pct: base + Math.round((p.pct ?? 0) / n) });
+            }, opts);
+            results.push(r);
+        } catch (err) {
+            results.push({ accountId: a.id, error: err.message });
+        }
+        done += 1;
+        onProgress?.({ pct: Math.round((done / n) * 100), phase: 'company_done' });
+    }
+    return { accounts: accounts.length, results };
+}
+
+// Compatibility wrapper for integration.service's ON_DEMAND_SYNCERS map (which
+// calls syncer(orgId, integrationRow, onProgress, opts)). The marker integrations
+// row is ignored — the real work fans out over the company account rows.
+export async function syncOneOrg(orgId, _integrationArg, onProgress = () => {}, opts = {}) {
+    return syncAllAccounts(orgId, onProgress, opts);
+}
+
+// Worker entry: every org with >=1 active QuickBooks company.
 export async function syncAllOrgs() {
     const { data: rows } = await supabase_1.serviceClient
-        .from('integrations')
-        .select('*')
+        .from('integration_accounts')
+        .select('organisation_id')
         .eq('provider', 'quickbooks')
         .eq('status', 'active');
+    const orgIds = [...new Set((rows ?? []).map((r) => r.organisation_id))];
     const results = [];
-    for (const row of rows ?? []) {
-        try {
-            const r = await syncOneOrg(row.organisation_id, row);
-            results.push({ orgId: row.organisation_id, ...r });
-        } catch (err) {
-            results.push({ orgId: row.organisation_id, error: err.message });
-        }
+    for (const orgId of orgIds) {
+        try { results.push({ orgId, ...(await syncAllAccounts(orgId)) }); }
+        catch (err) { results.push({ orgId, error: err.message }); }
     }
     return results;
 }
