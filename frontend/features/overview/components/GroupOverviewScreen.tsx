@@ -14,7 +14,7 @@ import { useBusinessHub, type HubPractice } from '../business-hub-api';
 import { GhlSummaryCards } from '@/features/ghl/components/GhlSummaryCards';
 
 export function GroupOverviewScreen() {
-  const { scope } = useScopePeriod();
+  const { scope, win } = useScopePeriod();
   const { data, isLoading, isError } = useBusinessHub();
 
   // Scope -> the practice rows in view (specific practice narrows; all/practices = every row).
@@ -70,7 +70,7 @@ export function GroupOverviewScreen() {
             <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'leads → new patients booked' : 'all sources — all practices'} deltaTone="up" />
           </div>
 
-          <GhlSummaryCards />
+          <GhlSummaryCards since={win.since} until={win.until} />
         </>
       )}
     </div>
