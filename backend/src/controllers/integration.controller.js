@@ -3,6 +3,7 @@ import * as integration_model_1 from "../models/integration.model.js";
 import { providerParamSchema, idParamSchema } from "../models/common.model.js";
 import { verifyState } from "../lib/oauth-state.js";
 import { ghlAccountService } from "../services/ghl-account.service.js";
+import { quickbooksAccountService } from "../services/quickbooks-account.service.js";
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { decryptSecret } from "../lib/crypto.js";
@@ -174,5 +175,24 @@ export const integrationController = {
         const orgId = req.user.organisation_id;
         await integrationAccountRepository.mergeConfig(orgId, id, { stage_mappings: mappings });
         res.json({ ok: true, stage_mappings: mappings });
+    },
+    // --- QuickBooks companies ----------------------------------------------
+    async qbAccountsList(req, res) {
+        res.json(await quickbooksAccountService.listAccounts(req.user.organisation_id));
+    },
+    async qbAccountConnect(req, res) {
+        res.json(await quickbooksAccountService.connect(req.user.organisation_id));
+    },
+    async qbAccountSync(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const orgId = req.user.organisation_id;
+        const full = req.query.full === 'true';
+        quickbooksAccountService.syncAccount(orgId, id, { full })
+            .catch((err) => console.error('[quickbooks-account] sync failed:', err?.message || err));
+        res.json({ started: true, accountId: id, full });
+    },
+    async qbAccountRemove(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await quickbooksAccountService.removeAccount(req.user.organisation_id, id));
     },
 };
