@@ -18,4 +18,15 @@ export const ghlDashboardRepository = {
     if (error) throw new Error(error.message);
     return data ?? [];
   },
+
+  async aggregateAppointments(orgId, since, until, practiceId = null) {
+    const { data, error } = await this._client().rpc('ghl_appointments_aggregate', {
+      p_org: orgId,
+      p_since: since,
+      p_until: until,
+      p_practice: practiceId ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return data ?? [];
+  },
 };
