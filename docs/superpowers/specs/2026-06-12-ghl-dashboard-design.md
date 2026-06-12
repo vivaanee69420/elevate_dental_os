@@ -75,8 +75,10 @@ Response shape:
 Layering:
 - `routes/integrations.routes.js` — add the dashboard route under the existing GHL group, owner/manager gated.
 - `controllers/integrations.controller.js` (or the GHL-specific controller) — parse + validate query with a new Zod schema (`GhlDashboardQuerySchema` in `models/`), call the service, shape response.
-- `services/ghl-dashboard.service.js` (new) — orchestrates the aggregate queries, computes derived metrics (conversion %, value sums), assembles `totals` + `perAccount`.
-- `repositories/` — add aggregate query methods (e.g. counts/sums grouped by practice) to the relevant repos (`ghl`/`contacts`/`leads`/`communications` + `integration-account`). Each MUST carry the explicit `.eq('organisation_id', orgId)` filter.
+- `services/ghl-dashboard.service.js` (new) — calls the aggregate repo method, computes derived metrics (conversion %, totals from the per-practice rows), assembles `totals` + `perAccount`, decorates with account labels/status from `integration_accounts`.
+- `repositories/ghl-dashboard.repository.js` (new) — calls a single Postgres RPC `ghl_dashboard_aggregate(p_org, p_since, p_until, p_practice)` that does the `GROUP BY practice_id` aggregation in SQL (counts, sums, source/stage breakdowns as JSON). Carries `organisation_id` via the RPC arg. RPC chosen over Node-side row fetch because `communications` is large (tens of thousands of rows/org) — grouping in SQL avoids transferring rows.
+
+**Migration:** `supabase/migrations/20260101000086_ghl_dashboard_rpc.sql` defines the RPC (idempotent `CREATE OR REPLACE FUNCTION`). Depends on `000085_integration_accounts` (per memory: not yet applied on hosted — coordinate before hosted apply). After hosted apply: `NOTIFY pgrst, 'reload schema';`.
 
 Money stays integer pence throughout; display conversion is frontend-only.
 
@@ -123,8 +125,8 @@ In `frontend/features/overview/GroupOverviewScreen.tsx`:
 
 ## Rollout
 
-- No migration required (live aggregates over existing tables).
-- After any future hosted DDL: `NOTIFY pgrst, 'reload schema';` — N/A here.
+- One migration: `000086_ghl_dashboard_rpc.sql` (aggregate RPC). Idempotent. Depends on `000085_integration_accounts`.
+- After hosted DDL: `NOTIFY pgrst, 'reload schema';`.
 - Update `docs/API.md` with the new endpoint.
 
 ## Follow-ups
