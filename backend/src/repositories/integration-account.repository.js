@@ -1,0 +1,139 @@
+// ============================================================================
+// Integration-account repository — per-subaccount credential store. Today only
+// GoHighLevel uses it (one row per GHL Location, mapped 1:1 to a practice).
+// Secrets are pre-encrypted before reaching here; read methods that face the API
+// NEVER select the secrets column. Every query carries organisation_id (no RLS
+// on the serviceClient path).
+// ============================================================================
+import * as supabase_1 from "../lib/supabase.js";
+
+// Columns safe to return to the API (no secrets).
+const SAFE_COLS = 'id, provider, external_account_id, practice_id, label, status, last_sync_at, last_error, config, webhook_token, created_at, updated_at';
+
+export const integrationAccountRepository = {
+    // Indirection so tests can stub the client.
+    _client() { return supabase_1.serviceClient; },
+
+    async list(orgId, provider) {
+        const { data } = await this._client()
+            .from('integration_accounts')
+            .select(SAFE_COLS)
+            .eq('organisation_id', orgId)
+            .eq('provider', provider)
+            .order('created_at', { ascending: true });
+        return data ?? [];
+    },
+
+    // Full row INCLUDING secrets — for sync only, never returned by a controller.
+    async getByIdWithSecrets(orgId, id) {
+        const { data } = await this._client()
+            .from('integration_accounts')
+            .select('*')
+            .eq('organisation_id', orgId)
+            .eq('id', id)
+            .maybeSingle();
+        return data;
+    },
+
+    async getById(orgId, id) {
+        const { data } = await this._client()
+            .from('integration_accounts')
+            .select(SAFE_COLS)
+            .eq('organisation_id', orgId)
+            .eq('id', id)
+            .maybeSingle();
+        return data;
+    },
+
+    async getByLocation(orgId, provider, locationId) {
+        const { data } = await this._client()
+            .from('integration_accounts')
+            .select('*')
+            .eq('organisation_id', orgId)
+            .eq('provider', provider)
+            .eq('external_account_id', String(locationId))
+            .maybeSingle();
+        return data;
+    },
+
+    // Webhook routing — resolves an account from its random token (no org filter:
+    // the token IS the credential). Returns the full row including practice_id.
+    async getByWebhookToken(token) {
+        if (!token) return null;
+        const { data } = await this._client()
+            .from('integration_accounts')
+            .select('*')
+            .eq('webhook_token', token)
+            .maybeSingle();
+        return data;
+    },
+
+    async insert(orgId, fields) {
+        const row = { organisation_id: orgId, ...fields };
+        const { data, error } = await this._client()
+            .from('integration_accounts')
+            .insert(row)
+            .select(SAFE_COLS)
+            .single();
+        if (error) throw new Error(error.message);
+        return data;
+    },
+
+    async update(orgId, id, patch) {
+        const { data, error } = await this._client()
+            .from('integration_accounts')
+            .update(patch)
+            .eq('organisation_id', orgId)
+            .eq('id', id)
+            .select(SAFE_COLS)
+            .single();
+        if (error) throw new Error(error.message);
+        return data;
+    },
+
+    // Shallow-merge a JSONB config patch (preserve other keys, e.g. stage_mappings).
+    async mergeConfig(orgId, id, patch) {
+        const { data: existing } = await this._client()
+            .from('integration_accounts')
+            .select('config')
+            .eq('organisation_id', orgId).eq('id', id).maybeSingle();
+        const config = { ...(existing?.config ?? {}), ...patch };
+        const { error } = await this._client()
+            .from('integration_accounts')
+            .update({ config })
+            .eq('organisation_id', orgId).eq('id', id);
+        if (error) throw new Error(error.message);
+        return config;
+    },
+
+    async markSynced(orgId, id) {
+        await this._client()
+            .from('integration_accounts')
+            .update({ last_sync_at: new Date().toISOString(), last_error: null, status: 'active' })
+            .eq('organisation_id', orgId).eq('id', id);
+    },
+
+    async markFailed(orgId, id, lastError) {
+        await this._client()
+            .from('integration_accounts')
+            .update({ status: 'failed', last_error: String(lastError).slice(0, 500) })
+            .eq('organisation_id', orgId).eq('id', id);
+    },
+
+    async markRevoked(orgId, id) {
+        await this._client()
+            .from('integration_accounts')
+            .update({ status: 'revoked', secrets: null })
+            .eq('organisation_id', orgId).eq('id', id);
+    },
+
+    // All active GHL accounts across every org — for the worker.
+    async listAllActive(provider) {
+        const { data } = await this._client()
+            .from('integration_accounts')
+            .select('*')
+            .eq('provider', provider)
+            .eq('status', 'active');
+        return data ?? [];
+    },
+};
