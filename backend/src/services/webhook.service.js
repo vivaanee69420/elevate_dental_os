@@ -118,7 +118,7 @@ export const webhookService = {
     // mounted on /webhooks/dentally). Each event upserts via the same row
     // builders the poller uses, so webhook + poll are consistent. The daily poll
     // remains the reconciliation backstop for any missed delivery.
-    async dentally(orgToken, body, signature) {
+    async dentally(orgToken, body, signature, diag = {}) {
         let orgId;
         try {
             orgId = verifyWebhookToken(orgToken);
@@ -138,6 +138,19 @@ export const webhookService = {
         // Accept a raw hex sig or an "sha256=" prefixed one.
         const got = String(signature ?? '').replace(/^sha256=/i, '');
         if (!timingSafeHexEqual(got, expected)) {
+            // Sanitized self-diagnostic so a real failed delivery tells us WHY
+            // (header drift vs secret/body mismatch) instead of an opaque 401.
+            // No full secret/body/signature logged — 8-char hex prefixes only.
+            console.warn('[dentally-webhook] signature rejected', {
+                orgId,
+                sigHeader: diag.sigHeaderName ?? 'none',
+                otherSigHeaders: diag.otherSigHeaders?.length ? diag.otherSigHeaders : undefined,
+                sigPresent: !!signature,
+                gotPrefix: got ? got.slice(0, 8) : null,
+                expectedPrefix: expected.slice(0, 8),
+                lenMatch: got.length === expected.length,
+                rawLen: raw.length,
+            });
             throw new errors_1.AppError('invalid signature', 401);
         }
         let parsed;
