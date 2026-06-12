@@ -253,6 +253,31 @@ export const analyticsRepository = {
     // truncated by the 1000-row read cap. Returns [{ day:'YYYY-MM-DD', pence }]
     // for the window (<=366 rows); callers bucket days into months/weeks/TTM.
     // practiceId scopes to one practice. Real revenue source — no projection.
+    // QuickBooks invoiced turnover for an org over a [since, until) window. Sourced
+    // from monthly_financials (QBO P&L revenue) — the invoices table only holds
+    // currently-unpaid debtors, so it can't give turnover. MONTHLY granularity:
+    // sums whole calendar months whose period (YYYY-MM) falls in the window, so a
+    // partial-month custom range is approximated to its whole months (exact for
+    // month/year board modes). ORG-LEVEL: QBO has no real practice attribution, so
+    // there is no practice filter. Integer pence.
+    async quickbooksTurnover(orgId, sinceISO, untilISO = null) {
+        const fromPeriod = (sinceISO || '').slice(0, 7);
+        const toPeriod = untilISO
+            ? new Date(Date.parse(untilISO) - 1).toISOString().slice(0, 7) // last included month
+            : null;
+        let q = supabase_1.serviceClient
+            .from('monthly_financials')
+            .select('amount_pence')
+            .eq('organisation_id', orgId)
+            .eq('source', 'quickbooks')
+            .eq('dental_bucket', 'revenue')
+            .limit(LIMIT_GUARD);
+        if (fromPeriod) q = q.gte('period', fromPeriod);
+        if (toPeriod) q = q.lte('period', toPeriod);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        return (data || []).reduce((s, r) => s + (Number(r.amount_pence) || 0), 0);
+    },
     async settledReceiptsByDay(orgId, sinceISO, practiceId = null, untilISO = null) {
         const { data, error } = await supabase_1.serviceClient.rpc('settled_receipts_by_day', {
             p_org: orgId,

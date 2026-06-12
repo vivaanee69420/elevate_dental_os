@@ -59,7 +59,7 @@ describe('bucketsByPeriod — Xero overrides manual per period+bucket', () => {
 });
 
 describe('bucket → P&L / finance-series mapping', () => {
-  it('plInputFromBuckets: tax excluded, overhead+other → other, no associate/property/marketing bucket', () => {
+  it('plInputFromBuckets: tax excluded, overhead+other → other, no property/marketing bucket', () => {
     const inp = plInputFromBuckets({
       revenue: 100000, staff: 30000, lab: 5000, materials: 3000,
       overhead: 8000, other: 2000, tax: 9999,
@@ -70,9 +70,15 @@ describe('bucket → P&L / finance-series mapping', () => {
     });
   });
 
+  it('plInputFromBuckets: associates bucket (clinician pay split from staff) flows to costs.associates', () => {
+    const inp = plInputFromBuckets({ revenue: 100000, associates: 45000, staff: 18000 });
+    expect(inp.costs.associates).toBe(45000);
+    expect(inp.costs.staff).toBe(18000);
+  });
+
   it('financeSeriesRowFromBuckets: groups + profit = revenue - all operating costs', () => {
     const row = financeSeriesRowFromBuckets('2026-03', {
-      revenue: 100000, staff: 30000, lab: 5000, materials: 3000, overhead: 8000, other: 2000,
+      revenue: 100000, associates: 0, staff: 30000, lab: 5000, materials: 3000, overhead: 8000, other: 2000,
     });
     expect(row).toEqual({
       month: '2026-03',

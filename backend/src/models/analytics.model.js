@@ -141,8 +141,13 @@ export const seriesQuerySchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid().optional(),
     from: dateStr,
     to: dateStr,
+    // /profit source toggle: 'combined' (default) = Dentally revenue + all-source
+    // costs; 'dentally' = revenue only; 'quickbooks' = full P&L from QBO actuals.
+    source: zod_1.z.enum(['combined', 'dentally', 'quickbooks']).optional(),
+    // QBO company scope (integration_account_id) — only meaningful when source=quickbooks.
+    account_id: zod_1.z.string().uuid().optional(),
+    // P&L accounting basis (cash vs accrual). Cash rows come from the QB Cash pull.
     accounting_method: zod_1.z.enum(['accrual', 'cash']).default('accrual'),
-    integration_account_id: zod_1.z.string().uuid().optional(),
 });
 
 // ai-insights ?days=30 — rolling window for the leads/payments rollups.
@@ -233,11 +238,26 @@ export const plSheetUpdateSchema = zod_1.z.object({
 // live from the same analytics rollups the dashboard uses; the request just
 // scopes the window. Money never crosses this boundary (server-derived).
 // ============================================================================
-// POST /api/analytics/board-report — generate (token cost). Optional window.
+// POST /api/analytics/board-report — generate (token cost). Optional window +
+// optional scope: 'all' (group-wide) or a practice UUID (narrow the pack to one
+// practice). Org-level-only feeds (P&L margin, treatment-plan funnel, ad leads)
+// degrade honestly when a single practice is selected — see analyticsService.
 export const boardReportSchema = zod_1.z.object({
     since: isoDateTime,
     until: isoDateTime,
     label: zod_1.z.string().trim().max(60).optional(),
+    scope: zod_1.z.string().trim().default('all').refine(
+        (s) => s === 'all' || UUID_RE.test(s),
+        { message: 'scope must be all or a practice UUID' },
+    ),
+});
+
+// PUT /api/analytics/turnover-source — owner-toggled group-turnover source.
+// dentally (default) | quickbooks (QBO P&L revenue) | both (sum — accepts the
+// double-count when an org runs both over the same revenue). Read by boardReport.
+export const TURNOVER_SOURCES = ['dentally', 'quickbooks', 'both'];
+export const turnoverSourceSchema = zod_1.z.object({
+    turnoverSource: zod_1.z.enum(['dentally', 'quickbooks', 'both']),
 });
 
 // POST /api/analytics/board-report/email — generate + email now to one address.

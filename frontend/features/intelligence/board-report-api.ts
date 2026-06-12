@@ -37,7 +37,13 @@ export interface BoardMetrics {
   topPractice: { name: string; revenuePence: number } | null;
   weakPractice: { name: string; noShowRate: number } | null;
   biggestLeak: { label: string; annualPence: number; owner: string } | null;
+  // Owner-selected turnover source + the integration feeds behind each headline
+  // card (rendered as a per-card caption).
+  turnoverSource: TurnoverSource;
+  sources: { turnover: string; margin: string; leakage: string; conversion: string };
 }
+
+export type TurnoverSource = 'dentally' | 'quickbooks' | 'both';
 
 export interface BoardReport {
   generatedAt: string;
@@ -69,21 +75,43 @@ export interface BoardSchedule {
   created_at: string;
 }
 
-function windowBody(win: ResolvedWindow) {
-  return { since: win.since, until: win.until, label: win.label };
+// scope = 'all' (group-wide) | practiceId. Only sent when a single practice is
+// picked, so the backend narrows the pack to that practice (org-level feeds —
+// margin, treatment-plan funnel, ad leads — stay group-level / degrade honestly).
+function windowBody(win: ResolvedWindow, scope?: string) {
+  const body: { since: string; until: string; label: string; scope?: string } = {
+    since: win.since,
+    until: win.until,
+    label: win.label,
+  };
+  if (scope && scope !== 'all') body.scope = scope;
+  return body;
 }
 
-export function generateBoardReport(win: ResolvedWindow): Promise<BoardReport> {
+export function generateBoardReport(win: ResolvedWindow, scope?: string): Promise<BoardReport> {
   return api<BoardReport>('/api/analytics/board-report', {
     method: 'POST',
-    body: JSON.stringify(windowBody(win)),
+    body: JSON.stringify(windowBody(win, scope)),
   });
 }
 
-export function emailBoardReport(win: ResolvedWindow, recipientEmail: string): Promise<EmailResult> {
+export function emailBoardReport(win: ResolvedWindow, recipientEmail: string, scope?: string): Promise<EmailResult> {
   return api<EmailResult>('/api/analytics/board-report/email', {
     method: 'POST',
-    body: JSON.stringify({ ...windowBody(win), recipient_email: recipientEmail }),
+    body: JSON.stringify({ ...windowBody(win, scope), recipient_email: recipientEmail }),
+  });
+}
+
+// Group turnover source toggle (owner-editable, finance.edit). Read by the board
+// report to pick which integration feeds group turnover.
+export function fetchTurnoverSource(): Promise<{ turnoverSource: TurnoverSource }> {
+  return api<{ turnoverSource: TurnoverSource }>('/api/analytics/turnover-source');
+}
+
+export function updateTurnoverSource(turnoverSource: TurnoverSource): Promise<{ turnoverSource: TurnoverSource }> {
+  return api<{ turnoverSource: TurnoverSource }>('/api/analytics/turnover-source', {
+    method: 'PUT',
+    body: JSON.stringify({ turnoverSource }),
   });
 }
 

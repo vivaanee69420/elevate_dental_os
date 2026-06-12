@@ -23,7 +23,10 @@ describe('toPence', () => {
 describe('heuristicBucket / mapBucket', () => {
     it('classifies by section + name keywords', () => {
         expect(__test.heuristicBucket('Patient Fees', 'Income')).toBe('revenue');
-        expect(__test.heuristicBucket('Associate Wages', 'Less Operating Expenses')).toBe('staff');
+        expect(__test.heuristicBucket('Associate salary', 'Less Operating Expenses')).toBe('associates');
+        expect(__test.heuristicBucket('Principal salary', 'Expenses')).toBe('associates');
+        expect(__test.heuristicBucket('Hygienist / Therapist', 'Expenses')).toBe('associates');
+        expect(__test.heuristicBucket('Salaries', 'Less Operating Expenses')).toBe('staff');
         expect(__test.heuristicBucket('Lab Fees', 'Expenses')).toBe('lab');
         expect(__test.heuristicBucket('Consumables', 'Expenses')).toBe('materials');
         expect(__test.heuristicBucket('Rent', 'Expenses')).toBe('overhead');

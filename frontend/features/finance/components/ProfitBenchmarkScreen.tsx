@@ -9,6 +9,8 @@
 
 import { useState } from 'react';
 import { useProfitBenchmark } from '../hooks';
+import type { FinanceSource } from '../api';
+import ProfitSourceBar from './ProfitSourceBar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import { Card, EmptyState, SkeletonKpiRow, SkeletonChart } from '@/components/ui';
 
@@ -47,7 +49,9 @@ function Pill({ severity, children }: { severity: string; children: React.ReactN
 
 export default function ProfitBenchmarkScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const { data, isLoading, isError } = useProfitBenchmark(practiceId);
+  const [source, setSource] = useState<FinanceSource>('combined');
+  const [qboAccountId, setQboAccountId] = useState<string | null>(null);
+  const { data, isLoading, isError } = useProfitBenchmark(practiceId, source, qboAccountId);
 
   return (
     <div className="flex flex-col gap-6">
@@ -60,7 +64,18 @@ export default function ProfitBenchmarkScreen() {
         </p>
       </div>
 
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      {/* Filters grouped in one block so the parent's flex gap spaces the whole
+          group once (not once per bar) — keeps spacing tight + matching the P&L. */}
+      <div>
+        <ProfitSourceBar
+          source={source}
+          onSourceChange={setSource}
+          accountId={qboAccountId}
+          onAccountChange={setQboAccountId}
+        />
+        {/* QuickBooks is scoped by company, not practice — hide the practice tabs. */}
+        {source !== 'quickbooks' && <PracticeTabs value={practiceId} onChange={setPracticeId} />}
+      </div>
 
       {isLoading && (
         <>
@@ -77,7 +92,13 @@ export default function ProfitBenchmarkScreen() {
 
       {!isLoading && !isError && data && !data.costsAvailable && (
         <EmptyState
-          message="No filed cost data for this scope yet. Connect Xero (or enter a monthly P&L) and the benchmark derives from your real actuals — we never estimate cost ratios."
+          message={
+            source === 'dentally'
+              ? 'Dentally provides no cost data, so a cost/profit benchmark can’t be built from it. Switch the data source to QuickBooks or Combined.'
+              : source === 'quickbooks'
+                ? 'No QuickBooks cost data for this scope yet. Connect and sync a QuickBooks company and the benchmark derives from its real actuals — we never estimate cost ratios.'
+                : 'No filed cost data for this scope yet. Connect Xero/QuickBooks (or enter a monthly P&L) and the benchmark derives from your real actuals — we never estimate cost ratios.'
+          }
         />
       )}
 

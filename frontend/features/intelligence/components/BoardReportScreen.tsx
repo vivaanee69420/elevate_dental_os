@@ -15,6 +15,7 @@ import { PageHeader, KpiTile, EmptyState, SkeletonKpiRow } from '@/components/ui
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill } from './os-ui';
+import { useMe } from '@/hooks/useMe';
 import {
   useGenerateBoardReport,
   useEmailBoardReport,
@@ -22,8 +23,10 @@ import {
   useCreateBoardSchedule,
   useUpdateBoardSchedule,
   useDeleteBoardSchedule,
+  useTurnoverSource,
+  useSaveTurnoverSource,
 } from '../board-report-hooks';
-import type { BoardReport, Rag, ScheduleFrequency } from '../board-report-api';
+import type { BoardReport, Rag, ScheduleFrequency, TurnoverSource } from '../board-report-api';
 
 const gbp = (p: number) => formatPence(p);
 
@@ -40,6 +43,52 @@ const FREQ_LABEL: Record<ScheduleFrequency, string> = {
 };
 
 const validEmail = (e: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+
+const TURNOVER_OPTIONS: { value: TurnoverSource; label: string }[] = [
+  { value: 'dentally', label: 'Dentally' },
+  { value: 'quickbooks', label: 'QuickBooks' },
+  { value: 'both', label: 'Both' },
+];
+
+// Owner-editable group-turnover source. Dentally = clinical production
+// (invoice_items); QuickBooks = QBO P&L revenue (group-level only); Both sums
+// them (double-counts when an org runs both over the same revenue).
+function TurnoverSourceControl({ onChanged }: { onChanged: () => void }) {
+  const me = useMe();
+  const { data } = useTurnoverSource();
+  const save = useSaveTurnoverSource();
+  const isOwner = me.data?.role === 'owner';
+  const current = data?.turnoverSource ?? 'dentally';
+  if (!isOwner) return null;
+
+  const pick = (value: TurnoverSource) => {
+    if (value === current || save.isPending) return;
+    save.mutate(value, { onSuccess: onChanged });
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 mb-3 print:hidden">
+      <span className="text-[12.5px] text-ink-muted">Group turnover source</span>
+      <div className="inline-flex rounded-md border border-line overflow-hidden">
+        {TURNOVER_OPTIONS.map((o) => (
+          <button
+            key={o.value}
+            onClick={() => pick(o.value)}
+            disabled={save.isPending}
+            className={`text-[12.5px] px-3 py-1 disabled:opacity-50 ${
+              current === o.value ? 'bg-accent text-white' : 'hover:bg-surface-2'
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <span className="text-[11.5px] text-ink-muted">
+        Dentally = clinical production · QuickBooks = QBO P&amp;L (group-level) · Both sums them
+      </span>
+    </div>
+  );
+}
 
 export default function BoardReportScreen() {
   const gen = useGenerateBoardReport();
@@ -70,6 +119,7 @@ export default function BoardReportScreen() {
             </div>
           }
         />
+        <TurnoverSourceControl onChanged={() => { if (report) gen.mutate(); }} />
         {gen.isError && (
           <EmptyState message={`Couldn't generate: ${gen.error?.message ?? 'unknown error'}`} />
         )}
@@ -88,33 +138,51 @@ export default function BoardReportScreen() {
   );
 }
 
+// Per-card data lineage — which integration feeds populate each headline metric.
+function SourceCaption({ text }: { text?: string }) {
+  if (!text) return null;
+  return <p className="text-[11px] text-ink-muted leading-tight px-1">Source: {text}</p>;
+}
+
 function BoardPack({ report }: { report: BoardReport }) {
   const m = report.metrics;
   return (
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiTile
-          label="Group turnover"
-          value={gbp(m.revenuePence)}
-          delta={`~${gbp(m.revenueAnnualisedPence)}/yr`}
-        />
-        <KpiTile
-          label="Net margin"
-          value={m.marginPct > 0 ? `${m.marginPct}%` : '—'}
-          delta={m.marginPct > 0 ? `EBITDA ${gbp(m.ebitdaWindowPence)}` : 'Connect Xero/QuickBooks'}
-          deltaTone={m.marginPct > 0 ? 'up' : 'muted'}
-        />
-        <KpiTile
-          label="Recoverable leakage"
-          value={`${gbp(m.leakageAnnualPence)}/yr`}
-          delta={m.leakagePctOfRevenue ? `${m.leakagePctOfRevenue}% of turnover` : `${gbp(m.leakageMonthlyPence)}/mo`}
-          deltaTone="down"
-        />
-        <KpiTile
-          label="Conversion"
-          value={`${m.conversionRate}%`}
-          delta={`${m.leads.toLocaleString('en-GB')} leads · ${gbp(m.cashCollectedPence)} banked`}
-        />
+        <div className="flex flex-col gap-1">
+          <KpiTile
+            label="Group turnover"
+            value={gbp(m.revenuePence)}
+            delta={`~${gbp(m.revenueAnnualisedPence)}/yr`}
+          />
+          <SourceCaption text={m.sources?.turnover} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <KpiTile
+            label="Net margin"
+            value={m.marginPct > 0 ? `${m.marginPct}%` : '—'}
+            delta={m.marginPct > 0 ? `EBITDA ${gbp(m.ebitdaWindowPence)}` : 'Connect Xero/QuickBooks'}
+            deltaTone={m.marginPct > 0 ? 'up' : 'muted'}
+          />
+          <SourceCaption text={m.sources?.margin} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <KpiTile
+            label="Recoverable leakage"
+            value={`${gbp(m.leakageAnnualPence)}/yr`}
+            delta={m.leakagePctOfRevenue ? `${m.leakagePctOfRevenue}% of turnover` : `${gbp(m.leakageMonthlyPence)}/mo`}
+            deltaTone="down"
+          />
+          <SourceCaption text={m.sources?.leakage} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <KpiTile
+            label="Conversion"
+            value={`${m.conversionRate}%`}
+            delta={`${m.leads.toLocaleString('en-GB')} leads · ${gbp(m.cashCollectedPence)} banked`}
+          />
+          <SourceCaption text={m.sources?.conversion} />
+        </div>
       </div>
 
       <div>
