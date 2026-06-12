@@ -301,3 +301,39 @@ export function setAccountStageMappings(id: string, mappings: Record<string, str
     { method: 'POST', body: JSON.stringify({ mappings }) },
   );
 }
+
+// --- QuickBooks companies (multi-account) -----------------------------------
+// Each company = one QBO realm (connected via OAuth). Owner-only. No practice
+// mapping — a QB company is an independent entity.
+export interface QboAccount {
+  id: string;
+  realm_id: string | null;
+  company_name: string | null;
+  label: string | null;
+  status: IntegrationStatus;
+  last_sync_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export function listQboAccounts() {
+  return api<{ accounts: QboAccount[] }>('/api/integrations/quickbooks/accounts');
+}
+
+// Returns the Intuit OAuth redirect URL; the caller sends the browser there.
+export function connectQboAccount() {
+  return api<{ redirectUrl: string }>('/api/integrations/quickbooks/accounts/connect', {
+    method: 'POST',
+  });
+}
+
+export function syncQboAccount(id: string, full = false) {
+  return api<{ started: boolean; accountId: string; full: boolean }>(
+    `/api/integrations/quickbooks/accounts/${id}/sync${full ? '?full=true' : ''}`,
+    { method: 'POST' },
+  );
+}
+
+export function removeQboAccount(id: string) {
+  return api<{ ok: boolean }>(`/api/integrations/quickbooks/accounts/${id}`, { method: 'DELETE' });
+}
