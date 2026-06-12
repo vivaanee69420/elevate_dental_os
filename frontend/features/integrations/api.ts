@@ -245,3 +245,60 @@ export function setAdAccountSelection(provider: string, selectedIds: string[]) {
     { method: 'POST', body: JSON.stringify({ selected_ids: selectedIds }) },
   );
 }
+
+// --- GoHighLevel subaccounts (multi-location) -------------------------------
+// Each subaccount = one GHL Location, mapped 1:1 to a practice. Owner-only.
+export interface GhlAccount {
+  id: string;
+  external_account_id: string;     // GHL locationId
+  practice_id: string | null;
+  label: string | null;
+  status: IntegrationStatus;
+  last_sync_at: string | null;
+  last_error: string | null;
+  config: Record<string, unknown>;
+  webhook_token: string | null;
+  webhook_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listGhlAccounts() {
+  return api<{ accounts: GhlAccount[] }>('/api/integrations/gohighlevel/accounts');
+}
+
+export function addGhlAccount(body: { token: string; locationId: string; practiceId?: string | null; label?: string }) {
+  return api<GhlAccount>('/api/integrations/gohighlevel/accounts', {
+    method: 'POST', body: JSON.stringify(body),
+  });
+}
+
+export function updateGhlAccount(id: string, body: { practiceId?: string | null; label?: string }) {
+  return api<GhlAccount>(`/api/integrations/gohighlevel/accounts/${id}`, {
+    method: 'PATCH', body: JSON.stringify(body),
+  });
+}
+
+export function removeGhlAccount(id: string) {
+  return api<{ ok: boolean }>(`/api/integrations/gohighlevel/accounts/${id}`, { method: 'DELETE' });
+}
+
+export function syncGhlAccount(id: string, full = false) {
+  return api<{ started: boolean; accountId: string; full: boolean }>(
+    `/api/integrations/gohighlevel/accounts/${id}/sync${full ? '?full=true' : ''}`,
+    { method: 'POST' },
+  );
+}
+
+export function detectAccountPipelines(id: string) {
+  return api<{ pipelines: GhlPipeline[]; error?: string }>(
+    `/api/integrations/gohighlevel/accounts/${id}/pipelines`,
+  );
+}
+
+export function setAccountStageMappings(id: string, mappings: Record<string, string>) {
+  return api<{ ok: boolean; stage_mappings: Record<string, string> }>(
+    `/api/integrations/gohighlevel/accounts/${id}/stage-mappings`,
+    { method: 'POST', body: JSON.stringify({ mappings }) },
+  );
+}
