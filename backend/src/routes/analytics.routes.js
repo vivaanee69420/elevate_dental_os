@@ -86,6 +86,8 @@ router.get('/valuation-inputs', val, (0, async_handler_1.asyncHandler)(analytics
 router.put('/valuation-inputs', valEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.putValuationInputs));
 router.get('/chair-config', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.getChairConfig));
 router.put('/chair-config', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.putChairConfig));
+router.get('/turnover-source', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.getTurnoverSource));
+router.put('/turnover-source', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.putTurnoverSource));
 
 // Phase 3 / T13 — editable P&L scenario sheets (scenario overlay; never feeds
 // actuals). GET = finance.view; mutations = finance.edit (audited). The /csv

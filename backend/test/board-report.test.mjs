@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { isScheduleDue } from '../src/repositories/boardReport.repository.js';
 import { generateBoardReport } from '../src/lib/gemini.js';
 import { analyticsService } from '../src/services/analytics.service.js';
+import { analyticsRepository } from '../src/repositories/analytics.repository.js';
 
 describe('isScheduleDue', () => {
   const now = new Date('2026-06-09T08:00:00Z');
@@ -42,11 +43,13 @@ describe('claude.generateBoardReport', () => {
 
 describe('analyticsService.boardReport', () => {
   const ORG = 'org-1';
-  let origHub, origLeak, prevKey;
+  let origHub, origLeak, origSource, prevKey;
 
   beforeEach(() => {
     origHub = analyticsService.businessHub;
     origLeak = analyticsService.revenueLeakage;
+    origSource = analyticsService.getTurnoverSource;
+    analyticsService.getTurnoverSource = async () => 'dentally'; // default, no QBO/DB
     prevKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY; // force deterministic fallback
 
@@ -90,6 +93,7 @@ describe('analyticsService.boardReport', () => {
   afterEach(() => {
     analyticsService.businessHub = origHub;
     analyticsService.revenueLeakage = origLeak;
+    analyticsService.getTurnoverSource = origSource;
     if (prevKey !== undefined) process.env.ANTHROPIC_API_KEY = prevKey;
   });
 
@@ -109,6 +113,65 @@ describe('analyticsService.boardReport', () => {
     expect(r.priorities.length).toBe(3);
     expect(r.priorities[0].rag).toBe('red');
     expect(r.priorities.map((p) => p.rag)).toEqual(['red', 'amber', 'green']);
+  });
+
+  it('forwards practiceId to both rollups when scoped to one practice', async () => {
+    const seen = {};
+    analyticsService.businessHub = async (org, opts) => {
+      seen.hubOrg = org; seen.hubPractice = opts.practiceId;
+      return {
+        period: { days: 30 },
+        group: { practices: 1, revenuePence: 70_000_00, revenueTargetPence: 0, marginPct: 0, appointments: 600, noShows: 30, noShowRate: 5, noShowTracked: true, leads: 40, conversionRate: 10, newPatients: 4, cashCollectedPence: 65_000_00 },
+        practices: [{ name: 'Site A', revenuePence: 70_000_00, appointments: 600, noShows: 30, noShowRate: 5 }],
+      };
+    };
+    analyticsService.revenueLeakage = async (org, opts) => {
+      seen.leakPractice = opts.practiceId;
+      return { windowDays: 30, since: 's', until: null, annualTotalPence: 0, monthlyTotalPence: 0, asPctOfRevenue: 0, lines: [] };
+    };
+    const r = await analyticsService.boardReport(ORG, { practiceId: 'prac-A' });
+    expect(seen.hubOrg).toBe(ORG);
+    expect(seen.hubPractice).toBe('prac-A');
+    expect(seen.leakPractice).toBe('prac-A');
+    // single practice => its revenue is the group turnover
+    expect(r.metrics.revenuePence).toBe(70_000_00);
+  });
+
+  it("source 'both' adds QuickBooks P&L revenue to Dentally turnover", async () => {
+    analyticsService.getTurnoverSource = async () => 'both';
+    const origQbo = analyticsRepository.quickbooksTurnover;
+    analyticsRepository.quickbooksTurnover = async () => 25_000_00;
+    try {
+      const r = await analyticsService.boardReport(ORG, { label: 'May' });
+      expect(r.metrics.revenuePence).toBe(125_000_00); // 100k Dentally + 25k QBO
+      expect(r.metrics.turnoverSource).toBe('both');
+      expect(r.metrics.sources.turnover).toBe('Dentally + QuickBooks');
+      // annualised + EBITDA recomputed from the blended figure
+      expect(r.metrics.revenueAnnualisedPence).toBe(Math.round((125_000_00 * 365) / 30));
+      expect(r.metrics.ebitdaWindowPence).toBe(Math.round((125_000_00 * 30) / 100));
+    } finally {
+      analyticsRepository.quickbooksTurnover = origQbo;
+    }
+  });
+
+  it('practice-scoped pack ignores QuickBooks (no per-practice QBO attribution)', async () => {
+    analyticsService.getTurnoverSource = async () => 'both';
+    analyticsService.businessHub = async () => ({
+      period: { days: 30 },
+      group: { practices: 1, revenuePence: 70_000_00, revenueTargetPence: 0, marginPct: 0, appointments: 600, noShows: 30, noShowRate: 5, noShowTracked: true, leads: 40, conversionRate: 10, newPatients: 4, cashCollectedPence: 65_000_00 },
+      practices: [{ name: 'Site A', revenuePence: 70_000_00, appointments: 600, noShows: 30, noShowRate: 5 }],
+    });
+    const origQbo = analyticsRepository.quickbooksTurnover;
+    let qboCalled = false;
+    analyticsRepository.quickbooksTurnover = async () => { qboCalled = true; return 25_000_00; };
+    try {
+      const r = await analyticsService.boardReport(ORG, { practiceId: 'prac-A' });
+      expect(qboCalled).toBe(false); // QBO not even queried when scoped
+      expect(r.metrics.revenuePence).toBe(70_000_00); // Dentally only
+      expect(r.metrics.turnoverSource).toBe('dentally');
+    } finally {
+      analyticsRepository.quickbooksTurnover = origQbo;
+    }
   });
 
   it('flags empty when there is no activity', async () => {
