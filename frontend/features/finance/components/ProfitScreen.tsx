@@ -132,8 +132,11 @@ export default function ProfitScreen() {
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(html); w.document.close(); w.focus();
-    w.onload = () => w.print();
-    setTimeout(() => { try { w.print(); } catch { /* closed */ } }, 400);
+    // Print once: onload fires on Chromium; the timeout is the Safari fallback.
+    let printed = false;
+    const printOnce = () => { if (!printed) { printed = true; try { w.print(); } catch { /* closed */ } } };
+    w.onload = printOnce;
+    setTimeout(printOnce, 400);
   }
 
   const cellPad = '10px 14px';
