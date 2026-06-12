@@ -48,17 +48,20 @@ export const monthlyFinancialRepository = {
     },
     // All rows for an org (both 'manual' and 'xero'/'quickbooks'), for the
     // analytics read path. Source is selected so the reader can apply the
-    // Xero-overrides-manual precedence per period+bucket. accounting_method
-    // and integration_account_id are included so the service layer can split
-    // cash vs accrual and filter by QuickBooks company.
-    async allForOrg(orgId, { integrationAccountId = null } = {}) {
+    // Xero-overrides-manual precedence per period+bucket. Optional filters scope
+    // the read to one provider (source) and/or one connected company
+    // (accountId = integration_account_id) — used by the /profit source toggle.
+    // accounting_method is selected so the service layer can split cash vs accrual.
+    async allForOrg(orgId, { source = null, accountId = null } = {}) {
         const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
         let q = supabase_1.serviceClient
             .from('monthly_financials')
-            .select('period, dental_bucket, amount_pence, source, practice_id, accounting_method, integration_account_id')
-            .eq('organisation_id', orgId);
-        if (integrationAccountId) q = q.eq('integration_account_id', integrationAccountId);
-        const { data, error } = await q.limit(LIMIT_GUARD);
+            .select('period, dental_bucket, amount_pence, source, practice_id, integration_account_id, accounting_method')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (source) q = q.eq('source', source);
+        if (accountId) q = q.eq('integration_account_id', accountId);
+        const { data, error } = await q;
         if (error) throw new Error(error.message);
         return (Array.isArray(data) ? data : []).filter((r) => !drop.has(r.source));
     },

@@ -1,18 +1,19 @@
 'use client';
-// Profit & Loss — QuickBooks-style matrix. Line items (rows) × time-period
-// columns (Total/Month/Quarter/Year) driven by QbFilterBar, with optional
-// %-of-income, previous-period and previous-year comparison. Real data from
-// GET /api/analytics/finance-series (settled-cash revenue + monthly_financials
-// costs, per accounting basis + QBO company). Money in pounds at this layer.
+// Profit & Loss — unified view combining the /profit source toggle + QBO company
+// selector (from main) with the QuickBooks-style matrix + QbFilterBar (from the
+// feat/pl-quickbooks-parity branch). Data source: GET /api/analytics/finance-series
+// (settled-cash revenue + monthly_financials costs, by accounting basis + QBO company).
 import { useMemo, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { Skeleton } from '@/components/ui';
 import { poundsCompact, monthShort } from '../mock';
-import { useFinanceSeries, useQuickbooksAccounts } from '../hooks';
+import { useFinanceSeries } from '../hooks';
+import type { FinanceSource } from '../api';
 import FinanceToolbar from './FinanceToolbar';
 import ManualPLModal from './ManualPLModal';
+import ProfitSourceBar from './ProfitSourceBar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import QbFilterBar, { DEFAULT_QB_FILTERS, type QbFilters } from './QbFilterBar';
 import {
@@ -58,10 +59,12 @@ function Kpi({ label, value, delta }: { label: string; value: string; delta?: st
 
 export default function ProfitScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const [companyId, setCompanyId] = useState<string | null>(null);
+  // Source toggle + QBO company selector (from main's ProfitSourceBar).
+  const [source, setSource] = useState<FinanceSource>('combined');
+  const [qboAccountId, setQboAccountId] = useState<string | null>(null);
+  // QuickBooks-style filter bar: date range, groupBy, accounting method, compare columns.
   const [filters, setFilters] = useState<QbFilters>(DEFAULT_QB_FILTERS);
   const [plModalOpen, setPlModalOpen] = useState(false);
-  const { data: qbAccounts } = useQuickbooksAccounts();
 
   // Fetch window: wide enough for the requested comparison columns, capped at 24mo.
   const scope = useMemo(() => scopeWindow(filters.range), [filters.range]);
@@ -73,16 +76,25 @@ export default function ProfitScreen() {
     return Math.min(24, Math.max(1, m));
   }, [spanMonths, filters.compare.prevYear, filters.compare.prevPeriod]);
 
-  // Always fetch by month-count ending now; slice locally. (range.from in the past
-  // beyond 24mo is out of scope — the matrix shows what the window covers.)
-  const { data, isLoading, isError } = useFinanceSeries(practiceId, null, {
-    months: fetchMonths,
-    accountingMethod: filters.method,
-    integrationAccountId: companyId,
-  });
+  // Single series fetch: source + qboAccountId (from main) + accountingMethod (from branch).
+  // QuickBooks is scoped by company not practice — drop practice_id when source=quickbooks.
+  const { data, isLoading, isError } = useFinanceSeries(
+    source === 'quickbooks' ? null : practiceId,
+    null,  // date range threaded via months count + local slice
+    source,
+    qboAccountId,
+    { months: fetchMonths, accountingMethod: filters.method },
+  );
 
   const allMonths: FinanceMonth[] = data?.months ?? [];
-  const basisLabel = BASIS_LABEL[data?.basis ?? 'revenue-only'] ?? BASIS_LABEL['revenue-only'];
+
+  // Per-source provenance note (from main).
+  const SOURCE_NOTE: Record<FinanceSource, string> = {
+    combined: BASIS_LABEL[data?.basis ?? 'revenue-only'] ?? BASIS_LABEL['revenue-only'],
+    dentally: 'Dentally — real settled/billed revenue · no cost data, profit £0',
+    quickbooks: 'QuickBooks — real P&L (revenue + costs) from connected companies',
+  };
+  const basisLabel = SOURCE_NOTE[source];
 
   // In-scope months + the pivoted columns.
   const scopeMonths = useMemo(() => sliceMonths(allMonths, scope.from, scope.to), [allMonths, scope.from, scope.to]);
@@ -132,7 +144,6 @@ export default function ProfitScreen() {
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(html); w.document.close(); w.focus();
-    // Print once: onload fires on Chromium; the timeout is the Safari fallback.
     let printed = false;
     const printOnce = () => { if (!printed) { printed = true; try { w.print(); } catch { /* closed */ } } };
     w.onload = printOnce;
@@ -145,7 +156,9 @@ export default function ProfitScreen() {
       <div className="mb-6 flex justify-between items-start gap-4 flex-wrap">
         <div>
           <h1 className="display text-3xl font-bold">Profit &amp; Loss</h1>
-          <p className="text-sm text-ink-muted">{filters.method === 'cash' ? 'Cash' : 'Accrual'} basis · {basisLabel}</p>
+          <p className="text-sm text-ink-muted">
+            {filters.method === 'cash' ? 'Cash' : 'Accrual'} basis · {basisLabel}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setPlModalOpen(true)} className="font-semibold"
@@ -161,21 +174,17 @@ export default function ProfitScreen() {
 
       <ManualPLModal open={plModalOpen} onClose={() => setPlModalOpen(false)} practiceId={practiceId} />
 
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      {/* Source toggle + QBO company selector (from main) */}
+      <ProfitSourceBar
+        source={source}
+        onSourceChange={setSource}
+        accountId={qboAccountId}
+        onAccountChange={setQboAccountId}
+      />
+      {/* QuickBooks is scoped by company, not practice — hide the practice tabs when active. */}
+      {source !== 'quickbooks' && <PracticeTabs value={practiceId} onChange={setPracticeId} />}
 
-      {(qbAccounts?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-muted)', textTransform: 'uppercase' }}>QuickBooks company</span>
-          <select value={companyId ?? ''} onChange={(e) => setCompanyId(e.target.value || null)}
-            style={{ padding: '5px 8px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6 }}>
-            <option value="">All companies</option>
-            {qbAccounts!.map((a) => (
-              <option key={a.id} value={a.id}>{a.company_name || a.label || a.id.slice(0, 8)}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
+      {/* QuickBooks-style filter bar: date range, groupBy, accounting method, compare columns. */}
       <QbFilterBar value={filters} onChange={setFilters} />
       <FinanceToolbar />
 
@@ -185,19 +194,45 @@ export default function ProfitScreen() {
           <div className="text-sm text-ink-muted">The analytics service did not respond. Refresh to retry.</div>
         </div>
       )}
+
+      {/* Source-aware empty state (from main) */}
       {!hasRevenue && !isError && !isLoading && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
-          <div className="font-semibold">No settled payments in this period</div>
-          <div className="text-sm text-ink-muted">Revenue here is real settled payments{practiceId ? ' for this practice' : ''}. Once payments land, the P&amp;L fills in automatically.</div>
+          {source === 'quickbooks' ? (
+            <>
+              <div className="font-semibold">No QuickBooks P&amp;L in this period</div>
+              <div className="text-sm text-ink-muted">
+                This view is built only from connected QuickBooks companies
+                {qboAccountId ? ' (selected company)' : ''}. Connect a QuickBooks
+                company and sync, or switch the data source above.
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="font-semibold">No settled payments in this period</div>
+              <div className="text-sm text-ink-muted">
+                Revenue here is real settled payments{practiceId ? ' for this practice' : ''}.
+                Once payments land, the P&amp;L fills in automatically.
+              </div>
+            </>
+          )}
         </div>
       )}
-      {!costsAvailable && !isError && !isLoading && hasRevenue && (
+
+      {/* Costs warning: method-aware copy (from branch) + source hint (from main) */}
+      {!costsAvailable && !isError && !isLoading && hasRevenue && source !== 'quickbooks' && (
         <div className="card-padded mb-4" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">Costs &amp; profit shown as £0</div>
           <div className="text-sm text-ink-muted">
             {filters.method === 'cash'
               ? 'No cash-basis cost data yet. Cash figures appear after a QuickBooks re-sync; Xero/manual actuals are accrual-only.'
-              : 'Revenue is real (settled payments) but we have no cost data for this period. Connect Xero/QuickBooks or enter P&L actuals.'}
+              : <>
+                  Revenue is real (settled payments). We have no cost data — Dentally
+                  doesn&rsquo;t provide it — so cost and profit lines are £0, not estimated.
+                  {source === 'dentally'
+                    ? ' Switch to QuickBooks or Combined for cost data.'
+                    : ' Connect Xero/QuickBooks or enter P&L actuals for real costs.'}
+                </>}
           </div>
         </div>
       )}
@@ -231,7 +266,7 @@ export default function ProfitScreen() {
         )}
       </div>
 
-      {/* P&L matrix */}
+      {/* P&L matrix (QuickBooks-style: line items × time-period columns) */}
       {renderCols.length > 0 && (
         <div className="card" style={{ overflowX: 'auto' }}>
           <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)' }}>

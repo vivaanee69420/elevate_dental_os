@@ -9,9 +9,12 @@ import {
   createBoardSchedule,
   updateBoardSchedule,
   deleteBoardSchedule,
+  fetchTurnoverSource,
+  updateTurnoverSource,
   type BoardReport,
   type EmailResult,
   type BoardSchedule,
+  type TurnoverSource,
 } from './board-report-api';
 
 // Generate is a MUTATION (token cost) — fired by the Generate button against the
@@ -19,14 +22,32 @@ import {
 export function useGenerateBoardReport() {
   const sp = useScopePeriod();
   return useMutation<BoardReport, Error>({
-    mutationFn: () => generateBoardReport(sp.win),
+    mutationFn: () => generateBoardReport(sp.win, sp.scope),
   });
 }
 
 export function useEmailBoardReport() {
   const sp = useScopePeriod();
   return useMutation<EmailResult, Error, string>({
-    mutationFn: (recipientEmail: string) => emailBoardReport(sp.win, recipientEmail),
+    mutationFn: (recipientEmail: string) => emailBoardReport(sp.win, recipientEmail, sp.scope),
+  });
+}
+
+const TURNOVER_SOURCE_KEY = ['turnover-source'];
+
+export function useTurnoverSource() {
+  return useQuery<{ turnoverSource: TurnoverSource }>({
+    queryKey: TURNOVER_SOURCE_KEY,
+    queryFn: fetchTurnoverSource,
+    staleTime: 60_000,
+  });
+}
+
+export function useSaveTurnoverSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (turnoverSource: TurnoverSource) => updateTurnoverSource(turnoverSource),
+    onSuccess: () => qc.invalidateQueries({ queryKey: TURNOVER_SOURCE_KEY }),
   });
 }
 

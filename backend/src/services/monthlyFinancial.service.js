@@ -63,15 +63,17 @@ export function sumBucketsInWindow(byPeriod, fromYmd, toYmd) {
 }
 
 // Map a resolved bucket set -> { revenue, costs } shaped for formulas.calculatePL.
-// Actuals carry no 'associates'/'property'/'marketing' bucket (those live inside
-// 'staff'/'overhead' depending on how the org books them), and 'tax' is below the
-// operating line so it is excluded from operating costs — matching the baseline
-// P&L which has no tax cost line. Documented in docs/FORMULAS.md.
+// 'associates' is fee-earning clinician pay split out of the ledger by the sync
+// heuristic (account names like "Associate/Principal salary", "hygienist") — 0
+// when the org's chart of accounts doesn't name them separately. 'property'/
+// 'marketing' have no dedicated actuals bucket (they live inside 'overhead'), and
+// 'tax' is below the operating line so it is excluded from operating costs —
+// matching the baseline P&L which has no tax cost line. Documented in docs/FORMULAS.md.
 export function plInputFromBuckets(b = {}) {
     return {
         revenue: b.revenue || 0,
         costs: {
-            associates: 0,
+            associates: b.associates || 0,
             staff: b.staff || 0,
             lab: b.lab || 0,
             materials: b.materials || 0,
@@ -85,7 +87,7 @@ export function plInputFromBuckets(b = {}) {
 // Map a resolved bucket set -> the /profit finance-series month grouping.
 export function financeSeriesRowFromBuckets(month, b = {}) {
     const revenue = b.revenue || 0;
-    const associatePay = 0;
+    const associatePay = b.associates || 0;
     const staffCosts = b.staff || 0;
     const labMaterials = (b.lab || 0) + (b.materials || 0);
     const opex = (b.overhead || 0) + (b.other || 0);

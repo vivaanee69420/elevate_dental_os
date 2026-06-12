@@ -14,6 +14,7 @@ import * as valuationInputs_repository_1 from "../repositories/valuationInputs.r
 import * as chairConfig_repository_1 from "../repositories/chairConfig.repository.js";
 import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { boardReportRepository } from "../repositories/boardReport.repository.js";
+import { orgSettingsRepository } from "../repositories/orgSettings.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
@@ -502,8 +503,8 @@ export const analyticsService = {
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
     // hasAny=false ⇒ callers fall back to the baseline projection unchanged.
-    async _actualsBundle(orgId, practiceId = null, { accountingMethod = 'accrual', integrationAccountId = null } = {}) {
-        const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId, { integrationAccountId });
+    async _actualsBundle(orgId, practiceId = null, { source = null, accountId = null, accountingMethod = 'accrual' } = {}) {
+        const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId, { source, accountId });
         const rows = practiceId
             ? (Array.isArray(all) ? all : []).filter((r) => r.practice_id === practiceId)
             : all;
@@ -561,18 +562,28 @@ export const analyticsService = {
     // never the baseline projection (FORMULAS §1a). When there is no real cost
     // source we return costsAvailable:false and no rows — the client shows a
     // "connect Xero / enter actuals" empty state rather than fabricating ratios.
-    async plBenchmark(orgId, { practiceId = null } = {}) {
-        const actuals = await this._actualsBundle(orgId, practiceId);
+    async plBenchmark(orgId, { practiceId = null, source = 'combined', accountId = null } = {}) {
+        const src = (source === 'dentally' || source === 'quickbooks') ? source : 'combined';
+        // Dentally carries no cost data, so a cost/profit benchmark is meaningless
+        // for that source → honest empty state (never an estimate, FORMULAS §1b).
+        if (src === 'dentally') {
+            return { costsAvailable: false, basis: 'none', revenue: 0, rows: [], overspendPence: 0, periodsCovered: 0, source: 'dentally' };
+        }
+        // QuickBooks source: benchmark built only from QBO actuals (optionally one
+        // company); a QB company is not practice-mapped, so practiceId is ignored.
+        const actuals = src === 'quickbooks'
+            ? await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId })
+            : await this._actualsBundle(orgId, practiceId);
         const a = actuals.annual || {};
         const revenue = a.revenue || 0;
-        const costTotal = (a.staff || 0) + (a.lab || 0) + (a.materials || 0) + (a.overhead || 0) + (a.other || 0);
+        const costTotal = (a.associates || 0) + (a.staff || 0) + (a.lab || 0) + (a.materials || 0) + (a.overhead || 0) + (a.other || 0);
         if (!actuals.hasAny || revenue <= 0 || costTotal <= 0) {
-            return { costsAvailable: false, basis: 'none', revenue, rows: [], overspendPence: 0, periodsCovered: actuals.periodsCovered };
+            return { costsAvailable: false, basis: 'none', revenue, rows: [], overspendPence: 0, periodsCovered: actuals.periodsCovered, source: src };
         }
         const plInput = plInputFromBuckets(a);
         const pl = (0, formulas_1.calculatePL)(plInput);
         const result = (0, formulas_1.calculateProfitBenchmark)({ revenue: plInput.revenue, costs: plInput.costs, netProfit: pl.netProfit });
-        return { ...result, marginPct: pl.marginPct, netProfit: pl.netProfit, totalCosts: pl.totalCosts, costsAvailable: true, basis: 'actuals', periodsCovered: actuals.periodsCovered };
+        return { ...result, marginPct: pl.marginPct, netProfit: pl.netProfit, totalCosts: pl.totalCosts, costsAvailable: true, basis: 'actuals', periodsCovered: actuals.periodsCovered, source: src };
     },
     // P&L & Margin (GM Intelligence OS, T11). Scope/period-aware group P&L
     // statement + per-entity breakdown from REAL monthly_financials actuals
@@ -1631,11 +1642,34 @@ export const analyticsService = {
     //             non-zero-revenue month has real costs.
     // basis: 'actuals' (all real costs) | 'mixed' | 'revenue-only' (real revenue,
     // costs/profit 0 — connect Xero for costs).
-    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null, accountingMethod = 'accrual', integrationAccountId = null } = {}) {
+    async financeSeries(orgId, { months = 12, now = () => new Date(), practiceId = null, from = null, to = null, source = 'combined', accountId = null, accountingMethod = 'accrual' } = {}) {
         const ref = now();
         const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
+        const src = (source === 'dentally' || source === 'quickbooks') ? source : 'combined';
+
+        // QuickBooks source: the P&L is built ENTIRELY from QBO actuals
+        // (revenue + costs in monthly_financials, source='quickbooks'), optionally
+        // scoped to one connected company (accountId). No Dentally revenue feed,
+        // and no practice scoping — a QB company is not practice-mapped.
+        if (src === 'quickbooks') {
+            const actuals = await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId, accountingMethod });
+            let qbMonths = 0;
+            const series = keys.map((month) => {
+                if (actuals.byPeriod.has(month)) {
+                    qbMonths++;
+                    return { ...financeSeriesRowFromBuckets(month, actuals.byPeriod.get(month)), costsAvailable: true };
+                }
+                return { month, revenue: 0, associatePay: 0, staffCosts: 0, labMaterials: 0, opex: 0, profit: 0, costsAvailable: false };
+            });
+            return { basis: qbMonths > 0 ? 'actuals' : 'revenue-only', costsAvailable: qbMonths > 0, source: 'quickbooks', months: series };
+        }
+
         const [actuals, dayRows, billedRows] = await Promise.all([
-            this._actualsBundle(orgId, practiceId, { accountingMethod, integrationAccountId }),
+            // Dentally source: revenue only — Dentally provides no cost data, so the
+            // cost actuals bundle is skipped and costs/profit stay £0 (not estimated).
+            src === 'dentally'
+                ? Promise.resolve({ byPeriod: new Map(), annual: {}, hasAny: false, periodsCovered: 0 })
+                : this._actualsBundle(orgId, practiceId, { accountingMethod }),
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             // Billed production by month (invoice_items) — the accrual turnover feed
             // the Business Hub uses, so Value & Growth's TTM base agrees with the
@@ -1676,7 +1710,7 @@ export const analyticsService = {
         const basis = revenueOnlyMonths === 0 && actualCostMonths > 0 ? 'actuals'
             : actualCostMonths > 0 && revenueOnlyMonths > 0 ? 'mixed'
             : 'revenue-only';
-        return { basis, costsAvailable: revenueOnlyMonths === 0 && actualCostMonths > 0, months: series };
+        return { basis, costsAvailable: revenueOnlyMonths === 0 && actualCostMonths > 0, source: src, months: series };
     },
     // 13-week REAL cash view (backward-looking, no projection, no baseline).
     // Each week = EXACT settled receipts that week (RPC daily sums bucketed by
@@ -2217,18 +2251,26 @@ export const analyticsService = {
     // shows, treatment-plan value, banked receipts) and runs them through
     // calculateRevenueLeakage. The window total is annualised by the caller's
     // window length. `rates` (0-100 per pool) tunes the recoverable share.
-    async revenueLeakage(orgId, { days = 90, since = null, until = null, rates = {}, now = () => new Date() } = {}) {
+    async revenueLeakage(orgId, { days = 90, since = null, until = null, rates = {}, practiceId = null, now = () => new Date() } = {}) {
         const nowMs = now().getTime();
         const sinceISO = since || new Date(nowMs - days * 86400000).toISOString();
         const untilISO = until || null;
         const windowEndMs = untilISO ? Date.parse(untilISO) : nowMs;
         const windowDays = Math.max(1, Math.round((windowEndMs - Date.parse(sinceISO)) / 86400000));
-        const [revRows, apptRows, planVal, cashRows] = await Promise.all([
+        const [revRowsAll, apptRowsAll, planVal, cashRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.treatmentPlanValueByStatus(orgId, sinceISO, untilISO),
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO),
+            // cashRows pre-filtered in SQL when scoped (p_practice).
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
         ]);
+        // Practice scope: narrow the per-practice feeds to the selected practice.
+        // treatment_plans carry no practice_id, so the plans pool can't be
+        // attributed — zero presented/accepted when scoped (honest, not group-wide).
+        const mine = (r) => r.practice_id === practiceId;
+        const revRows = practiceId ? revRowsAll.filter(mine) : revRowsAll;
+        const apptRows = practiceId ? apptRowsAll.filter(mine) : apptRowsAll;
+        const scopedPlanVal = practiceId ? { presentedPence: 0, acceptedPence: 0 } : planVal;
         const num = (v) => Number(v || 0);
         const revenuePence = revRows.reduce((s, r) => s + num(r.pence), 0);
         const appointments = apptRows.reduce((s, r) => s + num(r.total), 0);
@@ -2237,8 +2279,8 @@ export const analyticsService = {
         const result = formulas_1.calculateRevenueLeakage(
             {
                 revenuePence,
-                presentedPlanPence: planVal.presentedPence,
-                acceptedPlanPence: planVal.acceptedPence,
+                presentedPlanPence: scopedPlanVal.presentedPence,
+                acceptedPlanPence: scopedPlanVal.acceptedPence,
                 appointments,
                 noShows,
                 cashCollectedPence,
@@ -2274,11 +2316,11 @@ export const analyticsService = {
             asPctOfRevenue: revenuePence > 0
                 ? formulas_1.pct((result.windowTotalPence / revenuePence) * 100)
                 : 0,
-            inputs: { revenuePence, appointments, noShows, cashCollectedPence, ...planVal },
+            inputs: { revenuePence, appointments, noShows, cashCollectedPence, ...scopedPlanVal },
             lines,
         };
     },
-    async businessHub(orgId, { days = 90, since = null, until = null, label = null, now = () => new Date() } = {}) {
+    async businessHub(orgId, { days = 90, since = null, until = null, label = null, practiceId = null, now = () => new Date() } = {}) {
         // Window: an explicit [since, until] (a picked month/day) takes priority;
         // otherwise fall back to the trailing N-day window (until open).
         const sinceISO = since || new Date(now().getTime() - days * 86400000).toISOString();
@@ -2290,7 +2332,7 @@ export const analyticsService = {
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
         const adFromDate = sinceISO.slice(0, 10);
         const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 86400000) : now()).toISOString().slice(0, 10);
-        const [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows] = await Promise.all([
+        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -2301,9 +2343,10 @@ export const analyticsService = {
             analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
             analytics_repository_1.analyticsRepository.hasNoShowData(orgId),
             analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, sinceISO, untilISO),
-            // Cash banked in window — settled receipts (payments processed), org-wide.
+            // Cash banked in window — settled receipts (payments processed).
+            // Pre-filtered in SQL when scoped to a practice (p_practice).
             // Distinct from turnover (settled invoices); the gap is outstanding/debtors.
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, null, untilISO),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             // Real ad-platform leads (Google + Meta conversions) + Dentally new
             // patients by registration ("joined") date — matches Dentally's New
             // Patients report. Live sources for the Leads / New Patients KPIs (CRM
@@ -2311,6 +2354,25 @@ export const analyticsService = {
             analytics_repository_1.analyticsRepository.adLeadsByProvider(orgId, adFromDate, adToDate),
             analytics_repository_1.analyticsRepository.newPatientsRegisteredByPractice(orgId, sinceISO, untilISO),
         ]);
+        // Practice scope (board report): collapse the group view to one practice by
+        // narrowing every per-practice feed; group totals below then sum to it.
+        // Feeds with no practice attribution degrade honestly: the treatment_plans
+        // funnel (no practice_id) is zeroed, ad-platform leads (ad_metrics.practice_id
+        // unreliable — usually one account per group) are dropped, and P&L margin +
+        // baseline target stay org-level (no per-practice P&L feed exists). cashRows
+        // is already practice-filtered in SQL above.
+        if (practiceId) {
+            const mine = (r) => r.practice_id === practiceId;
+            practices = practices.filter((p) => p.id === practiceId);
+            revRows = revRows.filter(mine);
+            apptRows = apptRows.filter(mine);
+            leadRows = leadRows.filter(mine);
+            closedRows = closedRows.filter(mine);
+            revLineRows = revLineRows.filter(mine);
+            newPatientRows = newPatientRows.filter(mine);
+            treatments = { started: 0, completed: 0, closed_value_pence: 0 };
+            adLeadsBy = new Map();
+        }
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         const num = (v) => Number(v || 0);
         // Per-practice new patients (Dentally registration date) -> map by practice.
@@ -2411,10 +2473,11 @@ export const analyticsService = {
             : days * 86400000;
         const prevUntilISO = sinceISO;
         const prevSinceISO = new Date(new Date(sinceISO).getTime() - winMs).toISOString();
-        const [prevBillRows, prevCashRows] = await Promise.all([
+        const [prevBillRowsAll, prevCashRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, prevSinceISO, prevUntilISO),
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, prevSinceISO, null, prevUntilISO),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, prevSinceISO, practiceId, prevUntilISO),
         ]);
+        const prevBillRows = practiceId ? prevBillRowsAll.filter((r) => r.practice_id === practiceId) : prevBillRowsAll;
         const prevRevenuePence = prevBillRows.reduce((s, r) => s + num(r.fee_pence), 0);
         const prevCashPence = prevCashRows.reduce((s, r) => s + num(r.pence), 0);
         // null when there's no prior-period base (don't show ±∞ / a fake 0%).
@@ -2499,6 +2562,17 @@ export const analyticsService = {
         };
     },
     // ------------------------------------------------------------------------
+    // Group turnover source (owner toggle). Defaults to 'dentally' (today's
+    // behaviour, no double-count) when no row exists. Read by boardReport.
+    async getTurnoverSource(orgId) {
+        const row = await orgSettingsRepository.get(orgId);
+        return row?.turnover_source || 'dentally';
+    },
+    async saveTurnoverSource(orgId, turnoverSource, userId) {
+        await orgSettingsRepository.upsert(orgId, { turnover_source: turnoverSource }, userId);
+        return { turnoverSource };
+    },
+    // ------------------------------------------------------------------------
     // Board Report Generator (DentaCFO gap module, Phase 2). Assembles a board
     // pack from the SAME live rollups as Business Hub + Revenue Leakage (no
     // stored snapshot): group turnover/margin, conversion, banked cash, top vs
@@ -2506,17 +2580,42 @@ export const analyticsService = {
     // the executive summary + RAG priorities; on any failure / no API key it
     // falls back to a deterministic, data-driven pack (HTTP 200 always). Money
     // is integer pence throughout.
-    async boardReport(orgId, { since = null, until = null, label = null, now = () => new Date() } = {}) {
-        const [hub, leak] = await Promise.all([
-            this.businessHub(orgId, { since, until, label, now }),
-            this.revenueLeakage(orgId, { since, until, now }),
+    async boardReport(orgId, { since = null, until = null, label = null, practiceId = null, now = () => new Date() } = {}) {
+        const [hub, leak, turnoverSource] = await Promise.all([
+            this.businessHub(orgId, { since, until, label, practiceId, now }),
+            this.revenueLeakage(orgId, { since, until, practiceId, now }),
+            this.getTurnoverSource(orgId),
         ]);
         const g = hub.group;
+        // Scope label for the AI narrative: the practice name when scoped, else Group.
+        const scopeLabel = practiceId ? (hub.practices?.[0]?.name || 'Practice') : 'Group';
         const periodLabel = label || (until ? `${(since || '').slice(0, 10)} → ${until.slice(0, 10)}` : `last ${hub.period.days} days`);
+
+        // Group turnover source (owner toggle). Dentally turnover = invoice_items
+        // clinical production (hub.group.revenuePence). QuickBooks turnover = QBO
+        // P&L revenue (monthly_financials), which is ORG-LEVEL only — QBO has no
+        // practice attribution — so when the pack is scoped to one practice we fall
+        // back to Dentally (the QBO portion can't be split per practice).
+        const dentallyTurnoverPence = g.revenuePence;
+        const wantsQbo = !practiceId && (turnoverSource === 'quickbooks' || turnoverSource === 'both');
+        const qboTurnoverPence = wantsQbo
+            ? await analytics_repository_1.analyticsRepository.quickbooksTurnover(orgId, since, until)
+            : 0;
+        const effectiveSource = practiceId && turnoverSource !== 'dentally' ? 'dentally' : turnoverSource;
+        const turnoverPence = effectiveSource === 'quickbooks'
+            ? qboTurnoverPence
+            : effectiveSource === 'both'
+                ? dentallyTurnoverPence + qboTurnoverPence
+                : dentallyTurnoverPence;
+        const TURNOVER_LABEL = { dentally: 'Dentally', quickbooks: 'QuickBooks', both: 'Dentally + QuickBooks' };
+        const turnoverSourceLabel = (practiceId && turnoverSource !== 'dentally')
+            ? 'Dentally (per-practice; QuickBooks is group-only)'
+            : TURNOVER_LABEL[effectiveSource];
+
         // Annualise window turnover by the leakage window length (same window).
         const days = Math.max(1, leak.windowDays);
-        const revAnnualPence = Math.round((g.revenuePence * 365) / days);
-        const ebitdaWindowPence = Math.round((g.revenuePence * (g.marginPct || 0)) / 100);
+        const revAnnualPence = Math.round((turnoverPence * 365) / days);
+        const ebitdaWindowPence = Math.round((turnoverPence * (g.marginPct || 0)) / 100);
         const practiceRows = hub.practices || [];
         const top = practiceRows[0] || null; // already sorted by revenue desc
         // Weakest = highest no-show rate among practices with appointments.
@@ -2527,7 +2626,7 @@ export const analyticsService = {
         const biggest = (leak.lines || [])[0] || null; // sorted by annualPence desc
 
         const metrics = {
-            revenuePence: g.revenuePence,
+            revenuePence: turnoverPence,
             revenueAnnualisedPence: revAnnualPence,
             revenueTargetPence: g.revenueTargetPence,
             marginPct: g.marginPct,
@@ -2547,16 +2646,25 @@ export const analyticsService = {
             topPractice: top ? { name: top.name, revenuePence: top.revenuePence } : null,
             weakPractice: weak ? { name: weak.name, noShowRate: weak.noShowRate } : null,
             biggestLeak: biggest ? { label: biggest.label, annualPence: biggest.annualPence, owner: biggest.owner } : null,
+            // Owner-selected turnover source + the integration feeds behind each
+            // headline card (surfaced as a per-card caption in the UI).
+            turnoverSource: effectiveSource,
+            sources: {
+                turnover: turnoverSourceLabel,
+                margin: 'Xero + QuickBooks + manual',
+                leakage: 'Dentally + QuickBooks',
+                conversion: 'Google Ads + Meta Ads + GHL · Dentally new patients',
+            },
         };
 
-        const empty = g.revenuePence === 0 && g.appointments === 0 && g.leads === 0;
+        const empty = turnoverPence === 0 && g.appointments === 0 && g.leads === 0;
         let summary = [];
         let priorities = [];
         let basis = 'deterministic';
         if (!empty) {
             try {
                 const ai = await claude_1.generateBoardReport(orgId, {
-                    scopeLabel: 'Group',
+                    scopeLabel,
                     periodLabel,
                     data: metrics,
                 });
@@ -2580,8 +2688,8 @@ export const analyticsService = {
     // Generate the pack + email it now to one address via SES. Returns the
     // report plus a delivery result. SES failure (no creds in dev) is NOT an
     // error — the caller surfaces {sent:false} and the UI offers a mailto draft.
-    async emailBoardReport(orgId, { recipientEmail, since = null, until = null, label = null, now = () => new Date() } = {}) {
-        const report = await this.boardReport(orgId, { since, until, label, now });
+    async emailBoardReport(orgId, { recipientEmail, since = null, until = null, label = null, practiceId = null, now = () => new Date() } = {}) {
+        const report = await this.boardReport(orgId, { since, until, label, practiceId, now });
         const html = renderBoardReportHtml(report);
         const subject = `Board Report — ${report.period.label}`;
         let delivery;

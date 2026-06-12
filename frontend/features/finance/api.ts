@@ -21,30 +21,41 @@ export interface FinanceMonth {
   costsAvailable: boolean; // true only when this month's costs are real (Xero/manual)
 }
 
+// /profit data-source toggle. 'combined' = Dentally revenue + all-source costs
+// (the original behaviour); 'dentally' = revenue only, £0 costs; 'quickbooks' =
+// full P&L (revenue + costs) from connected QuickBooks companies only.
+export type FinanceSource = 'combined' | 'dentally' | 'quickbooks';
+
+// QuickBooks-parity matrix options: report-window length + accounting basis.
 export interface FinanceSeriesOpts {
   months?: number;                       // default 12 (max 24, backend-capped)
   accountingMethod?: 'accrual' | 'cash'; // default accrual
-  integrationAccountId?: string | null;  // QBO company filter
 }
 
 export async function getFinanceSeries(
   practiceId?: string | null,
   range?: DateRange | null,
+  source: FinanceSource = 'combined',
+  accountId?: string | null,
   opts?: FinanceSeriesOpts,
 ): Promise<{
   error?: string;
   basis?: 'actuals' | 'mixed' | 'revenue-only';
   costsAvailable: boolean;
+  source?: FinanceSource;
   months: FinanceMonth[];
 }> {
+  // QuickBooks is scoped by company (accountId), not practice — drop practice_id.
   const months = opts?.months ?? 12;
-  const pp = practiceId ? `&practice_id=${practiceId}` : '';
+  const pp = source !== 'quickbooks' && practiceId ? `&practice_id=${practiceId}` : '';
+  const sp = source !== 'combined' ? `&source=${source}` : '';
+  const ap = source === 'quickbooks' && accountId ? `&account_id=${accountId}` : '';
   const am = `&accounting_method=${opts?.accountingMethod ?? 'accrual'}`;
-  const ia = opts?.integrationAccountId ? `&integration_account_id=${opts.integrationAccountId}` : '';
-  const r = await api(`/api/analytics/finance-series?months=${months}${pp}${rangeQS(range)}${am}${ia}`);
+  const r = await api(`/api/analytics/finance-series?months=${months}${pp}${sp}${ap}${am}${rangeQS(range)}`);
   if (r?.error) return { error: r.error, costsAvailable: false, months: [] };
   return {
     basis: r.basis,
+    source: r.source,
     costsAvailable: !!r.costsAvailable,
     months: (r.months ?? []).map((m: any) => ({
       month: m.month,
@@ -57,24 +68,6 @@ export async function getFinanceSeries(
       costsAvailable: !!m.costsAvailable,
     })),
   };
-}
-
-export interface QuickbooksAccount {
-  id: string;
-  company_name: string | null;
-  label: string | null;
-  status: string;
-}
-
-export async function getQuickbooksAccounts(): Promise<QuickbooksAccount[]> {
-  const r = await api('/api/integrations/quickbooks/accounts');
-  if (r?.error) return [];
-  return (r.accounts ?? []).map((a: any) => ({
-    id: a.id,
-    company_name: a.company_name ?? null,
-    label: a.label ?? null,
-    status: a.status,
-  }));
 }
 
 export interface CashflowWeek {
@@ -441,9 +434,18 @@ export interface ProfitBenchmark {
   rows: BenchmarkRow[];
 }
 
-export async function getProfitBenchmark(practiceId?: string | null): Promise<ProfitBenchmark> {
-  const pp = practiceId ? `?practice_id=${practiceId}` : '';
-  const r = await api(`/api/analytics/pl-benchmark${pp}`);
+export async function getProfitBenchmark(
+  practiceId?: string | null,
+  source: FinanceSource = 'combined',
+  accountId?: string | null,
+): Promise<ProfitBenchmark> {
+  const qs = new URLSearchParams();
+  // QuickBooks is scoped by company, not practice — drop practice_id.
+  if (source !== 'quickbooks' && practiceId) qs.set('practice_id', practiceId);
+  if (source !== 'combined') qs.set('source', source);
+  if (source === 'quickbooks' && accountId) qs.set('account_id', accountId);
+  const q = qs.toString();
+  const r = await api(`/api/analytics/pl-benchmark${q ? `?${q}` : ''}`);
   return {
     costsAvailable: !!r.costsAvailable,
     basis: r.basis ?? 'none',

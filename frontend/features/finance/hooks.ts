@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { listQboAccounts } from '@/features/integrations/api';
 import {
   getFinanceSeries,
   getCashflow,
@@ -7,7 +8,6 @@ import {
   getProfitBenchmark,
   getValuationBase,
   getPaymentSourceBreakdown,
-  getQuickbooksAccounts,
   recordManualPayment,
   recordMonthlyFinancial,
   listMonthlyFinancials,
@@ -16,27 +16,32 @@ import {
   type MonthlyFinancialInput,
   type FinanceSeriesOpts,
   type DateRange,
+  type FinanceSource,
 } from './api';
 
 export function useFinanceSeries(
   practiceId: string | null = null,
   range?: DateRange | null,
+  source: FinanceSource = 'combined',
+  accountId: string | null = null,
   opts?: FinanceSeriesOpts,
 ) {
   return useQuery({
     queryKey: [
       'finance-series', practiceId, range?.from ?? null, range?.to ?? null,
-      opts?.months ?? 12, opts?.accountingMethod ?? 'accrual', opts?.integrationAccountId ?? null,
+      source, accountId, opts?.months ?? 12, opts?.accountingMethod ?? 'accrual',
     ],
-    queryFn: () => getFinanceSeries(practiceId, range, opts),
+    queryFn: () => getFinanceSeries(practiceId, range, source, accountId, opts),
   });
 }
 
-export function useQuickbooksAccounts() {
+// Connected QuickBooks companies — feeds the /profit QBO company selector.
+// Only 'active' companies are offered as a scope (others have no synced data).
+export function useQboAccounts() {
   return useQuery({
-    queryKey: ['quickbooks-accounts'],
-    queryFn: getQuickbooksAccounts,
-    staleTime: 5 * 60 * 1000,
+    queryKey: ['qbo-accounts'],
+    queryFn: listQboAccounts,
+    staleTime: 60_000,
   });
 }
 
@@ -61,10 +66,14 @@ export function useFinancial(dsoDays = 45, payableDays = 30, practiceId: string 
   });
 }
 
-export function useProfitBenchmark(practiceId: string | null = null) {
+export function useProfitBenchmark(
+  practiceId: string | null = null,
+  source: FinanceSource = 'combined',
+  accountId: string | null = null,
+) {
   return useQuery({
-    queryKey: ['pl-benchmark', practiceId],
-    queryFn: () => getProfitBenchmark(practiceId),
+    queryKey: ['pl-benchmark', practiceId, source, accountId],
+    queryFn: () => getProfitBenchmark(practiceId, source, accountId),
   });
 }
 

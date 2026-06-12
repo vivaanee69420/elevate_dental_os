@@ -28,7 +28,7 @@ import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 
 const MINOR_VERSION = '65';
-const BUCKETS = ['revenue', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
+const BUCKETS = ['revenue', 'associates', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
 const BACKFILL_MONTHS = 12;
 // QuickBooks reports each P&L on a Cash or Accrual basis; we store both.
 // 'accrual' is QB's default (omit the param); 'cash' adds accounting_method=Cash.
@@ -49,7 +49,11 @@ function toPence(amount) {
 function heuristicBucket(accountName, sectionTitle) {
     const s = `${sectionTitle || ''} ${accountName || ''}`.toLowerCase();
     if (/income|revenue|sales|turnover/.test(s)) return 'revenue';
-    if (/wage|salary|salaries|payroll|staff|associate|locum/.test(s)) return 'staff';
+    // Fee-earning clinician pay (the 45% "dentist/associate" benchmark line) MUST
+    // be tested before the staff line — account names like "Associate salary" /
+    // "Principal salary" carry "salary" and would otherwise fold into support staff.
+    if (/associate|locum|principal|hygien|hygenist|therapist|self.?employed|dentist/.test(s)) return 'associates';
+    if (/wage|salary|salaries|payroll|staff/.test(s)) return 'staff';
     if (/\blab\b|laboratory/.test(s)) return 'lab';
     if (/material|consumable|stock|supplies/.test(s)) return 'materials';
     if (/\btax\b|corporation tax|vat/.test(s)) return 'tax';

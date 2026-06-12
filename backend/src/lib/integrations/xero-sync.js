@@ -21,7 +21,7 @@ import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 
 const REPORTS_BASE = 'https://api.xero.com/api.xro/2.0/Reports';
-const BUCKETS = ['revenue', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
+const BUCKETS = ['revenue', 'associates', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
 
 function toPence(amount) {
     const n = Number(String(amount ?? '').replace(/[(),]/g, (m) => (m === '(' ? '-' : '')));
@@ -33,7 +33,11 @@ function toPence(amount) {
 function heuristicBucket(accountName, sectionTitle) {
     const s = `${sectionTitle || ''} ${accountName || ''}`.toLowerCase();
     if (/income|revenue|sales|turnover/.test(s)) return 'revenue';
-    if (/wage|salary|salaries|payroll|staff|associate|locum/.test(s)) return 'staff';
+    // Fee-earning clinician pay (the 45% "dentist/associate" benchmark line) MUST
+    // be tested before the staff line — account names like "Associate salary" /
+    // "Principal salary" carry "salary" and would otherwise fold into support staff.
+    if (/associate|locum|principal|hygien|hygenist|therapist|self.?employed|dentist/.test(s)) return 'associates';
+    if (/wage|salary|salaries|payroll|staff/.test(s)) return 'staff';
     if (/\blab\b|laboratory/.test(s)) return 'lab';
     if (/material|consumable|stock|supplies/.test(s)) return 'materials';
     if (/\btax\b|corporation tax|vat/.test(s)) return 'tax';
