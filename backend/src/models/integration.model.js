@@ -46,3 +46,11 @@ export const ghlAccountCreateSchema = zod_1.z.object({
 export const ghlAccountUpdateSchema = zod_1.z.object({
     label: zod_1.z.string().max(120).optional(),
 });
+// GHL dashboard query — optional single-account/practice filter + ISO window.
+// since/until default in the controller (trailing 30 days) when omitted.
+export const ghlDashboardQuerySchema = zod_1.z.object({
+    accountId: zod_1.z.string().uuid().optional(),
+    practiceId: zod_1.z.string().uuid().optional(),
+    since: zod_1.z.string().datetime().optional(),
+    until: zod_1.z.string().datetime().optional(),
+});
