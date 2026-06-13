@@ -66,6 +66,13 @@ export default function GoHighLevelPanel() {
           <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Private Integration Token (pit-…)" style={inp} />
           <input type="text" value={locId} onChange={(e) => setLocId(e.target.value)} placeholder="Location ID" style={inp} />
           <span className="text-ink-muted" style={{ fontSize: 10 }}>The token must be created inside the same GHL sub-account as the Location ID.</span>
+          <button
+            onClick={submitAdd}
+            disabled={add.isPending || !token.trim() || !locId.trim()}
+            style={{ alignSelf: 'flex-start', padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'white', cursor: 'pointer', opacity: (add.isPending || !token.trim() || !locId.trim()) ? 0.5 : 1 }}
+          >
+            {add.isPending ? 'Connecting…' : 'Connect'}
+          </button>
         </div>
       )}
 
