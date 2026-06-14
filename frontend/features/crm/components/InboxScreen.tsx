@@ -13,6 +13,8 @@ import { Skeleton } from '@/components/ui';
 import { useCommunications, useSendCommunication } from '../hooks';
 import { type Communication } from '../api';
 import { CRM_NAVY, agoLabel } from '../data';
+import { useGhlAccounts } from '@/features/integrations/hooks';
+import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
 // Per-channel accent colour (emoji indicators dropped per rule 7).
 const CHANNEL_COLOUR: Record<string, string> = {
@@ -151,13 +153,18 @@ function groupIntoThreads(rows: Communication[]): DerivedThread[] {
 
 /** CRM unified-inbox screen — backed by GET /api/comms. */
 export default function InboxScreen() {
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data: ghlData } = useGhlAccounts();
+
   const [filter, setFilter] = useState<string>('all');
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
   const sendMsg = useSendCommunication();
 
-  const { data, isLoading, error } = useCommunications();
+  const { data, isLoading, error } = useCommunications({
+    ...(accountId ? { integration_account_id: accountId } : {}),
+  });
 
   const threads = useMemo(
     () => groupIntoThreads(data?.communications ?? []),
@@ -235,6 +242,20 @@ export default function InboxScreen() {
           </p>
         </div>
       </div>
+
+      {ghlData && ghlData.accounts.length > 0 && (
+        <div className="mb-4">
+          <SubaccountFilterBar
+            accounts={ghlData.accounts.map((a) => ({
+              accountId: a.id,
+              label: a.label || 'GoHighLevel',
+              practiceId: a.practice_id ?? null,
+            })) as any}
+            selected={accountId}
+            onSelect={setAccountId}
+          />
+        </div>
+      )}
 
       {error && (
         <div

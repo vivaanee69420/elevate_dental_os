@@ -56,6 +56,7 @@ export interface LeadsListResponse {
 export interface LeadsListFilters {
   status?: LeadStatus;
   practice_id?: string;
+  integration_account_id?: string;
   assigned_to?: string;
   since?: string;
   ghl_pipeline_id?: string;
@@ -66,6 +67,7 @@ export function listLeads(filters: LeadsListFilters = {}): Promise<LeadsListResp
   const params = new URLSearchParams();
   if (filters.status) params.set('status', filters.status);
   if (filters.practice_id) params.set('practice_id', filters.practice_id);
+  if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
   if (filters.assigned_to) params.set('assigned_to', filters.assigned_to);
   if (filters.since) params.set('since', filters.since);
   if (filters.ghl_pipeline_id) params.set('ghl_pipeline_id', filters.ghl_pipeline_id);

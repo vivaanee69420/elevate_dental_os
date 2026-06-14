@@ -51,11 +51,17 @@ function LeadAcquisition() {
   );
 }
 
-export default function LeadsScreen() {
+export default function LeadsScreen({ overrideAccountId }: { overrideAccountId?: string | null }) {
   // Scope the leads list to the globally-selected practice (= GHL subaccount).
   const { scope } = useScopePeriod();
   const practiceId = scope !== 'all' && UUID_RE.test(scope) ? scope : undefined;
-  const { data } = useLeads(practiceId ? { practice_id: practiceId } : {});
+  
+  const isUsingGhlOverride = overrideAccountId !== undefined;
+  const { data } = useLeads(
+    isUsingGhlOverride
+      ? (overrideAccountId ? { integration_account_id: overrideAccountId } : {})
+      : (practiceId ? { practice_id: practiceId } : {})
+  );
   return (
     <div className="max-w-7xl mx-auto">
       <PageHeader title="Leads" subtitle="All enquiries across practices" />

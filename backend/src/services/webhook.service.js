@@ -221,7 +221,7 @@ export const webhookService = {
         if (!events || events.length === 0) return { received: true, ignored: true };
         const results = [];
         for (const { eventType, record } of events) {
-            results.push(await applyGhlWebhookEvent(orgId, eventType, record));
+            results.push(await applyGhlWebhookEvent(orgId, eventType, record, account?.id || null));
         }
         return { received: true, count: results.length, results };
     },

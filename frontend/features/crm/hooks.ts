@@ -7,10 +7,10 @@ import {
   type SendCommunicationInput,
 } from './api';
 
-export function useGhlWorkflows() {
+export function useGhlWorkflows(accountId?: string | null) {
   return useQuery({
-    queryKey: ['ghl-workflows'],
-    queryFn: fetchGhlWorkflows,
+    queryKey: ['ghl-workflows', accountId ?? 'all'],
+    queryFn: () => fetchGhlWorkflows(accountId),
     staleTime: 60_000,
   });
 }

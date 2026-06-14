@@ -40,6 +40,7 @@ export interface CommunicationsListFilters {
   contact_id?: string;
   lead_id?: string;
   channel?: Channel;
+  integration_account_id?: string;
 }
 
 export function fetchCommunications(
@@ -49,6 +50,7 @@ export function fetchCommunications(
   if (filters.contact_id) params.set('contact_id', filters.contact_id);
   if (filters.lead_id) params.set('lead_id', filters.lead_id);
   if (filters.channel) params.set('channel', filters.channel);
+  if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
   const qs = params.toString();
   return api<CommunicationsListResponse>(`/api/comms${qs ? `?${qs}` : ''}`);
 }
@@ -78,6 +80,7 @@ export interface GhlWorkflow {
   updatedAt: string | null;
 }
 
-export function fetchGhlWorkflows() {
-  return api<{ workflows: GhlWorkflow[] }>('/api/workflows/ghl');
+export function fetchGhlWorkflows(accountId?: string | null) {
+  const qs = accountId ? `?account_id=${accountId}` : '';
+  return api<{ workflows: GhlWorkflow[] }>(`/api/workflows/ghl${qs}`);
 }

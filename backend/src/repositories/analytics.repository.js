@@ -290,6 +290,33 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
+    async settledReceiptsByDayBulk(orgId, sinceISO, practiceIds, untilISO = null) {
+        const drop = new Set(await revokedSources(orgId, ['dentally', 'quickbooks']));
+        let q = supabase_1.serviceClient
+            .from('payments')
+            .select('amount_pence, source, processed_at')
+            .eq('organisation_id', orgId)
+            .eq('status', 'settled')
+            .gte('processed_at', sinceISO)
+            .in('practice_id', practiceIds)
+            .limit(LIMIT_GUARD);
+        
+        if (untilISO) q = q.lt('processed_at', untilISO);
+
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+
+        const merged = new Map();
+        for (const p of data || []) {
+            if (drop.has(p.source)) continue;
+            if (!p.processed_at) continue;
+            // Extract YYYY-MM-DD from ISO string
+            const day = p.processed_at.substring(0, 10);
+            merged.set(day, (merged.get(day) || 0) + (Number(p.amount_pence) || 0));
+        }
+
+        return [...merged].map(([day, pence]) => ({ day, pence }));
+    },
     // Exact per-practice rollups (Postgres GROUP BY via RPC — no 1000-row cap).
     // Manual chair-utilisation grid rows (the intentional, owner-maintained
     // occupancy source). Small table; aggregated per practice in the service.

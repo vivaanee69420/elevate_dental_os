@@ -131,7 +131,7 @@ describe('upsertOpportunity', () => {
             if (q.table === 'leads' && q.op === 'upsert') return { error: null };
             return { data: null, error: null };
         });
-        const r = await upsertOpportunity('org-1', { id: 'opp1', name: 'Implant', monetaryValue: 1200, pipelineStageId: 's1', stageName: 'Consultation Booked', contact: { id: 'g1' } }, {}, db);
+        const r = await upsertOpportunity('org-1', { id: 'opp1', name: 'Implant', monetaryValue: 1200, pipelineStageId: 's1', stageName: 'Consultation Booked', contact: { id: 'g1' } }, null, {}, db);
         expect(r).toEqual({ ok: true });
         const lead = db.calls.find((c) => c.table === 'leads' && c.op === 'upsert');
         expect(lead.opts).toMatchObject({ onConflict: 'organisation_id,ghl_opportunity_id' });
@@ -162,7 +162,7 @@ describe('matchOrCreateContact', () => {
             if (q.op === 'select' && q.eqs.some(([c]) => c === 'ghl_contact_id')) return { data: { id: 'existing' }, error: null };
             return { data: null, error: null };
         });
-        const id = await matchOrCreateContact(org, { ghl_contact_id: 'g1', email: 'a@b.com' }, db);
+        const id = await matchOrCreateContact(org, { ghl_contact_id: 'g1', email: 'a@b.com' }, null, db);
         expect(id).toBe('existing');
         expect(db.calls.some((c) => c.op === 'insert')).toBe(false);
     });
@@ -173,7 +173,7 @@ describe('matchOrCreateContact', () => {
             if (q.ilikes.some(([c]) => c === 'email')) return { data: { id: 'by-email' }, error: null };
             return { data: null, error: null };
         });
-        const id = await matchOrCreateContact(org, { ghl_contact_id: 'g1', email: 'A@B.com' }, db);
+        const id = await matchOrCreateContact(org, { ghl_contact_id: 'g1', email: 'A@B.com' }, null, db);
         expect(id).toBe('by-email');
         expect(db.calls.some((c) => c.op === 'update')).toBe(true); // backfilled ghl id
     });
@@ -183,7 +183,7 @@ describe('matchOrCreateContact', () => {
             if (q.op === 'upsert') return { data: { id: 'new-contact' }, error: null };
             return { data: null, error: null };
         });
-        const id = await matchOrCreateContact(org, { ghl_contact_id: 'g9', email: 'new@x.com', phone: '07700900999', first_name: 'New' }, db);
+        const id = await matchOrCreateContact(org, { ghl_contact_id: 'g9', email: 'new@x.com', phone: '07700900999', first_name: 'New' }, null, db);
         expect(id).toBe('new-contact');
         const up = db.calls.find((c) => c.op === 'upsert');
         expect(up.opts).toMatchObject({ onConflict: 'organisation_id,ghl_contact_id' });

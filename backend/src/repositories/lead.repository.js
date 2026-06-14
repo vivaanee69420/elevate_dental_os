@@ -22,6 +22,8 @@ export const leadRepository = {
             query = query.eq('status', q.status);
         if (q.practice_id)
             query = query.eq('practice_id', q.practice_id);
+        if (q.integration_account_id)
+            query = query.eq('integration_account_id', q.integration_account_id);
         if (q.assigned_to)
             query = query.eq('assigned_to', q.assigned_to);
         if (q.ghl_pipeline_id)

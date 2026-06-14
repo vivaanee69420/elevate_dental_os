@@ -13,6 +13,9 @@ import type { Communication } from '../api';
 import { agoLabel } from '../data';
 import { formatPence } from '@/lib/format';
 
+import { useGhlAccounts } from '@/features/integrations/hooks';
+import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
+
 type Selected = { kind: 'lead'; lead: Lead } | { kind: 'msg'; comm: Communication };
 
 // Lookback window for the "New leads" list. 'recent' = since the start of
@@ -46,8 +49,16 @@ function stripJunk(s: string | null): string {
 }
 
 export default function TodayScreen() {
-  const { data: leadData, isLoading } = useLeads({ limit: 500 });
-  const { data: commData } = useCommunications();
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data: ghlData } = useGhlAccounts();
+
+  const { data: leadData, isLoading } = useLeads({
+    limit: 500,
+    ...(accountId ? { integration_account_id: accountId } : {}),
+  });
+  const { data: commData } = useCommunications({
+    ...(accountId ? { integration_account_id: accountId } : {}),
+  });
   const leads: Lead[] = leadData?.leads ?? [];
   const comms = commData?.communications ?? [];
   const [selected, setSelected] = useState<Selected | null>(null);
@@ -89,8 +100,8 @@ export default function TodayScreen() {
   ];
 
   return (
-    <div className="mx-auto" style={{ maxWidth: 1280 }}>
-      <div className="mb-6 flex" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+    <div className="mx-auto space-y-4" style={{ maxWidth: 1280 }}>
+      <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
           <h1 className="display font-bold" style={{ fontSize: 28 }}>Today</h1>
           <p className="text-ink-muted" style={{ fontSize: 13 }}>
@@ -108,6 +119,18 @@ export default function TodayScreen() {
           ))}
         </select>
       </div>
+
+      {ghlData && ghlData.accounts.length > 0 && (
+        <SubaccountFilterBar
+          accounts={ghlData.accounts.map((a) => ({
+            accountId: a.id,
+            label: a.label || 'GoHighLevel',
+            practiceId: a.practice_id ?? null,
+          })) as any}
+          selected={accountId}
+          onSelect={setAccountId}
+        />
+      )}
 
       <div className="grid gap-3 mb-5" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         {counters.map((s) => (

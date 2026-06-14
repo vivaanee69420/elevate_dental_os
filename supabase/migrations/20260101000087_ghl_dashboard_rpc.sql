@@ -82,8 +82,12 @@ as $$
       count(*) filter (where r.created_at >= p_since and r.created_at < p_until) as new_in,
       coalesce(
         (select jsonb_object_agg(s.source, s.cnt)
-         from c_src s
-         where s.practice_id is not distinct from r.practice_id),
+         from (
+           select source, count(*) as cnt
+           from c_rows
+           where created_at >= p_since and created_at < p_until and practice_id is not distinct from r.practice_id
+           group by source
+         ) s),
         '{}'::jsonb
       ) as by_source
     from c_rows r
@@ -115,16 +119,20 @@ as $$
       -- open = none of the terminal won/lost statuses
       count(*) filter (where r.status not in (
         'treatment_started', 'treatment_completed', 'not_proceeding', 'failed_to_attend'
-      )) as open_cnt,
+      ) and r.created_at >= p_since and r.created_at < p_until) as open_cnt,
       -- won = treatment underway or completed
-      count(*) filter (where r.status in ('treatment_started', 'treatment_completed')) as won_cnt,
+      count(*) filter (where r.status in ('treatment_started', 'treatment_completed') and r.created_at >= p_since and r.created_at < p_until) as won_cnt,
       -- lost = not proceeding or failed to attend
-      count(*) filter (where r.status in ('not_proceeding', 'failed_to_attend')) as lost_cnt,
-      coalesce(sum(r.estimated_value_pence), 0) as value_pence,
+      count(*) filter (where r.status in ('not_proceeding', 'failed_to_attend') and r.created_at >= p_since and r.created_at < p_until) as lost_cnt,
+      coalesce(sum(r.estimated_value_pence) filter (where r.created_at >= p_since and r.created_at < p_until), 0) as value_pence,
       coalesce(
         (select jsonb_object_agg(s.stage, s.cnt)
-         from l_stage s
-         where s.practice_id is not distinct from r.practice_id),
+         from (
+           select stage, count(*) as cnt
+           from l_rows
+           where created_at >= p_since and created_at < p_until and practice_id is not distinct from r.practice_id
+           group by stage
+         ) s),
         '{}'::jsonb
       ) as by_stage
     from l_rows r
@@ -136,9 +144,9 @@ as $$
     select
       co.practice_id,
       count(*) as total,
-      count(*) filter (where cm.direction = 'inbound') as inbound_cnt,
-      count(*) filter (where cm.direction = 'outbound') as outbound_cnt,
-      count(*) filter (where cm.created_at >= (p_until - interval '7 days')) as last7d
+      count(*) filter (where cm.direction = 'inbound' and cm.created_at >= p_since and cm.created_at < p_until) as inbound_cnt,
+      count(*) filter (where cm.direction = 'outbound' and cm.created_at >= p_since and cm.created_at < p_until) as outbound_cnt,
+      count(*) filter (where cm.created_at >= (p_until - interval '7 days') and cm.created_at < p_until) as last7d
     from public.communications cm
     left join public.contacts co on co.id = cm.contact_id
     where cm.organisation_id = p_org

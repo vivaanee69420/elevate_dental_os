@@ -20,6 +20,8 @@ export const contactRepository = {
             query = query.eq('type', q.type);
         if (q.practice_id)
             query = query.eq('practice_id', q.practice_id);
+        if (q.integration_account_id)
+            query = query.eq('integration_account_id', q.integration_account_id);
         if (q.source)
             query = query.eq('source', q.source);
         if (q.search) {

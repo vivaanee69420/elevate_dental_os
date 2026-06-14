@@ -111,7 +111,12 @@ export default function IntegrationsScreen() {
   const providers = data?.available ?? [];
   const connectedCount = integrations.filter((i) => i.status === 'active').length;
   const dentallyConnected = statusOf('dentally', integrations) === 'active';
+  // For GHL we show the panel as long as the integration row exists (any status except
+  // 'revoked'), because the multi-subaccount model stores secrets in integration_accounts,
+  // not the main integrations row, so 'failed' on the main row should not hide the panel.
+  const ghlRow = integrations.find((i) => i.provider === 'gohighlevel');
   const ghlConnected = statusOf('gohighlevel', integrations) === 'active';
+  const ghlPanelVisible = !!ghlRow && ghlRow.status !== 'revoked';
   const googleAdsConnected = statusOf('google_ads', integrations) === 'active';
   const metaAdsConnected = statusOf('meta_ads', integrations) === 'active';
 
@@ -124,10 +129,13 @@ export default function IntegrationsScreen() {
   }
 
   async function handleConnect(p: ProviderMeta) {
+    console.log(`[IntegrationsScreen] handleConnect: initiating connection for provider=${p.id}`);
     const res = await startConnect.mutateAsync({ provider: p.id });
     if (res.redirectUrl) {
+      console.log(`[IntegrationsScreen] handleConnect: redirecting to ${res.redirectUrl}`);
       window.location.href = res.redirectUrl;
     } else if (res.requiresKeyPaste) {
+      console.log(`[IntegrationsScreen] handleConnect: requiring key paste for provider=${p.id}`);
       setBrokerModal({
         provider: p.id,
         hint: res.pasteHint ?? 'Paste your API key.',
@@ -139,6 +147,7 @@ export default function IntegrationsScreen() {
   async function handleBrokerSubmit() {
     if (!brokerModal) return;
     const provider = brokerModal.provider;
+    console.log(`[IntegrationsScreen] handleBrokerSubmit: submitting key for provider=${provider}`);
     // submitBrokerKey persists the key; the backend then runs the first pull
     // automatically (Dentally: detect sites → map practices → pull; GHL: pull
     // contacts + opportunities). Show the progress overlay so the user sees it
@@ -148,6 +157,7 @@ export default function IntegrationsScreen() {
       apiKey: keyInput,
       locationId: brokerModal.requiresLocationId ? locInput : undefined,
     });
+    console.log(`[IntegrationsScreen] handleBrokerSubmit: key submitted successfully for provider=${provider}`);
     setBrokerModal(null);
     setKeyInput('');
     setLocInput('');
@@ -155,12 +165,14 @@ export default function IntegrationsScreen() {
   }
 
   async function handleRefresh(provider: string) {
+    console.log(`[IntegrationsScreen] handleRefresh: refreshing data for provider=${provider}`);
     startSyncToast(provider);
     // Fire-and-forget on the server (returns immediately); the overlay polls
     // progress and clears itself via onDone. Incremental pull (latest changes
     // since the last sync) — full history is the separate button on the
     // Dentally mapping panel.
     await sync.mutateAsync({ provider, full: false });
+    console.log(`[IntegrationsScreen] handleRefresh: refresh initiated for provider=${provider}`);
   }
 
   return (
@@ -180,7 +192,7 @@ export default function IntegrationsScreen() {
 
       {dentallyConnected && <DentallyPracticeMapping />}
       {dentallyConnected && <DentallyWebhookPanel />}
-      {ghlConnected && <GoHighLevelPanel />}
+      {ghlPanelVisible && <GoHighLevelPanel />}
       <QuickBooksPanel />
       {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
       {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
@@ -332,6 +344,7 @@ export default function IntegrationsScreen() {
               <button
                 onClick={() => {
                   const provider = confirmDisconnect;
+                  console.log(`[IntegrationsScreen] Disconnecting provider=${provider}`);
                   setConfirmDisconnect(null);
                   revoke.mutate(provider);
                 }}

@@ -29,6 +29,15 @@ function stubReceipts() {
           { day: '2026-05-05', pence: 300000 },
         ], error: null }
       : { data: [], error: null };
+  supaRec.resultProvider = (q) => {
+    if (q && q.table === 'payments' && q.op === 'select') {
+      return { data: [
+        { processed_at: '2026-05-04T12:00:00.000Z', amount_pence: 100000, source: 'stripe' },
+        { processed_at: '2026-05-05T12:00:00.000Z', amount_pence: 300000, source: 'stripe' }
+      ], error: null };
+    }
+    return { data: [], error: null };
+  };
 }
 
 describe('cashByDay', () => {
@@ -85,12 +94,14 @@ describe('cashByDay', () => {
   it('entity scope filters receipts to the one practice', async () => {
     stubReceipts();
     await svc.cashByDay(ORG, { scope: 'p7', period: 'month', periodKey: '2026-05', now });
-    const call = supaRec.rpcCalls.find((c) => c.fn === 'settled_receipts_by_day');
-    expect(call.params.p_practice).toBe('p7');
+    const call = supaRec.last;
+    expect(call.table).toBe('payments');
+    expect(call.ins.find((c) => c.col === 'practice_id').vals).toEqual(['p7']);
   });
 
   it('no receipts -> hasData false, zero totals, no insights', async () => {
     supaRec.rpcProvider = () => ({ data: [], error: null });
+    supaRec.resultProvider = () => ({ data: [], error: null });
     const r = await svc.cashByDay(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
     expect(r.hasData).toBe(false);
     expect(r.totalPence).toBe(0);

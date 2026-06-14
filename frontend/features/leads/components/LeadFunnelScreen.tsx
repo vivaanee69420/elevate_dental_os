@@ -11,23 +11,50 @@ import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { useBusinessHub, type HubPractice } from '@/features/overview/business-hub-api';
 
+import { useLeads } from '@/features/leads/hooks';
+
 const STAGE_TONE = ['bg-brand', 'bg-success', 'bg-info', 'bg-accent'];
 
-export function LeadFunnelScreen() {
+export function LeadFunnelScreen({ overrideAccountId }: { overrideAccountId?: string | null }) {
   const { scope } = useScopePeriod();
-  const { data, isLoading, isError } = useBusinessHub();
+  const { data: hubData, isLoading: hubLoading, isError: hubError } = useBusinessHub();
+
+  const isUsingGhlOverride = overrideAccountId !== undefined;
+  
+  const { data: leadData, isLoading: leadsLoading, isError: leadsError } = useLeads({
+    limit: 500,
+    ...(isUsingGhlOverride && overrideAccountId ? { integration_account_id: overrideAccountId } : {}),
+  });
 
   const rows: HubPractice[] = useMemo(() => {
-    if (!data) return [];
-    if (scope === 'all' || scope === 'practices') return data.practices;
-    return data.practices.filter((p) => p.practiceId === scope);
-  }, [data, scope]);
+    if (isUsingGhlOverride || !hubData) return [];
+    if (scope === 'all' || scope === 'practices') return hubData.practices;
+    return hubData.practices.filter((p) => p.practiceId === scope);
+  }, [hubData, scope, isUsingGhlOverride]);
 
-  const sum = (k: keyof HubPractice) => rows.reduce((s, p) => s + (Number(p[k]) || 0), 0);
-  const leads = sum('leads');
-  const booked = sum('appointments');
-  const attended = sum('completed');
-  const accepted = rows.reduce((s, p) => s + Math.round((p.leads * p.conversionRate) / 100), 0);
+  const { leads, booked, attended, accepted } = useMemo(() => {
+    if (isUsingGhlOverride) {
+      const list = leadData?.leads ?? [];
+      const lCount = list.length;
+      const bCount = list.filter((l) =>
+        ['consultation_booked', 'consultation_attended', 'treatment_started', 'treatment_completed', 'failed_to_attend'].includes(l.status)
+      ).length;
+      const aCount = list.filter((l) =>
+        ['consultation_attended', 'treatment_started', 'treatment_completed'].includes(l.status)
+      ).length;
+      const accCount = list.filter((l) =>
+        ['treatment_started', 'treatment_completed'].includes(l.status)
+      ).length;
+      return { leads: lCount, booked: bCount, attended: aCount, accepted: accCount };
+    } else {
+      const sum = (k: keyof HubPractice) => rows.reduce((s, p) => s + (Number(p[k]) || 0), 0);
+      const lCount = sum('leads');
+      const bCount = sum('appointments');
+      const aCount = sum('completed');
+      const accCount = rows.reduce((s, p) => s + Math.round((p.leads * p.conversionRate) / 100), 0);
+      return { leads: lCount, booked: bCount, attended: aCount, accepted: accCount };
+    }
+  }, [rows, leadData, isUsingGhlOverride]);
 
   const stages = [
     { label: 'Leads', value: leads },
@@ -37,7 +64,11 @@ export function LeadFunnelScreen() {
   ];
   const top = stages[0].value || 1;
 
-  const notApplicable = data && (scope === 'academy' || scope === 'lab');
+  const isLoading = isUsingGhlOverride ? leadsLoading : hubLoading;
+  const isError = isUsingGhlOverride ? leadsError : hubError;
+  const notApplicable = !isUsingGhlOverride && hubData && (scope === 'academy' || scope === 'lab');
+
+  const showContent = isUsingGhlOverride ? !isLoading && !isError : hubData && !notApplicable;
 
   return (
     <div className="flex flex-col gap-4">
@@ -45,7 +76,7 @@ export function LeadFunnelScreen() {
         title="Lead Funnel"
         subtitle="Lead → consult → attended → accepted, with the drop-off at each stage. The biggest leak is the cheapest place to add profit."
       />
-      <ScopePeriodBar />
+      {!isUsingGhlOverride && <ScopePeriodBar />}
 
       {isLoading && (
         <>
@@ -58,7 +89,7 @@ export function LeadFunnelScreen() {
         <AlertRow tone="info" title="The funnel covers clinical practices" body="Switch scope to the group or a practice." />
       )}
 
-      {data && !notApplicable && (
+      {showContent && (
         <>
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
             <KpiTile label="Lead → accepted" value={`${leads ? Math.round((accepted / leads) * 1000) / 10 : 0}%`} delta={`${accepted.toLocaleString('en-GB')} accepted from ${leads.toLocaleString('en-GB')} leads`} deltaTone="up" />

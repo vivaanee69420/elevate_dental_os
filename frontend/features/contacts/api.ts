@@ -15,10 +15,12 @@ export function listContacts(
   source?: string | null,
   page = 1,
   limit = 50,
+  integrationAccountId?: string | null,
 ) {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
   const ss = source ? `&source=${encodeURIComponent(source)}` : '';
+  const ia = integrationAccountId ? `&integration_account_id=${integrationAccountId}` : '';
   return api<ContactsListResponse>(
-    `/api/contacts?search=${encodeURIComponent(search)}&limit=${limit}&page=${page}${pp}${ss}`,
+    `/api/contacts?search=${encodeURIComponent(search)}&limit=${limit}&page=${page}${pp}${ss}${ia}`,
   );
 }

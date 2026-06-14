@@ -8,23 +8,25 @@ import * as supabase_1 from "../lib/supabase.js";
 export const ghlDashboardRepository = {
   _client() { return supabase_1.serviceClient; },
 
-  async aggregate(orgId, since, until, practiceId = null) {
+  async aggregate(orgId, since, until, practiceId = null, accountId = null) {
     const { data, error } = await this._client().rpc('ghl_dashboard_aggregate', {
       p_org: orgId,
       p_since: since,
       p_until: until,
       p_practice: practiceId ?? null,
+      p_account_id: accountId ?? null,
     });
     if (error) throw new Error(error.message);
     return data ?? [];
   },
 
-  async aggregateAppointments(orgId, since, until, practiceId = null) {
+  async aggregateAppointments(orgId, since, until, practiceId = null, accountId = null) {
     const { data, error } = await this._client().rpc('ghl_appointments_aggregate', {
       p_org: orgId,
       p_since: since,
       p_until: until,
       p_practice: practiceId ?? null,
+      p_account_id: accountId ?? null,
     });
     if (error) throw new Error(error.message);
     return data ?? [];

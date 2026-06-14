@@ -5,7 +5,6 @@ import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useGhlDashboard } from '../hooks';
 import { GhlKpiCards } from './GhlKpiCards';
 import { PipelineByStage } from './PipelineByStage';
-import { ConversationActivity } from './ConversationActivity';
 import { AppointmentsPanel } from './AppointmentsPanel';
 import { SyncHealthTable } from './SyncHealthTable';
 import { SubaccountFilterBar } from './SubaccountFilterBar';
@@ -47,8 +46,7 @@ export default function GhlDashboardScreen() {
         <>
           <GhlKpiCards totals={data.totals} />
           <PipelineByStage stages={data.totals.leads.byStage} />
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <ConversationActivity conversations={data.totals.conversations} />
+          <div className="grid grid-cols-1 gap-4">
             <AppointmentsPanel appointments={data.totals.appointments} />
           </div>
           <div>

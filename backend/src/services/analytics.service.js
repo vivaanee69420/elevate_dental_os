@@ -430,19 +430,12 @@ export const analyticsService = {
         };
     },
     // Sum settled receipts by day across the in-scope entities. practiceIds=null
-    // (all/practices) → one whole-org RPC call; otherwise call per resolved id
-    // and merge (academy/lab/specific practice — at most a handful, no N+1 risk).
+    // (all/practices) → one whole-org RPC call; otherwise call the bulk method.
     async _receiptsByDayScoped(orgId, since, until, resolved) {
         if (!resolved.practiceIds || resolved.practiceIds.length === 0) {
             return analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, since, null, until);
         }
-        const parts = await Promise.all(resolved.practiceIds.map((id) =>
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, since, id, until)));
-        const merged = new Map();
-        for (const rows of parts)
-            for (const r of rows)
-                merged.set(r.day, (merged.get(r.day) || 0) + (Number(r.pence) || 0));
-        return [...merged].map(([day, pence]) => ({ day, pence }));
+        return analytics_repository_1.analyticsRepository.settledReceiptsByDayBulk(orgId, since, resolved.practiceIds, until);
     },
     // Treatment Economics Workbench (Arch #3 pure compute). The UI posts a model
     // (debounced); this returns the full money flow. No DB, no persistence.

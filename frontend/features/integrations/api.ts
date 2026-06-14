@@ -260,6 +260,7 @@ export interface GhlAccount {
   webhook_url: string | null;
   created_at: string;
   updated_at: string;
+  practice_id: string | null;
 }
 
 export function listGhlAccounts() {
