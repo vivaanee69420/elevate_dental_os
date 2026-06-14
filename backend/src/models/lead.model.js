@@ -11,6 +11,7 @@ export const LEAD_STATUSES = [
 export const leadListQuerySchema = zod_1.z.object({
     status: zod_1.z.enum(LEAD_STATUSES).optional(),
     practice_id: zod_1.z.string().uuid().optional(),
+    integration_account_id: zod_1.z.string().uuid().optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
     since: zod_1.z.string().optional(),
     // Filter to one GoHighLevel pipeline (drives the Pipeline screen — fetch only

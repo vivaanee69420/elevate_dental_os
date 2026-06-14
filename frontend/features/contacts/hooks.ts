@@ -7,10 +7,11 @@ export function useContacts(
   source: string | null = null,
   page = 1,
   limit = 50,
+  integrationAccountId: string | null = null,
 ) {
   return useQuery({
-    queryKey: ['contacts', search, practiceId, source, page, limit],
-    queryFn: () => listContacts(search, practiceId, source, page, limit),
+    queryKey: ['contacts', search, practiceId, source, page, limit, integrationAccountId],
+    queryFn: () => listContacts(search, practiceId, source, page, limit, integrationAccountId),
     placeholderData: (prev) => prev, // keep prior page visible while the next loads
   });
 }

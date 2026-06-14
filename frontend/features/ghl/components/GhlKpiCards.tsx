@@ -18,7 +18,7 @@ export function GhlKpiCards({ totals }: { totals: GhlTotals }) {
       <Card label="Leads" value={formatNumber(totals.leads.total)} sub={`${formatNumber(totals.leads.open)} open`} />
       <Card label="Pipeline value" value={formatPence(totals.leads.pipelineValuePence)} />
       <Card label="Conversion" value={`${totals.leads.conversionPct}%`} sub={`${formatNumber(totals.leads.won)} won / ${formatNumber(totals.leads.lost)} lost`} />
-      <Card label="Conversations" value={formatNumber(totals.conversations.total)} sub={`${formatNumber(totals.conversations.inbound)} in / ${formatNumber(totals.conversations.outbound)} out`} />
+      <Card label="Conversations" value={formatNumber(totals.conversations.total)} sub={`${formatNumber(totals.conversations.inbound)} inbound / ${formatNumber(totals.conversations.outbound)} outbound`} />
       <Card label="Appointments" value={formatNumber(totals.appointments.total)} sub={`${formatNumber(totals.appointments.upcoming)} upcoming`} />
       <Card label="Sync health" value={`${totals.sync.active}/${totals.sync.accounts}`} sub="active subaccounts" />
     </div>

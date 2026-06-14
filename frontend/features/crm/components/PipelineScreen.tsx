@@ -11,12 +11,9 @@ import { useMemo, useState } from 'react';
 import { useLeads, usePipelines } from '@/features/leads/hooks';
 import type { Lead, LeadStatus } from '@/features/leads/api';
 import { formatPence } from '@/lib/format';
-import { useScopePeriod } from '@/features/_shared/scope-context';
 import { CRM_TEAL, agoLabel } from '../data';
-
-// A real practice scope is a UUID; 'all' and any group sentinel must not be sent
-// as practice_id (backend validates it as a uuid).
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { useGhlAccounts } from '@/features/integrations/hooks';
+import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
 // Fallback columns (no GHL pipeline) — verbatim from the prototype.
 const FALLBACK_STAGES: { key: string; label: string; colour: string; byStatus: LeadStatus }[] = [
@@ -48,14 +45,15 @@ export default function PipelineScreen() {
   const pipelines = pData?.pipelines ?? [];
   const [picked, setPicked] = useState<string | null>(null);
   const selectedId = picked ?? pipelines[0]?.id ?? null;
-  // Scope to the globally-selected practice (= GHL subaccount).
-  const { scope } = useScopePeriod();
-  const practiceId = scope !== 'all' && UUID_RE.test(scope) ? scope : undefined;
+
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data: ghlData } = useGhlAccounts();
+
   // Fetch the selected pipeline's leads server-side (a pipeline can have 300+
   // leads, so client-side slicing of a 100-row page would drop most).
   const { data, isLoading, error } = useLeads({
     ...(selectedId ? { ghl_pipeline_id: selectedId } : {}),
-    ...(practiceId ? { practice_id: practiceId } : {}),
+    ...(accountId ? { integration_account_id: accountId } : {}),
     limit: 500,
   });
   const leads: Lead[] = data?.leads ?? [];
@@ -105,6 +103,20 @@ export default function PipelineScreen() {
           </div>
         )}
       </div>
+
+      {ghlData && ghlData.accounts.length > 0 && (
+        <div className="mb-4">
+          <SubaccountFilterBar
+            accounts={ghlData.accounts.map((a) => ({
+              accountId: a.id,
+              label: a.label || 'GoHighLevel',
+              practiceId: a.practice_id ?? null,
+            })) as any}
+            selected={accountId}
+            onSelect={setAccountId}
+          />
+        </div>
+      )}
 
       {error && (
         <div className="card" style={{ padding: 12, marginBottom: 12, background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B', fontSize: 12 }}>

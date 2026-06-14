@@ -19,7 +19,7 @@ describe('GHL practice_id stamping', () => {
       maybeSingle: async () => ({ data: { id: 'contact-1' } }),
       upsert: async (row) => { captured = row; return { error: null }; },
     }; } };
-    const r = await upsertOpportunity('org-1', { id: 'opp-1', contact: { id: 'c1' } }, {}, db, new Map([['c1', 'contact-1']]), null, 'prac-9');
+    const r = await upsertOpportunity('org-1', { id: 'opp-1', contact: { id: 'c1' } }, 'prac-9', {}, db, new Map([['c1', 'contact-1']]), null);
     expect(r.ok).toBe(true);
     expect(captured.practice_id).toBe('prac-9');
   });

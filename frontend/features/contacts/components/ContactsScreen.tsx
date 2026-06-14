@@ -2,16 +2,8 @@
 import { useState } from 'react';
 import { PageHeader, DataTable, StatusBadge, type Column } from '@/components/ui';
 import { useContacts } from '../hooks';
-import PracticeTabs from '@/features/practices/PracticeTabs';
-import { useScopePeriod } from '@/features/_shared/scope-context';
-
-// A real practice scope is a UUID; 'all' and any group sentinel ('practices',
-// 'academy', 'lab') must NOT be sent as practice_id (the backend validates it as
-// a uuid). Treat anything non-uuid as "no practice filter".
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function scopeToPracticeId(scope: string): string | null {
-  return scope !== 'all' && UUID_RE.test(scope) ? scope : null;
-}
+import { useGhlAccounts } from '@/features/integrations/hooks';
+import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
 // Human label for the integration origin shown in the Source column / tabs.
 const SOURCE_LABEL: Record<string, string> = {
@@ -48,19 +40,17 @@ const columns: Column<any>[] = [
 const PAGE_SIZE = 50;
 
 export default function ContactsScreen() {
-  // The practice filter is the globally-selected practice (= GHL subaccount).
-  // PracticeTabs writes through to the shared scope so the selection persists
-  // across screens and the URL.
-  const { scope, setScope } = useScopePeriod();
-  const practiceId = scopeToPracticeId(scope);
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data: ghlData } = useGhlAccounts();
+
   const [search, setSearch] = useState('');
   const [source, setSource] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const { data } = useContacts(search, practiceId, source, page, PAGE_SIZE);
+  const { data } = useContacts(search, null, source, page, PAGE_SIZE, accountId);
 
   // Any filter/search change resets to page 1.
   function changeSource(key: string | null) { setSource(key); setPage(1); }
-  function changePractice(id: string | null) { setScope(id ?? 'all'); setPage(1); }
+  function changeAccountId(id: string | null) { setAccountId(id); setPage(1); }
   function changeSearch(v: string) { setSearch(v); setPage(1); }
 
   const total = data?.total ?? 0;
@@ -71,7 +61,20 @@ export default function ContactsScreen() {
   return (
     <div className="max-w-7xl mx-auto">
       <PageHeader title="Contacts" subtitle="All leads, patients, lapsed" />
-      <PracticeTabs value={practiceId} onChange={changePractice} />
+      
+      {ghlData && ghlData.accounts.length > 0 && (
+        <div className="mb-4">
+          <SubaccountFilterBar
+            accounts={ghlData.accounts.map((a) => ({
+              accountId: a.id,
+              label: a.label || 'GoHighLevel',
+              practiceId: a.practice_id ?? null,
+            })) as any}
+            selected={accountId}
+            onSelect={changeAccountId}
+          />
+        </div>
+      )}
 
       {/* Source tabs — view the Dentally-synced and GHL-synced books separately. */}
       <div className="flex gap-2 mb-4 flex-wrap">

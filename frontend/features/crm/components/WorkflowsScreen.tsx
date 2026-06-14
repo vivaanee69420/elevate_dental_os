@@ -3,10 +3,12 @@
 // GHL's API exposes id/name/status only (no per-workflow sent/conversion), so
 // the table shows name + status + last-updated, with total/active KPIs.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, DataTable, KpiTile, Chip, type Column } from '@/components/ui';
 import { useGhlWorkflows } from '../hooks';
 import type { GhlWorkflow } from '../api';
+import { useGhlAccounts } from '@/features/integrations/hooks';
+import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
 function isActive(status: string | null): boolean {
   const s = (status ?? '').toLowerCase();
@@ -15,7 +17,10 @@ function isActive(status: string | null): boolean {
 
 /** Automations screen — GoHighLevel workflows. */
 export default function WorkflowsScreen() {
-  const { data, isLoading } = useGhlWorkflows();
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data: ghlData } = useGhlAccounts();
+
+  const { data, isLoading } = useGhlWorkflows(accountId);
   const workflows = data?.workflows ?? [];
 
   const active = useMemo(() => workflows.filter((w) => isActive(w.status)).length, [workflows]);
@@ -47,6 +52,20 @@ export default function WorkflowsScreen() {
           {isLoading ? 'Loading…' : `${workflows.length} GoHighLevel workflows · ${active} active`}
         </p>
       </div>
+
+      {ghlData && ghlData.accounts.length > 0 && (
+        <div className="mb-4">
+          <SubaccountFilterBar
+            accounts={ghlData.accounts.map((a) => ({
+              accountId: a.id,
+              label: a.label || 'GoHighLevel',
+              practiceId: a.practice_id ?? null,
+            })) as any}
+            selected={accountId}
+            onSelect={setAccountId}
+          />
+        </div>
+      )}
 
       <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
         <KpiTile label="Total workflows" value={String(workflows.length)} />

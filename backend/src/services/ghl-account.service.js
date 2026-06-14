@@ -20,6 +20,19 @@ export const ghlAccountService = {
         // location's settings (the random webhook_token IS the per-account webhook
         // credential — owner-facing, like the Dentally webhook-info URL).
         const base = process.env.BACKEND_PUBLIC_URL || process.env.APP_URL || 'http://localhost:8080';
+
+        // Auto-heal: if there are active subaccounts but the main integration row is
+        // 'failed' (e.g. from a stale sync error like "onPage is not a function"),
+        // reset it to 'active' so the frontend shows the panel correctly.
+        const hasActive = accounts.some((a) => a.status === 'active');
+        if (hasActive) {
+            try {
+                await integrationRepository.upsert(orgId, PROVIDER, { status: 'active', last_error: null });
+            } catch (err) {
+                console.warn('[ghl-account] auto-heal reset failed:', err?.message || err);
+            }
+        }
+
         return {
             accounts: accounts.map((a) => ({
                 ...a,

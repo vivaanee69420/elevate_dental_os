@@ -31,10 +31,12 @@ export const integrationController = {
     },
     async connect(req, res) {
         const body = integration_model_1.integrationConnectSchema.parse(req.body);
+        console.log(`[integrationController] startConnect: orgId=${req.user.organisation_id}, provider=${body.provider}`);
         res.json(await integration_service_1.integrationService.startConnect(req.user.organisation_id, body.provider, body));
     },
     async callback(req, res) {
         const { provider } = providerParamSchema.parse(req.params);
+        console.log(`[integrationController] callback: orgId=${req.user.organisation_id}, provider=${provider}`);
         // OAuth providers carry { code, state } in query; broker uses POST body.
         const payload = req.method === 'POST' ? req.body : req.query;
         res.json(await integration_service_1.integrationService.finishConnect(req.user.organisation_id, provider, payload));
@@ -56,9 +58,11 @@ export const integrationController = {
         try {
             if (oauthError) throw new Error(String(oauthError));
             const { orgId } = verifyState(state, provider);
+            console.log(`[integrationController] oauthCallback success: orgId=${orgId}, provider=${provider}`);
             await integration_service_1.integrationService.finishConnect(orgId, provider, { code, realmId });
             dest.searchParams.set('connected', provider);
         } catch (err) {
+            console.error(`[integrationController] oauthCallback error: provider=${provider}, message=${err.message}`);
             dest.searchParams.set('error', err.message || 'oauth_failed');
             dest.searchParams.set('provider', provider);
         }
@@ -66,6 +70,7 @@ export const integrationController = {
     },
     async revoke(req, res) {
         const { provider } = providerParamSchema.parse(req.params);
+        console.log(`[integrationController] revoke: orgId=${req.user.organisation_id}, provider=${provider}`);
         res.json(await integration_service_1.integrationService.revoke(req.user.organisation_id, provider));
     },
     async refresh(req, res) {
@@ -81,6 +86,7 @@ export const integrationController = {
         const { full: bodyFull, resources } = integration_model_1.syncBodySchema.parse(req.body ?? {});
         const full = req.query.full === 'true' || bodyFull === true;
         const { organisation_id } = req.user;
+        console.log(`[integrationController] sync started: orgId=${organisation_id}, provider=${provider}, full=${full}`);
         integration_service_1.integrationService.syncNow(organisation_id, provider, { full, resources: resources ?? null })
             .catch((err) => console.error(`[integrations] sync ${provider} failed:`, err?.message || err));
         res.json({ started: true, provider, full, resources: resources ?? null });
@@ -89,6 +95,7 @@ export const integrationController = {
     // provider (Dentally, GHL, Google/Meta Ads, QuickBooks). Fire-and-forget:
     // returns the providers that started; the UI polls per-provider progress.
     async syncAll(req, res) {
+        console.log(`[integrationController] syncAll started: orgId=${req.user.organisation_id}`);
         const { started } = await integration_service_1.integrationService.syncAll(req.user.organisation_id);
         res.json({ started });
     },

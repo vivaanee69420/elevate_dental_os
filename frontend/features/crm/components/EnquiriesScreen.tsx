@@ -22,6 +22,8 @@ import {
   leadFullName,
   type Enquiry,
 } from '../data';
+import { useGhlAccounts } from '@/features/integrations/hooks';
+import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
 /** Index leads by id for row joins. */
 const LEAD_BY_ID = Object.fromEntries(LEADS.map((l) => [l.id, l]));
@@ -50,18 +52,32 @@ function StatusPill({ status }: { status: string }) {
 export default function EnquiriesScreen() {
   const [treatment, setTreatment] = useState('all');
   const [status, setStatus] = useState('all');
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data: ghlData } = useGhlAccounts();
 
   const all = useMemo(() => buildEnquiries(), []);
 
-  // Apply the two prototype filters.
+  const selectedAccount = ghlData?.accounts.find((a) => a.id === accountId);
+  const selectedLabel = selectedAccount?.label ?? '';
+
+  // Apply the two prototype filters + GHL subaccount label mock filter.
   const filtered = useMemo(
     () =>
       all.filter((e) => {
         if (treatment !== 'all' && e.treatment !== treatment) return false;
         if (status !== 'all' && e.journeyStatus !== status) return false;
+        if (selectedLabel) {
+          const l = LEAD_BY_ID[e.leadId];
+          if (!l) return false;
+          const labelClean = selectedLabel.toLowerCase().replace(/\s+/g, '');
+          const practiceClean = (l.practice ?? '').toLowerCase().replace(/\s+/g, '');
+          if (!practiceClean.includes(labelClean) && !labelClean.includes(practiceClean)) {
+            return false;
+          }
+        }
         return true;
       }),
-    [all, treatment, status],
+    [all, treatment, status, selectedLabel],
   );
 
   const totalValue = filtered.reduce((s, e) => s + e.value, 0);
@@ -130,6 +146,20 @@ export default function EnquiriesScreen() {
           {formatCurrency(totalValue)} total value
         </p>
       </div>
+
+      {ghlData && ghlData.accounts.length > 0 && (
+        <div className="mb-4">
+          <SubaccountFilterBar
+            accounts={ghlData.accounts.map((a) => ({
+              accountId: a.id,
+              label: a.label || 'GoHighLevel',
+              practiceId: a.practice_id ?? null,
+            })) as any}
+            selected={accountId}
+            onSelect={setAccountId}
+          />
+        </div>
+      )}
 
       {/* Filters */}
       <div
