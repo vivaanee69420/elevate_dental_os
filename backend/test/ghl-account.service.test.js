@@ -42,26 +42,25 @@ describe('ghlAccountService.addAccount', () => {
   });
 
   it('rejects an invalid token before persisting', async () => {
-    await expect(svc.addAccount('org-1', { token: 'bad', locationId: 'L1', practiceId: 'p1' }))
+    await expect(svc.addAccount('org-1', { token: 'bad', locationId: 'L1' }))
       .rejects.toThrow();
     expect(repo._rows.length).toBe(0);
   });
 
   it('encrypts the token, stores a webhook_token, and mints a row', async () => {
-    const out = await svc.addAccount('org-1', { token: 'pit-good', locationId: 'L1', practiceId: 'p1' });
+    const out = await svc.addAccount('org-1', { token: 'pit-good', locationId: 'L1' });
     expect(out.id).toBeTruthy();
     expect(out.secrets).toBeUndefined();
     const row = repo._rows[0];
     expect(row.external_account_id).toBe('L1');
-    expect(row.practice_id).toBe('p1');
     expect(row.webhook_token).toMatch(/[a-f0-9]{32,}/);
     expect(row.secrets).toBeTruthy();
     expect(row.secrets).not.toContain('pit-good');
   });
 
   it('rejects a duplicate location for the same org', async () => {
-    await svc.addAccount('org-1', { token: 'pit-good', locationId: 'L1', practiceId: 'p1' });
-    await expect(svc.addAccount('org-1', { token: 'pit-good', locationId: 'L1', practiceId: 'p2' }))
+    await svc.addAccount('org-1', { token: 'pit-good', locationId: 'L1' });
+    await expect(svc.addAccount('org-1', { token: 'pit-good', locationId: 'L1' }))
       .rejects.toThrow(/already connected/i);
   });
 });

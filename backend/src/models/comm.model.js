@@ -6,6 +6,7 @@ export const commListQuerySchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),
     lead_id: zod_1.z.string().uuid().optional(),
     channel: zod_1.z.string().optional(),
+    integration_account_id: zod_1.z.string().uuid().optional(),
 });
 export const commSendSchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),

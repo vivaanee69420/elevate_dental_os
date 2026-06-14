@@ -1,10 +1,13 @@
 // ============================================================================
 // GHL dashboard service — assembles the consolidated GoHighLevel view. Loads the
 // org's GHL subaccounts, runs the aggregate RPC (optionally scoped to one
-// account's practice), then builds:
-//   totals    — every metric summed across all returned practice rows
-//   perAccount — one entry per subaccount (+ an "Unmapped" entry for null-practice
-//                rows), used for both the single-account filter and drill-downs
+// account), then builds:
+//   totals    — every metric summed across all returned rows
+//   perAccount — one entry per subaccount matched by integration_account_id
+// The RPC (v3) now groups by integration_account_id so each sub-account always
+// gets its own isolated row — no more repeated/doubled numbers when two accounts
+// share the same practice_id (or both are unmapped / NULL).
+// All "total" counts in the RPC are already scoped to the [since, until) window.
 // Money stays in integer pence. Conversion % = won / (won + lost).
 // ============================================================================
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
@@ -37,21 +40,17 @@ export const ghlDashboardService = {
   async getDashboard(orgId, { since, until, accountId = null, practiceId = null }) {
     const accounts = await integrationAccountRepository.list(orgId, PROVIDER);
 
-    let practiceFilter = practiceId;
-    if (accountId) {
-      const acct = accounts.find((a) => a.id === accountId);
-      practiceFilter = acct?.practice_id ?? null;
-    }
+    // RPC v3 groups by integration_account_id — one row per sub-account, no duplication.
+    const rows = await ghlDashboardRepository.aggregate(orgId, since, until, practiceId, accountId);
+    // Key by integration_account_id for O(1) lookup
+    const byAccount = new Map(rows.map((r) => [r.integration_account_id, r]));
 
-    const rows = await ghlDashboardRepository.aggregate(orgId, since, until, practiceFilter);
-    const byPractice = new Map(rows.map((r) => [r.practice_id, r]));
-
-    const apptRows = await ghlDashboardRepository.aggregateAppointments(orgId, since, until, practiceFilter);
-    const apptByPractice = new Map(apptRows.map((r) => [r.practice_id, r]));
+    const apptRows = await ghlDashboardRepository.aggregateAppointments(orgId, since, until, practiceId, accountId);
+    const apptByAccount = new Map(apptRows.map((r) => [r.integration_account_id, r]));
 
     const perAccount = accounts.map((a) => {
-      const r = byPractice.get(a.practice_id) ?? {};
-      const ar = apptByPractice.get(a.practice_id) ?? {};
+      const r = byAccount.get(a.id) ?? {};
+      const ar = apptByAccount.get(a.id) ?? {};
       return {
         accountId: a.id,
         label: a.label || 'GoHighLevel',
@@ -69,9 +68,11 @@ export const ghlDashboardService = {
       };
     });
 
-    const mappedPractices = new Set(accounts.map((a) => a.practice_id));
-    const unmappedRows = rows.filter((r) => !mappedPractices.has(r.practice_id));
-    const unmappedApptRows = apptRows.filter((r) => !mappedPractices.has(r.practice_id));
+    // Any rows whose integration_account_id doesn't match a known active account
+    // (e.g. rows from revoked/deleted accounts, or NULLs) go into "Unmapped".
+    const knownAccountIds = new Set(accounts.map((a) => a.id));
+    const unmappedRows = rows.filter((r) => !knownAccountIds.has(r.integration_account_id));
+    const unmappedApptRows = apptRows.filter((r) => !knownAccountIds.has(r.integration_account_id));
     if (unmappedRows.length || unmappedApptRows.length) {
       const u = unmappedRows;
       const ua = unmappedApptRows;

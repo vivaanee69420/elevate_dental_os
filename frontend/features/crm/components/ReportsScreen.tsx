@@ -10,17 +10,25 @@
 //         -> group by practice-> practice rows
 //         -> group by treatment-> treatment value cards
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useLeads } from '@/features/leads/hooks';
 import type { Lead } from '@/features/leads/api';
 import { useTreatmentBreakdown } from '@/features/crm/treatment-api';
 import { formatPence as formatCurrency } from '@/lib/format';
+import { useGhlAccounts } from '@/features/integrations/hooks';
+import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
 /** CRM Reports screen — live, derived from GET /api/leads. The "By treatment"
  *  card is backed by REAL Dentally invoiced fees (GET /api/analytics/treatment-breakdown),
  *  not the lead pipeline (leads carry GHL opp.name, not a real treatment). */
 export default function ReportsScreen() {
-  const { data, isLoading } = useLeads({ limit: 1000 });
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const { data: ghlData } = useGhlAccounts();
+
+  const { data, isLoading } = useLeads({
+    limit: 1000,
+    ...(accountId ? { integration_account_id: accountId } : {}),
+  });
   const leads: Lead[] = data?.leads ?? [];
   const { data: treatmentData } = useTreatmentBreakdown(24);
   const treatmentBreakdown = treatmentData?.treatments ?? [];
@@ -99,6 +107,20 @@ export default function ReportsScreen() {
             : `${model.totalLeads.toLocaleString('en-GB')} leads · conversion funnel · source ROI · practice performance`}
         </p>
       </div>
+
+      {ghlData && ghlData.accounts.length > 0 && (
+        <div className="mb-4">
+          <SubaccountFilterBar
+            accounts={ghlData.accounts.map((a) => ({
+              accountId: a.id,
+              label: a.label || 'GoHighLevel',
+              practiceId: a.practice_id ?? null,
+            })) as any}
+            selected={accountId}
+            onSelect={setAccountId}
+          />
+        </div>
+      )}
 
       {/* 4 KPIs */}
       <div

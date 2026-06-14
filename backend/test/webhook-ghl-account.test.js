@@ -14,7 +14,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
 }));
 const applied = [];
 vi.mock('../src/lib/integrations/gohighlevel-sync.js', () => ({
-  applyWebhookEvent: vi.fn(async (org, type, rec, practiceId) => { applied.push({ org, type, practiceId }); return { applied: 1 }; }),
+  applyWebhookEvent: vi.fn(async (org, type, rec, integrationAccountId) => { applied.push({ org, type, integrationAccountId }); return { applied: 1 }; }),
   mapWebhookEventType: () => 'contact',
 }));
 vi.mock('../src/lib/integrations/dentally-sync.js', () => ({ applyWebhookEvent: vi.fn() }));
@@ -26,6 +26,6 @@ describe('GHL webhook account routing', () => {
     const res = await webhookService.gohighlevel('wht-good', { type: 'ContactCreate', contact: { id: 'c1', email: 'a@x.com' } }, null);
     expect(res.received).toBe(true);
     expect(applied[0].org).toBe('org-1');
-    expect(applied[0].practiceId).toBe('prac-9');
+    expect(applied[0].integrationAccountId).toBe('acc-1');
   });
 });

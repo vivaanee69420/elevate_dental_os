@@ -6,7 +6,8 @@ export const workflowController = {
         res.json(await workflow_service_1.workflowService.list(req.user.organisation_id));
     },
     async ghl(req, res) {
-        res.json(await workflow_service_1.workflowService.ghl(req.user.organisation_id));
+        const { practice_id: practiceId, account_id: accountId } = req.query;
+        res.json(await workflow_service_1.workflowService.ghl(req.user.organisation_id, { practiceId, accountId }));
     },
     async create(req, res) {
         const body = workflow_model_1.workflowCreateSchema.parse(req.body);
