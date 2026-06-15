@@ -593,6 +593,14 @@ the same row builders as the poller (idempotent upsert). Unknown event types →
 `{received:true, ignored:true}`. The daily 03:00 poll reconciles missed
 deliveries. 401 on bad token/signature or unset secret.
 
+### `POST /webhooks/emergent/:token`
+Treatments-Accepted events from the Emergent ops app. `:token` is the stable
+HMAC-signed org encoding (resolves the org; 401 on bad token). **Ingest is
+pending Emergent's API contract** (field names + signing secret): currently acks
+`202 {received:true, processed:false}` without persisting. When the contract
+lands, add `express.raw` on this path + HMAC verify + `mapRecord` → upsert
+`treatment_accepted`.
+
 ### `POST /webhooks/postmark/inbound`
 Records inbound email as communication.
 
@@ -627,6 +635,11 @@ Requires env: `OAUTH_STATE_SECRET`, `BACKEND_PUBLIC_URL`, plus per-provider
 ### `POST /api/integrations/connect`
 Body `{ provider }`. For OAuth providers returns `{ redirectUrl }` (frontend
 sends the browser there). GoHighLevel → `marketplace.leadconnectorhq.com/oauth/chooselocation`.
+
+### Emergent (Treatments Accepted) — store-only connect
+- `GET /api/integrations/emergent` (owner | practice_manager) → `{ connected, status, baseUrl, keyHint, webhookUrl, lastSyncAt }`. `keyHint` is the API key's last 4; `webhookUrl` is the org's signed `/webhooks/emergent/:token` to paste into Emergent.
+- `POST /api/integrations/emergent` (owner) — body `{ baseUrl, apiKey }`. Stores `base_url` + `key_hint` in config and the API key **encrypted** in `secrets`; status `active`. Does NOT yet validate against Emergent or pull (ingest pending the API contract).
+- `DELETE /api/integrations/emergent` (owner) — disconnect: status `revoked`, secret cleared.
 
 ### `POST /api/integrations/:provider/refresh`
 Forces an OAuth token refresh. For `gohighlevel`, guarded against concurrent

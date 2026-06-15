@@ -404,7 +404,13 @@ export const analyticsRepository = {
         const { data, error } = await supabase_1.serviceClient.rpc('treatment_accepted_aggregate', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null, p_practice: practiceId ?? null,
         });
-        if (error) throw new Error(error.message);
+        // Defensive: if the aggregate RPC/table isn't applied on this DB yet (the
+        // Emergent ingest is still being wired), degrade to zeros rather than break
+        // the whole Business Hub. The card just stays a placeholder.
+        if (error) {
+            console.warn(`[analytics] treatment_accepted_aggregate unavailable, returning zeros: ${error.message}`);
+            return { count: 0, value_pence: 0 };
+        }
         const row = (Array.isArray(data) ? data[0] : data) || {};
         return { count: Number(row.accepted_count || 0), value_pence: Number(row.accepted_value_pence || 0) };
     },
