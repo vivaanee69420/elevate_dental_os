@@ -2325,7 +2325,7 @@ export const analyticsService = {
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
         const adFromDate = sinceISO.slice(0, 10);
         const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 86400000) : now()).toISOString().slice(0, 10);
-        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows] = await Promise.all([
+        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -2346,6 +2346,9 @@ export const analyticsService = {
             // `leads` is empty for Dentally-only orgs).
             analytics_repository_1.analyticsRepository.adLeadsByProvider(orgId, adFromDate, adToDate),
             analytics_repository_1.analyticsRepository.newPatientsRegisteredByPractice(orgId, sinceISO, untilISO),
+            // Treatments ACCEPTED (Emergent ops app) — count + value in window.
+            // Gated on an active emergent integration; zeros (placeholder) until connected.
+            analytics_repository_1.analyticsRepository.treatmentAcceptedRollup(orgId, sinceISO, untilISO, practiceId),
         ]);
         // Practice scope (board report): collapse the group view to one practice by
         // narrowing every per-practice feed; group totals below then sum to it.
@@ -2403,9 +2406,10 @@ export const analyticsService = {
                 name: p.name,
                 chairs: p.chairs || 0,
                 revenuePence: billedBy.get(p.id) || 0,      // turnover = invoiced production
+                takingsPence: revBy.get(p.id) || 0,         // Takings = settled payments received (matches Patient Payments "Received")
                 treatmentsClosedPence: closedBy.get(p.id) || 0, // plan fees billed (sold), this practice
                 treatmentsPaidPence: paidBy.get(p.id) || 0,     // plan fees paid (collected), this practice
-                cashCollectedPence: revBy.get(p.id) || 0,   // settled receipts for this practice
+                cashCollectedPence: revBy.get(p.id) || 0,   // settled receipts for this practice (== takings)
                 appointments,
                 completed: num(ap.completed),
                 noShows,
@@ -2447,6 +2451,13 @@ export const analyticsService = {
         // Treatment funnel (org-wide; treatment_plans are not practice-attributed).
         const treatmentsStarted = num(treatments.started);
         const treatmentsCompleted = num(treatments.completed);
+        // Treatments COMPLETED value (practitioner activity): private treatment
+        // value of plans marked completed in the window (treatment_plans feed).
+        const treatmentsCompletedValuePence = num(treatments.closed_value_pence);
+        // Treatments ACCEPTED (Emergent ops app) — placeholder zeros until the
+        // emergent integration is connected (Dentally has no accepted flag).
+        const treatmentsAcceptedCount = num(acceptedAgg?.count);
+        const treatmentsAcceptedValuePence = num(acceptedAgg?.value_pence);
         // "Closed" value = REAL invoiced treatment-plan fees in the window (same
         // feed as turnover), not the planned private estimate the rollup returns.
         // Group total = sum of the per-practice rows (invoice_items always carry a
@@ -2534,10 +2545,14 @@ export const analyticsService = {
                 conversionRate: rate(newPatients, totalLeads), // new patients booked per lead
                 newPatients, // booked Dentally new-patient appointments (real PMS)
                 treatmentsStarted,
-                treatmentsCompleted, // accepted/completed plan count in window
+                treatmentsCompleted, // completed plan count in window (practitioner activity)
+                treatmentsCompletedValuePence, // value of completed plans (private treatment value)
+                treatmentsAcceptedCount, // accepted treatments (Emergent) — 0 until connected
+                treatmentsAcceptedValuePence, // value of accepted treatments (Emergent)
                 treatmentsClosedPence, // billed (sold) plan fees
                 treatmentsPaidPence,   // collected (paid) plan fees
-                cashCollectedPence, // settled receipts banked in window
+                takingsPence: cashCollectedPence, // Takings = settled payments received (matches Patient Payments "Received")
+                cashCollectedPence, // settled receipts banked in window (== takings)
                 // Like-for-like deltas vs the prior same-length period (null when
                 // no prior base). prevPeriodLabel names it for the chip ("May 2026").
                 turnoverDeltaPct,

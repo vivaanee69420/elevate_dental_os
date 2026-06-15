@@ -91,3 +91,11 @@ export function pmsHidden(orgId) {
 export function crmHidden(orgId) {
     return domainHidden(orgId, ['gohighlevel']);
 }
+
+// Treatment-acceptance data comes from the Emergent ops app (manual logging).
+// True only when an active `emergent` integration exists — used to gate the
+// treatment_accepted aggregate so a never-connected org skips the RPC entirely
+// (the table/RPC may not yet be applied on hosted — blocked on Emergent's API).
+export function emergentConnected(orgId) {
+    return isActive(orgId, 'emergent');
+}

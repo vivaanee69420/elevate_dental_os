@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { supaRec } from './setup.js';
+import { invalidate as invalidateGating } from '../src/lib/integration-gating.js';
 
 const svc = (await import('../src/services/analytics.service.js'))
   .analyticsService;
@@ -809,5 +810,62 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(tables.filter((t) => t.org === ORG_B).length).toBe(tables.length);
     expect(supaRec.rpcCalls.length).toBeGreaterThanOrEqual(3);
     expect(supaRec.rpcCalls.every((c) => c.params.p_org === ORG_B)).toBe(true);
+  });
+});
+
+describe('businessHub — Takings, Treatments Completed value, Treatments Accepted', () => {
+  // The gating helper caches per-org (30s TTL); clear it so emergent-connected
+  // state doesn't bleed between cases that reuse ORG_A.
+  beforeEach(() => invalidateGating(ORG_A));
+
+  it('takings = settled receipts (group) + per-practice settled; completed value surfaced', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }, { id: 'p2', name: 'Beta', chairs: 3 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : { data: [], error: null }; // integrations empty → emergent NOT connected
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'settled_revenue_by_practice') // per-practice takings
+        return { data: [{ practice_id: 'p1', pence: 100000 }, { practice_id: 'p2', pence: 50000 }], error: null };
+      if (fn === 'settled_receipts_by_day')     // group takings (== Patient Payments "Received")
+        return { data: [{ day: '2026-05-01', pence: 90000 }, { day: '2026-05-02', pence: 60000 }], error: null };
+      if (fn === 'treatments_rollup_by_org')    // completed count + value
+        return { data: [{ started: 9, completed: 4, closed_value_pence: 720000 }], error: null };
+      return { data: [], error: null };
+    };
+    supaRec.rpcCalls = [];
+    const res = await svc.businessHub(ORG_A, { days: 90, now: () => new Date('2026-05-25T00:00:00Z') });
+
+    // Takings: group = sum of settled receipts; per-practice = settled-by-practice.
+    expect(res.group.takingsPence).toBe(150000);
+    expect(res.practices.find((p) => p.name === 'Alpha').takingsPence).toBe(100000);
+    expect(res.practices.find((p) => p.name === 'Beta').takingsPence).toBe(50000);
+
+    // Treatments Completed: count + private-treatment value (practitioner activity).
+    expect(res.group.treatmentsCompleted).toBe(4);
+    expect(res.group.treatmentsCompletedValuePence).toBe(720000);
+
+    // Treatments Accepted: emergent not connected → zeros, and the aggregate RPC
+    // is NEVER called (so the still-blocked table/RPC isn't required on hosted).
+    expect(res.group.treatmentsAcceptedCount).toBe(0);
+    expect(res.group.treatmentsAcceptedValuePence).toBe(0);
+    expect(supaRec.rpcCalls.some((c) => c.fn === 'treatment_accepted_aggregate')).toBe(false);
+  });
+
+  it('treatments accepted flow from the aggregate RPC once emergent is connected', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : q.table === 'integrations' ? { data: [{ provider: 'emergent', status: 'active' }], error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'treatment_accepted_aggregate')
+        return { data: [{ accepted_count: 7, accepted_value_pence: 4200000 }], error: null };
+      return { data: [], error: null };
+    };
+    supaRec.rpcCalls = [];
+    const res = await svc.businessHub(ORG_A, { days: 90 });
+    expect(res.group.treatmentsAcceptedCount).toBe(7);
+    expect(res.group.treatmentsAcceptedValuePence).toBe(4200000);
+    expect(supaRec.rpcCalls.some((c) => c.fn === 'treatment_accepted_aggregate')).toBe(true);
   });
 });
