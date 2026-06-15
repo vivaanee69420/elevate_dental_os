@@ -25,6 +25,7 @@ import { useMarketingRoi } from '@/features/intelligence/marketing-roi-hooks';
 import type { MarketingRoi } from '@/features/intelligence/marketing-roi-api';
 import { AdAccountFilter } from '@/features/intelligence/AdAccountFilter';
 import { QuickBooksGroupSection } from './QuickBooksGroupSection';
+import { GhlSummaryCards } from '@/features/ghl/components/GhlSummaryCards';
 
 const DASH = '—';
 
@@ -35,6 +36,15 @@ function pctOf(n: number, d: number, dp = 0): number {
   if (d <= 0) return 0;
   const f = 10 ** dp;
   return Math.round((n / d) * 100 * f) / f;
+}
+
+// Source-group title above a row of headline cards (Dentally, QuickBooks, …).
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <div className="text-xs font-semibold uppercase tracking-wide text-ink-muted mb-2">
+      {children}
+    </div>
+  );
 }
 
 // One headline scorecard tile: label, big value, sub-line, optional status chip.
@@ -50,7 +60,7 @@ function HeadlineCard({ c }: { c: HeadlineKpi }) {
 }
 
 export function GroupPerformanceScreen() {
-  const { scope } = useScopePeriod();
+  const { scope, win } = useScopePeriod();
   const { data, isLoading, isError } = useBusinessHub();
   // Dynamic per-provider ad-account filter for the marketing snapshot. null = all
   // selected accounts for that provider; a customer_id narrows to one account.
@@ -121,27 +131,58 @@ export function GroupPerformanceScreen() {
   // Takings delta = settled-receipts (cash) delta vs the prior same-length period.
   const cashChip = deltaChip(g.cashDeltaPct);
 
-  // Row 1 — money + acquisition headline. Row 2 — the lead→treatment funnel.
-  // (Treatments Completed/Accepted live in the Group Overview KPI row above.)
-  const headlineTop: HeadlineKpi[] = [
+  // Merged-in Group-Overview metrics (appointments / no-show / leads), scoped to
+  // the selected practice where the feed is practice-attributed.
+  const apptCount = scopedRow ? scopedRow.appointments : g.appointments;
+  const apptCompleted = scopedRow ? scopedRow.completed : data.practices.reduce((s, p) => s + p.completed, 0);
+  const noShowRateVal = scopedRow ? scopedRow.noShowRate : g.noShowRate;
+  const leadsBreakdown = (g.leadsBySource ?? [])
+    .map((s) => `${s.source.split(' ')[0]} ${formatNumber(s.leads)}`).join(' · ');
+
+  // Headline cards grouped by data source, each under its own label. Every card
+  // for a source lives in that source's section (no duplicate sections).
+  // Dentally — payments (takings), treatment plans, appointments, invoiced fees.
+  const dentallyCards: HeadlineKpi[] = [
     // Takings = settled payments received (same feed as the Patient Payments
     // "Received" tile, so the two screens reconcile); chip = like-for-like delta.
     { label: 'Takings', value: formatPence(takingsPence), sub: `Settled payments received · ${windowLabel}`,
       chip: cashChip },
-    { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
-      chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
-    { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
-      chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
-    { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',
-      chip: roas > 0 ? { text: roasLabel, tone: roasTone } : null },
-    { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'New-patient exams booked (Dentally)',
-      chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null },
-  ];
-  const headlineFunnel: HeadlineKpi[] = [
+    { label: 'Treatments Completed', value: formatNumber(g.treatmentsCompleted), sub: `Completed by practitioners · ${windowLabel}`,
+      chip: g.treatmentsCompletedValuePence > 0 ? { text: `${formatPence(g.treatmentsCompletedValuePence)} value`, tone: 'emerald' } : null },
     { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Billed plan revenue (sold) · ${windowLabel}`,
       chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
     { label: 'Plan Fees Collected', value: formatPence(paidPence), sub: `Plan treatment fees on paid invoices · ${windowLabel}`,
       chip: collectedPct > 0 ? { text: `${collectedPct}% of billed collected`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null },
+    { label: 'Appointments', value: formatNumber(apptCount), sub: `${formatNumber(apptCompleted)} completed · ${windowLabel}`,
+      chip: null },
+    { label: 'No-show rate', value: g.noShowTracked ? `${noShowRateVal}%` : DASH, sub: g.noShowTracked ? 'Missed appointments' : 'Not tracked in Dentally',
+      chip: null },
+    { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'New-patient exams booked (Dentally)',
+      chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null },
+  ];
+  // Emergent — treatment acceptance staff log in the ops app.
+  const emergentCards: HeadlineKpi[] = [
+    { label: 'Treatments Accepted', value: g.treatmentsAcceptedCount > 0 ? formatNumber(g.treatmentsAcceptedCount) : DASH,
+      sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${windowLabel}` : 'Connect Emergent to track acceptance',
+      chip: g.treatmentsAcceptedValuePence > 0 ? { text: `${formatPence(g.treatmentsAcceptedValuePence)} value`, tone: 'emerald' } : null },
+  ];
+  // QuickBooks / Xero — P&L actuals (profit + net margin).
+  const quickbooksCards: HeadlineKpi[] = [
+    { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
+      chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
+    { label: 'Margin', value: g.marginPct > 0 ? `${g.marginPct}%` : DASH, sub: g.marginPct > 0 ? 'Net, from actuals' : 'Connect Xero / QuickBooks',
+      chip: null },
+  ];
+  // Marketing — paid spend/ROAS + the lead→treatment acquisition funnel.
+  const marketingCards: HeadlineKpi[] = [
+    { label: 'Leads', value: formatNumber(g.leads), sub: leadsBreakdown || 'Google · Meta · GHL',
+      chip: null },
+    { label: 'Conversion', value: `${g.conversionRate}%`, sub: 'Leads → new patients booked',
+      chip: null },
+    { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
+      chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
+    { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',
+      chip: roas > 0 ? { text: roasLabel, tone: roasTone } : null },
     { label: 'Lead → Start Rate', value: `${g.leadToStartRate}%`, sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads`,
       chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} completed`, tone: 'emerald' } : null },
     { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: 'Paid spend ÷ treatments started',
@@ -161,12 +202,34 @@ export function GroupPerformanceScreen() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Headline scorecard — money + acquisition, then the lead→treatment funnel. */}
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
-        {headlineTop.map((c) => <HeadlineCard key={c.label} c={c} />)}
+      {/* Headline scorecard — grouped by data source, one section per source. */}
+      <div>
+        <SectionLabel>Dentally</SectionLabel>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+          {dentallyCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
+        </div>
       </div>
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
-        {headlineFunnel.map((c) => <HeadlineCard key={c.label} c={c} />)}
+      <div>
+        <SectionLabel>Emergent</SectionLabel>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+          {emergentCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
+        </div>
+      </div>
+      <div>
+        <SectionLabel>Marketing</SectionLabel>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+          {marketingCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
+        </div>
+      </div>
+      <div>
+        <SectionLabel>QuickBooks</SectionLabel>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+          {quickbooksCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
+        </div>
+      </div>
+      <div>
+        <SectionLabel>GoHighLevel</SectionLabel>
+        <GhlSummaryCards since={win.since} until={win.until} />
       </div>
 
       {/* QuickBooks group roll-up — summed across every connected company. */}
