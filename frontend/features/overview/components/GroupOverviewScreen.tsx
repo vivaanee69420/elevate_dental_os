@@ -62,6 +62,20 @@ export function GroupOverviewScreen() {
         <>
           <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
             <KpiTile label="Takings" value={formatPence(headlineTakings)} delta={data.period.label ?? `${data.period.days}-day window`} />
+            {/* Treatments Completed (practitioner activity) + Accepted (Emergent),
+                side by side with Takings. Both org-wide (treatment plans carry no
+                practice_id), so they show the group figure at any scope. */}
+            <KpiTile
+              label="Treatments Completed"
+              value={data.group.treatmentsCompleted.toLocaleString('en-GB')}
+              delta={data.group.treatmentsCompletedValuePence > 0 ? `${formatPence(data.group.treatmentsCompletedValuePence)} value` : 'completed by practitioners'}
+              deltaTone="up"
+            />
+            <KpiTile
+              label="Treatments Accepted"
+              value={data.group.treatmentsAcceptedCount > 0 ? data.group.treatmentsAcceptedCount.toLocaleString('en-GB') : '—'}
+              delta={data.group.treatmentsAcceptedCount > 0 ? 'accepted (Emergent)' : 'connect Emergent'}
+            />
             <KpiTile label="Margin" value={`${data.group.marginPct}%`} delta="net, from actuals" deltaTone={data.group.marginPct >= 18 ? 'up' : data.group.marginPct > 0 ? 'muted' : 'down'} />
             <KpiTile label="Appointments" value={inScopeSum(inScope, 'appointments').toLocaleString('en-GB')} delta={`${inScopeSum(inScope, 'completed').toLocaleString('en-GB')} completed`} />
             <KpiTile label="No-show rate"
