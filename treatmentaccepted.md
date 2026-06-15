@@ -13,9 +13,17 @@ Built on the Dental-os side now (Business Hub "Treatments Accepted" card):
 - Business Hub: `analyticsRepository.treatmentAcceptedRollup` → `group.treatmentsAcceptedCount`
   + `treatmentsAcceptedValuePence`; frontend "Treatments Accepted" card renders count + £ value.
 
-Still TODO once Emergent returns the contract: webhook receiver + signature verify,
-config routes + connect UI, worker backstop cron, apply migration on hosted (`NOTIFY pgrst`),
-fill `mapRecord` field names, wire `syncOrg`. Resume at build-order step 4.
+Connect UI + config routes + webhook endpoint now built (store-only):
+- `GET/POST/DELETE /api/integrations/emergent` (emergent.service.js) — stores base URL +
+  encrypted API key, exposes the signed webhook URL. **Applied: migration 000096 IS now on hosted**
+  (table + `treatment_accepted_aggregate`; same DB local+prod). treatmentAcceptedRollup also
+  hardened to degrade to zeros if the RPC is ever absent.
+- `EmergentPanel.tsx` in Settings → Integrations (connect form + webhook URL copy + disconnect).
+- `POST /webhooks/emergent/:token` — token resolves the org, acks 202; **does NOT persist yet.**
+
+Still TODO once Emergent returns the contract (base URL/key already storable): HMAC verify on the
+webhook (add express.raw + signing secret), `mapRecord` field names, `syncOrg` pull loop + worker
+cron. Resume at build-order step 4 (the connector body in emergent-sync.js).
 
 ## ⚠ Action items — BLOCKED on Emergent (chase these)
 

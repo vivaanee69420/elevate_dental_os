@@ -9,6 +9,7 @@ import { integrationAccountRepository } from "../repositories/integration-accoun
 import { decryptSecret } from "../lib/crypto.js";
 import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema } from "../models/integration.model.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
+import { emergentService } from "../services/emergent.service.js";
 
 function frontendUrl() {
     const raw = (process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').trim();
@@ -26,6 +27,17 @@ function frontendUrl() {
 }
 
 export const integrationController = {
+    // ---- Emergent (Treatments Accepted) — store-only connect ----------------
+    async emergentGet(req, res) {
+        res.json(await emergentService.get(req.user.organisation_id));
+    },
+    async emergentConnect(req, res) {
+        const { baseUrl, apiKey } = req.body ?? {};
+        res.json(await emergentService.connect(req.user.organisation_id, { baseUrl, apiKey }));
+    },
+    async emergentDisconnect(req, res) {
+        res.json(await emergentService.disconnect(req.user.organisation_id));
+    },
     async list(req, res) {
         res.json(await integration_service_1.integrationService.list(req.user.organisation_id));
     },
