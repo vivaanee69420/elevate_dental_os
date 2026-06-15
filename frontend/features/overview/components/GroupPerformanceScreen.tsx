@@ -122,11 +122,10 @@ export function GroupPerformanceScreen() {
   const cashChip = deltaChip(g.cashDeltaPct);
 
   // Row 1 — money + acquisition headline. Row 2 — the lead→treatment funnel.
+  // (Treatments Completed/Accepted live in the Group Overview KPI row above.)
   const headlineTop: HeadlineKpi[] = [
-    // Takings = settled payments received in the window — the same feed as the
-    // Patient Payments "Received" tile (settled payments, by processed_at), so the
-    // two screens reconcile. Replaces the old invoiced-production "Turnover" card.
-    // The chip is a like-for-like delta vs the prior same-length period.
+    // Takings = settled payments received (same feed as the Patient Payments
+    // "Received" tile, so the two screens reconcile); chip = like-for-like delta.
     { label: 'Takings', value: formatPence(takingsPence), sub: `Settled payments received · ${windowLabel}`,
       chip: cashChip },
     { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
@@ -143,15 +142,6 @@ export function GroupPerformanceScreen() {
       chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
     { label: 'Plan Fees Collected', value: formatPence(paidPence), sub: `Plan treatment fees on paid invoices · ${windowLabel}`,
       chip: collectedPct > 0 ? { text: `${collectedPct}% of billed collected`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null },
-    // Treatments Completed — practitioner activity: plans marked completed in the
-    // window (Dentally treatment_plans). Count headline, private-value £ as chip.
-    { label: 'Treatments Completed', value: formatNumber(g.treatmentsCompleted), sub: `Completed by practitioners · ${windowLabel}`,
-      chip: g.treatmentsCompletedValuePence > 0 ? { text: `${formatPence(g.treatmentsCompletedValuePence)} value`, tone: 'emerald' } : null },
-    // Treatments Accepted — sourced from the Emergent ops app (Dentally has no
-    // accepted flag). Placeholder until the emergent integration is connected.
-    { label: 'Treatments Accepted', value: g.treatmentsAcceptedCount > 0 ? formatNumber(g.treatmentsAcceptedCount) : DASH,
-      sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${windowLabel}` : 'Connect Emergent to track acceptance',
-      chip: g.treatmentsAcceptedValuePence > 0 ? { text: `${formatPence(g.treatmentsAcceptedValuePence)} value`, tone: 'emerald' } : null },
     { label: 'Lead → Start Rate', value: `${g.leadToStartRate}%`, sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads`,
       chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} completed`, tone: 'emerald' } : null },
     { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: 'Paid spend ÷ treatments started',
@@ -171,7 +161,7 @@ export function GroupPerformanceScreen() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Headline scorecard — money + acquisition (row 1), lead→treatment funnel (row 2) */}
+      {/* Headline scorecard — money + acquisition, then the lead→treatment funnel. */}
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
         {headlineTop.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
