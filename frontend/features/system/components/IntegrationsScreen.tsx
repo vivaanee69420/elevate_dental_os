@@ -27,6 +27,7 @@ import DentallyPracticeMapping from '@/features/integrations/components/Dentally
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
 import QuickBooksPanel from '@/features/integrations/components/QuickBooksPanel';
+import EmergentPanel from '@/features/integrations/components/EmergentPanel';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
 import { useSyncToast } from '@/features/integrations/sync-toast';
 
@@ -194,6 +195,7 @@ export default function IntegrationsScreen() {
       {dentallyConnected && <DentallyWebhookPanel />}
       {ghlPanelVisible && <GoHighLevelPanel />}
       <QuickBooksPanel />
+      <EmergentPanel />
       {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
       {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
 
