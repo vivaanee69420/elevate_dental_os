@@ -149,6 +149,11 @@ export function GroupPerformanceScreen() {
       chip: cashChip },
     { label: 'Treatments Completed', value: formatNumber(g.treatmentsCompleted), sub: `Completed by practitioners · ${windowLabel}`,
       chip: g.treatmentsCompletedValuePence > 0 ? { text: `${formatPence(g.treatmentsCompletedValuePence)} value`, tone: 'emerald' } : null },
+    // Treatments Accepted is sourced from the Emergent ops app, but grouped here
+    // with the other treatment cards. Placeholder until Emergent is connected.
+    { label: 'Treatments Accepted', value: g.treatmentsAcceptedCount > 0 ? formatNumber(g.treatmentsAcceptedCount) : DASH,
+      sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${windowLabel}` : 'Connect Emergent to track acceptance',
+      chip: g.treatmentsAcceptedValuePence > 0 ? { text: `${formatPence(g.treatmentsAcceptedValuePence)} value`, tone: 'emerald' } : null },
     { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Billed plan revenue (sold) · ${windowLabel}`,
       chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
     { label: 'Plan Fees Collected', value: formatPence(paidPence), sub: `Plan treatment fees on paid invoices · ${windowLabel}`,
@@ -159,12 +164,6 @@ export function GroupPerformanceScreen() {
       chip: null },
     { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'New-patient exams booked (Dentally)',
       chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null },
-  ];
-  // Emergent — treatment acceptance staff log in the ops app.
-  const emergentCards: HeadlineKpi[] = [
-    { label: 'Treatments Accepted', value: g.treatmentsAcceptedCount > 0 ? formatNumber(g.treatmentsAcceptedCount) : DASH,
-      sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${windowLabel}` : 'Connect Emergent to track acceptance',
-      chip: g.treatmentsAcceptedValuePence > 0 ? { text: `${formatPence(g.treatmentsAcceptedValuePence)} value`, tone: 'emerald' } : null },
   ];
   // QuickBooks / Xero — P&L actuals (profit + net margin).
   const quickbooksCards: HeadlineKpi[] = [
@@ -207,12 +206,6 @@ export function GroupPerformanceScreen() {
         <SectionLabel>Dentally</SectionLabel>
         <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
           {dentallyCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
-        </div>
-      </div>
-      <div>
-        <SectionLabel>Emergent</SectionLabel>
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
-          {emergentCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
         </div>
       </div>
       <div>
