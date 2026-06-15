@@ -179,17 +179,21 @@ export function buildApp() {
     // ---- Authenticated routes ----
     const api = express_1.default.Router();
     api.use(auth_1.authenticate);
-    // Per-user API rate limit: 50 requests / minute, keyed by the VERIFIED
+    // Per-user API rate limit: 300 requests / minute, keyed by the VERIFIED
     // user id (authenticate ran above, so req.user is trusted — unlike the
     // coarse global limiter keyed by a spoofable header). Falls back to IP if
-    // req.user is somehow absent. 429 on exceed.
+    // req.user is somehow absent. 429 on exceed. A data-heavy dashboard page
+    // fans out many parallel reads (business-hub + marketing-roi + ghl + me + …),
+    // so 50/min tripped on normal navigation; 300/min keeps abuse protection
+    // while comfortably covering a few page loads a minute.
+    const API_RATE_MAX = Number(process.env.API_RATE_LIMIT_PER_MIN) || 300;
     api.use((0, express_rate_limit_1.default)({
         windowMs: 60 * 1000,
-        max: 50,
+        max: API_RATE_MAX,
         standardHeaders: true,
         legacyHeaders: false,
         keyGenerator: (req) => req.user?.id || req.ip || 'anon',
-        message: { error: 'Rate limit exceeded: 50 requests per minute' },
+        message: { error: `Rate limit exceeded: ${API_RATE_MAX} requests per minute` },
     }));
     api.use(audit_1.audit);
     api.use('/health', health_business_routes_1.default);
