@@ -10,6 +10,7 @@ export interface HubPractice {
   name: string;
   chairs: number;
   revenuePence: number;
+  takingsPence: number;          // settled payments received, this practice (matches Patient Payments "Received")
   treatmentsClosedPence: number; // plan fees billed (sold), this practice
   treatmentsPaidPence: number;   // plan fees paid (collected), this practice
   appointments: number;
@@ -45,10 +46,14 @@ export interface BusinessHub {
     conversionRate: number;
     newPatients: number;           // booked Dentally new-patient appointments (real PMS)
     treatmentsStarted: number;     // plans started in window (Dentally)
-    treatmentsCompleted: number;   // accepted/completed plan count in window
+    treatmentsCompleted: number;   // completed plan count in window (practitioner activity)
+    treatmentsCompletedValuePence: number; // value of completed plans (private treatment value)
+    treatmentsAcceptedCount: number;       // accepted treatments (Emergent) — 0 until connected
+    treatmentsAcceptedValuePence: number;  // value of accepted treatments (Emergent)
     treatmentsClosedPence: number; // plan fees BILLED in window (sold) — invoice_items
     treatmentsPaidPence: number;   // plan fees PAID in window (collected) — invoice_paid subset
-    cashCollectedPence: number;    // settled receipts banked in window
+    takingsPence: number;          // settled payments received in window (matches Patient Payments "Received")
+    cashCollectedPence: number;    // settled receipts banked in window (== takings)
     turnoverDeltaPct: number | null; // turnover vs prior same-length period; null => no base
     cashDeltaPct: number | null;     // cash vs prior same-length period; null => no base
     prevPeriodLabel: string;         // label for the comparison period ("May 2026")

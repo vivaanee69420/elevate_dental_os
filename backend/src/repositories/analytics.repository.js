@@ -2,7 +2,7 @@
 // Analytics repository — Supabase reads for the analytics domain.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
-import { revokedProviders, revokedSources, pmsHidden, crmHidden } from "../lib/integration-gating.js";
+import { revokedProviders, revokedSources, pmsHidden, crmHidden, emergentConnected } from "../lib/integration-gating.js";
 
 // Max rows we read for an in-Node aggregate. Realistic per-org practice +
 // settled-payment counts sit far below this; if it ever trips, the service
@@ -392,6 +392,21 @@ export const analyticsRepository = {
         });
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
+    },
+    // Treatments ACCEPTED rollup — sourced from the Emergent ops app (manual
+    // acceptance logging; Dentally has no accepted flag). Gated on an active
+    // `emergent` integration: a never-connected org skips the RPC entirely and
+    // returns zeros, so the card renders a "Connect Emergent" placeholder and we
+    // don't need the (still-blocked) table/RPC applied on hosted yet.
+    // Rows: { accepted_count, accepted_value_pence }.
+    async treatmentAcceptedRollup(orgId, sinceISO, untilISO = null, practiceId = null) {
+        if (!(await emergentConnected(orgId))) return { count: 0, value_pence: 0 };
+        const { data, error } = await supabase_1.serviceClient.rpc('treatment_accepted_aggregate', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null, p_practice: practiceId ?? null,
+        });
+        if (error) throw new Error(error.message);
+        const row = (Array.isArray(data) ? data[0] : data) || {};
+        return { count: Number(row.accepted_count || 0), value_pence: Number(row.accepted_value_pence || 0) };
     },
     // Treatment-plan private production split by status, in the window — feeds
     // the Revenue Leakage "lost plans" pool. Presented = all plans started in

@@ -25,9 +25,11 @@ export function GroupOverviewScreen() {
   }, [data, scope]);
 
   const isGroupScope = scope === 'all' || scope === 'practices';
-  const headlineRevenue = isGroupScope
-    ? data?.group.revenuePence ?? 0
-    : inScope.reduce((s, p) => s + p.revenuePence, 0);
+  // Takings = settled payments received (matches the Patient Payments "Received"
+  // tile). Replaces the old invoiced-production "Turnover" headline.
+  const headlineTakings = isGroupScope
+    ? data?.group.takingsPence ?? 0
+    : inScope.reduce((s, p) => s + p.takingsPence, 0);
   // Leads/conversion are ALWAYS the group total, even at practice scope. They
   // come from the paid channels (Google Ads + Meta) + the CRM, which run at the
   // group level and carry no practice_id — can't be split per-practice without
@@ -44,7 +46,7 @@ export function GroupOverviewScreen() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Group Overview"
-        subtitle="Group finances at a glance — turnover, margin, demand and conversion across the practices."
+        subtitle="Group finances at a glance — takings, margin, demand and conversion across the practices."
       />
       <ScopePeriodBar />
 
@@ -59,7 +61,7 @@ export function GroupOverviewScreen() {
       {data && scope !== 'academy' && scope !== 'lab' && (
         <>
           <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
-            <KpiTile label="Turnover" value={formatPence(headlineRevenue)} delta={data.period.label ?? `${data.period.days}-day window`} />
+            <KpiTile label="Takings" value={formatPence(headlineTakings)} delta={data.period.label ?? `${data.period.days}-day window`} />
             <KpiTile label="Margin" value={`${data.group.marginPct}%`} delta="net, from actuals" deltaTone={data.group.marginPct >= 18 ? 'up' : data.group.marginPct > 0 ? 'muted' : 'down'} />
             <KpiTile label="Appointments" value={inScopeSum(inScope, 'appointments').toLocaleString('en-GB')} delta={`${inScopeSum(inScope, 'completed').toLocaleString('en-GB')} completed`} />
             <KpiTile label="No-show rate"

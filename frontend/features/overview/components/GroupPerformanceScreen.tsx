@@ -76,7 +76,7 @@ export function GroupPerformanceScreen() {
   // aren't practice-attributed) — we say so when a practice is selected.
   const isGroupScope = scope === 'all' || scope === 'practices' || scope === 'academy' || scope === 'lab';
   const practices = isGroupScope ? data.practices : data.practices.filter((p) => p.practiceId === scope);
-  const maxTurnover = Math.max(1, ...data.practices.map((p) => p.revenuePence));
+  const maxTakings = Math.max(1, ...data.practices.map((p) => p.takingsPence));
   // Treatments Closed + turnover ARE practice-attributed (invoice_items feed), so
   // a specific practice scopes them to that row. Leads/new-patients are NOT, so
   // avg-value / rev-per-lead stay group-wide (handled below on g.*).
@@ -84,6 +84,9 @@ export function GroupPerformanceScreen() {
   const closedPence = scopedRow ? scopedRow.treatmentsClosedPence : g.treatmentsClosedPence;
   const paidPence = scopedRow ? scopedRow.treatmentsPaidPence : g.treatmentsPaidPence;
   const closedTurnoverBase = scopedRow ? scopedRow.revenuePence : g.revenuePence;
+  // Takings = settled payments received (matches the Patient Payments "Received"
+  // tile). Per-practice when scoped, group total otherwise.
+  const takingsPence = scopedRow ? scopedRow.takingsPence : g.takingsPence;
 
   // Headline KPIs — the group business scorecard. Real feeds: Dentally
   // (turnover, cash banked, treatments, leads) + ads via marketing ROI (spend,
@@ -115,23 +118,19 @@ export function GroupPerformanceScreen() {
   // window (server-side, like-for-like). null base => no chip. Up = emerald.
   const deltaChip = (pct: number | null): { text: string; tone: ChipColour } | null =>
     pct == null ? null : { text: `${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct)}% vs ${g.prevPeriodLabel}`, tone: pct >= 0 ? 'emerald' : 'rose' };
-  const turnoverChip = deltaChip(g.turnoverDeltaPct);
+  // Takings delta = settled-receipts (cash) delta vs the prior same-length period.
   const cashChip = deltaChip(g.cashDeltaPct);
 
   // Row 1 — money + acquisition headline. Row 2 — the lead→treatment funnel.
   const headlineTop: HeadlineKpi[] = [
-    { label: 'Group Turnover', value: formatPence(g.revenuePence), sub: `${windowLabel} · ${g.practices} ${g.practices === 1 ? 'entity' : 'entities'}`,
-      chip: turnoverChip },
+    // Takings = settled payments received in the window — the same feed as the
+    // Patient Payments "Received" tile (settled payments, by processed_at), so the
+    // two screens reconcile. Replaces the old invoiced-production "Turnover" card.
+    // The chip is a like-for-like delta vs the prior same-length period.
+    { label: 'Takings', value: formatPence(takingsPence), sub: `Settled payments received · ${windowLabel}`,
+      chip: cashChip },
     { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
       chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
-    // Cash banked = ALL settled receipts in the window, including payments for
-    // treatment invoiced in prior periods (deposits, payment plans, finance,
-    // debtor collection). It is NOT comparable to in-window turnover, so we never
-    // show a "% of turnover banked" ratio (it routinely exceeds 100% and the
-    // implied "turnover - cash = outstanding" is a fake debtor figure). The chip
-    // is a like-for-like delta vs the prior same-length period instead.
-    { label: 'Cash Collected', value: formatPence(g.cashCollectedPence), sub: `Settled receipts banked · ${windowLabel}`,
-      chip: cashChip },
     { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
       chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
     { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',
@@ -144,8 +143,17 @@ export function GroupPerformanceScreen() {
       chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
     { label: 'Plan Fees Collected', value: formatPence(paidPence), sub: `Plan treatment fees on paid invoices · ${windowLabel}`,
       chip: collectedPct > 0 ? { text: `${collectedPct}% of billed collected`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null },
+    // Treatments Completed — practitioner activity: plans marked completed in the
+    // window (Dentally treatment_plans). Count headline, private-value £ as chip.
+    { label: 'Treatments Completed', value: formatNumber(g.treatmentsCompleted), sub: `Completed by practitioners · ${windowLabel}`,
+      chip: g.treatmentsCompletedValuePence > 0 ? { text: `${formatPence(g.treatmentsCompletedValuePence)} value`, tone: 'emerald' } : null },
+    // Treatments Accepted — sourced from the Emergent ops app (Dentally has no
+    // accepted flag). Placeholder until the emergent integration is connected.
+    { label: 'Treatments Accepted', value: g.treatmentsAcceptedCount > 0 ? formatNumber(g.treatmentsAcceptedCount) : DASH,
+      sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${windowLabel}` : 'Connect Emergent to track acceptance',
+      chip: g.treatmentsAcceptedValuePence > 0 ? { text: `${formatPence(g.treatmentsAcceptedValuePence)} value`, tone: 'emerald' } : null },
     { label: 'Lead → Start Rate', value: `${g.leadToStartRate}%`, sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads`,
-      chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} accepted`, tone: 'emerald' } : null },
+      chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} completed`, tone: 'emerald' } : null },
     { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: 'Paid spend ÷ treatments started',
       chip: connected && spendPence > 0 ? { text: `${formatPence(spendPence)} paid`, tone: 'amber' } : null },
     { label: 'Revenue / Lead', value: formatPence(revPerLead), sub: 'Dentally plan fees ÷ leads (Google · Meta · GHL)',
@@ -265,14 +273,13 @@ export function GroupPerformanceScreen() {
       <div className="grid gap-4 lg:grid-cols-2 items-start">
         <Card>
           <h3 className="display text-lg font-semibold">Business Performance</h3>
-          <p className="text-sm text-ink-muted mt-0.5 mb-3">Turnover and Closed are live from Dentally. Cash, profit, margin and ROAS need Xero + ad mapping — shown once connected.</p>
+          <p className="text-sm text-ink-muted mt-0.5 mb-3">Takings and Closed are live from Dentally. Profit, margin and ROAS need Xero + ad mapping — shown once connected.</p>
           <div className="overflow-x-auto">
           <table className="table">
             <thead>
               <tr>
                 <th>Entity</th>
-                <th className="right">Turnover</th>
-                <th className="right">Cash in</th>
+                <th className="right">Takings</th>
                 <th className="right">Closed</th>
                 <th className="right">Profit</th>
                 <th className="right">Margin</th>
@@ -286,12 +293,11 @@ export function GroupPerformanceScreen() {
                   <td className="right">
                     <div className="flex items-center justify-end gap-2">
                       <span className="inline-block h-1.5 w-16 rounded-full bg-border overflow-hidden">
-                        <span className="block h-full rounded-full bg-brand" style={{ width: `${(p.revenuePence / maxTurnover) * 100}%` }} />
+                        <span className="block h-full rounded-full bg-brand" style={{ width: `${(p.takingsPence / maxTakings) * 100}%` }} />
                       </span>
-                      {formatPence(p.revenuePence)}
+                      {formatPence(p.takingsPence)}
                     </div>
                   </td>
-                  <td className="right">{DASH}</td>
                   <td className="right">{formatPence(p.treatmentsClosedPence)}</td>
                   <td className="right">{DASH}</td>
                   <td className="right">{DASH}</td>
@@ -300,8 +306,7 @@ export function GroupPerformanceScreen() {
               ))}
               <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
                 <td><strong>Group</strong></td>
-                <td className="right">{formatPence(g.revenuePence)}</td>
-                <td className="right">{DASH}</td>
+                <td className="right">{formatPence(g.takingsPence)}</td>
                 <td className="right">{formatPence(g.treatmentsClosedPence)}</td>
                 <td className="right">{DASH}</td>
                 <td className="right">{g.marginPct > 0 ? `${g.marginPct}%` : DASH}</td>
