@@ -60,35 +60,73 @@ export function GroupOverviewScreen() {
 
       {data && scope !== 'academy' && scope !== 'lab' && (
         <>
-          <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-6">
-            <KpiTile label="Takings" value={formatPence(headlineTakings)} delta={data.period.label ?? `${data.period.days}-day window`} />
-            {/* Treatments Completed (practitioner activity) + Accepted (Emergent),
-                side by side with Takings. Both org-wide (treatment plans carry no
-                practice_id), so they show the group figure at any scope. */}
-            <KpiTile
-              label="Treatments Completed"
-              value={data.group.treatmentsCompleted.toLocaleString('en-GB')}
-              delta={data.group.treatmentsCompletedValuePence > 0 ? `${formatPence(data.group.treatmentsCompletedValuePence)} value` : 'completed by practitioners'}
-              deltaTone="up"
-            />
-            <KpiTile
-              label="Treatments Accepted"
-              value={data.group.treatmentsAcceptedCount > 0 ? data.group.treatmentsAcceptedCount.toLocaleString('en-GB') : '—'}
-              delta={data.group.treatmentsAcceptedCount > 0 ? 'accepted (Emergent)' : 'connect Emergent'}
-            />
-            <KpiTile label="Margin" value={`${data.group.marginPct}%`} delta="net, from actuals" deltaTone={data.group.marginPct >= 18 ? 'up' : data.group.marginPct > 0 ? 'muted' : 'down'} />
-            <KpiTile label="Appointments" value={inScopeSum(inScope, 'appointments').toLocaleString('en-GB')} delta={`${inScopeSum(inScope, 'completed').toLocaleString('en-GB')} completed`} />
-            <KpiTile label="No-show rate"
-              value={data.group.noShowTracked ? `${rate(inScopeSum(inScope, 'noShows'), inScopeSum(inScope, 'appointments'))}%` : '—'}
-              delta={data.group.noShowTracked ? `${inScopeSum(inScope, 'noShows').toLocaleString('en-GB')} no-shows` : 'not tracked in Dentally'}
-              deltaTone="down" />
-            <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={leadsBreakdown || (isGroupScope ? 'Google · Meta · GHL' : 'all sources — all practices')} />
-            <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'leads → new patients booked' : 'all sources — all practices'} deltaTone="up" />
+          {/* Cards grouped by data source, each under its own label. */}
+          {/* Dentally — PMS: payments (takings), treatment plans, appointments. */}
+          <div>
+            <SectionLabel>Dentally</SectionLabel>
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+              <KpiTile label="Takings" value={formatPence(headlineTakings)} delta={data.period.label ?? `${data.period.days}-day window`} />
+              {/* Treatments Completed = practitioner activity (treatment_plans).
+                  Org-wide (plans carry no practice_id), so it shows the group figure. */}
+              <KpiTile
+                label="Treatments Completed"
+                value={data.group.treatmentsCompleted.toLocaleString('en-GB')}
+                delta={data.group.treatmentsCompletedValuePence > 0 ? `${formatPence(data.group.treatmentsCompletedValuePence)} value` : 'completed by practitioners'}
+                deltaTone="up"
+              />
+              <KpiTile label="Appointments" value={inScopeSum(inScope, 'appointments').toLocaleString('en-GB')} delta={`${inScopeSum(inScope, 'completed').toLocaleString('en-GB')} completed`} />
+              <KpiTile label="No-show rate"
+                value={data.group.noShowTracked ? `${rate(inScopeSum(inScope, 'noShows'), inScopeSum(inScope, 'appointments'))}%` : '—'}
+                delta={data.group.noShowTracked ? `${inScopeSum(inScope, 'noShows').toLocaleString('en-GB')} no-shows` : 'not tracked in Dentally'}
+                deltaTone="down" />
+            </div>
           </div>
 
-          <GhlSummaryCards since={win.since} until={win.until} />
+          {/* Emergent — treatment acceptance staff log in the ops app. */}
+          <div>
+            <SectionLabel>Emergent</SectionLabel>
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+              <KpiTile
+                label="Treatments Accepted"
+                value={data.group.treatmentsAcceptedCount > 0 ? data.group.treatmentsAcceptedCount.toLocaleString('en-GB') : '—'}
+                delta={data.group.treatmentsAcceptedCount > 0 ? 'accepted (Emergent)' : 'connect Emergent'}
+              />
+            </div>
+          </div>
+
+          {/* Marketing — Google Ads + Meta + CRM lead acquisition. */}
+          <div>
+            <SectionLabel>Marketing</SectionLabel>
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+              <KpiTile label="Leads" value={leadsValue.toLocaleString('en-GB')} delta={leadsBreakdown || (isGroupScope ? 'Google · Meta · GHL' : 'all sources — all practices')} />
+              <KpiTile label="Conversion" value={`${conversionValue}%`} delta={isGroupScope ? 'leads → new patients booked' : 'all sources — all practices'} deltaTone="up" />
+            </div>
+          </div>
+
+          {/* QuickBooks / Xero — P&L actuals (net margin). */}
+          <div>
+            <SectionLabel>QuickBooks</SectionLabel>
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+              <KpiTile label="Margin" value={`${data.group.marginPct}%`} delta="net, from actuals" deltaTone={data.group.marginPct >= 18 ? 'up' : data.group.marginPct > 0 ? 'muted' : 'down'} />
+            </div>
+          </div>
+
+          {/* GoHighLevel — CRM contacts, leads, pipeline, conversion. */}
+          <div>
+            <SectionLabel>GoHighLevel</SectionLabel>
+            <GhlSummaryCards since={win.since} until={win.until} />
+          </div>
         </>
       )}
+    </div>
+  );
+}
+
+// Source-group title above a row of KPI cards (Dentally, GoHighLevel, …).
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <div className="text-xs font-semibold uppercase tracking-wide text-ink-muted mb-2">
+      {children}
     </div>
   );
 }
