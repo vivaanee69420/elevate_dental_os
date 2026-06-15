@@ -157,6 +157,35 @@ describe('selectStaleAppointmentIds (delete-reconciliation safety)', () => {
     });
 });
 
+describe('selectStalePaymentIds (payment delete-reconciliation safety)', () => {
+    const { selectStalePaymentIds } = __test;
+    // Payments key on external_id (not pms_external_id).
+    const rows = (ids) => ids.map((x) => ({ id: `pay-${x}`, external_id: String(x) }));
+    it('flags only payments Dentally voided/removed (id no longer in the feed)', () => {
+        // Mirrors the live finding: a voided duplicate (32459) + a voided payment
+        // (32485) linger in our DB and inflate Takings.
+        const our = rows([32450, 32459, 32485, 32500]);
+        const remote = new Set(['32450', '32500']); // 32459 + 32485 voided in Dentally
+        const { ids, aborted } = selectStalePaymentIds(our, remote);
+        expect(aborted).toBeNull();
+        expect(ids.sort()).toEqual(['pay-32459', 'pay-32485']);
+    });
+    it('aborts (deletes nothing) on an empty remote set — a bad/partial pull', () => {
+        const { ids, aborted } = selectStalePaymentIds(rows([1, 2, 3]), new Set());
+        expect(aborted).toBe('empty_remote');
+        expect(ids).toEqual([]);
+    });
+    it('aborts when it would delete more than half the window (silent shape change)', () => {
+        const our = rows([1, 2, 3, 4]);
+        const { ids, aborted } = selectStalePaymentIds(our, new Set(['1']));
+        expect(aborted).toBe('safety_threshold');
+        expect(ids).toEqual([]);
+    });
+    it('no-ops cleanly on an empty window', () => {
+        expect(selectStalePaymentIds([], new Set())).toEqual({ ids: [], aborted: null });
+    });
+});
+
 describe('invoiceItemRow', () => {
     const ORG = 'org-1';
     const invoiceMap = new Map([
