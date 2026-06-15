@@ -898,6 +898,95 @@ export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO
     return { deleted, remote: remoteIds.size, scanned: ourRows.length };
 }
 
+// Pure decision step for the payment delete-reconciliation, mirroring
+// selectStaleAppointmentIds. Payments key on `external_id`. Same fail-closed
+// guards: never act on an empty remote set, never delete more than
+// maxDeleteShare of the window (a remote-shape change must not wipe real money).
+export function selectStalePaymentIds(ourRows, remoteIdSet, { maxDeleteShare = 0.5 } = {}) {
+    const stale = (ourRows || []).filter((r) => r.external_id != null && !remoteIdSet.has(String(r.external_id)));
+    if (!ourRows || ourRows.length === 0) return { ids: [], aborted: null };
+    if (remoteIdSet.size === 0) return { ids: [], aborted: 'empty_remote' };
+    if (stale.length > ourRows.length * maxDeleteShare) return { ids: [], aborted: 'safety_threshold' };
+    return { ids: stale.map((r) => r.id), aborted: null };
+}
+
+// Window-scoped delete reconciliation for PAYMENTS. Dentally's List-payments feed
+// (filtered by `dated_after`/`dated_before` on `dated_on`) never returns VOIDED or
+// DELETED payments — they are simply gone — so our upsert-only sync keeps stale
+// rows forever and Takings drifts ABOVE Dentally's own report (confirmed: a voided
+// duplicate £687 + a voided £1,452 inflated one practice's month by £1,939). Pull
+// the AUTHORITATIVE id set for a bounded payment-date window, then delete our
+// dentally-sourced payment rows in that window whose id Dentally no longer returns.
+//
+// Safety (this deletes financial rows, so it is fail-closed) — mirrors the
+// appointment reconcile: only source='dentally' rows inside [sinceISO, untilISO);
+// remote pull padded ±1 day (remote set can only be a SUPERSET, never miss a row);
+// ABORTS (deletes nothing) unless it FULLY paged the window — any page-cap hit,
+// HTTP error, fetch error, or empty/ambiguous body is "unknown", never "deleted";
+// the pure selectStalePaymentIds guard aborts on an empty remote set or an
+// implausibly large delete share.
+export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, untilISO, maxPages = MAX_PAGES } = {}) {
+    if (!sinceISO || !untilISO) return { deleted: 0, aborted: 'no_window' };
+    const pad = 86400000; // ±1 day, in ms
+    // /payments filters on dated_on (a DATE) via dated_after/dated_before.
+    const dated_after = new Date(Date.parse(sinceISO) - pad).toISOString().slice(0, 10);
+    const dated_before = new Date(Date.parse(untilISO) + pad).toISOString().slice(0, 10);
+    const params = { dated_after, dated_before };
+    const remoteIds = new Set();
+    let page = 1;
+    let complete = false;
+    for (;;) {
+        const url = new URL(`${base}/payments`);
+        for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
+        let res = null;
+        try {
+            res = await fetchWithTimeout(url, { headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' } });
+        } catch {
+            return { deleted: 0, aborted: 'fetch_error' }; // partial -> never delete
+        }
+        if (res.status === 429) { const ra = Number(res.headers.get('retry-after')) || 2; await sleep(ra * 1000); continue; }
+        if (!res.ok) return { deleted: 0, aborted: `http_${res.status}` };
+        const body = await res.json();
+        const key = Object.keys(body).find((k) => Array.isArray(body[k]));
+        const items = key ? body[key] : [];
+        for (const p of items) if (p?.id != null) remoteIds.add(String(p.id));
+        const totalPages = body.meta?.total_pages;
+        const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
+        if (done) { complete = true; break; }
+        if (page >= maxPages) break; // window too big to fully page -> abort below
+        page++;
+        await sleep(RATE_DELAY_MS);
+    }
+    if (!complete) return { deleted: 0, aborted: 'page_cap' };
+    // Our dentally payments in the SAME (unpadded) window, by processed_at (= dated_on).
+    const ourRows = [];
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('payments')
+            .select('id, external_id')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .gte('processed_at', sinceISO)
+            .lt('processed_at', untilISO)
+            .not('external_id', 'is', null)
+            .range(from, from + PAGE - 1);
+        if (error) return { deleted: 0, aborted: 'db_read_error' };
+        const rows = data ?? [];
+        ourRows.push(...rows);
+        if (rows.length < PAGE) break;
+    }
+    const { ids: staleIds, aborted } = selectStalePaymentIds(ourRows, remoteIds);
+    if (aborted) return { deleted: 0, aborted, remote: remoteIds.size, scanned: ourRows.length };
+    let deleted = 0;
+    for (let i = 0; i < staleIds.length; i += 500) {
+        const chunk = staleIds.slice(i, i + 500);
+        const { error } = await supabase_1.serviceClient.from('payments').delete().in('id', chunk);
+        if (!error) deleted += chunk.length;
+    }
+    return { deleted, remote: remoteIds.size, scanned: ourRows.length };
+}
+
 async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
     let synced = 0;
     let skipped = 0;
@@ -1415,6 +1504,31 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             pays = await pullPayments(orgId, base, auth, payParams, siteMap, contactMap, reporter(2), maxPages);
             await markPhaseDone('payments');
         }
+        // Delete-reconciliation for payments: prune rows Dentally has VOIDED/removed
+        // but our upsert-only sync still holds — the source of Takings drift above
+        // Dentally's own report (voided duplicates / reversed payments). Same recent
+        // ±35-day window + fail-closed guards as the appointment prune. Non-fatal;
+        // skipped on the partial bootstrap (recent) pull.
+        if (!recent && want('payments')) {
+            try {
+                const wMs = 35 * 86400000;
+                // Nightly/incremental: a recent ±35-day window (voids happen near the
+                // payment date — cheap, one extra paged id-pull). The one-time full
+                // backfill widens the scan back to the 2-year history so even an old
+                // void clears once; nightly is unaffected. maxPages is already
+                // BACKFILL_MAX_PAGES on the full path, so the wide window can page out.
+                const reconSince = full ? backfillSince() : new Date(Date.now() - wMs).toISOString();
+                const reconUntil = new Date(Date.now() + wMs).toISOString();
+                const prunedPay = await reconcileDeletedPayments(orgId, base, auth, { sinceISO: reconSince, untilISO: reconUntil, maxPages });
+                if (prunedPay.aborted) {
+                    console.warn(`[dentally] payment prune aborted (${prunedPay.aborted}) — no rows deleted`);
+                } else if (prunedPay.deleted) {
+                    console.warn(`[dentally] payment prune removed ${prunedPay.deleted} stale row(s) Dentally no longer has`);
+                }
+            } catch (err) {
+                console.warn(`[dentally] payment prune skipped: ${err?.message || err}`);
+            }
+        }
         // Treatment plans = production per practitioner (for the Associate Pay
         // Run). Same window as payments; reuse the practitioner + contact maps to
         // resolve associate_id / contact_id. Weighted phase 3; never fail the
@@ -1615,4 +1729,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow, classifyWebhook };
+export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow, classifyWebhook, selectStaleAppointmentIds, selectStalePaymentIds };
