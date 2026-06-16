@@ -9,14 +9,14 @@
 // read false-green). The fully-editable spreadsheet engine + account-level CoA
 // mapping are the Phase 3 persistence slice.
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { PageHeader, KpiTile, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable, Explainer } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useQboAccounts } from '@/features/finance/hooks';
 import { Panel, PanelHead, NoteFoot, Pill, th, td } from './os-ui';
 import { usePLMargin } from '../pl-margin-hooks';
-import type { PLLine } from '../pl-margin-api';
+import type { PLLine, PLBreakdownLine } from '../pl-margin-api';
 
 const pct = (n: number) => `${n.toFixed(1)}%`;
 const marginTone = (m: number): 'good' | 'warn' | 'bad' => (m >= 18 ? 'good' : m >= 10 ? 'warn' : 'bad');
@@ -150,6 +150,13 @@ function QboFilterBar({
 
 function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['data']> }) {
   const [linesInfo, setLinesInfo] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggleRow = (field: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(field)) next.delete(field); else next.add(field);
+      return next;
+    });
   const t = data.statement;
   const staffRatio = t.revPence ? (t.staffPence / t.revPence) * 100 : 0;
   const isQbo = data.source === 'quickbooks';
@@ -220,7 +227,7 @@ function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['da
       <Panel>
         <PanelHead
           title="Profit & Loss — group statement"
-          sub="Revenue down to net operating profit for the current scope and period."
+          sub="Revenue down to net operating profit for the current scope and period. Click a line to see the individual accounts behind it."
           right={
             <div className="flex items-center gap-2">
               <button
@@ -256,13 +263,37 @@ function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['da
               {STATEMENT.map((line) => {
                 const isSub = line.kind === 'sub' || line.kind === 'total';
                 const neg = line.kind === 'direct' || line.kind === 'op';
+                // Subtotals (gross/net) have no account detail; the other lines
+                // drill into the individual accounts that roll into them.
+                const detail = (data.breakdown as unknown as Record<string, PLBreakdownLine[]>)[line.field] ?? [];
+                const canExpand = detail.length > 0;
+                const isOpen = expanded.has(line.field as string);
                 return (
-                  <tr key={line.field} className={`border-b border-border last:border-0 ${line.kind === 'sub' ? 'border-t border-border' : ''} ${line.kind === 'total' ? 'border-t-2' : ''}`}>
-                    <td className={`${td} ${line.kind === 'rev' || isSub ? 'font-semibold' : ''}`}>{line.label}</td>
-                    <td className={`${td} text-right tabular-nums ${isSub ? 'font-bold' : ''} ${neg ? 'text-danger' : ''}`}>
-                      {`${neg ? '−' : ''}${formatPence(t[line.field])}`}
-                    </td>
-                  </tr>
+                  <Fragment key={line.field}>
+                    <tr
+                      className={`border-b border-border last:border-0 ${line.kind === 'sub' ? 'border-t border-border' : ''} ${line.kind === 'total' ? 'border-t-2' : ''} ${canExpand ? 'cursor-pointer hover:bg-surface-muted' : ''}`}
+                      onClick={canExpand ? () => toggleRow(line.field as string) : undefined}
+                    >
+                      <td className={`${td} ${line.kind === 'rev' || isSub ? 'font-semibold' : ''}`}>
+                        {canExpand && (
+                          <span className="inline-block w-3 mr-1 text-[10px] text-ink-muted" aria-hidden>{isOpen ? '▾' : '▸'}</span>
+                        )}
+                        {line.label}
+                        {canExpand && <span className="ml-1 text-[11px] text-ink-muted">({detail.length})</span>}
+                      </td>
+                      <td className={`${td} text-right tabular-nums ${isSub ? 'font-bold' : ''} ${neg ? 'text-danger' : ''}`}>
+                        {`${neg ? '−' : ''}${formatPence(t[line.field])}`}
+                      </td>
+                    </tr>
+                    {isOpen && detail.map((d) => (
+                      <tr key={`${line.field}:${d.name}`} className="border-b border-border last:border-0 bg-surface-muted/40">
+                        <td className={`${td} pl-7 text-ink-muted`}>{d.name}</td>
+                        <td className={`${td} text-right tabular-nums text-ink-muted ${neg ? 'text-danger' : ''}`}>
+                          {neg ? `−${formatPence(Math.abs(d.amountPence))}` : `${d.amountPence < 0 ? '−' : ''}${formatPence(Math.abs(d.amountPence))}`}
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
                 );
               })}
               <tr className="border-b border-border last:border-0">
