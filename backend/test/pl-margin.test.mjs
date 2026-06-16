@@ -100,6 +100,30 @@ describe('plMargin', () => {
     expect(r.entities).toEqual([]);
   });
 
+  it('a BST month window resolves to that single London month, not the prior month', async () => {
+    // Regression: the frontend sends London-local-midnight UTC instants. During
+    // BST, 1 Jun London = 2026-05-31T23:00Z and 1 Jul London = 2026-06-30T23:00Z.
+    // Reading getUTCMonth() off the `since` leaked May into a June request, summing
+    // May+June and mislabelling the result "Trailing 12mo". The window must cover
+    // June ALONE → basis actuals-month, June figures only.
+    const fin = [
+      { practice_id: 'p1', period: '2026-05', dental_bucket: 'revenue', amount_pence: 1000000, source: 'xero' },
+      { practice_id: 'p1', period: '2026-06', dental_bucket: 'revenue', amount_pence: 300000, source: 'xero' },
+      { practice_id: 'p1', period: '2026-06', dental_bucket: 'staff', amount_pence: 100000, source: 'xero' },
+    ];
+    stub(fin);
+    const r = await svc.plMargin(ORG, {
+      scope: 'all', period: 'month',
+      since: '2026-05-31T23:00:00.000Z', // London 2026-06-01 00:00 (BST)
+      until: '2026-06-30T23:00:00.000Z', // London 2026-07-01 00:00 (exclusive)
+      now,
+    });
+    expect(r.basis).toBe('actuals-month');
+    expect(r.statement.revPence).toBe(300000); // June only — NOT 1,300,000
+    expect(r.statement.staffPence).toBe(100000);
+    expect(r.statement.netPence).toBe(200000);
+  });
+
   it('no actuals → honest empty state (hasData false, basis none)', async () => {
     stub([]);
     const r = await svc.plMargin(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
