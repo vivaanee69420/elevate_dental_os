@@ -505,11 +505,15 @@ export function chairRecovery(input) {
     const upliftPctPoints = Math.max(0, input.upliftPctPoints || 0);
     const revPerBookedHrPence = Math.max(0, input.revPerBookedHrPence || 0);
     const currentOccupancyPct = Math.max(0, Math.min(100, input.currentOccupancyPct || 0));
-    const recoveryHrsYr = capHrsYr * upliftPctPoints / 100;
+    // Cap uplift to the real headroom — you can't recover past 100% occupancy.
+    // Without this, a fully-booked entity still shows phantom "revenue unlocked".
+    const headroomPctPoints = Math.max(0, 100 - currentOccupancyPct);
+    const effectiveUpliftPctPoints = Math.min(upliftPctPoints, headroomPctPoints);
+    const recoveryHrsYr = capHrsYr * effectiveUpliftPctPoints / 100;
     return {
         recoveryHrsYr: Math.round(recoveryHrsYr),
         revenueUnlockedPence: pence(recoveryHrsYr * revPerBookedHrPence),
-        newOccupancyPct: pct(Math.min(100, currentOccupancyPct + upliftPctPoints)),
+        newOccupancyPct: pct(Math.min(100, currentOccupancyPct + effectiveUpliftPctPoints)),
     };
 }
 
