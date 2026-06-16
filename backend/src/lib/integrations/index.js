@@ -3,6 +3,7 @@
 export * from './provider-interface.js';
 import './broker-provider.js';
 import './gohighlevel-provider.js';
+import './dentally-provider.js';
 import './xero-provider.js';
 import './quickbooks-provider.js';
 import './google-ads-provider.js';

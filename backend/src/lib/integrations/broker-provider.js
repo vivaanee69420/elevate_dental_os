@@ -39,7 +39,5 @@ function makeBroker(id, label, category, pasteHint) {
     registerProvider({ id, label, authStyle: 'broker_key', category }, impl);
 }
 
-makeBroker('dentally', 'Dentally', 'pms',
-    'Paste your Dentally Bearer token from Dentally → Settings → API.');
 makeBroker('soe', 'Software of Excellence (Exact)', 'pms',
     'Paste your SOE/Exact API key from your SOE practice settings.');
