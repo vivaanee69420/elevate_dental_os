@@ -21,22 +21,44 @@ const BRAND = 'var(--brand)';
 const uid = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.round(Math.random() * 1e6)}`).slice(0, 8);
 
-// A sensible starter grid for a new sheet: three months x a basic P&L skeleton.
+// The standard P&L skeleton every starter grid uses (revenue down to net).
+const baseLines = (): SheetLine[] => [
+  { id: uid(), label: 'Revenue', kind: 'line' },
+  { id: uid(), label: 'Staff', kind: 'line' },
+  { id: uid(), label: 'Lab & materials', kind: 'line' },
+  { id: uid(), label: 'Other overheads', kind: 'line' },
+  { id: uid(), label: 'Net profit', kind: 'total' },
+];
+const cols = (labels: string[]): SheetCol[] => labels.map((label) => ({ id: uid(), label }));
+
+// A plain blank-ish starter: three months x the P&L skeleton.
 function scaffold() {
-  const cols: SheetCol[] = [
-    { id: uid(), label: 'Month 1' },
-    { id: uid(), label: 'Month 2' },
-    { id: uid(), label: 'Month 3' },
-  ];
-  const lines: SheetLine[] = [
-    { id: uid(), label: 'Revenue', kind: 'line' },
-    { id: uid(), label: 'Staff', kind: 'line' },
-    { id: uid(), label: 'Lab & materials', kind: 'line' },
-    { id: uid(), label: 'Other overheads', kind: 'line' },
-    { id: uid(), label: 'Net profit', kind: 'total' },
-  ];
-  return { cols, lines, cells: {} as SheetCells };
+  return { cols: cols(['Month 1', 'Month 2', 'Month 3']), lines: baseLines(), cells: {} as SheetCells };
 }
+
+// Quick-start templates surfaced on the empty state so a first sheet is one click
+// away. Each just pre-shapes the grid (name + columns + the shared P&L skeleton);
+// every cell stays empty for the owner to fill. Nothing here touches actuals.
+const TEMPLATES: { key: string; name: string; desc: string; build: () => { cols: SheetCol[]; lines: SheetLine[]; cells: SheetCells } }[] = [
+  {
+    key: 'budget',
+    name: 'Monthly budget',
+    desc: 'Three months of revenue, staff, lab & overheads down to net profit.',
+    build: () => ({ cols: cols(['Month 1', 'Month 2', 'Month 3']), lines: baseLines(), cells: {} }),
+  },
+  {
+    key: 'whatif',
+    name: 'What-if scenario',
+    desc: 'A baseline beside a scenario — model a fee uplift, a new hire or a cost cut.',
+    build: () => ({ cols: cols(['Baseline', 'Scenario']), lines: baseLines(), cells: {} }),
+  },
+  {
+    key: 'annual',
+    name: 'Annual plan',
+    desc: 'Four quarters across the same P&L skeleton for a full-year view.',
+    build: () => ({ cols: cols(['Q1', 'Q2', 'Q3', 'Q4']), lines: baseLines(), cells: {} }),
+  },
+];
 
 interface Draft {
   name: string;
@@ -66,9 +88,9 @@ export function PlSheetsPanel() {
     if (sheet) setDraft({ name: sheet.name, cols: sheet.cols ?? [], lines: sheet.lines ?? [], cells: sheet.cells ?? {} });
   }, [sheet]);
 
-  const newSheet = async () => {
-    const s = scaffold();
-    const created = await create.mutateAsync({ name: 'Untitled scenario', type: 'scenario', ...s });
+  const newSheet = async (tpl?: (typeof TEMPLATES)[number]) => {
+    const s = tpl ? tpl.build() : scaffold();
+    const created = await create.mutateAsync({ name: tpl ? tpl.name : 'Untitled scenario', type: 'scenario', ...s });
     setSelectedId(created.id);
   };
 
@@ -113,34 +135,80 @@ export function PlSheetsPanel() {
         subtitle="Editable what-if / budget P&L grids. These are planning sheets — they sit beside your real P&L and never change your actuals or valuation."
       />
 
-      <div className="flex items-center gap-2 flex-wrap">
-        {(sheets ?? []).map((s) => (
+      {(sheets ?? []).length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(sheets ?? []).map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setSelectedId(s.id)}
+              className="rounded-xl px-3 py-2 text-[13px] font-semibold border"
+              style={{
+                borderColor: s.id === selectedId ? BRAND : 'var(--border)',
+                color: s.id === selectedId ? BRAND : 'var(--ink-muted)',
+                background: s.id === selectedId ? 'rgba(14,124,123,0.05)' : 'transparent',
+              }}
+            >
+              {s.name}
+            </button>
+          ))}
           <button
-            key={s.id}
-            onClick={() => setSelectedId(s.id)}
-            className="rounded-xl px-3 py-2 text-[13px] font-semibold border"
-            style={{
-              borderColor: s.id === selectedId ? BRAND : 'var(--border)',
-              color: s.id === selectedId ? BRAND : 'var(--ink-muted)',
-              background: s.id === selectedId ? 'rgba(14,124,123,0.05)' : 'transparent',
-            }}
+            onClick={() => newSheet()}
+            disabled={create.isPending}
+            className="rounded-xl px-3 py-2 text-[13px] font-semibold border border-dashed disabled:opacity-60"
+            style={{ borderColor: BRAND, color: BRAND }}
           >
-            {s.name}
+            {create.isPending ? 'Creating…' : '+ New sheet'}
           </button>
-        ))}
-        <button
-          onClick={newSheet}
-          disabled={create.isPending}
-          className="rounded-xl px-3 py-2 text-[13px] font-semibold border border-dashed disabled:opacity-60"
-          style={{ borderColor: BRAND, color: BRAND }}
-        >
-          {create.isPending ? 'Creating…' : '+ New sheet'}
-        </button>
-      </div>
+        </div>
+      )}
 
       {isLoading && <EmptyState message="Loading scenario sheets…" />}
       {!isLoading && (sheets ?? []).length === 0 && (
-        <EmptyState message="No scenario sheets yet — create one to model a budget or what-if P&L." />
+        <div className="card-padded flex flex-col items-center text-center gap-6 py-12">
+          {/* Spreadsheet glyph — no emoji (project rule 7). */}
+          <div
+            className="flex items-center justify-center w-14 h-14 rounded-2xl"
+            style={{ background: 'rgba(14,124,123,0.08)', color: BRAND }}
+            aria-hidden
+          >
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M3 15h18M9 3v18" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="display text-xl">Plan a budget or test a what-if</h3>
+            <p className="text-[13px] text-ink-muted max-w-[480px] mt-1.5 leading-relaxed">
+              A scenario sheet is an editable P&amp;L grid you fill in by hand. It sits beside your real numbers
+              for planning — it never changes your actuals or your valuation. Pick a starting point:
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3 w-full max-w-[680px]">
+            {TEMPLATES.map((tpl) => (
+              <button
+                key={tpl.key}
+                onClick={() => newSheet(tpl)}
+                disabled={create.isPending}
+                className="group text-left rounded-2xl border border-border bg-card p-4 transition hover:shadow-panel-sm hover:border-[color:var(--brand)] disabled:opacity-60"
+              >
+                <div className="text-[13px] font-semibold text-ink">{tpl.name}</div>
+                <div className="text-[12px] text-ink-muted mt-1 leading-relaxed">{tpl.desc}</div>
+                <div className="text-[12px] font-semibold mt-3" style={{ color: BRAND }}>
+                  {create.isPending ? 'Creating…' : 'Start →'}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={() => newSheet()}
+            disabled={create.isPending}
+            className="text-[12px] font-semibold text-ink-muted hover:text-ink underline underline-offset-4 disabled:opacity-60"
+          >
+            or start from a blank sheet
+          </button>
+        </div>
       )}
       {create.isError && <AlertRow tone="bad" title="Couldn't create sheet" body="You may not have finance edit permission." />}
 
