@@ -8,14 +8,18 @@
 // the explicit organisation_id filter is the only app-layer tenant guard).
 // ============================================================================
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { supaRec } from './setup.js';
 import { invalidate as invalidateGating } from '../src/lib/integration-gating.js';
 
 const svc = (await import('../src/services/analytics.service.js'))
   .analyticsService;
+const analyticsTest = (await import('../src/services/analytics.service.js'))
+  .__test;
 const repo = (await import('../src/repositories/analytics.repository.js'))
   .analyticsRepository;
+const bhRepo = (await import('../src/repositories/business-health.repository.js'))
+  .businessHealthRepository;
 
 const ORG_A = 'org-aaaaaaaa';
 const ORG_B = 'org-bbbbbbbb';
@@ -867,5 +871,54 @@ describe('businessHub — Takings, Treatments Completed value, Treatments Accept
     expect(res.group.treatmentsAcceptedCount).toBe(7);
     expect(res.group.treatmentsAcceptedValuePence).toBe(4200000);
     expect(supaRec.rpcCalls.some((c) => c.fn === 'treatment_accepted_aggregate')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// baselineAsOf — the AI must ground a CLOSED (past) period on the baseline/
+// targets that were in effect THEN (business_health_snapshots.inputs, 000054),
+// not today's overwrite-in-place business_health blob. A window ending on/after
+// today is the live current period. Missing snapshot fields fall back to live.
+// ---------------------------------------------------------------------------
+describe('baselineAsOf — historised vs live manual baseline for AI grounding', () => {
+  const { baselineAsOf } = analyticsTest;
+  const NOW = new Date('2026-06-16T09:00:00Z');
+  const ORG = 'org-asof';
+  const LIVE = { baseline: { rev: 'live' }, targets: { rev: 'liveT' } };
+  const SNAP = { baseline: { rev: 'snap' }, targets: { rev: 'snapT' } };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('current period (window ends on/after today) → uses the live blob, never reads a snapshot', async () => {
+    const live = vi.spyOn(repo, 'baselineMaybe').mockResolvedValue(LIVE);
+    const asof = vi.spyOn(bhRepo, 'getInputsAsOf').mockResolvedValue(SNAP);
+    // June 2026 exclusive end = 2026-07-01 → asOfDate 2026-06-30 >= today.
+    const out = await baselineAsOf(ORG, { until: '2026-07-01T00:00:00.000Z' }, NOW);
+    expect(asof).not.toHaveBeenCalled();
+    expect(live).toHaveBeenCalledWith(ORG);
+    expect(out).toEqual(LIVE);
+  });
+
+  it('past period → reads the snapshot as-of the period last day and grounds on it', async () => {
+    vi.spyOn(repo, 'baselineMaybe').mockResolvedValue(LIVE);
+    const asof = vi.spyOn(bhRepo, 'getInputsAsOf').mockResolvedValue(SNAP);
+    // Sept 2025 exclusive end = 2025-10-01 → asOfDate is the period last day 2025-09-30.
+    const out = await baselineAsOf(ORG, { until: '2025-10-01T00:00:00.000Z' }, NOW);
+    expect(asof).toHaveBeenCalledWith(ORG, '2025-09-30');
+    expect(out).toEqual(SNAP);
+  });
+
+  it('past period, partial snapshot → missing fields fall back to the live blob', async () => {
+    vi.spyOn(repo, 'baselineMaybe').mockResolvedValue(LIVE);
+    vi.spyOn(bhRepo, 'getInputsAsOf').mockResolvedValue({ baseline: { rev: 'snap' } }); // no targets
+    const out = await baselineAsOf(ORG, { until: '2025-10-01T00:00:00.000Z' }, NOW);
+    expect(out).toEqual({ baseline: { rev: 'snap' }, targets: LIVE.targets });
+  });
+
+  it('past period, no snapshot yet → falls back entirely to the live blob (no fabrication)', async () => {
+    vi.spyOn(repo, 'baselineMaybe').mockResolvedValue(LIVE);
+    vi.spyOn(bhRepo, 'getInputsAsOf').mockResolvedValue(null);
+    const out = await baselineAsOf(ORG, { until: '2025-10-01T00:00:00.000Z' }, NOW);
+    expect(out).toEqual(LIVE);
   });
 });
