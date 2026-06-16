@@ -10,6 +10,9 @@ import { integrationRepository } from "../repositories/integration.repository.js
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { applyWebhookEvent } from "../lib/integrations/dentally-sync.js";
 import { applyWebhookEvent as applyGhlWebhookEvent, mapWebhookEventType as mapGhlEventType } from "../lib/integrations/gohighlevel-sync.js";
+import { treatmentAcceptedRepository } from "../repositories/treatment-accepted.repository.js";
+import { emergentPracticeMapRepository } from "../repositories/emergent-practice-map.repository.js";
+import { mapRecord as mapEmergentRecord, externalId as emergentExternalId } from "../lib/integrations/emergent-sync.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
 // Resource keys, most specific first: 'invoice_item' contains 'invoice', and a
@@ -168,6 +171,74 @@ export const webhookService = {
             results.push(await applyWebhookEvent(orgId, resourceType, rec, action));
         }
         return { received: true, resourceType, action, count: results.length, results };
+    },
+
+    // Emergent (Treatments Accepted) real-time webhook. Mirrors `dentally`:
+    // org from the signed URL token, HMAC-SHA256 of the raw body vs the per-org
+    // config.webhook_secret, then route by event. Tenant isolation: the resolved
+    // orgId scopes every downstream write; the body never chooses a tenant.
+    async emergent(token, body, signature, eventHeader) {
+        let orgId;
+        try {
+            orgId = verifyWebhookToken(token);
+        } catch {
+            throw new errors_1.AppError('invalid webhook token', 401);
+        }
+        const integration = await integrationRepository.getByProvider(orgId, 'emergent');
+        if (!integration || integration.status === 'revoked') {
+            throw new errors_1.AppError('emergent not connected', 404);
+        }
+        const secret = integration.config?.webhook_secret;
+        if (!secret) {
+            throw new errors_1.AppError('webhook secret not configured', 401);
+        }
+        const raw = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ''), 'utf8');
+        const expected = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+        const got = String(signature ?? '').replace(/^sha256=/i, '');
+        if (!timingSafeHexEqual(got, expected)) {
+            console.warn('[emergent-webhook] signature rejected', {
+                orgId,
+                sigPresent: !!signature,
+                gotPrefix: got ? got.slice(0, 8) : null,
+                expectedPrefix: expected.slice(0, 8),
+                lenMatch: got.length === expected.length,
+                rawLen: raw.length,
+            });
+            throw new errors_1.AppError('invalid signature', 401);
+        }
+        let parsed;
+        try {
+            parsed = JSON.parse(raw.toString('utf8'));
+        } catch {
+            throw new errors_1.AppError('invalid JSON', 400);
+        }
+        const data = parsed?.data;
+        // The event suffix may arrive in the body or the X-Webhook-Event header.
+        const event = String(parsed?.event || eventHeader || '');
+        const action = event.replace(/^treatment\./, '');
+        if (!data || typeof data !== 'object' || data.business_id == null) {
+            return { received: true, ignored: true, reason: 'no_data' };
+        }
+
+        // Discover the business so it appears in the mapping UI immediately.
+        await emergentPracticeMapRepository.discover(orgId, [
+            { business_id: data.business_id, business_name: data.business_name },
+        ]);
+
+        if (action === 'deleted') {
+            const deleted = await treatmentAcceptedRepository.deleteByExternalId(
+                orgId, 'emergent', emergentExternalId(data),
+            );
+            await integrationRepository.setSyncTime(orgId, 'emergent');
+            return { received: true, action, deleted };
+        }
+        if (action === 'accepted' || action === 'updated') {
+            const explicit = await emergentPracticeMapRepository.resolutionMap(orgId);
+            await treatmentAcceptedRepository.upsert(mapEmergentRecord(data, orgId, { explicit, fuzzy: null }));
+            await integrationRepository.setSyncTime(orgId, 'emergent');
+            return { received: true, action, processed: true };
+        }
+        return { received: true, ignored: true, event };
     },
     // GoHighLevel real-time webhook. orgToken (signed, in the URL) identifies the
     // tenant. GHL workflow webhooks don't HMAC the body, so the unguessable token
