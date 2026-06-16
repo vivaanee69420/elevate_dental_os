@@ -146,6 +146,17 @@ export default function IntegrationsScreen() {
     }
   }
 
+  async function handleConnectWithKey(p: ProviderMeta) {
+    const res = await startConnect.mutateAsync({ provider: p.id, method: 'key' });
+    if (res.requiresKeyPaste) {
+      setBrokerModal({
+        provider: p.id,
+        hint: res.pasteHint ?? 'Paste your API key.',
+        requiresLocationId: res.requiresLocationId,
+      });
+    }
+  }
+
   async function handleBrokerSubmit() {
     if (!brokerModal) return;
     const provider = brokerModal.provider;
@@ -261,13 +272,25 @@ export default function IntegrationsScreen() {
                       </button>
                     </div>
                   ) : (
-                    <button
-                      onClick={() => handleConnect(p)}
-                      disabled={startConnect.isPending}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                    >
-                      <Chip colour="amber">{startConnect.isPending ? '…' : 'Connect'}</Chip>
-                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                      <button
+                        onClick={() => handleConnect(p)}
+                        disabled={startConnect.isPending}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                      >
+                        <Chip colour="amber">{startConnect.isPending ? '…' : 'Connect'}</Chip>
+                      </button>
+                      {p.id === 'dentally' && (
+                        <button
+                          type="button"
+                          onClick={() => handleConnectWithKey(p)}
+                          disabled={startConnect.isPending}
+                          style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: 'var(--muted, #64748b)', textDecoration: 'underline', cursor: 'pointer' }}
+                        >
+                          Use an API key instead
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
               );
