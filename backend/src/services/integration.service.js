@@ -17,7 +17,7 @@ import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
 
 // Providers that receive real-time webhooks (vs poll-only).
-const WEBHOOK_PROVIDERS = new Set(['dentally']);
+const WEBHOOK_PROVIDERS = new Set(['dentally', 'emergent']);
 
 // A long pull has legitimately-silent stretches (bulk upserts, the per-record
 // link loop, conversations) where the syncer emits NO progress for minutes. The
