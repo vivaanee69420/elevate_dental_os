@@ -1,20 +1,13 @@
 import * as webhook_service_1 from "../services/webhook.service.js";
 import { verifyWebhookToken } from "../lib/webhook-token.js";
 export const webhookController = {
-    // Emergent (Treatments Accepted). The per-org token resolves the org so the
-    // URL is live for the owner to paste into Emergent now. INGEST IS PENDING the
-    // Emergent API contract (field names + HMAC signing secret) — we ack 202 and
-    // do NOT yet persist (see treatmentaccepted.md). Once the contract lands: add
-    // express.raw on this path, HMAC-verify, mapRecord -> upsert treatment_accepted.
+    // Emergent (Treatments Accepted). app.js mounts express.raw on
+    // /webhooks/emergent, so req.body is a Buffer (needed for HMAC). The signed
+    // URL token resolves the org; the secret verifies the payload.
     async emergent(req, res) {
-        let orgId;
-        try {
-            orgId = verifyWebhookToken(req.params.token);
-        } catch {
-            return res.status(401).json({ error: 'invalid_token' });
-        }
-        console.warn(`[emergent] webhook received for org ${orgId} — ingest pending API contract, not persisted`);
-        return res.status(202).json({ received: true, processed: false, reason: 'emergent_ingest_pending_contract' });
+        const sig = req.headers['x-webhook-signature'];
+        const event = req.headers['x-webhook-event'];
+        res.json(await webhook_service_1.webhookService.emergent(req.params.token, req.body, sig, event));
     },
     async stripe(req, res) {
         const sig = req.headers['stripe-signature'];
