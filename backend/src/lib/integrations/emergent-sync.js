@@ -101,7 +101,7 @@ async function loadPracticeMap(orgId) {
 
 // Build the full resolution input for mapRecord: the explicit map-table entries
 // plus the legacy fuzzy practices-by-name map (fallback). Both org-scoped.
-async function loadResolution(orgId) {
+export async function loadResolution(orgId) {
     const [explicit, fuzzy] = await Promise.all([
         emergentPracticeMapRepository.resolutionMap(orgId),
         loadPracticeMap(orgId),
