@@ -47,7 +47,7 @@ export function ChairEfficiencyScreen() {
         title="Chair Efficiency"
         subtitle="Every chair as an asset — true occupancy against full capacity, the cost of empty chairs, and exactly how much to recover."
       />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       {isLoading && (
         <>

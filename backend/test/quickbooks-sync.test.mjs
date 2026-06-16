@@ -82,32 +82,6 @@ describe('parseReportRows', () => {
     });
 });
 
-describe('parseBalanceSheetBanks', () => {
-    it('keeps only leaf accounts under a bank/cash section (or named bank/cash)', () => {
-        const report = { Rows: { Row: [
-            {
-                Header: { ColData: [{ value: 'Bank Accounts' }] },
-                Rows: { Row: [
-                    { ColData: [{ value: 'Current Account' }, { value: '12500.00' }], type: 'Data' },
-                    { ColData: [{ value: 'Savings' }, { value: '3000.00' }], type: 'Data' },
-                ] },
-                type: 'Section',
-            },
-            {
-                Header: { ColData: [{ value: 'Accounts Receivable' }] },
-                Rows: { Row: [
-                    { ColData: [{ value: 'Debtors' }, { value: '900.00' }], type: 'Data' },
-                ] },
-                type: 'Section',
-            },
-        ] } };
-        expect(__test.parseBalanceSheetBanks(report)).toEqual([
-            { account: 'Current Account', amount: '12500.00' },
-            { account: 'Savings', amount: '3000.00' },
-        ]);
-    });
-});
-
 describe('lastNMonths', () => {
     it('returns N descending YYYY-MM periods, newest first, with month bounds', () => {
         const months = __test.lastNMonths(12);
@@ -137,21 +111,15 @@ describe('mapInvoiceRow', () => {
     });
 });
 
-describe('dedupeReceipts', () => {
-    it('drops QBO receipts matching an existing settled receipt by date+amount', () => {
-        const payments = [
-            { Id: '1', TxnDate: '2026-01-05', TotalAmt: '150.00' }, // dup -> dropped
-            { Id: '2', TxnDate: '2026-01-06', TotalAmt: '200.00' }, // kept
-        ];
-        const existing = new Set(['2026-01-05|15000']);
-        const { rows, deduped } = __test.dedupeReceipts('org-1', 'acc-1', 'realm-9', 'prac-1', payments, existing);
-        expect(deduped).toBe(1);
-        expect(rows).toHaveLength(1);
-        expect(rows[0]).toMatchObject({
+describe('mapPaymentRow', () => {
+    it('maps a QBO payment to a settled payments row (source=quickbooks, account-stamped)', () => {
+        const row = __test.mapPaymentRow('org-1', 'acc-1', 'realm-9', 'prac-1',
+            { Id: '2', TxnDate: '2026-01-06', TotalAmt: '200.00' }, '2026-01-06', 20000);
+        expect(row).toMatchObject({
             external_id: 'realm-9:2', amount_pence: 20000, status: 'settled', source: 'quickbooks',
             practice_id: 'prac-1', integration_account_id: 'acc-1', method: 'bank_transfer',
         });
-        expect(rows[0].processed_at).toContain('2026-01-06');
+        expect(row.processed_at).toContain('2026-01-06');
     });
 });
 

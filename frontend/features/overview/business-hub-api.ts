@@ -13,6 +13,8 @@ export interface HubPractice {
   takingsPence: number;          // settled payments received, this practice (matches Patient Payments "Received")
   treatmentsClosedPence: number; // plan fees billed (sold), this practice
   treatmentsPaidPence: number;   // plan fees paid (collected), this practice
+  treatmentsCompleted: number;   // Practitioner Activity completed-treatment count, this practice
+  treatmentsCompletedValuePence: number; // value of those completed treatments, this practice
   appointments: number;
   completed: number;
   noShows: number;
@@ -46,10 +48,12 @@ export interface BusinessHub {
     conversionRate: number;
     newPatients: number;           // booked Dentally new-patient appointments (real PMS)
     treatmentsStarted: number;     // plans started in window (Dentally)
-    treatmentsCompleted: number;   // completed plan count in window (practitioner activity)
-    treatmentsCompletedValuePence: number; // value of completed plans (private treatment value)
+    treatmentsCompleted: number;   // completed-treatment count (Practitioner Activity feed) — group total
+    treatmentsCompletedValuePence: number; // value of those completed treatments — group total
     treatmentsAcceptedCount: number;       // accepted treatments (Emergent) — 0 until connected
     treatmentsAcceptedValuePence: number;  // value of accepted treatments (Emergent)
+    treatmentsAcceptedByPractice: { practiceId: string | null; name: string; count: number; valuePence: number }[]; // per-practice split for click-to-breakdown
+
     treatmentsClosedPence: number; // plan fees BILLED in window (sold) — invoice_items
     treatmentsPaidPence: number;   // plan fees PAID in window (collected) — invoice_paid subset
     takingsPence: number;          // settled payments received in window (matches Patient Payments "Received")

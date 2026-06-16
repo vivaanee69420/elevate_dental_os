@@ -15,21 +15,30 @@
 // and a treatment-production/price feed are connected.
 
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
 import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type ChipColour } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice, type RevenueLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
+import { SectionFilterPills } from '@/features/_shared/SectionFilterPills';
 import { DecisionLens } from '@/features/_shared/DecisionLens';
+import { usePractices } from '@/features/practices/hooks';
 import { useMarketingRoi } from '@/features/intelligence/marketing-roi-hooks';
 import type { MarketingRoi } from '@/features/intelligence/marketing-roi-api';
 import { AdAccountFilter } from '@/features/intelligence/AdAccountFilter';
+import { getQuickBooksOverview } from '@/features/finance/quickbooks-api';
+import { useGhlDashboard } from '@/features/ghl/hooks';
 import { QuickBooksGroupSection } from './QuickBooksGroupSection';
 import { GhlSummaryCards } from '@/features/ghl/components/GhlSummaryCards';
 
 const DASH = '—';
 
-type HeadlineKpi = { label: string; value: string; sub: string; chip: { text: string; tone: ChipColour } | null };
+type HeadlineKpi = {
+  label: string; value: string; sub: string; chip: { text: string; tone: ChipColour } | null;
+  // Optional click-to-expand affordance (used by Treatments Accepted -> per-practice breakdown).
+  onClick?: () => void; hint?: string; active?: boolean;
+};
 
 // n/d as a percentage, rounded to `dp` decimals (default integer). 0 when d<=0.
 function pctOf(n: number, d: number, dp = 0): number {
@@ -39,35 +48,75 @@ function pctOf(n: number, d: number, dp = 0): number {
 }
 
 // Source-group title above a row of headline cards (Dentally, QuickBooks, …).
+// Rendered as a titled divider at the top of each section panel.
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="text-xs font-semibold uppercase tracking-wide text-ink-muted mb-2">
+    <div className="text-sm font-semibold uppercase tracking-wide text-ink mb-3 pb-2 border-b border-border">
       {children}
     </div>
   );
 }
 
 // One headline scorecard tile: label, big value, sub-line, optional status chip.
+// When `onClick` is set the whole tile becomes a button (click-to-expand a
+// breakdown), with a hover state, an `active` ring while open, and a hint line.
 function HeadlineCard({ c }: { c: HeadlineKpi }) {
-  return (
-    <div className="card-padded flex flex-col min-w-0">
+  const body = (
+    <>
       <div className="text-xs text-ink-muted uppercase tracking-wide">{c.label}</div>
-      <div className="display text-xl font-bold tabular-nums tracking-tight mt-1">{c.value}</div>
+      <div className="text-xl font-bold tabular-nums tracking-tight mt-1">{c.value}</div>
       <div className="text-xs text-ink-muted mt-1">{c.sub}</div>
       {c.chip && <div className="mt-2"><Chip colour={c.chip.tone}>{c.chip.text}</Chip></div>}
-    </div>
+      {c.hint && <div className="text-[11px] text-brand mt-2">{c.hint}</div>}
+    </>
+  );
+  if (!c.onClick) return <div className="card-padded flex flex-col min-w-0">{body}</div>;
+  return (
+    <button type="button" onClick={c.onClick} aria-expanded={c.active}
+      className={'card-padded flex flex-col min-w-0 text-left transition-colors hover:border-brand-200 '
+        + (c.active ? 'ring-1 ring-brand border-brand' : '')}>
+      {body}
+    </button>
   );
 }
 
 export function GroupPerformanceScreen() {
-  const { scope, win } = useScopePeriod();
+  const { scope, setScope, win } = useScopePeriod();
   const { data, isLoading, isError } = useBusinessHub();
-  // Dynamic per-provider ad-account filter for the marketing snapshot. null = all
-  // selected accounts for that provider; a customer_id narrows to one account.
+
+  // Per-section filters, each shown directly above its own data-source block and
+  // re-scoping only that source's cards. The global period filter (win) applies
+  // to every section.
+  // Dentally → practices (drives the global scope). Only real Dentally-mapped
+  // sites (non-null pms_site_id); practices auto-created by GHL/QuickBooks
+  // account mapping carry no pms_site_id and don't belong in the Dentally filter.
+  const { data: practicesData } = usePractices();
+  const practiceOptions = (practicesData?.practices ?? [])
+    .filter((p) => p.pms_site_id)
+    .map((p) => ({ id: p.id, label: p.name }));
+  // Marketing → per-provider ad accounts. null = all selected accounts for that
+  // provider; a customer_id narrows to one account.
   const [metaId, setMetaId] = useState<string | null>(null);
   const [googleId, setGoogleId] = useState<string | null>(null);
   const accountIds = [metaId, googleId].filter(Boolean) as string[];
-  const { data: roi } = useMarketingRoi(accountIds.length ? accountIds : undefined);
+  // Pin marketing to group scope — ad spend isn't practice-attributed, so a
+  // selected practice must not empty the marketing cards / snapshot.
+  const { data: roi } = useMarketingRoi(accountIds.length ? accountIds : undefined, 'all');
+  // QuickBooks → connected company. Window the roll-up by the global period.
+  const qbFrom = win.since.slice(0, 10);
+  const qbTo = win.until.slice(0, 10);
+  const [qbAccountId, setQbAccountId] = useState<string | null>(null);
+  const { data: qbAll } = useQuery({ queryKey: ['qbo-finance', 'accounts'], queryFn: () => getQuickBooksOverview({}) });
+  const qbOptions = (qbAll?.accounts ?? []).map((a) => ({ id: a.id, label: a.companyName }));
+  // GoHighLevel → connected subaccount. The all-accounts dashboard supplies the
+  // filter options; GhlSummaryCards re-fetches scoped to the selection.
+  const [ghlAccountId, setGhlAccountId] = useState<string | null>(null);
+  // Treatments Accepted card → click-to-expand per-practice breakdown.
+  const [acceptedOpen, setAcceptedOpen] = useState(false);
+  const { data: ghlAll } = useGhlDashboard({ since: win.since, until: win.until });
+  const ghlOptions = (ghlAll?.perAccount ?? [])
+    .filter((a) => a.accountId)
+    .map((a) => ({ id: a.accountId as string, label: a.label }));
 
   if (isLoading)
     return (
@@ -94,9 +143,25 @@ export function GroupPerformanceScreen() {
   const closedPence = scopedRow ? scopedRow.treatmentsClosedPence : g.treatmentsClosedPence;
   const paidPence = scopedRow ? scopedRow.treatmentsPaidPence : g.treatmentsPaidPence;
   const closedTurnoverBase = scopedRow ? scopedRow.revenuePence : g.revenuePence;
+  // Treatments Completed (Practitioner Activity feed) IS practice-attributed (via
+  // the practitioner's site), so a selected practice scopes the card to that row.
+  const completedCount = scopedRow ? scopedRow.treatmentsCompleted : g.treatmentsCompleted;
+  const completedValuePence = scopedRow ? scopedRow.treatmentsCompletedValuePence : g.treatmentsCompletedValuePence;
   // Takings = settled payments received (matches the Patient Payments "Received"
   // tile). Per-practice when scoped, group total otherwise.
   const takingsPence = scopedRow ? scopedRow.takingsPence : g.takingsPence;
+
+  // Treatments Accepted (Emergent) — practice-attributed via the per-practice
+  // breakdown. A selected practice scopes the card to that row (0 if it has no
+  // accepted rows); group scope shows the org total. The breakdown also drives
+  // the click-to-expand table below, which marks the row the card reflects.
+  const acceptedRows = g.treatmentsAcceptedByPractice ?? [];
+  const acceptedScopedRow = isGroupScope ? null : acceptedRows.find((r) => r.practiceId === scope) ?? null;
+  const acceptedCount = isGroupScope ? g.treatmentsAcceptedCount : (acceptedScopedRow?.count ?? 0);
+  const acceptedValuePence = isGroupScope ? g.treatmentsAcceptedValuePence : (acceptedScopedRow?.valuePence ?? 0);
+  const acceptedScopeLabel = isGroupScope
+    ? 'All practices'
+    : (acceptedScopedRow?.name ?? practiceOptions.find((p) => p.id === scope)?.label ?? 'Selected practice');
 
   // Headline KPIs — the group business scorecard. Real feeds: Dentally
   // (turnover, cash banked, treatments, leads) + ads via marketing ROI (spend,
@@ -147,13 +212,19 @@ export function GroupPerformanceScreen() {
     // "Received" tile, so the two screens reconcile); chip = like-for-like delta.
     { label: 'Takings', value: formatPence(takingsPence), sub: `Settled payments received · ${windowLabel}`,
       chip: cashChip },
-    { label: 'Treatments Completed', value: formatNumber(g.treatmentsCompleted), sub: `Completed by practitioners · ${windowLabel}`,
-      chip: g.treatmentsCompletedValuePence > 0 ? { text: `${formatPence(g.treatmentsCompletedValuePence)} value`, tone: 'emerald' } : null },
+    { label: 'Treatments Completed', value: formatNumber(completedCount), sub: `Completed by practitioners · ${windowLabel}`,
+      chip: completedValuePence > 0 ? { text: `${formatPence(completedValuePence)} value`, tone: 'emerald' } : null },
     // Treatments Accepted is sourced from the Emergent ops app, but grouped here
     // with the other treatment cards. Placeholder until Emergent is connected.
-    { label: 'Treatments Accepted', value: g.treatmentsAcceptedCount > 0 ? formatNumber(g.treatmentsAcceptedCount) : DASH,
-      sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${windowLabel}` : 'Connect Emergent to track acceptance',
-      chip: g.treatmentsAcceptedValuePence > 0 ? { text: `${formatPence(g.treatmentsAcceptedValuePence)} value`, tone: 'emerald' } : null },
+    // Click-to-expand reveals the per-practice breakdown; the card value follows
+    // the selected practice filter (scope), and the sub-line names which filter
+    // it currently reflects.
+    { label: 'Treatments Accepted', value: acceptedCount > 0 ? formatNumber(acceptedCount) : DASH,
+      sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${acceptedScopeLabel} · ${windowLabel}` : 'Connect Emergent to track acceptance',
+      chip: acceptedValuePence > 0 ? { text: `${formatPence(acceptedValuePence)} value`, tone: 'emerald' } : null,
+      onClick: acceptedRows.length > 0 ? () => setAcceptedOpen((v) => !v) : undefined,
+      active: acceptedOpen,
+      hint: acceptedRows.length > 0 ? (acceptedOpen ? 'Hide breakdown' : 'Click for practice breakdown') : undefined },
     { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Billed plan revenue (sold) · ${windowLabel}`,
       chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
     { label: 'Plan Fees Collected', value: formatPence(paidPence), sub: `Plan treatment fees on paid invoices · ${windowLabel}`,
@@ -200,61 +271,51 @@ export function GroupPerformanceScreen() {
   const costConnected = data.revenueLineCostBasis != null; // Xero/QuickBooks P&L feed present
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Headline scorecard — grouped by data source, one section per source. */}
-      <div>
+    <div className="flex flex-col gap-5">
+      {/* Headline scorecard — grouped by data source, one bordered panel per
+          source, each with its own filter directly above it. The global period
+          filter (top of page) applies to every section. */}
+      <Card>
         <SectionLabel>Dentally</SectionLabel>
+        <SectionFilterPills label="Practice" options={practiceOptions}
+          selectedId={scope === 'all' ? null : scope}
+          onSelect={(id) => setScope(id ?? 'all')} allLabel="All practices" />
         <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
           {dentallyCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
         </div>
-      </div>
-      <div>
+        {acceptedOpen && acceptedRows.length > 0 && (
+          <TreatmentsAcceptedBreakdown rows={acceptedRows} scope={isGroupScope ? null : scope}
+            total={{ count: g.treatmentsAcceptedCount, valuePence: g.treatmentsAcceptedValuePence }} />
+        )}
+      </Card>
+
+      <Card>
         <SectionLabel>Marketing</SectionLabel>
+        {/* Per-provider ad-account filter — built from the org's REAL connected
+            Google and Meta accounts; hides itself with fewer than two accounts. */}
+        <AdAccountFilter metaId={metaId} googleId={googleId} onSelectMeta={setMetaId} onSelectGoogle={setGoogleId} />
         <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
           {marketingCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
         </div>
-      </div>
-      <div>
-        <SectionLabel>QuickBooks</SectionLabel>
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
-          {quickbooksCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
-        </div>
-      </div>
-      <div>
-        <SectionLabel>GoHighLevel</SectionLabel>
-        <GhlSummaryCards since={win.since} until={win.until} />
-      </div>
 
-      {/* QuickBooks group roll-up — summed across every connected company. */}
-      <QuickBooksGroupSection />
-
-      {!isGroupScope && (
-        <AlertRow tone="info" title="Some funnel KPIs stay group-wide"
-          body="Treatments Closed narrows to the selected practice (real invoiced fees). Lead-based KPIs (lead→start, cost/treatment, revenue/lead) stay group-wide — GHL leads aren't attributed per practice. The Business Performance table below narrows to the selected practice." />
-      )}
-
-      {/* Dynamic ad-account filter — built from the org's REAL connected Google
-          and Meta accounts. Narrows the marketing snapshot per provider; hides
-          itself when there are fewer than two accounts to choose between. */}
-      <AdAccountFilter metaId={metaId} googleId={googleId} onSelectMeta={setMetaId} onSelectGoogle={setGoogleId} />
-
-      {/* Marketing Snapshot — real Google + Meta spend/leads per channel, reactive
-          to the Scope/Period bar and the ad-account filter above. Per-channel
-          revenue/ROAS isn't attributable, so they show as — (blended ROAS only). */}
-      <Card>
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h3 className="display text-lg font-semibold">Marketing Snapshot</h3>
-            <p className="text-sm text-ink-muted mt-0.5">Real Google Ads + Meta spend, leads and conversions across your paid channels.</p>
+        {/* Marketing Snapshot — real Google + Meta spend/leads per channel,
+            reactive to the period bar + ad-account filter. Group-wide (ad spend
+            isn't practice-attributed). Per-channel revenue/ROAS isn't
+            attributable, so they show as — (blended ROAS only). */}
+        <div className="mt-5 pt-4 border-t border-border">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="display text-base font-semibold">Marketing Snapshot</h3>
+              <p className="text-sm text-ink-muted mt-0.5">Real Google Ads + Meta spend, leads and conversions across your paid channels.</p>
+            </div>
+            {roi?.connected && roi.blendedRoas != null && roi.blendedRoas > 0 && (
+              <Chip colour="emerald">{roi.blendedRoas.toFixed(2)}× blended ROAS</Chip>
+            )}
           </div>
-          {roi?.connected && roi.blendedRoas != null && roi.blendedRoas > 0 && (
-            <Chip colour="emerald">{roi.blendedRoas.toFixed(2)}× blended ROAS</Chip>
-          )}
-        </div>
-        {channels.length === 0 ? (
-          <EmptyState message="No ad spend in this window. Connect Google Ads / Meta in Data Hub." />
-        ) : (
-          <>
+          {channels.length === 0 ? (
+            <EmptyState message="No ad spend in this window. Connect Google Ads / Meta in Data Hub." />
+          ) : (
+            <>
             <div className="grid gap-3 mt-3 grid-cols-1 md:grid-cols-3">
               {channels.map((c) => (
                 <div key={c.key} className="rounded-xl border border-border p-4">
@@ -263,7 +324,7 @@ export function GroupPerformanceScreen() {
                       <span aria-hidden className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: c.color }} />
                       {c.label}
                     </span>
-                    <span className="display text-2xl font-bold">{c.ctrPct > 0 ? `${c.ctrPct.toFixed(1)}%` : DASH}</span>
+                    <span className="text-2xl font-bold">{c.ctrPct > 0 ? `${c.ctrPct.toFixed(1)}%` : DASH}</span>
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
                     <ChannelStat label="Spend" value={formatPence(c.spendPence)} />
@@ -311,9 +372,34 @@ export function GroupPerformanceScreen() {
                 </p>
               </div>
             )}
-          </>
-        )}
+            </>
+          )}
+        </div>
       </Card>
+
+      <Card>
+        <SectionLabel>QuickBooks</SectionLabel>
+        <SectionFilterPills label="Company" options={qbOptions}
+          selectedId={qbAccountId} onSelect={setQbAccountId} allLabel="All companies" />
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+          {quickbooksCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
+        </div>
+      </Card>
+
+      {/* QuickBooks group roll-up — scoped by the company filter + global period. */}
+      <QuickBooksGroupSection accountId={qbAccountId} from={qbFrom} to={qbTo} windowLabel={windowLabel} />
+
+      <Card>
+        <SectionLabel>GoHighLevel</SectionLabel>
+        <SectionFilterPills label="Subaccount" options={ghlOptions}
+          selectedId={ghlAccountId} onSelect={setGhlAccountId} allLabel="All subaccounts" />
+        <GhlSummaryCards since={win.since} until={win.until} accountId={ghlAccountId} />
+      </Card>
+
+      {!isGroupScope && (
+        <AlertRow tone="info" title="Some funnel KPIs stay group-wide"
+          body="Treatments Closed narrows to the selected practice (real invoiced fees). Lead-based KPIs (lead→start, cost/treatment, revenue/lead) stay group-wide — GHL leads aren't attributed per practice. The Business Performance table below narrows to the selected practice." />
+      )}
 
       {/* Business Performance + Decision Lens */}
       <div className="grid gap-4 lg:grid-cols-2 items-start">
@@ -422,6 +508,54 @@ function RevenueLineBars({ lines, metric, showShare = false }: { lines: RevenueL
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Treatments Accepted, split by practice (Emergent feed). The highlighted row is
+// the one the card value currently reflects: the selected practice, or the
+// "All practices" total when no practice filter is applied. Unmapped = Emergent
+// records whose business name didn't resolve to a practice.
+function TreatmentsAcceptedBreakdown(
+  { rows, scope, total }: {
+    rows: { practiceId: string | null; name: string; count: number; valuePence: number }[];
+    scope: string | null;
+    total: { count: number; valuePence: number };
+  },
+) {
+  return (
+    <div className="mt-4 pt-4 border-t border-border">
+      <div className="text-xs text-ink-muted uppercase tracking-wide mb-2">Treatments Accepted by practice</div>
+      <div className="overflow-x-auto">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Practice</th>
+              <th className="right">Accepted</th>
+              <th className="right">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const active = scope != null && r.practiceId === scope;
+              return (
+                <tr key={r.practiceId ?? 'unmapped'} className={active ? 'bg-brand-50' : undefined}>
+                  <td><strong>{r.name}</strong>{active && <span className="ml-2"><Chip colour="emerald">Showing</Chip></span>}</td>
+                  <td className="right">{formatNumber(r.count)}</td>
+                  <td className="right">{formatPence(r.valuePence)}</td>
+                </tr>
+              );
+            })}
+            <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}
+              className={scope == null ? 'bg-brand-50' : undefined}>
+              <td><strong>All practices</strong>{scope == null && <span className="ml-2"><Chip colour="emerald">Showing</Chip></span>}</td>
+              <td className="right">{formatNumber(total.count)}</td>
+              <td className="right">{formatPence(total.valuePence)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="text-xs text-ink-muted mt-2">Click a practice pill above to scope the card; Unmapped rows are Emergent records whose business name didn&apos;t match a practice.</p>
     </div>
   );
 }

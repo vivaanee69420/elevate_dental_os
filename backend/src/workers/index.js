@@ -23,6 +23,7 @@ import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 import * as reviews_sync_1 from "../lib/integrations/reviews-sync.js";
+import * as emergent_sync_1 from "../lib/integrations/emergent-sync.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import * as aws_sns_1 from "../lib/aws-sns.js";
 import { notificationService } from "../services/notification.service.js";
@@ -312,6 +313,16 @@ scheduleMonitored('reviews-sync', '10 3 * * *', async () => {
         if (results.length > 0) console.log(`[worker] Reviews sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] Reviews sync failed', err);
+    }
+}, { maxRuntime: 30 });
+// Emergent (Treatments Accepted) sync — daily 03:20, incremental pull of accepted
+// treatments for every org with an active emergent integration.
+scheduleMonitored('emergent-sync', '20 3 * * *', async () => {
+    try {
+        const results = await emergent_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] Emergent sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] Emergent sync failed', err);
     }
 }, { maxRuntime: 30 });
 // --------------------------------------------------------------------------

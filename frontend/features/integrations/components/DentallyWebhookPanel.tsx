@@ -6,6 +6,7 @@
 
 import { useState } from 'react';
 import { useWebhookInfo, useSetWebhookSecret } from '../hooks';
+import CollapsibleCard from './CollapsibleCard';
 
 export default function DentallyWebhookPanel() {
   const { data, isLoading } = useWebhookInfo('dentally');
@@ -50,13 +51,10 @@ export default function DentallyWebhookPanel() {
   })();
 
   return (
-    <div className="card-padded" style={{ marginBottom: 20 }}>
-      <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-        Real-time webhook
-        <span style={{ marginLeft: 8, fontSize: 11, color: badge.dot }}>
-          • {badge.text}
-        </span>
-      </h2>
+    <CollapsibleCard
+      title="Real-time webhook"
+      badge={<span style={{ fontSize: 11, color: badge.dot }}>• {badge.text}</span>}
+    >
       {badge.tip && (
         <p style={{ fontSize: 11, color: badge.dot, marginBottom: 8 }}>{badge.tip}</p>
       )}
@@ -120,6 +118,6 @@ export default function DentallyWebhookPanel() {
       <p className="text-ink-muted" style={{ fontSize: 10, marginTop: 10 }}>
         Stored server-side; used only to verify the HMAC signature on inbound events.
       </p>
-    </div>
+    </CollapsibleCard>
   );
 }

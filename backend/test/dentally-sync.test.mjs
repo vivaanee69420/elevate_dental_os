@@ -10,7 +10,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), mergeConfig: vi.fn() },
 }));
 
-const { syncOneOrg, syncAllOrgs, bootstrapOnConnect, invoiceRow, selectStaleAppointmentIds, __test } = await import('../src/lib/integrations/dentally-sync.js');
+const { syncOneOrg, syncAllOrgs, bootstrapOnConnect, backfillTreatmentItems, invoiceRow, selectStaleAppointmentIds, __test } = await import('../src/lib/integrations/dentally-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 describe('dentally mappers', () => {
@@ -613,14 +613,16 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();
         expect(seen.filter(Boolean).some((s) => s.startsWith(`${backfillYear}-`))).toBe(true);
         expect(seen.filter(Boolean).some((s) => s.startsWith('2005-'))).toBe(false);
-        expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-1', 'dentally', { history_backfilled: true });
+        // The full pull already seeds treatment_plan_items, so both one-time flags
+        // are set together — no separate item backfill needed for a fresh org.
+        expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-1', 'dentally', { history_backfilled: true, treatment_items_backfilled: true });
     });
 
     it('once flagged, later runs ride the incremental cursor (no re-backfill)', async () => {
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         supaRec.resultProvider = (q) => {
             if (q.table === 'integrations' && q.op === 'select')
-                return { data: [{ organisation_id: 'org-2', provider: 'dentally', status: 'active', secrets, config: { history_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+                return { data: [{ organisation_id: 'org-2', provider: 'dentally', status: 'active', secrets, config: { history_backfilled: true, treatment_items_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
             if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
             return { data: [], error: null };
         };
@@ -634,6 +636,85 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         const windowed = seen.filter(Boolean);
         expect(windowed.length).toBeGreaterThan(0);
         expect(windowed.every((s) => s.startsWith('2026-05'))).toBe(true); // incremental from last_sync_at
+        expect(integrationRepository.mergeConfig).not.toHaveBeenCalled();
+    });
+
+    it('legacy org (history backfilled, no item flag) runs a one-time treatment_items backfill', async () => {
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'integrations' && q.op === 'select')
+                return { data: [{ organisation_id: 'org-3', provider: 'dentally', status: 'active', secrets, config: { history_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+            if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            return { data: [], error: null };
+        };
+        // Record which resource + window each call hit.
+        const items = [];
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            items.push({ path: u.pathname, since: u.searchParams.get('updated_after') });
+            return page({ patients: [], meta: { total_pages: 1 } });
+        });
+        const res = await syncAllOrgs();
+        expect(res[0].backfill).toBe(false); // main sync stays incremental
+        // The one-time item backfill pulled /treatment_plan_items over the full
+        // 2-year window (not the 2026-05 incremental cursor) ...
+        const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();
+        const itemPulls = items.filter((c) => c.path.endsWith('/treatment_plan_items'));
+        expect(itemPulls.length).toBeGreaterThan(0);
+        expect(itemPulls.some((c) => c.since && c.since.startsWith(`${backfillYear}-`))).toBe(true);
+        // ... and, on reaching the end of the collection, flipped the one-time flag
+        // (and cleared the resume cursor) so it never repeats.
+        expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-3', 'dentally', { treatment_items_backfilled: true, treatment_items_backfill_page: null });
+    });
+});
+
+describe('isRateLimited — Dentally signals rate limits as 403, not just 429', () => {
+    const mk = (status, body) => ({ status, clone: () => ({ text: async () => body }) });
+    it('treats a 403 "Rate limit exceeded" body as a rate-limit', async () => {
+        expect(await __test.isRateLimited(mk(403, JSON.stringify({ error: { type: 'invalid_access_error', message: 'Rate limit exceeded' } })))).toBe(true);
+    });
+    it('treats a standard 429 as a rate-limit (no body read needed)', async () => {
+        expect(await __test.isRateLimited({ status: 429 })).toBe(true);
+    });
+    it('does NOT treat a genuine 403 (auth/permission) as a rate-limit', async () => {
+        expect(await __test.isRateLimited(mk(403, JSON.stringify({ error: { message: 'Forbidden' } })))).toBe(false);
+    });
+    it('passes through a normal 200', async () => {
+        expect(await __test.isRateLimited({ status: 200 })).toBe(false);
+    });
+});
+
+describe('backfillTreatmentItems — resumable page cursor', () => {
+    beforeEach(() => {
+        integrationRepository.mergeConfig.mockReset();
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'associates') return { data: [{ id: 'a1', pms_external_id: 'P1', primary_practice_id: 'prac-1' }], error: null };
+            if (q.table === 'contacts') return { data: [], error: null };
+            return { data: [], error: null };
+        };
+    });
+
+    it('resumes from the saved page cursor instead of page 1', async () => {
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        const pagesSeen = [];
+        global.fetch = vi.fn(async (url) => {
+            pagesSeen.push(new URL(url.toString()).searchParams.get('page'));
+            return page({ treatment_plan_items: [], meta: {} }); // empty short page -> finished
+        });
+        const integ = { config: { history_backfilled: true, treatment_items_backfill_page: 7 }, secrets };
+        const res = await backfillTreatmentItems('org-9', integ);
+        expect(pagesSeen[0]).toBe('7'); // started at the cursor, not 1
+        expect(res.finished).toBe(true);
+        // reaching the end flips the flag AND clears the cursor
+        expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-9', 'dentally', { treatment_items_backfilled: true, treatment_items_backfill_page: null });
+    });
+
+    it('no-ops once the org is already flagged (never re-pulls)', async () => {
+        global.fetch = vi.fn();
+        const integ = { config: { treatment_items_backfilled: true }, secrets: encryptSecret(JSON.stringify({ apiKey: 'k' })) };
+        const res = await backfillTreatmentItems('org-9', integ);
+        expect(res).toEqual({ skipped: true });
+        expect(global.fetch).not.toHaveBeenCalled();
         expect(integrationRepository.mergeConfig).not.toHaveBeenCalled();
     });
 });

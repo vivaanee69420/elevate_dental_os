@@ -104,9 +104,9 @@ export function PracticeDeepDiveScreen() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Practice Deep Dive"
-        subtitle="Everything about one site — pick a practice in the scope selector to drill into its turnover, demand, conversion and chair economics."
+        subtitle="Everything about one site — pick a practice in the scope selector to drill into its takings, demand, conversion and chair economics."
       />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       {(scope === 'academy' || scope === 'lab') && (
         <AlertRow tone="info" title="Deep Dive covers clinical practices"
@@ -130,7 +130,7 @@ export function PracticeDeepDiveScreen() {
             <div className="text-[11px] uppercase tracking-wider text-brand font-semibold">Practice</div>
             <div className="display text-2xl mt-1">{hubRow.name}</div>
             <div className="flex flex-wrap gap-x-10 gap-y-3 mt-4">
-              <Stat label="Turnover" value={formatPence(hubRow.revenuePence)} />
+              <Stat label="Takings" value={formatPence(hubRow.takingsPence)} />
               <Stat label="Chairs" value={String(hubRow.chairs)} />
               <Stat label="Appointments" value={hubRow.appointments.toLocaleString('en-GB')} />
               <Stat label="Completed" value={hubRow.completed.toLocaleString('en-GB')} />
@@ -192,7 +192,7 @@ export function PracticeDeepDiveScreen() {
 
             {/* 12-month turnover trend — area chart */}
             <div className="card-padded">
-              <h3 className="display text-lg">Turnover — last 12 months</h3>
+              <h3 className="display text-lg">Takings — last 12 months</h3>
               {series.isLoading && <Skeleton className="w-full mt-3" style={{ height: 180 }} />}
               {trendData.length > 0 && trendData.every((m) => !m.pence) && <p className="text-sm text-ink-muted mt-3">No settled revenue in the window.</p>}
               {trendData.length > 0 && (
@@ -207,7 +207,7 @@ export function PracticeDeepDiveScreen() {
                     <CartesianGrid stroke="var(--border)" vertical={false} />
                     <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--ink-muted)' }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 10, fill: 'var(--ink-soft)' }} axisLine={false} tickLine={false} width={48} tickFormatter={(v: number) => poundsK(v)} />
-                    <Tooltip formatter={(v: number) => [formatPence(v), 'Turnover']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                    <Tooltip formatter={(v: number) => [formatPence(v), 'Takings']} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
                     <Area type="monotone" dataKey="pence" stroke="var(--brand)" strokeWidth={2} fill="url(#ddRev)" />
                   </AreaChart>
                 </ResponsiveContainer>

@@ -33,7 +33,7 @@ const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
 const REQUEST_TIMEOUT_MS = 30000; // abort a hung Dentally request, never hang forever
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
-const BACKFILL_MAX_PAGES = 5000; // full backfill ceiling (~500k rows/resource) — one-off, pulls the 2-year window
+const BACKFILL_MAX_PAGES = 15000; // full backfill ceiling (~1.5M rows/resource) — one-off, pulls the 2-year window. MUST exceed the largest collection: /treatment_plan_items returns ~725k rows (7.2k pages) and Dentally IGNORES the completed/date filters, so the whole collection must be paged to find the completed subset. The old 5000-page (500k-row) cap truncated the oldest ~225k items, silently dropping completed treatments scattered across past months (the "Treatments Completed undercount" bug). The page loop self-terminates at the real end (items.length < PER_PAGE), so this is only a runaway guard, not a target.
 const BACKFILL_YEARS = 2;        // full backfill cap: most-recent 2 years of history, no deeper (product rule)
 // Rolling 2-year updated_after for full pulls. Dentally requires the param; we
 // deliberately cap history at 2 years rather than pulling all-time (was a 2005
@@ -73,6 +73,22 @@ async function fetchWithTimeout(url, opts) {
     }
 }
 
+// True when a Dentally response is a rate-limit signal. Dentally uses BOTH a
+// standard 429 AND a 403 whose body is { error: { type: 'invalid_access_error',
+// message: 'Rate limit exceeded' } } (its sustained cap, sent with no Retry-After
+// header). Reads the body off a CLONE so the caller can still consume res. A 403
+// with any other body is a genuine auth/permission failure, not a rate-limit.
+async function isRateLimited(res) {
+    if (res.status === 429) return true;
+    if (res.status !== 403) return false;
+    try {
+        const text = await res.clone().text();
+        return /rate limit/i.test(text);
+    } catch {
+        return false;
+    }
+}
+
 function authHeader(secrets) {
     try {
         const parsed = JSON.parse(decryptSecret(secrets));
@@ -102,7 +118,7 @@ async function streamPages(base, path, auth, params, onBatch, onPage = null, max
         }
         let res = null;
         let lastErr = null;
-        for (let attempt = 0; attempt < 4; attempt++) {
+        for (let attempt = 0; attempt < 7; attempt++) {
             try {
                 res = await fetchWithTimeout(url, {
                     headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
@@ -117,9 +133,17 @@ async function streamPages(base, path, auth, params, onBatch, onPage = null, max
                 if (attempt < 3) { await sleep(1000 * (attempt + 1)); continue; }
                 throw err;
             }
-            if (res.status === 429) {
-                const retryAfter = Number(res.headers.get('retry-after')) || 2;
-                await sleep(retryAfter * 1000);
+            // Dentally signals RATE LIMITING two ways: a standard 429, AND a 403 with
+            // body { error: { type: 'invalid_access_error', message: 'Rate limit
+            // exceeded' } } and NO Retry-After header (its sustained/hourly cap). The
+            // old code only knew 429, so a 403 rate-limit fell straight through to the
+            // `!res.ok` throw below and aborted the phase — which is why the LAST phase
+            // each sync (treatment_items) silently 403-failed once the earlier phases
+            // had burned the request budget. Treat both as retryable with backoff; only
+            // a non-rate-limit 403 (real auth/permission) fails fast.
+            if (await isRateLimited(res)) {
+                const retryAfter = Number(res.headers.get('retry-after'));
+                await sleep(retryAfter ? retryAfter * 1000 : Math.min(60000, 2000 * 2 ** attempt));
                 continue;
             }
             break;
@@ -378,6 +402,23 @@ async function loadPractitionerMap(orgId) {
         .not('pms_external_id', 'is', null);
     const map = new Map();
     for (const a of data ?? []) map.set(String(a.pms_external_id), a.id);
+    return map;
+}
+
+// Build { dentally practitioner id -> practices.id } for an org. Treatment plan
+// ITEMS carry only practitioner_id (no site), so completed treatments attribute
+// to a practice via the practitioner's home site — associates.primary_practice_id,
+// which pullPractitioners resolved from practitioner.site_id. Validated against
+// Dentally's Practitioner Activity report (location filter) to the penny.
+async function loadPractitionerPracticeMap(orgId) {
+    const { data } = await supabase_1.serviceClient
+        .from('associates')
+        .select('pms_external_id, primary_practice_id')
+        .eq('organisation_id', orgId)
+        .not('pms_external_id', 'is', null)
+        .not('primary_practice_id', 'is', null);
+    const map = new Map();
+    for (const a of data ?? []) map.set(String(a.pms_external_id), a.primary_practice_id);
     return map;
 }
 
@@ -662,6 +703,46 @@ export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap
         completed_at: tp.completed_at ?? null,
         start_date: tp.start_date ?? null,
         end_date: tp.end_date ?? null,
+    };
+}
+
+// Treatment plan ITEM = one completed-treatment line — the feed behind Dentally's
+// "Practitioner Activity" report. Verified live shape (GET /treatment_plan_items):
+// { id, completed, completed_at, base_chart, price (money string), duration,
+//   practitioner_id, patient_id, treatment_plan_id, treatment_appointment_id,
+//   invoice_id, charged, appear_on_invoice, nomenclature, patient_nomenclature }.
+// SENSITIVE clinical fields the payload also carries (teeth, surfaces, notes,
+// custom_fields) are deliberately NOT read — matches the connector's data-
+// minimisation policy. practice_id resolves via the practitioner's home site
+// (practiceByPractitioner); associate_id / contact_id via the existing maps.
+// price is a money STRING -> integer pence. base_chart=true rows are tooth/surface
+// charting noise Dentally excludes from the report; we store the flag and let the
+// rollup RPC filter, so both report semantics stay available.
+export function treatmentItemRow(orgId, it, practiceByPractitioner = new Map(), associateMap = new Map(), contactMap = new Map()) {
+    const prac = it.practitioner_id != null ? String(it.practitioner_id) : null;
+    const dur = Number(it.duration);
+    return {
+        organisation_id: orgId,
+        source: 'dentally',
+        pms_external_id: String(it.id),
+        pms_practitioner_id: prac,
+        pms_patient_id: it.patient_id != null ? String(it.patient_id) : null,
+        practice_id: prac ? (practiceByPractitioner.get(prac) ?? null) : null,
+        contact_id: contactMap.get(String(it.patient_id)) ?? null,
+        associate_id: prac ? (associateMap.get(prac) ?? null) : null,
+        treatment_plan_id: it.treatment_plan_id != null ? String(it.treatment_plan_id) : null,
+        treatment_appointment_id: it.treatment_appointment_id != null ? String(it.treatment_appointment_id) : null,
+        pms_invoice_id: it.invoice_id != null ? String(it.invoice_id) : null,
+        // patient_nomenclature is the patient-facing treatment label; fall back to
+        // the clinical nomenclature when absent.
+        treatment_name: it.patient_nomenclature ?? it.nomenclature ?? null,
+        price_pence: toPence(it.price),
+        duration: Number.isFinite(dur) && dur > 0 ? dur : 0,
+        completed: it.completed === true,
+        completed_at: it.completed_at ?? null,
+        base_chart: it.base_chart === true,
+        charged: it.charged === true,
+        appear_on_invoice: it.appear_on_invoice === true,
     };
 }
 
@@ -1009,6 +1090,25 @@ async function pullTreatmentPlans(orgId, base, auth, params, associateMap, conta
             .filter((tp) => tp && tp.id != null)
             .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap));
         synced += await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
+    }, onPage, maxPages);
+    return { synced };
+}
+
+// Pull /treatment_plan_items (the Practitioner Activity feed). Only `updated_after`
+// is honoured server-side — the `completed`/date/site filters are silently ignored
+// (the whole collection comes back regardless), so we filter to completed rows here
+// and let the rollup RPC apply the completed_at window + base_chart exclusion. We
+// persist only COMPLETED items: a planned-but-not-done item is irrelevant to this
+// metric and would bloat the table (the full collection is ~725k rows); when an
+// item is later completed its updated_at bumps and the incremental cursor re-pulls
+// it. Never fail the whole sync if this resource errors (caller wraps in try).
+async function pullTreatmentItems(orgId, base, auth, params, practiceByPractitioner, associateMap, contactMap, onPage, maxPages) {
+    let synced = 0;
+    await streamPages(base, '/treatment_plan_items', auth, params, async (items) => {
+        const rows = items
+            .filter((it) => it && it.id != null && it.completed === true)
+            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap));
+        if (rows.length) synced += await upsertChunked('dentally_treatment_items', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
     return { synced };
 }
@@ -1373,20 +1473,21 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // (the largest pulls on a full backfill) ran silent between payments and
     // invoices, freezing the bar mid-sync; and the bar hit the 99 ceiling after
     // invoices while invoice_items + the relink RPCs still ran with no feedback.
-    const PHASES = ['patients', 'appointments', 'payments', 'treatment_plans', 'invoices', 'invoice_items'];
+    const PHASES = ['patients', 'appointments', 'payments', 'treatment_plans', 'invoices', 'invoice_items', 'treatment_items'];
     // Only probe (and below, only pull) the selected resources. An unselected
     // phase contributes 0 pages to the weighted total and is never fetched, so
     // the bar paces over exactly the work that runs.
     const probe = (k, path, params) => want(k) ? fetchPageCount(base, path, auth, params, maxPages) : Promise.resolve(0);
-    const [patientPages, apptPages, payPages, planPages, invoicePages, itemPages] = await Promise.all([
+    const [patientPages, apptPages, payPages, planPages, invoicePages, itemPages, tiPages] = await Promise.all([
         probe('patients', '/patients', patientParams),
         probe('appointments', '/appointments', apptParams),
         probe('payments', '/payments', payParams),
         probe('treatment_plans', '/treatment_plans', { updated_after: since }),
         probe('invoices', '/invoices', invoiceParams),
         probe('invoices', '/invoice_items', { updated_after: since }),
+        probe('treatment_items', '/treatment_plan_items', { updated_after: since }),
     ]);
-    const phaseTotals = [patientPages, apptPages, payPages, planPages, invoicePages, itemPages];
+    const phaseTotals = [patientPages, apptPages, payPages, planPages, invoicePages, itemPages, tiPages];
     const reporter = (idx) => (page, totalPages, count) => {
         // reportPct grows phaseTotals from the live pull so an under-counting
         // probe (no meta.total_pages -> 1, or a timed-out probe -> 0) can't
@@ -1566,6 +1667,21 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             await markPhaseDone('invoices');
             await markPhaseDone('invoice_items');
         }
+        // Treatment plan ITEMS = the completed-treatment feed behind Dentally's
+        // Practitioner Activity report (the "Treatments Completed" card). Weighted
+        // phase 6; never fail the whole sync. Practice attribution via the
+        // practitioner's home site (practiceByPractitioner); associate/contact via
+        // the maps already built above.
+        let treatmentItems = { synced: 0 };
+        if (want('treatment_items') && !completedPhases.has('treatment_items')) {
+            try {
+                const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
+                treatmentItems = await pullTreatmentItems(orgId, base, auth, { updated_after: since }, practiceByPractitioner, practitionerMap, contactMap, reporter(6), maxPages);
+                await markPhaseDone('treatment_items');
+            } catch (err) {
+                console.warn(`[dentally] treatment_items pull skipped: ${err?.message || err}`);
+            }
+        }
         // All pulls done; the relink RPCs below are set-based SQL that can take a
         // while on a large org (hundreds of thousands of appointments). Emit an
         // explicit "linking" phase at the 99 ceiling so the bar shows real work
@@ -1640,6 +1756,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             appointments_upcoming: upcomingSynced,
             payments: pays.synced,
             treatment_plans: treatmentPlans.synced,
+            treatment_items: treatmentItems.synced,
             invoice_items: invoiceItems.synced,
             invoices: invoices.synced,
             skipped_unmatched_practice: (appts.skipped ?? 0) + (pays.skipped ?? 0) + (invoices.skipped ?? 0),
@@ -1700,6 +1817,95 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
     return { sitesDetected: siteIds.length, practicesCreated, ...result };
 }
 
+// Resumable, per-run-bounded one-time backfill of the COMPLETED treatment_plan_items
+// history (the Practitioner Activity / "Treatments Completed" feed). Dentally IGNORES
+// the date/completed filter on /treatment_plan_items, so the ENTIRE collection
+// (hundreds of thousands of rows — 639k for the live group) must be paged to find the
+// completed subset. The old path ran this as one all-or-nothing syncOneOrg phase: if
+// the process died (dyno recycle / timeout) before the last page, the phase was never
+// marked done, the flag never flipped, and the NEXT night restarted from page 1 — a
+// permanent stall that left every month under-counting for any large org. This persists
+// a PAGE CURSOR (treatment_items_backfill_page) and bounds each run, so a killed run
+// resumes where it stopped and the backfill always converges, then flips the one-time
+// treatment_items_backfilled flag. Upserts are idempotent, so the small re-pull after a
+// crash (back to the last persisted cursor) is harmless.
+const TI_BACKFILL_PAGES_PER_RUN = 3000; // ~300k rows/run; resumes from the cursor next run
+const TI_BACKFILL_CHECKPOINT_EVERY = 25; // persist the page cursor every N pages
+
+export async function backfillTreatmentItems(orgId, integration) {
+    if (integration.config?.treatment_items_backfilled) return { skipped: true };
+    const base = integration.config?.base_url ?? DEFAULT_BASE;
+    const auth = authHeader(integration.secrets);
+    if (!auth) return { error: 'no_auth' };
+    const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
+    const associateMap = await loadPractitionerMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    const params = { updated_after: backfillSince() };
+    const startPage = Math.max(1, Number(integration.config?.treatment_items_backfill_page) || 1);
+    const stopBefore = startPage + TI_BACKFILL_PAGES_PER_RUN; // exclusive per-run ceiling
+    let page = startPage;
+    let synced = 0;
+    let finished = false;
+    let rateLimited = false;
+    for (;;) {
+        const url = new URL(`${base}/treatment_plan_items`);
+        for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) {
+            url.searchParams.set(k, String(v));
+        }
+        let res = null;
+        let lastErr = null;
+        for (let attempt = 0; attempt < 7; attempt++) {
+            try {
+                res = await fetchWithTimeout(url, {
+                    headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
+                });
+            } catch (err) {
+                lastErr = err;
+                res = null;
+                if (attempt < 3) { await sleep(1000 * (attempt + 1)); continue; }
+                throw err;
+            }
+            // Same 429/403 rate-limit handling as streamPages — back off and retry.
+            if (await isRateLimited(res)) {
+                const retryAfter = Number(res.headers.get('retry-after'));
+                await sleep(retryAfter ? retryAfter * 1000 : Math.min(60000, 2000 * 2 ** attempt));
+                continue;
+            }
+            break;
+        }
+        if (!res) throw lastErr ?? new Error('Dentally /treatment_plan_items: no response');
+        // Sustained rate-limit (Dentally's hourly cap) survived every backoff: do NOT
+        // throw — STOP gracefully, persist the cursor, and let the next run resume from
+        // here. The whole 639k-row collection can't fit one hourly window, so the
+        // backfill is designed to converge across runs rather than fail.
+        if (await isRateLimited(res)) { rateLimited = true; break; }
+        if (!res.ok) throw new Error(`Dentally /treatment_plan_items -> HTTP ${res.status}`);
+        const body = await res.json();
+        const items = body.treatment_plan_items || [];
+        const rows = items
+            .filter((it) => it && it.id != null && it.completed === true)
+            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap));
+        if (rows.length) {
+            synced += await upsertChunked('dentally_treatment_items', rows, 'organisation_id,source,pms_external_id');
+        }
+        if (items.length < PER_PAGE) { finished = true; break; } // reached the end of the collection
+        // Persist the NEXT page to fetch periodically so a crash resumes near here.
+        if (page % TI_BACKFILL_CHECKPOINT_EVERY === 0) {
+            await integrationRepository.mergeConfig(orgId, 'dentally', { treatment_items_backfill_page: page + 1 });
+        }
+        page++;
+        if (page >= stopBefore) break; // per-run bound — persist below and resume next run
+        await sleep(RATE_DELAY_MS);
+    }
+    if (finished) {
+        await integrationRepository.mergeConfig(orgId, 'dentally', { treatment_items_backfilled: true, treatment_items_backfill_page: null });
+    } else {
+        // Rate-limited or hit the per-run bound: save where to resume next run.
+        await integrationRepository.mergeConfig(orgId, 'dentally', { treatment_items_backfill_page: page });
+    }
+    return { synced, finished, rateLimited, lastPage: page };
+}
+
 export async function syncAllOrgs() {
     const { data: rows } = await supabase_1.serviceClient
         .from('integrations')
@@ -1717,9 +1923,31 @@ export async function syncAllOrgs() {
             const needsBackfill = !row.config?.history_backfilled;
             const r = await syncOneOrg(row.organisation_id, row, () => {}, { full: needsBackfill });
             if (needsBackfill && !r.error) {
-                await integrationRepository.mergeConfig(row.organisation_id, 'dentally', { history_backfilled: true });
+                // The full pull above already pulled treatment_plan_items over the
+                // backfill window, so the Practitioner Activity feed is seeded too.
+                await integrationRepository.mergeConfig(row.organisation_id, 'dentally', { history_backfilled: true, treatment_items_backfilled: true });
             }
-            results.push({ orgId: row.organisation_id, backfill: needsBackfill, ...r });
+            // One-time treatment_plan_items backfill for orgs connected BEFORE the
+            // Practitioner Activity feed existed: history is already backfilled, so
+            // the nightly run rides the incremental cursor and would only ever pick
+            // up NEW completions — never the ~18 months of history the card needs.
+            // Run a SELECTIVE full pull of just that resource (cheap vs a full
+            // re-sync of patients/appointments/invoices) over the backfill window,
+            // resolving practice/associate/contact from the already-synced maps, then
+            // flip a one-time flag so it never repeats.
+            let itemBackfill = 0;
+            if (!needsBackfill && !r.error && !row.config?.treatment_items_backfilled) {
+                try {
+                    // Resumable + per-run bounded: converges over consecutive runs and
+                    // sets treatment_items_backfilled itself when it reaches the end, so a
+                    // dyno recycle mid-pull no longer restarts from page 1 every night.
+                    const ib = await backfillTreatmentItems(row.organisation_id, row);
+                    itemBackfill = ib?.synced ?? 0;
+                } catch (err) {
+                    console.warn(`[dentally] treatment_items backfill skipped for ${row.organisation_id}: ${err?.message || err}`);
+                }
+            }
+            results.push({ orgId: row.organisation_id, backfill: needsBackfill, treatment_items_backfill: itemBackfill, ...r });
         } catch (err) {
             // Per-org isolation: one org's failure never blocks the others.
             results.push({ orgId: row.organisation_id, error: err.message });
@@ -1729,4 +1957,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow, classifyWebhook, selectStaleAppointmentIds, selectStalePaymentIds };
+export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow, classifyWebhook, selectStaleAppointmentIds, selectStalePaymentIds, isRateLimited };

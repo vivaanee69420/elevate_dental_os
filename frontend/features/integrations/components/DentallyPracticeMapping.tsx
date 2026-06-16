@@ -17,6 +17,7 @@ import {
 } from '../hooks';
 import type { DentallySyncResource } from '../api';
 import { useSyncToast } from '../sync-toast';
+import CollapsibleCard from './CollapsibleCard';
 
 // Selectable Dentally collections for a scoped backfill. Order = pull order.
 const SYNC_RESOURCES: { key: DentallySyncResource; label: string }[] = [
@@ -103,10 +104,12 @@ export default function DentallyPracticeMapping() {
   }
 
   return (
-    <div className="card-padded" style={{ marginBottom: 20 }}>
-      <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>
-        Dentally practice mapping
-      </h2>
+    <CollapsibleCard
+      title="Dentally practice mapping"
+      badge={unmapped > 0 ? (
+        <span style={{ color: 'var(--danger)', fontSize: 12, fontWeight: 600 }}>{unmapped} unmapped</span>
+      ) : undefined}
+    >
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
         Your practices were detected and mapped automatically on connect. We pull
         the last 24 months straight away; older history syncs overnight, or you
@@ -175,6 +178,6 @@ export default function DentallyPracticeMapping() {
           </tbody>
         </table>
       )}
-    </div>
+    </CollapsibleCard>
   );
 }

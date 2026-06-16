@@ -70,7 +70,7 @@ export default function BookingScreen() {
         <button className="btn btn-primary">Customise widget</button>
       </div>
 
-      <PracticeTabs value={practiceId} onChange={onPractice} />
+      <PracticeTabs dentallyOnly value={practiceId} onChange={onPractice} />
       <DateRangeFilter value={range} onChange={onRange} />
 
       <div className="grid gap-4 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>

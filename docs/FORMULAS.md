@@ -295,6 +295,26 @@ recurringRevenuePct = (membership_revenue + plan_revenue) / revenue × 100
 retentionRatePct = activePatients / (activePatients + lapsedPatients) × 100
 ```
 
+### Business Hub — Treatments Closed & Plan Fees Collected (Dentally `invoice_items`)
+
+Per-practice plan-treatment money, from real invoiced fees (`treatments_closed_revenue_by_practice`, migrations 000074 + **000101**). A "plan line" = an `invoice_items` row with `treatment_plan_id NOT NULL`, windowed by `invoiced_on`, grouped by `practice_id`.
+
+```
+# Treatments Closed (billed / sold)
+closedPence = Σ fee_pence                         # all plan lines in window
+
+# Plan Fees Collected (amount actually collected) — migration 000101
+# Allocate each invoice's settled portion pro-rata across its lines by value,
+# then sum the plan lines' share. Counts PARTIAL payments — matches Dentally's
+# collected basis (Invoice Timeline "Paid" / Patient Accounts), NOT the old
+# all-or-nothing invoice_paid flag.
+collectedRatio(invoice) = clamp01( (amount_pence − amount_outstanding_pence) / amount_pence )
+paidPence   = Σ ( fee_pence × collectedRatio(parent invoice) )   over plan lines
+% collected = paidPence / closedPence
+```
+
+Why it changed: the old `paid = Σ fee_pence WHERE invoice_paid IS TRUE` excluded a whole invoice the moment any balance remained (a £11,900 invoice with £27.80 outstanding counted £0), understating collected (live Ashford Jun 2026: 69% → real 96%). The gap `closed − paid` is real outstanding treatment debtors.
+
 ### Live scorecard actuals (Dentally-sourced, migration 000056)
 
 The KPI Scorecard resolves these "hybrid" metrics from the synced Dentally

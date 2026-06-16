@@ -182,7 +182,7 @@ export default function ProfitScreen() {
         onAccountChange={setQboAccountId}
       />
       {/* QuickBooks is scoped by company, not practice — hide the practice tabs when active. */}
-      {source !== 'quickbooks' && <PracticeTabs value={practiceId} onChange={setPracticeId} />}
+      {source !== 'quickbooks' && <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />}
 
       {/* QuickBooks-style filter bar: date range, groupBy, accounting method, compare columns. */}
       <QbFilterBar value={filters} onChange={setFilters} />

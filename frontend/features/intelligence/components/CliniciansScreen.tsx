@@ -26,7 +26,7 @@ export default function CliniciansScreen() {
   const header = (
     <>
       <PageHeader title="Clinicians" subtitle="Production, pay splits and profit by associate and hygienist, plus NHS/UDA obligation tracking." />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
     </>
   );
 
