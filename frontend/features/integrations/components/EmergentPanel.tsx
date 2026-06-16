@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Chip } from '@/components/ui';
+import CollapsibleCard from './CollapsibleCard';
+import { useSetWebhookSecret } from '../hooks';
 
 interface EmergentStatus {
   connected: boolean;
@@ -17,6 +19,7 @@ interface EmergentStatus {
   baseUrl: string | null;
   keyHint: string | null;
   webhookUrl: string | null;
+  webhookSecretSet: boolean;
   lastSyncAt: string | null;
 }
 
@@ -28,6 +31,11 @@ export default function EmergentPanel() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  
+  const saveWebhook = useSetWebhookSecret('emergent');
+  const [secret, setSecret] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -74,6 +82,24 @@ export default function EmergentPanel() {
     }
   }
 
+  async function runSync(full: boolean) {
+    setSyncing(true);
+    setSyncMsg(null);
+    setErr(null);
+    try {
+      const res = await api<{ synced: number }>('/api/integrations/emergent/sync', {
+        method: 'POST',
+        body: JSON.stringify({ full }),
+      });
+      setSyncMsg(`Synced ${res.synced} accepted treatment${res.synced === 1 ? '' : 's'}.`);
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   function copyWebhook() {
     if (!data?.webhookUrl) return;
     navigator.clipboard?.writeText(data.webhookUrl);
@@ -81,20 +107,30 @@ export default function EmergentPanel() {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  async function saveSecret() {
+    if (secret.trim().length < 8) return;
+    setErr(null);
+    try {
+      await saveWebhook.mutateAsync(secret.trim());
+      setSecret('');
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
+
   if (loading) return null;
 
   const connected = data?.connected;
 
   return (
-    <div className="card-padded" style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>Emergent — Treatments Accepted</div>
-          <div className="text-ink-muted" style={{ fontSize: 11 }}>
-            Pulls treatment-acceptance records staff log in the Emergent ops app into the Business Hub.
-          </div>
-        </div>
-        {connected ? <Chip colour="emerald">Connected</Chip> : <Chip colour="amber">Not connected</Chip>}
+    <CollapsibleCard
+      title="Emergent — Treatments Accepted"
+      style={{ marginBottom: 12 }}
+      actions={connected ? <Chip colour="emerald">Connected</Chip> : <Chip colour="amber">Not connected</Chip>}
+    >
+      <div className="text-ink-muted" style={{ fontSize: 11, marginBottom: 4 }}>
+        Pulls treatment-acceptance records staff log in the Emergent ops app into the Business Hub.
       </div>
 
       <div
@@ -103,9 +139,8 @@ export default function EmergentPanel() {
           background: '#FFFBEB', border: '1px solid #FDE68A', color: '#92400E',
         }}
       >
-        Credentials are stored encrypted. Live sync of accepted treatments turns on once Emergent
-        provides their API contract (field names + webhook signing secret) — until then the
-        Treatments Accepted card shows a placeholder.
+        Credentials are stored encrypted. Accepted treatments pull from the Emergent public API on
+        connect, nightly, and on demand (Sync now) into the Business Hub Treatments Accepted card.
       </div>
 
       {err && (
@@ -150,16 +185,47 @@ export default function EmergentPanel() {
             <span className="text-ink-muted">Base URL:</span> {data?.baseUrl}
             {data?.keyHint && <span className="text-ink-muted"> · key ••••{data.keyHint}</span>}
           </div>
+          <div className="text-ink-muted" style={{ fontSize: 11 }}>
+            Last sync: {data?.lastSyncAt ? new Date(data.lastSyncAt).toLocaleString('en-GB') : 'never'}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => runSync(false)}
+              disabled={syncing}
+              style={{
+                padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+                border: 'none', background: 'var(--brand)', color: 'white',
+                cursor: syncing ? 'default' : 'pointer', opacity: syncing ? 0.6 : 1,
+              }}
+            >
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+            <button
+              onClick={() => runSync(true)}
+              disabled={syncing}
+              style={{
+                padding: '6px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+                border: '1px solid var(--border)', background: 'white',
+                cursor: syncing ? 'default' : 'pointer',
+              }}
+            >
+              Full refresh
+            </button>
+            {syncMsg && <span style={{ fontSize: 11, color: '#047857' }}>{syncMsg}</span>}
+          </div>
+
           {data?.webhookUrl && (
             <div>
               <div className="text-ink-muted" style={{ fontSize: 11, marginBottom: 4 }}>
-                Webhook URL — paste this into Emergent so it pushes accepted treatments here:
+                Real-time webhook — paste into Emergent. Data also pulls
+                nightly and on demand (Sync now), so this is not required.
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
                 <code
                   style={{
                     flex: 1, fontSize: 11, background: '#F3F4F6', padding: '6px 8px',
-                    borderRadius: 6, overflowX: 'auto', whiteSpace: 'nowrap',
+                    border: '1px solid var(--border)', borderRadius: 6, overflowX: 'auto', whiteSpace: 'nowrap',
                   }}
                 >
                   {data.webhookUrl}
@@ -169,6 +235,34 @@ export default function EmergentPanel() {
                   style={{ padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, background: 'white', cursor: 'pointer' }}
                 >
                   {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+
+              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>
+                Signing secret {data.webhookSecretSet && '(set — enter again to replace)'}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="password"
+                  value={secret}
+                  onChange={(e) => setSecret(e.target.value)}
+                  placeholder={data.webhookSecretSet ? '••••••••' : 'Min 8 characters'}
+                  style={{
+                    flex: 1, padding: '8px 10px', fontSize: 12,
+                    border: '1px solid var(--border)', borderRadius: 6,
+                  }}
+                />
+                <button
+                  onClick={saveSecret}
+                  disabled={secret.trim().length < 8 || saveWebhook.isPending}
+                  style={{
+                    padding: '8px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+                    border: 'none', color: 'white',
+                    background: secret.trim().length >= 8 ? 'var(--brand)' : '#9CA3AF',
+                    cursor: secret.trim().length >= 8 && !saveWebhook.isPending ? 'pointer' : 'default',
+                  }}
+                >
+                  {saveWebhook.isPending ? 'Saving…' : 'Save secret'}
                 </button>
               </div>
             </div>
@@ -187,6 +281,6 @@ export default function EmergentPanel() {
           </div>
         </div>
       )}
-    </div>
+    </CollapsibleCard>
   );
 }

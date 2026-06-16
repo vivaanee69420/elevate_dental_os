@@ -27,7 +27,7 @@ function frontendUrl() {
 }
 
 export const integrationController = {
-    // ---- Emergent (Treatments Accepted) — store-only connect ----------------
+    // ---- Emergent (Treatments Accepted) — connect + pull --------------------
     async emergentGet(req, res) {
         res.json(await emergentService.get(req.user.organisation_id));
     },
@@ -35,8 +35,22 @@ export const integrationController = {
         const { baseUrl, apiKey } = req.body ?? {};
         res.json(await emergentService.connect(req.user.organisation_id, { baseUrl, apiKey }));
     },
+    async emergentSync(req, res) {
+        const full = req.body?.full === true || req.query?.full === 'true';
+        res.json(await emergentService.sync(req.user.organisation_id, { full }));
+    },
     async emergentDisconnect(req, res) {
         res.json(await emergentService.disconnect(req.user.organisation_id));
+    },
+    async emergentPractices(req, res) {
+        res.json(await emergentService.listPractices(req.user.organisation_id));
+    },
+    async emergentSetPractice(req, res) {
+        const body = integration_model_1.emergentPracticeMapSchema.parse(req.body);
+        res.json(await emergentService.setPracticeMapping(req.user.organisation_id, {
+            businessId: body.business_id,
+            practiceId: body.practice_id,
+        }));
     },
     async list(req, res) {
         res.json(await integration_service_1.integrationService.list(req.user.organisation_id));

@@ -14,8 +14,9 @@ router.post('/dentally/:token', (0, async_handler_1.asyncHandler)(webhook_contro
 // GoHighLevel real-time webhook. :token routes to a subaccount (per-account
 // webhook_token) or, for legacy URLs, the signed org token. JSON body (no raw mount).
 router.post('/gohighlevel/:token', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.gohighlevel));
-// Emergent (Treatments Accepted). JSON body (no raw mount yet — HMAC verify is
-// added with the Emergent contract). Token resolves the org; ingest is pending.
+// Emergent (Treatments Accepted). Raw body (express.raw mounted on
+// /webhooks/emergent in app.js) for HMAC-SHA256 signature verification. Token
+// resolves the org; the service verifies X-Webhook-Signature and ingests.
 router.post('/emergent/:token', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.emergent));
 router.post('/postmark/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.postmarkInbound));
 router.post('/twilio/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.twilioInbound));

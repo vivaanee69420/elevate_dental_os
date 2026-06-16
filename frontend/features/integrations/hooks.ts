@@ -22,6 +22,8 @@ import {
   updateGhlAccount,
   removeGhlAccount,
   syncGhlAccount,
+  getEmergentPractices,
+  setEmergentPractice,
   type ConnectInput,
   type DentallySyncResource,
 } from './api';
@@ -239,5 +241,29 @@ export function useRemoveGhlAccount() {
 export function useSyncGhlAccount() {
   return useMutation({
     mutationFn: ({ id, full }: { id: string; full?: boolean }) => syncGhlAccount(id, full),
+  });
+}
+
+// --- Emergent Practice Mapping ----------------------------------------------
+export function useEmergentPractices() {
+  return useQuery({
+    queryKey: ['emergent-practices'],
+    queryFn: getEmergentPractices,
+    staleTime: 30_000,
+  });
+}
+
+export function useSetEmergentPractice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ businessId, practiceId }: { businessId: string; practiceId: string | null }) =>
+      setEmergentPractice(businessId, practiceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['emergent-practices'] });
+      // Refresh treatment_accepted surfaces since re-stamp may change counts
+      qc.invalidateQueries({ queryKey: ['marketing-roi'] });
+      qc.invalidateQueries({ queryKey: ['growth', 'marketing-roi'] });
+      qc.invalidateQueries({ queryKey: ['business-hub'] });
+    },
   });
 }
