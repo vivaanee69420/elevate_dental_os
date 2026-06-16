@@ -9,9 +9,11 @@
 // read false-green). The fully-editable spreadsheet engine + account-level CoA
 // mapping are the Phase 3 persistence slice.
 
+import { useState } from 'react';
 import { PageHeader, KpiTile, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { useQboAccounts } from '@/features/finance/hooks';
 import { Panel, PanelHead, NoteFoot, Pill, th, td } from './os-ui';
 import { usePLMargin } from '../pl-margin-hooks';
 import type { PLLine } from '../pl-margin-api';
@@ -36,7 +38,26 @@ const STATEMENT: { field: keyof PLLine; label: string; kind: 'rev' | 'direct' | 
 ];
 
 export default function PLMarginScreen() {
-  const { data, isLoading, isError, error } = usePLMargin();
+  // QuickBooks is the live accounting feed: it posts a full P&L per company.
+  // When any QB company is connected the tab goes QuickBooks-first — company +
+  // accrual/cash filters replace the practice (Dentally) scope, which QB data
+  // can't honour (QB is not practice-mapped). With no QB connected we fall back
+  // to the all-feeds view + the practice scope, so Xero/manual orgs are unchanged.
+  const { data: qbo } = useQboAccounts();
+  const companies = (qbo?.accounts ?? []).filter((a) => a.status === 'active');
+  const hasQbo = companies.length > 0;
+
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [method, setMethod] = useState<'accrual' | 'cash'>('accrual');
+
+  // A stale company selection (company disconnected) silently falls back to All.
+  const selected = hasQbo && accountId && companies.some((c) => c.id === accountId) ? accountId : null;
+
+  const { data, isLoading, isError, error } = usePLMargin(
+    hasQbo
+      ? { source: 'quickbooks', accountId: selected, accountingMethod: method }
+      : { source: 'combined', accountingMethod: 'accrual' },
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -44,7 +65,17 @@ export default function PLMarginScreen() {
         title="P&L & Margin"
         subtitle="Group and per-entity profit from your accounting actuals: revenue, lab, staff and the net operating profit that lands."
       />
-      <ScopePeriodBar dentallyOnly />
+      {/* Period pills always; practice scope only when there is no QB feed. */}
+      <ScopePeriodBar hideScope={hasQbo} dentallyOnly />
+      {hasQbo && (
+        <QboFilterBar
+          companies={companies}
+          accountId={selected}
+          onAccount={setAccountId}
+          method={method}
+          onMethod={setMethod}
+        />
+      )}
 
       {isError ? (
         <Panel><EmptyState message={`Couldn't load P&L: ${(error as Error)?.message ?? 'unknown error'}`} /></Panel>
@@ -56,7 +87,9 @@ export default function PLMarginScreen() {
       ) : !data?.hasData ? (
         <Panel>
           <PanelHead title="Profit & Loss" sub="Real actuals only — no projection on a finance screen." />
-          <EmptyState message="No P&L actuals for this scope/period. Connect Xero or QuickBooks (Integrations), or enter monthly actuals, to populate the statement." />
+          <EmptyState message={hasQbo
+            ? 'No QuickBooks P&L for this company/period. Pick another month or company, or check the QuickBooks sync in Integrations.'
+            : 'No P&L actuals for this scope/period. Connect QuickBooks or Xero (Integrations), or enter monthly actuals, to populate the statement.'} />
         </Panel>
       ) : (
         <PLBody data={data} />
@@ -65,10 +98,64 @@ export default function PLMarginScreen() {
   );
 }
 
+// QuickBooks filter row: company picker (a QB company = one legal entity, not a
+// dental practice) + accrual/cash accounting basis. Mirrors the /profit source
+// bar's controls so the two QuickBooks surfaces feel identical.
+function QboFilterBar({
+  companies,
+  accountId,
+  onAccount,
+  method,
+  onMethod,
+}: {
+  companies: { id: string; company_name: string | null; label: string | null; realm_id: string | null }[];
+  accountId: string | null;
+  onAccount: (id: string | null) => void;
+  method: 'accrual' | 'cash';
+  onMethod: (m: 'accrual' | 'cash') => void;
+}) {
+  const fieldCls = 'text-[13px] border border-border bg-card text-ink px-3 py-2 rounded-xl shadow-panel-sm cursor-pointer';
+  return (
+    <div className="flex flex-wrap items-end gap-4 mb-1">
+      <div>
+        <div className="text-[11px] uppercase tracking-wide text-ink-soft mb-1.5">QuickBooks company</div>
+        <select className={fieldCls} value={accountId ?? ''} onChange={(e) => onAccount(e.target.value || null)}>
+          <option value="">All companies</option>
+          {companies.map((c) => (
+            <option key={c.id} value={c.id}>{c.company_name || c.label || c.realm_id || 'Company'}</option>
+          ))}
+        </select>
+      </div>
+      <div>
+        <div className="text-[11px] uppercase tracking-wide text-ink-soft mb-1.5">Accounting basis</div>
+        <div className="inline-flex rounded-xl overflow-hidden border border-border">
+          {(['accrual', 'cash'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => onMethod(m)}
+              className={
+                'text-[13px] px-4 py-2 font-medium capitalize ' +
+                (method === m ? 'bg-brand text-white' : 'bg-card text-ink hover:bg-surface-2')
+              }
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['data']> }) {
   const t = data.statement;
   const staffRatio = t.revPence ? (t.staffPence / t.revPence) * 100 : 0;
-  const basisPill = BASIS_LABEL[data.basis] ?? data.basis;
+  const isQbo = data.source === 'quickbooks';
+  const isCompany = data.perEntityKind === 'company';
+  // Append the accounting basis to the period pill for QuickBooks (cash vs accrual
+  // change the numbers materially; non-QB feeds are accrual-only so no need).
+  const basisPill = `${BASIS_LABEL[data.basis] ?? data.basis}${isQbo ? ` · ${data.accountingMethod === 'cash' ? 'cash' : 'accrual'}` : ''}`;
 
   return (
     <>
@@ -116,13 +203,19 @@ function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['da
 
       {/* Per-entity */}
       <Panel>
-        <PanelHead title="P&L by Entity" sub={data.perEntityAvailable ? 'Each business in scope with its own tagged actuals.' : 'Per-entity split needs practice-tagged actuals.'} right={<Pill tone="info">{basisPill}</Pill>} />
+        <PanelHead
+          title={isCompany ? 'P&L by Company' : 'P&L by Entity'}
+          sub={data.perEntityAvailable
+            ? (isCompany ? 'Each connected QuickBooks company with its own P&L.' : 'Each business in scope with its own tagged actuals.')
+            : (isQbo ? 'Connect a QuickBooks company per entity to split this.' : 'Per-entity split needs practice-tagged actuals.')}
+          right={<Pill tone="info">{basisPill}</Pill>}
+        />
         {data.perEntityAvailable ? (
           <div className="overflow-x-auto">
             <table className="w-full border-collapse" style={{ minWidth: 600 }}>
               <thead>
                 <tr className="border-b border-border">
-                  {['Entity', 'Revenue', 'Lab & mat', 'Staff', 'Other opex', 'Net Profit', 'Margin'].map((h, i) => (
+                  {[isCompany ? 'Company' : 'Entity', 'Revenue', 'Lab & mat', 'Staff', 'Other opex', 'Net Profit', 'Margin'].map((h, i) => (
                     <th key={h} className={`${th} ${i ? 'text-right' : 'text-left'}`}>{h}</th>
                   ))}
                 </tr>
@@ -152,7 +245,9 @@ function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['da
             </table>
           </div>
         ) : (
-          <EmptyState message="Your accounting feed posts at group level (no practice tag), so the P&L can't be split per entity yet. Tag actuals by practice in Xero/QuickBooks to unlock this." />
+          <EmptyState message={isQbo
+            ? "These QuickBooks rows aren't tagged to a company, so they can't be split per entity. Map each company to its QuickBooks realm in Integrations to unlock this."
+            : "Your accounting feed posts at group level (no practice tag), so the P&L can't be split per entity yet. Tag actuals by practice in Xero/QuickBooks to unlock this."} />
         )}
       </Panel>
     </>

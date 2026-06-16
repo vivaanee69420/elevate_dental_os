@@ -109,3 +109,64 @@ describe('plMargin', () => {
     expect(r.entities).toEqual([]);
   });
 });
+
+// ----------------------------------------------------------------------------
+// QuickBooks path: company-level P&L (no practice tag), accrual/cash basis, and
+// the associates bucket folded into staff & clinician pay. monthly_financials
+// QBO rows carry integration_account_id (the QB company) but practice_id = null,
+// so the per-entity split is BY COMPANY, labelled from integration_accounts.
+// ----------------------------------------------------------------------------
+describe('plMargin — QuickBooks (company split, accrual/cash, associates)', () => {
+  const QBO_ACCOUNTS = [
+    { id: 'ia1', label: 'Co One', status: 'active', config: { company_name: 'Company One Ltd' } },
+    { id: 'ia2', label: 'Co Two', status: 'active', config: { company_name: 'Company Two Ltd' } },
+  ];
+  function stubQbo(fin) {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'practices') return { data: ENTITIES, error: null };
+      if (q.table === 'integration_accounts') return { data: QBO_ACCOUNTS, error: null };
+      if (q.table === 'monthly_financials') return { data: fin, error: null };
+      return { data: [], error: null };
+    };
+  }
+
+  it('folds the associates bucket into staff & clinician pay', async () => {
+    const fin = [
+      { practice_id: null, integration_account_id: 'ia1', period: '2026-05', dental_bucket: 'revenue', amount_pence: 1000000, source: 'quickbooks', accounting_method: 'accrual' },
+      { practice_id: null, integration_account_id: 'ia1', period: '2026-05', dental_bucket: 'staff', amount_pence: 200000, source: 'quickbooks', accounting_method: 'accrual' },
+      { practice_id: null, integration_account_id: 'ia1', period: '2026-05', dental_bucket: 'associates', amount_pence: 300000, source: 'quickbooks', accounting_method: 'accrual' },
+    ];
+    stubQbo(fin);
+    const r = await svc.plMargin(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', source: 'quickbooks', accountingMethod: 'accrual', now });
+    expect(r.statement.staffPence).toBe(500000); // 200k staff + 300k associates
+    expect(r.statement.netPence).toBe(500000); // 1,000,000 rev - 500,000 staff
+    expect(r.statement.marginPct).toBe(50);
+  });
+
+  it('splits per-entity by QuickBooks company, labelled from integration_accounts', async () => {
+    const fin = [
+      { practice_id: null, integration_account_id: 'ia1', period: '2026-05', dental_bucket: 'revenue', amount_pence: 1000000, source: 'quickbooks', accounting_method: 'accrual' },
+      { practice_id: null, integration_account_id: 'ia2', period: '2026-05', dental_bucket: 'revenue', amount_pence: 400000, source: 'quickbooks', accounting_method: 'accrual' },
+    ];
+    stubQbo(fin);
+    const r = await svc.plMargin(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', source: 'quickbooks', accountingMethod: 'accrual', now });
+    expect(r.perEntityAvailable).toBe(true);
+    expect(r.entities.map((e) => e.name)).toEqual(['Company One Ltd', 'Company Two Ltd']);
+    expect(r.entities.every((e) => e.kind === 'company')).toBe(true);
+    expect(r.entities[0].revPence).toBe(1000000);
+    // Group statement = sum across companies.
+    expect(r.statement.revPence).toBe(1400000);
+  });
+
+  it('cash basis surfaces only cash rows (no accrual double-count)', async () => {
+    const fin = [
+      { practice_id: null, integration_account_id: 'ia1', period: '2026-05', dental_bucket: 'revenue', amount_pence: 1000000, source: 'quickbooks', accounting_method: 'accrual' },
+      { practice_id: null, integration_account_id: 'ia1', period: '2026-05', dental_bucket: 'revenue', amount_pence: 900000, source: 'quickbooks', accounting_method: 'cash' },
+    ];
+    stubQbo(fin);
+    const accrual = await svc.plMargin(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', source: 'quickbooks', accountingMethod: 'accrual', now });
+    expect(accrual.statement.revPence).toBe(1000000);
+    const cash = await svc.plMargin(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', source: 'quickbooks', accountingMethod: 'cash', now });
+    expect(cash.statement.revPence).toBe(900000);
+  });
+});

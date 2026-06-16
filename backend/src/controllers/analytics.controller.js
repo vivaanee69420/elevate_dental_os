@@ -61,6 +61,7 @@ export const analyticsController = {
         const q = analytics_model_1.scopeQuerySchema.parse(req.query);
         res.json(await analytics_service_1.analyticsService.plMargin(req.user.organisation_id, {
             scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
+            source: q.source, accountId: q.account_id, accountingMethod: q.accounting_method,
         }));
     },
     async valuation(req, res) {
