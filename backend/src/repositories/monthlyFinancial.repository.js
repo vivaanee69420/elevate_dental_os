@@ -56,7 +56,7 @@ export const monthlyFinancialRepository = {
         const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
         let q = supabase_1.serviceClient
             .from('monthly_financials')
-            .select('period, dental_bucket, amount_pence, source, practice_id, integration_account_id, accounting_method')
+            .select('period, account_code, dental_bucket, amount_pence, source, practice_id, integration_account_id, accounting_method')
             .eq('organisation_id', orgId)
             .limit(LIMIT_GUARD);
         if (source) q = q.eq('source', source);

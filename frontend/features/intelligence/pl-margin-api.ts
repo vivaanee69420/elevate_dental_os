@@ -36,6 +36,22 @@ export interface PLMarginOpts {
   accountingMethod?: 'accrual' | 'cash';
 }
 
+// One account-level line under a summary row (e.g. "Council Tax" under Other
+// operating costs), as the accounting feed books it. Pence.
+export interface PLBreakdownLine {
+  name: string;
+  amountPence: number;
+}
+
+// Account-level drill-down keyed by the summary line it rolls into. Each list is
+// largest-first. Empty lists when no account detail exists for that line.
+export interface PLBreakdown {
+  revPence: PLBreakdownLine[];
+  labMaterialsPence: PLBreakdownLine[];
+  staffPence: PLBreakdownLine[];
+  otherOpexPence: PLBreakdownLine[];
+}
+
 export interface PLMargin {
   applicable: boolean;
   scope: string;
@@ -53,6 +69,7 @@ export interface PLMargin {
   perEntityKind: 'company' | 'practice' | null;
   entityBasisMixed: boolean;
   entities: PLEntity[];
+  breakdown: PLBreakdown;
   note?: string;
 }
 
@@ -62,6 +79,7 @@ const EMPTY: PLMargin = {
   hasData: false, costsAvailable: false, periodsCovered: 0,
   statement: { revPence: 0, labMaterialsPence: 0, grossPence: 0, staffPence: 0, otherOpexPence: 0, netPence: 0, marginPct: 0 },
   dentistStaffSeparable: false, perEntityAvailable: false, perEntityKind: null, entityBasisMixed: false, entities: [],
+  breakdown: { revPence: [], labMaterialsPence: [], staffPence: [], otherOpexPence: [] },
 };
 
 export function fetchPLMargin(scope: string, win: ResolvedWindow, opts: PLMarginOpts = {}): Promise<PLMargin> {

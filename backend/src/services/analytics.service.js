@@ -17,7 +17,7 @@ import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { boardReportRepository } from "../repositories/boardReport.repository.js";
 import { orgSettingsRepository } from "../repositories/orgSettings.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
-import { bucketsByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
+import { bucketsByPeriod, accountLinesByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
@@ -683,14 +683,44 @@ export const analyticsService = {
                 for (const mk of hit)
                     for (const [k, v] of Object.entries(byPeriod.get(mk))) summed[k] = (summed[k] || 0) + v;
                 if ((summed.revenue || 0) > 0) {
-                    return { buckets: summed, basis: multiMonth ? 'annual' : 'month', periodsCovered: hit.length };
+                    return { buckets: summed, basis: multiMonth ? 'annual' : 'month', periodsCovered: hit.length, periodsUsed: hit };
                 }
             }
             const periods = [...byPeriod.keys()].sort().slice(-12);
             const annual = {};
             for (const p of periods)
                 for (const [k, v] of Object.entries(byPeriod.get(p))) annual[k] = (annual[k] || 0) + v;
-            return { buckets: annual, basis: 'annual', periodsCovered: periods.length };
+            return { buckets: annual, basis: 'annual', periodsCovered: periods.length, periodsUsed: periods };
+        };
+
+        // Which summary P&L line each monthly_financials bucket rolls into — drives
+        // the drill-down: a clicked summary row expands to the account_code lines
+        // whose bucket maps here. 'tax' is below the operating line → no drill-down.
+        const SUMMARY_OF_BUCKET = {
+            revenue: 'revPence',
+            lab: 'labMaterialsPence', materials: 'labMaterialsPence',
+            staff: 'staffPence', associates: 'staffPence',
+            overhead: 'otherOpexPence', other: 'otherOpexPence',
+        };
+        // Group-level account-line detail, keyed by summary line -> code -> pence.
+        // Accumulated across every in-scope key (incl. __org__) over the SAME
+        // periods that key contributed to the statement total.
+        const groupBreakdown = {
+            revPence: new Map(), labMaterialsPence: new Map(),
+            staffPence: new Map(), otherOpexPence: new Map(),
+        };
+        const addBreakdown = (rows, periodsUsed) => {
+            const byPeriod = accountLinesByPeriod(rows, { accountingMethod: method });
+            for (const mk of periodsUsed) {
+                const byBucket = byPeriod.get(mk);
+                if (!byBucket) continue;
+                for (const [bucket, byCode] of byBucket) {
+                    const grp = SUMMARY_OF_BUCKET[bucket];
+                    if (!grp) continue;
+                    const target = groupBreakdown[grp];
+                    for (const [code, amt] of byCode) target.set(code, (target.get(code) || 0) + amt);
+                }
+            }
         };
 
         // QuickBooks company labels (only fetched when company-keyed rows exist —
@@ -712,11 +742,13 @@ export const analyticsService = {
         const groupLine = { revPence: 0, labMaterialsPence: 0, grossPence: 0, staffPence: 0, otherOpexPence: 0, netPence: 0 };
         let anyMonth = false, anyAnnual = false, groupPeriods = 0;
         for (const [key, rows] of byKey) {
-            const { buckets, basis, periodsCovered } = resolveBuckets(rows);
+            const { buckets, basis, periodsCovered, periodsUsed } = resolveBuckets(rows);
             const line = plLineFromBuckets(buckets);
             if (line.revPence <= 0 && line.netPence === 0) continue;
             // Accumulate into the group statement (all in-scope keys, incl. __org__).
             for (const f of Object.keys(groupLine)) groupLine[f] += line[f];
+            // Same keys + same periods feed the drill-down account-line detail.
+            addBreakdown(rows, periodsUsed);
             if (basis === 'month') anyMonth = true; else anyAnnual = true;
             groupPeriods = Math.max(groupPeriods, periodsCovered);
             if (key === '__org__') continue; // org-level stays in the total, not a row
@@ -778,6 +810,15 @@ export const analyticsService = {
             perEntityKind,
             entityBasisMixed: anyMonth && anyAnnual,
             entities,
+            // Account-level drill-down per summary line (largest first). Lets the
+            // UI expand e.g. "Other operating costs" into Council Tax, Advertising,
+            // Utilities... exactly as the accounting feed books them.
+            breakdown: Object.fromEntries(Object.entries(groupBreakdown).map(([grp, m]) => [
+                grp,
+                [...m.entries()]
+                    .map(([name, amountPence]) => ({ name, amountPence }))
+                    .sort((a, b) => b.amountPence - a.amountPence),
+            ])),
             note: 'Real P&L from monthly_financials (Xero/QuickBooks override manual; QuickBooks is split per company). Staff includes associate/clinician pay (Xero books them together; QuickBooks folds its associates bucket into the same line). Editable scenario sheets + account-level CoA mapping are the persistence slice.',
         };
     },
