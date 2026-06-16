@@ -10,7 +10,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), mergeConfig: vi.fn() },
 }));
 
-const { syncOneOrg, syncAllOrgs, bootstrapOnConnect, backfillTreatmentItems, invoiceRow, selectStaleAppointmentIds, __test } = await import('../src/lib/integrations/dentally-sync.js');
+const { syncOneOrg, syncAllOrgs, bootstrapOnConnect, backfillTreatmentItems, invoiceRow, selectStaleAppointmentIds, resolveDentallyAuth, __test } = await import('../src/lib/integrations/dentally-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 describe('dentally mappers', () => {
@@ -116,13 +116,15 @@ describe('invoiceRow', () => {
   });
 });
 
-describe('authHeader', () => {
-    it('round-trips an encrypted apiKey to a Bearer header', () => {
+describe('resolveDentallyAuth', () => {
+    it('round-trips an encrypted apiKey to a Bearer header', async () => {
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k-123' }));
-        expect(__test.authHeader(secrets)).toBe('Bearer k-123');
+        const integ = { secrets, expires_at: null };
+        expect(await resolveDentallyAuth('org1', integ)).toBe('Bearer k-123');
     });
-    it('returns null on garbage', () => {
-        expect(__test.authHeader('not-encrypted')).toBeNull();
+    it('returns null on garbage', async () => {
+        const integ = { secrets: 'not-encrypted', expires_at: null };
+        expect(await resolveDentallyAuth('org1', integ)).toBeNull();
     });
 });
 
