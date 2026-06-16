@@ -39,6 +39,7 @@ export interface ConnectInput {
   provider: string;
   apiKey?: string;
   baseUrl?: string;
+  method?: 'oauth' | 'key';
 }
 
 export interface ConnectResponse {
