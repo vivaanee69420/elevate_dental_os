@@ -140,4 +140,16 @@ describe('chairRecovery', () => {
     const rec = chairRecovery({ capHrsYr: 1000, upliftPctPoints: 30, revPerBookedHrPence: 100, currentOccupancyPct: 85 });
     expect(rec.newOccupancyPct).toBe(100);
   });
+  it('caps recovery hours/revenue to headroom — no phantom unlock past 100%', () => {
+    // 85% occupancy, 30pt uplift -> only 15pts of real headroom.
+    const rec = chairRecovery({ capHrsYr: 1000, upliftPctPoints: 30, revPerBookedHrPence: 100, currentOccupancyPct: 85 });
+    expect(rec.recoveryHrsYr).toBe(150);            // 1000 * 15/100, not 300
+    expect(rec.revenueUnlockedPence).toBe(150 * 100);
+  });
+  it('already at 100% occupancy -> zero recovery, zero revenue', () => {
+    const rec = chairRecovery({ capHrsYr: 1000, upliftPctPoints: 10, revPerBookedHrPence: 100, currentOccupancyPct: 100 });
+    expect(rec.recoveryHrsYr).toBe(0);
+    expect(rec.revenueUnlockedPence).toBe(0);
+    expect(rec.newOccupancyPct).toBe(100);
+  });
 });
