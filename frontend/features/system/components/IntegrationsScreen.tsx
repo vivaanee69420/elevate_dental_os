@@ -275,26 +275,39 @@ export default function IntegrationsScreen() {
                         Disconnect
                       </button>
                     </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                  ) : p.authStyle === 'oauth_or_key' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <button
                         onClick={() => handleConnect(p)}
                         disabled={startConnect.isPending}
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                        style={{ background: 'none', border: 'none', padding: 0, cursor: startConnect.isPending ? 'default' : 'pointer' }}
+                        title={`Connect securely via ${p.label} OAuth`}
                       >
-                        <Chip colour="amber">{startConnect.isPending ? '…' : 'Connect'}</Chip>
+                        <Chip colour="amber">{startConnect.isPending ? '…' : 'Connect with OAuth'}</Chip>
                       </button>
-                      {p.id === 'dentally' && (
-                        <button
-                          type="button"
-                          onClick={() => handleConnectWithKey(p)}
-                          disabled={startConnect.isPending}
-                          style={{ background: 'none', border: 'none', padding: 0, fontSize: 11, color: 'var(--muted, #64748b)', textDecoration: 'underline', cursor: 'pointer' }}
-                        >
-                          Use an API key instead
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleConnectWithKey(p)}
+                        disabled={startConnect.isPending}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)',
+                          borderRadius: 6, padding: '4px 8px', fontSize: 11,
+                          color: 'var(--ink-muted, #64748b)',
+                          cursor: startConnect.isPending ? 'default' : 'pointer',
+                        }}
+                        title={`Connect with a ${p.label} API key instead`}
+                      >
+                        API key
+                      </button>
                     </div>
+                  ) : (
+                    <button
+                      onClick={() => handleConnect(p)}
+                      disabled={startConnect.isPending}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                    >
+                      <Chip colour="amber">{startConnect.isPending ? '…' : 'Connect'}</Chip>
+                    </button>
                   )}
                 </div>
               );
