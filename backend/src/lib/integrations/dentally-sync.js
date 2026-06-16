@@ -90,13 +90,29 @@ async function isRateLimited(res) {
     }
 }
 
-function authHeader(secrets) {
-    try {
-        const parsed = JSON.parse(decryptSecret(secrets));
-        return parsed.apiKey ? `Bearer ${parsed.apiKey}` : null;
-    } catch {
-        return null;
+// Refresh ~5 min before the OAuth token's stated expiry to avoid mid-call 401s.
+function tokenStale(expiresAt) {
+    if (!expiresAt) return false;
+    return Date.now() >= new Date(expiresAt).getTime() - 5 * 60 * 1000;
+}
+
+// Resolve the Authorization header for a Dentally integration row.
+//   apiKey path -> Bearer <apiKey> (long-lived, never refreshed)
+//   OAuth path  -> Bearer <access_token>, refreshing first if near expiry
+export async function resolveDentallyAuth(orgId, integration) {
+    let parsed;
+    try { parsed = JSON.parse(decryptSecret(integration.secrets)); } catch { return null; }
+    if (parsed.apiKey) return `Bearer ${parsed.apiKey}`;
+    if (!parsed.access_token) return null;
+    if (tokenStale(integration.expires_at)) {
+        const { DentallyProvider } = await import('./dentally-provider.js');
+        await DentallyProvider.refresh(orgId);
+        const fresh = await integrationRepository.getByProvider(orgId, 'dentally');
+        if (fresh?.secrets) {
+            try { parsed = JSON.parse(decryptSecret(fresh.secrets)); } catch { /* keep old */ }
+        }
     }
+    return parsed.access_token ? `Bearer ${parsed.access_token}` : null;
 }
 
 // Page through a Dentally collection endpoint, handing each page to `onBatch`
@@ -260,7 +276,7 @@ async function fetchPageCount(base, path, auth, params, maxPages = MAX_PAGES) {
 // one page each of patients/appointments/payments over the last year.
 export async function detectSiteIds(orgId, integration) {
     const base = integration.config?.base_url ?? DEFAULT_BASE;
-    const auth = authHeader(integration.secrets);
+    const auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) return { error: 'no_auth', siteIds: [] };
     const since = new Date(Date.now() - 365 * 86400000).toISOString();
     const counts = new Map();
@@ -837,7 +853,7 @@ async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages) {
 // existing rows without running the heavy patients/appointments/invoice phases.
 export async function syncPractitionersOnly(orgId, integration) {
     const base = integration.config?.base_url ?? DEFAULT_BASE;
-    const auth = authHeader(integration.secrets);
+    const auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) return { error: 'no_auth' };
     const siteMap = await loadSiteMap(orgId);
     return pullPractitioners(orgId, base, auth, {}, siteMap, BACKFILL_MAX_PAGES);
@@ -1257,7 +1273,7 @@ export async function getWebhookHealth(orgId, integration = null) {
     try {
         const integ = integration || (await integrationRepository.getByProvider(orgId, 'dentally'));
         if (!integ || integ.status === 'revoked') return { available: false, reason: 'not_connected' };
-        const auth = authHeader(integ.secrets);
+        const auth = await resolveDentallyAuth(orgId, integ);
         if (!auth) return { available: false, reason: 'no_credentials' };
         const base = integ.config?.base_url ?? DEFAULT_BASE;
         const res = await fetchWithTimeout(new URL(`${base}/webhooks`), {
@@ -1383,7 +1399,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     const selective = Array.isArray(resources) && resources.length > 0;
     const want = (k) => !selective || resources.includes(k);
     const base = integration.config?.base_url ?? DEFAULT_BASE;
-    const auth = authHeader(integration.secrets);
+    const auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) {
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
@@ -1785,7 +1801,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
 // an empty siteMap, and the later backfill was swallowed by the concurrency
 // guard against that still-running sync).
 export async function bootstrapOnConnect(orgId, integration, onProgress = () => {}) {
-    const auth = authHeader(integration.secrets);
+    const auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) {
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
@@ -1836,7 +1852,7 @@ const TI_BACKFILL_CHECKPOINT_EVERY = 25; // persist the page cursor every N page
 export async function backfillTreatmentItems(orgId, integration) {
     if (integration.config?.treatment_items_backfilled) return { skipped: true };
     const base = integration.config?.base_url ?? DEFAULT_BASE;
-    const auth = authHeader(integration.secrets);
+    const auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) return { error: 'no_auth' };
     const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
     const associateMap = await loadPractitionerMap(orgId);
@@ -1957,4 +1973,4 @@ export async function syncAllOrgs() {
 }
 
 // Exported for unit tests.
-export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, authHeader, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow, classifyWebhook, selectStaleAppointmentIds, selectStalePaymentIds, isRateLimited };
+export const __test = { fetchAllPages, streamPages, fetchPageCount, weightedPct, reportPct, isOpenAppointment, mapAppointmentStatus, mapPaymentStatus, mapPaymentMethod, toPence, treatmentPlanRow, invoiceItemRow, invoiceTreatment, paymentRow, classifyWebhook, selectStaleAppointmentIds, selectStalePaymentIds, isRateLimited };
