@@ -1,6 +1,7 @@
 // Chair utilisation — pure grid aggregation (no I/O).
 import { describe, it, expect } from 'vitest';
 import { aggregateGrid, SLOTS } from '../src/lib/chair-utilisation.js';
+import { chairUtilisationCreateSchema, chairUtilisationUpdateSchema } from '../src/models/chair-utilisation.model.js';
 
 const rec = (o) => ({ weekday: 1, slot: 'morning', booked_minutes: 0, available_minutes: 0, ...o });
 
@@ -49,5 +50,26 @@ describe('aggregateGrid', () => {
         expect(kpis.peakSlot).toBeNull();
         expect(kpis.lowestSlot).toBeNull();
         expect(kpis.idleChairHours).toBe(0);
+    });
+});
+
+describe('chairUtilisationCreateSchema — booked must not exceed available', () => {
+    const base = {
+        practice_id: '11111111-1111-1111-1111-111111111111',
+        chair_name: 'Surgery 1', weekday: 1, slot: 'morning',
+    };
+    it('accepts booked <= available', () => {
+        expect(chairUtilisationCreateSchema.safeParse({ ...base, booked_minutes: 180, available_minutes: 240 }).success).toBe(true);
+        expect(chairUtilisationCreateSchema.safeParse({ ...base, booked_minutes: 240, available_minutes: 240 }).success).toBe(true);
+    });
+    it('rejects booked > available', () => {
+        const r = chairUtilisationCreateSchema.safeParse({ ...base, booked_minutes: 300, available_minutes: 180 });
+        expect(r.success).toBe(false);
+        expect(r.error.issues[0].path).toEqual(['booked_minutes']);
+    });
+    it('update schema also rejects booked > available when both supplied', () => {
+        expect(chairUtilisationUpdateSchema.safeParse({ booked_minutes: 300, available_minutes: 180 }).success).toBe(false);
+        // partial: only one side present -> can't compare -> allowed
+        expect(chairUtilisationUpdateSchema.safeParse({ booked_minutes: 300 }).success).toBe(true);
     });
 });

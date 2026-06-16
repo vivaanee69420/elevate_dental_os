@@ -327,6 +327,7 @@ CREATE TABLE IF NOT EXISTS chair_utilisation (
   slot TEXT NOT NULL CHECK (slot IN ('morning','midday','afternoon','evening')),
   booked_minutes INT NOT NULL DEFAULT 0 CHECK (booked_minutes >= 0),
   available_minutes INT NOT NULL DEFAULT 0 CHECK (available_minutes >= 0),
+  revenue_pence INT NOT NULL DEFAULT 0 CHECK (revenue_pence >= 0),  -- typical-week revenue for this cell (000102)
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

@@ -12,10 +12,10 @@ export function useChairRecords(practiceId: string | undefined) {
   });
 }
 
-export function useChairGrid(practiceId: string | undefined) {
+export function useChairGrid(practiceId: string | undefined, asOf?: string) {
   return useQuery({
-    queryKey: ['chair-grid', practiceId],
-    queryFn: () => getChairGrid(practiceId!),
+    queryKey: ['chair-grid', practiceId, asOf ?? 'live'],
+    queryFn: () => getChairGrid(practiceId!, asOf),
     enabled: !!practiceId,
   });
 }
