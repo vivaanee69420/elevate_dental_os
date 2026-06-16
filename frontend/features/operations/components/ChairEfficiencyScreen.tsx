@@ -19,6 +19,7 @@ const UPLIFTS = [0, 5, 10, 20, 40];
 
 export function ChairEfficiencyScreen() {
   const [recover, setRecover] = useState(10);
+  const [tableInfo, setTableInfo] = useState(false);
   const { data, isLoading, isError, error } = useChairAnalytics(recover);
 
   const cols: Column<ChairPracticeRow>[] = [
@@ -194,7 +195,31 @@ export function ChairEfficiencyScreen() {
           <ChairConfigPanel />
 
           <div>
-            <h3 className="display text-lg mb-2">Occupancy &amp; cost of empty chairs — by practice</h3>
+            <div className="flex items-center gap-2 mb-2">
+              <h3 className="display text-lg">Occupancy &amp; cost of empty chairs — by practice</h3>
+              <button
+                type="button"
+                onClick={() => setTableInfo((o) => !o)}
+                aria-label={tableInfo ? 'Hide column definitions' : 'How are these columns calculated?'}
+                aria-expanded={tableInfo}
+                className="shrink-0 w-5 h-5 rounded-full border border-border text-[11px] font-semibold text-ink-muted leading-none flex items-center justify-center hover:bg-surface-muted"
+              >
+                {tableInfo ? '×' : '?'}
+              </button>
+            </div>
+            {tableInfo && (
+              <div className="card-padded mb-2 text-[12px] text-ink-muted leading-relaxed">
+                <div className="font-semibold text-ink mb-1">How each column is calculated</div>
+                <ul className="list-disc pl-4 flex flex-col gap-1">
+                  <li><b>Chairs</b> — distinct chair names entered in this practice&apos;s chair-utilisation grid.</li>
+                  <li><b>Occupancy</b> — Σ booked ÷ Σ available minutes from the grid, capped at 100%.</li>
+                  <li><b>Booked/yr</b> — capacity × occupancy. Capacity = chairs × open hrs/day × (weeks/yr × days/wk).</li>
+                  <li><b>Empty/yr</b> — capacity − booked: unused chair-hours over the year.</li>
+                  <li><b>Cost of empty</b> — empty hrs × the benchmark £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/chair-hour (industry rate, not your yield).</li>
+                  <li><b>Recoverable</b> — hrs to reach the {data.config?.benchOccPct ?? 88}% benchmark × your own revenue/hr. Zero if already at/above it.</li>
+                </ul>
+              </div>
+            )}
             <DataTable
               columns={cols}
               rows={data.practices}
