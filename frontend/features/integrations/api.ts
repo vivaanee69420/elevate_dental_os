@@ -2,7 +2,7 @@
 
 import { api } from '@/lib/api';
 
-export type AuthStyle = 'oauth' | 'broker_key' | 'platform';
+export type AuthStyle = 'oauth' | 'broker_key' | 'platform' | 'oauth_or_key';
 export type IntegrationStatus = 'pending' | 'verifying' | 'active' | 'failed' | 'revoked';
 
 export interface ProviderMeta {

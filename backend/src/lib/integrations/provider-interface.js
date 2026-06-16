@@ -37,7 +37,7 @@ export class NotImplementedError extends Error {
  *   without realtime webhooks (e.g. Dentally polling).
  *
  * meta
- *   Static metadata: { id, label, authStyle: 'oauth' | 'broker_key' | 'platform' }
+ *   Static metadata: { id, label, authStyle: 'oauth' | 'broker_key' | 'platform' | 'oauth_or_key' }
  */
 export const providers = new Map();
 
