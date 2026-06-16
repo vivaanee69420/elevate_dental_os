@@ -33,6 +33,13 @@ export const scopeQuerySchema = zod_1.z.object({
     // Comma-separated ad-account customer_ids to restrict the marketing views to
     // (used by /marketing-roi). Absent => fall back to the org's selected accounts.
     account_ids: zod_1.z.string().trim().optional(),
+    // P&L & Margin data-source narrowing. source picks one accounting feed
+    // ('quickbooks'|'xero'|'manual'; 'combined'/'dentally' = no filter); account_id
+    // = one QuickBooks company (integration_account_id); accounting_method = the
+    // QB cash/accrual basis. All optional — absent keeps the all-feeds accrual view.
+    source: zod_1.z.string().trim().max(20).optional(),
+    account_id: zod_1.z.string().trim().refine((s) => UUID_RE.test(s), { message: 'account_id must be a UUID' }).optional(),
+    accounting_method: zod_1.z.enum(['accrual', 'cash']).optional(),
 });
 
 // AI Analyst Ask (POST body). Same scope/period selector + a bounded free-text

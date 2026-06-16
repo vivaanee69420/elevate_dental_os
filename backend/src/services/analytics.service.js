@@ -8,6 +8,7 @@ import { integrationRepository as integration_repository_1 } from "../repositori
 import * as formulas_1 from "../lib/formulas.js";
 import * as claude_1 from "../lib/gemini.js";
 import * as monthlyFinancial_repository_1 from "../repositories/monthlyFinancial.repository.js";
+import { quickbooksFinanceRepository } from "../repositories/quickbooks-finance.repository.js";
 import * as associate_repository_1 from "../repositories/associate.repository.js";
 import * as payRun_repository_1 from "../repositories/pay-run.repository.js";
 import * as valuationInputs_repository_1 from "../repositories/valuationInputs.repository.js";
@@ -620,7 +621,7 @@ export const analyticsService = {
     // the trailing ≤12mo annual sum (basis flags which). Per-entity rows appear
     // only when monthly_financials carries practice_id; org-level-only data →
     // `perEntityAvailable:false` and a group statement alone.
-    async plMargin(orgId, { scope = 'all', period = 'month', periodKey, since, until, label, now = () => new Date() } = {}) {
+    async plMargin(orgId, { scope = 'all', period = 'month', periodKey, since, until, label, source = null, accountId = null, accountingMethod = 'accrual', now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
         // Months the window touches ('YYYY-MM'). Explicit pill window wins; else
         // the single month of periodKey (legacy month|day path).
@@ -630,28 +631,43 @@ export const analyticsService = {
         const monthKey = windowMonths[0];
         const multiMonth = windowMonths.length > 1;
 
+        // Optional data-source narrowing. 'quickbooks'|'xero'|'manual' filter
+        // monthly_financials to that one feed; anything else (incl. 'combined'/
+        // 'dentally'/undefined) leaves it unfiltered (all accounting feeds). A
+        // single QuickBooks company is selected via accountId (integration_account_id).
+        const finSource = ['quickbooks', 'xero', 'manual'].includes(source) ? source : null;
+        const method = accountingMethod === 'cash' ? 'cash' : 'accrual';
+
         const [entityRows, allFin] = await Promise.all([
             analytics_repository_1.analyticsRepository.allEntities(orgId),
-            monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId),
+            monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId, { source: finSource, accountId }),
         ]);
         const entityById = new Map(entityRows.map((e) => [e.id, e]));
         const practiceKindIds = new Set(entityRows.filter((e) => e.kind === 'practice').map((e) => e.id));
 
-        // Which practice_ids count for this scope. __org__ (null practice_id) rows
+        // Entity key for a row. Practice-tagged rows (Xero/manual) key by
+        // practice_id; QuickBooks rows carry no practice_id but DO carry
+        // integration_account_id (the QB company = a legal entity) → key by
+        // company. Untagged rows fall to the group bucket.
+        const keyOf = (r) => r.practice_id
+            ? r.practice_id
+            : (r.integration_account_id ? `qbo:${r.integration_account_id}` : '__org__');
+
+        // Which rows count for this scope. __org__ (untagged) and QB-company rows
         // belong to the whole group → included for all/practices, excluded from a
-        // specific entity/academy/lab scope.
-        const inScope = (pid) => {
-            const key = pid || '__org__';
+        // specific practice/academy/lab scope (QB is not practice-mapped).
+        const inScope = (r) => {
+            const pid = r.practice_id;
             if (resolved.mode === 'all') return true;
-            if (resolved.mode === 'practices') return key === '__org__' || practiceKindIds.has(pid);
-            return resolved.practiceIds.includes(pid); // entity/academy/lab
+            if (resolved.mode === 'practices') return !pid || practiceKindIds.has(pid);
+            return pid && resolved.practiceIds.includes(pid); // entity/academy/lab
         };
 
-        // Group rows by practiceKey, then resolve period buckets per group.
-        const byKey = new Map(); // practiceKey -> rows
+        // Group rows by entity key, then resolve period buckets per group.
+        const byKey = new Map(); // entityKey -> rows
         for (const r of allFin) {
-            if (!inScope(r.practice_id)) continue;
-            const key = r.practice_id || '__org__';
+            if (!inScope(r)) continue;
+            const key = keyOf(r);
             (byKey.get(key) || byKey.set(key, []).get(key)).push(r);
         }
 
@@ -660,7 +676,7 @@ export const analyticsService = {
         // basis 'month'; a multi-month window sums to basis 'annual'. When the
         // window has no actuals, fall back to the trailing ≤12mo annual sum.
         const resolveBuckets = (rows) => {
-            const byPeriod = bucketsByPeriod(rows);
+            const byPeriod = bucketsByPeriod(rows, { accountingMethod: method });
             const hit = windowMonths.filter((mk) => byPeriod.has(mk));
             if (hit.length > 0) {
                 const summed = {};
@@ -676,6 +692,17 @@ export const analyticsService = {
                 for (const [k, v] of Object.entries(byPeriod.get(p))) annual[k] = (annual[k] || 0) + v;
             return { buckets: annual, basis: 'annual', periodsCovered: periods.length };
         };
+
+        // QuickBooks company labels (only fetched when company-keyed rows exist —
+        // a Xero/manual-only org never pays for this query). company_name lives in
+        // integration_accounts.config; fall back to label, then a generic name.
+        const hasCompanyKeys = [...byKey.keys()].some((k) => k.startsWith('qbo:'));
+        const companyLabelById = new Map();
+        if (hasCompanyKeys) {
+            const accts = await quickbooksFinanceRepository.accounts(orgId);
+            for (const a of (accts || []))
+                companyLabelById.set(a.id, a.config?.company_name ?? a.label ?? 'QuickBooks company');
+        }
 
         // Resolve EACH key (entity or __org__) independently — Xero-overrides-
         // manual precedence is per-entity, so never merge sources across entities
@@ -693,6 +720,18 @@ export const analyticsService = {
             if (basis === 'month') anyMonth = true; else anyAnnual = true;
             groupPeriods = Math.max(groupPeriods, periodsCovered);
             if (key === '__org__') continue; // org-level stays in the total, not a row
+            if (key.startsWith('qbo:')) {
+                // QuickBooks company entity (no practice mapping).
+                const iaid = key.slice(4);
+                entities.push({
+                    id: key,
+                    name: companyLabelById.get(iaid) || 'QuickBooks company',
+                    kind: 'company',
+                    region: 'QuickBooks company',
+                    basis, periodsCovered, ...line,
+                });
+                continue;
+            }
             const ent = entityById.get(key);
             entities.push({
                 id: key,
@@ -713,11 +752,21 @@ export const analyticsService = {
             : anyMonth && anyAnnual ? 'actuals-mixed'
             : anyMonth ? 'actuals-month' : 'actuals-annual';
 
+        // Per-entity rows are either QuickBooks companies or tagged practices —
+        // tells the UI how to label the split and which empty-state copy to show.
+        const perEntityKind = entities.length === 0 ? null
+            : entities.every((e) => e.kind === 'company') ? 'company'
+            : 'practice';
+
         return {
             applicable: true,
             scope, period,
             monthKey,
             basis,
+            // Echo the resolved feed + accounting basis so the UI can label the
+            // statement and keep its filter controls in sync with what was summed.
+            source: finSource || 'combined',
+            accountingMethod: method,
             hasData,
             costsAvailable: hasData,
             periodsCovered: groupPeriods,
@@ -726,9 +775,10 @@ export const analyticsService = {
             // show a separate clinician line off this source (it would read false).
             dentistStaffSeparable: false,
             perEntityAvailable: entities.length > 0,
+            perEntityKind,
             entityBasisMixed: anyMonth && anyAnnual,
             entities,
-            note: 'Real P&L from monthly_financials (Xero/QuickBooks override manual). Staff includes associate/clinician pay (Xero books them together). Editable scenario sheets + account-level CoA mapping are the persistence slice.',
+            note: 'Real P&L from monthly_financials (Xero/QuickBooks override manual; QuickBooks is split per company). Staff includes associate/clinician pay (Xero books them together; QuickBooks folds its associates bucket into the same line). Editable scenario sheets + account-level CoA mapping are the persistence slice.',
         };
     },
     // Marketing & ROI (GM Intelligence OS, T11). Per-channel acquisition economics
@@ -3404,7 +3454,13 @@ function buildCliniciansInsights({ clinicians, productionAvailable, appointments
 function plLineFromBuckets(b = {}) {
     const revPence = b.revenue || 0;
     const labMaterialsPence = (b.lab || 0) + (b.materials || 0);
-    const staffPence = b.staff || 0;
+    // Staff & clinician pay = the staff bucket PLUS the associates bucket. Xero
+    // books associate/clinician pay inside staff (associates=0), but QuickBooks
+    // classifies it into its own `associates` bucket — dropping it here would
+    // omit clinician pay entirely and overstate net profit. dentistStaffSeparable
+    // is false, so the two belong on the same line (matches plInputFromBuckets /
+    // financeSeriesRowFromBuckets which both include associates).
+    const staffPence = (b.staff || 0) + (b.associates || 0);
     const otherOpexPence = (b.overhead || 0) + (b.other || 0);
     const netPence = revPence - labMaterialsPence - staffPence - otherOpexPence;
     return {
