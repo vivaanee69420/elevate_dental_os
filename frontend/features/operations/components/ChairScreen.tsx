@@ -4,7 +4,7 @@
 // All data is entered here; nothing comes from Dentally.
 
 import { useMemo, useState } from 'react';
-import { Skeleton } from '@/components/ui';
+import { Skeleton, Explainer } from '@/components/ui';
 import { usePractices } from '@/features/integrations/hooks';
 import { formatNumber } from '@/lib/format';
 import {
@@ -123,13 +123,29 @@ export default function ChairScreen() {
       {/* KPIs */}
       <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         <Kpi label="Avg utilisation" value={kpis?.avgUtilPct != null ? `${kpis.avgUtilPct}%` : '—'} sub="UK avg: 72%" subColor="var(--success)"
-          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p>Mean of <b>booked ÷ available</b> across every filled weekday×slot cell (each capped at 100%). Empty cells are ignored.</p></>} />
+          info={<Explainer
+            what="On average, how full your chairs are across the whole week."
+            how="For each time slot we work out how full it was (booked ÷ available), then take the average. Slots you haven't entered yet are skipped."
+            now={kpis?.avgUtilPct != null ? <>Right now: <b>{kpis.avgUtilPct}%</b>. The UK average is about 72%.</> : undefined}
+          />} />
         <Kpi label="Peak slot" value={peakLabel} sub={kpis?.peakSlot ? `${kpis.peakSlot.pct}% utilised` : ''} subColor="var(--success)"
-          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p>The weekday×slot cell with the <b>highest</b> booked ÷ available ratio across all chairs.</p></>} />
+          info={<Explainer
+            what="Your busiest time slot — when chairs are most full."
+            how="We look at every weekday-and-time slot and pick the one with the highest booked-vs-available."
+            now={kpis?.peakSlot ? <><b>{peakLabel}</b> at {kpis.peakSlot.pct}% full.</> : undefined}
+          />} />
         <Kpi label="Lowest slot" value={lowestLabel} sub={kpis?.lowestSlot ? `${kpis.lowestSlot.pct}% utilised` : ''} subColor="var(--danger)"
-          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p>The filled weekday×slot cell with the <b>lowest</b> booked ÷ available ratio — your biggest gap to fill.</p></>} />
+          info={<Explainer
+            what="Your quietest time slot — your biggest opportunity to fill chairs."
+            how="We look at every slot you've entered and pick the one with the lowest booked-vs-available."
+            now={kpis?.lowestSlot ? <><b>{lowestLabel}</b> at {kpis.lowestSlot.pct}% full.</> : undefined}
+          />} />
         <Kpi label="Idle chair-hours" value={kpis ? formatNumber(kpis.idleChairHours) : '—'} sub="/week" subColor="var(--danger)"
-          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p><b>Σ (available − booked)</b> minutes across all filled cells, in hours — the unused chair time in a typical week.</p></>} />
+          info={<Explainer
+            what="The unused chair time in a typical week — hours your chairs are open but empty."
+            how="For every slot we take the open time minus the booked time, then add it all up."
+            now={kpis ? <>About <b>{formatNumber(kpis.idleChairHours)} hours</b> sit empty each week.</> : undefined}
+          />} />
       </div>
 
       {/* Heatmap */}
@@ -149,7 +165,7 @@ export default function ChairScreen() {
           </div>
         </div>
         <div className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-          Each cell = <b>booked ÷ available</b> minutes for that weekday × slot, summed across all chairs and capped at 100%. Greener = busier, redder = more idle; <b>—</b> means no data entered for that cell.
+          <b>How to read this:</b> each box is one time slot on one weekday. The % shows how full your chairs were then (time booked out of time available). <b>Green</b> = busy, <b>red</b> = lots of empty time, <b>—</b> = you haven&apos;t entered any data for that slot yet.
         </div>
         {asOf && (
           <div className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
