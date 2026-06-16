@@ -105,14 +105,36 @@ export async function resolveDentallyAuth(orgId, integration) {
     if (parsed.apiKey) return `Bearer ${parsed.apiKey}`;
     if (!parsed.access_token) return null;
     if (tokenStale(integration.expires_at)) {
-        const { DentallyProvider } = await import('./dentally-provider.js');
-        await DentallyProvider.refresh(orgId);
-        const fresh = await integrationRepository.getByProvider(orgId, 'dentally');
-        if (fresh?.secrets) {
-            try { parsed = JSON.parse(decryptSecret(fresh.secrets)); } catch { /* keep old */ }
-        }
+        try {
+            const { DentallyProvider } = await import('./dentally-provider.js');
+            await DentallyProvider.refresh(orgId);
+            const fresh = await integrationRepository.getByProvider(orgId, 'dentally');
+            if (fresh?.secrets) parsed = JSON.parse(decryptSecret(fresh.secrets));
+        } catch { /* refresh failed — proceed with the existing token; a downstream 401 surfaces it */ }
     }
     return parsed.access_token ? `Bearer ${parsed.access_token}` : null;
+}
+
+// One-shot 401 guard for long backfill pagers. On a 401, refresh the OAuth
+// token once, re-resolve the bearer, and retry. Returns { res, auth } so the
+// caller adopts the (possibly refreshed) bearer for subsequent pages. A second
+// 401 (e.g. a genuinely revoked token) is returned as-is for the caller to surface.
+export async function dentallyFetchWithRefresh(orgId, auth, url, extraHeaders = {}) {
+    const headers = { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json', ...extraHeaders };
+    let res = await fetchWithTimeout(url, { headers });
+    if (res.status === 401) {
+        try {
+            const { DentallyProvider } = await import('./dentally-provider.js');
+            await DentallyProvider.refresh(orgId);
+            const fresh = await integrationRepository.getByProvider(orgId, 'dentally');
+            const newAuth = fresh ? await resolveDentallyAuth(orgId, fresh) : auth;
+            if (newAuth && newAuth !== auth) {
+                auth = newAuth;
+                res = await fetchWithTimeout(url, { headers: { ...headers, Authorization: auth } });
+            }
+        } catch { /* refresh failed — return the original 401 for the caller to surface */ }
+    }
+    return { res, auth };
 }
 
 // Page through a Dentally collection endpoint, handing each page to `onBatch`
@@ -1852,7 +1874,7 @@ const TI_BACKFILL_CHECKPOINT_EVERY = 25; // persist the page cursor every N page
 export async function backfillTreatmentItems(orgId, integration) {
     if (integration.config?.treatment_items_backfilled) return { skipped: true };
     const base = integration.config?.base_url ?? DEFAULT_BASE;
-    const auth = await resolveDentallyAuth(orgId, integration);
+    let auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) return { error: 'no_auth' };
     const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
     const associateMap = await loadPractitionerMap(orgId);
@@ -1873,9 +1895,7 @@ export async function backfillTreatmentItems(orgId, integration) {
         let lastErr = null;
         for (let attempt = 0; attempt < 7; attempt++) {
             try {
-                res = await fetchWithTimeout(url, {
-                    headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
-                });
+                ({ res, auth } = await dentallyFetchWithRefresh(orgId, auth, url));
             } catch (err) {
                 lastErr = err;
                 res = null;
