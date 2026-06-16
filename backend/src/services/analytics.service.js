@@ -3532,16 +3532,22 @@ function resolveWindow({ since, until, label, period, periodKey, now }) {
 // Every calendar month ('YYYY-MM', UTC) the [since, until) window touches. until
 // is exclusive. Capped at 120 months so a hostile range can't loop unbounded.
 function monthsInWindow(since, until) {
-    const s = new Date(since);
-    const e = new Date(Date.parse(until) - 1); // inclusive last instant
-    let y = s.getUTCFullYear(), m = s.getUTCMonth();
-    const ey = e.getUTCFullYear(), em = e.getUTCMonth();
+    // Month keys must be read in LONDON local time, not UTC. The window's `since`
+    // is London-local midnight stored as a UTC instant — during BST that is the
+    // PRIOR day's 23:00 UTC, so the 1st of a summer month (e.g. 1 Jun) is stored
+    // as 2026-05-31T23:00Z. Reading getUTCMonth() off that yields May and leaks an
+    // extra month into every BST window. londonMonthKey resolves the instant in
+    // Europe/London (DST-aware), so the boundary lands in the right month.
+    const startKey = londonMonthKey(new Date(since));
+    const endKey = londonMonthKey(new Date(Date.parse(until) - 1)); // inclusive last instant
+    let [y, m] = startKey.split('-').map(Number); // m is 1-12
+    const [ey, em] = endKey.split('-').map(Number);
     const out = [];
     while ((y < ey || (y === ey && m <= em)) && out.length < 120) {
-        out.push(`${y}-${String(m + 1).padStart(2, '0')}`);
-        if (++m > 11) { m = 0; y++; }
+        out.push(`${y}-${String(m).padStart(2, '0')}`);
+        if (++m > 12) { m = 1; y++; }
     }
-    return out.length ? out : [`${s.getUTCFullYear()}-${String(s.getUTCMonth() + 1).padStart(2, '0')}`];
+    return out.length ? out : [startKey];
 }
 
 // Shared matrix assembler for the Treatment Mix views. Turns flat
