@@ -16,6 +16,14 @@ import { encryptSecret, decryptSecret } from '../crypto.js';
 
 const PASTE_HINT = 'Paste your Dentally Bearer token from Dentally → Settings → API.';
 
+// Dentally (Doorkeeper) REQUIRES the `scope` param on authorize — omitting it
+// returns invalid_request/missing_param. These read scopes cover every resource
+// the bootstrap pulls (patients, appointments, payments, invoices, treatment
+// plans/items, practitioners=users). Override with DENTALLY_SCOPES if the
+// registered app exposes a different set (a bad name → invalid_scope).
+const DEFAULT_SCOPES = 'patient:read appointment:read payment:read invoice:read treatment:read user:read';
+function dentallyScopes() { return process.env.DENTALLY_SCOPES || DEFAULT_SCOPES; }
+
 function authBase() { return process.env.DENTALLY_AUTH_BASE || 'https://api.dentally.co'; }
 function authorizeUrl() { return `${authBase()}/oauth/authorize`; }
 function tokenUrl() { return `${authBase()}/oauth/token`; }
@@ -72,7 +80,7 @@ export const DentallyProvider = {
         url.searchParams.set('client_id', process.env.DENTALLY_CLIENT_ID);
         url.searchParams.set('redirect_uri', redirectUri());
         url.searchParams.set('state', state);
-        if (process.env.DENTALLY_SCOPES) url.searchParams.set('scope', process.env.DENTALLY_SCOPES);
+        url.searchParams.set('scope', dentallyScopes());
         await integrationsRepository.upsert(orgId, 'dentally', { status: 'pending' });
         return { redirectUrl: url.toString() };
     },

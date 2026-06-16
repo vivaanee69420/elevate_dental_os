@@ -41,7 +41,15 @@ describe('DentallyProvider.authorize', () => {
     expect(url.searchParams.get('redirect_uri')).toBe('https://app.example.com/oauth/dentally/callback');
     expect(url.searchParams.get('response_type')).toBe('code');
     expect(url.searchParams.get('state')).toBeTruthy();
-    expect(url.searchParams.has('scope')).toBe(false);
+    // Dentally (Doorkeeper) requires the scope param; default read set sent when unset.
+    expect(url.searchParams.get('scope')).toContain('patient:read');
+  });
+
+  it('honours DENTALLY_SCOPES override when set', async () => {
+    vi.spyOn(integrationRepository, 'upsert').mockResolvedValue({});
+    process.env.DENTALLY_SCOPES = 'patient:read appointment:read';
+    const res = await DentallyProvider.authorize('org1', {});
+    expect(new URL(res.redirectUrl).searchParams.get('scope')).toBe('patient:read appointment:read');
   });
 
   it('throws "not configured" when client id missing', async () => {
