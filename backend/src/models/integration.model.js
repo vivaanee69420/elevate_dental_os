@@ -7,6 +7,7 @@ export const integrationConnectSchema = zod_1.z.object({
     redirect_url: zod_1.z.string().url().optional(),
     apiKey: zod_1.z.string().optional(),
     baseUrl: zod_1.z.string().url().optional(),
+    method: zod_1.z.enum(['oauth', 'key']).optional(),
 });
 export const emergentPracticeMapSchema = zod_1.z.object({
     business_id: zod_1.z.string().min(1),
