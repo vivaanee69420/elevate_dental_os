@@ -16,7 +16,7 @@ import { encryptSecret, decryptSecret } from '../crypto.js';
 
 const PASTE_HINT = 'Paste your Dentally Bearer token from Dentally → Settings → API.';
 
-function authBase() { return process.env.DENTALLY_AUTH_BASE || 'https://login.dentally.co'; }
+function authBase() { return process.env.DENTALLY_AUTH_BASE || 'https://api.dentally.co'; }
 function authorizeUrl() { return `${authBase()}/oauth/authorize`; }
 function tokenUrl() { return `${authBase()}/oauth/token`; }
 function backendUrl() { return process.env.BACKEND_PUBLIC_URL || 'http://localhost:8080'; }
