@@ -85,18 +85,43 @@ export function ChairEfficiencyScreen() {
               value={`${data.group.occupancyPct}%`}
               delta={`${(data.group.occupancyPct - (data.config?.benchOccPct ?? 88)).toFixed(1)}pts vs ${data.config?.benchOccPct ?? 88}% benchmark`}
               deltaTone={data.group.occupancyPct >= (data.config?.benchOccPct ?? 88) ? 'up' : 'down'}
+              info={
+                <>
+                  <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
+                  <p><b>occupancy = Σ booked ÷ Σ available</b> minutes from the chair-utilisation grid, across all in-scope chairs, capped at 100%.</p>
+                  <p className="mt-1">Only grid cells you&apos;ve entered count. Slots with no row aren&apos;t included as available.</p>
+                  <p className="mt-1">Now: <b>{data.group.occupancyPct}%</b> vs {data.config?.benchOccPct ?? 88}% benchmark.</p>
+                </>
+              }
             />
             <KpiTile
               label="Cost of empty chairs"
               value={formatPence(data.group.lostPotentialYrPence)}
               delta={`${data.group.emptyHrsYr.toLocaleString('en-GB')} empty hrs/yr at £${((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/chair-hr`}
               deltaTone="down"
+              info={
+                <>
+                  <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
+                  <p><b>cost = empty hrs/yr × benchmark £/chair-hour</b>.</p>
+                  <p className="mt-1">empty hrs = capacity − booked, where <b>capacity = chairs × open hrs/day × (weeks/yr × days/wk)</b>. Chairs = distinct chair names in the grid.</p>
+                  <p className="mt-1">Uses the <b>£{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/hr benchmark</b> (what an idle chair could earn at industry rate), not your own yield.</p>
+                  <p className="mt-1">Now: {data.group.emptyHrsYr.toLocaleString('en-GB')} empty hrs × £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)} = <b>{formatPence(data.group.lostPotentialYrPence)}</b>.</p>
+                </>
+              }
             />
             <KpiTile
               label={`Recoverable to ${data.config?.benchOccPct ?? 88}%`}
               value={formatPence(data.group.recoverRevYrPence)}
               delta="At your own revenue/hr, not the ceiling"
               deltaTone="up"
+              info={
+                <>
+                  <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
+                  <p><b>= capacity × (benchmark − occupancy)/100 × your yield/hr</b>.</p>
+                  <p className="mt-1">Hours to climb from {data.group.occupancyPct}% to the {data.config?.benchOccPct ?? 88}% benchmark, valued at <b>your</b> revenue/hr (£{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)}/booked-hr), not the £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)} ceiling.</p>
+                  <p className="mt-1">Zero if you&apos;re already at or above the benchmark.</p>
+                </>
+              }
             />
           </div>
 
@@ -124,9 +149,44 @@ export function ChairEfficiencyScreen() {
             </div>
             {data.recovery && (
               <div className="grid gap-3 grid-cols-1 sm:grid-cols-3 mt-4">
-                <KpiTile label="Recovery chair-time" value={`${data.recovery.recoveryHrsYr.toLocaleString('en-GB')}h`} delta="per year, across scope" />
-                <KpiTile label="Revenue unlocked" value={formatPence(data.recovery.revenueUnlockedPence)} delta="at your current yield/hr" deltaTone="up" />
-                <KpiTile label="New occupancy" value={`${data.recovery.newOccupancyPct}%`} delta={`from ${data.group.occupancyPct}% today`} />
+                <KpiTile
+                  label="Recovery chair-time"
+                  value={`${data.recovery.recoveryHrsYr.toLocaleString('en-GB')}h`}
+                  delta="per year, across scope"
+                  info={
+                    <>
+                      <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
+                      <p><b>= capacity × effective uplift / 100</b>, where effective uplift = min(your {recover}% pick, headroom to 100%).</p>
+                      <p className="mt-1">Headroom = 100% − current occupancy ({data.group.occupancyPct}%). At 100% occupancy this is 0 — no room left to recover.</p>
+                    </>
+                  }
+                />
+                <KpiTile
+                  label="Revenue unlocked"
+                  value={formatPence(data.recovery.revenueUnlockedPence)}
+                  delta="at your current yield/hr"
+                  deltaTone="up"
+                  info={
+                    <>
+                      <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
+                      <p><b>= recovery chair-time × your yield/hr</b>.</p>
+                      <p className="mt-1">Yield/hr = Σ grid revenue ÷ Σ booked hrs = £{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)}/booked-hr.</p>
+                      <p className="mt-1">Now: {data.recovery.recoveryHrsYr.toLocaleString('en-GB')}h × £{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)} = <b>{formatPence(data.recovery.revenueUnlockedPence)}</b>.</p>
+                    </>
+                  }
+                />
+                <KpiTile
+                  label="New occupancy"
+                  value={`${data.recovery.newOccupancyPct}%`}
+                  delta={`from ${data.group.occupancyPct}% today`}
+                  info={
+                    <>
+                      <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
+                      <p><b>= current occupancy + effective uplift</b>, capped at 100%.</p>
+                      <p className="mt-1">{data.group.occupancyPct}% + up to {recover}% → <b>{data.recovery.newOccupancyPct}%</b>.</p>
+                    </>
+                  }
+                />
               </div>
             )}
           </div>
