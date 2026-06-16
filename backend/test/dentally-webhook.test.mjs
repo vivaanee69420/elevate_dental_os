@@ -214,6 +214,50 @@ describe('applyWebhookEvent — delete events remove rows (no resurrection)', ()
   });
 });
 
+describe('webhookService.dentally — resilient processing (never 5xx a live delivery)', () => {
+  // Dentally auto-disables a webhook after sustained failed deliveries, so a
+  // single unstorable record or a transient DB blip must NOT 5xx the batch —
+  // it is logged + skipped and the nightly poll reconciles. Auth/signature
+  // failures (tested below) stay hard 401s; only POST-verification processing
+  // is made fault-tolerant.
+  const SECRET = 'topsecret-key';
+  const sign = (raw) => crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
+  const fire = (bodyObj) => {
+    const token = signWebhookToken(ORG);
+    const raw = Buffer.from(JSON.stringify(bodyObj));
+    return webhookService.dentally(token, raw, sign(raw));
+  };
+
+  it('a record whose apply throws (transient DB error on delete) is skipped, not a 5xx', async () => {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'integrations')
+        return { data: { status: 'active', config: { webhook_secret: SECRET } }, error: null };
+      if (q.table === 'appointments' && q.op === 'delete')
+        return { data: null, error: { message: 'connection reset by peer' } };
+      return { data: [], error: null };
+    };
+    const r = await fire({ event: 'appointment.deleted', data: { id: 1 } });
+    expect(r).toMatchObject({ received: true, resourceType: 'appointment', action: 'delete', count: 1 });
+    expect(r.results[0]).toMatchObject({ error: true, recordId: 1 });
+  });
+
+  it('one bad record does not block sibling records in the same delivery', async () => {
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'integrations')
+        return { data: { status: 'active', config: { webhook_secret: SECRET } }, error: null };
+      // Fail only the delete keyed to id '1'; id '2' deletes cleanly.
+      if (q.table === 'appointments' && q.op === 'delete'
+          && q.eqs.some((e) => e.col === 'pms_external_id' && e.val === '1'))
+        return { data: null, error: { message: 'deadlock detected' } };
+      return { data: [], error: null };
+    };
+    const r = await fire({ event: 'appointment.deleted', data: [{ id: 1 }, { id: 2 }] });
+    expect(r.count).toBe(2);
+    expect(r.results[0]).toMatchObject({ error: true, recordId: 1 });
+    expect(r.results[1]).toMatchObject({ table: 'appointments', deleted: 1 });
+  });
+});
+
 describe('webhookService.dentally — token + HMAC gate', () => {
   const SECRET = 'topsecret-key';
   const sign = (raw) => crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
