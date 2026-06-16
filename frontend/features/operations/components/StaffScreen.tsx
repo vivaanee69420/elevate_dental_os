@@ -63,7 +63,7 @@ export default function StaffScreen() {
       </div>
 
       {/* Dynamic practice filter — tabs come from the org's Dentally sites. */}
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />
 
       {/* Role filter — options derived from the current roster. */}
       <div className="mb-4 flex items-center gap-2">

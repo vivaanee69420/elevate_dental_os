@@ -112,7 +112,7 @@ export default function CashflowScreen() {
         <FinanceToolbar />
       </div>
 
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />
       <DateRangeFilter value={range} onChange={setRange} />
 
       {isError && (
@@ -155,6 +155,9 @@ export default function CashflowScreen() {
         // only exist group-wide — drop the vs-target chip when a practice is picked.
         const pr = practiceId ? hub.practices.find((p) => p.practiceId === practiceId) ?? null : null;
         const turnover = (pr ? pr.revenuePence : g.revenuePence) / 100;
+        // Takings = settled payments received (business-hub logic). Headline tile
+        // shows takings; turnover (billed) stays the basis for the % math below.
+        const takings = (pr ? pr.takingsPence : g.takingsPence) / 100;
         const target = g.revenueTargetPence / 100;
         const vsTarget = !pr && target > 0 ? (turnover / target - 1) * 100 : null;
         const profit = turnover * (g.marginPct || 0) / 100;
@@ -169,8 +172,8 @@ export default function CashflowScreen() {
         return (
           <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}>
             <StripKpi
-              label="Group turnover"
-              value={gbp(turnover)}
+              label="Group takings"
+              value={gbp(takings)}
               sub={`Settled receipts · ${periodSub}`}
               tag={vsTarget != null ? `${vsTarget >= 0 ? '▲' : '▼'} ${Math.abs(vsTarget).toFixed(0)}% vs target` : undefined}
               tone={vsTarget != null && vsTarget >= 0 ? 'good' : 'warn'}

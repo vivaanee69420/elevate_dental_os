@@ -2,7 +2,7 @@
 // Analytics repository — Supabase reads for the analytics domain.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
-import { revokedProviders, revokedSources, pmsHidden, crmHidden, emergentConnected } from "../lib/integration-gating.js";
+import { revokedProviders, groupReceiptExcludedSources, pmsHidden, crmHidden, emergentConnected } from "../lib/integration-gating.js";
 
 // Max rows we read for an in-Node aggregate. Realistic per-org practice +
 // settled-payment counts sit far below this; if it ever trips, the service
@@ -92,7 +92,7 @@ export const analyticsRepository = {
         return data || [];
     },
     async settledPayments(orgId) {
-        const drop = new Set(await revokedSources(orgId, ['dentally', 'quickbooks']));
+        const drop = new Set(await groupReceiptExcludedSources(orgId));
         const { data, error } = await supabase_1.serviceClient
             .from('payments')
             .select('practice_id, amount_pence, source')
@@ -218,7 +218,7 @@ export const analyticsRepository = {
         return data || [];
     },
     async settledPaymentsInWindow(orgId, sinceISO) {
-        const drop = new Set(await revokedSources(orgId, ['dentally', 'quickbooks']));
+        const drop = new Set(await groupReceiptExcludedSources(orgId));
         const { data, error } = await supabase_1.serviceClient
             .from('payments')
             .select('practice_id, amount_pence, source')
@@ -271,6 +271,9 @@ export const analyticsRepository = {
             .eq('organisation_id', orgId)
             .eq('source', 'quickbooks')
             .eq('dental_bucket', 'revenue')
+            // QBO P&L is synced under BOTH accrual + cash basis; pin accrual
+            // (fold legacy null-method rows in) or turnover double-counts.
+            .or('accounting_method.eq.accrual,accounting_method.is.null')
             .limit(LIMIT_GUARD);
         if (fromPeriod) q = q.gte('period', fromPeriod);
         if (toPeriod) q = q.lte('period', toPeriod);
@@ -284,14 +287,14 @@ export const analyticsRepository = {
             p_since: sinceISO,
             p_practice: practiceId ?? null,
             p_until: untilISO ?? null,
-            p_exclude_sources: await revokedSources(orgId, ['dentally', 'quickbooks']),
+            p_exclude_sources: await groupReceiptExcludedSources(orgId),
         });
         if (error)
             throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
     async settledReceiptsByDayBulk(orgId, sinceISO, practiceIds, untilISO = null) {
-        const drop = new Set(await revokedSources(orgId, ['dentally', 'quickbooks']));
+        const drop = new Set(await groupReceiptExcludedSources(orgId));
         let q = supabase_1.serviceClient
             .from('payments')
             .select('amount_pence, source, processed_at')
@@ -332,7 +335,7 @@ export const analyticsRepository = {
     async settledRevenueByPractice(orgId, sinceISO, untilISO = null) {
         const { data, error } = await supabase_1.serviceClient.rpc('settled_revenue_by_practice', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
-            p_exclude_sources: await revokedSources(orgId, ['dentally', 'quickbooks']),
+            p_exclude_sources: await groupReceiptExcludedSources(orgId),
         });
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
@@ -393,6 +396,23 @@ export const analyticsRepository = {
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
+    // Treatments COMPLETED rollup PER PRACTICE — the real Practitioner Activity feed
+    // (dentally_treatment_items, migration 000099): completed treatments by
+    // completed_at, base_chart charting rows excluded. Replaces the old
+    // treatments_rollup_by_org count (which counted plan HEADERS org-wide). Rows:
+    // { practice_id, completed_count, value_pence, patient_count, duration_minutes }.
+    // Empty (degrade safe) if the migration/table isn't applied on this DB yet.
+    async treatmentsCompletedByPractice(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('treatments_completed_by_practice', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) {
+            console.warn(`[analytics] treatments_completed_by_practice unavailable: ${error.message}`);
+            return [];
+        }
+        return Array.isArray(data) ? data : [];
+    },
     // Treatments ACCEPTED rollup — sourced from the Emergent ops app (manual
     // acceptance logging; Dentally has no accepted flag). Gated on an active
     // `emergent` integration: a never-connected org skips the RPC entirely and
@@ -413,6 +433,24 @@ export const analyticsRepository = {
         }
         const row = (Array.isArray(data) ? data[0] : data) || {};
         return { count: Number(row.accepted_count || 0), value_pence: Number(row.accepted_value_pence || 0) };
+    },
+    // Treatments ACCEPTED split by practice — powers the card's click-to-breakdown
+    // (which practice's data the card reflects). Same gate + defensive degrade as
+    // the rollup above. Rows: { practice_id (null = unmapped), count, value_pence }.
+    async treatmentAcceptedByPractice(orgId, sinceISO, untilISO = null) {
+        if (!(await emergentConnected(orgId))) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('treatment_accepted_by_practice', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) {
+            console.warn(`[analytics] treatment_accepted_by_practice unavailable, returning []: ${error.message}`);
+            return [];
+        }
+        return (Array.isArray(data) ? data : []).map((r) => ({
+            practice_id: r.practice_id ?? null,
+            count: Number(r.accepted_count || 0),
+            value_pence: Number(r.accepted_value_pence || 0),
+        }));
     },
     // Treatment-plan private production split by status, in the window — feeds
     // the Revenue Leakage "lost plans" pool. Presented = all plans started in

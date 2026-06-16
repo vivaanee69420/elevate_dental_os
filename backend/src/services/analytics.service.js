@@ -2325,7 +2325,7 @@ export const analyticsService = {
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
         const adFromDate = sinceISO.slice(0, 10);
         const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 86400000) : now()).toISOString().slice(0, 10);
-        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg] = await Promise.all([
+        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg, acceptedByPractice, completedRows] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -2349,7 +2349,21 @@ export const analyticsService = {
             // Treatments ACCEPTED (Emergent ops app) — count + value in window.
             // Gated on an active emergent integration; zeros (placeholder) until connected.
             analytics_repository_1.analyticsRepository.treatmentAcceptedRollup(orgId, sinceISO, untilISO, practiceId),
+            // Treatments ACCEPTED split by practice — feeds the card's click-to-
+            // breakdown (which practice's data the card reflects). Group-wide
+            // regardless of practiceId scope; [] until Emergent is connected.
+            analytics_repository_1.analyticsRepository.treatmentAcceptedByPractice(orgId, sinceISO, untilISO),
+            // Treatments COMPLETED per practice — the REAL Practitioner Activity feed
+            // (dentally_treatment_items, migration 000099): completed treatments by
+            // completed_at, charting rows excluded, attributed to a practice via the
+            // practitioner's site. Replaces the old org-wide treatments_rollup_by_org
+            // count (plan headers + planned-estimate value) so the card matches
+            // Dentally's report and scopes per practice.
+            analytics_repository_1.analyticsRepository.treatmentsCompletedByPractice(orgId, sinceISO, untilISO),
         ]);
+        // Practice name lookup BEFORE the practiceId filter narrows `practices`, so
+        // the accepted breakdown can name every practice even under a scoped call.
+        const practiceNameById = new Map((practices || []).map((p) => [p.id, p.name]));
         // Practice scope (board report): collapse the group view to one practice by
         // narrowing every per-practice feed; group totals below then sum to it.
         // Feeds with no practice attribution degrade honestly: the treatment_plans
@@ -2366,6 +2380,7 @@ export const analyticsService = {
             closedRows = closedRows.filter(mine);
             revLineRows = revLineRows.filter(mine);
             newPatientRows = newPatientRows.filter(mine);
+            completedRows = (completedRows || []).filter(mine);
             treatments = { started: 0, completed: 0, closed_value_pence: 0 };
             adLeadsBy = new Map();
         }
@@ -2382,14 +2397,30 @@ export const analyticsService = {
         for (const r of revLineRows) billedBy.set(r.practice_id, (billedBy.get(r.practice_id) || 0) + num(r.fee_pence));
         // Treatments-Closed value per practice (real invoiced plan fees) — same
         // invoice_items feed as turnover, so it's practice-attributed too. closed =
-        // billed (sold); paid = the collected subset (invoice_paid), matches
-        // Dentally's "Paid" filter. The gap is debtors.
+        // billed (sold); paid = amount actually COLLECTED on plan lines, allocated
+        // pro-rata from each invoice's settled portion (migration 000101) — counts
+        // partial payments, matching Dentally's collected basis (not the old
+        // all-or-nothing invoice_paid flag). The gap is real outstanding debtors.
         const closedBy = new Map();
         const paidBy = new Map();
         for (const r of closedRows) {
             closedBy.set(r.practice_id, (closedBy.get(r.practice_id) || 0) + num(r.closed_value_pence));
             paidBy.set(r.practice_id, (paidBy.get(r.practice_id) || 0) + num(r.paid_value_pence));
         }
+        // Treatments-Completed per practice (Practitioner Activity feed): count of
+        // completed treatments + their value, attributed via the practitioner's site
+        // so the card scopes to a selected practice. Null-practice rows (practitioner
+        // with no mapped site) fold into the group total only, not any practice row.
+        const completedCountBy = new Map();
+        const completedValueBy = new Map();
+        for (const r of (completedRows || [])) {
+            completedCountBy.set(r.practice_id, (completedCountBy.get(r.practice_id) || 0) + num(r.completed_count));
+            completedValueBy.set(r.practice_id, (completedValueBy.get(r.practice_id) || 0) + num(r.value_pence));
+        }
+        // Group total sums EVERY row (incl. null-practice), so unmapped completions
+        // aren't lost by the per-practice attribution.
+        const completedTotalCount = (completedRows || []).reduce((s, r) => s + num(r.completed_count), 0);
+        const completedTotalValuePence = (completedRows || []).reduce((s, r) => s + num(r.value_pence), 0);
         const revBy = new Map(revRows.map((r) => [r.practice_id, num(r.pence)]));
         const apBy = new Map(apptRows.map((r) => [r.practice_id, r]));
         const ldBy = new Map(leadRows.map((r) => [r.practice_id, r]));
@@ -2409,6 +2440,8 @@ export const analyticsService = {
                 takingsPence: revBy.get(p.id) || 0,         // Takings = settled payments received (matches Patient Payments "Received")
                 treatmentsClosedPence: closedBy.get(p.id) || 0, // plan fees billed (sold), this practice
                 treatmentsPaidPence: paidBy.get(p.id) || 0,     // plan fees paid (collected), this practice
+                treatmentsCompleted: completedCountBy.get(p.id) || 0, // Practitioner Activity completed count, this practice
+                treatmentsCompletedValuePence: completedValueBy.get(p.id) || 0, // value of those completed treatments
                 cashCollectedPence: revBy.get(p.id) || 0,   // settled receipts for this practice (== takings)
                 appointments,
                 completed: num(ap.completed),
@@ -2448,16 +2481,32 @@ export const analyticsService = {
         // EVERY row (incl. any null-practice patients), so it isn't lost by the
         // per-practice mapping. conversionRate = new patients per lead.
         const newPatients = newPatientRows.reduce((s, r) => s + num(r.new_patients), 0);
-        // Treatment funnel (org-wide; treatment_plans are not practice-attributed).
+        // Treatments STARTED: org-wide treatment_plans funnel (plans aren't reliably
+        // practice-attributed, so this stays a group figure).
         const treatmentsStarted = num(treatments.started);
-        const treatmentsCompleted = num(treatments.completed);
-        // Treatments COMPLETED value (practitioner activity): private treatment
-        // value of plans marked completed in the window (treatment_plans feed).
-        const treatmentsCompletedValuePence = num(treatments.closed_value_pence);
+        // Treatments COMPLETED: the REAL Practitioner Activity feed
+        // (dentally_treatment_items) — count + value of completed treatments in the
+        // window, summed across practices. Matches Dentally's report to the penny and
+        // is practice-scopable (per-practice rows above feed the card's filter). The
+        // old org-wide treatments_rollup_by_org count (plan headers, planned-estimate
+        // value) is no longer used for this card.
+        const treatmentsCompleted = completedTotalCount;
+        const treatmentsCompletedValuePence = completedTotalValuePence;
         // Treatments ACCEPTED (Emergent ops app) — placeholder zeros until the
         // emergent integration is connected (Dentally has no accepted flag).
         const treatmentsAcceptedCount = num(acceptedAgg?.count);
         const treatmentsAcceptedValuePence = num(acceptedAgg?.value_pence);
+        // Per-practice accepted breakdown for the card's click-to-expand. null
+        // practice_id (Emergent business_name didn't resolve to a practice) folds
+        // into a single "Unmapped" row. Sorted high-to-low by count.
+        const treatmentsAcceptedByPractice = (acceptedByPractice || [])
+            .map((r) => ({
+                practiceId: r.practice_id,
+                name: r.practice_id ? (practiceNameById.get(r.practice_id) || 'Unknown practice') : 'Unmapped',
+                count: num(r.count),
+                valuePence: num(r.value_pence),
+            }))
+            .sort((a2, b2) => b2.count - a2.count);
         // "Closed" value = REAL invoiced treatment-plan fees in the window (same
         // feed as turnover), not the planned private estimate the rollup returns.
         // Group total = sum of the per-practice rows (invoice_items always carry a
@@ -2549,6 +2598,7 @@ export const analyticsService = {
                 treatmentsCompletedValuePence, // value of completed plans (private treatment value)
                 treatmentsAcceptedCount, // accepted treatments (Emergent) — 0 until connected
                 treatmentsAcceptedValuePence, // value of accepted treatments (Emergent)
+                treatmentsAcceptedByPractice, // per-practice split for the card's click-to-breakdown ([] until connected)
                 treatmentsClosedPence, // billed (sold) plan fees
                 treatmentsPaidPence,   // collected (paid) plan fees
                 takingsPence: cashCollectedPence, // Takings = settled payments received (matches Patient Payments "Received")

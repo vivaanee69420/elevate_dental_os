@@ -46,18 +46,36 @@ function toPence(amount) {
 }
 
 // Heuristic bucket from the account name + the section it sits under.
+//
+// CRITICAL: the QB P&L "Cost of Sales" section title contains the word "sales",
+// so it must NOT be allowed to match the revenue regex — otherwise every
+// Cost-of-Sales account (associate pay, lab, materials) folds into revenue and
+// inflates turnover. Revenue is recognised ONLY inside an Income/Revenue section
+// (which nets contra lines like patient refunds), never inside a cost/expense
+// section. Cost buckets are then resolved by ACCOUNT NAME so the poisoning
+// section title can't leak in.
 function heuristicBucket(accountName, sectionTitle) {
-    const s = `${sectionTitle || ''} ${accountName || ''}`.toLowerCase();
-    if (/income|revenue|sales|turnover/.test(s)) return 'revenue';
+    const section = String(sectionTitle || '').toLowerCase();
+    const name = String(accountName || '').toLowerCase();
+    const isCostSection = /cost of (sales|goods)|\bcogs\b/.test(section);
+    const isExpenseSection = /expense/.test(section);
+
+    // Revenue: only when NOT under a cost/expense section. Section-driven first
+    // (everything under "Income"/"Revenue" is turnover, incl. negative refunds),
+    // then a name-based fallback for income accounts with a non-standard section.
+    if (!isCostSection && !isExpenseSection) {
+        if (/income|revenue|turnover/.test(section)) return 'revenue';
+        if (/income|revenue|\bsales\b|turnover/.test(`${section} ${name}`)) return 'revenue';
+    }
     // Fee-earning clinician pay (the 45% "dentist/associate" benchmark line) MUST
     // be tested before the staff line — account names like "Associate salary" /
     // "Principal salary" carry "salary" and would otherwise fold into support staff.
-    if (/associate|locum|principal|hygien|hygenist|therapist|self.?employed|dentist/.test(s)) return 'associates';
-    if (/wage|salary|salaries|payroll|staff/.test(s)) return 'staff';
-    if (/\blab\b|laboratory/.test(s)) return 'lab';
-    if (/material|consumable|stock|supplies/.test(s)) return 'materials';
-    if (/\btax\b|corporation tax|vat/.test(s)) return 'tax';
-    if (/expense|overhead|rent|rates|utilit|insurance|admin|marketing/.test(s)) return 'overhead';
+    if (/associate|locum|principal|hygien|hygenist|therapist|self.?employed|dentist/.test(name)) return 'associates';
+    if (/wage|salary|salaries|payroll|staff/.test(name)) return 'staff';
+    if (/\blab\b|laboratory/.test(name)) return 'lab';
+    if (/material|consumable|stock|supplies|implant/.test(name)) return 'materials';
+    if (/\btax\b|corporation tax|vat/.test(`${section} ${name}`)) return 'tax';
+    if (/expense|overhead|rent|rates|utilit|insurance|admin|marketing|advertis|bank charge|subscription|finance/.test(`${section} ${name}`)) return 'overhead';
     return 'other';
 }
 
@@ -88,12 +106,6 @@ function parseReportRows(report) {
     };
     walk(report?.Rows?.Row, undefined);
     return out;
-}
-
-function parseBalanceSheetBanks(report) {
-    return parseReportRows(report)
-        .filter((r) => /bank|cash/i.test(r.section) || /bank|cash/i.test(r.account))
-        .map((r) => ({ account: r.account, amount: r.amount }));
 }
 
 // Last N calendar months as {period:'YYYY-MM', from:'YYYY-MM-01', to}.
@@ -151,18 +163,6 @@ function mapPaymentRow(orgId, accountId, realmId, practiceId, p, date, pence) {
     };
 }
 
-function dedupeReceipts(orgId, accountId, realmId, practiceId, payments, existingKeys) {
-    const rows = [];
-    let deduped = 0;
-    for (const p of payments) {
-        const date = String(p.TxnDate ?? '').slice(0, 10);
-        const pence = toPence(p.TotalAmt);
-        if (existingKeys.has(`${date}|${pence}`)) { deduped++; continue; }
-        rows.push(mapPaymentRow(orgId, accountId, realmId, practiceId, p, date, pence));
-    }
-    return { rows, deduped };
-}
-
 async function loadAccountMap(orgId) {
     const { data } = await supabase_1.serviceClient
         .from('xero_account_map')
@@ -185,22 +185,6 @@ async function defaultPracticeId(orgId) {
         .order('created_at', { ascending: true })
         .limit(1);
     return data?.[0]?.id ?? null;
-}
-
-async function loadSettledKeys(orgId, sinceIso) {
-    const { data } = await supabase_1.serviceClient
-        .from('payments')
-        .select('processed_at, amount_pence, status, source')
-        .eq('organisation_id', orgId)
-        .eq('status', 'settled')
-        .neq('source', 'quickbooks')
-        .gte('processed_at', sinceIso);
-    const set = new Set();
-    for (const r of data ?? []) {
-        const date = String(r.processed_at ?? '').slice(0, 10);
-        set.add(`${date}|${r.amount_pence}`);
-    }
-    return set;
 }
 
 async function qboReport(realmId, accessToken, name, params) {
@@ -282,18 +266,34 @@ async function pullProfitAndLoss(orgId, accountId, realmId, accessToken, account
     return totalLines;
 }
 
-// 2. Balance Sheet cash/bank -> bank_accounts (delete-then-insert this company's
-// rows). external_id prefixed with realmId.
-async function pullBalanceSheet(orgId, accountId, realmId, accessToken) {
-    const report = await qboReport(realmId, accessToken, 'BalanceSheet', {});
-    const rows = parseBalanceSheetBanks(report).map((b) => ({
+// 2. Cash at bank -> bank_accounts (delete-then-insert this company's rows).
+// Uses the QB `Account` entity filtered to AccountType='Bank' (its CurrentBalance)
+// rather than scraping the Balance Sheet report — the report grouped credit cards,
+// clearing and other ledger accounts under the bank/cash sections, so the old
+// scrape counted a credit card's negative balance (e.g. "Capital On Tap" -£322k)
+// as cash. AccountType='Bank' is QuickBooks' own classification of real cash
+// accounts (CreditCard / Other Current Asset / etc. are excluded). Overdrawn bank
+// accounts keep their genuine negative balance. external_id prefixed with realmId.
+// The org's real cash accounts (QB AccountType='Bank'), used both for the live
+// balance and as the name->id whitelist for the month-end history pull.
+async function fetchBankAccountSet(realmId, accessToken) {
+    return qboQueryAll(
+        realmId, accessToken,
+        "SELECT Id, Name, CurrentBalance FROM Account WHERE AccountType = 'Bank' AND Active = true",
+        'Account',
+    );
+}
+
+async function pullBankAccounts(orgId, accountId, realmId, accessToken, bankAccounts) {
+    const accounts = bankAccounts ?? (await fetchBankAccountSet(realmId, accessToken));
+    const rows = accounts.map((a) => ({
         organisation_id: orgId,
         integration_account_id: accountId,
         source: 'quickbooks',
-        external_id: `${realmId}:${b.account}`,
-        display_name: b.account,
+        external_id: `${realmId}:${a.Id}`,
+        display_name: a.Name,
         account_type: 'bank',
-        balance_pence: toPence(b.amount),
+        balance_pence: toPence(a.CurrentBalance),
         currency: 'GBP',
         last_synced_at: new Date().toISOString(),
     }));
@@ -309,6 +309,50 @@ async function pullBalanceSheet(orgId, accountId, realmId, accessToken) {
         if (error) throw new Error(`bank_accounts insert: ${error.message}`);
     }
     return { accounts: rows.length };
+}
+
+// 2b. Month-end cash history -> bank_balance_snapshots. For each month in the
+// window we pull a Balance Sheet AS OF that month-end and record the balance of
+// each real bank account (matched by name to the AccountType='Bank' set), so the
+// dashboard can show cash as-of the selected period instead of one frozen live
+// figure. Delete-then-insert this company's snapshots for the pulled periods.
+async function pullBankBalanceHistory(orgId, accountId, realmId, accessToken, months, bankAccounts) {
+    const accounts = bankAccounts ?? (await fetchBankAccountSet(realmId, accessToken));
+    if (!accounts.length) return { snapshots: 0 };
+    const byName = new Map(accounts.map((a) => [String(a.Name), a]));
+    const periods = lastNMonths(months);
+    const rows = [];
+    for (const { period, to } of periods) {
+        const report = await qboReport(realmId, accessToken, 'BalanceSheet', { start_date: to, end_date: to });
+        for (const r of parseReportRows(report)) {
+            const acct = byName.get(String(r.account));
+            if (!acct) continue; // not one of the real bank accounts
+            rows.push({
+                organisation_id: orgId,
+                integration_account_id: accountId,
+                source: 'quickbooks',
+                period,
+                as_of: to,
+                external_id: `${realmId}:${acct.Id}`,
+                display_name: acct.Name,
+                balance_pence: toPence(r.amount),
+                currency: 'GBP',
+            });
+        }
+    }
+    const { error: delErr } = await supabase_1.serviceClient
+        .from('bank_balance_snapshots')
+        .delete()
+        .eq('organisation_id', orgId)
+        .eq('source', 'quickbooks')
+        .eq('integration_account_id', accountId)
+        .in('period', periods.map((p) => p.period));
+    if (delErr) throw new Error(`bank_balance_snapshots clear: ${delErr.message}`);
+    if (rows.length > 0) {
+        const { error } = await supabase_1.serviceClient.from('bank_balance_snapshots').insert(rows);
+        if (error) throw new Error(`bank_balance_snapshots insert: ${error.message}`);
+    }
+    return { snapshots: rows.length };
 }
 
 // 3. Unpaid invoices -> invoices (debtors). Delete-then-insert this company's rows.
@@ -334,8 +378,15 @@ async function pullReceivables(orgId, accountId, realmId, accessToken, practiceI
     return { count: rows.length };
 }
 
-// 4. Customer receipts -> payments. Deduped against existing non-QBO settled
-// payments, then delete-then-insert this company's rows across the pull window.
+// 4. Customer receipts -> payments. Stores THIS company's own QuickBooks receipts
+// (source='quickbooks', integration_account_id) so the QuickBooks panel shows real
+// numbers. Delete-then-insert this company's rows across the pull window. NOTE:
+// we deliberately do NOT dedupe against other sources (e.g. Dentally) at write
+// time — QB receipts and the clinical PMS often record the SAME patient cash, but
+// suppressing them here left the source-isolated QB panel permanently at £0. The
+// same-cash double-count is avoided at the GROUP cash roll-up READ layer instead
+// (Dentally is the primary receipts feed; QB is excluded there — see
+// analytics.repository settled_receipts). Idempotency comes from the delete below.
 async function pullReceipts(orgId, accountId, realmId, accessToken, practiceId, months) {
     if (!practiceId) return { skipped: 'no_practice' };
     const since = lastNMonths(months).at(-1).from;
@@ -345,8 +396,9 @@ async function pullReceipts(orgId, accountId, realmId, accessToken, practiceId, 
         `SELECT Id, TxnDate, TotalAmt FROM Payment WHERE TxnDate >= '${since}'`,
         'Payment',
     );
-    const existingKeys = await loadSettledKeys(orgId, sinceIso);
-    const { rows, deduped } = dedupeReceipts(orgId, accountId, realmId, practiceId, payments, existingKeys);
+    const rows = payments.map((p) => mapPaymentRow(
+        orgId, accountId, realmId, practiceId, p, String(p.TxnDate ?? '').slice(0, 10), toPence(p.TotalAmt),
+    ));
     const { error: delErr } = await supabase_1.serviceClient
         .from('payments')
         .delete()
@@ -359,8 +411,7 @@ async function pullReceipts(orgId, accountId, realmId, accessToken, practiceId, 
         const { error } = await supabase_1.serviceClient.from('payments').insert(rows);
         if (error) throw new Error(`payments insert: ${error.message}`);
     }
-    if (deduped) console.warn(`[quickbooks] receipts: skipped ${deduped} payment(s) matching an existing settled receipt (dedupe)`);
-    return { count: rows.length, deduped };
+    return { count: rows.length };
 }
 
 async function safePull(fn, label) {
@@ -392,14 +443,19 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, opts 
 
         const practiceId = await defaultPracticeId(orgId);
         onProgress?.({ pct: 55, phase: 'balance_sheet' });
-        const banks = await safePull(() => pullBalanceSheet(orgId, accountId, realmId, access_token), 'balance_sheet');
+        // Fetch the real bank-account set once; reuse for the live balance + the
+        // month-end history (avoids a duplicate Account query).
+        const bankAccounts = await safePull(() => fetchBankAccountSet(realmId, access_token), 'bank_account_set');
+        const bankSet = Array.isArray(bankAccounts) ? bankAccounts : [];
+        const banks = await safePull(() => pullBankAccounts(orgId, accountId, realmId, access_token, bankSet), 'bank_accounts');
+        const bankHistory = await safePull(() => pullBankBalanceHistory(orgId, accountId, realmId, access_token, months, bankSet), 'bank_balance_history');
         onProgress?.({ pct: 70, phase: 'receivables' });
         const receivables = await safePull(() => pullReceivables(orgId, accountId, realmId, access_token, practiceId), 'receivables');
         onProgress?.({ pct: 85, phase: 'receipts' });
         const receipts = await safePull(() => pullReceipts(orgId, accountId, realmId, access_token, practiceId, months), 'receipts');
 
         await integrationAccountRepository.markSynced(orgId, accountId);
-        return { accountId, lines, months, period: lastNMonths(1)[0].period, banks, receivables, receipts };
+        return { accountId, lines, months, period: lastNMonths(1)[0].period, banks, bankHistory, receivables, receipts };
     } catch (err) {
         await integrationAccountRepository.markFailed(orgId, accountId, String(err.message).slice(0, 500));
         throw err;
@@ -455,6 +511,6 @@ export async function syncAllOrgs() {
 }
 
 export const __test = {
-    toPence, heuristicBucket, mapBucket, parseReportRows, parseBalanceSheetBanks,
-    lastNMonths, mapInvoiceRow, mapPaymentRow, dedupeReceipts, ACCOUNTING_METHODS,
+    toPence, heuristicBucket, mapBucket, parseReportRows,
+    lastNMonths, mapInvoiceRow, mapPaymentRow, ACCOUNTING_METHODS,
 };
