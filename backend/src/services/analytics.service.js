@@ -16,6 +16,7 @@ import * as chairConfig_repository_1 from "../repositories/chairConfig.repositor
 import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { boardReportRepository } from "../repositories/boardReport.repository.js";
 import { orgSettingsRepository } from "../repositories/orgSettings.repository.js";
+import { businessHealthRepository } from "../repositories/business-health.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import { bucketsByPeriod, accountLinesByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
@@ -1162,6 +1163,10 @@ export const analyticsService = {
             ? resolveWindow({ since, until, label, now: now() })
             : treatmentWindow('month', (periodKey || '').slice(0, 7), now());
 
+        // Historical periods must ground on the baseline/targets in effect THEN,
+        // not today's overwrite-in-place blob (see baselineAsOf).
+        const baselineP = baselineAsOf(orgId, resolvedWin, now());
+
         const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank] = await Promise.all([
             this.plMargin(orgId, win),
             this.marketingRoi(orgId, win),
@@ -1172,7 +1177,7 @@ export const analyticsService = {
             this.revenueLeakage(orgId, win),
             debtService.list(orgId),
             this.chairAnalytics(orgId, win),
-            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            baselineP,
             analytics_repository_1.analyticsRepository.bankSummary(orgId),
         ]);
 
@@ -1351,6 +1356,10 @@ export const analyticsService = {
           win = { scope, period: 'month', periodKey, now: () => now };
           resolvedWin = treatmentWindow('month', periodKey, now);
         }
+
+        // Historical periods must ground on the baseline/targets in effect THEN,
+        // not today's overwrite-in-place blob (see baselineAsOf).
+        const baselineP = baselineAsOf(orgId, resolvedWin, now);
 
         const [pl, mkt, clin, cash, settledRevRows, entityRows, leakage, debt, chair, health, bank, leadRows, treatments] = await Promise.all([
             this.plMargin(orgId, win),
@@ -3570,6 +3579,31 @@ function resolveWindow({ since, until, label, period, periodKey, now }) {
     return treatmentWindow(period, periodKey, now);
 }
 
+// Resolve the manual baseline/targets the AI should ground on for a window.
+// Manual inputs are HISTORISED (business_health_snapshots.inputs, migration 000054)
+// but the live `business_health` row OVERWRITES in place. For a CLOSED (past)
+// window the AI must use the values in effect THEN, else every historical answer
+// is anchored to today's goals. `resolvedWin.until` is the EXCLUSIVE next-period
+// start, so `until − 1ms` is the period's last calendar day; a window ending
+// on/after today is the live current period (use the live blob directly). Missing
+// snapshot fields fall back to the live blob — honest, never fabricated. Mirrors
+// business-health.service.progress()'s as-of read. `nowDate` is a Date.
+function baselineAsOf(orgId, resolvedWin, nowDate) {
+    const lp = londonParts(nowDate);
+    const todayYmd = `${lp.year}-${String(lp.month).padStart(2, '0')}-${String(lp.day).padStart(2, '0')}`;
+    const asOfDate = new Date(Date.parse(resolvedWin.until) - 1).toISOString().slice(0, 10);
+    if (asOfDate >= todayYmd) {
+        return analytics_repository_1.analyticsRepository.baselineMaybe(orgId);
+    }
+    return Promise.all([
+        businessHealthRepository.getInputsAsOf(orgId, asOfDate),
+        analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+    ]).then(([snap, live]) => ({
+        baseline: snap?.baseline ?? live?.baseline,
+        targets: snap?.targets ?? live?.targets,
+    }));
+}
+
 // Every calendar month ('YYYY-MM', UTC) the [since, until) window touches. until
 // is exclusive. Capped at 120 months so a hostile range can't loop unbounded.
 function monthsInWindow(since, until) {
@@ -3829,3 +3863,6 @@ function buildCashByDayInsights({ withIndex, avgPerDayPence, peak, totalPence })
 
     return cards;
 }
+
+// Test-only surface for module-private helpers.
+export const __test = { baselineAsOf };
