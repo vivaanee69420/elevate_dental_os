@@ -1,4 +1,8 @@
 // backend/test/emergent-webhook.test.mjs
+import './setup.js'; // dummy Supabase env + @supabase/supabase-js stub (this file
+                     // mocks the repos but webhook.service still loads lib/supabase
+                     // transitively via dentally-sync; without this it only passed
+                     // when another suite's setup import leaked env into the run).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'node:crypto';
 
@@ -102,6 +106,36 @@ it('discovers the business and stamps last_sync_at on a valid event', async () =
   await webhookService.emergent(token, raw, sign(raw), 'treatment.accepted');
   expect(discover).toHaveBeenCalledWith(ORG, [{ business_id: 'biz-1', business_name: 'Ashford' }]);
   expect(setSyncTime).toHaveBeenCalledWith(ORG, 'emergent');
+});
+
+// --- resilience: a transient DB error must NOT 5xx the delivery. The provider
+//     disables a webhook after sustained failures, and the nightly sync is the
+//     reconciliation backstop, so processing faults are logged + acked (200). --
+it('acks (200, not 5xx) when the upsert throws — nightly sync reconciles', async () => {
+  upsert.mockRejectedValueOnce(new Error('connection reset by peer'));
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
+  const res = await webhookService.emergent(token, raw, sign(raw), 'treatment.accepted');
+  expect(res).toMatchObject({ received: true, error: true });
+});
+
+it('acks (200, not 5xx) when the delete throws', async () => {
+  deleteByExternalId.mockRejectedValueOnce(new Error('deadlock detected'));
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.deleted', data: DATA }));
+  const res = await webhookService.emergent(token, raw, sign(raw), 'treatment.deleted');
+  expect(res).toMatchObject({ received: true, error: true });
+});
+
+it('a failing business-discover does not 5xx the delivery', async () => {
+  discover.mockRejectedValueOnce(new Error('pg timeout'));
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
+  const res = await webhookService.emergent(token, raw, sign(raw), 'treatment.accepted');
+  expect(res).toMatchObject({ received: true, error: true });
+});
+
+it('a bad signature still hard-rejects (resilience does not swallow auth failures)', async () => {
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
+  await expect(webhookService.emergent(token, raw, 'sha256=deadbeef', 'treatment.accepted'))
+    .rejects.toMatchObject({ statusCode: 401 });
 });
 
 it('uses ONLY the org from the signed token (body cannot cross tenants)', async () => {

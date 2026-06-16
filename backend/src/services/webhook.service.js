@@ -168,7 +168,24 @@ export const webhookService = {
         }
         const results = [];
         for (const rec of records) {
-            results.push(await applyWebhookEvent(orgId, resourceType, rec, action));
+            // Per-record fault isolation: an unstorable record or a transient DB
+            // error must NOT 5xx the whole delivery — Dentally auto-disables a
+            // webhook after sustained failures, so one bad row would silently
+            // kill ALL future real-time updates. Log + skip; the nightly poll is
+            // the reconciliation backstop for anything missed here. Auth, token
+            // and signature failures (above) stay hard rejections by design.
+            try {
+                results.push(await applyWebhookEvent(orgId, resourceType, rec, action));
+            } catch (err) {
+                console.warn('[dentally-webhook] record skipped', {
+                    orgId,
+                    resourceType,
+                    action,
+                    recordId: rec?.id ?? null,
+                    err: err?.message || String(err),
+                });
+                results.push({ error: true, recordId: rec?.id ?? null, reason: err?.message || 'apply_failed' });
+            }
         }
         return { received: true, resourceType, action, count: results.length, results };
     },
@@ -220,28 +237,42 @@ export const webhookService = {
             return { received: true, ignored: true, reason: 'no_data' };
         }
 
-        // Discover the business so it appears in the mapping UI immediately.
-        await emergentPracticeMapRepository.discover(orgId, [
-            { business_id: data.business_id, business_name: data.business_name },
-        ]);
+        // Fault isolation: a transient DB error (discover/upsert/delete) must NOT
+        // 5xx the delivery — the provider auto-disables a webhook after sustained
+        // failures, and the nightly sync is the reconciliation backstop. Log +
+        // ack. Auth/token/signature failures (above) stay hard rejections.
+        try {
+            // Discover the business so it appears in the mapping UI immediately.
+            await emergentPracticeMapRepository.discover(orgId, [
+                { business_id: data.business_id, business_name: data.business_name },
+            ]);
 
-        if (action === 'deleted') {
-            const deleted = await treatmentAcceptedRepository.deleteByExternalId(
-                orgId, 'emergent', emergentExternalId(data),
-            );
-            await integrationRepository.setSyncTime(orgId, 'emergent');
-            return { received: true, action, deleted };
+            if (action === 'deleted') {
+                const deleted = await treatmentAcceptedRepository.deleteByExternalId(
+                    orgId, 'emergent', emergentExternalId(data),
+                );
+                await integrationRepository.setSyncTime(orgId, 'emergent');
+                return { received: true, action, deleted };
+            }
+            if (action === 'accepted' || action === 'updated') {
+                // Same resolution as the nightly sync (explicit map first, fuzzy
+                // business-name match as fallback) so a webhook for a not-yet-mapped
+                // business still gets best-effort practice attribution.
+                const maps = await loadEmergentResolution(orgId);
+                await treatmentAcceptedRepository.upsert(mapEmergentRecord(data, orgId, maps));
+                await integrationRepository.setSyncTime(orgId, 'emergent');
+                return { received: true, action, processed: true };
+            }
+            return { received: true, ignored: true, event };
+        } catch (err) {
+            console.warn('[emergent-webhook] processing skipped', {
+                orgId,
+                action,
+                businessId: data.business_id ?? null,
+                err: err?.message || String(err),
+            });
+            return { received: true, error: true, reason: err?.message || 'apply_failed' };
         }
-        if (action === 'accepted' || action === 'updated') {
-            // Same resolution as the nightly sync (explicit map first, fuzzy
-            // business-name match as fallback) so a webhook for a not-yet-mapped
-            // business still gets best-effort practice attribution.
-            const maps = await loadEmergentResolution(orgId);
-            await treatmentAcceptedRepository.upsert(mapEmergentRecord(data, orgId, maps));
-            await integrationRepository.setSyncTime(orgId, 'emergent');
-            return { received: true, action, processed: true };
-        }
-        return { received: true, ignored: true, event };
     },
     // GoHighLevel real-time webhook. orgToken (signed, in the URL) identifies the
     // tenant. GHL workflow webhooks don't HMAC the body, so the unguessable token
