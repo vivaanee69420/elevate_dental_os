@@ -18,11 +18,12 @@ const PASTE_HINT = 'Paste your Dentally Bearer token from Dentally → Settings 
 
 // Dentally (Doorkeeper) REQUIRES the `scope` param on authorize — omitting it
 // returns invalid_request/missing_param, and an UNREGISTERED scope value makes
-// it 500 (server_error) instead of a clean invalid_scope. Default to the three
-// documented-valid read scopes so authorize always succeeds; widen via
-// DENTALLY_SCOPES to whatever the registered Dentally app actually exposes
-// (e.g. add payment:read invoice:read treatment:read once confirmed).
-const DEFAULT_SCOPES = 'patient:read appointment:read user:read';
+// it 500 (server_error) instead of a clean invalid_scope. These are Dentally's
+// real read-scope names (from the app's scope picker): financials:read covers
+// BOTH payments and invoices; treatments is a flat scope (no :action suffix);
+// practice:read covers sites. Together they grant every resource the bootstrap
+// pulls. Override via DENTALLY_SCOPES.
+const DEFAULT_SCOPES = 'patient:read appointment:read user:read practice:read financials:read treatments';
 function dentallyScopes() { return process.env.DENTALLY_SCOPES || DEFAULT_SCOPES; }
 
 function authBase() { return process.env.DENTALLY_AUTH_BASE || 'https://api.dentally.co'; }
