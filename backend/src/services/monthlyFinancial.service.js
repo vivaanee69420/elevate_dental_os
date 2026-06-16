@@ -45,6 +45,40 @@ export function bucketsByPeriod(rows, { accountingMethod = 'accrual' } = {}) {
     return out;
 }
 
+// Like bucketsByPeriod, but keeps per-account_code line detail so a P&L bucket
+// can be expanded into the individual accounts that roll into it (e.g. the
+// 'overhead' bucket -> Council Tax, Advertising, Utilities...). Applies the SAME
+// synced-overrides-manual precedence per period+bucket: when any synced
+// (Xero/QuickBooks) row exists for a period+bucket, manual account lines for
+// that period+bucket are dropped. Returns Map<period, Map<bucket, Map<code,
+// amount_pence>>>. account_code falls back to dental_bucket for legacy rows.
+// Pure — exported for the analytics read path + tests.
+export function accountLinesByPeriod(rows, { accountingMethod = 'accrual' } = {}) {
+    const list = Array.isArray(rows) ? rows : [];
+    const same = (r) => (r.accounting_method || 'accrual') === accountingMethod;
+    // Decide, per period+bucket, whether synced rows exist (precedence gate).
+    const hasSynced = new Map(); // period -> Set(bucket)
+    for (const r of list) {
+        if (!r.period || !r.dental_bucket || !same(r)) continue;
+        if (!SYNCED_SOURCES.has(r.source)) continue;
+        if (!hasSynced.has(r.period)) hasSynced.set(r.period, new Set());
+        hasSynced.get(r.period).add(r.dental_bucket);
+    }
+    const out = new Map();
+    for (const r of list) {
+        if (!r.period || !r.dental_bucket || !same(r)) continue;
+        const bucketSynced = hasSynced.get(r.period)?.has(r.dental_bucket);
+        if (bucketSynced && !SYNCED_SOURCES.has(r.source)) continue; // manual loses
+        const code = r.account_code || r.dental_bucket;
+        if (!out.has(r.period)) out.set(r.period, new Map());
+        const byBucket = out.get(r.period);
+        if (!byBucket.has(r.dental_bucket)) byBucket.set(r.dental_bucket, new Map());
+        const byCode = byBucket.get(r.dental_bucket);
+        byCode.set(code, (byCode.get(code) || 0) + (r.amount_pence || 0));
+    }
+    return out;
+}
+
 // Sum resolved buckets for the periods a [from,to] day-range covers. period keys
 // are 'YYYY-MM'; endpoints are compared at month granularity (inclusive on both
 // ends). Pure — the dashboard read path uses this to slice actuals to a custom

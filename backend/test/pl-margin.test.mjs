@@ -77,6 +77,57 @@ describe('plMargin', () => {
     expect(r.entities[0].netPence).toBe(300000);
   });
 
+  it('breakdown drills each summary line into its account_code lines (QuickBooks shape)', async () => {
+    // QBO posts per company (integration_account_id), every P&L line as its own
+    // account_code row. Mirror the client report: Sales + a contra refund, two
+    // CoS lines (lab + materials), associate + salary on the staff line, and two
+    // overhead expenses — each must land under the right summary line, sorted desc.
+    const qbo = [
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Sales', dental_bucket: 'revenue', amount_pence: 23978126, source: 'quickbooks', accounting_method: 'accrual' },
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Patient Refund', dental_bucket: 'revenue', amount_pence: -35000, source: 'quickbooks', accounting_method: 'accrual' },
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Lab fees', dental_bucket: 'lab', amount_pence: 1761900, source: 'quickbooks', accounting_method: 'accrual' },
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Dental Materials', dental_bucket: 'materials', amount_pence: 452925, source: 'quickbooks', accounting_method: 'accrual' },
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Associate Salary', dental_bucket: 'associates', amount_pence: 9446497, source: 'quickbooks', accounting_method: 'accrual' },
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Salaries', dental_bucket: 'staff', amount_pence: 1988388, source: 'quickbooks', accounting_method: 'accrual' },
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Council Tax', dental_bucket: 'overhead', amount_pence: 140600, source: 'quickbooks', accounting_method: 'accrual' },
+      { integration_account_id: 'co1', period: '2026-05', account_code: 'Advertising/Promotional', dental_bucket: 'overhead', amount_pence: 309600, source: 'quickbooks', accounting_method: 'accrual' },
+    ];
+    stub(qbo);
+    const r = await svc.plMargin(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', source: 'quickbooks', now });
+    expect(r.breakdown.revPence).toEqual([
+      { name: 'Sales', amountPence: 23978126 },
+      { name: 'Patient Refund', amountPence: -35000 },
+    ]);
+    expect(r.breakdown.labMaterialsPence).toEqual([
+      { name: 'Lab fees', amountPence: 1761900 },
+      { name: 'Dental Materials', amountPence: 452925 },
+    ]);
+    // associate pay sorts above salaries; both on the staff line.
+    expect(r.breakdown.staffPence).toEqual([
+      { name: 'Associate Salary', amountPence: 9446497 },
+      { name: 'Salaries', amountPence: 1988388 },
+    ]);
+    expect(r.breakdown.otherOpexPence).toEqual([
+      { name: 'Advertising/Promotional', amountPence: 309600 },
+      { name: 'Council Tax', amountPence: 140600 },
+    ]);
+    // Detail sums reconcile to the summary line totals.
+    const sum = (a) => a.reduce((t, x) => t + x.amountPence, 0);
+    expect(sum(r.breakdown.staffPence)).toBe(r.statement.staffPence);
+    expect(sum(r.breakdown.labMaterialsPence)).toBe(r.statement.labMaterialsPence);
+  });
+
+  it('breakdown respects synced-overrides-manual: manual lines dropped when synced exists for that bucket', async () => {
+    const mixed = [
+      { practice_id: 'p1', period: '2026-05', account_code: 'Council Tax', dental_bucket: 'overhead', amount_pence: 140600, source: 'xero' },
+      { practice_id: 'p1', period: '2026-05', account_code: 'Manual overhead guess', dental_bucket: 'overhead', amount_pence: 999999, source: 'manual' },
+      { practice_id: 'p1', period: '2026-05', dental_bucket: 'revenue', amount_pence: 5000000, source: 'xero' },
+    ];
+    stub(mixed);
+    const r = await svc.plMargin(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
+    expect(r.breakdown.otherOpexPence).toEqual([{ name: 'Council Tax', amountPence: 140600 }]);
+  });
+
   it('falls back to trailing annual when the selected month has no actuals', async () => {
     // Data only in March; ask for May.
     const finMar = FIN_MAY.map((r) => ({ ...r, period: '2026-03' }));
