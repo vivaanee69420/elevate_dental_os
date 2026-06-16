@@ -7,7 +7,7 @@
 // (backend returns null with a note).
 
 import { useEffect, useState } from 'react';
-import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable, type Column } from '@/components/ui';
+import { PageHeader, KpiTile, DataTable, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable, Explainer, type Column } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { formatPence } from '@/lib/format';
 import { useChairAnalytics } from '../chair-analytics-hooks';
@@ -87,12 +87,11 @@ export function ChairEfficiencyScreen() {
               delta={`${(data.group.occupancyPct - (data.config?.benchOccPct ?? 88)).toFixed(1)}pts vs ${data.config?.benchOccPct ?? 88}% benchmark`}
               deltaTone={data.group.occupancyPct >= (data.config?.benchOccPct ?? 88) ? 'up' : 'down'}
               info={
-                <>
-                  <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
-                  <p><b>occupancy = Σ booked ÷ Σ available</b> minutes from the chair-utilisation grid, across all in-scope chairs, capped at 100%.</p>
-                  <p className="mt-1">Only grid cells you&apos;ve entered count. Slots with no row aren&apos;t included as available.</p>
-                  <p className="mt-1">Now: <b>{data.group.occupancyPct}%</b> vs {data.config?.benchOccPct ?? 88}% benchmark.</p>
-                </>
+                <Explainer
+                  what="How much of your open chair time is actually being used by patients."
+                  how="We add up the hours your chairs were booked and divide by the hours they were open and available. 100% means every open hour was filled. Only the time slots you've entered in the grid count."
+                  now={<>Your chairs are <b>{data.group.occupancyPct}% full</b>. Your target is {data.config?.benchOccPct ?? 88}% — you&apos;re {data.group.occupancyPct >= (data.config?.benchOccPct ?? 88) ? 'at or above it.' : `${((data.config?.benchOccPct ?? 88) - data.group.occupancyPct).toFixed(1)} points below it.`}</>}
+                />
               }
             />
             <KpiTile
@@ -101,13 +100,11 @@ export function ChairEfficiencyScreen() {
               delta={`${data.group.emptyHrsYr.toLocaleString('en-GB')} empty hrs/yr at £${((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/chair-hr`}
               deltaTone="down"
               info={
-                <>
-                  <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
-                  <p><b>cost = empty hrs/yr × benchmark £/chair-hour</b>.</p>
-                  <p className="mt-1">empty hrs = capacity − booked, where <b>capacity = chairs × open hrs/day × (weeks/yr × days/wk)</b>. Chairs = distinct chair names in the grid.</p>
-                  <p className="mt-1">Uses the <b>£{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/hr benchmark</b> (what an idle chair could earn at industry rate), not your own yield.</p>
-                  <p className="mt-1">Now: {data.group.emptyHrsYr.toLocaleString('en-GB')} empty hrs × £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)} = <b>{formatPence(data.group.lostPotentialYrPence)}</b>.</p>
-                </>
+                <Explainer
+                  what="The money you miss out on because chairs sit open but unbooked."
+                  how={<>We count the empty chair-hours over a year (the time chairs are open but not booked), then value each empty hour at the £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)} industry-standard rate — what a chair <i>could</i> earn — not your own prices.</>}
+                  now={<><b>{data.group.emptyHrsYr.toLocaleString('en-GB')} empty hours</b> a year × £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)} per hour = <b>{formatPence(data.group.lostPotentialYrPence)}</b>.</>}
+                />
               }
             />
             <KpiTile
@@ -116,12 +113,11 @@ export function ChairEfficiencyScreen() {
               delta="At your own revenue/hr, not the ceiling"
               deltaTone="up"
               info={
-                <>
-                  <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
-                  <p><b>= capacity × (benchmark − occupancy)/100 × your yield/hr</b>.</p>
-                  <p className="mt-1">Hours to climb from {data.group.occupancyPct}% to the {data.config?.benchOccPct ?? 88}% benchmark, valued at <b>your</b> revenue/hr (£{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)}/booked-hr), not the £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)} ceiling.</p>
-                  <p className="mt-1">Zero if you&apos;re already at or above the benchmark.</p>
-                </>
+                <Explainer
+                  what={<>The extra revenue you could realistically earn by filling chairs up to your {data.config?.benchOccPct ?? 88}% target.</>}
+                  how={<>We work out how many more hours you&apos;d need to book to hit the target, then value them at <b>your own</b> average earnings of £{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)} per booked hour — a realistic figure, not the industry rate.</>}
+                  now={<>Going from {data.group.occupancyPct}% to {data.config?.benchOccPct ?? 88}% is worth about <b>{formatPence(data.group.recoverRevYrPence)}</b> a year. This is £0 if you&apos;re already at or above target.</>}
+                />
               }
             />
           </div>
@@ -155,11 +151,11 @@ export function ChairEfficiencyScreen() {
                   value={`${data.recovery.recoveryHrsYr.toLocaleString('en-GB')}h`}
                   delta="per year, across scope"
                   info={
-                    <>
-                      <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
-                      <p><b>= capacity × effective uplift / 100</b>, where effective uplift = min(your {recover}% pick, headroom to 100%).</p>
-                      <p className="mt-1">Headroom = 100% − current occupancy ({data.group.occupancyPct}%). At 100% occupancy this is 0 — no room left to recover.</p>
-                    </>
+                    <Explainer
+                      what="The extra chair-hours you'd gain each year if you lifted occupancy by the amount you picked above."
+                      how={<>We add your chosen {recover}% uplift on top of today&apos;s occupancy — but never past 100%, because you can&apos;t book more than every open hour.</>}
+                      now={<>A {recover}% lift on {data.group.occupancyPct}% gives <b>{data.recovery.recoveryHrsYr.toLocaleString('en-GB')} more hours</b> a year. (This is 0 if you&apos;re already full.)</>}
+                    />
                   }
                 />
                 <KpiTile
@@ -168,12 +164,11 @@ export function ChairEfficiencyScreen() {
                   delta="at your current yield/hr"
                   deltaTone="up"
                   info={
-                    <>
-                      <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
-                      <p><b>= recovery chair-time × your yield/hr</b>.</p>
-                      <p className="mt-1">Yield/hr = Σ grid revenue ÷ Σ booked hrs = £{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)}/booked-hr.</p>
-                      <p className="mt-1">Now: {data.recovery.recoveryHrsYr.toLocaleString('en-GB')}h × £{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)} = <b>{formatPence(data.recovery.revenueUnlockedPence)}</b>.</p>
-                    </>
+                    <Explainer
+                      what="The money those extra booked hours would bring in."
+                      how={<>We multiply the extra chair-hours by your own average earnings of £{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)} per booked hour.</>}
+                      now={<><b>{data.recovery.recoveryHrsYr.toLocaleString('en-GB')} hours</b> × £{((data.group.blendedRevPerBookedHrPence ?? 0) / 100).toFixed(0)} = <b>{formatPence(data.recovery.revenueUnlockedPence)}</b> a year.</>}
+                    />
                   }
                 />
                 <KpiTile
@@ -181,11 +176,11 @@ export function ChairEfficiencyScreen() {
                   value={`${data.recovery.newOccupancyPct}%`}
                   delta={`from ${data.group.occupancyPct}% today`}
                   info={
-                    <>
-                      <div className="font-semibold text-ink mb-1">How it&apos;s calculated</div>
-                      <p><b>= current occupancy + effective uplift</b>, capped at 100%.</p>
-                      <p className="mt-1">{data.group.occupancyPct}% + up to {recover}% → <b>{data.recovery.newOccupancyPct}%</b>.</p>
-                    </>
+                    <Explainer
+                      what="Where your occupancy would land after the uplift."
+                      how="We take today's occupancy and add the uplift you chose, capped at 100%."
+                      now={<>{data.group.occupancyPct}% + up to {recover}% = <b>{data.recovery.newOccupancyPct}%</b>.</>}
+                    />
                   }
                 />
               </div>
@@ -209,14 +204,14 @@ export function ChairEfficiencyScreen() {
             </div>
             {tableInfo && (
               <div className="card-padded mb-2 text-[12px] text-ink-muted leading-relaxed">
-                <div className="font-semibold text-ink mb-1">How each column is calculated</div>
+                <div className="font-semibold text-ink mb-1">What each column means</div>
                 <ul className="list-disc pl-4 flex flex-col gap-1">
-                  <li><b>Chairs</b> — distinct chair names entered in this practice&apos;s chair-utilisation grid.</li>
-                  <li><b>Occupancy</b> — Σ booked ÷ Σ available minutes from the grid, capped at 100%.</li>
-                  <li><b>Booked/yr</b> — capacity × occupancy. Capacity = chairs × open hrs/day × (weeks/yr × days/wk).</li>
-                  <li><b>Empty/yr</b> — capacity − booked: unused chair-hours over the year.</li>
-                  <li><b>Cost of empty</b> — empty hrs × the benchmark £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/chair-hour (industry rate, not your yield).</li>
-                  <li><b>Recoverable</b> — hrs to reach the {data.config?.benchOccPct ?? 88}% benchmark × your own revenue/hr. Zero if already at/above it.</li>
+                  <li><b>Chairs</b> — how many chairs (surgeries) you&apos;ve set up for this practice.</li>
+                  <li><b>Occupancy</b> — how full those chairs are: booked time as a share of open time.</li>
+                  <li><b>Booked/yr</b> — the hours patients actually fill across a whole year.</li>
+                  <li><b>Empty/yr</b> — the open chair-hours left unbooked across the year.</li>
+                  <li><b>Cost of empty</b> — what those empty hours would be worth at the £{((data.config?.benchRevHrPence ?? 30000) / 100).toFixed(0)}/hr industry rate.</li>
+                  <li><b>Recoverable</b> — extra revenue from filling chairs up to your {data.config?.benchOccPct ?? 88}% target, valued at your own prices.</li>
                 </ul>
               </div>
             )}
