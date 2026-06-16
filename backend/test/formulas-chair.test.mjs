@@ -66,6 +66,23 @@ describe('calculateChairStats', () => {
     expect(hot.recoverableToBenchHrsYr).toBe(0);
     expect(hot.recoverRevYrPence).toBe(0);
   });
+
+  it('revPerBookedHrPence override (owner-entered grid yield) wins over annual revenue', () => {
+    // Override forces the yield directly; annual revenue is ignored for yield.
+    const o = calculateChairStats({
+      chairs: 6, utilPct: 84, annualRevenuePence: 231_840_000, revPerBookedHrPence: 50_000,
+    });
+    expect(o.revPerBookedHrPence).toBe(50_000); // not the 25,000 derived from annual rev
+    // recoverable hrs unchanged (442), valued at the overridden £500/hr yield.
+    expect(o.recoverableToBenchHrsYr).toBe(442); // 441.6 rounded for display
+    expect(o.recoverRevYrPence).toBe(441.6 * 50_000); // uses unrounded 441.6 hrs
+  });
+
+  it('revPerBookedHrPence override of 0 still valid (zero yield)', () => {
+    const z = calculateChairStats({ chairs: 6, utilPct: 84, annualRevenuePence: 9_999, revPerBookedHrPence: 0 });
+    expect(z.revPerBookedHrPence).toBe(0);
+    expect(z.recoverRevYrPence).toBe(0);
+  });
 });
 
 describe('calculateOcpspd', () => {

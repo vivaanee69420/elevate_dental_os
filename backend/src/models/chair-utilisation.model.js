@@ -11,6 +11,16 @@ export const chairUtilisationListQuerySchema = zod_1.z.object({
     asOf: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
+// Booked can never exceed available — occupancy is booked/available and must
+// stay <= 100%. Rejected at the API boundary so the grid can't store >100% cells.
+const bookedNotOverAvailable = (v) =>
+    v.booked_minutes == null || v.available_minutes == null ||
+    v.booked_minutes <= v.available_minutes;
+const bookedOverAvailableIssue = {
+    message: 'Booked time cannot exceed available time',
+    path: ['booked_minutes'],
+};
+
 export const chairUtilisationCreateSchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid(),
     chair_name: zod_1.z.string().trim().min(1).max(120),
@@ -18,9 +28,14 @@ export const chairUtilisationCreateSchema = zod_1.z.object({
     slot: zod_1.z.enum(['morning', 'midday', 'afternoon', 'evening']),
     booked_minutes: zod_1.z.coerce.number().int().min(0),
     available_minutes: zod_1.z.coerce.number().int().min(0),
+    // Typical-week revenue for this chair+weekday+slot, integer pence. Drives the
+    // owner-entered yield/hr on Chair Efficiency.
+    revenue_pence: zod_1.z.coerce.number().int().min(0).optional().default(0),
     notes: zod_1.z.string().trim().max(500).optional(),
-});
+}).refine(bookedNotOverAvailable, bookedOverAvailableIssue);
 
 export const chairUtilisationUpdateSchema = chairUtilisationCreateSchema
+    .innerType()
     .omit({ practice_id: true })
-    .partial();
+    .partial()
+    .refine(bookedNotOverAvailable, bookedOverAvailableIssue);

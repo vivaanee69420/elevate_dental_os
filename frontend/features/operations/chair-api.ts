@@ -9,6 +9,7 @@ export type ChairRecord = {
   slot: SlotKey;
   booked_minutes: number;
   available_minutes: number;
+  revenue_pence: number;
   notes: string | null;
 };
 
@@ -33,14 +34,16 @@ export type ChairInput = {
   slot: SlotKey;
   booked_minutes: number;
   available_minutes: number;
+  revenue_pence?: number;
   notes?: string;
 };
 
 export function listChairRecords(practiceId: string) {
   return api<{ records: ChairRecord[] }>(`/api/chair-utilisation?practice_id=${practiceId}`);
 }
-export function getChairGrid(practiceId: string) {
-  return api<ChairGrid>(`/api/chair-utilisation/grid?practice_id=${practiceId}`);
+export function getChairGrid(practiceId: string, asOf?: string) {
+  const q = asOf ? `&asOf=${asOf}` : '';
+  return api<ChairGrid>(`/api/chair-utilisation/grid?practice_id=${practiceId}${q}`);
 }
 export function createChairRecord(input: ChairInput) {
   return api<ChairRecord>('/api/chair-utilisation', { method: 'POST', body: JSON.stringify(input) });

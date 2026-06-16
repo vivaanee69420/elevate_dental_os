@@ -326,7 +326,7 @@ export const analyticsRepository = {
     async chairUtilisationRows(orgId) {
         const { data, error } = await supabase_1.serviceClient
             .from('chair_utilisation')
-            .select('practice_id, booked_minutes, available_minutes')
+            .select('practice_id, chair_name, booked_minutes, available_minutes, revenue_pence')
             .eq('organisation_id', orgId)
             .limit(LIMIT_GUARD);
         if (error) throw new Error(error.message);
