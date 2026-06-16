@@ -239,7 +239,7 @@ describe('fetchAllPages', () => {
         global.fetch = vi.fn()
             .mockResolvedValueOnce(page({ patients: [{ id: 1 }], meta: { total_pages: 2 } }))
             .mockResolvedValueOnce(page({ patients: [{ id: 2 }], meta: { total_pages: 2 } }));
-        const out = await __test.fetchAllPages('https://api.dentally.co/v1', '/patients', 'Bearer k', { updated_after: 'x' });
+        const out = await __test.fetchAllPages('o1', 'https://api.dentally.co/v1', '/patients', 'Bearer k', { updated_after: 'x' });
         expect(out.map((p) => p.id)).toEqual([1, 2]);
         const headers = global.fetch.mock.calls[0][1].headers;
         expect(headers['User-Agent']).toMatch(/ElevateOS/);
@@ -252,7 +252,7 @@ describe('fetchAllPages', () => {
         global.fetch = vi.fn()
             .mockResolvedValueOnce({ status: 429, ok: false, headers: h })
             .mockResolvedValueOnce(page({ patients: [{ id: 9 }] }));
-        const p = __test.fetchAllPages('https://b', '/patients', 'Bearer k', {});
+        const p = __test.fetchAllPages('o1', 'https://b', '/patients', 'Bearer k', {});
         await vi.advanceTimersByTimeAsync(1000);
         const out = await p;
         expect(out).toEqual([{ id: 9 }]);
@@ -264,7 +264,7 @@ describe('fetchAllPages', () => {
         global.fetch = vi.fn()
             .mockRejectedValueOnce(new Error('socket hang up'))
             .mockResolvedValueOnce(page({ patients: [{ id: 7 }] }));
-        const p = __test.fetchAllPages('https://b', '/patients', 'Bearer k', {});
+        const p = __test.fetchAllPages('o1', 'https://b', '/patients', 'Bearer k', {});
         await vi.advanceTimersByTimeAsync(1000); // first backoff
         const out = await p;
         expect(out).toEqual([{ id: 7 }]);
@@ -276,7 +276,7 @@ describe('fetchAllPages', () => {
         vi.useFakeTimers();
         const abortErr = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
         global.fetch = vi.fn().mockRejectedValue(abortErr);
-        const p = __test.fetchAllPages('https://b', '/patients', 'Bearer k', {}).catch((e) => e);
+        const p = __test.fetchAllPages('o1', 'https://b', '/patients', 'Bearer k', {}).catch((e) => e);
         await vi.advanceTimersByTimeAsync(1000 + 2000 + 3000); // exhaust the 4 attempts
         const err = await p;
         expect(err).toBeInstanceOf(Error);
@@ -294,7 +294,7 @@ describe('streamPages (bounded-memory pagination)', () => {
             .mockResolvedValueOnce(page({ appointments: [{ id: 3 }, { id: 4 }], meta: { total_pages: 3 } }))
             .mockResolvedValueOnce(page({ appointments: [{ id: 5 }], meta: { total_pages: 3 } }));
         const batches = [];
-        const total = await __test.streamPages('https://b', '/appointments', 'Bearer k', { updated_after: 'x' },
+        const total = await __test.streamPages('o1', 'https://b', '/appointments', 'Bearer k', { updated_after: 'x' },
             (items, p) => { batches.push({ p, n: items.length, ids: items.map((i) => i.id) }); });
         // One batch per page — the caller upserts+discards each, so peak memory is
         // a single page, not all 5 rows at once.
