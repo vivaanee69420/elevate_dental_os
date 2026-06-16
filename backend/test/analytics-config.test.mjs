@@ -108,6 +108,8 @@ describe('chair_config', () => {
     supaRec.rpcProvider = () => ({ data: [], error: null });
     supaRec.resultProvider = (q) => {
       if (q.table === 'practices') return { data: PRACTICES, error: null };
+      // p1 needs a manual grid to be "live" (empty grid -> zero capacity).
+      if (q.table === 'chair_utilisation') return { data: [{ practice_id: 'p1', booked_minutes: 1000, available_minutes: 2000 }], error: null };
       if (q.table === 'chair_config') return { data: { open_hrs: 10, weeks_yr: 46, days_wk: 5, bench_occ_pct: 88, bench_rev_hr_pence: 30000 }, error: null };
       return { data: [], error: null };
     };

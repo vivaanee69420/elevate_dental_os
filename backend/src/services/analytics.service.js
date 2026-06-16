@@ -49,13 +49,13 @@ export const analyticsService = {
     //   revenue   = REAL (trailing-12mo settled receipts per practice).
     //   occupancy = the MANUAL chair-utilisation grid (booked/available minutes,
     //               owner-maintained — intentional single source of truth).
-    //               No grid data for a practice -> fall back to assumed_util_pct
-    //               (or 80%) and flag occupancySource='assumption'.
-    //   occupancySource: 'manual' (grid) | 'assumption'.
+    //               No grid data for a practice -> blank: zero capacity/occupancy/
+    //               cost (no assumption), flagged occupancySource='none'. The
+    //               practice goes live only once its grid is filled.
+    //   occupancySource: 'manual' (grid) | 'none' (empty grid).
     // Cost-of-empty / recoverable are modelled off occupancy + chair capacity.
     // OCPSPD + profit-per-chair-hour still deferred.
     async chairAnalytics(orgId, { scope = 'all', recoverPctPoints = 10, since: winSince, until: winUntil, now = () => new Date() } = {}) {
-        const DEFAULT_UTIL_PCT = 80;
         const resolved = await this.resolveScope(orgId, scope);
         if (resolved.mode === 'academy' || resolved.mode === 'lab') {
             return { applicable: false, scope: resolved.mode,
@@ -96,13 +96,17 @@ export const analyticsService = {
             const annualRevenuePence = revByPractice.get(p.id) || 0;
             const gm = grid.get(p.id);
             const hasManual = !!gm && gm.available > 0;
-            const occupancySource = hasManual ? 'manual' : 'assumption';
-            const utilAssumed = !hasManual;
-            const utilPct = hasManual
-                ? Math.min(100, Math.round((gm.booked / gm.available) * 1000) / 10)
-                : (p.assumed_util_pct == null ? DEFAULT_UTIL_PCT : p.assumed_util_pct);
+            if (!hasManual) {
+                // No manual chair-utilisation grid -> honest blank: zero capacity,
+                // occupancy and cost (no 80% fallback). The practice only becomes
+                // "live" once its grid is filled in Chair Utilisation. Real revenue
+                // is preserved on the row but yields nothing without booked hours.
+                const stats = (0, formulas_1.calculateChairStats)({ chairs: 0, utilPct: 0, annualRevenuePence, config });
+                return { id: p.id, name: p.name, utilAssumed: false, occupancySource: 'none', annualRevenuePence, ...stats };
+            }
+            const utilPct = Math.min(100, Math.round((gm.booked / gm.available) * 1000) / 10);
             const stats = (0, formulas_1.calculateChairStats)({ chairs: p.chairs || 0, utilPct, annualRevenuePence, config });
-            return { id: p.id, name: p.name, utilAssumed, occupancySource, annualRevenuePence, ...stats };
+            return { id: p.id, name: p.name, utilAssumed: false, occupancySource: 'manual', annualRevenuePence, ...stats };
         });
 
         // Group rollup — sum hours/£, blended occupancy + yield/hr.

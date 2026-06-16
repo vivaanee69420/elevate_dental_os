@@ -19,8 +19,8 @@ beforeEach(() => {
 });
 
 describe('chairAnalytics', () => {
-  it('occupancy from the MANUAL grid; falls back to assumption when no grid; rolls up group', async () => {
-    // p1 has manual grid rows -> occupancy = booked/available; p2 has none -> assumed.
+  it('occupancy from the MANUAL grid; no grid -> zero/blank (no 80% fallback); rolls up group', async () => {
+    // p1 has manual grid rows -> occupancy = booked/available; p2 has none -> blank.
     supaRec.resultProvider = (q) =>
       q.table === 'chair_utilisation'
         ? { data: [
@@ -45,13 +45,17 @@ describe('chairAnalytics', () => {
     expect(p1.utilAssumed).toBe(false);
     expect(p1.occupancyPct).toBe(66.5);
     expect(p1.capHrsYr).toBe(11040);          // 6*8*230
-    // p2: no grid -> assumption (assumed_util_pct null -> default 80)
-    expect(p2.occupancySource).toBe('assumption');
-    expect(p2.utilAssumed).toBe(true);
-    expect(p2.occupancyPct).toBe(80);
+    // p2: no grid -> blank (no 80% assumption, zero capacity/occupancy/cost)
+    expect(p2.occupancySource).toBe('none');
+    expect(p2.utilAssumed).toBe(false);
+    expect(p2.occupancyPct).toBe(0);
+    expect(p2.capHrsYr).toBe(0);
+    expect(p2.chairs).toBe(0);
+    expect(p2.lostPotentialYrPence).toBe(0);
 
-    expect(r.group.capHrsYr).toBe(20240);
-    expect(r.group.chairs).toBe(11);
+    // Group rolls up p1 only (p2 contributes nothing until its grid is filled).
+    expect(r.group.capHrsYr).toBe(11040);
+    expect(r.group.chairs).toBe(6);
     expect(r.ocpspd).toBeNull();
   });
 

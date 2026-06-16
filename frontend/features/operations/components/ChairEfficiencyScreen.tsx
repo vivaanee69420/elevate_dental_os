@@ -25,12 +25,7 @@ export function ChairEfficiencyScreen() {
     {
       header: 'Practice',
       render: (r) => (
-        <span className="font-semibold">
-          {r.name}
-          {r.utilAssumed && (
-            <span className="ml-2 text-[11px] font-normal text-ink-soft">util assumed</span>
-          )}
-        </span>
+        <span className="font-semibold">{r.name}</span>
       ),
     },
     { header: 'Chairs', align: 'right', render: (r) => r.chairs },
@@ -77,11 +72,11 @@ export function ChairEfficiencyScreen() {
               body="Occupancy is your manually-maintained chair-utilisation data (booked ÷ available minutes). Revenue is real settled payments. Cost-of-empty-chairs and recoverable are modelled from occupancy and the practice chair count."
             />
           )}
-          {(data.practices ?? []).some((p) => p.occupancySource === 'assumption') && (
+          {(data.practices ?? []).some((p) => p.occupancySource === 'none') && (
             <AlertRow
               tone="warn"
               title="Some practices have no chair-utilisation data"
-              body="Where the chair-utilisation grid is empty, occupancy falls back to a working assumption (80%) — fill the grid in Chair Utilisation to make those practices live."
+              body="Where the chair-utilisation grid is empty, the practice reads zero — no occupancy, capacity or cost is assumed. Fill the grid in Chair Utilisation to make those practices live."
             />
           )}
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
