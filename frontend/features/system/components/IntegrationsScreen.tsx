@@ -147,13 +147,17 @@ export default function IntegrationsScreen() {
   }
 
   async function handleConnectWithKey(p: ProviderMeta) {
-    const res = await startConnect.mutateAsync({ provider: p.id, method: 'key' });
-    if (res.requiresKeyPaste) {
-      setBrokerModal({
-        provider: p.id,
-        hint: res.pasteHint ?? 'Paste your API key.',
-        requiresLocationId: res.requiresLocationId,
-      });
+    try {
+      const res = await startConnect.mutateAsync({ provider: p.id, method: 'key' });
+      if (res.requiresKeyPaste) {
+        setBrokerModal({
+          provider: p.id,
+          hint: res.pasteHint ?? 'Paste your API key.',
+          requiresLocationId: res.requiresLocationId,
+        });
+      }
+    } catch (err) {
+      setNotice({ kind: 'error', title: `Could not connect ${p.label}`, message: (err as Error).message });
     }
   }
 
@@ -227,7 +231,7 @@ export default function IntegrationsScreen() {
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600, fontSize: 13 }}>{p.label}</div>
                     <div className="text-ink-muted" style={{ fontSize: 11 }}>
-                      {p.authStyle === 'oauth' ? 'OAuth' : 'API key'} · {p.category}
+                      {p.authStyle === 'oauth' ? 'OAuth' : p.authStyle === 'oauth_or_key' ? 'OAuth / API key' : 'API key'} · {p.category}
                     </div>
                     {connected && (
                       <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 2 }}>

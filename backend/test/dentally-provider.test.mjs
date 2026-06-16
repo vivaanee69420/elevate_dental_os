@@ -123,3 +123,31 @@ describe('DentallyProvider.refresh', () => {
     expect(secrets.refresh_token).toBe('NEWRT');
   });
 });
+
+describe('DentallyProvider cross-org isolation', () => {
+  it('refresh only passes orgA id to every repository call — never another org id', async () => {
+    const orgA = 'orgA';
+    const orgB = 'orgB';
+
+    const claimRefreshSpy = vi.spyOn(integrationRepository, 'claimRefresh').mockResolvedValue(true);
+    const clearRefreshSpy = vi.spyOn(integrationRepository, 'clearRefresh').mockResolvedValue();
+    const getByProviderSpy = vi.spyOn(integrationRepository, 'getByProvider').mockResolvedValue({
+      secrets: encryptSecret(JSON.stringify({ access_token: 'OLD', refresh_token: 'OLDRT' })),
+      config: {},
+    });
+    const upsertSecretsSpy = vi.spyOn(integrationRepository, 'upsertSecrets').mockResolvedValue();
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true, json: async () => ({ access_token: 'NEW', refresh_token: 'NEWRT', token_type: 'Bearer', expires_in: 7200 }),
+    });
+
+    await DentallyProvider.refresh(orgA);
+
+    // Every repository call must use orgA — never orgB.
+    for (const spy of [claimRefreshSpy, clearRefreshSpy, getByProviderSpy, upsertSecretsSpy]) {
+      for (const call of spy.mock.calls) {
+        expect(call[0]).toBe(orgA);
+        expect(call[0]).not.toBe(orgB);
+      }
+    }
+  });
+});
