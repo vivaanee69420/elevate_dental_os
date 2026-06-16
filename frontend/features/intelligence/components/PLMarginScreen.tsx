@@ -10,7 +10,7 @@
 // mapping are the Phase 3 persistence slice.
 
 import { useState } from 'react';
-import { PageHeader, KpiTile, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
+import { PageHeader, KpiTile, EmptyState, AlertRow, SkeletonKpiRow, SkeletonTable, Explainer } from '@/components/ui';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useQboAccounts } from '@/features/finance/hooks';
@@ -149,20 +149,63 @@ function QboFilterBar({
 }
 
 function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['data']> }) {
+  const [linesInfo, setLinesInfo] = useState(false);
   const t = data.statement;
   const staffRatio = t.revPence ? (t.staffPence / t.revPence) * 100 : 0;
   const isQbo = data.source === 'quickbooks';
   const isCompany = data.perEntityKind === 'company';
+  // Plain-English name for where these numbers come from, used in the card
+  // explainers so a non-technical reader knows exactly what feed they're reading.
+  const srcLabel = isQbo ? 'QuickBooks' : 'your accounting feed (QuickBooks, Xero, or figures entered by hand)';
+  const basisWord = isQbo ? (data.accountingMethod === 'cash' ? 'cash' : 'accrual') : 'accrual';
   // Append the accounting basis to the period pill for QuickBooks (cash vs accrual
   // change the numbers materially; non-QB feeds are accrual-only so no need).
-  const basisPill = `${BASIS_LABEL[data.basis] ?? data.basis}${isQbo ? ` · ${data.accountingMethod === 'cash' ? 'cash' : 'accrual'}` : ''}`;
+  const basisPill = `${BASIS_LABEL[data.basis] ?? data.basis}${isQbo ? ` · ${basisWord}` : ''}`;
 
   return (
     <>
+      <div className="text-[12px] text-ink-muted">
+        These figures come straight from <b>{isQbo ? 'QuickBooks' : 'your accounting records'}</b>
+        {isQbo && <> — your accountant&apos;s books, on a <b>{basisWord}</b> basis</>}. Nothing here is estimated or forecast. Tap the <b>?</b> on any card to see what it means.
+      </div>
       <div className="grid gap-3 grid-cols-1 md:grid-cols-3">
-        <KpiTile label="Revenue" value={formatPence(t.revPence)} delta={basisPill} />
-        <KpiTile label="Net operating profit" value={formatPence(t.netPence)} delta={`${pct(t.marginPct)} of turnover`} deltaTone={t.marginPct >= 18 ? 'up' : t.marginPct >= 10 ? 'muted' : 'down'} />
-        <KpiTile label="Staff & clinician ratio" value={pct(staffRatio)} delta={`${formatPence(t.staffPence)} incl. associate pay`} />
+        <KpiTile
+          label="Revenue"
+          value={formatPence(t.revPence)}
+          delta={basisPill}
+          info={
+            <Explainer
+              what="The total money the business billed for dental work over this period — the top line before any costs are taken off."
+              how={<>We take the revenue (sales/income) posted in {srcLabel} for the company and months you&apos;ve selected, and add it up. No VAT, no estimates.</>}
+              now={<>For this selection you billed <b>{formatPence(t.revPence)}</b>.</>}
+            />
+          }
+        />
+        <KpiTile
+          label="Net operating profit"
+          value={formatPence(t.netPence)}
+          delta={`${pct(t.marginPct)} of turnover`}
+          deltaTone={t.marginPct >= 18 ? 'up' : t.marginPct >= 10 ? 'muted' : 'down'}
+          info={
+            <Explainer
+              what="What's actually left after every running cost is paid: lab &amp; materials, all staff and clinician pay, and the other day-to-day overheads."
+              how={<>Revenue minus lab &amp; materials gives gross profit; then we take off all staff/clinician pay and the other operating costs. The margin % is this profit divided by revenue.</>}
+              now={<>You kept <b>{formatPence(t.netPence)}</b> of every <b>{formatPence(t.revPence)}</b> billed — a margin of <b>{pct(t.marginPct)}</b>.</>}
+            />
+          }
+        />
+        <KpiTile
+          label="Staff & clinician ratio"
+          value={pct(staffRatio)}
+          delta={`${formatPence(t.staffPence)} incl. associate pay`}
+          info={
+            <Explainer
+              what="How much of every pound you bill goes on paying people — both employed team and self-employed associate clinicians."
+              how={<>We add up all the wages, salaries and associate/clinician pay posted in {srcLabel}, then divide that by revenue. A lower number means more of each pound is left over.</>}
+              now={<><b>{formatPence(t.staffPence)}</b> of pay against <b>{formatPence(t.revPence)}</b> of revenue = <b>{pct(staffRatio)}</b> spent on people.</>}
+            />
+          }
+        />
       </div>
 
       {!data.dentistStaffSeparable && (
@@ -175,7 +218,38 @@ function PLBody({ data }: { data: NonNullable<ReturnType<typeof usePLMargin>['da
 
       {/* Group statement */}
       <Panel>
-        <PanelHead title="Profit & Loss — group statement" sub="Revenue down to net operating profit for the current scope and period." right={<Pill tone="info">{basisPill}</Pill>} />
+        <PanelHead
+          title="Profit & Loss — group statement"
+          sub="Revenue down to net operating profit for the current scope and period."
+          right={
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setLinesInfo((o) => !o)}
+                aria-label={linesInfo ? 'Hide what each line means' : 'What does each line mean?'}
+                aria-expanded={linesInfo}
+                className="shrink-0 w-5 h-5 rounded-full border border-border text-[11px] font-semibold text-ink-muted leading-none flex items-center justify-center hover:bg-surface-muted"
+              >
+                {linesInfo ? '×' : '?'}
+              </button>
+              <Pill tone="info">{basisPill}</Pill>
+            </div>
+          }
+        />
+        {linesInfo && (
+          <div className="card-padded mb-2 text-[12px] text-ink-muted leading-relaxed">
+            <div className="font-semibold text-ink mb-1">What each line means — all pulled from {isQbo ? 'QuickBooks' : 'your accounting records'}</div>
+            <ul className="list-disc pl-4 flex flex-col gap-1">
+              <li><b>Revenue</b> — total money billed for dental work, before any costs.</li>
+              <li><b>Lab &amp; materials</b> — what you paid labs and for the materials used on patients.</li>
+              <li><b>Gross profit</b> — revenue minus lab &amp; materials: what&apos;s left to run the practice.</li>
+              <li><b>Staff &amp; clinician pay</b> — all wages, salaries and self-employed associate/clinician pay.</li>
+              <li><b>Other operating costs</b> — every other running cost: rent, rates, marketing, insurance, software, and so on.</li>
+              <li><b>Net operating profit</b> — what&apos;s left after all of the above: the profit the business actually makes.</li>
+              <li><b>Net margin</b> — that profit as a share of revenue (profit ÷ revenue).</li>
+            </ul>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full border-collapse" style={{ minWidth: 420 }}>
             <tbody>
