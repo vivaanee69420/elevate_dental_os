@@ -36,7 +36,7 @@ describe('DentallyProvider.authorize', () => {
     vi.spyOn(integrationRepository, 'upsert').mockResolvedValue({});
     const res = await DentallyProvider.authorize('org1', {});
     const url = new URL(res.redirectUrl);
-    expect(url.origin + url.pathname).toBe('https://login.dentally.co/oauth/authorize');
+    expect(url.origin + url.pathname).toBe('https://api.dentally.co/oauth/authorize');
     expect(url.searchParams.get('client_id')).toBe('cid');
     expect(url.searchParams.get('redirect_uri')).toBe('https://app.example.com/oauth/dentally/callback');
     expect(url.searchParams.get('response_type')).toBe('code');
