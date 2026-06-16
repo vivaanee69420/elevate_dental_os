@@ -83,14 +83,26 @@ export const analyticsService = {
             this.getChairConfig(orgId),
         ]);
         const revByPractice = new Map(revRows.map((r) => [r.practice_id, Number(r.pence) || 0]));
-        // Per-practice manual occupancy = Σ booked / Σ available.
-        const grid = new Map(); // practiceId -> { booked, available }
+        // Per-practice manual occupancy = Σ booked / Σ available. The chair count
+        // is the DISTINCT chair_name in the grid (the owner-maintained source of
+        // truth) — not the stale practices.chairs field, so adding a surgery row
+        // scales capacity immediately.
+        const grid = new Map(); // practiceId -> { booked, available, revenue, chairs:Set }
         for (const g of gridRows) {
-            const a = grid.get(g.practice_id) || { booked: 0, available: 0 };
+            const a = grid.get(g.practice_id) || { booked: 0, available: 0, revenue: 0, chairs: new Set() };
             a.booked += g.booked_minutes || 0;
             a.available += g.available_minutes || 0;
+            a.revenue += g.revenue_pence || 0;
+            if (g.chair_name) a.chairs.add(g.chair_name);
             grid.set(g.practice_id, a);
         }
+        // Yield per booked chair-hour from the owner-entered grid revenue
+        // (Σ revenue / Σ booked hrs — period-independent £/hr). The manual source
+        // of truth, replacing the settled-receipts-derived yield on this screen.
+        const yieldPerHrPence = (gm) => {
+            const bookedHrs = gm.booked / 60;
+            return bookedHrs > 0 ? Math.round(gm.revenue / bookedHrs) : 0;
+        };
 
         const rows = practices.map((p) => {
             const annualRevenuePence = revByPractice.get(p.id) || 0;
@@ -105,17 +117,31 @@ export const analyticsService = {
                 return { id: p.id, name: p.name, utilAssumed: false, occupancySource: 'none', annualRevenuePence, ...stats };
             }
             const utilPct = Math.min(100, Math.round((gm.booked / gm.available) * 1000) / 10);
-            const stats = (0, formulas_1.calculateChairStats)({ chairs: p.chairs || 0, utilPct, annualRevenuePence, config });
+            // Distinct chairs in the grid is the live chair count; fall back to the
+            // practices.chairs field only if no chair_name was recorded.
+            const chairs = gm.chairs.size || p.chairs || 0;
+            const stats = (0, formulas_1.calculateChairStats)({
+                chairs, utilPct, annualRevenuePence,
+                revPerBookedHrPence: yieldPerHrPence(gm), config,
+            });
             return { id: p.id, name: p.name, utilAssumed: false, occupancySource: 'manual', annualRevenuePence, ...stats };
         });
 
-        // Group rollup — sum hours/£, blended occupancy + yield/hr.
+        // Group rollup — sum hours/£, blended occupancy + yield/hr. Blended yield
+        // comes from the grid revenue across in-scope practices (Σ revenue / Σ
+        // booked hrs), matching the per-practice manual yield.
         const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
         const capHrsYr = sum((r) => r.capHrsYr);
         const bookedHrsYr = sum((r) => r.bookedHrsYr);
         const annualRevenuePence = sum((r) => r.annualRevenuePence);
         const groupOccupancyPct = capHrsYr > 0 ? Math.round((bookedHrsYr / capHrsYr) * 1000) / 10 : 0;
-        const blendedRevPerBookedHrPence = bookedHrsYr > 0 ? Math.round(annualRevenuePence / bookedHrsYr) : 0;
+        let groupGridRevenue = 0, groupGridBookedMin = 0;
+        for (const p of practices) {
+            const gm = grid.get(p.id);
+            if (gm && gm.available > 0) { groupGridRevenue += gm.revenue; groupGridBookedMin += gm.booked; }
+        }
+        const blendedRevPerBookedHrPence = groupGridBookedMin > 0
+            ? Math.round(groupGridRevenue / (groupGridBookedMin / 60)) : 0;
         const group = {
             chairs: sum((r) => r.chairs),
             capHrsYr,

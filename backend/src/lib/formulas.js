@@ -425,7 +425,12 @@ export function calculateChairStats(input) {
     const capHrsYr = chairs * config.openHrs * workDaysYr(config);
     const bookedHrsYr = capHrsYr * utilPct / 100;
     const emptyHrsYr = capHrsYr - bookedHrsYr;
-    const revPerBookedHrPence = bookedHrsYr > 0 ? pence(annualRevenuePence / bookedHrsYr) : 0;
+    // Yield per booked chair-hour. Prefer the owner-entered grid revenue
+    // (revPerBookedHrPence override) — the manual source of truth — falling back
+    // to deriving it from annual settled revenue / booked hours when not supplied.
+    const revPerBookedHrPence = input.revPerBookedHrPence != null
+        ? Math.max(0, Math.round(input.revPerBookedHrPence))
+        : (bookedHrsYr > 0 ? pence(annualRevenuePence / bookedHrsYr) : 0);
     const revPotentialYrPence = pence(capHrsYr * config.benchRevHrPence);
     const lostPotentialYrPence = pence(emptyHrsYr * config.benchRevHrPence);
     // Hours to climb from current occupancy to benchmark (never negative).

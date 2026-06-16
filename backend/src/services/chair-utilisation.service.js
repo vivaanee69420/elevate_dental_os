@@ -16,6 +16,7 @@ async function captureGrid(orgId, practiceId) {
     const cells = rows.map((r) => ({
         chair_name: r.chair_name, weekday: r.weekday, slot: r.slot,
         booked_minutes: r.booked_minutes, available_minutes: r.available_minutes,
+        revenue_pence: r.revenue_pence ?? 0,
     }));
     await chairUtilisationRepository.upsertSnapshot(orgId, practiceId, todayStr(), cells);
 }
