@@ -12,7 +12,7 @@ import { applyWebhookEvent } from "../lib/integrations/dentally-sync.js";
 import { applyWebhookEvent as applyGhlWebhookEvent, mapWebhookEventType as mapGhlEventType } from "../lib/integrations/gohighlevel-sync.js";
 import { treatmentAcceptedRepository } from "../repositories/treatment-accepted.repository.js";
 import { emergentPracticeMapRepository } from "../repositories/emergent-practice-map.repository.js";
-import { mapRecord as mapEmergentRecord, externalId as emergentExternalId } from "../lib/integrations/emergent-sync.js";
+import { mapRecord as mapEmergentRecord, externalId as emergentExternalId, loadResolution as loadEmergentResolution } from "../lib/integrations/emergent-sync.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
 // Resource keys, most specific first: 'invoice_item' contains 'invoice', and a
@@ -233,8 +233,11 @@ export const webhookService = {
             return { received: true, action, deleted };
         }
         if (action === 'accepted' || action === 'updated') {
-            const explicit = await emergentPracticeMapRepository.resolutionMap(orgId);
-            await treatmentAcceptedRepository.upsert(mapEmergentRecord(data, orgId, { explicit, fuzzy: null }));
+            // Same resolution as the nightly sync (explicit map first, fuzzy
+            // business-name match as fallback) so a webhook for a not-yet-mapped
+            // business still gets best-effort practice attribution.
+            const maps = await loadEmergentResolution(orgId);
+            await treatmentAcceptedRepository.upsert(mapEmergentRecord(data, orgId, maps));
             await integrationRepository.setSyncTime(orgId, 'emergent');
             return { received: true, action, processed: true };
         }

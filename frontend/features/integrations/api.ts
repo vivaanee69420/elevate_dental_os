@@ -338,3 +338,21 @@ export function syncQboAccount(id: string, full = false) {
 export function removeQboAccount(id: string) {
   return api<{ ok: boolean }>(`/api/integrations/quickbooks/accounts/${id}`, { method: 'DELETE' });
 }
+
+// --- Emergent Practice Mapping ----------------------------------------------
+export interface EmergentPracticeMapRow {
+  business_id: string;
+  business_name: string | null;
+  practice_id: string | null;
+}
+
+export function getEmergentPractices() {
+  return api<{ connected: boolean; businesses: EmergentPracticeMapRow[]; practices: PracticeRow[] }>('/api/integrations/emergent/practices');
+}
+
+export function setEmergentPractice(businessId: string, practiceId: string | null) {
+  return api<{ connected: boolean; businesses: EmergentPracticeMapRow[]; practices: PracticeRow[]; restamped: number }>('/api/integrations/emergent/practices', {
+    method: 'POST',
+    body: JSON.stringify({ business_id: businessId, practice_id: practiceId }),
+  });
+}

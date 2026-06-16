@@ -8,6 +8,10 @@ export const integrationConnectSchema = zod_1.z.object({
     apiKey: zod_1.z.string().optional(),
     baseUrl: zod_1.z.string().url().optional(),
 });
+export const emergentPracticeMapSchema = zod_1.z.object({
+    business_id: zod_1.z.string().min(1),
+    practice_id: zod_1.z.string().uuid().nullable(),
+});
 export const integrationCallbackSchema = zod_1.z.object({
     code: zod_1.z.string().optional(),
     state: zod_1.z.string().optional(),

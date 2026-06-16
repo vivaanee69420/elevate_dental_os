@@ -10,6 +10,10 @@ const discover = vi.fn(async () => {});
 const resolutionMap = vi.fn(async () => new Map());
 const getByProvider = vi.fn();
 const setSyncTime = vi.fn(async () => {});
+// loadResolution touches serviceClient (practices query) inside emergent-sync,
+// so mock it here to keep the test hermetic while keeping the REAL mapRecord /
+// externalId. Returns empty maps (no practice match) by default.
+const loadResolution = vi.fn(async () => ({ explicit: new Map(), fuzzy: new Map() }));
 
 vi.mock('../src/repositories/treatment-accepted.repository.js', () => ({
   treatmentAcceptedRepository: { upsert, deleteByExternalId },
@@ -20,6 +24,10 @@ vi.mock('../src/repositories/emergent-practice-map.repository.js', () => ({
 vi.mock('../src/repositories/integration.repository.js', () => ({
   integrationRepository: { getByProvider, setSyncTime },
 }));
+vi.mock('../src/lib/integrations/emergent-sync.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, loadResolution };
+});
 
 const SECRET = 'whsec_test_123';
 const ORG = '00000000-0000-0000-0000-000000000001';
@@ -94,4 +102,18 @@ it('discovers the business and stamps last_sync_at on a valid event', async () =
   await webhookService.emergent(token, raw, sign(raw), 'treatment.accepted');
   expect(discover).toHaveBeenCalledWith(ORG, [{ business_id: 'biz-1', business_name: 'Ashford' }]);
   expect(setSyncTime).toHaveBeenCalledWith(ORG, 'emergent');
+});
+
+it('uses ONLY the org from the signed token (body cannot cross tenants)', async () => {
+  // Token is for ORG. Even though the body smuggles a different organisation_id,
+  // every downstream write must be scoped to ORG (the token-resolved tenant).
+  const raw = Buffer.from(JSON.stringify({
+    event: 'treatment.accepted',
+    data: { ...DATA, organisation_id: 'attacker-org', business_id: 'biz-1' },
+  }));
+  await webhookService.emergent(token, raw, sign(raw), 'treatment.accepted');
+  expect(loadResolution).toHaveBeenCalledWith(ORG);
+  expect(discover).toHaveBeenCalledWith(ORG, [{ business_id: 'biz-1', business_name: 'Ashford' }]);
+  expect(setSyncTime).toHaveBeenCalledWith(ORG, 'emergent');
+  expect(upsert.mock.calls[0][0].organisation_id).toBe(ORG);
 });
