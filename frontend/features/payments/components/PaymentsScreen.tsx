@@ -111,7 +111,7 @@ export default function PaymentsScreen() {
         </button>
       </div>
 
-      <PracticeTabs value={practiceId} onChange={(id) => { setPracticeId(id); setPage(1); }} />
+      <PracticeTabs dentallyOnly value={practiceId} onChange={(id) => { setPracticeId(id); setPage(1); }} />
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
         <select

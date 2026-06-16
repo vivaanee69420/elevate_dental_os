@@ -24,7 +24,7 @@ export default function DayScreen() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="Day — Cash Collected" subtitle="Cash banked by working day across the month in scope, with a composite collection index. This is cash receipts, not billed production." />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       <AlertRow tone="info" title="Cash collected, not production" body="Day figures track money banked by date, not treatment value billed. Production stays month-only — use P&L & Margin or Treatment Mix for billed work." />
 

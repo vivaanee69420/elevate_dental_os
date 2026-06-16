@@ -19,10 +19,10 @@ import { useLeads } from '@/features/leads/hooks';
 import { useMarketingRoi } from '@/features/growth/hooks';
 import { formatPence as fmtPence } from '@/lib/format';
 import { usePractices } from '@/features/practices/hooks';
+import { useBusinessHub } from '@/features/overview/business-hub-api';
 import {
   useDashboardSummary,
   useRevenueSeries,
-  usePracticeSummary,
 } from '../hooks';
 import {
   STAGES,
@@ -129,15 +129,27 @@ export default function DashboardScreen() {
   // Practice selector drives the WHOLE dashboard. Resolve the chosen name → id
   // (null = All) and feed it to the period-scoped summary + chart.
   const { data: practicesData } = usePractices();
-  const allPractices: { id: string; name: string }[] = practicesData?.practices ?? [];
+  // Dentally-mapped sites only — GoHighLevel auto-creates pms_site_id-null
+  // pseudo-practices for CRM scoping; they must not appear in the dashboard
+  // practice selector (kept on Business Hub + Elevate CRM only).
+  const allPractices: { id: string; name: string }[] = (practicesData?.practices ?? []).filter(
+    (p) => p.pms_site_id != null,
+  );
   const selectedId = selected === 'All practices'
     ? null
     : allPractices.find((p) => p.name === selected)?.id ?? null;
 
   const { data: summary, isLoading: sumLoading } = useDashboardSummary(period, selectedId);
   const { data: seriesResp, isLoading: seriesLoading } = useRevenueSeries(period, selectedId);
-  const { data: practiceResp, isLoading: practiceLoading } =
-    usePracticeSummary();
+  // Per-practice scorecard is sourced from the Business Hub rollup (single source
+  // of truth) windowed to the dashboard period — billed turnover per practice,
+  // same logic the Business Hub page renders. UTC day bounds match ScopePeriod.
+  const hubWin = useMemo(() => ({
+    since: new Date(`${period.from}T00:00:00Z`).toISOString(),
+    until: new Date(new Date(`${period.to}T00:00:00Z`).getTime() + 86_400_000).toISOString(),
+    label: periodLabel,
+  }), [period, periodLabel]);
+  const { data: hub, isLoading: hubLoading } = useBusinessHub(hubWin);
   const { data: leadsResp, isLoading: leadsLoading } = useLeads();
   const { data: roi } = useMarketingRoi();
 
@@ -209,23 +221,17 @@ export default function DashboardScreen() {
         icon: '📈',
         label: 'Turnover',
         value: ccPounds(rev),
-        sub: `${periodLabel} · ${
-          summary?.turnoverBasis === 'billed'
-            ? 'invoiced production'
-            : summary?.turnoverBasis === 'actuals'
-              ? 'Xero actuals'
-              : 'real settled payments'
-        }`,
+        sub: `${periodLabel} · invoiced production`,
         colour: POS,
-        link: '/cashflow',
+        link: '/profit',
       },
       {
-        icon: '💵',
-        label: 'Cash collected',
+        icon: '💷',
+        label: 'Takings',
         value: ccPounds(cash),
-        sub: rev > 0 ? `${((cash / rev) * 100).toFixed(0)}% of turnover` : '—',
+        sub: `${periodLabel} · settled payments received`,
         colour: POS,
-        link: '/payments',
+        link: '/cashflow',
       },
       {
         icon: '📊',
@@ -271,12 +277,19 @@ export default function DashboardScreen() {
       },
     ];
 
-    const scorecard = (practiceResp?.practices ?? []).map((p) => ({
-      name: p.name,
-      turnover: p.turnover,
-      margin: p.margin,
-      hit: p.margin / 100 >= TM,
-    }));
+    // Per-practice scorecard from the Business Hub rollup (source of truth):
+    // billed turnover per practice (revenuePence), windowed to the dashboard
+    // period. Dentally-mapped sites only — drop GoHighLevel pseudo-practices.
+    // Margin is group-derived (no per-practice P&L feed), as on Business Hub.
+    const dentallyIds = new Set(allPractices.map((p) => p.id));
+    const scorecard = (hub?.practices ?? [])
+      .filter((p) => dentallyIds.has(p.practiceId))
+      .map((p) => ({
+        name: p.name,
+        turnover: Math.round(p.revenuePence / 100),
+        margin,
+        hit: margin / 100 >= TM,
+      }));
 
     // Lead funnel — real leads, last 30 days, optional practice filter.
     const cutoff30 = new Date(Date.now() - 30 * 86400000);
@@ -327,7 +340,8 @@ export default function DashboardScreen() {
   }, [
     summary,
     seriesResp,
-    practiceResp,
+    hub,
+    practicesData,
     leads,
     health,
     selected,
@@ -388,13 +402,13 @@ export default function DashboardScreen() {
               className="text-ink-muted font-bold uppercase"
               style={{ fontSize: 10, letterSpacing: '0.05em' }}
             >
-              {periodLabel} turnover (real)
+              {periodLabel} takings (real)
             </div>
             <div
               className="display font-bold text-brand"
               style={{ fontSize: 28, lineHeight: 1 }}
             >
-              {sumLoading ? '…' : noBaseline ? '—' : ccPounds(v.rev)}
+              {sumLoading ? '…' : noBaseline ? '—' : ccPounds(v.cash)}
             </div>
           </div>
         </div>
@@ -846,11 +860,11 @@ export default function DashboardScreen() {
             Per-practice scorecard
           </h2>
           <span className="text-ink-muted" style={{ fontSize: 11 }}>
-            Real settled-payment turnover · margin = group baseline · target{' '}
+            Billed turnover ({periodLabel}) · margin = group baseline · target{' '}
             {targetMargin}%
           </span>
         </div>
-        {practiceLoading ? (
+        {hubLoading ? (
           <div className="space-y-3">
             {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-5 w-full" />
@@ -858,7 +872,7 @@ export default function DashboardScreen() {
           </div>
         ) : v.scorecard.length === 0 ? (
           <div className="text-ink-muted" style={{ fontSize: 12 }}>
-            No practices with settled payments yet.
+            No billed turnover for any practice in this period yet.
           </div>
         ) : (
           <div

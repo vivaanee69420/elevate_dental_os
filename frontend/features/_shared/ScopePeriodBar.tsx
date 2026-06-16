@@ -45,13 +45,22 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
-export function ScopePeriodBar({ hideScope = false }: { hideScope?: boolean } = {}) {
+export function ScopePeriodBar({
+  hideScope = false,
+  dentallyOnly = false,
+}: { hideScope?: boolean; dentallyOnly?: boolean } = {}) {
   const {
     scope, mode, monthKey, customSince, customUntil,
-    setScope, setMode, setMonthKey, setYearKey, setCustom,
+    setScope, setMonthKey, setYearKey, setCustom,
   } = useScopePeriod();
   const { data } = usePractices();
-  const practices = data?.practices;
+  // By default the scope row lists every practice (Business Hub + Elevate CRM
+  // want the GoHighLevel subaccounts visible). GoHighLevel auto-creates
+  // pms_site_id-null pseudo-practices for CRM scoping; analytics views pass
+  // `dentallyOnly` to drop those and show only real Dentally-mapped sites.
+  const practices = dentallyOnly
+    ? data?.practices?.filter((p) => p.pms_site_id != null)
+    : data?.practices;
 
   const months = useMemo(() => recentMonths(12), []);
   const curMonth = currentMonthKey();
@@ -76,9 +85,6 @@ export function ScopePeriodBar({ hideScope = false }: { hideScope?: boolean } = 
 
       {/* Period pills. */}
       <div className="flex gap-2 flex-wrap items-center">
-        <Pill active={mode === 'recent'} onClick={() => setMode('recent')}>
-          Recent
-        </Pill>
         <Pill active={mode === 'month' && monthKey === curMonth} onClick={() => setMonthKey(curMonth)}>
           This month
         </Pill>

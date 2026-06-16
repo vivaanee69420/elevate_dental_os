@@ -20,7 +20,10 @@ export function GroupOverviewScreen() {
         title="Group Overview"
         subtitle="Group finances at a glance — takings, margin, demand and conversion across the practices."
       />
-      <ScopePeriodBar />
+      {/* Global data filter — period only; it applies to every card on the page.
+          Per-source filters (practices, ad accounts, QB companies, GHL
+          subaccounts) sit directly above their own sections below. */}
+      <ScopePeriodBar hideScope />
 
       {isError && <AlertRow tone="bad" title="Couldn't load the overview" />}
 

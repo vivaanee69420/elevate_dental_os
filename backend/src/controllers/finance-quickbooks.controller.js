@@ -4,12 +4,13 @@ import { financeQuickbooksService } from "../services/finance-quickbooks.service
 
 export const financeQuickbooksController = {
     async overview(req, res) {
-        const { accountId, period, from, to } = req.query;
+        const { accountId, period, from, to, method } = req.query;
         const payload = await financeQuickbooksService.getOverview(req.user.organisation_id, {
             accountId: accountId || null,
             period: period || null,
             from: from || null,
             to: to || null,
+            accountingMethod: method === 'cash' ? 'cash' : 'accrual',
         });
         res.json(payload);
     },

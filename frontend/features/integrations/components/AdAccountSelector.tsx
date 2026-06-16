@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react';
 import { Chip } from '@/components/ui';
 import { useAdAccounts, useSetAdAccountSelection, useSyncIntegration } from '@/features/integrations/hooks';
+import CollapsibleCard from './CollapsibleCard';
 
 export default function AdAccountSelector({ provider, label }: { provider: string; label: string }) {
   const { data: accounts, isLoading } = useAdAccounts(provider);
@@ -43,13 +44,15 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
   }
 
   return (
-    <div className="card-padded" style={{ marginBottom: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <h3 className="display" style={{ fontSize: 15, fontWeight: 600 }}>{label} accounts</h3>
+    <CollapsibleCard
+      title={`${label} accounts`}
+      style={{ marginBottom: 16 }}
+      actions={(
         <span className="text-ink-muted" style={{ fontSize: 11 }}>
           {selectedCount} of {accounts.length} included
         </span>
-      </div>
+      )}
+    >
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 10 }}>
         Choose which ad accounts feed the marketing dashboards. Unticking an account hides it from
         the views — its synced history is kept and returns when re-ticked.
@@ -118,7 +121,7 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
             : 'Re-pulls 12 months of spend, impressions and clicks. Use if historical months look low (the daily Refresh only fetches the last ~31 days).'}
         </p>
       </div>
-    </div>
+    </CollapsibleCard>
   );
 }
 

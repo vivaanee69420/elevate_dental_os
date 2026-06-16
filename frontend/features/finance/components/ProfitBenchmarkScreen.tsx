@@ -74,7 +74,7 @@ export default function ProfitBenchmarkScreen() {
           onAccountChange={setQboAccountId}
         />
         {/* QuickBooks is scoped by company, not practice — hide the practice tabs. */}
-        {source !== 'quickbooks' && <PracticeTabs value={practiceId} onChange={setPracticeId} />}
+        {source !== 'quickbooks' && <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />}
       </div>
 
       {isLoading && (

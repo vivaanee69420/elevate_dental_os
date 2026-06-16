@@ -16,22 +16,43 @@ export const quickbooksFinanceRepository = {
     _client() { return supabase_1.serviceClient; },
 
     // monthly_financials rows for the period window (inclusive YYYY-MM bounds).
-    async pnlRows(orgId, { accountId, fromPeriod, toPeriod }) {
+    // QuickBooks P&L is synced under BOTH accounting_method='accrual' and 'cash'
+    // (see quickbooks-sync.js) — callers MUST pin one method or revenue/expenses
+    // double-count. Defaults to accrual (standard P&L basis); legacy null-method
+    // rows are folded into accrual so pre-column data is not silently dropped.
+    async pnlRows(orgId, { accountId, fromPeriod, toPeriod, accountingMethod = 'accrual' }) {
         let q = this._client()
             .from('monthly_financials')
             .select('period, dental_bucket, amount_pence, integration_account_id');
         q = scope(q, orgId, accountId);
+        if (accountingMethod === 'accrual') q = q.or('accounting_method.eq.accrual,accounting_method.is.null');
+        else q = q.eq('accounting_method', accountingMethod);
         if (fromPeriod) q = q.gte('period', fromPeriod);
         if (toPeriod) q = q.lte('period', toPeriod);
         const { data } = await q;
         return data ?? [];
     },
 
-    // Current cash/bank balances (point-in-time snapshot, not windowed).
+    // Current cash/bank balances (point-in-time snapshot — the latest live sync).
     async bankRows(orgId, { accountId }) {
         let q = this._client()
             .from('bank_accounts')
             .select('balance_pence, integration_account_id');
+        q = scope(q, orgId, accountId);
+        const { data } = await q;
+        return data ?? [];
+    },
+
+    // Month-end cash balances for a single period ('YYYY-MM'). Powers the
+    // period-aware "Cash at Bank" tile (cash as-of the end of the selected
+    // window). Empty when the period predates the snapshot history → caller
+    // falls back to the live bankRows snapshot.
+    async bankSnapshotRows(orgId, { accountId, period }) {
+        if (!period) return [];
+        let q = this._client()
+            .from('bank_balance_snapshots')
+            .select('balance_pence, integration_account_id')
+            .eq('period', period);
         q = scope(q, orgId, accountId);
         const { data } = await q;
         return data ?? [];

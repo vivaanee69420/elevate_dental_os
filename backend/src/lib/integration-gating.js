@@ -80,6 +80,23 @@ export async function revokedSources(orgId, sources) {
     return sources.filter((s) => byProvider.get(s) === 'revoked');
 }
 
+// Group cash roll-up: payment sources to exclude so the SAME patient cash is not
+// counted twice. QuickBooks receipts (the accounting entity's view) duplicate the
+// clinical PMS cash, so when Dentally is ACTIVE, QuickBooks is excluded from the
+// GROUP receipts roll-up — Dentally is the primary cash feed. QB receipts still
+// surface on the source-isolated QuickBooks panel (which reads source='quickbooks'
+// directly, not via these helpers). A QB-only org (no active Dentally) keeps its
+// QuickBooks receipts in the group total. Revoked sources are always excluded.
+export async function groupReceiptExcludedSources(orgId) {
+    const byProvider = await load(orgId);
+    const out = new Set();
+    for (const s of ['dentally', 'quickbooks']) {
+        if (byProvider.get(s) === 'revoked') out.add(s);
+    }
+    if (byProvider.get('dentally') === 'active') out.add('quickbooks');
+    return [...out];
+}
+
 // --- Domain convenience wrappers -------------------------------------------
 // Practice-management data lives in untagged tables (appointments,
 // treatment_plans, invoice_items). dentally + soe are the PMS providers.

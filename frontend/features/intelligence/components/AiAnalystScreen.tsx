@@ -37,7 +37,7 @@ export default function AiAnalystScreen() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="AI Analyst" subtitle="Live analysis of the group's numbers — ranked, quantified recommendations that refresh as you change scope and period." />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       <Panel className="border border-brand/30 bg-brand/[0.04]">
         <PanelHead title="AI Analyst" sub="Reading your live numbers for the current scope and period and ranking what to do next by £ impact. Change scope or period and the analysis re-runs." />

@@ -165,7 +165,7 @@ export default function PatientsScreen() {
         </p>
       </div>
 
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       {isLoading && <SkeletonKpiRow count={4} className="mb-4" />}
       {error && (

@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 // summed; period (YYYY-MM) or from/to (YYYY-MM-DD) window the figures.
 
 export interface QbBuckets {
-  revenue: number; staff: number; lab: number; materials: number;
+  revenue: number; associates: number; staff: number; lab: number; materials: number;
   overhead: number; tax: number; other: number;
 }
 
@@ -42,6 +42,7 @@ export interface QbOverview {
     netProfitPence: number;
     netMarginPct: number;
     cashAtBankPence: number;
+    cashAsOf: string; // 'YYYY-MM' (month-end snapshot) or 'latest' (live fallback)
     receivablesPence: number;
     receiptsPence: number;
   };

@@ -9,6 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useGhlAccounts, useAddGhlAccount } from '../hooks';
 import { syncGhlAccount } from '../api';
 import GhlAccountRow from './GhlAccountRow';
+import CollapsibleCard from './CollapsibleCard';
 
 export default function GoHighLevelPanel() {
   const qc = useQueryClient();
@@ -43,13 +44,14 @@ export default function GoHighLevelPanel() {
   }
 
   return (
-    <div className="card-padded" style={{ marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>GoHighLevel subaccounts</h2>
+    <CollapsibleCard
+      title="GoHighLevel subaccounts"
+      actions={(
         <button onClick={() => setShowAdd((v) => !v)} style={{ padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'white', cursor: 'pointer' }}>
           {showAdd ? 'Cancel' : 'Add subaccount'}
         </button>
-      </div>
+      )}
+    >
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
         Connect each GoHighLevel location with its own Private Integration Token.
         Contacts and opportunities sync in automatically.
@@ -97,7 +99,7 @@ export default function GoHighLevelPanel() {
           </tbody>
         </table>
       )}
-    </div>
+    </CollapsibleCard>
   );
 }
 

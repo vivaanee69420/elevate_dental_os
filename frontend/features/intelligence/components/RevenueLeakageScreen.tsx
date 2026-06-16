@@ -43,7 +43,7 @@ export default function RevenueLeakageScreen() {
         title="Revenue Leakage"
         subtitle="The money left on the table this period — what it is, who owns the fix, and the recoverable value. Tune the recoverable rates to your reality."
       />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       {isError ? (
         <Panel><EmptyState message={`Couldn't load leakage: ${(error as Error)?.message ?? 'unknown error'}`} /></Panel>

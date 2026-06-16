@@ -4,8 +4,8 @@ import { formatPence, formatNumber } from '@/lib/format';
 import { useGhlDashboard } from '../hooks';
 import { SyncHealthTable } from './SyncHealthTable';
 
-export function GhlSummaryCards({ since, until }: { since?: string; until?: string }) {
-  const { data } = useGhlDashboard({ since, until });
+export function GhlSummaryCards({ since, until, accountId = null }: { since?: string; until?: string; accountId?: string | null }) {
+  const { data } = useGhlDashboard({ since, until, accountId });
   const [open, setOpen] = useState(false);
 
   if (!data || data.totals.sync.accounts === 0) return null;

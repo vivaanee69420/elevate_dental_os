@@ -1,8 +1,9 @@
 'use client';
 // Group Overview — QuickBooks roll-up. Summed cards across every connected
 // QuickBooks company plus a per-company breakdown. Self-contained: reads the
-// finance QB overview (accountId omitted = all companies summed + per-company
-// rows). Hides itself when no company is connected.
+// finance QB overview. Re-scoped by the QuickBooks company filter (accountId =
+// one company, omitted = all summed) and the global data filter (from/to window)
+// above its section. Hides itself when no company is connected.
 
 import { useQuery } from '@tanstack/react-query';
 import { Card } from '@/components/ui';
@@ -10,14 +11,25 @@ import { getQuickBooksOverview } from '@/features/finance/quickbooks-api';
 
 const gbp = (pence: number) => '£' + Math.round((pence || 0) / 100).toLocaleString('en-GB');
 
-export function QuickBooksGroupSection() {
+export function QuickBooksGroupSection({
+  accountId = null,
+  from,
+  to,
+  windowLabel,
+}: {
+  accountId?: string | null;
+  from?: string;
+  to?: string;
+  windowLabel?: string;
+} = {}) {
   const { data, isLoading } = useQuery({
-    queryKey: ['qbo-finance', 'group'],
-    queryFn: () => getQuickBooksOverview({}),
+    queryKey: ['qbo-finance', 'group', accountId ?? 'all', from ?? '', to ?? ''],
+    queryFn: () => getQuickBooksOverview({ accountId: accountId ?? undefined, from, to }),
   });
 
   if (isLoading || !data || data.accounts.length === 0) return null;
   const s = data.summary;
+  const span = windowLabel ?? 'selected period';
 
   return (
     <Card>
@@ -25,7 +37,7 @@ export function QuickBooksGroupSection() {
         <div>
           <h3 className="display text-lg font-semibold">QuickBooks (group)</h3>
           <p className="text-sm text-ink-muted mt-0.5">
-            Trailing 12 months across {data.accounts.length} connected{' '}
+            {span} across {data.accounts.length} connected{' '}
             {data.accounts.length === 1 ? 'company' : 'companies'}.
           </p>
         </div>

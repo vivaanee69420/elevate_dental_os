@@ -100,7 +100,7 @@ export default function BoardReportScreen() {
         title="Board Report Generator"
         subtitle="An AI-written board pack from your live numbers — executive summary, RAG priorities, PDF export and recurring delivery."
       />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       <Panel>
         <PanelHead

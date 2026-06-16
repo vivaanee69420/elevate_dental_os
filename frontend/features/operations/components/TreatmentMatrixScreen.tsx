@@ -38,7 +38,7 @@ export default function TreatmentMatrixScreen() {
       />
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <ScopePeriodBar />
+        <ScopePeriodBar dentallyOnly />
         <div className="flex gap-1.5">
           <button className={tab('volume', 'Volume')} onClick={() => setMode('volume')}>Volume</button>
           <button className={tab('revenue', 'Revenue £')} onClick={() => setMode('revenue')}>Revenue £</button>

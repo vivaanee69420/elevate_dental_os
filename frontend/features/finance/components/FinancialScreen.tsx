@@ -100,7 +100,7 @@ export default function FinancialScreen() {
         <FinanceToolbar />
       </div>
 
-      <PracticeTabs value={practiceId} onChange={setPracticeId} />
+      <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />
       <DateRangeFilter value={range} onChange={setRange} />
 
       {isError && (

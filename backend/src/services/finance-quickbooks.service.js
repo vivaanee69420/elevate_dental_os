@@ -9,7 +9,7 @@
 // ============================================================================
 import { quickbooksFinanceRepository } from "../repositories/quickbooks-finance.repository.js";
 
-const EXPENSE_BUCKETS = ['staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
+const EXPENSE_BUCKETS = ['associates', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
 const ALL_BUCKETS = ['revenue', ...EXPENSE_BUCKETS];
 
 // Enumerate inclusive YYYY-MM periods between two YYYY-MM bounds (cap 24).
@@ -72,23 +72,31 @@ function summarise(pnlRows) {
 }
 
 export const financeQuickbooksService = {
-    async getOverview(orgId, { accountId = null, period = null, from = null, to = null } = {}) {
+    async getOverview(orgId, { accountId = null, period = null, from = null, to = null, accountingMethod = 'accrual' } = {}) {
+        const method = accountingMethod === 'cash' ? 'cash' : 'accrual';
         const { fromPeriod, toPeriod } = resolveWindow({ period, from, to });
         const sinceIso = new Date(`${fromPeriod}-01T00:00:00Z`).toISOString();
         // end of the toPeriod month
         const [ey, em] = toPeriod.split('-').map(Number);
         const untilIso = new Date(Date.UTC(ey, em, 0, 23, 59, 59)).toISOString();
 
-        const [pnlRows, bankRows, receivableRows, receiptRows, accountRows] = await Promise.all([
-            quickbooksFinanceRepository.pnlRows(orgId, { accountId, fromPeriod, toPeriod }),
+        const [pnlRows, bankRows, bankSnapRows, receivableRows, receiptRows, accountRows] = await Promise.all([
+            quickbooksFinanceRepository.pnlRows(orgId, { accountId, fromPeriod, toPeriod, accountingMethod: method }),
             quickbooksFinanceRepository.bankRows(orgId, { accountId }),
+            quickbooksFinanceRepository.bankSnapshotRows(orgId, { accountId, period: toPeriod }),
             quickbooksFinanceRepository.receivableRows(orgId, { accountId }),
             quickbooksFinanceRepository.receiptRows(orgId, { accountId, sinceIso, untilIso }),
             quickbooksFinanceRepository.accounts(orgId),
         ]);
 
         const base = summarise(pnlRows);
-        const cashAtBankPence = sumPence(bankRows, 'balance_pence');
+        // Cash AS OF the end of the selected window (month-end snapshot). Falls
+        // back to the live bank_accounts snapshot when no history exists yet for
+        // that period (pre-backfill, or before the next sync runs).
+        const useSnapshot = bankSnapRows.length > 0;
+        const cashSource = useSnapshot ? bankSnapRows : bankRows;
+        const cashAtBankPence = sumPence(cashSource, 'balance_pence');
+        const cashAsOf = useSnapshot ? toPeriod : 'latest';
         const receivablesPence = sumPence(receivableRows, 'amount_outstanding_pence');
         const receiptsPence = sumPence(receiptRows, 'amount_pence');
 
@@ -111,7 +119,7 @@ export const financeQuickbooksService = {
                 if (!groups.has(k)) groups.set(k, []);
                 groups.get(k).push(r);
             }
-            const cashByAcc = groupSum(bankRows, 'balance_pence');
+            const cashByAcc = groupSum(cashSource, 'balance_pence');
             const recvByAcc = groupSum(receivableRows, 'amount_outstanding_pence');
             const rcptByAcc = groupSum(receiptRows, 'amount_pence');
             for (const [accId, rows] of groups) {
@@ -132,13 +140,14 @@ export const financeQuickbooksService = {
         }
 
         return {
-            window: { fromPeriod, toPeriod },
+            window: { fromPeriod, toPeriod, accountingMethod: method },
             summary: {
                 revenuePence: base.revenuePence,
                 expensesPence: base.expensesPence,
                 netProfitPence: base.netProfitPence,
                 netMarginPct: base.netMarginPct,
                 cashAtBankPence,
+                cashAsOf,
                 receivablesPence,
                 receiptsPence,
             },

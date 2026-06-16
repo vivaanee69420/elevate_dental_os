@@ -7,11 +7,16 @@ import { usePractices } from './hooks';
 interface Props {
   value: string | null;
   onChange: (practiceId: string | null) => void;
+  // Dentally-mapped sites only (pms_site_id set). GoHighLevel auto-creates
+  // pms_site_id-null pseudo-practices for CRM scoping — pass this on analytics /
+  // finance pages to drop them. Business Hub leaves it off to keep all.
+  dentallyOnly?: boolean;
 }
 
-export default function PracticeTabs({ value, onChange }: Props) {
+export default function PracticeTabs({ value, onChange, dentallyOnly = false }: Props) {
   const { data } = usePractices();
-  const practices: { id: string; name: string }[] = data?.practices ?? [];
+  const all: { id: string; name: string; pms_site_id: string | null }[] = data?.practices ?? [];
+  const practices = dentallyOnly ? all.filter((p) => p.pms_site_id != null) : all;
   if (practices.length <= 1) return null;
 
   const tab = (active: boolean): React.CSSProperties => ({

@@ -44,7 +44,7 @@ export default function PLMarginScreen() {
         title="P&L & Margin"
         subtitle="Group and per-entity profit from your accounting actuals: revenue, lab, staff and the net operating profit that lands."
       />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
 
       {isError ? (
         <Panel><EmptyState message={`Couldn't load P&L: ${(error as Error)?.message ?? 'unknown error'}`} /></Panel>

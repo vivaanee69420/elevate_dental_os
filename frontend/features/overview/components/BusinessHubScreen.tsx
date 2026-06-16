@@ -19,7 +19,7 @@ function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: 
   return (
     <div className="card-padded">
       <div className="text-xs text-ink-muted uppercase">{label}</div>
-      <div className="display text-2xl font-bold mt-1" style={colour ? { color: colour } : undefined}>{value}</div>
+      <div className="text-2xl font-bold mt-1" style={colour ? { color: colour } : undefined}>{value}</div>
       {sub && <div className="text-xs text-ink-muted mt-1">{sub}</div>}
     </div>
   );

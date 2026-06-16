@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listQboAccounts, connectQboAccount, syncQboAccount, removeQboAccount, type QboAccount } from '../api';
+import CollapsibleCard from './CollapsibleCard';
 
 export default function QuickBooksPanel() {
   const qc = useQueryClient();
@@ -46,13 +47,14 @@ export default function QuickBooksPanel() {
   }
 
   return (
-    <div className="card-padded" style={{ marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h2 className="display" style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>QuickBooks companies</h2>
+    <CollapsibleCard
+      title="QuickBooks companies"
+      actions={(
         <button onClick={onConnect} disabled={busy} style={{ padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'white', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
           {busy ? 'Redirecting…' : 'Connect a company'}
         </button>
-      </div>
+      )}
+    >
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
         Connect each QuickBooks company separately. Profit &amp; loss, bank balances,
         outstanding invoices and receipts sync in automatically and roll up across
@@ -105,7 +107,7 @@ export default function QuickBooksPanel() {
           </tbody>
         </table>
       )}
-    </div>
+    </CollapsibleCard>
   );
 }
 

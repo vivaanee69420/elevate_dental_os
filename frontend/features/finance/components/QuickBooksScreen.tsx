@@ -15,9 +15,16 @@ const gbp = (pence: number) => '£' + Math.round((pence || 0) / 100).toLocaleStr
 const pct = (n: number) => `${(n || 0).toFixed(1)}%`;
 
 const BUCKET_LABELS: Record<string, string> = {
-  revenue: 'Revenue', staff: 'Staff', lab: 'Lab', materials: 'Materials',
+  revenue: 'Revenue', associates: 'Associates', staff: 'Staff', lab: 'Lab', materials: 'Materials',
   overhead: 'Overhead', tax: 'Tax', other: 'Other',
 };
+
+// 'YYYY-MM' -> 'Jan 2026' (for the cash as-of label).
+function fmtMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  if (!y || !m) return ym;
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+}
 
 // Last 12 month options for the period dropdown (YYYY-MM).
 function recentPeriods(n = 12): { value: string; label: string }[] {
@@ -105,7 +112,7 @@ export default function QuickBooksScreen() {
             <Stat label="Net Margin" value={pct(s.netMarginPct)} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 20 }}>
-            <Stat label="Cash at Bank" value={gbp(s.cashAtBankPence)} />
+            <Stat label={`Cash at Bank${s.cashAsOf && s.cashAsOf !== 'latest' ? ` (as of ${fmtMonth(s.cashAsOf)})` : ' (latest)'}`} value={gbp(s.cashAtBankPence)} />
             <Stat label="Outstanding Receivables" value={gbp(s.receivablesPence)} />
             <Stat label="Receipts Collected" value={gbp(s.receiptsPence)} />
           </div>

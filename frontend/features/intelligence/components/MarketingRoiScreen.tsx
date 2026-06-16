@@ -36,7 +36,7 @@ export default function MarketingRoiScreen() {
         title="Marketing & ROI"
         subtitle="Facebook vs Google vs organic — spend, leads, cost per patient and conversion, per channel and per practice. Real ad spend + CRM lead attribution."
       />
-      <ScopePeriodBar />
+      <ScopePeriodBar dentallyOnly />
       <AdAccountFilter metaId={metaId} googleId={googleId} onSelectMeta={setMetaId} onSelectGoogle={setGoogleId} />
 
       {isError ? (
