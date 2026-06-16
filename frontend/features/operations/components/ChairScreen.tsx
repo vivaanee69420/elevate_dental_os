@@ -122,10 +122,14 @@ export default function ChairScreen() {
 
       {/* KPIs */}
       <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <Kpi label="Avg utilisation" value={kpis?.avgUtilPct != null ? `${kpis.avgUtilPct}%` : '—'} sub="UK avg: 72%" subColor="var(--success)" />
-        <Kpi label="Peak slot" value={peakLabel} sub={kpis?.peakSlot ? `${kpis.peakSlot.pct}% utilised` : ''} subColor="var(--success)" />
-        <Kpi label="Lowest slot" value={lowestLabel} sub={kpis?.lowestSlot ? `${kpis.lowestSlot.pct}% utilised` : ''} subColor="var(--danger)" />
-        <Kpi label="Idle chair-hours" value={kpis ? formatNumber(kpis.idleChairHours) : '—'} sub="/week" subColor="var(--danger)" />
+        <Kpi label="Avg utilisation" value={kpis?.avgUtilPct != null ? `${kpis.avgUtilPct}%` : '—'} sub="UK avg: 72%" subColor="var(--success)"
+          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p>Mean of <b>booked ÷ available</b> across every filled weekday×slot cell (each capped at 100%). Empty cells are ignored.</p></>} />
+        <Kpi label="Peak slot" value={peakLabel} sub={kpis?.peakSlot ? `${kpis.peakSlot.pct}% utilised` : ''} subColor="var(--success)"
+          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p>The weekday×slot cell with the <b>highest</b> booked ÷ available ratio across all chairs.</p></>} />
+        <Kpi label="Lowest slot" value={lowestLabel} sub={kpis?.lowestSlot ? `${kpis.lowestSlot.pct}% utilised` : ''} subColor="var(--danger)"
+          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p>The filled weekday×slot cell with the <b>lowest</b> booked ÷ available ratio — your biggest gap to fill.</p></>} />
+        <Kpi label="Idle chair-hours" value={kpis ? formatNumber(kpis.idleChairHours) : '—'} sub="/week" subColor="var(--danger)"
+          info={<><div className="font-bold text-ink" style={{ marginBottom: 4 }}>How it&apos;s calculated</div><p><b>Σ (available − booked)</b> minutes across all filled cells, in hours — the unused chair time in a typical week.</p></>} />
       </div>
 
       {/* Heatmap */}
@@ -143,6 +147,9 @@ export default function ChairScreen() {
                 onClick={() => setAsOf('')}>Live</button>
             )}
           </div>
+        </div>
+        <div className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
+          Each cell = <b>booked ÷ available</b> minutes for that weekday × slot, summed across all chairs and capped at 100%. Greener = busier, redder = more idle; <b>—</b> means no data entered for that cell.
         </div>
         {asOf && (
           <div className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
@@ -273,12 +280,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Kpi({ label, value, sub, subColor }: { label: string; value: string; sub: string; subColor: string }) {
+function Kpi({ label, value, sub, subColor, info }: { label: string; value: string; sub: string; subColor: string; info?: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
   return (
     <div className="card-padded">
-      <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>{label}</div>
+      <div className="flex items-start justify-between" style={{ gap: 8 }}>
+        <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 11, letterSpacing: '0.05em' }}>{label}</div>
+        {info && (
+          <button type="button" onClick={() => setOpen((o) => !o)}
+            aria-label={open ? 'Hide how this is calculated' : 'How is this calculated?'} aria-expanded={open}
+            style={{ flexShrink: 0, width: 20, height: 20, borderRadius: 999, border: '1px solid var(--border)', fontSize: 11, fontWeight: 700, color: 'var(--ink-muted)', lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', cursor: 'pointer' }}>
+            {open ? '×' : '?'}
+          </button>
+        )}
+      </div>
       <div className="display font-bold" style={{ fontSize: 22, marginTop: 4 }}>{value}</div>
       {sub && <div className="font-bold" style={{ fontSize: 12, marginTop: 4, color: subColor }}>{sub}</div>}
+      {info && open && (
+        <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)', lineHeight: 1.5 }}>{info}</div>
+      )}
     </div>
   );
 }
