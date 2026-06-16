@@ -147,10 +147,15 @@ export async function syncOrg(orgId, { full = false } = {}) {
     }
     if (!apiKey) return { synced: 0, skipped: 'no api key' };
 
-    // Full = all-time; incremental = trailing 90 days (cheap overlap for edits).
+    // Window policy: a manual `full` pull is all-time; the automatic path does a
+    // 1-year first fill (no prior sync) then a trailing 6-month nightly window
+    // (cheap overlap that re-confirms recent rows and catches late edits).
+    const firstFill = !row.last_sync_at;
     const startDate = full
         ? '2020-01-01'
-        : new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10);
+        : firstFill
+            ? new Date(Date.now() - 365 * 86400_000).toISOString().slice(0, 10)
+            : new Date(Date.now() - 183 * 86400_000).toISOString().slice(0, 10);
 
     try {
         const [records, maps] = await Promise.all([

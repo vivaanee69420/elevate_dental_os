@@ -356,7 +356,7 @@ describe('syncOneOrg', () => {
     it('resume: a checkpointed phase for the same window is not re-pulled', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-06-10T00:00:00Z'));
-        const windowKey = new Date(Date.now() - 2 * 365 * 86400000).toISOString().slice(0, 10);
+        const windowKey = new Date(Date.now() - 6 * 30 * 86400000).toISOString().slice(0, 10);
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const pageOneHits = {};
@@ -594,7 +594,7 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         integrationRepository.mergeConfig.mockReset();
     });
 
-    it('first run full-backfills the 2-year window then flags the org', async () => {
+    it('first run full-backfills the 6-month window then flags the org', async () => {
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         supaRec.resultProvider = (q) => {
             if (q.table === 'integrations' && q.op === 'select')
@@ -609,10 +609,11 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         });
         const res = await syncAllOrgs();
         expect(res[0].backfill).toBe(true);
-        // full backfill is now a rolling 2-year window, not the old 2005 anchor.
-        const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();
-        expect(seen.filter(Boolean).some((s) => s.startsWith(`${backfillYear}-`))).toBe(true);
-        expect(seen.filter(Boolean).some((s) => s.startsWith('2005-'))).toBe(false);
+        // full backfill is now a rolling 6-month window (was 2 years / a 2005 anchor).
+        const expected6mo = Date.now() - 6 * 30 * 86400000;
+        const windowed = seen.filter(Boolean);
+        expect(windowed.some((s) => Math.abs(new Date(s).getTime() - expected6mo) < 86400000)).toBe(true);
+        expect(windowed.some((s) => s.startsWith('2005-'))).toBe(false);
         // The full pull already seeds treatment_plan_items, so both one-time flags
         // are set together — no separate item backfill needed for a fresh org.
         expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-1', 'dentally', { history_backfilled: true, treatment_items_backfilled: true });
@@ -657,11 +658,11 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         const res = await syncAllOrgs();
         expect(res[0].backfill).toBe(false); // main sync stays incremental
         // The one-time item backfill pulled /treatment_plan_items over the full
-        // 2-year window (not the 2026-05 incremental cursor) ...
-        const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();
+        // 6-month window (not the 2026-05 incremental cursor) ...
+        const expected6mo = Date.now() - 6 * 30 * 86400000;
         const itemPulls = items.filter((c) => c.path.endsWith('/treatment_plan_items'));
         expect(itemPulls.length).toBeGreaterThan(0);
-        expect(itemPulls.some((c) => c.since && c.since.startsWith(`${backfillYear}-`))).toBe(true);
+        expect(itemPulls.some((c) => c.since && Math.abs(new Date(c.since).getTime() - expected6mo) < 86400000)).toBe(true);
         // ... and, on reaching the end of the collection, flipped the one-time flag
         // (and cleared the resume cursor) so it never repeats.
         expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-3', 'dentally', { treatment_items_backfilled: true, treatment_items_backfill_page: null });
@@ -789,7 +790,7 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
-    it('full backfill uses a 2-year updated_after window, not the 30d/last_sync window', async () => {
+    it('full backfill uses a 6-month updated_after window, not the 30d/last_sync window', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
         const seen = [];
@@ -799,12 +800,12 @@ describe('bootstrapOnConnect (first-connect automation)', () => {
         });
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { full: true });
-        // every WINDOWED resource pull asked for the most-recent 2 years, ignoring
+        // every WINDOWED resource pull asked for the most-recent 6 months, ignoring
         // last_sync_at. The /users roster pull is deliberately unwindowed (full
         // team every sync), so it carries no updated_after (null) — skip it.
         const windowed = seen.filter(Boolean);
         expect(windowed.length).toBeGreaterThan(0);
-        const backfillYear = new Date(Date.now() - 2 * 365 * 86400000).getUTCFullYear();
-        for (const s of windowed) expect(s.startsWith(`${backfillYear}-`)).toBe(true);
+        const expected6mo = Date.now() - 6 * 30 * 86400000;
+        for (const s of windowed) expect(Math.abs(new Date(s).getTime() - expected6mo) < 86400000).toBe(true);
     });
 });

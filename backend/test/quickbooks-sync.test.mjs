@@ -157,10 +157,12 @@ describe('syncAccount', () => {
             id: 'acc-1',
             secrets: encryptSecret(JSON.stringify({ access_token: 'tok', refresh_token: 'r' })),
             config: { realm_id: 'realm-1', expires_at: new Date(Date.now() + 3600_000).toISOString() },
-            last_sync_at: new Date().toISOString(), // already synced -> current month only
+            last_sync_at: new Date().toISOString(),
         });
 
-        const res = await syncAccount('org-1', 'acc-1');
+        // Pin to a single month so this test exercises the bucket-mapping +
+        // delete/insert mechanics, not the window size (nightly = 6 months).
+        const res = await syncAccount('org-1', 'acc-1', undefined, { months: 1 });
 
         // P&L is pulled once per accounting basis (accrual + cash); the mocked
         // report returns the same 2 lines each time -> 2 bases x 2 lines = 4.
