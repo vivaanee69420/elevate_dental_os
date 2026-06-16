@@ -147,7 +147,7 @@ export async function dentallyFetchWithRefresh(orgId, auth, url, extraHeaders = 
 // Returns the total record count fetched. onBatch(items, page) is awaited so the
 // upsert's back-pressure paces the fetch; onPage(page, totalPages, fetchedSoFar)
 // drives the progress bar.
-async function streamPages(base, path, auth, params, onBatch, onPage = null, maxPages = MAX_PAGES) {
+async function streamPages(orgId, base, path, auth, params, onBatch, onPage = null, maxPages = MAX_PAGES) {
     let page = 1;
     let fetched = 0;
     for (;;) {
@@ -159,9 +159,7 @@ async function streamPages(base, path, auth, params, onBatch, onPage = null, max
         let lastErr = null;
         for (let attempt = 0; attempt < 7; attempt++) {
             try {
-                res = await fetchWithTimeout(url, {
-                    headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' },
-                });
+                ({ res, auth } = await dentallyFetchWithRefresh(orgId, auth, url));
             } catch (err) {
                 // A timeout or transient network blip on ONE page used to throw
                 // straight out and fail the whole sync (the "This operation was
@@ -217,9 +215,9 @@ async function streamPages(base, path, auth, params, onBatch, onPage = null, max
 // Collect every page into a flat array. Thin wrapper over streamPages for the
 // small, unweighted resources (practitioners, users) where buffering the whole
 // set is cheap. The heavy resources stream-upsert per page instead (see pulls).
-async function fetchAllPages(base, path, auth, params, onPage = null, maxPages = MAX_PAGES) {
+async function fetchAllPages(orgId, base, path, auth, params, onPage = null, maxPages = MAX_PAGES) {
     const out = [];
-    await streamPages(base, path, auth, params, (items) => { out.push(...items); }, onPage, maxPages);
+    await streamPages(orgId, base, path, auth, params, (items) => { out.push(...items); }, onPage, maxPages);
     return out;
 }
 
@@ -851,7 +849,7 @@ export function invoiceRow(orgId, inv, siteMap, contactMap) {
 
 async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
     let synced = 0;
-    await streamPages(base, '/patients', auth, params, async (items) => {
+    await streamPages(orgId, base, '/patients', auth, params, async (items) => {
         const rows = items.map((p) => patientRow(orgId, p, siteMap));
         synced += await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
@@ -859,7 +857,7 @@ async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages
 }
 
 async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages) {
-    const remote = await fetchAllPages(base, '/practitioners', auth, params, null, maxPages);
+    const remote = await fetchAllPages(orgId, base, '/practitioners', auth, params, null, maxPages);
     const rows = remote
         .filter((p) => p && p.id != null)
         .map((p) => practitionerRow(orgId, p, siteMap));
@@ -884,7 +882,7 @@ export async function syncPractitionersOnly(orgId, integration) {
 // Dentally `/users` -> staff roster. Small set (whole-practice team), so one
 // unfiltered pull each sync; upsert is idempotent on (org, source, pms id).
 async function pullUsers(orgId, base, auth, params, siteMap, maxPages) {
-    const remote = await fetchAllPages(base, '/users', auth, params, null, maxPages);
+    const remote = await fetchAllPages(orgId, base, '/users', auth, params, null, maxPages);
     const rows = remote
         .filter((u) => u && u.id != null)
         .map((u) => staffRow(orgId, u, siteMap));
@@ -905,7 +903,7 @@ async function pullAppointments(orgId, base, auth, params, siteMap, contactMap, 
     let synced = 0;
     let skipped = 0;       // unmatched practice (NOT NULL practice_id) — a data-mapping gap
     let skippedClosed = 0; // dropped by the first-pull open filter — expected, not a gap
-    await streamPages(base, '/appointments', auth, params, async (items) => {
+    await streamPages(orgId, base, '/appointments', auth, params, async (items) => {
         const rows = [];
         for (const a of items) {
             const row = appointmentRow(orgId, a, siteMap, contactMap, practitionerMap);
@@ -1110,7 +1108,7 @@ export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, un
 async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
     let synced = 0;
     let skipped = 0;
-    await streamPages(base, '/payments', auth, params, async (items) => {
+    await streamPages(orgId, base, '/payments', auth, params, async (items) => {
         const rows = [];
         for (const p of items) {
             const row = paymentRow(orgId, p, siteMap, contactMap);
@@ -1124,7 +1122,7 @@ async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPa
 
 async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages) {
     let synced = 0;
-    await streamPages(base, '/treatment_plans', auth, params, async (items) => {
+    await streamPages(orgId, base, '/treatment_plans', auth, params, async (items) => {
         const rows = items
             .filter((tp) => tp && tp.id != null)
             .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap));
@@ -1143,7 +1141,7 @@ async function pullTreatmentPlans(orgId, base, auth, params, associateMap, conta
 // it. Never fail the whole sync if this resource errors (caller wraps in try).
 async function pullTreatmentItems(orgId, base, auth, params, practiceByPractitioner, associateMap, contactMap, onPage, maxPages) {
     let synced = 0;
-    await streamPages(base, '/treatment_plan_items', auth, params, async (items) => {
+    await streamPages(orgId, base, '/treatment_plan_items', auth, params, async (items) => {
         const rows = items
             .filter((it) => it && it.id != null && it.completed === true)
             .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap));
@@ -1154,7 +1152,7 @@ async function pullTreatmentItems(orgId, base, auth, params, practiceByPractitio
 
 async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitionerMap, onPage, maxPages) {
     let synced = 0;
-    await streamPages(base, '/invoice_items', auth, params, async (items) => {
+    await streamPages(orgId, base, '/invoice_items', auth, params, async (items) => {
         const rows = items
             .filter((it) => it && it.id != null)
             .map((it) => invoiceItemRow(orgId, it, invoiceMap, practitionerMap));
@@ -1172,7 +1170,7 @@ async function pullInvoices(orgId, base, auth, params, siteMap, contactMap, onPa
     // small fields per invoice (not the full row), so it stays bounded even as
     // the invoice rows themselves stream out per page.
     const invoiceMap = new Map();
-    await streamPages(base, '/invoices', auth, params, async (items) => {
+    await streamPages(orgId, base, '/invoices', auth, params, async (items) => {
         const rows = [];
         for (const inv of items) {
             if (inv && inv.id != null) {
