@@ -6,7 +6,9 @@
 //
 //   1. ProfitAndLoss report  -> monthly_financials  (source='quickbooks', integration_account_id)
 //      Backfills the last 12 months on first connect / full refresh; the nightly
-//      cron refreshes the current month only.
+//      cron re-pulls the trailing 6 months (NIGHTLY_MONTHS) to catch late edits
+//      and reclassified transactions. The per-period delete is scoped to each
+//      month it re-inserts, so re-pulling never duplicates or orphans a period.
 //   2. BalanceSheet report   -> bank_accounts        (source='quickbooks', integration_account_id)
 //      Cash/bank balances -> the Cashflow opening balance.
 //   3. Invoice query (Balance>0) -> invoices         (source='quickbooks', integration_account_id)
@@ -29,12 +31,32 @@ import * as supabase_1 from "../supabase.js";
 
 const MINOR_VERSION = '65';
 const BUCKETS = ['revenue', 'associates', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
-const BACKFILL_MONTHS = 12;
+const BACKFILL_MONTHS = 12;   // first-fill (on-connect) window: last 12 months
+const NIGHTLY_MONTHS = 6;     // nightly cron window: re-pull the trailing 6 months (catches late edits / reclassified txns)
 // QuickBooks reports each P&L on a Cash or Accrual basis; we store both.
 // 'accrual' is QB's default (omit the param); 'cash' adds accounting_method=Cash.
 const ACCOUNTING_METHODS = ['accrual', 'cash'];
 const QBO_METHOD_PARAM = { accrual: 'Accrual', cash: 'Cash' };
 const QUERY_PAGE = 1000;
+const REQUEST_TIMEOUT_MS = 30000; // abort a hung QuickBooks request so one stuck company can't stall the nightly cron forever
+
+// fetch with an abort-based timeout. A hung Node fetch never rejects on its own,
+// so without this a single unresponsive QBO company would block syncAllOrgs
+// indefinitely (the per-org try/catch only catches thrown errors, not a hang).
+async function fetchWithTimeout(url, opts) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(url, { ...opts, signal: ac.signal });
+    } catch (err) {
+        if (err?.name === 'AbortError') {
+            throw new Error(`QuickBooks request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 function apiBase() {
     return process.env.QUICKBOOKS_API_BASE || 'https://quickbooks.api.intuit.com';
@@ -189,7 +211,7 @@ async function defaultPracticeId(orgId) {
 
 async function qboReport(realmId, accessToken, name, params) {
     const qs = new URLSearchParams({ ...params, minorversion: MINOR_VERSION }).toString();
-    const res = await fetch(`${apiBase()}/v3/company/${realmId}/reports/${name}?${qs}`, {
+    const res = await fetchWithTimeout(`${apiBase()}/v3/company/${realmId}/reports/${name}?${qs}`, {
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
     });
     if (!res.ok) throw new Error(`QuickBooks ${name} -> HTTP ${res.status}`);
@@ -201,7 +223,7 @@ async function qboQueryAll(realmId, accessToken, selectWhere, entity) {
     let start = 1;
     for (let guard = 0; guard < 50; guard++) {
         const q = `${selectWhere} STARTPOSITION ${start} MAXRESULTS ${QUERY_PAGE}`;
-        const res = await fetch(`${apiBase()}/v3/company/${realmId}/query?query=${encodeURIComponent(q)}&minorversion=${MINOR_VERSION}`, {
+        const res = await fetchWithTimeout(`${apiBase()}/v3/company/${realmId}/query?query=${encodeURIComponent(q)}&minorversion=${MINOR_VERSION}`, {
             headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
         });
         if (!res.ok) throw new Error(`QuickBooks query ${entity} -> HTTP ${res.status}`);
@@ -435,7 +457,7 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, opts 
         const realmId = account.config?.realm_id;
         if (!realmId) throw new Error('no QuickBooks company (realmId) on account');
         const { access_token } = JSON.parse(decryptSecret(account.secrets));
-        const months = opts.months ?? ((opts.full || !account.last_sync_at) ? BACKFILL_MONTHS : 1);
+        const months = opts.months ?? ((opts.full || !account.last_sync_at) ? BACKFILL_MONTHS : NIGHTLY_MONTHS);
         const accountMap = await loadAccountMap(orgId);
 
         onProgress?.({ pct: 10, phase: 'profit_and_loss' });

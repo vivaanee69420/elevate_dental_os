@@ -21,8 +21,8 @@ import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
 
-const INCREMENTAL_DAYS = 31;
-const FULL_DAYS = 366;
+const INCREMENTAL_DAYS = 183; // nightly cron window: trailing ~6 months
+const FULL_DAYS = 366;        // first-fill (on-connect) window: 12 months + 1 day
 
 // GAQL is built per-window. campaign.status + advertising_channel_type are the
 // campaign dimensions (objective proxy); customer.descriptive_name +

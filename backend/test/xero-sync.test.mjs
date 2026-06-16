@@ -87,7 +87,10 @@ describe('syncOneOrg', () => {
             config: { tenant_id: 'tenant-1' },
             expires_at: new Date(Date.now() + 3600_000).toISOString(), // fresh -> no refresh
         };
-        const res = await syncOneOrg('org-1', integration);
+        // Pin to a single month so this test exercises the bucket-mapping +
+        // delete/insert mechanics, not the window size (first fill = 12 months,
+        // nightly = 6 — covered by the window test below).
+        const res = await syncOneOrg('org-1', integration, undefined, { months: 1 });
 
         expect(res.lines).toBe(2);
         const del = queries.find((q) => q.table === 'monthly_financials' && q.op === 'delete');
@@ -100,6 +103,28 @@ describe('syncOneOrg', () => {
             expect.objectContaining({ account_code: 'Lab Fees', dental_bucket: 'lab', amount_pence: 120000 }),
         ]));
         expect(integrationRepository.upsert).toHaveBeenCalled();
+    });
+
+    it('first fill (no prior sync) pulls 12 months; nightly (already synced) pulls 6', async () => {
+        const months = new Set();
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            months.add(u.searchParams.get('fromDate').slice(0, 7)); // YYYY-MM
+            return { ok: true, status: 200, json: async () => ({ Reports: [{ Rows: [] }] }) };
+        });
+        const base = {
+            secrets: encryptSecret(JSON.stringify({ access_token: 'tok', refresh_token: 'r' })),
+            config: { tenant_id: 'tenant-1' },
+            expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        };
+
+        months.clear();
+        await syncOneOrg('org-1', { ...base, last_sync_at: null });
+        expect(months.size).toBe(12); // first fill
+
+        months.clear();
+        await syncOneOrg('org-1', { ...base, last_sync_at: new Date().toISOString() });
+        expect(months.size).toBe(6);  // nightly cron
     });
 
     it('marks failed when no tenant is connected', async () => {

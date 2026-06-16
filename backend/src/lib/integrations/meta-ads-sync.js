@@ -22,8 +22,9 @@ import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
 
 const INSIGHT_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,reach,frequency,actions';
-// Incremental window (daily cron); a full backfill pulls 12 months.
-const INCREMENTAL_DAYS = 31;
+// Incremental window (nightly cron) = trailing ~6 months; a full backfill
+// (first connect) pulls 12 months.
+const INCREMENTAL_DAYS = 183;
 const FULL_DAYS = 366;
 // action_types that count as a conversion for a dental practice (form leads,
 // pixel leads, purchases, registrations, appointment schedules, contacts).

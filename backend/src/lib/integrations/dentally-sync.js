@@ -33,15 +33,16 @@ const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
 const REQUEST_TIMEOUT_MS = 30000; // abort a hung Dentally request, never hang forever
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
-const BACKFILL_MAX_PAGES = 15000; // full backfill ceiling (~1.5M rows/resource) — one-off, pulls the 2-year window. MUST exceed the largest collection: /treatment_plan_items returns ~725k rows (7.2k pages) and Dentally IGNORES the completed/date filters, so the whole collection must be paged to find the completed subset. The old 5000-page (500k-row) cap truncated the oldest ~225k items, silently dropping completed treatments scattered across past months (the "Treatments Completed undercount" bug). The page loop self-terminates at the real end (items.length < PER_PAGE), so this is only a runaway guard, not a target.
-const BACKFILL_YEARS = 2;        // full backfill cap: most-recent 2 years of history, no deeper (product rule)
-// Rolling 2-year updated_after for full pulls. Dentally requires the param; we
-// deliberately cap history at 2 years rather than pulling all-time (was a 2005
-// anchor) so a backfill stays bounded on long-lived practices.
+const BACKFILL_MAX_PAGES = 15000; // full backfill ceiling (~1.5M rows/resource) — one-off, pulls the 6-month window. MUST exceed the largest collection: /treatment_plan_items returns ~725k rows (7.2k pages) and Dentally IGNORES the completed/date filters, so the whole collection must be paged to find the completed subset. The old 5000-page (500k-row) cap truncated the oldest ~225k items, silently dropping completed treatments scattered across past months (the "Treatments Completed undercount" bug). The page loop self-terminates at the real end (items.length < PER_PAGE), so this is only a runaway guard, not a target.
+const BACKFILL_MONTHS = 6;       // nightly full-backfill cap: most-recent 6 months of history, no deeper (product rule — the nightly cron stays light; on-connect already landed the full year)
+// Rolling 6-month updated_after for full pulls. Dentally requires the param; we
+// deliberately cap the nightly backfill at 6 months (rather than 2 years or
+// all-time, which was a 2005 anchor) so a nightly pull stays bounded on
+// long-lived practices.
 function backfillSince() {
-    return new Date(Date.now() - BACKFILL_YEARS * 365 * 86400000).toISOString();
+    return new Date(Date.now() - BACKFILL_MONTHS * 30 * 86400000).toISOString();
 }
-const RECENT_MONTHS = 12;        // on-connect bootstrap window: last 12 months — a fast connect that lands a full year (dashboards are TTM); the nightly cron deepens the rest of history overnight (see syncAllOrgs one-time backfill)
+const RECENT_MONTHS = 12;        // on-connect bootstrap (first fill) window: last 12 months — a connect that lands a full year (dashboards are TTM); the nightly cron then maintains the trailing 6 months (see syncAllOrgs)
 const BOOTSTRAP_MAX_PAGES = 900; // ~90k rows/resource cap for the on-connect pull — headroom for a busy multi-site group's full 1-year history so the pull reaches recent + upcoming, not just the oldest rows
 // On the FIRST pull we only want live work — upcoming, not-yet-closed
 // appointments — so onboarding is fast and the Operations view is immediately
@@ -220,7 +221,7 @@ export function weightedPct(idx, page, phaseTotals) {
 // Update the live progress weighting for one reported page and return the pct.
 // The up-front probe (fetchPageCount) UNDER-counts a phase when Dentally omits
 // meta.total_pages (it falls back to 1 page) or when the probe times out (0).
-// On the bootstrap pull that hits the patients phase, which pulls the 2-year
+// On the bootstrap pull that hits the patients phase, which pulls the 1-year
 // patient window — the longest phase — so weighting it as ~1 page made
 // weightedPct's Math.min(page, total) clamp the bar near 0% for the entire
 // phase: it looked frozen even though the pull was running. Grow the phase's
@@ -1389,7 +1390,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     }
     // Window selection — ONE window, shared by patients / appointments /
     // payments (all filtered by `updated_after`):
-    //  - full   : the most-recent 2 years (backfillSince()) with a lifted page cap.
+    //  - full   : the most-recent 6 months (backfillSince()) with a lifted page cap.
     //  - recent : the on-connect bootstrap — last RECENT_MONTHS (1 year). A
     //             fresh org lands a complete, bounded 1-year dataset including
     //             COMPLETED appointments, so Associates / Treatment Mix / Pay
@@ -1407,7 +1408,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // Resume checkpoint — only the full backfill (the long, OOM-prone, restart-
     // exposed path). The process can die mid-pull (deploy, dyno recycle, OOM) and
     // last_sync_at only advances on full completion, so without this a restarted
-    // full pull re-pulls the same 2-year window from page 1 every time. We record
+    // full pull re-pulls the same 6-month window from page 1 every time. We record
     // which heavy phases finished, keyed by the backfill window (day-bucketed:
     // backfillSince() shifts each ms, so an exact-timestamp key would never match
     // a later run; the window only moves a day at a time). A re-run for the same
@@ -1438,7 +1439,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // bootstrap fetched upcoming-only appointments (`after=now`) + all-history
     // patients for a fast first paint, but that left every completed appointment
     // — and therefore associate_id / appointment_type / production analytics —
-    // empty. A bounded 2-year historical pull is the deliberate trade: a few
+    // empty. A bounded historical pull is the deliberate trade: a few
     // more pages on connect for a dataset every module can actually use.
     // `cancelled: true` is REQUIRED — Dentally's GET /appointments defaults to
     // cancelled=false, which silently drops BOTH cancelled AND did_not_attend
@@ -1513,7 +1514,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         const siteMap = await loadSiteMap(orgId);
         // Practitioners first (cheap, no separate progress phase) so the
         // appointment pull can resolve associate_id. Use the same updated_after
-        // window as patients (2-year backfillSince() on full/bootstrap so all
+        // window as patients (backfillSince() on full/bootstrap so all
         // staff in that window are captured; incremental cursor for routine syncs).
         // Practitioners + staff are small (whole-practice team), so they aren't
         // weighted, but we emit a phase label + live count so the overlay shows
@@ -1615,7 +1616,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 const wMs = 35 * 86400000;
                 // Nightly/incremental: a recent ±35-day window (voids happen near the
                 // payment date — cheap, one extra paged id-pull). The one-time full
-                // backfill widens the scan back to the 2-year history so even an old
+                // backfill widens the scan back to the 6-month history so even an old
                 // void clears once; nightly is unaffected. maxPages is already
                 // BACKFILL_MAX_PAGES on the full path, so the wide window can page out.
                 const reconSince = full ? backfillSince() : new Date(Date.now() - wMs).toISOString();
@@ -1915,11 +1916,10 @@ export async function syncAllOrgs() {
     const results = [];
     for (const row of rows ?? []) {
         try {
-            // The on-connect pull is deliberately a fast 1-year window. The FIRST
-            // nightly run after connect deepens it to the full 2-year window
-            // (backfillSince()) — the "rest done overnight" — then flips a
-            // one-time flag so every
-            // subsequent run rides the cheap incremental changed-since cursor.
+            // The on-connect pull is the 1-year first-fill window. The FIRST
+            // nightly run after connect re-pulls the trailing 6-month window
+            // (backfillSince()) to settle any edits, then flips a one-time flag so
+            // every subsequent run rides the cheap incremental changed-since cursor.
             const needsBackfill = !row.config?.history_backfilled;
             const r = await syncOneOrg(row.organisation_id, row, () => {}, { full: needsBackfill });
             if (needsBackfill && !r.error) {

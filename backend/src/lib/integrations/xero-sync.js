@@ -22,6 +22,25 @@ import * as supabase_1 from "../supabase.js";
 
 const REPORTS_BASE = 'https://api.xero.com/api.xro/2.0/Reports';
 const BUCKETS = ['revenue', 'associates', 'staff', 'lab', 'materials', 'overhead', 'tax', 'other'];
+const REQUEST_TIMEOUT_MS = 30000; // abort a hung Xero report so one stuck tenant can't stall the nightly cron forever
+
+// fetch with an abort-based timeout. A hung Node fetch never rejects on its own,
+// so without this a single unresponsive Xero tenant would block syncAllOrgs
+// indefinitely (the per-org try/catch only catches thrown errors, not a hang).
+async function fetchWithTimeout(url, opts) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS);
+    try {
+        return await fetch(url, { ...opts, signal: ac.signal });
+    } catch (err) {
+        if (err?.name === 'AbortError') {
+            throw new Error(`Xero request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`);
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 function toPence(amount) {
     const n = Number(String(amount ?? '').replace(/[(),]/g, (m) => (m === '(' ? '-' : '')));
@@ -74,15 +93,31 @@ function parseReportRows(report) {
     return out;
 }
 
-function currentPeriod() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-function monthBounds() {
-    const d = new Date();
-    const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-    const to = d.toISOString().slice(0, 10);
-    return { from, to };
+const FIRST_FILL_MONTHS = 12; // first-fill (on-connect) window: last 12 calendar months
+const NIGHTLY_MONTHS = 6;     // nightly cron window: re-pull the trailing 6 calendar months (catches late edits)
+
+// The most-recent `n` calendar months, oldest first, as { period, from, to }.
+// `period` is YYYY-MM; the current (last) month's `to` is capped at today, every
+// earlier month runs to its real last day. Each month is pulled + stored
+// independently so a later re-sync never disturbs earlier periods.
+function monthWindows(n) {
+    const now = new Date();
+    const y = now.getUTCFullYear();
+    const m = now.getUTCMonth();
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(Date.UTC(y, m - i, 1));
+        const yy = d.getUTCFullYear();
+        const mm = d.getUTCMonth(); // 0-based
+        const period = `${yy}-${String(mm + 1).padStart(2, '0')}`;
+        const from = `${period}-01`;
+        const lastDay = new Date(Date.UTC(yy, mm + 1, 0)).getUTCDate();
+        const to = i === 0
+            ? now.toISOString().slice(0, 10)
+            : `${period}-${String(lastDay).padStart(2, '0')}`;
+        out.push({ period, from, to });
+    }
+    return out;
 }
 
 async function loadAccountMap(orgId) {
@@ -104,7 +139,48 @@ async function ensureToken(orgId, integration) {
     return integrationRepository.getByProvider(orgId, 'xero');
 }
 
-export async function syncOneOrg(orgId, integrationArg) {
+// Pull + store ONE month's P&L for an org. Replaces the whole period: delete this
+// period's xero rows then insert fresh. Idempotent, and avoids depending on the
+// COALESCE functional unique index as an ON CONFLICT arbiter (which Supabase
+// upsert can't target). Returns the number of lines stored for the month.
+async function syncMonth(orgId, tenantId, access_token, accountMap, { period, from, to }) {
+    const res = await fetchWithTimeout(`${REPORTS_BASE}/ProfitAndLoss?fromDate=${from}&toDate=${to}`, {
+        headers: {
+            Authorization: `Bearer ${access_token}`,
+            'Xero-tenant-id': tenantId,
+            Accept: 'application/json',
+        },
+    });
+    if (!res.ok) throw new Error(`Xero P&L (${period}) -> HTTP ${res.status}`);
+    const report = await res.json();
+
+    const rows = parseReportRows(report).map((r) => ({
+        organisation_id: orgId,
+        practice_id: null,
+        period,
+        account_code: String(r.account),
+        dental_bucket: mapBucket(r.account, r.section, accountMap),
+        amount_pence: toPence(r.amount),
+        source: 'xero',
+    }));
+
+    const { error: delErr } = await supabase_1.serviceClient
+        .from('monthly_financials')
+        .delete()
+        .eq('organisation_id', orgId)
+        .eq('period', period)
+        .eq('source', 'xero');
+    if (delErr) throw new Error(`monthly_financials clear (${period}): ${delErr.message}`);
+    if (rows.length > 0) {
+        const { error } = await supabase_1.serviceClient.from('monthly_financials').insert(rows);
+        if (error) throw new Error(`monthly_financials insert (${period}): ${error.message}`);
+    }
+    return rows.length;
+}
+
+// opts.months overrides the window; otherwise first fill (no prior sync) backfills
+// 12 months and the nightly cron refreshes the trailing 6.
+export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'xero');
     if (!integration?.secrets) {
         await integrationRepository.markFailed(orgId, 'xero', 'no_auth: no stored credentials');
@@ -115,48 +191,22 @@ export async function syncOneOrg(orgId, integrationArg) {
         const tenantId = integration.config?.tenant_id;
         if (!tenantId) throw new Error('no Xero tenant connected');
         const { access_token } = JSON.parse(decryptSecret(integration.secrets));
-        const { from, to } = monthBounds();
-
-        const res = await fetch(`${REPORTS_BASE}/ProfitAndLoss?fromDate=${from}&toDate=${to}`, {
-            headers: {
-                Authorization: `Bearer ${access_token}`,
-                'Xero-tenant-id': tenantId,
-                Accept: 'application/json',
-            },
-        });
-        if (!res.ok) throw new Error(`Xero P&L -> HTTP ${res.status}`);
-        const report = await res.json();
-
         const accountMap = await loadAccountMap(orgId);
-        const period = currentPeriod();
-        const rows = parseReportRows(report).map((r) => ({
-            organisation_id: orgId,
-            practice_id: null,
-            period,
-            account_code: String(r.account),
-            dental_bucket: mapBucket(r.account, r.section, accountMap),
-            amount_pence: toPence(r.amount),
-            source: 'xero',
-        }));
 
-        // A P&L sync replaces the whole month: delete this period's xero rows then
-        // insert fresh. Idempotent, and avoids depending on the COALESCE functional
-        // unique index as an ON CONFLICT arbiter (which Supabase upsert can't target).
-        const { error: delErr } = await supabase_1.serviceClient
-            .from('monthly_financials')
-            .delete()
-            .eq('organisation_id', orgId)
-            .eq('period', period)
-            .eq('source', 'xero');
-        if (delErr) throw new Error(`monthly_financials clear: ${delErr.message}`);
-        if (rows.length > 0) {
-            const { error } = await supabase_1.serviceClient.from('monthly_financials').insert(rows);
-            if (error) throw new Error(`monthly_financials insert: ${error.message}`);
+        const months = opts.months ?? (integration.last_sync_at ? NIGHTLY_MONTHS : FIRST_FILL_MONTHS);
+        const windows = monthWindows(months);
+
+        let lines = 0;
+        const periods = [];
+        for (const w of windows) {
+            lines += await syncMonth(orgId, tenantId, access_token, accountMap, w);
+            periods.push(w.period);
         }
+
         await integrationRepository.upsert(orgId, 'xero', {
             last_sync_at: new Date().toISOString(), last_error: null, status: 'active',
         });
-        return { lines: rows.length, period };
+        return { lines, periods };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'xero', String(err.message).slice(0, 500));
         throw err;
