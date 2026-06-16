@@ -38,6 +38,9 @@ async function persistTokenResponse(orgId, body) {
 
 async function exchange(orgId, params) {
     const { DENTALLY_CLIENT_ID, DENTALLY_CLIENT_SECRET } = process.env;
+    if (!DENTALLY_CLIENT_ID || !DENTALLY_CLIENT_SECRET) {
+        throw new Error('DENTALLY_CLIENT_ID / DENTALLY_CLIENT_SECRET not configured');
+    }
     const res = await fetch(tokenUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
