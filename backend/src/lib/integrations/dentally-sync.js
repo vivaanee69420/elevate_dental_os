@@ -1549,9 +1549,15 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
 
         const siteMap = await loadSiteMap(orgId);
         // Practitioners first (cheap, no separate progress phase) so the
-        // appointment pull can resolve associate_id. Use the same updated_after
-        // window as patients (backfillSince() on full/bootstrap so all
-        // staff in that window are captured; incremental cursor for routine syncs).
+        // appointment pull can resolve associate_id. ALWAYS pull the FULL roster
+        // (no updated_after filter): the practitioner set is tiny (a handful of
+        // pages for the whole practice), but treatment_plan_items + appointments
+        // reference HISTORICAL practitioners whose record hasn't been "updated"
+        // recently. Windowing by updated_after dropped those clinicians from the
+        // roster, so their treatment items resolved practice_id = null — the
+        // Practitioner Activity / "Treatments Completed" card then read 0 for an
+        // individual practice and undercounted the group. (regression: an org
+        // synced 17 of ~216 practitioners; 64/72 treating clinicians were absent.)
         // Practitioners + staff are small (whole-practice team), so they aren't
         // weighted, but we emit a phase label + live count so the overlay shows
         // "Practitioners · N pulled" instead of dead air at pct 0 before patients.
@@ -1561,7 +1567,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         if (want('appointments') || want('treatment_plans')) {
             onProgress({ phase: 'practitioners', pct: 0, count: 0 });
             try {
-                practitioners = await pullPractitioners(orgId, base, auth, patientParams, siteMap, maxPages);
+                practitioners = await pullPractitioners(orgId, base, auth, {}, siteMap, maxPages);
                 onProgress({ phase: 'practitioners', pct: 0, count: practitioners.synced });
             } catch (err) {
                 console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
@@ -1717,6 +1723,22 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 await markPhaseDone('treatment_items');
             } catch (err) {
                 console.warn(`[dentally] treatment_items pull skipped: ${err?.message || err}`);
+            }
+        }
+        // Self-heal practice attribution on the items feed. treatment_plan_items
+        // carry only practitioner_id, so practice_id is resolved from the
+        // practitioner's home site at pull time. Any item pulled BEFORE its
+        // practitioner landed in the roster (incomplete-roster sync, or items
+        // pulled ahead of a practitioner this run) is stranded with practice_id =
+        // null and never re-corrected by an idempotent upsert. Re-stamp from the
+        // now-complete org roster every sync: a cheap set-based UPDATE that fixes
+        // those null/stale rows so the Treatments Completed card scopes per
+        // practice. Non-fatal — the RPC is absent on un-migrated DBs.
+        if (want('treatment_items')) {
+            try {
+                await supabase_1.serviceClient.rpc('restamp_treatment_item_practices', { p_org: orgId });
+            } catch (err) {
+                console.warn(`[dentally] treatment_items practice restamp skipped: ${err?.message || err}`);
             }
         }
         // All pulls done; the relink RPCs below are set-based SQL that can take a
@@ -1937,6 +1959,14 @@ export async function backfillTreatmentItems(orgId, integration) {
     } else {
         // Rate-limited or hit the per-run bound: save where to resume next run.
         await integrationRepository.mergeConfig(orgId, 'dentally', { treatment_items_backfill_page: page });
+    }
+    // Re-stamp practice attribution from the org roster (same self-heal as the
+    // routine sync) so legacy-backfilled items resolve a practice even if their
+    // practitioner landed in the roster after the row was first inserted.
+    try {
+        await supabase_1.serviceClient.rpc('restamp_treatment_item_practices', { p_org: orgId });
+    } catch (err) {
+        console.warn(`[dentally] treatment_items practice restamp skipped: ${err?.message || err}`);
     }
     return { synced, finished, rateLimited, lastPage: page };
 }

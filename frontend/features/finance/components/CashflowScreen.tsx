@@ -279,6 +279,23 @@ export default function CashflowScreen() {
             <p className="text-sm text-ink-muted mb-4">
               What lands in the bank against what leaves it, month by month.
             </p>
+            {outlook.costsBasis === 'none' && (
+              <div
+                className="text-xs"
+                style={{
+                  background: 'var(--surface-muted, #f6f7f9)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  marginBottom: 12,
+                  color: 'var(--ink-muted)',
+                }}
+              >
+                Cash <strong>out</strong> needs an accounting feed. Connect QuickBooks or
+                Xero (or add monthly costs) to see outflows, net position and runway.
+                Only money <strong>in</strong> (settled receipts) is shown below.
+              </div>
+            )}
             {outlook.months.map((m) => (
               <div key={m.month} style={{ padding: '10px 0', borderTop: '1px solid var(--border)' }}>
                 <div className="flex justify-between items-center">
