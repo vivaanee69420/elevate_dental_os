@@ -429,6 +429,35 @@ describe('cashflow — backward real settled receipts (no projection)', () => {
   });
 });
 
+describe('cashflowOutlook — cash IN is settled receipts, never billed production', () => {
+  const now = () => new Date(2026, 4, 15); // May 2026 → window Feb..May
+
+  it('IN = settled cash for the month, NOT the (higher) billed turnover', async () => {
+    // No cost actuals (default empty tables) → Dentally-only org. Settled cash
+    // for Mar is LESS than billed production for Mar (billed-but-not-collected
+    // gap). Cash IN must be the settled figure, or the cashflow card overstates.
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = (fn) => {
+      if (fn === 'settled_receipts_by_day') return { data: [{ day: '2026-03-20', pence: 30_911_176 }], error: null };
+      if (fn === 'billed_revenue_by_month') return { data: [{ month: '2026-03', pence: 37_861_002 }], error: null };
+      return { data: [], error: null };
+    };
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 2, now });
+    const mar = r.months.find((m) => m.month === '2026-03');
+    expect(mar.inPence).toBe(30_911_176); // settled cash, not 37,861,002 billed
+  });
+
+  it('no cost source → costsBasis none, out flagged unavailable', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-03-20', pence: 1_000_000 }], error: null } : { data: [], error: null };
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 2, now });
+    expect(r.costsBasis).toBe('none');
+    expect(r.costsAvailable).toBe(false);
+    expect(r.months.every((m) => m.costsAvailable === false)).toBe(true);
+  });
+});
+
 describe('aiInsights — locked D-Q2 definitions over real leads/payments', () => {
   const now = () => new Date(2026, 4, 15);
   const dataset = (q) => {

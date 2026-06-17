@@ -1969,14 +1969,32 @@ export const analyticsService = {
     //   • Bills are tax ESTIMATES from profit; no payables/scheduled-bill source.
     async cashflowOutlook(orgId, { months = 4, forward = 2, now = () => new Date(), practiceId = null } = {}) {
         const ref = now();
-        const [series, bank] = await Promise.all([
+        // Cash IN must be EXACT settled receipts (real money landed), per this
+        // view's contract. financeSeries.revenue prefers BILLED production
+        // (invoice_items accrual turnover) when present — correct for Value &
+        // Growth, but wrong for a cashflow view: it overstates "cash in" by the
+        // billed-but-not-yet-collected gap (e.g. £378k billed vs £309k settled).
+        // So source IN from settled receipts directly and use financeSeries ONLY
+        // for the cost (OUT) buckets.
+        const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, null, null);
+        const [series, bank, settledDays] = await Promise.all([
             this.financeSeries(orgId, { months, now, practiceId }),
             analytics_repository_1.analyticsRepository.bankSummary(orgId),
+            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
         ]);
+        const settledByMonth = this._monthlyRevenueFromDays(settledDays);
         const anchorBank = bank.totalPence || 0;
-        const real = series.months.map((m) => {
-            const out = (m.associatePay || 0) + (m.staffCosts || 0) + (m.labMaterials || 0) + (m.opex || 0);
-            return { month: m.month, inPence: m.revenue || 0, outPence: out, costsAvailable: !!m.costsAvailable, projected: false };
+        const costsByMonth = new Map(series.months.map((m) => [m.month, m]));
+        const real = keys.map((month) => {
+            const c = costsByMonth.get(month);
+            const out = c ? (c.associatePay || 0) + (c.staffCosts || 0) + (c.labMaterials || 0) + (c.opex || 0) : 0;
+            // Prefer real settled cash. Fall back to financeSeries revenue ONLY when
+            // there is no settled-receipts feed for the month (e.g. a QBO-only org
+            // with no Dentally payments) so cash-in doesn't drop to 0 there; an
+            // active Dentally org always has settled receipts and uses them.
+            const settled = settledByMonth.get(month) || 0;
+            const inPence = settled > 0 ? settled : (c ? (c.revenue || 0) : 0);
+            return { month, inPence, outPence: out, costsAvailable: !!(c && c.costsAvailable), projected: false };
         });
 
         // Run-rate for projection: average of recent months (IN always real;
