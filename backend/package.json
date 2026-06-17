@@ -36,6 +36,7 @@
     "openai": "^6.42.0",
     "pino": "^9.3.2",
     "pino-http": "^10.3.0",
+    "pino-roll": "^4.0.0",
     "postmark": "^4.0.4",
     "stripe": "^16.7.0",
     "twilio": "^5.2.2",
