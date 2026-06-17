@@ -528,14 +528,18 @@ export const analyticsService = {
     // precedence per period+bucket. Returns the per-period bucket map plus an
     // `annual` sum over the trailing ≤12 periods (for annual P&L / ratios).
     // hasAny=false ⇒ callers fall back to the baseline projection unchanged.
-    async _actualsBundle(orgId, practiceId = null, { source = null, accountId = null, accountingMethod = 'accrual' } = {}) {
+    async _actualsBundle(orgId, practiceId = null, { source = null, accountId = null, accountingMethod = 'accrual', since = null, until = null } = {}) {
         const all = await monthlyFinancial_repository_1.monthlyFinancialRepository.allForOrg(orgId, { source, accountId });
         const rows = practiceId
             ? (Array.isArray(all) ? all : []).filter((r) => r.practice_id === practiceId)
             : all;
         const byPeriod = bucketsByPeriod(rows, { accountingMethod });
         const periods = [...byPeriod.keys()].sort();
-        const recent = periods.slice(-12);
+        // Explicit [since,until] window (YYYY-MM-DD) → the months it spans; else the
+        // trailing 12 months. Periods are 'YYYY-MM', so compare on the month prefix.
+        const recent = (since && until)
+            ? periods.filter((pm) => pm >= since.slice(0, 7) && pm <= until.slice(0, 7))
+            : periods.slice(-12);
         const annual = {};
         for (const p of recent) {
             for (const [k, v] of Object.entries(byPeriod.get(p))) {
@@ -587,7 +591,7 @@ export const analyticsService = {
     // never the baseline projection (FORMULAS §1a). When there is no real cost
     // source we return costsAvailable:false and no rows — the client shows a
     // "connect Xero / enter actuals" empty state rather than fabricating ratios.
-    async plBenchmark(orgId, { practiceId = null, source = 'combined', accountId = null } = {}) {
+    async plBenchmark(orgId, { practiceId = null, source = 'combined', accountId = null, since = null, until = null } = {}) {
         const src = (source === 'dentally' || source === 'quickbooks') ? source : 'combined';
         // Dentally carries no cost data, so a cost/profit benchmark is meaningless
         // for that source → honest empty state (never an estimate, FORMULAS §1b).
@@ -597,8 +601,8 @@ export const analyticsService = {
         // QuickBooks source: benchmark built only from QBO actuals (optionally one
         // company); a QB company is not practice-mapped, so practiceId is ignored.
         const actuals = src === 'quickbooks'
-            ? await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId })
-            : await this._actualsBundle(orgId, practiceId);
+            ? await this._actualsBundle(orgId, null, { source: 'quickbooks', accountId, since, until })
+            : await this._actualsBundle(orgId, practiceId, { since, until });
         const a = actuals.annual || {};
         const revenue = a.revenue || 0;
         const costTotal = (a.associates || 0) + (a.staff || 0) + (a.lab || 0) + (a.materials || 0) + (a.overhead || 0) + (a.other || 0);

@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { useProfitBenchmark } from '../hooks';
 import type { FinanceSource } from '../api';
 import ProfitSourceBar from './ProfitSourceBar';
+import DateRangeFilter, { type DateRange } from './DateRangeFilter';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import { Card, EmptyState, SkeletonKpiRow, SkeletonChart } from '@/components/ui';
 
@@ -51,7 +52,8 @@ export default function ProfitBenchmarkScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const [source, setSource] = useState<FinanceSource>('combined');
   const [qboAccountId, setQboAccountId] = useState<string | null>(null);
-  const { data, isLoading, isError } = useProfitBenchmark(practiceId, source, qboAccountId);
+  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const { data, isLoading, isError } = useProfitBenchmark(practiceId, source, qboAccountId, range);
 
   return (
     <div className="flex flex-col gap-6">
@@ -75,6 +77,9 @@ export default function ProfitBenchmarkScreen() {
         />
         {/* QuickBooks is scoped by company, not practice — hide the practice tabs. */}
         {source !== 'quickbooks' && <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />}
+        {/* Period filter — windows the benchmark to a month/year/custom range;
+            Recent (default) keeps the trailing-12mo actuals. */}
+        <DateRangeFilter value={range} onChange={setRange} />
       </div>
 
       {isLoading && (
