@@ -447,6 +447,15 @@ describe('cashflowOutlook — cash IN is settled receipts, never billed producti
     expect(mar.inPence).toBe(30_911_176); // settled cash, not 37,861,002 billed
   });
 
+  it('names the cash-in feed from the settled-payment source (e.g. Dentally)', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'payments' ? { data: [{ source: 'dentally' }], error: null } : { data: [], error: null };
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-03-20', pence: 30_911_176 }], error: null } : { data: [], error: null };
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 2, now });
+    expect(r.inSource).toBe('Dentally');
+  });
+
   it('no cost source → costsBasis none, out flagged unavailable', async () => {
     supaRec.resultProvider = () => ({ data: [], error: null });
     supaRec.rpcProvider = (fn) =>

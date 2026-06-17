@@ -78,9 +78,15 @@ export default function ProfitScreen() {
 
   // Single series fetch: source + qboAccountId (from main) + accountingMethod (from branch).
   // QuickBooks is scoped by company not practice — drop practice_id when source=quickbooks.
+  // Pass the explicit [from,to] window to the backend when the period is a
+  // specific month/range (Pick month / Custom). Previously this was null and the
+  // window was applied by slicing a trailing fetch locally — so picking a PAST
+  // month fetched only the current month and sliced to nothing (£0). For the
+  // rolling "Last 12mo" preset (no range) we keep the trailing months fetch.
+  const fetchRange = filters.range.from && filters.range.to ? filters.range : null;
   const { data, isLoading, isError } = useFinanceSeries(
     source === 'quickbooks' ? null : practiceId,
-    null,  // date range threaded via months count + local slice
+    fetchRange,
     source,
     qboAccountId,
     { months: fetchMonths, accountingMethod: filters.method },
@@ -238,11 +244,10 @@ export default function ProfitScreen() {
       )}
 
       {/* KPI strip */}
-      <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
         <Kpi label="Revenue (period)" value={isLoading ? '…' : poundsCompact(grand.values.revenue)} delta="Real settled payments" />
         <Kpi label="Net profit (period)" value={isLoading ? '…' : (costsAvailable ? poundsCompact(grand.profit) : '£0')} delta={costsAvailable && grand.marginPct != null ? `${grand.marginPct.toFixed(1)}% margin` : 'no cost data (£0)'} />
         <Kpi label="Avg monthly revenue" value={isLoading ? '…' : poundsCompact(avgMonthlyRevenue)} delta={revenueMonths > 0 ? `over ${revenueMonths} mo with revenue` : undefined} />
-        <Kpi label="Columns" value={String(renderCols.length)} delta={`${filters.groupBy} view`} />
       </div>
 
       {/* Revenue & profit chart */}

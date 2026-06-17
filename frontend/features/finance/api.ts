@@ -160,6 +160,8 @@ export interface CashflowOutlook {
   anchorBank: number;
   costsAvailable: boolean;
   costsBasis: 'actuals' | 'baseline' | 'none';
+  inSource: string | null;  // feed behind cash-in (e.g. 'Dentally')
+  outSource: string | null; // feed behind cash-out (e.g. 'QuickBooks')
   balancesReconstructed: boolean;
   months: OutlookMonth[];
   currentIndex: number;
@@ -191,6 +193,8 @@ export async function getCashflowOutlook(
     anchorBank: p(r.anchorBankPence),
     costsAvailable: !!r.costsAvailable,
     costsBasis: r.costsBasis ?? 'none',
+    inSource: r.inSource ?? null,
+    outSource: r.outSource ?? null,
     balancesReconstructed: !!r.balancesReconstructed,
     months: (r.months ?? []).map((m: any) => ({
       month: m.month,
