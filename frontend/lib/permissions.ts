@@ -76,7 +76,6 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   patients: 'growth.view',
   marketing: 'growth.view',
   loyalty: 'growth.view',
-  reviews: 'growth.view',
   booking: 'growth.view',
   benchmark: 'growth.view',
 
