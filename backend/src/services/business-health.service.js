@@ -238,10 +238,17 @@ export const businessHealthService = {
             analyticsService.dashboardSummary(orgId, asOf ? { to: new Date(asOf) } : {}),
             analyticsService.businessHub(orgId, asOf ? { until: asOf } : {}),
         ]);
+        // Net profit / margin are only real on the 'actuals' basis (cost feed
+        // present — QuickBooks/Xero/manual costs). On 'revenue-only' (e.g. a
+        // Dentally-only org with no cost feed) calculatePL yields 0 cost → 0
+        // profit / 0% margin, which would render as a real "£0 profit" tile and
+        // read as a genuine zero, not "no data". Null them out instead so the
+        // tile shows "—" / "no data" and prompts the owner to connect accounting.
+        const hasActualProfit = summary.basis === 'actuals';
         const auto = {
             annual_revenue:    { value: round1(summary.revenuePence / 100), source: summary.basis },
-            net_profit:        { value: round1(summary.netProfitPence / 100), source: summary.basis },
-            net_profit_margin: { value: round1(summary.marginPct), source: summary.basis },
+            net_profit:        { value: hasActualProfit ? round1(summary.netProfitPence / 100) : null, source: hasActualProfit ? summary.basis : 'no data' },
+            net_profit_margin: { value: hasActualProfit ? round1(summary.marginPct) : null,           source: hasActualProfit ? summary.basis : 'no data' },
             cash_at_bank:      { value: round1(summary.cashflowPence / 100), source: 'bank' },
             lead_to_treatment: { value: round1(hub.group.conversionRate), source: 'live' },
             fta_no_show_rate:  { value: round1(hub.group.noShowRate), source: 'live' },
@@ -259,6 +266,9 @@ export const businessHealthService = {
                 const a = auto[m.key] || {};
                 current = a.value ?? null;
                 source = a.source || 'live';
+                // An auto metric with no live value (e.g. profit before a cost
+                // feed is connected) is "no data", not a real zero.
+                if (current == null) needsInput = true;
             } else if (m.computed && computed[m.key] != null) {
                 // Live computed value wins over a stale manual entry and renders
                 // as an auto/source-chip tile.
