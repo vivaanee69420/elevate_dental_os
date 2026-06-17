@@ -61,7 +61,6 @@ export const NAV: NavSection[] = [
     { id: 'patients', label: 'Patients' },
     { id: 'marketing', label: 'Marketing & ROI' },
     { id: 'loyalty', label: 'Loyalty & Members' },
-    { id: 'reviews', label: 'Reviews' },
     { id: 'booking', label: 'Online Booking' },
     { id: 'benchmark', label: 'Benchmark' },
   ]},
