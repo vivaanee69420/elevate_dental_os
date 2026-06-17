@@ -53,7 +53,7 @@ export const analyticsController = {
     },
     async plBenchmark(req, res) {
         const q = analytics_model_1.seriesQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.plBenchmark(req.user.organisation_id, { practiceId: q.practice_id, source: q.source, accountId: q.account_id }));
+        res.json(await analytics_service_1.analyticsService.plBenchmark(req.user.organisation_id, { practiceId: q.practice_id, source: q.source, accountId: q.account_id, since: q.from, until: q.to }));
     },
     // P&L & Margin (Intelligence OS) — scope/period-aware group statement +
     // per-entity P&L from real monthly_financials actuals.
