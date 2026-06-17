@@ -8,9 +8,14 @@ jobs:
   deploy-backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Deploy to Railway
-        uses: bervProject/railway-deploy@main
+        # Pinned to a commit SHA — this third-party action runs with RAILWAY_TOKEN
+        # in scope; a floating @main ref would let an upstream compromise deploy
+        # attacker code to production. NOTE: railway-deploy publishes no release
+        # tags, so this is the current main SHA — re-verify on bump. Consider
+        # migrating to the official @railway/cli to own the supply chain.
+        uses: bervProject/railway-deploy@c8b8e2f0da766585bcb50512e99789a4434c79a8 # main @ 2026-06-17
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         with:
@@ -19,9 +24,9 @@ jobs:
   deploy-frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Deploy to Railway
-        uses: bervProject/railway-deploy@main
+        uses: bervProject/railway-deploy@c8b8e2f0da766585bcb50512e99789a4434c79a8 # main @ 2026-06-17
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         with:

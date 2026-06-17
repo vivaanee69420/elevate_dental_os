@@ -74,8 +74,15 @@ export const payRunRepository = {
     async insertLines(lines) {
         return supabase_1.serviceClient.from('pay_run_lines').insert(lines);
     },
-    async updateTotals(id, totals) {
-        return supabase_1.serviceClient.from('pay_runs').update(totals).eq('id', id);
+    async updateTotals(orgId, id, totals) {
+        // Org-scoped for consistency with approve() — defence-in-depth so the
+        // update can never touch another tenant's pay_run even if a future caller
+        // passes an id from outside this org.
+        return supabase_1.serviceClient
+            .from('pay_runs')
+            .update(totals)
+            .eq('id', id)
+            .eq('organisation_id', orgId);
     },
     async approve(orgId, id, patch) {
         return supabase_1.serviceClient

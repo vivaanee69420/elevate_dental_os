@@ -5,6 +5,24 @@ export const dynamic = 'force-dynamic';
 const BACKEND_URL =
   process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
+// Defence-in-depth against path traversal / host repointing — the base host is
+// fixed server-side; reject any catch-all path that could escape the
+// /api/platform/ base (scheme prefix, protocol-relative //, backslash, ..).
+function safePlatformPath(path: string[]): string | null {
+  const joined = path.join('/');
+  if (
+    joined.startsWith('/') ||
+    joined.includes('\\') ||
+    joined.includes('//') ||
+    /(^|\/)\.\.(\/|$)/.test(joined) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(joined) ||
+    !/^[A-Za-z0-9/_\-.]+$/.test(joined)
+  ) {
+    return null;
+  }
+  return joined;
+}
+
 // Same-origin proxy for /api/platform/* — reads the platform_token httpOnly
 // cookie and injects it as a Bearer header to the backend. Browser JS never
 // touches the platform JWT.
@@ -14,8 +32,12 @@ async function proxy(req: NextRequest, path: string[]) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
+  const safe = safePlatformPath(path);
+  if (safe === null) {
+    return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
+  }
   const search = req.nextUrl.search;
-  const target = `${BACKEND_URL}/api/platform/${path.join('/')}${search}`;
+  const target = `${BACKEND_URL}/api/platform/${safe}${search}`;
 
   const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
   const contentType = req.headers.get('content-type');

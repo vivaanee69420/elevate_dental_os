@@ -53,7 +53,7 @@ export const payRunService = {
             lab: acc.lab + l.lab_deduction_pence,
             net: acc.net + l.net_pence,
         }), { gross: 0, lab: 0, net: 0 });
-        await pay_run_repository_1.payRunRepository.updateTotals(payRun.id, {
+        await pay_run_repository_1.payRunRepository.updateTotals(orgId, payRun.id, {
             total_gross_pence: totals.gross,
             total_lab_deductions_pence: totals.lab,
             total_net_pence: totals.net,

@@ -32,6 +32,26 @@ const nextConfig = {
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          // CSP in REPORT-ONLY mode: surfaces violations without breaking the
+          // UI so the policy can be tuned, then promoted to enforcing
+          // (Content-Security-Policy) once clean. Next.js needs 'unsafe-inline'
+          // for its injected styles and (in this setup) inline hydration; tighten
+          // toward nonces before flipping to enforce. connect-src covers the
+          // same-origin API proxy and the Supabase project.
+          {
+            key: 'Content-Security-Policy-Report-Only',
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data: blob: https:",
+              "font-src 'self' data:",
+              `connect-src 'self' ${process.env.NEXT_PUBLIC_SUPABASE_URL || ''}`.trim(),
+              "frame-ancestors 'none'",
+              "object-src 'none'",
+              "base-uri 'self'",
+            ].join('; '),
+          },
         ],
       },
     ];
