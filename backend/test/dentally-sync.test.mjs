@@ -566,6 +566,27 @@ describe('syncOneOrg', () => {
         }
     });
 
+    it('pulls the FULL practitioner roster (no updated_after) so historical clinicians attribute treatments', async () => {
+        // treatment_plan_items + appointments reference practitioners whose record
+        // may not have been "updated" inside the sync window. Windowing the
+        // practitioner pull by updated_after dropped those clinicians from the
+        // roster, so their completed treatments resolved practice_id = null and the
+        // Treatments Completed card read 0 per practice / undercounted the group.
+        // The roster is tiny, so it is ALWAYS pulled in full.
+        supaRec.resultProvider = (q) =>
+            q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
+        const practitionerWindows = [];
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            if (u.pathname.endsWith('/practitioners')) practitionerWindows.push(u.searchParams.get('updated_after'));
+            return page({ patients: [], meta: { total_pages: 1 } });
+        });
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-05-01T00:00:00Z' }, () => {}, { recent: true });
+        expect(practitionerWindows.length).toBeGreaterThan(0);
+        for (const w of practitionerWindows) expect(w).toBeNull();
+    });
+
     it('always requests cancelled + DNA appointments (cancelled=true on every /appointments pull)', async () => {
         // Dentally's GET /appointments defaults cancelled=false, silently dropping
         // BOTH cancelled and did_not_attend rows. Without cancelled=true we store
