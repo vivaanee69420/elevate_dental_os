@@ -1052,3 +1052,19 @@ seeded from catalogue defaults on first GET. Treatment values are integer **penc
 
 `Settings = { organisation_id, treatments: [{ name, default_value_pence }], sources: string[], payment_plans: string[], gdpr_default_basis: 'consent'|'legitimate_interest'|'contract'|'none', quiet_hours_start, quiet_hours_end ('HH:MM'), quiet_hours_tz, marketing_default_consent, updated_at, updated_by }`.
 `Counts = { template_count, active_sequence_count, treatment_count, source_count }` (active_sequence_count is 0 until B3 lands the crm_sequences table).
+
+## Production logs (`/api/admin/logs/*`) *(owner only)*
+
+Read/download the on-disk production logs. Gated `requireRole('owner')` at the
+mount point. Logs are written by `lib/logger.js` into `LOG_DIR` (point it at a
+persistent Railway Volume, e.g. `/data/logs`). When `LOG_DIR` is unset the app
+logs to stdout only and these endpoints report `enabled: false` / `files: []`.
+
+Files: `app.<date>.<n>.log` (all levels) and `error.<date>.<n>.log` (errors +
+fatals only), daily-rotated, auto-pruned to `LOG_RETAIN_APP_DAYS` (default 14)
+and `LOG_RETAIN_ERROR_DAYS` (default 30). The `file` query param must be a plain
+basename of a file in `LOG_DIR` (path traversal rejected with `400`).
+
+- `GET /api/admin/logs` -> `{ enabled, directory, files: [{ name, sizeBytes, modified }] }` (newest first)
+- `GET /api/admin/logs/tail?file=<name>&lines=<n>` -> `{ file, lines: string[] }` (default 200 lines, max 5000; reads ≤512 KB from the file end). `400` bad name, `404` missing file, `409` if `LOG_DIR` unset.
+- `GET /api/admin/logs/download?file=<name>` -> raw `text/plain` attachment. Same error codes.

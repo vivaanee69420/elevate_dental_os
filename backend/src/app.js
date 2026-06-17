@@ -55,6 +55,8 @@ import * as debt_routes_1 from "./routes/debt.routes.js";
 import * as notification_routes_1 from "./routes/notification.routes.js";
 import platformAdminRouter from "./routes/platform-admin.routes.js";
 import platformCoursesRouter from "./routes/platform-courses.routes.js";
+import logs_routes_1 from "./routes/logs.routes.js";
+import { logger } from "./lib/logger.js";
 const CORS_ALLOWED = [
     'http://localhost:3000',
     'http://localhost:3001',
@@ -70,11 +72,10 @@ const CORS_ALLOWED = [
 export function buildApp() {
     const app = (0, express_1.default)();
     app.set('trust proxy', true);
-    app.use((0, pino_http_1.pinoHttp)({
-        level: process.env.LOG_LEVEL || 'info',
-        transport: process.env.NODE_ENV === 'development' ? { target: 'pino-pretty' } : undefined,
-        redact: ['req.headers.authorization', 'req.headers.cookie', '*.password', '*.token'],
-    }));
+    // Logger configured in lib/logger.js (stdout always; + rotating app/error
+    // files when LOG_DIR points at a persistent Volume). pino-http logs every
+    // request through it; route errors/fatals also land in error.<date>.log.
+    app.use((0, pino_http_1.pinoHttp)({ logger }));
     app.use((0, cors_1.default)({
         origin(origin, cb) {
             if (!origin || CORS_ALLOWED.includes(origin))
@@ -231,6 +232,9 @@ export function buildApp() {
     api.use('/wealth', wealth_routes_1.default);
     api.use('/training', training_routes_1.default);
     api.use('/practices', practices_routes_1.default);
+    // Owner-only: read/download the on-disk production logs (LOG_DIR). Gated
+    // here at the mount point so every route in the module is owner-restricted.
+    api.use('/admin/logs', (0, auth_1.requireRole)('owner'), logs_routes_1.default);
     app.use('/api', api);
     // Sentry Express error handler — must come AFTER routes, BEFORE our handler.
     Sentry.setupExpressErrorHandler(app);
