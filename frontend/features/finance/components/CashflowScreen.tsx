@@ -282,7 +282,8 @@ export default function CashflowScreen() {
             {outlook.costsBasis !== 'none' && (
               <p className="text-xs text-ink-muted mb-4">
                 <strong>Net = In − Out.</strong> In = settled patient payments received
-                that month. Out = running costs for that month (P&amp;L cost base).
+                that month{outlook.inSource ? ` (from ${outlook.inSource})` : ''}. Out =
+                running costs for that month{outlook.outSource ? ` (from ${outlook.outSource})` : ' (P&L cost base)'}.
               </p>
             )}
             {outlook.costsBasis === 'none' && (
@@ -314,11 +315,11 @@ export default function CashflowScreen() {
                   </span>
                 </div>
                 <div className="flex justify-between text-xs text-ink-muted mt-1">
-                  <span>In · settled patient payments</span>
+                  <span>In · settled patient payments{outlook.inSource ? ` · ${outlook.inSource}` : ''}</span>
                   <span>{gbp(m.in)}</span>
                 </div>
                 <div className="flex justify-between text-xs text-ink-muted">
-                  <span>Out · running costs</span>
+                  <span>Out · running costs{m.costsAvailable && outlook.outSource ? ` · ${outlook.outSource}` : ''}</span>
                   <span>{m.costsAvailable ? `−${gbp(m.out)}` : '—'}</span>
                 </div>
                 {outlook.costsAvailable && (
@@ -330,8 +331,9 @@ export default function CashflowScreen() {
               </div>
             ))}
             <p className="text-ink-muted" style={{ fontSize: 11, marginTop: 10 }}>
-              * projected from recent run-rate. In = real settled receipts; out = P&amp;L cost base
-              {outlook.costsBasis !== 'none' ? ` (${outlook.costsBasis})` : ' (not sourced)'}.
+              * projected from recent run-rate. In = real settled receipts
+              {outlook.inSource ? ` (${outlook.inSource})` : ''}; out = P&amp;L cost base
+              {outlook.outSource ? ` (${outlook.outSource})` : outlook.costsBasis !== 'none' ? ` (${outlook.costsBasis})` : ' (not sourced)'}.
             </p>
           </div>
 

@@ -96,26 +96,12 @@ export default function QbFilterBar({ value, onChange }: Props) {
         )}
       </div>
 
-      {/* Method + columns + compare */}
+      {/* Accounting method. Columns are fixed to a month view and the compare
+          toggles were removed — the matrix is a straight month-by-month P&L. */}
       <div style={wrap}>
         <span style={label}>Method</span>
         <button style={seg(value.method === 'accrual')} onClick={() => set({ method: 'accrual' })}>Accrual</button>
         <button style={seg(value.method === 'cash')} onClick={() => set({ method: 'cash' })}>Cash</button>
-
-        <span style={{ ...label, marginLeft: 10 }}>Columns</span>
-        {(['total', 'month', 'quarter', 'year'] as GroupBy[]).map((g) => (
-          <button key={g} style={seg(value.groupBy === g)} onClick={() => set({ groupBy: g })}>
-            {g === 'total' ? 'Total' : g.charAt(0).toUpperCase() + g.slice(1)}
-          </button>
-        ))}
-
-        <span style={{ ...label, marginLeft: 10 }}>Compare</span>
-        <button style={seg(value.compare.pctOfIncome)}
-          onClick={() => set({ compare: { ...value.compare, pctOfIncome: !value.compare.pctOfIncome } })}>% of income</button>
-        <button style={seg(value.compare.prevPeriod)}
-          onClick={() => set({ compare: { ...value.compare, prevPeriod: !value.compare.prevPeriod } })}>Prev period</button>
-        <button style={seg(value.compare.prevYear)}
-          onClick={() => set({ compare: { ...value.compare, prevYear: !value.compare.prevYear } })}>Prev year</button>
       </div>
     </div>
   );

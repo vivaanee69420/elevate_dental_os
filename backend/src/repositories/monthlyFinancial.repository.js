@@ -65,6 +65,20 @@ export const monthlyFinancialRepository = {
         if (error) throw new Error(error.message);
         return (Array.isArray(data) ? data : []).filter((r) => !drop.has(r.source));
     },
+    // Distinct cost-data sources present for an org (e.g. ['quickbooks'] or
+    // ['xero','manual']), revoked providers excluded. Cheap — used to name the
+    // cash-out feed on the cashflow card. Capped read; the source vocabulary is
+    // tiny so a sample reliably captures every distinct value in practice.
+    async distinctSources(orgId) {
+        const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
+        const { data, error } = await supabase_1.serviceClient
+            .from('monthly_financials')
+            .select('source')
+            .eq('organisation_id', orgId)
+            .limit(LIMIT_GUARD);
+        if (error) throw new Error(error.message);
+        return [...new Set((Array.isArray(data) ? data : []).map((r) => r.source).filter((s) => s && !drop.has(s)))];
+    },
     async remove(orgId, id) {
         const { error } = await supabase_1.serviceClient
             .from('monthly_financials')
