@@ -1977,10 +1977,12 @@ export const analyticsService = {
         // So source IN from settled receipts directly and use financeSeries ONLY
         // for the cost (OUT) buckets.
         const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, null, null);
-        const [series, bank, settledDays] = await Promise.all([
+        const [series, bank, settledDays, inSrcSlugs, outSrcSlugs] = await Promise.all([
             this.financeSeries(orgId, { months, now, practiceId }),
             analytics_repository_1.analyticsRepository.bankSummary(orgId),
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
+            analytics_repository_1.analyticsRepository.settledReceiptSources(orgId, sinceISO, practiceId, untilISO).catch(() => []),
+            monthlyFinancial_repository_1.monthlyFinancialRepository.distinctSources(orgId).catch(() => []),
         ]);
         const settledByMonth = this._monthlyRevenueFromDays(settledDays);
         const anchorBank = bank.totalPence || 0;
@@ -2021,6 +2023,21 @@ export const analyticsService = {
             }
         }
         const costsAvailable = costsBasis !== 'none';
+
+        // Name the data feed behind each line. Cash IN = the settled-payment
+        // source (Dentally / Stripe / GoCardless); when a month fell back to
+        // financeSeries revenue (no settled receipts), it came from the cost
+        // source instead. Cash OUT = the cost source (QuickBooks / Xero / manual).
+        const SOURCE_LABELS = { dentally: 'Dentally', quickbooks: 'QuickBooks', xero: 'Xero', manual: 'manual entry', stripe: 'Stripe', gocardless: 'GoCardless' };
+        const labelSources = (slugs) => {
+            const names = [...new Set((slugs || []).map((s) => SOURCE_LABELS[s] || s))];
+            return names.length ? names.join(' + ') : null;
+        };
+        const outSource = costsBasis === 'actuals' ? labelSources(outSrcSlugs)
+            : costsBasis === 'baseline' ? 'business baseline (estimate)'
+            : null;
+        const hasSettled = real.some((m) => m.inPence > 0 && (settledByMonth.get(m.month) || 0) > 0);
+        const inSource = (hasSettled && labelSources(inSrcSlugs)) || outSource || null;
 
         // Forward projected months (next `forward` calendar months).
         const pad = (n) => String(n).padStart(2, '0');
@@ -2090,6 +2107,8 @@ export const analyticsService = {
             anchorBankPence: anchorBank,
             costsAvailable,
             costsBasis,
+            inSource,  // human label for the cash-in feed (e.g. 'Dentally')
+            outSource, // human label for the cash-out feed (e.g. 'QuickBooks')
             balancesReconstructed: currentIdx >= 1, // historical closings derived from today's balance
             months: all,
             currentIndex: currentIdx,

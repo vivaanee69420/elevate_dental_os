@@ -293,6 +293,25 @@ export const analyticsRepository = {
             throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
+    // Distinct sources behind settled receipts in [since, until) (e.g.
+    // ['dentally'] or ['dentally','stripe']) — names the cash-in feed on the
+    // cashflow card. Group-receipt-excluded sources are dropped to match the
+    // figures shown. Cheap capped read.
+    async settledReceiptSources(orgId, sinceISO, practiceId = null, untilISO = null) {
+        const drop = new Set(await groupReceiptExcludedSources(orgId));
+        let q = supabase_1.serviceClient
+            .from('payments')
+            .select('source')
+            .eq('organisation_id', orgId)
+            .eq('status', 'settled')
+            .gte('processed_at', sinceISO)
+            .limit(LIMIT_GUARD);
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        if (untilISO) q = q.lt('processed_at', untilISO);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        return [...new Set((Array.isArray(data) ? data : []).map((r) => r.source).filter((s) => s && !drop.has(s)))];
+    },
     async settledReceiptsByDayBulk(orgId, sinceISO, practiceIds, untilISO = null) {
         const drop = new Set(await groupReceiptExcludedSources(orgId));
         let q = supabase_1.serviceClient
