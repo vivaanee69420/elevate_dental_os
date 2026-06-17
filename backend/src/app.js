@@ -71,7 +71,11 @@ const CORS_ALLOWED = [
 ].filter(Boolean);
 export function buildApp() {
     const app = (0, express_1.default)();
-    app.set('trust proxy', true);
+    // Trust exactly one proxy hop (Railway's edge). `true` trusted the entire
+    // X-Forwarded-For chain, letting a client spoof XFF to rotate req.ip and
+    // defeat the per-IP rate limiter. Override with TRUST_PROXY_HOPS if the
+    // deploy fronts the app with additional proxies.
+    app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
     // Logger configured in lib/logger.js (stdout always; + rotating app/error
     // files when LOG_DIR points at a persistent Volume). pino-http logs every
     // request through it; route errors/fatals also land in error.<date>.log.
@@ -85,7 +89,27 @@ export function buildApp() {
         },
         credentials: true,
     }));
-    app.use((0, helmet_1.default)({ contentSecurityPolicy: false }));
+    // Helmet sets HSTS, nosniff, frameguard, etc. CSP is enabled in REPORT-ONLY
+    // mode first: it logs violations (incl. the inline-styled / status page)
+    // without blocking, so we can tighten to enforce mode once the report is
+    // clean. Set CSP_ENFORCE=true to switch from report-only to blocking.
+    app.use((0, helmet_1.default)({
+        contentSecurityPolicy: {
+            useDefaults: true,
+            reportOnly: process.env.CSP_ENFORCE !== 'true',
+            directives: {
+                defaultSrc: ["'self'"],
+                // The public status page at / uses an inline <style> block.
+                styleSrc: ["'self'", "'unsafe-inline'"],
+                scriptSrc: ["'self'"],
+                objectSrc: ["'none'"],
+                frameAncestors: ["'none'"],
+                baseUri: ["'self'"],
+                // API serves JSON/HTML only — no third-party connect targets.
+                upgradeInsecureRequests: [],
+            },
+        },
+    }));
     app.use((0, express_rate_limit_1.default)({
         windowMs: 60 * 1000,
         max: 100,

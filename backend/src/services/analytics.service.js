@@ -21,6 +21,7 @@ import * as aws_ses_1 from "../lib/aws-ses.js";
 import { bucketsByPeriod, accountLinesByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
+import { checkBudget, recordUsage } from "../lib/ai/guardrails.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonParts, londonMonthKey } from "../lib/tz.js";
@@ -1319,8 +1320,10 @@ export const analyticsService = {
             },
         };
 
+        await checkBudget(orgId); // throws AppError 429 when over the monthly token budget
         try {
             const ai = await claude_1.askAnalyst(orgId, q, summary);
+            await recordUsage(orgId, { feature: 'analyst', model: getProvider().model, usage: ai.usage });
             const answerFindings = ai.findings && ai.findings.length ? ai.findings : findings.slice(0, 4);
             return { scope, period, question: q, answer: ai.answer, findings, answerFindings, basis: 'claude', model: getProvider().model, practiceBreakdown };
         } catch (err) {
@@ -2333,6 +2336,7 @@ export const analyticsService = {
         if (!hasBaseline && practices.length === 0 && sources.length === 0) {
             return { basis: 'ai', insights: [], error: 'No data to analyse' };
         }
+        await checkBudget(orgId); // throws AppError 429 when over the monthly token budget
         try {
             const insights = await claude_1.generateDataInsights(orgId, {
                 baseline,
@@ -2340,6 +2344,7 @@ export const analyticsService = {
                 practices,
                 sources,
             });
+            await recordUsage(orgId, { feature: 'insights', model: getProvider().model, usage: insights?.usage });
             return { basis: 'ai', insights };
         }
         catch (err) {
@@ -2394,8 +2399,10 @@ export const analyticsService = {
         catch (err) {
             return { basis: 'unavailable', items: [], error: 'Could not assemble data' };
         }
+        await checkBudget(orgId); // throws AppError 429 when over the monthly token budget
         try {
-            const items = await claude_1.generateDecisionLens(orgId, { surface, scopeLabel, periodLabel, data });
+            const { items, usage } = await claude_1.generateDecisionLens(orgId, { surface, scopeLabel, periodLabel, data });
+            await recordUsage(orgId, { feature: 'decision_lens', model: getProvider().model, usage });
             if (!items.length) return { basis: 'unavailable', items: [] };
             await analytics_repository_1.analyticsRepository.upsertDecisionLensCache(orgId, surface, cacheKey, items).catch(() => {});
             return { basis: 'ai', cached: false, generatedAt: new Date().toISOString(), items };
@@ -2891,12 +2898,14 @@ export const analyticsService = {
         let priorities = [];
         let basis = 'deterministic';
         if (!empty) {
+            await checkBudget(orgId); // throws AppError 429 when over the monthly token budget
             try {
                 const ai = await claude_1.generateBoardReport(orgId, {
                     scopeLabel,
                     periodLabel,
                     data: metrics,
                 });
+                await recordUsage(orgId, { feature: 'board_report', model: getProvider().model, usage: ai.usage });
                 if (ai.summary.length) { summary = ai.summary; priorities = ai.priorities; basis = 'ai'; }
             } catch (err) {
                 // fall through to deterministic

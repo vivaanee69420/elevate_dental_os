@@ -4,7 +4,9 @@
 import * as zod_1 from "zod";
 export const contactListQuerySchema = zod_1.z.object({
     type: zod_1.z.enum(['lead', 'patient', 'lapsed']).optional(),
-    search: zod_1.z.string().optional(),
+    // Length-capped; PostgREST filter metacharacters are stripped in the
+    // repository before interpolation into .or() (see contact.repository.list).
+    search: zod_1.z.string().max(80).optional(),
     practice_id: zod_1.z.string().uuid().optional(),
     integration_account_id: zod_1.z.string().uuid().optional(),
     // Filter by integration origin, e.g. 'dentally' | 'gohighlevel' (drives the

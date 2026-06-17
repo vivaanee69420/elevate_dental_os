@@ -6,6 +6,25 @@ export const dynamic = 'force-dynamic';
 const BACKEND_URL =
   process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
+// Defence-in-depth against path traversal / host repointing. The base host is
+// fixed server-side; this rejects any catch-all path that could escape it
+// (scheme prefix, protocol-relative //, backslash, .. traversal, leading /).
+// Next normalises segments before this runs, but we don't want to rely on that.
+function safeBackendPath(path: string[]): string | null {
+  const joined = path.join('/');
+  if (
+    joined.startsWith('/') ||
+    joined.includes('\\') ||
+    joined.includes('//') ||
+    /(^|\/)\.\.(\/|$)/.test(joined) ||
+    /^[a-z][a-z0-9+.-]*:/i.test(joined) ||
+    !/^[A-Za-z0-9/_\-.]+$/.test(joined)
+  ) {
+    return null;
+  }
+  return joined;
+}
+
 // Same-origin proxy. Browser never sees the JWT (httpOnly cookie).
 // This handler reads the session server-side and injects the Bearer token.
 async function proxy(req: NextRequest, path: string[]) {
@@ -18,8 +37,12 @@ async function proxy(req: NextRequest, path: string[]) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
+  const safe = safeBackendPath(path);
+  if (safe === null) {
+    return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
+  }
   const search = req.nextUrl.search;
-  const target = `${BACKEND_URL}/${path.join('/')}${search}`;
+  const target = `${BACKEND_URL}/${safe}${search}`;
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${session.access_token}`,

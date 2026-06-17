@@ -308,13 +308,14 @@ Return ONLY a valid JSON object {"items": [...]} with 3-4 items. No prose, no co
         maxTokens: 1200,
     });
     const arr = JSON.parse(res.text).items;
-    if (!Array.isArray(arr)) return [];
+    if (!Array.isArray(arr)) return { items: [], usage: res.usage };
     const TONES = new Set(['good', 'warn', 'bad', 'info']);
-    return arr.filter((x) => x && x.title && x.body).slice(0, 4).map((x) => ({
+    const items = arr.filter((x) => x && x.title && x.body).slice(0, 4).map((x) => ({
         tone: TONES.has(x.tone) ? x.tone : 'info',
         title: String(x.title), body: String(x.body),
         ...(x.value ? { value: String(x.value) } : {}),
     }));
+    return { items, usage: res.usage };
 }
 
 // ============================================================================

@@ -26,6 +26,26 @@ const PASTE_HINT = 'Paste your Dentally Bearer token from Dentally → Settings 
 const DEFAULT_SCOPES = 'patient:read appointment:read user:read practice:read financials:read treatments';
 function dentallyScopes() { return process.env.DENTALLY_SCOPES || DEFAULT_SCOPES; }
 
+// SSRF guard for the owner-supplied `baseUrl`. Without this, z.string().url()
+// accepts http://169.254.169.254/ (cloud metadata) or http://localhost:<port>/,
+// and the sync code would then issue requests there WITH the stored Dentally
+// credential attached. Restrict to https Dentally hosts only.
+function assertSafeDentallyBaseUrl(raw) {
+    let u;
+    try { u = new URL(raw); }
+    catch { throw new Error('baseUrl must be a valid URL'); }
+    if (u.protocol !== 'https:') {
+        throw new Error('baseUrl must use https');
+    }
+    const host = u.hostname.toLowerCase();
+    const allowed = host === 'dentally.co' || host.endsWith('.dentally.co');
+    if (!allowed) {
+        throw new Error('baseUrl host not allowed (must be a dentally.co host)');
+    }
+    // Normalise to origin — drop any path/query/credentials the caller appended.
+    return u.origin;
+}
+
 function authBase() { return process.env.DENTALLY_AUTH_BASE || 'https://api.dentally.co'; }
 function authorizeUrl() { return `${authBase()}/oauth/authorize`; }
 function tokenUrl() { return `${authBase()}/oauth/token`; }
@@ -99,7 +119,7 @@ export const DentallyProvider = {
         }
         if (payload.apiKey) {
             await integrationsRepository.upsertSecrets(orgId, 'dentally', {
-                config: payload.baseUrl ? { base_url: payload.baseUrl } : {},
+                config: payload.baseUrl ? { base_url: assertSafeDentallyBaseUrl(payload.baseUrl) } : {},
                 secrets: encryptSecret(JSON.stringify({ apiKey: payload.apiKey })),
                 status: 'active',
                 verified_at: new Date().toISOString(),

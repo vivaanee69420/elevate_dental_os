@@ -25,7 +25,11 @@ export const contactRepository = {
         if (q.source)
             query = query.eq('source', q.source);
         if (q.search) {
-            query = query.or(`first_name.ilike.%${q.search}%,last_name.ilike.%${q.search}%,email.ilike.%${q.search}%,phone.ilike.%${q.search}%`);
+            // Strip PostgREST filter metacharacters so the value can't break out
+            // of the intended ilike clauses and inject arbitrary filter operators.
+            // ( ) , . \ " * are all reserved in the PostgREST query grammar.
+            const s = q.search.replace(/[(),.\\"*]/g, ' ').slice(0, 80);
+            query = query.or(`first_name.ilike.%${s}%,last_name.ilike.%${s}%,email.ilike.%${s}%,phone.ilike.%${s}%`);
         }
         const { data, error, count } = await query;
         if (error)

@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 
+const SECURE = process.env.NODE_ENV === 'production';
+
+// Force httpOnly + Secure (prod) + SameSite on any session cookie this
+// middleware writes, preserving the library-supplied maxAge/expires/domain.
+function secureCookieOpts(options: any) {
+  return {
+    ...options,
+    httpOnly: true,
+    secure: SECURE,
+    sameSite: 'lax' as const,
+    path: options?.path ?? '/',
+  };
+}
+
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
 
@@ -25,10 +39,14 @@ export async function middleware(req: NextRequest) {
       cookies: {
         get(name: string) { return req.cookies.get(name)?.value; },
         set(name: string, value: string, options: any) {
-          res.cookies.set({ name, value, ...options });
+          // Force the security flags rather than trusting whatever @supabase/ssr
+          // passes — behind a TLS-terminating proxy the inbound request is plain
+          // HTTP, so the library may emit the refreshed session cookie WITHOUT
+          // Secure. Mirror lib/supabase-server.ts cookieOpts().
+          res.cookies.set({ name, value, ...secureCookieOpts(options) });
         },
         remove(name: string, options: any) {
-          res.cookies.set({ name, value: '', ...options });
+          res.cookies.set({ name, value: '', ...secureCookieOpts(options), maxAge: 0 });
         },
       },
     }
