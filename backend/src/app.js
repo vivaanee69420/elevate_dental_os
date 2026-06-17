@@ -55,7 +55,7 @@ import * as debt_routes_1 from "./routes/debt.routes.js";
 import * as notification_routes_1 from "./routes/notification.routes.js";
 import platformAdminRouter from "./routes/platform-admin.routes.js";
 import platformCoursesRouter from "./routes/platform-courses.routes.js";
-import logs_routes_1 from "./routes/logs.routes.js";
+import * as logs_routes_1 from "./routes/logs.routes.js";
 import { logger } from "./lib/logger.js";
 const CORS_ALLOWED = [
     'http://localhost:3000',
