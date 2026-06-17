@@ -43,6 +43,7 @@ vi.mock('../src/services/analytics.service.js', () => ({
 }));
 
 const { supaRec } = await import('./setup.js');
+const { analyticsService } = await import('../src/services/analytics.service.js');
 const svc = (await import('../src/services/business-health.service.js')).businessHealthService;
 const ORG = 'org-hhhhhhhh';
 
@@ -78,6 +79,35 @@ describe('businessHealthService.metrics', () => {
     const recall = metrics.find((m) => m.key === 'recall_compliance');
     expect(recall.current).toBeNull();
     expect(recall.needsInput).toBe(true);
+  });
+
+  it('net profit/margin are "no data" (null + needsInput), not a fake £0, when no cost feed', async () => {
+    // 'revenue-only' basis = real revenue, no QuickBooks/Xero cost feed -> PL
+    // yields 0 cost => 0 profit. That must NOT render as a genuine £0 profit.
+    analyticsService.dashboardSummary.mockResolvedValueOnce({
+      basis: 'revenue-only', revenuePence: 90000000, netProfitPence: 0,
+      marginPct: 0, cashflowPence: 4000000,
+    });
+    supaRec.resultProvider = (q) =>
+      q.table === 'business_health'
+        ? { data: { baseline: {}, targets: {}, manual: {} }, error: null }
+        : { data: [], error: null };
+
+    const { metrics } = await svc.metrics(ORG, 'owner');
+    const by = (k) => metrics.find((m) => m.key === k);
+
+    // Revenue is still real and present.
+    expect(by('annual_revenue').current).toBe(900000);
+
+    const profit = by('net_profit');
+    expect(profit.current).toBeNull();
+    expect(profit.needsInput).toBe(true);
+    expect(profit.source).toBe('no data');
+
+    const margin = by('net_profit_margin');
+    expect(margin.current).toBeNull();
+    expect(margin.needsInput).toBe(true);
+    expect(margin.source).toBe('no data');
   });
 
   it('reception gets an empty stub (CRM-only rule)', async () => {
