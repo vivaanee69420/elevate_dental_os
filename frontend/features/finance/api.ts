@@ -442,12 +442,15 @@ export async function getProfitBenchmark(
   practiceId?: string | null,
   source: FinanceSource = 'combined',
   accountId?: string | null,
+  range?: DateRange | null,
 ): Promise<ProfitBenchmark> {
   const qs = new URLSearchParams();
   // QuickBooks is scoped by company, not practice — drop practice_id.
   if (source !== 'quickbooks' && practiceId) qs.set('practice_id', practiceId);
   if (source !== 'combined') qs.set('source', source);
   if (source === 'quickbooks' && accountId) qs.set('account_id', accountId);
+  // from/to take effect only when BOTH set (else the trailing-12mo window).
+  if (range?.from && range?.to) { qs.set('from', range.from); qs.set('to', range.to); }
   const q = qs.toString();
   const r = await api(`/api/analytics/pl-benchmark${q ? `?${q}` : ''}`);
   return {

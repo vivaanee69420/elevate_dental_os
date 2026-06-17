@@ -70,10 +70,11 @@ export function useProfitBenchmark(
   practiceId: string | null = null,
   source: FinanceSource = 'combined',
   accountId: string | null = null,
+  range?: DateRange | null,
 ) {
   return useQuery({
-    queryKey: ['pl-benchmark', practiceId, source, accountId],
-    queryFn: () => getProfitBenchmark(practiceId, source, accountId),
+    queryKey: ['pl-benchmark', practiceId, source, accountId, range?.from ?? null, range?.to ?? null],
+    queryFn: () => getProfitBenchmark(practiceId, source, accountId, range),
   });
 }
 
