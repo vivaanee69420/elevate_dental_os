@@ -276,9 +276,15 @@ export default function CashflowScreen() {
         <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: '1fr 1fr' }}>
           <div className="card-padded">
             <h2 className="display text-lg font-semibold mb-1">Cash in vs cash out</h2>
-            <p className="text-sm text-ink-muted mb-4">
+            <p className="text-sm text-ink-muted mb-2">
               What lands in the bank against what leaves it, month by month.
             </p>
+            {outlook.costsBasis !== 'none' && (
+              <p className="text-xs text-ink-muted mb-4">
+                <strong>Net = In − Out.</strong> In = settled patient payments received
+                that month. Out = running costs for that month (P&amp;L cost base).
+              </p>
+            )}
             {outlook.costsBasis === 'none' && (
               <div
                 className="text-xs"
@@ -308,13 +314,19 @@ export default function CashflowScreen() {
                   </span>
                 </div>
                 <div className="flex justify-between text-xs text-ink-muted mt-1">
-                  <span>In</span>
+                  <span>In · settled patient payments</span>
                   <span>{gbp(m.in)}</span>
                 </div>
                 <div className="flex justify-between text-xs text-ink-muted">
-                  <span>Out</span>
-                  <span>{m.costsAvailable ? gbp(m.out) : '—'}</span>
+                  <span>Out · running costs</span>
+                  <span>{m.costsAvailable ? `−${gbp(m.out)}` : '—'}</span>
                 </div>
+                {outlook.costsAvailable && (
+                  <div className="flex justify-between text-xs mt-1" style={{ color: m.net >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                    <span>Net · In − Out</span>
+                    <span>{signed(m.net)}</span>
+                  </div>
+                )}
               </div>
             ))}
             <p className="text-ink-muted" style={{ fontSize: 11, marginTop: 10 }}>
