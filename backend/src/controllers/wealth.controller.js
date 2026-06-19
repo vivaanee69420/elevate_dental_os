@@ -17,6 +17,10 @@ export const wealthController = {
     async exitPlan(req, res) {
         res.json(await wealth_service_1.wealthService.exitPlan(req.user.organisation_id));
     },
+    // Saved-plan snapshot vs the live re-resolved plan (drift since last save).
+    async exitPlanCompare(req, res) {
+        res.json(await wealth_service_1.wealthService.exitPlanCompare(req.user.organisation_id));
+    },
     async netWorth(req, res) {
         res.json(await wealth_service_1.wealthService.netWorth(req.user.organisation_id));
     },

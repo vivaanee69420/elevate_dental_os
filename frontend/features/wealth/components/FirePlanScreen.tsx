@@ -7,12 +7,68 @@
 // sliders recompute live via POST /compute/exit-plan. Owner-only. Integer pence.
 import { useEffect, useRef, useState } from 'react';
 import { formatPence } from '@/lib/format';
-import { useWealthInputs, useExitPlan, useComputeExitPlan, useSaveWealthInputs } from '../wealth-hooks';
-import type { ExitPlanInput, ExitPlanResult } from '../wealth-api';
+import { useWealthInputs, useExitPlan, useExitPlanCompare, useComputeExitPlan, useSaveWealthInputs } from '../wealth-hooks';
+import type { ExitPlanInput, ExitPlanResult, ExitPlanCompare } from '../wealth-api';
 
 const toPounds = (pence: number) => Math.round(pence / 100);
 const toPence = (pounds: number) => Math.round(pounds * 100);
 const pctStr = (n: number) => `${n.toFixed(1)}%`;
+// Clean, decimal-free pounds for headline figures (£4,303,494 not £4,303,493.79).
+const gbp0 = (pence: number) => `£${toPounds(pence).toLocaleString('en-GB')}`;
+// UK personal allowance — mirrors backend UK_INCOME_TAX.personalAllowancePence (£12,570).
+const PERSONAL_ALLOWANCE_PENCE = 1_257_000;
+
+function Stat({ label, value, accent }: { label: string; value: string; accent?: 'good' | 'bad' }) {
+  const colour = accent === 'good' ? 'var(--success)' : accent === 'bad' ? 'var(--danger)' : 'var(--ink)';
+  return (
+    <div style={{ flex: 1, minWidth: 130 }}>
+      <div className="text-ink-muted" style={{ fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, marginTop: 3, color: colour, lineHeight: 1.1 }}>{value}</div>
+    </div>
+  );
+}
+
+function Verdict({ c, retireAge }: { c: ExitPlanResult; retireAge: number }) {
+  const ok = c.onTrack;
+  const accent = ok ? 'var(--success)' : 'var(--danger)';
+  const headline = ok
+    ? 'On track to retire on this plan.'
+    : `Shortfall of ${gbp0(c.gapPence)} to close.`;
+  const stats = ok
+    ? [
+        { label: 'Sale price', value: gbp0(c.targetSalePence) },
+        { label: 'Nets to invest', value: gbp0(c.investablePence), accent: 'good' as const },
+        { label: 'Pot you need', value: gbp0(c.potNeededPence) },
+        { label: 'Income / yr', value: gbp0(c.projection[0]?.incomePence ?? 0), accent: 'good' as const },
+      ]
+    : [
+        { label: 'Pot you need', value: gbp0(c.potNeededPence) },
+        { label: 'Sale needed', value: gbp0(c.requiredSalePence) },
+        { label: 'Growth / yr', value: pctStr(c.reqGrowthPct), accent: 'bad' as const },
+        { label: 'Or retire after', value: `age ${retireAge}+`, accent: 'bad' as const },
+      ];
+  return (
+    <div className="card" style={{ marginBottom: 16, overflow: 'hidden' }}>
+      <div style={{ borderLeft: `4px solid ${accent}`, padding: '18px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <span style={{
+            fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.6,
+            color: 'white', background: accent, padding: '3px 10px', borderRadius: 999,
+          }}>{ok ? 'On track' : 'Off track'}</span>
+          <span style={{ fontSize: 16, fontWeight: 700 }}>{headline}</span>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20 }}>
+          {stats.map((s) => <Stat key={s.label} {...s} />)}
+        </div>
+        <div className="text-ink-muted" style={{ fontSize: 12, marginTop: 12 }}>
+          {ok
+            ? 'Income drawn rises for life under the 4% rule.'
+            : 'Close the gap: grow the group, add freehold rent, or push your retirement date back.'}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function NumField({ label, value, onChange, suffix, step = 1 }: {
   label: string; value: number; onChange: (n: number) => void; suffix?: string; step?: number;
@@ -54,6 +110,87 @@ function Card({ label, value, sub, tone }: { label: string; value: string; sub?:
   );
 }
 
+// Saved-plan snapshot vs live re-resolved plan. Each row compares the figure the
+// owner locked at save against today's live number, with a signed delta coloured
+// by whether the move helps (a bigger pot NEEDED is a move the wrong way).
+function DriftRow({ label, saved, live, fmt, upGood = true }: {
+  label: string; saved: number; live: number; fmt: (n: number) => string; upGood?: boolean;
+}) {
+  const delta = live - saved;
+  const flat = Math.abs(delta) < 1;
+  const good = upGood ? delta > 0 : delta < 0;
+  const colour = flat ? 'var(--ink-muted)' : good ? 'var(--success)' : 'var(--danger)';
+  const arrow = flat ? '=' : delta > 0 ? '▲' : '▼';
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 13, alignItems: 'center' }}>
+      <span className="text-ink-muted">{label}</span>
+      <span style={{ textAlign: 'right' }}>{fmt(saved)}</span>
+      <span style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(live)}</span>
+      <span style={{ textAlign: 'right', color: colour, fontWeight: 600, fontSize: 12 }}>
+        {flat ? '—' : `${arrow} ${fmt(Math.abs(delta))}`}
+      </span>
+    </div>
+  );
+}
+
+function DriftPanel({ data }: { data: ExitPlanCompare }) {
+  const { saved, live, updatedAt } = data;
+  // Nothing saved yet — invite the owner to lock a baseline.
+  if (!saved || !updatedAt) {
+    return (
+      <div className="card-padded" style={{ marginBottom: 16 }}>
+        <div className="display font-bold" style={{ fontSize: 16, marginBottom: 4 }}>Plan vs live</div>
+        <p className="text-ink-muted" style={{ fontSize: 12 }}>
+          Save a plan to lock a baseline. Once saved, this shows how your live business value and the resulting plan have drifted since.
+        </p>
+      </div>
+    );
+  }
+  const sp = saved.plan, lp = live.plan;
+  const savedDate = new Date(updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const verdictChanged = sp.onTrack !== lp.onTrack;
+  return (
+    <div className="card-padded" style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+        <div className="display font-bold" style={{ fontSize: 16 }}>Plan vs live</div>
+        <div className="text-ink-muted" style={{ fontSize: 11 }}>baseline saved {savedDate}</div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: 8, fontSize: 10.5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, color: 'var(--ink-muted)', paddingBottom: 4 }}>
+        <span>Metric</span>
+        <span style={{ textAlign: 'right' }}>Saved</span>
+        <span style={{ textAlign: 'right' }}>Live today</span>
+        <span style={{ textAlign: 'right' }}>Change</span>
+      </div>
+      <DriftRow label="Group value" saved={saved.valuation.currentValuePence} live={live.valuation.currentValuePence} fmt={gbp0} />
+      <DriftRow label="Sale price" saved={sp.targetSalePence} live={lp.targetSalePence} fmt={gbp0} />
+      <DriftRow label="Nets to invest" saved={sp.investablePence} live={lp.investablePence} fmt={gbp0} />
+      <DriftRow label="Pot you need" saved={sp.potNeededPence} live={lp.potNeededPence} fmt={gbp0} upGood={false} />
+      <DriftRow label="Income / yr" saved={sp.projection[0]?.incomePence ?? 0} live={lp.projection[0]?.incomePence ?? 0} fmt={gbp0} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 12 }}>
+        <span className="text-ink-muted">Verdict:</span>
+        <Badge ok={sp.onTrack} text={sp.onTrack ? 'On track' : 'Off track'} dim />
+        <span className="text-ink-muted">→</span>
+        <Badge ok={lp.onTrack} text={lp.onTrack ? 'On track' : 'Off track'} />
+        {verdictChanged && (
+          <span style={{ fontSize: 11, color: lp.onTrack ? 'var(--success)' : 'var(--danger)', fontWeight: 600 }}>
+            {lp.onTrack ? 'improved since save' : 'slipped since save'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Badge({ ok, text, dim }: { ok: boolean; text: string; dim?: boolean }) {
+  const bg = ok ? 'var(--success)' : 'var(--danger)';
+  return (
+    <span style={{
+      fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5,
+      color: 'white', background: bg, padding: '2px 8px', borderRadius: 999, opacity: dim ? 0.5 : 1,
+    }}>{text}</span>
+  );
+}
+
 function Panel({ step, title, blurb, children }: { step: number; title: string; blurb: string; children: React.ReactNode }) {
   return (
     <div className="card-padded" style={{ marginBottom: 16 }}>
@@ -69,6 +206,7 @@ function Panel({ step, title, blurb, children }: { step: number; title: string; 
 export default function FirePlanScreen() {
   const inputs = useWealthInputs();
   const seed = useExitPlan();
+  const drift = useExitPlanCompare();
   const compute = useComputeExitPlan();
   const save = useSaveWealthInputs();
 
@@ -147,14 +285,10 @@ export default function FirePlanScreen() {
       </div>
 
       {/* Verdict */}
-      <div className="card-padded" style={{ marginBottom: 16, borderLeft: `4px solid ${c.onTrack ? 'var(--success)' : 'var(--danger)'}` }}>
-        <div className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase' }}>Verdict</div>
-        <div style={{ fontSize: 15, fontWeight: 700, marginTop: 4, lineHeight: 1.45 }}>
-          {c.onTrack
-            ? `On track — selling for ${formatPence(c.targetSalePence)} nets ${formatPence(c.investablePence)} to invest, at or above the ${formatPence(c.potNeededPence)} pot you need. Income drawn: ${formatPence(c.projection[0]?.incomePence ?? 0)}/yr, rising for life.`
-            : `Shortfall ${formatPence(c.gapPence)} — grow the group to ~${formatPence(c.requiredSalePence)} (${pctStr(c.reqGrowthPct)}/yr), add freehold rent, or push retirement past age ${inp.retireAge}.`}
-        </div>
-      </div>
+      <Verdict c={c} retireAge={inp.retireAge} />
+
+      {/* Plan vs live drift */}
+      {drift.data && <DriftPanel data={drift.data} />}
 
       {/* 1 · Income + people */}
       <Panel step={1} title="What you want to retire on"
@@ -204,14 +338,25 @@ export default function FirePlanScreen() {
           <Card label="Tax saved by splitting" value={c.taxSavingPence > 0 ? `${formatPence(c.taxSavingPence)}/yr` : '£0'} sub={c.taxSavingPence > 0 ? `vs one earner (${formatPence(c.singleGrossPence)} gross)` : 'no split benefit yet'} tone={c.taxSavingPence > 0 ? 'good' : undefined} />
         </div>
         <div style={{ marginTop: 12 }}>
-          {c.people.map((p, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
-              <span style={{ fontWeight: 600 }}>{p.name}</span>
-              <span className="text-ink-muted">net {formatPence(p.netPence)}</span>
-              <span className="text-ink-muted">gross {formatPence(p.grossPence)}</span>
-              <span style={{ color: '#b06a1f' }}>tax {formatPence(p.taxPence)}</span>
-            </div>
-          ))}
+          {c.people.map((p, i) => {
+            const taxFree = p.taxPence === 0 && p.netPence <= PERSONAL_ALLOWANCE_PENCE;
+            return (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
+                <span style={{ fontWeight: 600 }}>{p.name}</span>
+                <span className="text-ink-muted">net {formatPence(p.netPence)}</span>
+                <span className="text-ink-muted">gross {formatPence(p.grossPence)}</span>
+                <span style={{ color: taxFree ? 'var(--ink-muted)' : '#b06a1f' }}>
+                  tax {formatPence(p.taxPence)}
+                  {taxFree && <span style={{ fontSize: 10, marginLeft: 4 }}>(within allowance)</span>}
+                </span>
+              </div>
+            );
+          })}
+          {c.people.some((p) => p.taxPence === 0 && p.netPence <= PERSONAL_ALLOWANCE_PENCE) && (
+            <p className="text-ink-muted" style={{ fontSize: 10, marginTop: 8 }}>
+              Each person&apos;s slice is below the £12,570 personal allowance, so it is drawn tax-free. Raise the income wanted, or reduce the number of people, to push slices into the taxed bands.
+            </p>
+          )}
         </div>
       </Panel>
 
@@ -224,22 +369,33 @@ export default function FirePlanScreen() {
         </Panel>
 
         {/* 3 · Freeholds */}
-        <Panel step={3} title="Freehold properties" blurb="Rent is added to your income — it shrinks the pot you need.">
+        <Panel step={3} title="Freehold properties" blurb="If you own the building your practice trades from (or any rental property), add it here. The rent it earns counts as retirement income, so you need a smaller investment pot.">
+          {inp.freeholds.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+              <span className="text-ink-muted" style={{ flex: 1, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }}>Property name</span>
+              <span className="text-ink-muted" style={{ width: 110, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, textAlign: 'right' }}>Value (£)</span>
+              <span className="text-ink-muted" style={{ width: 100, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4, textAlign: 'right' }}>Rent (£/yr)</span>
+              <span style={{ width: 16 }} />
+            </div>
+          )}
           {inp.freeholds.map((f, i) => (
             <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-              <input value={f.name} placeholder="Property"
+              <input value={f.name} placeholder="e.g. Practice building, High St"
                 onChange={(e) => { const freeholds = [...inp.freeholds]; freeholds[i] = { ...f, name: e.target.value }; set({ freeholds }); }}
                 style={{ flex: 1, padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }} />
-              <input type="number" value={toPounds(f.valuePence)} step={50000} title="value £"
+              <input type="number" value={toPounds(f.valuePence)} step={50000} title="Property market value (£)" placeholder="0"
                 onChange={(e) => { const freeholds = [...inp.freeholds]; freeholds[i] = { ...f, valuePence: toPence(Number(e.target.value)) }; set({ freeholds }); }}
                 style={{ width: 110, padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, textAlign: 'right' }} />
-              <input type="number" value={toPounds(f.rentPence)} step={5000} title="rent £/yr"
+              <input type="number" value={toPounds(f.rentPence)} step={5000} title="Annual rent received (£/yr)" placeholder="0"
                 onChange={(e) => { const freeholds = [...inp.freeholds]; freeholds[i] = { ...f, rentPence: toPence(Number(e.target.value)) }; set({ freeholds }); }}
                 style={{ width: 100, padding: '6px 8px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, textAlign: 'right' }} />
-              <button onClick={() => set({ freeholds: inp.freeholds.filter((_, j) => j !== i) })}
-                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--danger)' }}>✕</button>
+              <button onClick={() => set({ freeholds: inp.freeholds.filter((_, j) => j !== i) })} title="Remove"
+                style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--danger)', width: 16 }}>✕</button>
             </div>
           ))}
+          {inp.freeholds.length === 0 && (
+            <p className="text-ink-muted" style={{ fontSize: 12 }}>No properties yet. Add one if you own premises you rent out — skip this if you don&apos;t.</p>
+          )}
           <button className="chip" style={{ cursor: 'pointer', padding: '4px 10px', marginTop: 8 }}
             onClick={() => set({ freeholds: [...inp.freeholds, { name: 'Freehold', valuePence: 0, rentPence: 0 }] })}>＋ Freehold</button>
           <div style={{ marginTop: 12 }}>
