@@ -8,7 +8,7 @@ export const integrationRepository = {
     async list(orgId) {
         const { data } = await supabase_1.serviceClient
             .from('integrations')
-            .select('id, provider, status, last_sync_at, last_error, config, verified_at, scopes, expires_at, created_at, updated_at')
+            .select('id, provider, status, last_sync_at, last_error, config, webhook_last_result, verified_at, scopes, expires_at, created_at, updated_at')
             .eq('organisation_id', orgId)
             .order('updated_at', { ascending: false });
         return data ?? [];
@@ -33,10 +33,19 @@ export const integrationRepository = {
         return data;
     },
     async upsertSecrets(orgId, provider, { config, secrets, status, verified_at, scopes, expires_at }) {
+        // Shallow-merge into the existing config instead of replacing it. A full
+        // replace silently wiped per-org config keys the incoming token payload
+        // doesn't carry — critically `webhook_secret`/`webhook_id`. Every OAuth
+        // token refresh runs through here, so the secret vanished on the first
+        // refresh after pairing, every real-time webhook delivery then 401'd
+        // ("webhook secret not configured"), and the provider auto-disabled the
+        // hook after ~50 failures. Merge keeps secrets/base_url/cursors paired
+        // across refresh and reconnect. New keys in `config` still win.
+        const existing = await this.getByProvider(orgId, provider);
         const row = {
             organisation_id: orgId,
             provider,
-            config: config ?? {},
+            config: { ...(existing?.config ?? {}), ...(config ?? {}) },
             secrets,
             status: status ?? 'active',
             verified_at,
@@ -103,6 +112,18 @@ export const integrationRepository = {
             .eq('provider', provider);
         if (error) throw new Error(error.message);
         return config;
+    },
+    // Record the outcome of the most recent inbound real-time webhook delivery.
+    // Single atomic UPDATE on a dedicated column — deliberately NOT a config
+    // merge, so it can never clobber webhook_secret/cursors (the exact failure
+    // mode this whole diagnostic exists to surface). Best-effort: callers wrap
+    // it so a recording blip never fails the delivery itself.
+    async recordWebhookResult(orgId, provider, result) {
+        await supabase_1.serviceClient
+            .from('integrations')
+            .update({ webhook_last_result: result })
+            .eq('organisation_id', orgId)
+            .eq('provider', provider);
     },
     async setSyncTime(orgId, provider) {
         await supabase_1.serviceClient

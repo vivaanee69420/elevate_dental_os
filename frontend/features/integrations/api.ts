@@ -180,11 +180,22 @@ export interface WebhookLive {
   reason?: string;
 }
 
+// Outcome of the most recent inbound delivery. Updates on the very next event,
+// before the provider's cumulative counters flip — the leading indicator that a
+// corrected secret actually works.
+export interface WebhookLastResult {
+  outcome: 'verified' | 'bad_signature' | 'no_secret';
+  at: string; // ISO timestamp of that delivery
+  lenMatch?: boolean; // bad_signature only: false => encoding/format, true => value mismatch
+  sigPresent?: boolean;
+}
+
 export interface WebhookInfo {
   provider: string;
   url: string;
   configured: boolean; // true once a verifying secret is set
   live?: WebhookLive | null; // live provider-side status (best-effort)
+  lastResult?: WebhookLastResult | null;
 }
 
 export function getWebhookInfo(provider: string) {

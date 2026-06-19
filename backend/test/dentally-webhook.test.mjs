@@ -318,3 +318,77 @@ describe('webhookService.dentally — token + HMAC gate', () => {
     expect(r).toEqual({ received: true, ignored: true });
   });
 });
+
+describe('webhookService.dentally — loop-closing delivery diagnostics', () => {
+  // Each inbound delivery records its verification outcome on a dedicated
+  // integrations column (NOT config — that read-modify-write was the original
+  // secret-wipe bug). The owner UI reads it to show a truthful, time-stamped
+  // status instead of a blanket "the secret must match" guess.
+  const SECRET = 'topsecret-key';
+  const sign = (raw) => crypto.createHmac('sha256', SECRET).update(raw).digest('hex');
+
+  // Capture every webhook_last_result UPDATE on the integrations table.
+  function harness({ secret = SECRET } = {}) {
+    const recorded = [];
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'integrations' && q.op === 'update' && q.updateVals?.webhook_last_result) {
+        recorded.push(q.updateVals.webhook_last_result);
+        return { data: null, error: null };
+      }
+      if (q.table === 'integrations')
+        return { data: { status: 'active', config: secret ? { webhook_secret: secret } : {} }, error: null };
+      if (q.table === 'practices')
+        return { data: [{ id: 'p1', pms_site_id: '5' }], error: null };
+      return { data: [], error: null };
+    };
+    return recorded;
+  }
+  const fire = (raw, sig) => webhookService.dentally(signWebhookToken(ORG), raw, sig);
+
+  it('records "verified" on a valid signature', async () => {
+    const recorded = harness();
+    const raw = Buffer.from(JSON.stringify({ event: 'patient.created', data: { id: 7, site_id: 5, first_name: 'A' } }));
+    await fire(raw, sign(raw));
+    expect(recorded.at(-1)).toMatchObject({ outcome: 'verified' });
+    expect(typeof recorded.at(-1).at).toBe('string');
+  });
+
+  it('records "bad_signature" with lenMatch=true on a value mismatch (same length, wrong secret)', async () => {
+    const recorded = harness();
+    const raw = Buffer.from(JSON.stringify({ event: 'patient.created', data: { id: 7, site_id: 5 } }));
+    // A signature of the right length (hex sha256 = 64 chars) but wrong value.
+    const wrong = crypto.createHmac('sha256', 'WRONG-secret').update(raw).digest('hex');
+    await expect(fire(raw, wrong)).rejects.toMatchObject({ statusCode: 401 });
+    expect(recorded.at(-1)).toMatchObject({ outcome: 'bad_signature', lenMatch: true, sigPresent: true });
+  });
+
+  it('records "bad_signature" with lenMatch=false on a malformed/short signature', async () => {
+    const recorded = harness();
+    const raw = Buffer.from(JSON.stringify({ event: 'patient.created', data: { id: 7, site_id: 5 } }));
+    await expect(fire(raw, 'deadbeef')).rejects.toMatchObject({ statusCode: 401 });
+    expect(recorded.at(-1)).toMatchObject({ outcome: 'bad_signature', lenMatch: false });
+  });
+
+  it('records "no_secret" when no verifying secret is configured', async () => {
+    const recorded = harness({ secret: null });
+    const raw = Buffer.from('{}');
+    await expect(fire(raw, 'whatever')).rejects.toMatchObject({ statusCode: 401 });
+    expect(recorded.at(-1)).toMatchObject({ outcome: 'no_secret' });
+  });
+
+  it('a recording failure never turns a good delivery into a 5xx', async () => {
+    // webhook_last_result write errors out, but the delivery still succeeds.
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'integrations' && q.op === 'update' && q.updateVals?.webhook_last_result)
+        throw new Error('transient db error while recording diagnostics');
+      if (q.table === 'integrations')
+        return { data: { status: 'active', config: { webhook_secret: SECRET } }, error: null };
+      if (q.table === 'practices')
+        return { data: [{ id: 'p1', pms_site_id: '5' }], error: null };
+      return { data: [], error: null };
+    };
+    const raw = Buffer.from(JSON.stringify({ event: 'patient.created', data: { id: 7, site_id: 5, first_name: 'A' } }));
+    const r = await fire(raw, sign(raw));
+    expect(r).toMatchObject({ received: true, resourceType: 'patient' });
+  });
+});
