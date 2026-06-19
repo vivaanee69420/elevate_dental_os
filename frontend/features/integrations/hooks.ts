@@ -149,6 +149,11 @@ export function useWebhookInfo(provider: string, enabled = true) {
     queryKey: ['webhook-info', provider],
     queryFn: () => getWebhookInfo(provider),
     enabled,
+    // Poll modestly so the owner can fire a test from the provider and watch the
+    // status flip to verified within seconds — the whole point of the
+    // loop-closing diagnostic. 15s keeps the live provider-side health call
+    // (a Dentally GET /webhooks) well under any rate limit.
+    refetchInterval: 15000,
   });
 }
 

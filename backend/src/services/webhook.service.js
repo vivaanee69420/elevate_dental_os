@@ -89,6 +89,21 @@ function timingSafeHexEqual(a, b) {
     const bb = Buffer.from(String(b), 'utf8');
     return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
 }
+// Persist the outcome of THIS inbound delivery so the owner UI can show a
+// truthful, time-stamped status ("verified 10s ago" / "signature rejected")
+// instead of a blanket "every delivery failing" that can't tell a real secret
+// mismatch from a stale cumulative failure count. Best-effort: a recording blip
+// must never turn a good delivery into a 5xx (which would make the provider
+// auto-disable the hook). The signed `at` lets the UI compute "Ns ago".
+async function recordWebhookResult(orgId, provider, outcome, extra = {}) {
+    try {
+        await integrationRepository.recordWebhookResult(orgId, provider, {
+            outcome,
+            at: new Date().toISOString(),
+            ...extra,
+        });
+    } catch { /* diagnostics only — never fail the delivery on a record error */ }
+}
 export const webhookService = {
     // body is the raw Buffer (express.raw applied to /webhooks/stripe in app.ts).
     async stripe(body, sig) {
@@ -134,6 +149,9 @@ export const webhookService = {
         }
         const secret = integration.config?.webhook_secret;
         if (!secret) {
+            // No verifying secret on file — the classic post-OAuth-refresh wipe,
+            // or a hook added in Dentally before the secret was entered here.
+            await recordWebhookResult(orgId, 'dentally', 'no_secret', { sigPresent: !!signature });
             throw new errors_1.AppError('webhook secret not configured', 401);
         }
         const raw = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ''), 'utf8');
@@ -154,8 +172,19 @@ export const webhookService = {
                 lenMatch: got.length === expected.length,
                 rawLen: raw.length,
             });
+            // Surface the precise cause to the owner UI: a length mismatch points
+            // at an encoding/format problem; equal-length-but-different points at
+            // a genuine value mismatch — re-enter the EXACT same secret on both
+            // sides. No secret/signature bytes stored — only lengths + a flag.
+            await recordWebhookResult(orgId, 'dentally', 'bad_signature', {
+                sigPresent: !!signature,
+                lenMatch: got.length === expected.length,
+            });
             throw new errors_1.AppError('invalid signature', 401);
         }
+        // Signature verified — record it NOW, before parse/apply, so the UI's
+        // "secret is correct" signal is isolated from whether a row stored.
+        await recordWebhookResult(orgId, 'dentally', 'verified');
         let parsed;
         try {
             parsed = JSON.parse(raw.toString('utf8'));

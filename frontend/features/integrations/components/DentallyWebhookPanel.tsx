@@ -8,6 +8,19 @@ import { useState } from 'react';
 import { useWebhookInfo, useSetWebhookSecret } from '../hooks';
 import CollapsibleCard from './CollapsibleCard';
 
+// Compact British relative time ("12s ago", "4m ago", "2h ago", "3d ago").
+function relTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return 'just now';
+  const s = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
 export default function DentallyWebhookPanel() {
   const { data, isLoading } = useWebhookInfo('dentally');
   const save = useSetWebhookSecret('dentally');
@@ -30,7 +43,34 @@ export default function DentallyWebhookPanel() {
   // Live state of the hook on Dentally's side. A stored secret alone does NOT
   // mean events flow — the hook may be disabled or every delivery failing.
   const live = data?.live;
+  const last = data?.lastResult;
+
+  // Outcome of the MOST RECENT inbound delivery (from our own endpoint, not
+  // Dentally's cumulative counters). This is the leading indicator: it flips the
+  // instant a corrected secret verifies, before Dentally's success count moves.
+  // We use it to replace the old blanket "the secret must match" message — which
+  // was wrong whenever the real cause was a wiped secret or stale failure count.
+  const lastLine = (() => {
+    if (!last) return null;
+    const when = relTime(last.at);
+    switch (last.outcome) {
+      case 'verified':
+        return { dot: '#047857', text: `Last delivery ${when}: signature verified.` };
+      case 'no_secret':
+        return { dot: '#DC2626', text: `A delivery arrived ${when} but no signing secret was set here — enter the secret below.` };
+      case 'bad_signature':
+        return last.lenMatch === false
+          ? { dot: '#DC2626', text: `Signature rejected ${when}: unexpected signature format from Dentally (not HMAC-SHA256 hex). Check the webhook on Dentally, not the secret.` }
+          : { dot: '#DC2626', text: `Signature rejected ${when}: the secret here does not match the one on the Dentally webhook. Re-enter the exact same secret in both places.` };
+    }
+  })();
+
   const badge = (() => {
+    // Prefer the last-delivery verdict for the headline when it disagrees with
+    // the cumulative counter (e.g. failures predate a now-corrected secret).
+    if (last?.outcome === 'verified' && live?.status !== 'delivering') {
+      return { dot: '#047857', text: 'secret verified', tip: null };
+    }
     if (!live || live.available === false) {
       return data?.configured
         ? { dot: '#9CA3AF', text: 'secret set', tip: null }
@@ -42,7 +82,12 @@ export default function DentallyWebhookPanel() {
       case 'disabled':
         return { dot: '#DC2626', text: 'disabled on Dentally', tip: `Dentally disabled this hook after ${live.failedDeliveries} failed deliveries. Re-enable it in Dentally → Settings → Webhooks.` };
       case 'failing':
-        return { dot: '#DC2626', text: 'every delivery failing', tip: `Active but ${live.failedDeliveries} deliveries failed and none succeeded — the signing secret below must exactly match the one set on the Dentally webhook.` };
+        // Don't assert WHY here — the precise reason comes from lastLine below.
+        // If the last delivery actually verified, these are stale pre-fix
+        // failures that clear on Dentally's next event.
+        return last?.outcome === 'verified'
+          ? { dot: '#D97706', text: 'recovering', tip: `The ${live.failedDeliveries} earlier failures predate the corrected secret; status clears when Dentally sends the next event.` }
+          : { dot: '#DC2626', text: 'deliveries failing', tip: last ? null : `Active but ${live.failedDeliveries} deliveries failed and none have succeeded yet.` };
       case 'idle':
         return { dot: '#D97706', text: 'enabled, awaiting events', tip: 'Registered and enabled; no events delivered yet.' };
       default:
@@ -57,6 +102,9 @@ export default function DentallyWebhookPanel() {
     >
       {badge.tip && (
         <p style={{ fontSize: 11, color: badge.dot, marginBottom: 8 }}>{badge.tip}</p>
+      )}
+      {lastLine && (
+        <p style={{ fontSize: 11, color: lastLine.dot, marginBottom: 8, fontWeight: 600 }}>{lastLine.text}</p>
       )}
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
         Dentally pushes changes here instantly (a daily sync reconciles anything

@@ -342,6 +342,11 @@ export const integrationService = {
             url: `${base}/webhooks/${provider}/${token}`,
             configured: !!integration?.config?.webhook_secret,
             live,
+            // Outcome of the most recent inbound delivery (verified | bad_signature
+            // | no_secret). The leading indicator: it updates on the very next
+            // event, before Dentally's cumulative counters flip, so the UI can
+            // show "verified 10s ago" the instant a corrected secret works.
+            lastResult: integration?.webhook_last_result ?? null,
         };
     },
     // Store/replace the per-org webhook signing secret (the value the owner also
