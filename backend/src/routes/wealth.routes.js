@@ -23,6 +23,7 @@ router.put('/inputs', owner, (0, async_handler_1.asyncHandler)(wealth_controller
 // Assembled live views.
 router.get('/net', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.netWorth));
 router.get('/fire', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.exitPlan));
+router.get('/fire/compare', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.exitPlanCompare));
 
 // Pure recompute (audit-exempt slider endpoints).
 router.post('/compute/sale-waterfall', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.saleWaterfall));

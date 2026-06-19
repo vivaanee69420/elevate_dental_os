@@ -127,6 +127,56 @@ describe('wealthService.exitPlan', () => {
   });
 });
 
+describe('wealthService.exitPlanCompare', () => {
+  let origGet, origVal;
+  beforeEach(() => {
+    origGet = wealthRepository.get;
+    origVal = analyticsService.valuation;
+  });
+  afterEach(() => {
+    wealthRepository.get = origGet;
+    analyticsService.valuation = origVal;
+  });
+
+  const exitBlob = (over = {}) => ({
+    incomePence: 100_000_00, incomePer: 'year', people: [{ name: 'You', share: 1 }],
+    currentAge: 45, retireAge: 57, freeholds: [],
+    withdrawPct: 4, returnPct: 8, currentValuePence: 0, useLiveValuation: true,
+    agentPct: 0, cgtPct: 0, baseCostPence: 0, existingInvestPence: 0, targetSalePence: 0,
+    ...over,
+  });
+
+  it('freezes the saved group value and re-resolves the live one (drift)', async () => {
+    // Saved blob locked the group value at £3.0M; the live valuation has since
+    // grown to £3.5M. saved = frozen, live = re-resolved.
+    wealthRepository.get = async () => ({
+      assets: [], liabilities: [], pensions: [], properties: [],
+      fire: exitBlob({ currentValuePence: 3_000_000_00 }),
+      updated_at: '2026-04-12T10:00:00Z',
+    });
+    analyticsService.valuation = async () => ({ midpoint: 3_500_000_00 });
+
+    const r = await wealthService.exitPlanCompare(ORG);
+    expect(r.updatedAt).toBe('2026-04-12T10:00:00Z');
+    expect(r.saved).not.toBeNull();
+    expect(r.saved.valuation.source).toBe('manual');                 // frozen, no live override
+    expect(r.saved.valuation.currentValuePence).toBe(3_000_000_00);
+    expect(r.live.valuation.source).toBe('live');
+    expect(r.live.valuation.currentValuePence).toBe(3_500_000_00);
+    // Bigger business today → less growth needed to reach the required sale.
+    expect(r.live.plan.reqGrowthPct).toBeLessThan(r.saved.plan.reqGrowthPct);
+  });
+
+  it('returns saved=null until a plan has been saved (no updated_at)', async () => {
+    wealthRepository.get = async () => null;                          // never configured
+    analyticsService.valuation = async () => ({ error: 'No baseline set' });
+    const r = await wealthService.exitPlanCompare(ORG);
+    expect(r.saved).toBeNull();
+    expect(r.updatedAt).toBeNull();
+    expect(r.live).not.toBeNull();
+  });
+});
+
 describe('wealthService.netWorth', () => {
   let origGet;
   beforeEach(() => { origGet = wealthRepository.get; });

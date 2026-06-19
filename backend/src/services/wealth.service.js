@@ -96,16 +96,39 @@ export const wealthService = {
     // drawdown projection. Seeds currentValuePence into the inputs the screen
     // echoes back to /compute/exit-plan for live slider recompute.
     async exitPlan(orgId) {
-        const { assets, liabilities, pensions, properties, exit } = await this.getInputs(orgId);
+        const bundle = await this.getInputs(orgId);
+        return this.assembleExitPlan(orgId, bundle, { live: true });
+    },
+
+    // Saved-vs-live drift: the same balance-sheet/plan assembly run TWICE off the
+    // one saved blob — once with the group value FROZEN as stored (the snapshot
+    // the owner locked when they clicked Save), once re-resolving the live
+    // valuation now. The delta is how the business has moved since. `saved` is
+    // null until the org has saved a plan at least once (nothing to compare to).
+    async exitPlanCompare(orgId) {
+        const bundle = await this.getInputs(orgId);
+        const live = await this.assembleExitPlan(orgId, bundle, { live: true });
+        const saved = bundle.updatedAt
+            ? await this.assembleExitPlan(orgId, bundle, { live: false })
+            : null;
+        return { live, saved, updatedAt: bundle.updatedAt };
+    },
+
+    // Shared Exit Plan assembly (canonical GM `exitCalc` model): resolve the group
+    // value today (live valuation midpoint when `live`, else the FROZEN saved
+    // override), seed existing investments + freeholds off the balance sheet, then
+    // run the full plan. Used by both /fire (live) and /fire/compare (live + frozen).
+    async assembleExitPlan(orgId, bundle, { live }) {
+        const { assets, pensions, properties, exit } = bundle;
 
         // Group value today from the live valuation midpoint when asked; fall back
-        // to the manual override on no baseline / error so the screen still computes.
+        // to the manual/frozen override on no baseline / error so it still computes.
         // valuation() seeds from the manual baseline first, else from REAL synced
         // turnover (invoice_items TTM) at the owner's assumed EBITDA margin.
         let currentValuePence = Math.round(exit.currentValuePence || 0);
         let valuationSource = 'manual';
         let valuationDetail = null;
-        if (exit.useLiveValuation) {
+        if (live && exit.useLiveValuation) {
             try {
                 const v = await analytics_service_1.analyticsService.valuation(orgId, {
                     marginPct: exit.ebitdaMarginPct,

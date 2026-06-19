@@ -131,6 +131,14 @@ export interface ExitPlanResponse {
   seeds: { liquidAssetsPence: number; pensionPence: number; existingInvestSeeded: boolean; freeholdsSeeded: boolean };
 }
 
+// Saved-plan snapshot (group value frozen at save) vs the live re-resolved plan.
+// `saved` is null until a plan has been saved at least once.
+export interface ExitPlanCompare {
+  live: ExitPlanResponse;
+  saved: ExitPlanResponse | null;
+  updatedAt: string | null;
+}
+
 // Body PUT /inputs accepts — everything optional, server applies defaults.
 export type WealthInputsBody = Partial<Omit<WealthInputs, 'updatedAt'>>;
 
@@ -149,6 +157,10 @@ export function fetchNetWorth(): Promise<NetWorth> {
 // Assembled live Exit Plan (seeds group value + existing investments + freeholds).
 export function fetchExitPlan(): Promise<ExitPlanResponse> {
   return api<ExitPlanResponse>('/api/wealth/fire');
+}
+// Saved snapshot vs live re-resolved plan (drift since last save).
+export function fetchExitPlanCompare(): Promise<ExitPlanCompare> {
+  return api<ExitPlanCompare>('/api/wealth/fire/compare');
 }
 // Pure slider recompute (audit-exempt). The screen passes the full input incl.
 // the currentValuePence it seeded from /fire.
