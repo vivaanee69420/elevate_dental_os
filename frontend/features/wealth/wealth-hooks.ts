@@ -6,11 +6,13 @@ import {
   saveWealthInputs,
   fetchNetWorth,
   fetchExitPlan,
+  fetchExitPlanCompare,
   computeExitPlan,
   type WealthInputs,
   type WealthInputsBody,
   type NetWorth,
   type ExitPlanResponse,
+  type ExitPlanCompare,
   type ExitPlanResult,
   type ExitPlanInput,
 } from './wealth-api';
@@ -22,6 +24,7 @@ import {
 const INPUTS_KEY = ['wealth-inputs'];
 const NET_KEY = ['wealth-net'];
 const FIRE_KEY = ['wealth-fire'];
+const FIRE_COMPARE_KEY = ['wealth-fire-compare'];
 
 export function useWealthInputs() {
   return useQuery<WealthInputs>({
@@ -47,6 +50,15 @@ export function useExitPlan() {
   });
 }
 
+// Saved snapshot vs live re-resolved plan (drift since last save).
+export function useExitPlanCompare() {
+  return useQuery<ExitPlanCompare>({
+    queryKey: FIRE_COMPARE_KEY,
+    queryFn: fetchExitPlanCompare,
+    staleTime: 60_000,
+  });
+}
+
 // Slider recompute (no persistence). The screen debounces calls to this.
 export function useComputeExitPlan() {
   return useMutation<ExitPlanResult, Error, ExitPlanInput>({
@@ -62,6 +74,7 @@ export function useSaveWealthInputs() {
       qc.setQueryData(INPUTS_KEY, data);
       qc.invalidateQueries({ queryKey: NET_KEY });
       qc.invalidateQueries({ queryKey: FIRE_KEY });
+      qc.invalidateQueries({ queryKey: FIRE_COMPARE_KEY });
     },
   });
 }
