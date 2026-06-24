@@ -27,6 +27,7 @@ const TOKEN_OK = {
 beforeEach(() => {
     process.env.GOOGLE_ADS_CLIENT_ID = 'cid';
     process.env.GOOGLE_ADS_CLIENT_SECRET = 'secret';
+    process.env.GOOGLE_ADS_DEVELOPER_TOKEN = 'devtoken';
     delete process.env.GOOGLE_ADS_API_VERSION;
     integrationRepository.upsertSecrets.mockReset();
     integrationRepository.markFailed.mockReset();
@@ -56,6 +57,43 @@ describe('listAccessibleCustomers', () => {
         await listAccessibleCustomers('tok');
         expect(headers['login-customer-id']).toBeUndefined();
         delete process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+    });
+
+    it('fails fast with a clear message when GOOGLE_ADS_DEVELOPER_TOKEN is not configured', async () => {
+        delete process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+        global.fetch = vi.fn();
+        await expect(listAccessibleCustomers('tok')).rejects.toThrow(/GOOGLE_ADS_DEVELOPER_TOKEN/);
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('treats a whitespace-only developer token as not configured', async () => {
+        process.env.GOOGLE_ADS_DEVELOPER_TOKEN = '   \n';
+        global.fetch = vi.fn();
+        await expect(listAccessibleCustomers('tok')).rejects.toThrow(/GOOGLE_ADS_DEVELOPER_TOKEN/);
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the specific Google Ads error code, not just the generic top-level message', async () => {
+        global.fetch = vi.fn(async () => ({
+            ok: false,
+            status: 400,
+            json: async () => ({
+                error: {
+                    code: 400,
+                    message: 'Request contains an invalid argument.',
+                    status: 'INVALID_ARGUMENT',
+                    details: [{
+                        '@type': 'type.googleapis.com/google.ads.googleads.v20.errors.GoogleAdsFailure',
+                        errors: [{
+                            errorCode: { authenticationError: 'DEVELOPER_TOKEN_PROHIBITED' },
+                            message: "The developer token is not allowed with project '123'.",
+                        }],
+                        requestId: 'req-1',
+                    }],
+                },
+            }),
+        }));
+        await expect(listAccessibleCustomers('tok')).rejects.toThrow(/DEVELOPER_TOKEN_PROHIBITED/);
     });
 
     it('calls a currently-supported API version by default (not a sunset one)', async () => {

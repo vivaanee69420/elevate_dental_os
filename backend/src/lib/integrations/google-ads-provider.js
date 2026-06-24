@@ -49,7 +49,9 @@ function redirectUri() {
 export function adsHeaders(accessToken, { withLogin = true } = {}) {
     const h = {
         Authorization: `Bearer ${accessToken}`,
-        'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '',
+        // .trim(): a stray newline in the env value yields an invalid header
+        // that Google rejects with the opaque INVALID_ARGUMENT.
+        'developer-token': (process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '').trim(),
         'Content-Type': 'application/json',
     };
     const login = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '').replace(/-/g, '');
@@ -76,21 +78,45 @@ async function persistTokenResponse(orgId, body, configPatch = {}) {
 // resource names like "customers/1234567890". A Manager login returns its
 // clients too; the sync skips accounts that error on a metrics query.
 export async function listAccessibleCustomers(accessToken) {
+    // Pre-flight: the developer token is operator-level config, not part of OAuth.
+    // OAuth can succeed (consent + token exchange) while the dev token is unset,
+    // and Google then rejects this — the FIRST dev-token call — with the opaque
+    // "Request contains an invalid argument." Fail with an actionable message.
+    if (!(process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '').trim()) {
+        throw new Error('GOOGLE_ADS_DEVELOPER_TOKEN is not configured on the server — a Google Ads developer token is required to list accounts.');
+    }
     const url = `${apiBase()}/${apiVersion()}/customers:listAccessibleCustomers`;
     // No login-customer-id: this lists the credential's own accounts; an MCC
     // header makes Google reject it with INVALID_ARGUMENT.
     const res = await fetch(url, { headers: adsHeaders(accessToken, { withLogin: false }) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-        const msg = body?.error?.message || `listAccessibleCustomers HTTP ${res.status}`;
-        throw new Error(msg);
+        throw new Error(googleAdsErrorMessage(body, res.status, 'listAccessibleCustomers'));
     }
     return (body.resourceNames ?? []).map((rn) => String(rn).split('/')[1]).filter(Boolean);
+}
+
+// Google Ads REST errors bury the actionable reason in
+// error.details[].errors[].errorCode/message; the top-level error.message is the
+// generic "Request contains an invalid argument." Surface the specific code so a
+// misconfigured dev token (DEVELOPER_TOKEN_PROHIBITED / _NOT_APPROVED, etc.) is
+// diagnosable instead of opaque.
+function googleAdsErrorMessage(body, status, label) {
+    const err = body?.error;
+    const detail = err?.details?.find((d) => Array.isArray(d?.errors) && d.errors.length);
+    const first = detail?.errors?.[0];
+    if (first) {
+        const code = first.errorCode ? Object.values(first.errorCode)[0] : null;
+        const msg = first.message || err?.message || `${label} HTTP ${status}`;
+        return code ? `${msg} (${code})` : msg;
+    }
+    return err?.message || `${label} HTTP ${status}`;
 }
 
 export const GoogleAdsProvider = {
     async authorize(orgId) {
         if (!process.env.GOOGLE_ADS_CLIENT_ID) throw new Error('GOOGLE_ADS_CLIENT_ID is not configured');
+        if (!(process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '').trim()) throw new Error('GOOGLE_ADS_DEVELOPER_TOKEN is not configured — connecting Google Ads would fail at account lookup.');
         const { signState } = await import('../oauth-state.js');
         const state = signState({ orgId, provider: 'google_ads' });
         const url = new URL(AUTHORIZE_URL);
