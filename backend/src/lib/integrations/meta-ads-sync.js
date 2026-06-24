@@ -1,5 +1,6 @@
 // Meta (Facebook) Ads spend/performance sync — pulls per-campaign, per-day
-// insights for the last 30 days via the Graph API for each connected ad
+// insights for the sync window (nightly 3mo / reconnect backfill 6mo) via the
+// Graph API for each connected ad
 // account, converts spend (account-currency decimal string) to integer pence,
 // and replaces the window's meta_ads rows in ad_metrics. MULTI-TENANT: every
 // row carries organisation_id; the loop is per-org and serviceClient queries
@@ -22,10 +23,11 @@ import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
 
 const INSIGHT_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,reach,frequency,actions';
-// Incremental window (nightly cron) = trailing ~6 months; a full backfill
-// (first connect) pulls 12 months.
-const INCREMENTAL_DAYS = 183;
-const FULL_DAYS = 366;
+// Incremental window (nightly cron) = trailing 3 months; a full backfill
+// (on-connect / reconnect) pulls 6 months. (product rule)
+const INCREMENTAL_DAYS = 90;
+const FULL_DAYS = 183;
+const UPSERT_CHUNK = 500;     // batch size: a single multi-thousand-row upsert hits Postgres statement_timeout
 // action_types that count as a conversion for a dental practice (form leads,
 // pixel leads, purchases, registrations, appointment schedules, contacts).
 const CONVERSION_ACTION = /lead|purchase|complete_registration|schedule|contact|submit_application/i;
@@ -190,8 +192,8 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
             throw new Error('no connected Meta ad accounts (check ads_read permission)');
         }
         const { access_token } = JSON.parse(decryptSecret(integration.secrets));
-        // Full backfill (post-connect / manual Refresh ?full=true) pulls 12mo;
-        // the nightly cron pulls the rolling ~30-day window.
+        // Full backfill (post-connect / manual Refresh ?full=true) pulls 6mo;
+        // the nightly cron pulls the trailing 3mo window.
         const windowDays = opts.full ? FULL_DAYS : INCREMENTAL_DAYS;
         const sinceDate = daysAgo(windowDays);
 
@@ -246,28 +248,48 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
             }
         }
 
-        // Replace the whole window: delete this org's meta_ads rows in the pulled
-        // range, then insert fresh. Idempotent; filtered on provider so other
-        // channels (google_ads) for the same dates are never clobbered.
-        const since = sinceDate;
-        const { error: delErr } = await supabase_1.serviceClient
-            .from('ad_metrics')
-            .delete()
-            .eq('organisation_id', orgId)
-            .eq('provider', 'meta_ads')
-            .gte('metric_date', since);
-        if (delErr) throw new Error(`ad_metrics clear: ${delErr.message}`);
-        if (all.length > 0) {
-            // upsert (not insert) so a boundary/timezone-skew row dated before the
-            // delete window updates in place instead of erroring on the unique key.
-            const { error } = await supabase_1.serviceClient.from('ad_metrics')
-                .upsert(all, { onConflict: 'organisation_id,provider,customer_id,campaign_id,metric_date' });
-            if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
+        // Robustness: if EVERY account query failed (e.g. an expired token), the
+        // pull returned nothing because of errors, not because there was no
+        // spend. Do NOT wipe the existing window and report healthy — mark
+        // failed and surface the error so the nightly retry + UI see it.
+        const allErrored = accountIds.length > 0 && skipped.length === accountIds.length;
+        if (allErrored) {
+            const msg = `all accounts failed: ${skipped.map((s) => s.error).join('; ')}`.slice(0, 500);
+            await integrationRepository.markFailed(orgId, 'meta_ads', msg);
+            throw new Error(msg);
         }
 
-        await integrationRepository.upsert(orgId, 'meta_ads', {
-            last_sync_at: new Date().toISOString(), last_error: null, status: 'active',
-        });
+        // Replace the window ONLY for accounts that actually returned rows. An
+        // account that errored — OR returned an empty 200 (a transient glitch:
+        // report not ready, throttle, momentary access loss) — keeps its existing
+        // rows. Daily spend is immutable history, so the only safe trigger for a
+        // destructive delete is a non-empty pull. Scoped to (provider, those
+        // accounts) so other channels (google_ads) are never clobbered.
+        const aidsWithRows = [...new Set(all.map((r) => r.customer_id))];
+        const since = sinceDate;
+        if (aidsWithRows.length > 0) {
+            const { error: delErr } = await supabase_1.serviceClient
+                .from('ad_metrics')
+                .delete()
+                .eq('organisation_id', orgId)
+                .eq('provider', 'meta_ads')
+                .in('customer_id', aidsWithRows)
+                .gte('metric_date', since);
+            if (delErr) throw new Error(`ad_metrics clear: ${delErr.message}`);
+            // upsert (not insert) so a boundary/timezone-skew row dated before the
+            // delete window updates in place instead of erroring on the unique key.
+            // Chunked: a single multi-thousand-row upsert exceeds Postgres
+            // statement_timeout on the 6-month backfill ("canceling statement due
+            // to statement timeout"). Write in <=UPSERT_CHUNK batches.
+            for (let i = 0; i < all.length; i += UPSERT_CHUNK) {
+                const { error } = await supabase_1.serviceClient.from('ad_metrics')
+                    .upsert(all.slice(i, i + UPSERT_CHUNK), { onConflict: 'organisation_id,provider,customer_id,campaign_id,metric_date' });
+                if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
+            }
+        }
+
+        // Scoped status write (won't resurrect a row revoked mid-sync).
+        await integrationRepository.markSynced(orgId, 'meta_ads');
         return { rows: all.length, accounts: accountIds.length, skipped };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'meta_ads', String(err.message).slice(0, 500));
@@ -276,11 +298,14 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
 }
 
 export async function syncAllOrgs() {
+    // Include 'failed' alongside 'active' so a transient failure self-heals on
+    // the next nightly run instead of being skipped forever. 'revoked' (the user
+    // disconnected) is intentionally excluded.
     const { data: rows } = await supabase_1.serviceClient
         .from('integrations')
         .select('*')
         .eq('provider', 'meta_ads')
-        .eq('status', 'active');
+        .in('status', ['active', 'failed']);
     const results = [];
     for (const row of rows ?? []) {
         try {
@@ -293,4 +318,4 @@ export async function syncAllOrgs() {
     return results;
 }
 
-export const __test = { spendToPence, conversionsFromActions, parseInsights, parseAccountInsight, INSIGHT_FIELDS };
+export const __test = { spendToPence, conversionsFromActions, parseInsights, parseAccountInsight, INSIGHT_FIELDS, INCREMENTAL_DAYS, FULL_DAYS };

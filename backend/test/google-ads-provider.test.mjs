@@ -16,7 +16,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     },
 }));
 
-const { GoogleAdsProvider, listAccessibleCustomers } = await import('../src/lib/integrations/google-ads-provider.js');
+const { GoogleAdsProvider, listAccessibleCustomers, adsHeaders } = await import('../src/lib/integrations/google-ads-provider.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 const TOKEN_OK = {
@@ -32,7 +32,32 @@ beforeEach(() => {
     integrationRepository.markFailed.mockReset();
 });
 
+describe('adsHeaders', () => {
+    it('includes login-customer-id (dashes stripped) by default, omits it when withLogin:false', () => {
+        process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID = '123-456-7890';
+        expect(adsHeaders('tok')['login-customer-id']).toBe('1234567890');
+        expect(adsHeaders('tok', { withLogin: false })['login-customer-id']).toBeUndefined();
+        delete process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+    });
+});
+
 describe('listAccessibleCustomers', () => {
+    // customers:listAccessibleCustomers lists accounts for the AUTHENTICATED
+    // credential — it must NOT be scoped to an MCC. Sending login-customer-id
+    // (esp. one the OAuth user can't act under) makes Google return
+    // INVALID_ARGUMENT ("Request contains an invalid argument") and breaks connect.
+    it('does NOT send login-customer-id even when the env is set', async () => {
+        process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID = '123-456-7890';
+        let headers = null;
+        global.fetch = vi.fn(async (url, opts) => {
+            headers = opts?.headers ?? {};
+            return { ok: true, status: 200, json: async () => ({ resourceNames: ['customers/123'] }) };
+        });
+        await listAccessibleCustomers('tok');
+        expect(headers['login-customer-id']).toBeUndefined();
+        delete process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID;
+    });
+
     it('calls a currently-supported API version by default (not a sunset one)', async () => {
         let calledUrl = '';
         global.fetch = vi.fn(async (url) => {
