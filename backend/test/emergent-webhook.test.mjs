@@ -14,6 +14,7 @@ const discover = vi.fn(async () => {});
 const resolutionMap = vi.fn(async () => new Map());
 const getByProvider = vi.fn();
 const setSyncTime = vi.fn(async () => {});
+const recordWebhookResult = vi.fn(async () => {});
 // loadResolution touches serviceClient (practices query) inside emergent-sync,
 // so mock it here to keep the test hermetic while keeping the REAL mapRecord /
 // externalId. Returns empty maps (no practice match) by default.
@@ -26,7 +27,7 @@ vi.mock('../src/repositories/emergent-practice-map.repository.js', () => ({
   emergentPracticeMapRepository: { discover, resolutionMap },
 }));
 vi.mock('../src/repositories/integration.repository.js', () => ({
-  integrationRepository: { getByProvider, setSyncTime },
+  integrationRepository: { getByProvider, setSyncTime, recordWebhookResult },
 }));
 vi.mock('../src/lib/integrations/emergent-sync.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -99,6 +100,27 @@ it('ignores an unknown event', async () => {
   expect(res.ignored).toBe(true);
   expect(upsert).not.toHaveBeenCalled();
   expect(deleteByExternalId).not.toHaveBeenCalled();
+});
+
+// Webhook health: the owner UI must show a truthful, time-stamped status for
+// Emergent just like Dentally. Record the outcome of every delivery.
+it('records a verified webhook health result on a valid event', async () => {
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
+  await webhookService.emergent(token, raw, sign(raw), 'treatment.accepted');
+  expect(recordWebhookResult).toHaveBeenCalledWith(ORG, 'emergent', expect.objectContaining({ outcome: 'verified' }));
+});
+
+it('records bad_signature on a rejected signature', async () => {
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
+  await expect(webhookService.emergent(token, raw, 'sha256=deadbeef', 'treatment.accepted')).rejects.toMatchObject({ statusCode: 401 });
+  expect(recordWebhookResult).toHaveBeenCalledWith(ORG, 'emergent', expect.objectContaining({ outcome: 'bad_signature' }));
+});
+
+it('records no_secret when no webhook secret is configured', async () => {
+  getByProvider.mockResolvedValue({ status: 'active', config: {} });
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
+  await expect(webhookService.emergent(token, raw, sign(raw), 'treatment.accepted')).rejects.toMatchObject({ statusCode: 401 });
+  expect(recordWebhookResult).toHaveBeenCalledWith(ORG, 'emergent', expect.objectContaining({ outcome: 'no_secret' }));
 });
 
 it('discovers the business and stamps last_sync_at on a valid event', async () => {
