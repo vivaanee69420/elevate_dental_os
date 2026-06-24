@@ -58,6 +58,20 @@ export const integrationRepository = {
             .upsert(row, { onConflict: 'organisation_id,provider' });
         if (error) throw new Error(error.message);
     },
+    // Success-path status write for a completed sync. A scoped UPDATE (not a
+    // blind upsert) with a `status != 'revoked'` guard: if the user disconnects
+    // mid-sync (markRevoked nulls secrets + sets 'revoked'), the finishing sync
+    // must NOT flip the row back to 'active' — that would show a credential-less
+    // integration as healthy until the next nightly run self-corrects it.
+    async markSynced(orgId, provider) {
+        const { error } = await supabase_1.serviceClient
+            .from('integrations')
+            .update({ status: 'active', last_error: null, last_sync_at: new Date().toISOString() })
+            .eq('organisation_id', orgId)
+            .eq('provider', provider)
+            .neq('status', 'revoked');
+        if (error) throw new Error(error.message);
+    },
     async markFailed(orgId, provider, last_error) {
         const { error } = await supabase_1.serviceClient
             .from('integrations')

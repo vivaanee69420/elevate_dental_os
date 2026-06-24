@@ -6,11 +6,26 @@ import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn() },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn() },
 }));
 
-const { syncOneOrg, __test } = await import('../src/lib/integrations/meta-ads-sync.js');
+const { syncOneOrg, syncAllOrgs, __test } = await import('../src/lib/integrations/meta-ads-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
+
+// Window policy (product rule): nightly cron resyncs 3 months; on-connect /
+// reconnect backfills 6 months. Guards against silent window regressions.
+describe('sync windows', () => {
+    it('nightly = 3 months, backfill = 6 months', () => {
+        expect(__test.INCREMENTAL_DAYS).toBe(90);
+        expect(__test.FULL_DAYS).toBe(183);
+    });
+});
+
+const freshCreds = (account_ids) => ({
+    secrets: encryptSecret(JSON.stringify({ access_token: 'tok' })),
+    config: { account_ids },
+    expires_at: new Date(Date.now() + 30 * 86400_000).toISOString(),
+});
 
 describe('spendToPence', () => {
     it('converts an account-currency decimal string to integer pence', () => {
@@ -99,6 +114,7 @@ describe('syncOneOrg', () => {
     beforeEach(() => {
         integrationRepository.upsert.mockReset();
         integrationRepository.markFailed.mockReset();
+        integrationRepository.markSynced.mockReset();
     });
 
     it('pulls spend per account and replaces the org window in ad_metrics', async () => {
@@ -136,7 +152,7 @@ describe('syncOneOrg', () => {
                 campaign_id: '7', spend_pence: 300, clicks: 20, conversions: 2,
             }),
         ]));
-        expect(integrationRepository.upsert).toHaveBeenCalled();
+        expect(integrationRepository.markSynced).toHaveBeenCalled();
     });
 
     it('queries account-level period reach/frequency and writes it onto ad_accounts', async () => {
@@ -181,6 +197,29 @@ describe('syncOneOrg', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
+    // A single multi-thousand-row upsert exceeds Postgres statement_timeout on
+    // the 6-month backfill ("canceling statement due to statement timeout").
+    // The upsert must be chunked into <=500-row batches.
+    it('chunks a large upsert into <=500-row batches', async () => {
+        const queries = [];
+        supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
+        const data = Array.from({ length: 600 }, (_, i) => ({
+            campaign_id: i + 1, campaign_name: `C${i}`, date_start: '2026-05-10',
+            spend: '1.00', impressions: '1', clicks: '1',
+        }));
+        global.fetch = vi.fn(async (url) => {
+            const isDaily = String(url).includes('time_increment=1');
+            return { ok: true, status: 200, json: async () => ({ data: isDaily ? data : [], paging: {} }) };
+        });
+
+        const res = await syncOneOrg('org-1', freshCreds(['1112223333']));
+        expect(res.rows).toBe(600);
+        const upserts = queries.filter((q) => q.table === 'ad_metrics' && q.op === 'upsert');
+        expect(upserts.length).toBe(2); // 500 + 100
+        expect(Math.max(...upserts.map((u) => u.upsertVals.length))).toBeLessThanOrEqual(500);
+        expect(upserts.reduce((s, u) => s + u.upsertVals.length, 0)).toBe(600);
+    });
+
     it('marks failed when no ad accounts are connected', async () => {
         const integration = {
             secrets: encryptSecret(JSON.stringify({ access_token: 'tok' })),
@@ -189,5 +228,76 @@ describe('syncOneOrg', () => {
         };
         await expect(syncOneOrg('org-1', integration)).rejects.toThrow(/accounts/);
         expect(integrationRepository.markFailed).toHaveBeenCalled();
+    });
+
+    // Robustness: an expired token makes EVERY account query throw. The sync must
+    // NOT wipe the existing window and report healthy — mark failed and surface it.
+    it('when every account errors: marks failed, throws, and does NOT delete existing rows', async () => {
+        const queries = [];
+        supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
+        global.fetch = vi.fn(async () => ({
+            ok: false, status: 401,
+            json: async () => ({ error: { message: 'Error validating access token: expired' } }),
+        }));
+
+        await expect(syncOneOrg('org-1', freshCreds(['1112223333']))).rejects.toThrow();
+        expect(integrationRepository.markFailed).toHaveBeenCalled();
+        expect(integrationRepository.markSynced).not.toHaveBeenCalled();   // never marked active
+        expect(queries.find((q) => q.table === 'ad_metrics' && q.op === 'delete')).toBeUndefined();
+    });
+
+    // Robustness: a 200 OK with an EMPTY result set (transient glitch — report
+    // not ready, throttle, momentary access loss) must NOT be treated as "zero
+    // spend" and wipe the existing window. Daily spend is immutable history; only
+    // a non-empty pull may trigger a destructive replace.
+    it('an empty (but successful) response does NOT delete existing rows and stays active', async () => {
+        const queries = [];
+        supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
+        global.fetch = vi.fn(async () => ({
+            ok: true, status: 200,
+            json: async () => ({ data: [], paging: {} }),   // 200 OK, no rows
+        }));
+
+        const res = await syncOneOrg('org-1', freshCreds(['1112223333']));
+        expect(res.rows).toBe(0);
+        expect(queries.find((q) => q.table === 'ad_metrics' && q.op === 'delete')).toBeUndefined();
+        expect(integrationRepository.markFailed).not.toHaveBeenCalled();
+        expect(integrationRepository.markSynced).toHaveBeenCalled();        // healthy, just no new data
+    });
+
+    // Robustness: one bad account must not wipe the OTHER accounts' data. The
+    // delete is scoped to the accounts that fetched rows.
+    it('partial failure scopes the delete to successfully-fetched accounts', async () => {
+        const queries = [];
+        supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
+        global.fetch = vi.fn(async (url) => {
+            const ok = String(url).includes('act_2220000000');
+            return ok
+                ? { ok: true, status: 200, json: async () => ({ data: [
+                    { campaign_id: 7, campaign_name: 'Brand', date_start: '2026-05-10',
+                      spend: '3.00', impressions: '500', clicks: '20', actions: [{ action_type: 'lead', value: '2' }] }],
+                    paging: {} }) }
+                : { ok: false, status: 403, json: async () => ({ error: { message: 'account disabled' } }) };
+        });
+
+        const res = await syncOneOrg('org-1', freshCreds(['1110000000', '2220000000']));
+        expect(res.rows).toBe(1);
+        const del = queries.find((q) => q.table === 'ad_metrics' && q.op === 'delete');
+        expect(del).toBeTruthy();
+        expect(del.ins).toEqual(expect.arrayContaining([{ col: 'customer_id', vals: ['2220000000'] }]));
+        expect(integrationRepository.markSynced).toHaveBeenCalled();       // partial success still active
+    });
+});
+
+// Nightly cron must also retry orgs stuck in 'failed' so a transient failure
+// self-heals on the next run — never 'revoked' (the user disconnected those).
+describe('syncAllOrgs', () => {
+    it('selects active AND failed integrations (self-healing), not just active', async () => {
+        const queries = [];
+        supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
+        await syncAllOrgs();
+        const q = queries.find((x) => x.table === 'integrations');
+        expect(q.eqs).toEqual(expect.arrayContaining([{ col: 'provider', val: 'meta_ads' }]));
+        expect(q.ins).toEqual(expect.arrayContaining([{ col: 'status', vals: ['active', 'failed'] }]));
     });
 });

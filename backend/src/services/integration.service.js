@@ -111,12 +111,13 @@ export const integrationService = {
                 console.error('[integrations] gohighlevel bootstrap failed:', err?.message || err);
             });
         } else if (ON_DEMAND_SYNCERS[provider]) {
-            // Ad providers backfill the FULL window (12mo) on first connect, like
-            // the Dentally/GHL bootstraps above. An incremental (31-day) first
-            // pull leaves older months ~30% short: spend/impressions/clicks are
-            // summed from daily ad_metrics rows, so any month with un-synced early
-            // days undercounts. (Reach is immune — it comes from the live
-            // account-level query, not the daily sum.)
+            // Ad providers backfill the FULL window (6mo) on (re)connect, like
+            // the Dentally/GHL bootstraps above; the nightly cron then maintains
+            // the trailing 3mo. An incremental first pull would leave older
+            // months short: spend/impressions/clicks are summed from daily
+            // ad_metrics rows, so any month with un-synced early days undercounts.
+            // (Reach is immune — it comes from the live account-level query, not
+            // the daily sum.)
             const full = provider === 'meta_ads' || provider === 'google_ads';
             this.syncNow(orgId, provider, { full }).catch((err) => {
                 console.error(`[integrations] first-sync ${provider} failed:`, err?.message || err);

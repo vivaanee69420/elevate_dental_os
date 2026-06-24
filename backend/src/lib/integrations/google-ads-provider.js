@@ -43,14 +43,17 @@ function redirectUri() {
 
 // Headers every Google Ads (not OAuth) call needs: bearer + developer token +
 // optional login-customer-id (the MCC the client account sits under).
-export function adsHeaders(accessToken) {
+// `withLogin:false` omits the MCC header — required for
+// customers:listAccessibleCustomers, which lists accounts for the AUTHENTICATED
+// credential and rejects a login-customer-id with INVALID_ARGUMENT.
+export function adsHeaders(accessToken, { withLogin = true } = {}) {
     const h = {
         Authorization: `Bearer ${accessToken}`,
         'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '',
         'Content-Type': 'application/json',
     };
     const login = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '').replace(/-/g, '');
-    if (login) h['login-customer-id'] = login;
+    if (withLogin && login) h['login-customer-id'] = login;
     return h;
 }
 
@@ -74,7 +77,9 @@ async function persistTokenResponse(orgId, body, configPatch = {}) {
 // clients too; the sync skips accounts that error on a metrics query.
 export async function listAccessibleCustomers(accessToken) {
     const url = `${apiBase()}/${apiVersion()}/customers:listAccessibleCustomers`;
-    const res = await fetch(url, { headers: adsHeaders(accessToken) });
+    // No login-customer-id: this lists the credential's own accounts; an MCC
+    // header makes Google reject it with INVALID_ARGUMENT.
+    const res = await fetch(url, { headers: adsHeaders(accessToken, { withLogin: false }) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
         const msg = body?.error?.message || `listAccessibleCustomers HTTP ${res.status}`;
