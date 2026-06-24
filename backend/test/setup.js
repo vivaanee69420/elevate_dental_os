@@ -76,6 +76,10 @@ const h = vi.hoisted(() => {
         q.eqs.push({ col, val });
         return builder;
       },
+      neq(col, val) {
+        (q.neqs ||= []).push({ col, val });
+        return builder;
+      },
       // Additive chainables (backward-compatible: existing tests only read
       // q.table/q.op/q.eqs/q.upsertVals). Recorded for assertions; the
       // analytics repo uses .limit() and .maybeSingle().

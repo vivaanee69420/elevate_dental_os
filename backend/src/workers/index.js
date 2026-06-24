@@ -281,9 +281,10 @@ scheduleMonitored('quickbooks-sync', '30 2 * * *', async () => {
         console.error('[worker] QuickBooks sync failed', err);
     }
 });
-// Google Ads spend sync — daily 02:45, pull the last 30 days of per-campaign
-// spend/performance into ad_metrics for orgs with an active google_ads
-// integration. Each org's rows are keyed by organisation_id (no cross-tenant).
+// Google Ads spend sync — daily 02:45, resync the trailing 3 months of
+// per-campaign spend/performance into ad_metrics for orgs with an active OR
+// failed google_ads integration (failed ones self-heal). Each org's rows are
+// keyed by organisation_id (no cross-tenant).
 scheduleMonitored('google-ads-sync', '45 2 * * *', async () => {
     try {
         const results = await google_ads_sync_1.syncAllOrgs();
@@ -292,9 +293,10 @@ scheduleMonitored('google-ads-sync', '45 2 * * *', async () => {
         console.error('[worker] Google Ads sync failed', err);
     }
 });
-// Meta (Facebook) Ads spend sync — daily 02:50, pull the last 30 days of
-// per-campaign spend/performance into ad_metrics for orgs with an active
-// meta_ads integration. Each org's rows are keyed by organisation_id.
+// Meta (Facebook) Ads spend sync — daily 02:50, resync the trailing 3 months of
+// per-campaign spend/performance into ad_metrics for orgs with an active OR
+// failed meta_ads integration (failed ones self-heal). Each org's rows are
+// keyed by organisation_id.
 scheduleMonitored('meta-ads-sync', '50 2 * * *', async () => {
     try {
         const results = await meta_ads_sync_1.syncAllOrgs();
