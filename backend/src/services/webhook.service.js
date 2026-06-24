@@ -236,6 +236,8 @@ export const webhookService = {
         }
         const secret = integration.config?.webhook_secret;
         if (!secret) {
+            // Record so the owner UI shows "secret not set" instead of silence.
+            await recordWebhookResult(orgId, 'emergent', 'no_secret', { sigPresent: !!signature });
             throw new errors_1.AppError('webhook secret not configured', 401);
         }
         const raw = Buffer.isBuffer(body) ? body : Buffer.from(String(body ?? ''), 'utf8');
@@ -250,8 +252,13 @@ export const webhookService = {
                 lenMatch: got.length === expected.length,
                 rawLen: raw.length,
             });
+            await recordWebhookResult(orgId, 'emergent', 'bad_signature', { sigPresent: !!signature });
             throw new errors_1.AppError('invalid signature', 401);
         }
+        // Signature verified — record it NOW, before parse/apply, so the UI's
+        // health status reflects a genuine authenticated delivery even if the
+        // payload is later ignored (no_data) or a transient apply error occurs.
+        await recordWebhookResult(orgId, 'emergent', 'verified');
         let parsed;
         try {
             parsed = JSON.parse(raw.toString('utf8'));
