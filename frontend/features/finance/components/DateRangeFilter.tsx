@@ -1,8 +1,9 @@
 'use client';
 // Reusable date-range filter for the Finance pages. Emits { from, to } as
-// YYYY-MM-DD (or null = use the page's default rolling window). Presets cover
-// "this month", "this year", a specific month, a single day, and an arbitrary
-// custom range (from–to). A single day = from === to.
+// YYYY-MM-DD. Presets cover "this month" (the default), "this year", a specific
+// month, and an arbitrary custom range (from–to). A single day = from === to.
+// (The old "Recent"/rolling-default preset was removed — pages now default to
+// the current month.)
 import { useState } from 'react';
 
 export interface DateRange {
@@ -33,10 +34,10 @@ interface Props {
   onChange: (r: DateRange) => void;
 }
 
-type Mode = 'default' | 'month' | 'year' | 'pick-month' | 'custom';
+type Mode = 'month' | 'year' | 'pick-month' | 'custom';
 
 export default function DateRangeFilter({ value, onChange }: Props) {
-  const [mode, setMode] = useState<Mode>('default');
+  const [mode, setMode] = useState<Mode>('month');
 
   const btn = (active: boolean): React.CSSProperties => ({
     padding: '5px 11px',
@@ -55,15 +56,13 @@ export default function DateRangeFilter({ value, onChange }: Props) {
 
   function pick(m: Mode) {
     setMode(m);
-    if (m === 'default') onChange({ from: null, to: null });
-    else if (m === 'month') onChange(thisMonthRange());
+    if (m === 'month') onChange(thisMonthRange());
     else if (m === 'year') onChange(thisYearRange());
     // 'pick-month' and 'custom' wait for input below
   }
 
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
-      <button style={btn(mode === 'default')} onClick={() => pick('default')}>Recent</button>
       <button style={btn(mode === 'month')} onClick={() => pick('month')}>This month</button>
       <button style={btn(mode === 'year')} onClick={() => pick('year')}>This year</button>
       <button style={btn(mode === 'pick-month')} onClick={() => pick('pick-month')}>Pick month</button>

@@ -26,7 +26,7 @@ import { useBusinessHub, type HubWindow } from '@/features/overview/business-hub
 import { useMarketingRoi } from '@/features/growth/hooks';
 import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
-import DateRangeFilter, { type DateRange } from './DateRangeFilter';
+import DateRangeFilter, { type DateRange, thisMonthRange } from './DateRangeFilter';
 
 const BRAND = 'var(--brand)';
 const RUNWAY_COLOUR: Record<string, string> = {
@@ -81,12 +81,13 @@ function StripKpi({
 
 export default function CashflowScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const [range, setRange] = useState<DateRange>(thisMonthRange());
   const { data, isLoading, isError } = useCashflow(13, practiceId, range);
   const { data: outlook } = useCashflowOutlook(4, 2, practiceId);
   // Context strip — group KPIs + live paid-marketing efficiency, both following
-  // the page's practice + period filters. Custom [from,to] → explicit window;
-  // "Recent" (no range) → trailing 90 days. Practice scope is applied client-side
+  // the page's practice + period filters. Selected [from,to] → explicit window;
+  // the filter defaults to the current month. The trailing-90-day fallback is
+  // kept defensively for any null range. Practice scope is applied client-side
   // off hub.practices (business-hub has no practice_id param), mirroring Business Hub.
   const hubWin: HubWindow = range.from && range.to
     ? { since: range.from, until: range.to }

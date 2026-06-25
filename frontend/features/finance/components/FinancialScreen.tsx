@@ -14,7 +14,7 @@ import { annualTotal } from '../mock';
 import { useFinancial, useFinanceSeries } from '../hooks';
 import FinanceToolbar from './FinanceToolbar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
-import DateRangeFilter, { type DateRange } from './DateRangeFilter';
+import DateRangeFilter, { type DateRange, thisMonthRange } from './DateRangeFilter';
 
 function fmt(n: number): string {
   return '£' + Math.round(n).toLocaleString('en-GB');
@@ -75,7 +75,7 @@ export default function FinancialScreen() {
   }
 
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const [range, setRange] = useState<DateRange>(thisMonthRange());
   const { data, isLoading, isError } = useFinancial(dsoDays, payableDays, practiceId, range);
   const { data: seriesData } = useFinanceSeries(practiceId, range);
   const noBaseline = !!data?.error;
