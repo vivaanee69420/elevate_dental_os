@@ -960,3 +960,51 @@ describe('baselineAsOf — historised vs live manual baseline for AI grounding',
     expect(out).toEqual(LIVE);
   });
 });
+
+// Drill-down behind the "Plan Fees Collected" card. The list comes from
+// plan_fees_collected_lines (one row per invoice line); the header totals come
+// from the aggregate treatments_closed_revenue_by_practice so they reconcile to
+// the tile exactly. Practice scope filters both.
+describe('planFeesLines — invoice-line drill-down + canonical totals', () => {
+  const since = '2026-06-01T00:00:00.000Z';
+  const until = '2026-07-01T00:00:00.000Z';
+  const PRAC_1 = 'prac-11111111';
+  const PRAC_2 = 'prac-22222222';
+  const lineRows = [
+    { invoice_item_id: 'ii-1', invoiced_on: '2026-06-10', practice_id: PRAC_1, practice_name: 'Ashford',
+      patient_name: 'Jane Doe', treatment_name: 'Implant', treatment_plan_id: 'tp-9', invoice_id: 'inv-1',
+      billed_pence: 100000, collected_pence: 90000, invoice_amount_pence: 120000, invoice_outstanding_pence: 12000 },
+    { invoice_item_id: 'ii-2', invoiced_on: '2026-06-12', practice_id: PRAC_2, practice_name: 'Rochester',
+      patient_name: 'John Roe', treatment_name: 'Crown', treatment_plan_id: 'tp-8', invoice_id: 'inv-2',
+      billed_pence: 50000, collected_pence: 50000, invoice_amount_pence: 50000, invoice_outstanding_pence: 0 },
+  ];
+  const aggRows = [
+    { practice_id: PRAC_1, closed_value_pence: 100000, paid_value_pence: 90001 }, // 90001 => proves header uses aggregate, not summed lines
+    { practice_id: PRAC_2, closed_value_pence: 50000, paid_value_pence: 50000 },
+  ];
+  const stub = (lines, agg) => (fn) =>
+    fn === 'plan_fees_collected_lines' ? { data: lines, error: null }
+    : fn === 'treatments_closed_revenue_by_practice' ? { data: agg, error: null }
+    : { data: null, error: { message: `rpc ${fn} not stubbed` } };
+
+  beforeEach(() => { invalidateGating(ORG_A); });
+
+  it('maps lines to camelCase and takes group totals from the aggregate (not the rounded line sum)', async () => {
+    supaRec.rpcProvider = stub(lineRows, aggRows);
+    const out = await svc.planFeesLines(ORG_A, { since, until, label: 'Jun 2026' });
+    expect(out.window).toEqual({ since, until, label: 'Jun 2026' });
+    expect(out.totals).toEqual({ billedPence: 150000, collectedPence: 140001, lineCount: 2 });
+    expect(out.lines).toHaveLength(2);
+    expect(out.lines[0]).toMatchObject({
+      id: 'ii-1', invoicedOn: '2026-06-10', practiceId: PRAC_1, practiceName: 'Ashford',
+      patientName: 'Jane Doe', treatmentName: 'Implant', treatmentPlanId: 'tp-9', invoiceId: 'inv-1',
+      billedPence: 100000, collectedPence: 90000, invoiceAmountPence: 120000, invoiceOutstandingPence: 12000,
+    });
+  });
+
+  it('scopes the canonical totals to the selected practice', async () => {
+    supaRec.rpcProvider = stub(lineRows.filter((r) => r.practice_id === PRAC_1), aggRows);
+    const out = await svc.planFeesLines(ORG_A, { since, until, practiceId: PRAC_1 });
+    expect(out.totals).toEqual({ billedPence: 100000, collectedPence: 90001, lineCount: 1 });
+  });
+});

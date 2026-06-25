@@ -46,6 +46,7 @@ router.get('/dashboard-summary', fin, (0, async_handler_1.asyncHandler)(analytic
 router.get('/revenue-series', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.revenueSeries));
 router.get('/practice-summary', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.practiceSummary));
 router.get('/business-hub', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.businessHub));
+router.get('/plan-fees-lines', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.planFeesLines));
 router.get('/leakage', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.leakage));
 router.get('/data-quality', sys, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.dataQuality));
 router.get('/retention', grw, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.retention));
