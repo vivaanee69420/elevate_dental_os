@@ -429,6 +429,20 @@ export const analyticsRepository = {
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
+    // Drill-down behind the "Treatments Completed" card: every completed
+    // treatment item in the window with patient + clinician + treatment + revenue
+    // (same filter as treatmentsCompletedByPractice). Optional practiceId scopes
+    // to one practice. Rows: { item_id, completed_at, practice_id, practice_name,
+    // patient_name, clinician_name, treatment_name, value_pence }.
+    async treatmentsCompletedLines(orgId, sinceISO, untilISO = null, practiceId = null, limit = null, offset = 0) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('treatments_completed_lines', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null, p_practice: practiceId ?? null,
+            p_limit: limit ?? null, p_offset: offset ?? 0,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
     // Treatments COMPLETED rollup PER PRACTICE — the real Practitioner Activity feed
     // (dentally_treatment_items, migration 000099): completed treatments by
     // completed_at, base_chart charting rows excluded. Replaces the old
