@@ -15,6 +15,8 @@
 // and a treatment-production/price feed are connected.
 
 import { useState } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
 import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type ChipColour } from '@/components/ui';
@@ -38,6 +40,9 @@ type HeadlineKpi = {
   label: string; value: string; sub: string; chip: { text: string; tone: ChipColour } | null;
   // Optional click-to-expand affordance (used by Treatments Accepted -> per-practice breakdown).
   onClick?: () => void; hint?: string; active?: boolean;
+  // Optional navigation: clicking the tile routes to a detail page (scope/period
+  // query already appended). Mutually exclusive with onClick.
+  href?: string;
 };
 
 // n/d as a percentage, rounded to `dp` decimals (default integer). 0 when d<=0.
@@ -70,6 +75,15 @@ function HeadlineCard({ c }: { c: HeadlineKpi }) {
       {c.hint && <div className="text-[11px] text-brand mt-2">{c.hint}</div>}
     </>
   );
+  // Navigation tile: routes to a detail page (scope/period preserved on the href).
+  if (c.href) {
+    return (
+      <Link href={c.href}
+        className="card-padded flex flex-col min-w-0 text-left transition-colors hover:border-brand-200 cursor-pointer">
+        {body}
+      </Link>
+    );
+  }
   if (!c.onClick) return <div className="card-padded flex flex-col min-w-0">{body}</div>;
   return (
     <button type="button" onClick={c.onClick} aria-expanded={c.active}
@@ -82,6 +96,13 @@ function HeadlineCard({ c }: { c: HeadlineKpi }) {
 
 export function GroupPerformanceScreen() {
   const { scope, setScope, win } = useScopePeriod();
+  const searchParams = useSearchParams();
+  // Scope + period live in the URL query, so carry them when routing from a card
+  // to its detail page — the target page then opens on the same practice/window.
+  const to = (path: string) => {
+    const qs = searchParams.toString();
+    return qs ? `${path}?${qs}` : path;
+  };
   const { data, isLoading, isError } = useBusinessHub();
 
   // Per-section filters, each shown directly above its own data-source block and
@@ -217,9 +238,10 @@ export function GroupPerformanceScreen() {
     // Takings = settled payments received (same feed as the Patient Payments
     // "Received" tile, so the two screens reconcile); chip = like-for-like delta.
     { label: 'Takings', value: formatPence(takingsPence), sub: `Settled payments received · ${windowLabel}`,
-      chip: cashChip },
+      chip: cashChip, href: to('/payments'), hint: 'Open Payments →' },
     { label: 'Treatments Completed', value: formatNumber(completedCount), sub: `Completed by practitioners · ${windowLabel}`,
-      chip: completedValuePence > 0 ? { text: `${formatPence(completedValuePence)} of work done`, tone: 'emerald' } : null },
+      chip: completedValuePence > 0 ? { text: `${formatPence(completedValuePence)} of work done`, tone: 'emerald' } : null,
+      href: to('/clinicians'), hint: 'Open Clinicians →' },
     // Treatments Accepted is sourced from the Emergent ops app, but grouped here
     // with the other treatment cards. Placeholder until Emergent is connected.
     // Click-to-expand reveals the per-practice breakdown; the card value follows
@@ -232,18 +254,20 @@ export function GroupPerformanceScreen() {
       active: acceptedOpen,
       hint: acceptedRows.length > 0 ? (acceptedOpen ? 'Hide breakdown' : 'Click for practice breakdown') : undefined },
     { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Plan fees billed · ${windowLabel}`,
-      chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
+      chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null,
+      href: to('/treatments'), hint: 'Open Treatments →' },
     { label: 'Treatment Plan Fees Collected', value: formatPence(paidPence), sub: `Collected on treatment plans · ${windowLabel}`,
       chip: collectedPct > 0 ? { text: `${collectedPct}% of billed paid`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null,
       onClick: paidPence > 0 ? () => setPlansOpen((v) => !v) : undefined,
       active: plansOpen,
       hint: paidPence > 0 ? (plansOpen ? 'Hide invoice lines' : 'Click to see every plan line') : undefined },
     { label: 'Appointments', value: formatNumber(apptCount), sub: `${formatNumber(apptCompleted)} completed · ${windowLabel}`,
-      chip: null },
+      chip: null, href: to('/appointments'), hint: 'Open Appointments →' },
     { label: 'No-show rate', value: g.noShowTracked ? `${noShowRateVal}%` : DASH, sub: g.noShowTracked ? 'Missed appointments' : 'Not tracked in Dentally',
-      chip: null },
+      chip: null, href: g.noShowTracked ? to('/appointments') : undefined, hint: g.noShowTracked ? 'Open Appointments →' : undefined },
     { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'New-patient exams booked (Dentally)',
-      chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null },
+      chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null,
+      href: to('/patients'), hint: 'Open Patients →' },
   ];
   // QuickBooks / Xero — P&L actuals (profit + net margin).
   const quickbooksCards: HeadlineKpi[] = [
@@ -520,7 +544,10 @@ export function GroupPerformanceScreen() {
           are not connected, so contribution is gross (cost £0). */}
       <div className="grid gap-4 lg:grid-cols-2 items-start">
         <Card>
-          <h3 className="display text-lg font-semibold">Revenue by Line</h3>
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="display text-lg font-semibold">Revenue by Line</h3>
+            <Link href={to('/crm-reports')} className="text-xs text-brand hover:underline whitespace-nowrap">Open report →</Link>
+          </div>
           <p className="text-sm text-ink-muted mt-0.5">Where group turnover comes from — clinical treatment lines · {windowLabel}.</p>
           {lines.length === 0
             ? <EmptyState message="No invoiced treatments from Dentally in this window yet." />
