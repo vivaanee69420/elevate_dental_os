@@ -80,6 +80,21 @@ export const analyticsController = {
         const label = typeof req.query.label === 'string' ? req.query.label.slice(0, 40) : null;
         res.json(await analytics_service_1.analyticsService.businessHub(req.user.organisation_id, { days, since, until, label }));
     },
+    // Drill-down behind the "Plan Fees Collected" card — every treatment-plan
+    // invoice line in the same window (+ optional practice scope). Same window
+    // parsing as businessHub so the drill-down reconciles to the tile.
+    async planFeesLines(req, res) {
+        const days = Number(req.query.days) || 90;
+        const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+        const since = iso(req.query.since);
+        const until = iso(req.query.until);
+        const label = typeof req.query.label === 'string' ? req.query.label.slice(0, 40) : null;
+        // practice_id is a UUID when a practice is selected; group buckets
+        // ('all'/'practices'/…) and junk are treated as no filter.
+        const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const practiceId = uuid.test(String(req.query.practice_id)) ? String(req.query.practice_id) : null;
+        res.json(await analytics_service_1.analyticsService.planFeesLines(req.user.organisation_id, { days, since, until, label, practiceId }));
+    },
     async leakage(req, res) {
         const days = Number(req.query.days) || 90;
         const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);

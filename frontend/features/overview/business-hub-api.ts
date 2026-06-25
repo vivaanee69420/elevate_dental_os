@@ -93,6 +93,51 @@ export function getBusinessHub(win: HubWindow = { days: 90 }) {
   return api<BusinessHub>(`/api/analytics/business-hub?${queryString(win)}`);
 }
 
+// One invoice line behind the "Plan Fees Collected" card (drill-down). All
+// *_pence are integer pence. collectedPence is each line's share of its
+// invoice's actual payments (rounded to the penny for display).
+export interface PlanFeeLine {
+  id: string;
+  invoicedOn: string;             // YYYY-MM-DD
+  practiceId: string | null;
+  practiceName: string | null;
+  patientName: string | null;
+  treatmentName: string | null;
+  treatmentPlanId: string | null;
+  invoiceId: string | null;
+  billedPence: number;
+  collectedPence: number;
+  invoiceAmountPence: number | null;      // parent invoice gross (the pro-rata denominator)
+  invoiceOutstandingPence: number | null; // still owed on that invoice
+}
+
+export interface PlanFeesLines {
+  window: { since: string; until: string | null; label: string | null };
+  totals: { billedPence: number; collectedPence: number; lineCount: number }; // canonical — matches the tile
+  lines: PlanFeeLine[];
+  basis: string;
+  note: string;
+}
+
+// Lazy drill-down: only fetched when the card is expanded (enabled). Honours the
+// global period window + the selected practice so it reconciles to the tile.
+export function usePlanFeesLines(
+  { enabled, practiceId }: { enabled: boolean; practiceId?: string | null },
+) {
+  const { win } = useScopePeriod();
+  // The global filter always resolves to a concrete [since, until) window.
+  const params = new URLSearchParams({ since: win.since, until: win.until });
+  if (win.label) params.set('label', win.label);
+  if (practiceId) params.set('practice_id', practiceId);
+  const qs = params.toString();
+  return useQuery({
+    queryKey: ['plan-fees-lines', qs],
+    queryFn: () => api<PlanFeesLines>(`/api/analytics/plan-fees-lines?${qs}`),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
 // useBusinessHub() with no arg follows the global month/day filter. Pass a number
 // (legacy) or an explicit HubWindow to pin a trailing-days or custom window
 // regardless of the filter (used by screens that aren't period-scoped).

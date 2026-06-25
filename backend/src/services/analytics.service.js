@@ -397,6 +397,46 @@ export const analyticsService = {
             note: 'Real invoiced fees from Dentally, grouped by treatment. Patients = unique invoiced patients per treatment.',
         };
     },
+    // Drill-down behind the "Plan Fees Collected" card — every treatment-plan
+    // invoice line in the SAME window the card uses, plus canonical totals (from
+    // the aggregate RPC, which rounds the summed products once) so the header
+    // reconciles to the tile EXACTLY. Window rules mirror businessHub(): an
+    // explicit [since, until] wins, else the trailing N-day window. Optional
+    // practiceId scopes both the lines and the totals to one practice.
+    async planFeesLines(orgId, { days = 90, since = null, until = null, label = null, practiceId = null, now = () => new Date() } = {}) {
+        const sinceISO = since || new Date(now().getTime() - days * 86400000).toISOString();
+        const untilISO = until || null;
+        const [lineRows, closedRows] = await Promise.all([
+            analytics_repository_1.analyticsRepository.planFeesCollectedLines(orgId, sinceISO, untilISO, practiceId),
+            analytics_repository_1.analyticsRepository.treatmentsClosedRevenueByPractice(orgId, sinceISO, untilISO),
+        ]);
+        // Canonical totals = the same aggregate the tile shows. Per-practice scope
+        // keeps only that practice's aggregate row; group sums every practice.
+        const scoped = practiceId ? closedRows.filter((r) => r.practice_id === practiceId) : closedRows;
+        const billedPence = scoped.reduce((s, r) => s + Number(r.closed_value_pence || 0), 0);
+        const collectedPence = scoped.reduce((s, r) => s + Number(r.paid_value_pence || 0), 0);
+        const lines = lineRows.map((r) => ({
+            id: r.invoice_item_id,
+            invoicedOn: r.invoiced_on,
+            practiceId: r.practice_id ?? null,
+            practiceName: r.practice_name ?? null,
+            patientName: r.patient_name ?? null,
+            treatmentName: r.treatment_name ?? null,
+            treatmentPlanId: r.treatment_plan_id ?? null,
+            invoiceId: r.invoice_id ?? null,
+            billedPence: Number(r.billed_pence || 0),
+            collectedPence: Number(r.collected_pence || 0),
+            invoiceAmountPence: r.invoice_amount_pence == null ? null : Number(r.invoice_amount_pence),
+            invoiceOutstandingPence: r.invoice_outstanding_pence == null ? null : Number(r.invoice_outstanding_pence),
+        }));
+        return {
+            window: { since: sinceISO, until: untilISO, label: label ?? null },
+            totals: { billedPence, collectedPence, lineCount: lines.length },
+            lines,
+            basis: 'invoice_items',
+            note: "Every Dentally treatment-plan invoice line in the window. Collected = each line's share of its invoice's actual payments (invoice gross minus outstanding, pro-rata). Per-line collected is rounded to the penny, so the lines can total a few pence off the header.",
+        };
+    },
     // Day — Cash Collected (GM Intelligence OS, T9). REAL settled receipts banked
     // by working day across the month containing periodKey, plus a composite
     // collection index (each day vs the month's average working day = 100). This

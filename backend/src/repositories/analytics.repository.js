@@ -415,6 +415,20 @@ export const analyticsRepository = {
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
+    // Drill-down behind the "Plan Fees Collected" card: every treatment-plan
+    // invoice line in the window (same WHERE + collected-ratio as
+    // treatmentsClosedRevenueByPractice), one row per line. Optional practiceId
+    // scopes to one practice. Rows: { invoice_item_id, invoiced_on, practice_id,
+    // practice_name, patient_name, treatment_name, treatment_plan_id, invoice_id,
+    // billed_pence, collected_pence, invoice_amount_pence, invoice_outstanding_pence }.
+    async planFeesCollectedLines(orgId, sinceISO, untilISO = null, practiceId = null) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('plan_fees_collected_lines', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null, p_practice: practiceId ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
     // Treatments COMPLETED rollup PER PRACTICE — the real Practitioner Activity feed
     // (dentally_treatment_items, migration 000099): completed treatments by
     // completed_at, base_chart charting rows excluded. Replaces the old
