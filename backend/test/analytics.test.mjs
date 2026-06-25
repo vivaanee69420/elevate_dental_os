@@ -1008,3 +1008,54 @@ describe('planFeesLines — invoice-line drill-down + canonical totals', () => {
     expect(out.totals).toEqual({ billedPence: 100000, collectedPence: 90001, lineCount: 1 });
   });
 });
+
+// Drill-down behind the "Treatments Completed" card (shown on the Clinicians
+// page): one row per completed treatment with patient, clinician, treatment and
+// the revenue it generated, sourced from dentally_treatment_items via RPC.
+describe('treatmentsCompletedLines — completed-treatment detail', () => {
+  const since = '2026-06-01T00:00:00.000Z';
+  const until = '2026-07-01T00:00:00.000Z';
+  const rows = [
+    { item_id: 'ti-1', completed_at: '2026-06-10T09:00:00.000Z', practice_id: 'prac-1', practice_name: 'Ashford',
+      patient_name: 'Jane Doe', clinician_name: 'Dr Smith', treatment_name: 'Implant', value_pence: 120000 },
+    { item_id: 'ti-2', completed_at: '2026-06-11T10:00:00.000Z', practice_id: 'prac-1', practice_name: 'Ashford',
+      patient_name: null, clinician_name: 'Dr Smith', treatment_name: 'Crown', value_pence: 50000 },
+  ];
+  // totals come from the aggregate (whole-window count + value), NOT from the
+  // page of lines — so they stay correct under pagination.
+  const stub = (fn) => fn === 'treatments_completed_lines' ? { data: rows, error: null }
+    : fn === 'treatments_completed_by_practice' ? { data: [{ practice_id: 'prac-1', completed_count: 1813, value_pence: 36525689 }], error: null }
+    : { data: null, error: { message: `rpc ${fn} not stubbed` } };
+
+  beforeEach(() => { invalidateGating(ORG_A); supaRec.rpcCalls = []; });
+
+  it('maps rows to camelCase, takes totals from the aggregate, keeps a null patient honest', async () => {
+    supaRec.rpcProvider = stub;
+    const out = await svc.treatmentsCompletedLines(ORG_A, { since, until, label: 'Jun 2026', scope: 'all' });
+    // totals over the whole window (aggregate), not the 2-row page.
+    expect(out.totals).toEqual({ count: 1813, valuePence: 36525689 });
+    expect(out.lines).toHaveLength(2);
+    expect(out.lines[0]).toMatchObject({
+      id: 'ti-1', practiceName: 'Ashford', patientName: 'Jane Doe',
+      clinicianName: 'Dr Smith', treatmentName: 'Implant', valuePence: 120000,
+    });
+    expect(out.lines[1].patientName).toBeNull();
+  });
+
+  it('paginates: passes limit/offset to the RPC and omits totals after the first page', async () => {
+    supaRec.rpcProvider = stub;
+    const out = await svc.treatmentsCompletedLines(ORG_A, { since, until, scope: 'all', limit: 100, offset: 100 });
+    const call = supaRec.rpcCalls.find((c) => c.fn === 'treatments_completed_lines');
+    expect(call.params).toMatchObject({ p_limit: 100, p_offset: 100 });
+    expect(out.totals).toBeNull(); // only computed on offset 0
+    // no aggregate call on later pages
+    expect(supaRec.rpcCalls.find((c) => c.fn === 'treatments_completed_by_practice')).toBeUndefined();
+  });
+
+  it('passes the selected practice scope through to the RPC', async () => {
+    supaRec.rpcProvider = stub;
+    await svc.treatmentsCompletedLines(ORG_A, { since, until, scope: 'prac-9' });
+    const call = supaRec.rpcCalls.find((c) => c.fn === 'treatments_completed_lines');
+    expect(call.params.p_practice).toBe('prac-9');
+  });
+});
