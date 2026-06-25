@@ -27,7 +27,6 @@ const INSIGHT_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,reach
 // (on-connect / reconnect) pulls 6 months. (product rule)
 const INCREMENTAL_DAYS = 90;
 const FULL_DAYS = 183;
-const UPSERT_CHUNK = 500;     // batch size: a single multi-thousand-row upsert hits Postgres statement_timeout
 // action_types that count as a conversion for a dental practice (form leads,
 // pixel leads, purchases, registrations, appointment schedules, contacts).
 const CONVERSION_ACTION = /lead|purchase|complete_registration|schedule|contact|submit_application/i;
@@ -267,25 +266,23 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         // accounts) so other channels (google_ads) are never clobbered.
         const aidsWithRows = [...new Set(all.map((r) => r.customer_id))];
         const since = sinceDate;
+        // Atomic, serialized replace: delete-window + upsert in ONE transaction
+        // guarded by a per-(org, provider) advisory lock (RPC). Upsert (not plain
+        // insert) so a boundary/timezone-skew row dated before the window updates
+        // in place instead of erroring on the unique key. Doing the delete and
+        // the writes in a single locked transaction prevents a 6-month backfill
+        // and the nightly incremental from deadlocking on ad_metrics row locks,
+        // which surfaced as "ad_metrics upsert: canceling statement due to
+        // statement timeout" when the two syncs overlapped.
         if (aidsWithRows.length > 0) {
-            const { error: delErr } = await supabase_1.serviceClient
-                .from('ad_metrics')
-                .delete()
-                .eq('organisation_id', orgId)
-                .eq('provider', 'meta_ads')
-                .in('customer_id', aidsWithRows)
-                .gte('metric_date', since);
-            if (delErr) throw new Error(`ad_metrics clear: ${delErr.message}`);
-            // upsert (not insert) so a boundary/timezone-skew row dated before the
-            // delete window updates in place instead of erroring on the unique key.
-            // Chunked: a single multi-thousand-row upsert exceeds Postgres
-            // statement_timeout on the 6-month backfill ("canceling statement due
-            // to statement timeout"). Write in <=UPSERT_CHUNK batches.
-            for (let i = 0; i < all.length; i += UPSERT_CHUNK) {
-                const { error } = await supabase_1.serviceClient.from('ad_metrics')
-                    .upsert(all.slice(i, i + UPSERT_CHUNK), { onConflict: 'organisation_id,provider,customer_id,campaign_id,metric_date' });
-                if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
-            }
+            const { error } = await supabase_1.serviceClient.rpc('ad_metrics_replace_window', {
+                p_org: orgId,
+                p_provider: 'meta_ads',
+                p_customer_ids: aidsWithRows,
+                p_since: since,
+                p_rows: all,
+            });
+            if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
         }
 
         // Scoped status write (won't resurrect a row revoked mid-sync).

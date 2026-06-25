@@ -115,6 +115,12 @@ describe('syncOneOrg', () => {
         integrationRepository.upsert.mockReset();
         integrationRepository.markFailed.mockReset();
         integrationRepository.markSynced.mockReset();
+        // The window replace now goes through the ad_metrics_replace_window RPC
+        // (delete + upsert in one advisory-locked transaction). Stub it green.
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = (fn) => fn === 'ad_metrics_replace_window'
+            ? { data: 0, error: null }
+            : { data: null, error: { message: `rpc ${fn} not stubbed` } };
     });
 
     it('pulls spend per account and replaces the org window in ad_metrics', async () => {
@@ -140,13 +146,14 @@ describe('syncOneOrg', () => {
 
         expect(res.rows).toBe(1);
         expect(res.accounts).toBe(1);
-        const del = queries.find((q) => q.table === 'ad_metrics' && q.op === 'delete');
-        expect(del.eqs).toEqual(expect.arrayContaining([
-            { col: 'organisation_id', val: 'org-1' }, { col: 'provider', val: 'meta_ads' },
-        ]));
-        const ins = queries.find((q) => q.table === 'ad_metrics' && q.op === 'upsert');
-        expect(ins.upsertOpts).toMatchObject({ onConflict: 'organisation_id,provider,customer_id,campaign_id,metric_date' });
-        expect(ins.upsertVals).toEqual(expect.arrayContaining([
+        // The atomic replace runs in ONE advisory-locked RPC transaction (delete
+        // + upsert), not a raw delete/upsert chain — that's what prevents the
+        // overlapping-sync deadlock that surfaced as a statement timeout.
+        const rpc = supaRec.rpcCalls.find((c) => c.fn === 'ad_metrics_replace_window');
+        expect(rpc).toBeTruthy();
+        expect(rpc.params).toMatchObject({ p_org: 'org-1', p_provider: 'meta_ads' });
+        expect(rpc.params.p_customer_ids).toContain('1112223333');
+        expect(rpc.params.p_rows).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 organisation_id: 'org-1', provider: 'meta_ads', customer_id: '1112223333',
                 campaign_id: '7', spend_pence: 300, clicks: 20, conversions: 2,
@@ -197,10 +204,12 @@ describe('syncOneOrg', () => {
         expect(integrationRepository.markFailed).toHaveBeenCalled();
     });
 
-    // A single multi-thousand-row upsert exceeds Postgres statement_timeout on
-    // the 6-month backfill ("canceling statement due to statement timeout").
-    // The upsert must be chunked into <=500-row batches.
-    it('chunks a large upsert into <=500-row batches', async () => {
+    // A 6-month backfill can be a few thousand rows. The whole window replace
+    // (delete + upsert) goes through ONE advisory-locked RPC transaction so a
+    // concurrent nightly sync can't deadlock it on ad_metrics row locks
+    // ("canceling statement due to statement timeout"). It must NOT fall back to
+    // a raw delete/chunked-upsert chain.
+    it('sends the whole window through a single atomic replace RPC', async () => {
         const queries = [];
         supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
         const data = Array.from({ length: 600 }, (_, i) => ({
@@ -214,10 +223,11 @@ describe('syncOneOrg', () => {
 
         const res = await syncOneOrg('org-1', freshCreds(['1112223333']));
         expect(res.rows).toBe(600);
-        const upserts = queries.filter((q) => q.table === 'ad_metrics' && q.op === 'upsert');
-        expect(upserts.length).toBe(2); // 500 + 100
-        expect(Math.max(...upserts.map((u) => u.upsertVals.length))).toBeLessThanOrEqual(500);
-        expect(upserts.reduce((s, u) => s + u.upsertVals.length, 0)).toBe(600);
+        const replaces = supaRec.rpcCalls.filter((c) => c.fn === 'ad_metrics_replace_window');
+        expect(replaces.length).toBe(1);                 // one atomic call, not N chunks
+        expect(replaces[0].params.p_rows.length).toBe(600);
+        // No raw delete/upsert chain on ad_metrics anymore.
+        expect(queries.some((q) => q.table === 'ad_metrics' && (q.op === 'upsert' || q.op === 'delete'))).toBe(false);
     });
 
     it('marks failed when no ad accounts are connected', async () => {
@@ -243,7 +253,8 @@ describe('syncOneOrg', () => {
         await expect(syncOneOrg('org-1', freshCreds(['1112223333']))).rejects.toThrow();
         expect(integrationRepository.markFailed).toHaveBeenCalled();
         expect(integrationRepository.markSynced).not.toHaveBeenCalled();   // never marked active
-        expect(queries.find((q) => q.table === 'ad_metrics' && q.op === 'delete')).toBeUndefined();
+        // No replace (which deletes the window) when nothing was fetched.
+        expect(supaRec.rpcCalls.find((c) => c.fn === 'ad_metrics_replace_window')).toBeUndefined();
     });
 
     // Robustness: a 200 OK with an EMPTY result set (transient glitch — report
@@ -260,14 +271,15 @@ describe('syncOneOrg', () => {
 
         const res = await syncOneOrg('org-1', freshCreds(['1112223333']));
         expect(res.rows).toBe(0);
-        expect(queries.find((q) => q.table === 'ad_metrics' && q.op === 'delete')).toBeUndefined();
+        // No replace (which deletes the window) on an empty-but-successful pull.
+        expect(supaRec.rpcCalls.find((c) => c.fn === 'ad_metrics_replace_window')).toBeUndefined();
         expect(integrationRepository.markFailed).not.toHaveBeenCalled();
         expect(integrationRepository.markSynced).toHaveBeenCalled();        // healthy, just no new data
     });
 
     // Robustness: one bad account must not wipe the OTHER accounts' data. The
-    // delete is scoped to the accounts that fetched rows.
-    it('partial failure scopes the delete to successfully-fetched accounts', async () => {
+    // replace is scoped to the accounts that fetched rows.
+    it('partial failure scopes the replace to successfully-fetched accounts', async () => {
         const queries = [];
         supaRec.resultProvider = (q) => { queries.push(q); return { data: [], error: null }; };
         global.fetch = vi.fn(async (url) => {
@@ -282,9 +294,9 @@ describe('syncOneOrg', () => {
 
         const res = await syncOneOrg('org-1', freshCreds(['1110000000', '2220000000']));
         expect(res.rows).toBe(1);
-        const del = queries.find((q) => q.table === 'ad_metrics' && q.op === 'delete');
-        expect(del).toBeTruthy();
-        expect(del.ins).toEqual(expect.arrayContaining([{ col: 'customer_id', vals: ['2220000000'] }]));
+        const rpc = supaRec.rpcCalls.find((c) => c.fn === 'ad_metrics_replace_window');
+        expect(rpc).toBeTruthy();
+        expect(rpc.params.p_customer_ids).toEqual(['2220000000']);   // only the account that returned rows
         expect(integrationRepository.markSynced).toHaveBeenCalled();       // partial success still active
     });
 });
