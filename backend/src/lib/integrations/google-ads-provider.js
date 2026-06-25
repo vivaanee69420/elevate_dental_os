@@ -32,7 +32,7 @@ function apiBase() {
 function apiVersion() {
     // Google sunsets Ads API versions ~yearly; a sunset version 404s every call.
     // Keep this on a currently-supported version (override via env when bumping).
-    return process.env.GOOGLE_ADS_API_VERSION || 'v20';
+    return process.env.GOOGLE_ADS_API_VERSION || 'v21';
 }
 function backendUrl() {
     return process.env.BACKEND_PUBLIC_URL || 'http://localhost:8080';
