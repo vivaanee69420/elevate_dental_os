@@ -14,7 +14,7 @@ import { useState } from 'react';
 import { Card, KpiTile, Chip } from '@/components/ui';
 import { formatPounds } from '@/features/_mock';
 import PracticeTabs from '@/features/practices/PracticeTabs';
-import DateRangeFilter, { type DateRange } from '@/features/finance/components/DateRangeFilter';
+import DateRangeFilter, { type DateRange, thisMonthRange } from '@/features/finance/components/DateRangeFilter';
 import { useBookingSummary, useRecentBookings } from '../hooks';
 import type { RecentBooking } from '../api';
 
@@ -45,7 +45,7 @@ const PER_PAGE = 10;
 /** Online Booking screen. */
 export default function BookingScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
-  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const [range, setRange] = useState<DateRange>(thisMonthRange());
   const [page, setPage] = useState(1);
   const { data: summary } = useBookingSummary(practiceId, range);
   const { data: recent, isLoading, isError } = useRecentBookings(practiceId, range, page, PER_PAGE);

@@ -4,7 +4,7 @@ import { PageHeader, DataTable, StatusBadge, type Column } from '@/components/ui
 import { formatPence, formatDate } from '@/lib/format';
 import { usePayments, usePaymentSummary, useCreatePaymentLink } from '../hooks';
 import PracticeTabs from '@/features/practices/PracticeTabs';
-import DateRangeFilter, { type DateRange } from '@/features/finance/components/DateRangeFilter';
+import DateRangeFilter, { type DateRange, thisMonthRange } from '@/features/finance/components/DateRangeFilter';
 
 const STATUSES = ['settled', 'pending', 'processing', 'failed', 'refunded', 'disputed'];
 
@@ -41,7 +41,7 @@ export default function PaymentsScreen() {
   const [page, setPage] = useState(1);
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [range, setRange] = useState<DateRange>({ from: null, to: null });
+  const [range, setRange] = useState<DateRange>(thisMonthRange());
   const { data, isFetching } = usePayments(page, PAGE_SIZE, {
     practiceId,
     status,
