@@ -169,6 +169,18 @@ export const analyticsController = {
             scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label,
         }));
     },
+    // Drill-down behind the "Treatments Completed" card — every completed treatment
+    // (patient + clinician + treatment + revenue) for the scope/window. Same scope
+    // params as /clinicians so the Clinicians page reconciles to the card.
+    async treatmentsCompletedLines(req, res) {
+        const q = analytics_model_1.scopeQuerySchema.parse(req.query);
+        // Paginated: the Clinicians page loads the first 100 then back-fills.
+        const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+        const offset = Math.max(0, Number(req.query.offset) || 0);
+        res.json(await analytics_service_1.analyticsService.treatmentsCompletedLines(req.user.organisation_id, {
+            scope: q.scope, period: q.period, periodKey: q.pk, since: q.since, until: q.until, label: q.label, limit, offset,
+        }));
+    },
     // Marketing & ROI (GM Intelligence OS) — per-channel acquisition economics
     // from real ad_metrics (spend) + CRM leads (attribution/conversion).
     async marketingRoi(req, res) {

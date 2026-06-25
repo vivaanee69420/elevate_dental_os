@@ -69,6 +69,7 @@ router.get('/treatment-breakdown', fin, (0, async_handler_1.asyncHandler)(analyt
 router.get('/cash-by-day', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.cashByDay));
 router.get('/marketing-roi', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.marketingRoi));
 router.get('/clinicians', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.clinicians));
+router.get('/treatments-completed-lines', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentsCompletedLines));
 router.post('/ai-ask', aiLimiter, fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.aiAsk));
 // Treatment Economics Workbench — pure compute, audit-exempt (/compute/ path).
 router.get('/compute/treatment-models', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentModels));

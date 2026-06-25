@@ -71,3 +71,35 @@ export function fetchClinicians(scope: string, win: ResolvedWindow): Promise<Cli
     ...EMPTY, ...r, applicable: r.applicable !== false,
   }));
 }
+
+// One completed treatment behind the "Treatments Completed" card. valuePence is
+// the treatment's price (the revenue it generated). Money in integer PENCE.
+export interface TreatmentCompletedLine {
+  id: string;
+  completedAt: string;            // ISO
+  practiceId: string | null;
+  practiceName: string | null;
+  patientName: string | null;     // null when the item has no linked patient record
+  clinicianName: string | null;
+  treatmentName: string | null;
+  valuePence: number;
+}
+
+export interface TreatmentsCompletedLines {
+  window: { since: string; until: string | null; label: string | null };
+  totals: { count: number; valuePence: number } | null; // present only on the first page (offset 0)
+  lines: TreatmentCompletedLine[];
+  limit: number;
+  offset: number;
+  basis: string;
+  note: string;
+}
+
+// Paginated: the Clinicians page loads the first page (100) on open, then
+// back-fills the rest in the background. `totals` is whole-window (not the page).
+export function fetchTreatmentsCompletedLines(
+  scope: string, win: ResolvedWindow, page: { limit: number; offset: number },
+): Promise<TreatmentsCompletedLines> {
+  const qs = `${windowParams(scope, win)}&limit=${page.limit}&offset=${page.offset}`;
+  return api<TreatmentsCompletedLines>(`/api/analytics/treatments-completed-lines?${qs}`);
+}

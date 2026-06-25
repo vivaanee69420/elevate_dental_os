@@ -1194,6 +1194,44 @@ export const analyticsService = {
                 : 'Roster shows active clinicians plus anyone with production or appointments in this period (idle per-site duplicate records from Dentally are hidden). Pay splits and NHS contract are live. Production £ is from completed Dentally treatment plans; appointment counts are practitioner-tagged appointments. Lab cost / operating-cost-per-surgery per clinician have no real per-clinician source and are omitted (use the Treatment Workbench).',
         };
     },
+    // Drill-down behind the "Treatments Completed" card — every completed Dentally
+    // treatment in the window with patient + clinician + treatment + the revenue
+    // it generated. Same scope/window resolution as clinicians() so the totals
+    // reconcile to the card. Academy/Lab carry no clinical treatment items.
+    async treatmentsCompletedLines(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, limit = 100, offset = 0, now = () => new Date() } = {}) {
+        const resolved = await this.resolveScope(orgId, scope);
+        const { since, until, label } = resolveWindow({ since: winSince, until: winUntil, label: winLabel, period, periodKey, now: now() });
+        const note = "Every completed Dentally treatment in the window (completed, excluding base-chart). Revenue = the treatment's price. Clinician is the practitioner who completed it; some items have no linked patient record.";
+        if (resolved.mode === 'academy' || resolved.mode === 'lab') {
+            return { window: { since, until, label }, totals: { count: 0, valuePence: 0 }, lines: [],
+                limit, offset, basis: 'dentally_treatment_items', note: 'No completed clinical treatments for this scope.' };
+        }
+        const practiceId = resolved.mode === 'entity' ? resolved.practiceIds[0] : null;
+        const rows = await analytics_repository_1.analyticsRepository.treatmentsCompletedLines(orgId, since, until, practiceId, limit, offset);
+        const lines = rows.map((r) => ({
+            id: r.item_id,
+            completedAt: r.completed_at,
+            practiceId: r.practice_id ?? null,
+            practiceName: r.practice_name ?? null,
+            patientName: r.patient_name ?? null,
+            clinicianName: r.clinician_name ?? null,
+            treatmentName: r.treatment_name ?? null,
+            valuePence: Number(r.value_pence || 0),
+        }));
+        // Totals (count + revenue over the WHOLE window, not just this page) come
+        // from the cheap aggregate, computed only on the first page — later pages
+        // reuse the client's cached total. Reconciles to the card exactly.
+        let totals = null;
+        if (offset === 0) {
+            const agg = await analytics_repository_1.analyticsRepository.treatmentsCompletedByPractice(orgId, since, until);
+            const scoped = practiceId ? agg.filter((r) => r.practice_id === practiceId) : agg;
+            totals = {
+                count: scoped.reduce((s, r) => s + Number(r.completed_count || 0), 0),
+                valuePence: scoped.reduce((s, r) => s + Number(r.value_pence || 0), 0),
+            };
+        }
+        return { window: { since, until, label }, totals, lines, limit, offset, basis: 'dentally_treatment_items', note };
+    },
     // AI Analyst (GM Intelligence OS). Prioritised, £-ranked findings over the
     // group's LIVE numbers for the current scope/period, plus a natural-language
     // answer to a free-text question. The findings are REAL — they aggregate the
