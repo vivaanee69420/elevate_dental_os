@@ -19,7 +19,7 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
 import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type ChipColour } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
-import { useBusinessHub, type HubPractice, type RevenueLine } from '../business-hub-api';
+import { useBusinessHub, usePlanFeesLines, type HubPractice, type RevenueLine, type PlanFeeLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { SectionFilterPills } from '@/features/_shared/SectionFilterPills';
 import { DecisionLens } from '@/features/_shared/DecisionLens';
@@ -112,10 +112,17 @@ export function GroupPerformanceScreen() {
   const [ghlAccountId, setGhlAccountId] = useState<string | null>(null);
   // Treatments Accepted card → click-to-expand per-practice breakdown.
   const [acceptedOpen, setAcceptedOpen] = useState(false);
+  // Plan Fees Collected card → click-to-expand the invoice lines behind it.
+  const [plansOpen, setPlansOpen] = useState(false);
   const { data: ghlAll } = useGhlDashboard({ since: win.since, until: win.until });
   const ghlOptions = (ghlAll?.perAccount ?? [])
     .filter((a) => a.accountId)
     .map((a) => ({ id: a.accountId as string, label: a.label }));
+  // Lazy drill-down for the Plan Fees Collected card — only fetched once opened,
+  // scoped to the selected practice (group buckets pass no practice filter) +
+  // the global window. Hook must sit above the early returns below (rules-of-hooks).
+  const planScopeIsGroup = scope === 'all' || scope === 'practices' || scope === 'academy' || scope === 'lab';
+  const planFees = usePlanFeesLines({ enabled: plansOpen, practiceId: planScopeIsGroup ? null : scope });
 
   if (isLoading)
     return (
@@ -226,8 +233,11 @@ export function GroupPerformanceScreen() {
       hint: acceptedRows.length > 0 ? (acceptedOpen ? 'Hide breakdown' : 'Click for practice breakdown') : undefined },
     { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Plan fees billed · ${windowLabel}`,
       chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null },
-    { label: 'Plan Fees Collected', value: formatPence(paidPence), sub: `Plan fees paid by patients · ${windowLabel}`,
-      chip: collectedPct > 0 ? { text: `${collectedPct}% of billed paid`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null },
+    { label: 'Treatment Plan Fees Collected', value: formatPence(paidPence), sub: `Collected on treatment plans · ${windowLabel}`,
+      chip: collectedPct > 0 ? { text: `${collectedPct}% of billed paid`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null,
+      onClick: paidPence > 0 ? () => setPlansOpen((v) => !v) : undefined,
+      active: plansOpen,
+      hint: paidPence > 0 ? (plansOpen ? 'Hide invoice lines' : 'Click to see every plan line') : undefined },
     { label: 'Appointments', value: formatNumber(apptCount), sub: `${formatNumber(apptCompleted)} completed · ${windowLabel}`,
       chip: null },
     { label: 'No-show rate', value: g.noShowTracked ? `${noShowRateVal}%` : DASH, sub: g.noShowTracked ? 'Missed appointments' : 'Not tracked in Dentally',
@@ -285,6 +295,14 @@ export function GroupPerformanceScreen() {
         {acceptedOpen && acceptedRows.length > 0 && (
           <TreatmentsAcceptedBreakdown rows={acceptedRows} scope={isGroupScope ? null : scope}
             total={{ count: g.treatmentsAcceptedCount, valuePence: g.treatmentsAcceptedValuePence }} />
+        )}
+        {plansOpen && (
+          <PlanFeesLinesBreakdown
+            loading={planFees.isLoading}
+            error={planFees.isError}
+            lines={planFees.data?.lines ?? []}
+            totals={planFees.data?.totals ?? { billedPence: closedPence, collectedPence: paidPence, lineCount: 0 }}
+            note={planFees.data?.note ?? ''} />
         )}
       </Card>
 
@@ -597,6 +615,91 @@ function TreatmentsAcceptedBreakdown(
         </table>
       </div>
       <p className="text-xs text-ink-muted mt-2">Click a practice pill above to scope the card; Unmapped rows are Emergent records whose business name didn&apos;t match a practice.</p>
+    </div>
+  );
+}
+
+// Plan Fees Collected → every treatment-plan invoice line behind the number.
+// Full source transparency: per line we show the billed fee, the collected
+// share, and the invoice gross/outstanding the pro-rata is derived from. Totals
+// are canonical (from the aggregate), so they reconcile to the card exactly.
+function PlanFeesLinesBreakdown(
+  { loading, error, lines, totals, note }: {
+    loading: boolean;
+    error: boolean;
+    lines: PlanFeeLine[];
+    totals: { billedPence: number; collectedPence: number; lineCount: number };
+    note: string;
+  },
+) {
+  const fmtDate = (d: string) => {
+    const t = Date.parse(d);
+    return Number.isNaN(t) ? d : new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+  const pct = (paid: number, billed: number) => (billed > 0 ? Math.round((100 * paid) / billed) : 0);
+  return (
+    <div className="mt-4 pt-4 border-t border-border">
+      <div className="flex items-baseline justify-between gap-3 mb-2">
+        <div className="text-xs text-ink-muted uppercase tracking-wide">Treatment plan fees — invoice lines</div>
+        <div className="text-xs text-ink-muted">
+          {formatNumber(totals.lineCount)} lines · {formatPence(totals.collectedPence)} collected of {formatPence(totals.billedPence)} billed
+        </div>
+      </div>
+      {loading && <p className="text-sm text-ink-muted py-4">Loading invoice lines…</p>}
+      {error && <p className="text-sm text-red-600 py-4">Could not load the invoice lines. Try again.</p>}
+      {!loading && !error && lines.length === 0 && (
+        <p className="text-sm text-ink-muted py-4">No treatment-plan invoice lines in this window.</p>
+      )}
+      {!loading && !error && lines.length > 0 && (
+        <div className="overflow-auto" style={{ maxHeight: 480 }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Patient</th>
+                <th>Practice</th>
+                <th>Treatment</th>
+                <th>Invoice</th>
+                <th className="right">Billed</th>
+                <th className="right">Collected</th>
+                <th className="right">Paid %</th>
+                <th className="right">Inv. gross</th>
+                <th className="right">Inv. outstanding</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => {
+                const p = pct(l.collectedPence, l.billedPence);
+                return (
+                  <tr key={l.id}>
+                    <td className="whitespace-nowrap">{fmtDate(l.invoicedOn)}</td>
+                    <td>{l.patientName ?? DASH}</td>
+                    <td>{l.practiceName ?? DASH}</td>
+                    <td>{l.treatmentName ?? DASH}</td>
+                    <td className="whitespace-nowrap text-ink-muted">{l.invoiceId ?? DASH}</td>
+                    <td className="right">{formatPence(l.billedPence)}</td>
+                    <td className="right">{formatPence(l.collectedPence)}</td>
+                    <td className="right">
+                      <Chip colour={p >= 80 ? 'emerald' : p > 0 ? 'amber' : 'slate'}>{p}%</Chip>
+                    </td>
+                    <td className="right text-ink-muted">{l.invoiceAmountPence == null ? DASH : formatPence(l.invoiceAmountPence)}</td>
+                    <td className="right text-ink-muted">{l.invoiceOutstandingPence == null ? DASH : formatPence(l.invoiceOutstandingPence)}</td>
+                  </tr>
+                );
+              })}
+              <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
+                <td colSpan={5}><strong>Total ({formatNumber(totals.lineCount)} lines)</strong></td>
+                <td className="right">{formatPence(totals.billedPence)}</td>
+                <td className="right">{formatPence(totals.collectedPence)}</td>
+                <td className="right">{pct(totals.collectedPence, totals.billedPence)}%</td>
+                <td className="right" />
+                <td className="right" />
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      {note && <p className="text-xs text-ink-muted mt-2">{note}</p>}
     </div>
   );
 }
