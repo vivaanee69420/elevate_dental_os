@@ -292,9 +292,12 @@ export const cockpitService = {
         const lim = clampLimit(limit);
         const off = clampOffset(offset);
         const [pipes, rows, accepted] = await Promise.all([
-            cockpitRepository.pipelineChannelMap(orgId, practiceId),
+            cockpitRepository.pipelineChannelMap(orgId),
             cockpitRepository.leadsDetailRows(orgId, since, until, practiceId, lim, off),
-            cockpitRepository.acceptedContactsInWindow(orgId, since, until, practiceId),
+            // Open-ended: a lead from this window may only have been accepted
+            // after it closed. Same rule as the channel breakdown, so a lead
+            // shown as converted in the list is counted as converted on the card.
+            cockpitRepository.acceptedForMatching(orgId, since),
         ]);
 
         const pipeById = new Map((pipes || []).map(p => [p.pipeline_id, p]));
@@ -308,6 +311,7 @@ export const cockpitService = {
             const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || null;
             return {
                 id: row.id,
+                contactId: row.contact_id ?? null,
                 createdAt: row.created_at,
                 practiceName: pipe?.practice_label ?? null,
                 channel: classifyChannel(pipe?.name),
@@ -331,20 +335,42 @@ export const cockpitService = {
     // Lazy detail — accepted treatments (treatment_accepted, status='accepted')
     // in-window. `source` prefers the typed ext_source column, falling back
     // to raw.source for older rows synced before that column existed.
+    //
+    // Each line is also tagged with the GHL ad pipeline the patient ORIGINALLY
+    // came in on (leadChannel/leadPipelineName) — that's the "which ad paid for
+    // this treatment" link. The match runs in SQL (cockpit_accepted_lead_source)
+    // because it has to look across every pipeline lead the org has ever had,
+    // not just the ones created inside this window.
     async treatmentsDetail(orgId, { since, until, practiceId, limit, offset } = {}) {
         const lim = clampLimit(limit);
         const off = clampOffset(offset);
-        const rows = await cockpitRepository.treatmentsDetailRows(orgId, since, until, practiceId, lim, off);
+        const [rows, pipes, sources] = await Promise.all([
+            cockpitRepository.treatmentsDetailRows(orgId, since, until, practiceId, lim, off),
+            cockpitRepository.pipelineChannelMap(orgId),
+            cockpitRepository.acceptedLeadSource(orgId, since, until, practiceId),
+        ]);
 
-        const lines = (rows || []).map(row => ({
-            id: row.id,
-            acceptedDate: row.accepted_date,
-            practiceName: row.practices?.name ?? null,
-            patientName: row.patient_name ?? null,
-            treatmentName: row.treatment_name ?? null,
-            valuePence: num(row.value_pence),
-            source: row.ext_source ?? row.raw?.source ?? null,
-        }));
+        const pipeById = new Map((pipes || []).map(p => [p.pipeline_id, p]));
+        const sourceByAccepted = new Map((sources || []).map(s => [s.accepted_id, s]));
+
+        const lines = (rows || []).map(row => {
+            const src = sourceByAccepted.get(row.id);
+            const pipe = src ? pipeById.get(src.ghl_pipeline_id) : null;
+            return {
+                id: row.id,
+                acceptedDate: row.accepted_date,
+                practiceName: row.practices?.name ?? null,
+                patientName: row.patient_name ?? null,
+                treatmentName: row.treatment_name ?? null,
+                valuePence: num(row.value_pence),
+                source: row.ext_source ?? row.raw?.source ?? null,
+                // null when the patient never came through a GHL ad pipeline
+                // (walk-in, referral, or a lead we can't match on phone/email/name).
+                leadChannel: pipe ? classifyChannel(pipe.name) : null,
+                leadPipelineName: pipe?.name ?? null,
+                leadCreatedAt: src?.lead_created_at ?? null,
+            };
+        });
 
         return { window: { since: since ?? null, until: until ?? null }, lines, limit: lim, offset: off };
     },
@@ -353,6 +379,12 @@ export const cockpitService = {
     // is cashTakenPence minus detailPence (manager total vs detail-patient
     // total); practiceName falls back to the Emergent business_name when the
     // row hasn't been mapped to a practice yet (emergent_practice_map).
+    //
+    // Also carries the manager-keyed daily counts (tx plans given + value, new
+    // leads, attended). Emergent's cash-up sends a COUNT PER DAY and no
+    // per-plan or per-lead records, so this day list is the deepest the "Tx
+    // plans given" / "New leads" headline numbers can ever be drilled — there
+    // is nothing further behind them to open.
     async cashupDaysDetail(orgId, { since, until, practiceId, limit, offset } = {}) {
         const lim = clampLimit(limit);
         const off = clampOffset(offset);
@@ -367,6 +399,10 @@ export const cockpitService = {
                 cashTakenPence,
                 detailPence,
                 variancePence: cashTakenPence - detailPence,
+                txPlansGiven: num(row.tx_plans_given),
+                txPlanValuePence: num(row.tx_plan_given_value_pence),
+                newLeads: num(row.num_new_leads),
+                attended: num(row.num_attended),
                 refunds: row.refunds ?? [],
             };
         });

@@ -46,16 +46,29 @@ export interface LeadRoiChannelRow {
   pipelineId: string | null;
   pipelineName: string | null;
   channel: LeadChannel;
+  // `leads` counts PEOPLE (a contact in two pipelines of the same channel is
+  // one lead); `entries` is the raw number of pipeline rows behind them.
   leads: number;
+  entries: number;
   conversions: number;
   matchedValuePence: number;
 }
 
 export interface LeadRoiGroupStats {
   leads: number;
+  entries: number;
   conversions: number;
   matchedValuePence: number;
   spendPence: number;
+}
+
+// GHL subaccounts with no practice mapping — an org can also connect academy /
+// accounting locations, whose leads are not a practice's patient leads. They
+// are excluded from the totals and reported here so they can be mapped (or
+// knowingly ignored) rather than silently counted.
+export interface LeadRoiUnmapped {
+  leads: number;
+  accounts: Array<{ accountId: string | null; label: string; leads: number }>;
 }
 
 // Org-wide, per-channel cost/lead + ROI — ad spend isn't practice-attributable,
@@ -72,10 +85,18 @@ export interface ChannelRoi {
 
 export interface LeadRoi {
   channels: LeadRoiChannelRow[];
+  // Always org-wide, whatever the page is scoped to — the figure the scoped
+  // number is compared against.
   group: {
     google: LeadRoiGroupStats;
     facebook: LeadRoiGroupStats;
   };
+  // The selected practice's own totals; null when no practice is selected.
+  scoped: {
+    google: LeadRoiGroupStats;
+    facebook: LeadRoiGroupStats;
+  } | null;
+  unmapped: LeadRoiUnmapped;
   spendByChannel: {
     google: number;
     facebook: number;
@@ -166,6 +187,7 @@ export interface CockpitDetailParams {
 
 export interface CockpitLeadLine {
   id: string;
+  contactId: string | null;
   createdAt: string;
   practiceName: string | null;
   channel: LeadChannel;
@@ -205,6 +227,11 @@ export interface CockpitTreatmentLine {
   treatmentName: string | null;
   valuePence: number;
   source: string | null;
+  // The GHL ad pipeline this patient originally came in on (first touch), or
+  // null if they never came through one (walk-in, referral, or unmatchable).
+  leadChannel: LeadChannel | null;
+  leadPipelineName: string | null;
+  leadCreatedAt: string | null;
 }
 
 export interface CockpitTreatmentsDetail {
@@ -234,6 +261,13 @@ export interface CockpitCashupDayLine {
   cashTakenPence: number;
   detailPence: number;
   variancePence: number;
+  // Manager-keyed daily counts from the Emergent cash-up. Emergent sends a
+  // count per day and no per-plan / per-lead records, so this day list is the
+  // deepest these headline numbers can be drilled.
+  txPlansGiven: number;
+  txPlanValuePence: number;
+  newLeads: number;
+  attended: number;
   refunds: CockpitRefund[];
 }
 
