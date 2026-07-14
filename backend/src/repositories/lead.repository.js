@@ -70,6 +70,16 @@ export const leadRepository = {
             .eq('id', id)
             .eq('organisation_id', orgId);
     },
+    // Lead count + value per GHL pipeline. RPC-aggregated, never a plain select:
+    // an org can hold tens of thousands of leads and PostgREST caps reads at
+    // 1000 rows, which would silently under-count. accountId null = all.
+    async pipelineCounts(orgId, accountId = null) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('lead_pipeline_counts', { p_org: orgId, p_account: accountId });
+        if (error)
+            throw new Error(error.message);
+        return data ?? [];
+    },
     async funnelRows(orgId) {
         if (await crmHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient

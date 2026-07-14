@@ -85,10 +85,16 @@ export interface GhlPipeline {
   id: string;
   name: string;
   stages: GhlPipelineStage[];
+  // Leads currently in this pipeline (backend orders the list busiest-first).
+  lead_count?: number;
+  value_pence?: number;
 }
 
-export function listPipelines() {
-  return api<{ pipelines: GhlPipeline[] }>('/api/leads/pipelines');
+// Pipeline ids are per GHL Location — pass the selected subaccount so the
+// selector only offers pipelines that subaccount's leads can actually be in.
+export function listPipelines(accountId?: string | null) {
+  const qs = accountId ? `?integration_account_id=${encodeURIComponent(accountId)}` : '';
+  return api<{ pipelines: GhlPipeline[] }>(`/api/leads/pipelines${qs}`);
 }
 
 export interface LeadUpdateInput {

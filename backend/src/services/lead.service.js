@@ -6,17 +6,61 @@ import * as lead_repository_1 from "../repositories/lead.repository.js";
 import * as errors_1 from "../middleware/errors.js";
 import * as lead_model_1 from "../models/lead.model.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 export const leadService = {
     list(orgId, q) {
         return lead_repository_1.leadRepository.list(orgId, q);
     },
-    // GoHighLevel pipeline definitions (id/name + ordered stages), cached on the
-    // integration config by the sync. Drives the dynamic Pipeline-screen columns.
+    // GoHighLevel pipeline definitions (id/name + ordered stages), cached on each
+    // subaccount's config by the sync. Drives the dynamic Pipeline-screen columns.
     // CRM-accessible (reception/staff use the Pipeline screen), so it lives here
     // rather than the owner-only integrations routes.
-    async pipelines(orgId) {
-        const integration = await integrationRepository.getByProvider(orgId, 'gohighlevel');
-        return { pipelines: integration?.config?.pipelines ?? [] };
+    //
+    // Pipeline ids are per GHL Location, so these MUST be scoped to the selected
+    // subaccount: an org with several Locations connected has a disjoint pipeline
+    // set per Location, and a lead only ever carries its own Location's pipeline
+    // id. With no subaccount selected ("All subaccounts") we union them, deduped
+    // by id. The legacy org-level `integrations` config — a single Location's
+    // pipelines — is only the fallback for orgs with no accounts row.
+    async pipelines(orgId, q = {}) {
+        const accountId = q.integration_account_id ?? null;
+        const accounts = await integrationAccountRepository.list(orgId, 'gohighlevel');
+        let defs;
+        if (accounts.length) {
+            const scoped = accountId ? accounts.filter((a) => a.id === accountId) : accounts;
+            const byId = new Map();
+            for (const account of scoped) {
+                for (const pipeline of account.config?.pipelines ?? []) {
+                    if (pipeline?.id && !byId.has(pipeline.id))
+                        byId.set(pipeline.id, pipeline);
+                }
+            }
+            defs = [...byId.values()];
+        }
+        else if (accountId) {
+            return { pipelines: [] };
+        }
+        else {
+            const integration = await integrationRepository.getByProvider(orgId, 'gohighlevel');
+            defs = integration?.config?.pipelines ?? [];
+        }
+        if (!defs.length)
+            return { pipelines: [] };
+        // Busiest first: a Location can carry 60+ pipelines, most of them empty or
+        // archived, and GHL's own order routinely puts a 1-lead pipeline first —
+        // which reads as "the board is broken". Sort is stable, so pipelines with
+        // equal counts keep GHL's order.
+        const counts = await lead_repository_1.leadRepository.pipelineCounts(orgId, accountId);
+        const byPipeline = new Map(counts.map((c) => [String(c.ghl_pipeline_id), c]));
+        return {
+            pipelines: defs
+                .map((p) => ({
+                ...p,
+                lead_count: Number(byPipeline.get(String(p.id))?.lead_count ?? 0),
+                value_pence: Number(byPipeline.get(String(p.id))?.value_pence ?? 0),
+            }))
+                .sort((a, b) => b.lead_count - a.lead_count),
+        };
     },
     async getById(orgId, id) {
         const { data, error } = await lead_repository_1.leadRepository.getById(orgId, id);
