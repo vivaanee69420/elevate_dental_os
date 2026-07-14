@@ -44,6 +44,16 @@ export function poundsToPence(x) {
     return Math.round(Number(x || 0) * 100);
 }
 
+// Shared practice resolution: explicit map (by business_id) wins even when its
+// value is null (owner intentionally unmapped); otherwise fuzzy business_name.
+export function resolvePracticeFromMaps(businessId, businessName, maps = null) {
+    const explicit = maps && maps.explicit instanceof Map ? maps.explicit : null;
+    const fuzzy = maps instanceof Map ? maps : (maps && maps.fuzzy instanceof Map ? maps.fuzzy : null);
+    if (explicit && explicit.has(String(businessId))) return explicit.get(String(businessId));
+    if (fuzzy) return resolvePractice(businessName, fuzzy);
+    return null;
+}
+
 // Map one Emergent record to a treatment_accepted row. Money: amount (float GBP)
 // -> integer pence. status is forced to 'accepted'. practice_id resolution:
 //   - `maps` may be a { explicit: Map<business_id, practice_id|null>, fuzzy: Map }
@@ -53,14 +63,7 @@ export function poundsToPence(x) {
 //   - Otherwise fall back to the fuzzy business_name match.
 export function mapRecord(rec, orgId, maps = null) {
     const empty = (s) => (s == null || String(s).trim() === '' ? null : String(s));
-    const explicit = maps && maps.explicit instanceof Map ? maps.explicit : null;
-    const fuzzy = maps instanceof Map ? maps : (maps && maps.fuzzy instanceof Map ? maps.fuzzy : null);
-    let practiceId = null;
-    if (explicit && explicit.has(String(rec.business_id))) {
-        practiceId = explicit.get(String(rec.business_id)); // may be null = intentional
-    } else if (fuzzy) {
-        practiceId = resolvePractice(rec.business_name, fuzzy);
-    }
+    const practiceId = resolvePracticeFromMaps(rec.business_id, rec.business_name, maps);
     return {
         organisation_id: orgId,
         source: PROVIDER,
@@ -75,6 +78,11 @@ export function mapRecord(rec, orgId, maps = null) {
         accepted_date: rec.date ?? null,
         status: 'accepted',
         raw: rec,
+        quantity: rec.quantity == null ? 1 : Number(rec.quantity),
+        phone: empty(rec.phone),
+        email: empty(rec.email),
+        ext_source: empty(rec.source),
+        ext_campaign: empty(rec.campaign),
     };
 }
 
