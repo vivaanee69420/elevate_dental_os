@@ -1,6 +1,6 @@
 // Lead-attribution service — classifies GHL leads by pipeline name into a
 // marketing channel (google/facebook) and matches them to Emergent
-// (treatment_accepted) conversions by phone/email. Money is integer pence.
+// (treatment_accepted) conversions by phone/email/name. Money is integer pence.
 import { cockpitRepository } from "../repositories/cockpit.repository.js";
 
 export const normPhone = (s) => (String(s || '').replace(/\D/g, '').slice(-10) || null);
@@ -82,47 +82,37 @@ export function classifyChannel(pipelineName) {
     return 'other';
 }
 
+// One person can sit in several pipelines of the same channel (re-enquiries,
+// an opportunity per campaign), and each is its own `leads` row. Counting rows
+// would report more Google/Facebook leads than there are people. Everything
+// below counts PEOPLE, keyed on the contact — falling back to the lead's own
+// id only when a lead somehow has no contact.
+const personKey = (lead) => lead.contact_id ?? `lead:${lead.id}`;
+
+const AD_CHANNELS = ['google', 'facebook'];
+const emptyStats = () => ({ leads: 0, conversions: 0, matchedValuePence: 0, entries: 0 });
+
 // Pure matcher: pipes = pipelineChannelMap() rows, leads = adLeadsInWindow()
-// rows (embedded `contacts`), accepted = acceptedContactsInWindow() rows.
+// rows (embedded `contacts`), accepted = acceptedForMatching() rows.
+//
+// Leads whose GHL subaccount has no practice mapping are NOT folded into any
+// practice's numbers — those subaccounts aren't dental patient feeds (an org
+// can also connect an academy/accounting location). They go to `unmapped`, so
+// they are reported rather than silently counted or silently dropped.
 export function matchBreakdown(pipes, leads, accepted) {
     const pipeById = new Map((pipes || []).map((p) => [p.pipeline_id, p]));
-
-    // Accepted key -> rich value map (first match wins per key), plus the
-    // practice-scoped name index for the last-resort match.
     const { acceptedByKey, nameByPractice } = buildAcceptedByKey(accepted);
 
-    // Group by practiceId x channel.
-    const groups = new Map(); // key `${practiceId}|${channel}` -> stats
-    const groupKey = (practiceId, channel) => `${practiceId ?? ''}|${channel}`;
-
+    const groups = new Map();     // `${practiceId}|${channel}` -> stats
+    const seen = new Map();       // same key -> Set(personKey), the dedupe
+    const unmapped = new Map();   // accountId -> { accountId, label, leads, people:Set }
     const annotatedLeads = [];
+
     for (const lead of leads || []) {
         const pipe = pipeById.get(lead.ghl_pipeline_id);
         const channel = classifyChannel(pipe?.name);
         const practiceId = pipe?.practice_id ?? lead.practice_id ?? null;
-        const practiceLabel = pipe?.practice_label ?? null;
-        const key = groupKey(practiceId, channel);
-        if (!groups.has(key)) {
-            groups.set(key, {
-                practiceId,
-                practiceName: practiceLabel,
-                pipelineId: pipe?.pipeline_id ?? null,
-                pipelineName: pipe?.name ?? null,
-                channel,
-                leads: 0,
-                conversions: 0,
-                matchedValuePence: 0,
-            });
-        }
-        const g = groups.get(key);
-        g.leads += 1;
-
-        const matched = matchAcceptedValue({ contacts: lead.contacts, practiceId }, acceptedByKey, nameByPractice);
-
-        if (matched !== null) {
-            g.conversions += 1;
-            g.matchedValuePence += matched.valuePence;
-        }
+        const person = personKey(lead);
 
         annotatedLeads.push({
             ...lead,
@@ -130,32 +120,89 @@ export function matchBreakdown(pipes, leads, accepted) {
             pipelineName: pipe?.name ?? null,
             channel,
         });
+
+        // No practice behind this subaccount -> not a practice's lead.
+        if (practiceId === null) {
+            if (!AD_CHANNELS.includes(channel)) continue;
+            const accountId = pipe?.account_id ?? null;
+            if (!unmapped.has(accountId)) {
+                unmapped.set(accountId, {
+                    accountId,
+                    label: pipe?.account_label ?? 'Unknown subaccount',
+                    leads: 0,
+                    people: new Set(),
+                });
+            }
+            unmapped.get(accountId).people.add(person);
+            continue;
+        }
+
+        const key = `${practiceId}|${channel}`;
+        if (!groups.has(key)) {
+            groups.set(key, {
+                practiceId,
+                practiceName: pipe?.practice_label ?? null,
+                pipelineId: pipe?.pipeline_id ?? null,
+                pipelineName: pipe?.name ?? null,
+                channel,
+                ...emptyStats(),
+            });
+            seen.set(key, new Set());
+        }
+        const g = groups.get(key);
+        g.entries += 1;                    // raw opportunity rows, for the UI's "N entries" note
+
+        const people = seen.get(key);
+        if (people.has(person)) continue;  // already counted this person in this channel
+        people.add(person);
+        g.leads += 1;
+
+        const matched = matchAcceptedValue({ contacts: lead.contacts, practiceId }, acceptedByKey, nameByPractice);
+        if (matched !== null) {
+            g.conversions += 1;
+            g.matchedValuePence += matched.valuePence;
+        }
     }
 
     const channels = Array.from(groups.values());
 
-    const group = {
-        google: { leads: 0, conversions: 0, matchedValuePence: 0, spendPence: 0 },
-        facebook: { leads: 0, conversions: 0, matchedValuePence: 0, spendPence: 0 },
+    return {
+        channels,
+        group: sumChannels(channels),
+        unmapped: {
+            leads: Array.from(unmapped.values()).reduce((n, a) => n + a.people.size, 0),
+            accounts: Array.from(unmapped.values())
+                .map((a) => ({ accountId: a.accountId, label: a.label, leads: a.people.size }))
+                .sort((a, b) => b.leads - a.leads),
+        },
+        leads: annotatedLeads,
     };
-    for (const c of channels) {
-        if (c.channel !== 'google' && c.channel !== 'facebook') continue;
-        group[c.channel].leads += c.leads;
-        group[c.channel].conversions += c.conversions;
-        group[c.channel].matchedValuePence += c.matchedValuePence;
-    }
-
-    return { channels, group, leads: annotatedLeads };
 }
 
-// CPL/ROI live only on groupChannels — ad spend isn't practice-attributable,
-// so cost-per-lead (spend/leads) and ROI (matchedValue/spend) are only
-// meaningful org-wide. Null-guarded (cpl null when leads=0, roi null when
-// spend=0). Money integer pence; roi is a plain ratio (frontend formats ×).
+// Rolls a set of per-practice channel rows up into google/facebook totals.
+// Used for both the org-wide group figure and the practice-scoped one — same
+// arithmetic, different row set, so the two can never disagree.
+export function sumChannels(channels) {
+    const out = { google: { ...emptyStats(), spendPence: 0 }, facebook: { ...emptyStats(), spendPence: 0 } };
+    for (const c of channels || []) {
+        if (!AD_CHANNELS.includes(c.channel)) continue;
+        out[c.channel].leads += c.leads;
+        out[c.channel].conversions += c.conversions;
+        out[c.channel].matchedValuePence += c.matchedValuePence;
+        out[c.channel].entries += c.entries;
+    }
+    return out;
+}
+
+// CPL/ROI live only on groupChannels — ad spend isn't practice-attributable
+// (ad_metrics.practice_id is null for every live account), so cost-per-lead
+// (spend/leads) and ROI (matchedValue/spend) are only meaningful org-wide.
+// Null-guarded (cpl null when leads=0, roi null when spend=0). Money integer
+// pence; roi is a plain ratio (frontend formats ×).
 function withCplRoi(group, spendByChannel) {
     const out = {};
-    for (const ch of ['google', 'facebook']) {
-        const g = group[ch] || { leads: 0, conversions: 0, matchedValuePence: 0 };
+    for (const ch of AD_CHANNELS) {
+        const g = group[ch] || emptyStats();
         const spendPence = spendByChannel[ch] || 0;
         out[ch] = {
             leads: g.leads,
@@ -171,40 +218,38 @@ function withCplRoi(group, spendByChannel) {
 
 export const leadAttributionService = {
     async channelBreakdown(orgId, { since, until, practiceId } = {}) {
+        // Loaded org-wide, ALWAYS. The practice filter selects which rows the
+        // page shows; it must not change how a lead is matched, and it must
+        // not change the group total the scoped figure is compared against.
+        // (Previously the scoped and org-wide views ran two separate loads,
+        // which is how a practice with no GHL subaccount ended up showing 0
+        // leads next to a group total of 62.)
         const [pipes, leads, accepted, spend] = await Promise.all([
-            cockpitRepository.pipelineChannelMap(orgId, practiceId),
-            cockpitRepository.adLeadsInWindow(orgId, since, until, practiceId),
-            cockpitRepository.acceptedContactsInWindow(orgId, since, until, practiceId),
+            cockpitRepository.pipelineChannelMap(orgId),
+            cockpitRepository.adLeadsInWindow(orgId, since, until),
+            cockpitRepository.acceptedForMatching(orgId, since),
             cockpitRepository.adSpendByProvider(orgId, since, until),
         ]);
 
-        const result = matchBreakdown(pipes, leads, accepted);
+        const all = matchBreakdown(pipes, leads, accepted);
 
         const spendByChannel = {
             google: spend?.google_ads || 0,
             facebook: spend?.meta_ads || 0,
         };
+        all.group.google.spendPence = spendByChannel.google;
+        all.group.facebook.spendPence = spendByChannel.facebook;
 
-        result.group.google.spendPence = spendByChannel.google;
-        result.group.facebook.spendPence = spendByChannel.facebook;
+        const channels = practiceId ? all.channels.filter((c) => c.practiceId === practiceId) : all.channels;
+        const scoped = practiceId ? sumChannels(channels) : null;
 
-        // groupChannels is ALWAYS org-wide (ignores practiceId), even when a
-        // practice scope was requested — CPL/ROI aren't meaningful per
-        // practice since ad spend isn't practice-attributable. Reuse the
-        // already-computed org-wide result.group when no practice filter was
-        // applied; otherwise re-run the pipe/lead/accepted load unscoped.
-        let orgWideGroup = result.group;
-        if (practiceId) {
-            const [orgPipes, orgLeads, orgAccepted] = await Promise.all([
-                cockpitRepository.pipelineChannelMap(orgId, undefined),
-                cockpitRepository.adLeadsInWindow(orgId, since, until, undefined),
-                cockpitRepository.acceptedContactsInWindow(orgId, since, until, undefined),
-            ]);
-            orgWideGroup = matchBreakdown(orgPipes, orgLeads, orgAccepted).group;
-        }
-
-        const groupChannels = withCplRoi(orgWideGroup, spendByChannel);
-
-        return { ...result, spendByChannel, groupChannels };
+        return {
+            channels,
+            group: all.group,
+            scoped,
+            unmapped: all.unmapped,
+            spendByChannel,
+            groupChannels: withCplRoi(all.group, spendByChannel),
+        };
     },
 };

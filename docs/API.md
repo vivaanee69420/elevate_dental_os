@@ -147,6 +147,17 @@ Update lead. Common: status changes, reassign.
 ### `GET /api/leads/funnel`
 Returns counts + £ values per status (for pipeline header).
 
+### `GET /api/leads/pipelines?integration_account_id=...`
+GoHighLevel pipeline definitions (id, name, ordered stages) that drive the
+Pipeline board's columns and selector, each with its `lead_count` /
+`value_pence`, busiest pipeline first.
+
+Pipeline ids belong to a single GHL Location, so this is scoped to one
+subaccount: pass `integration_account_id` for that subaccount's pipelines, or
+omit it for the union across every connected subaccount ("All subaccounts").
+Orgs with no `integration_accounts` row fall back to the legacy org-level
+`integrations` config.
+
 ## Contacts
 
 ### `GET /api/contacts?type=patient&search=smith&limit=200&practice_id=`
@@ -1101,3 +1112,41 @@ basename of a file in `LOG_DIR` (path traversal rejected with `400`).
 - `GET /api/admin/logs` -> `{ enabled, directory, files: [{ name, sizeBytes, modified }] }` (newest first)
 - `GET /api/admin/logs/tail?file=<name>&lines=<n>` -> `{ file, lines: string[] }` (default 200 lines, max 5000; reads ≤512 KB from the file end). `400` bad name, `404` missing file, `409` if `LOG_DIR` unset.
 - `GET /api/admin/logs/download?file=<name>` -> raw `text/plain` attachment. Same error codes.
+
+## Daily Command Cockpit (`/api/cockpit/*`)
+
+One-page daily snapshot: Emergent cash-up + monthly P&L, and Google vs Facebook
+lead performance matched against Emergent conversions. Gated on the
+`finance.view` permission. Money is integer **pence** throughout.
+
+Window params are `since` / `until` (ISO, half-open `[since, until)`); `scope` is
+`all` or a practice UUID on the root endpoint, `practiceId` on the detail ones.
+
+### `GET /api/cockpit`
+
+```
+{
+  window, revenue { collectedPence, byPractice[], dailySeries[] },
+  treatment { acceptedCount, acceptedValuePence, txPlansGiven, txPlanValuePence,
+              newLeads, attended, byPractice[] },
+  leadRoi, cashUp { … }, monthly { … }, updatedAt
+}
+```
+
+`leadRoi` is the Google/Facebook comparison:
+
+- `channels[]` — one row per practice × channel: `{ practiceId, practiceName, pipelineId, pipelineName, channel, leads, entries, conversions, matchedValuePence }`. **`leads` counts people** (one contact sitting in several pipelines of the same channel is one lead); `entries` is the raw pipeline-row count behind them.
+- `group` — org-wide `{ google, facebook }` totals. **Always org-wide**, whatever `scope` is, so a scoped figure always has a group figure to be compared against.
+- `scoped` — the selected practice's own totals, same shape as `group`; `null` when `scope=all`. Scoping is applied *after* matching, so it never changes how a lead is matched or what the group total is.
+- `unmapped` — `{ leads, accounts: [{ accountId, label, leads }] }`. Leads from GoHighLevel subaccounts with **no practice mapping** (an org can also connect academy/accounting locations). They are excluded from `channels`/`group` and reported here, so they are neither silently counted into a practice nor silently dropped.
+- `spendByChannel`, `groupChannels` — ad spend and the derived `cplPence` / `roi`. Group-level only: `ad_metrics` carries no practice, so a per-practice spend figure would be a guess.
+
+Conversion matching is **open-ended on the accepted side** — a lead created in the
+window is "converted" if it has been accepted *by now*, not only if it was accepted
+inside the same window (leads typically convert weeks later).
+
+### Detail endpoints (lazy — fetched when a drill-down opens)
+
+- `GET /api/cockpit/leads?since&until&practiceId&channel&limit&offset` -> `{ window, lines[], limit, offset }`. Each line: `{ id, contactId, createdAt, practiceName, channel, pipelineName, name, email, phone, converted, matchedValuePence, matchedTreatmentName, matchedPatientName, matchedAcceptedDate }`. `limit` defaults 100, capped 500.
+- `GET /api/cockpit/treatments?since&until&practiceId&limit&offset` -> accepted treatments, each tagged with the ad pipeline the patient **first** came in on: `{ id, acceptedDate, practiceName, patientName, treatmentName, valuePence, source, leadChannel, leadPipelineName, leadCreatedAt }`. The last three are `null` when no GoHighLevel lead matches the patient (walk-in, referral, or unmatchable). Backed by the `cockpit_accepted_lead_source` RPC (migration `…000112`) — phone → email → practice-scoped name, earliest lead wins.
+- `GET /api/cockpit/cashup-days?since&until&practiceId&limit&offset` -> `{ window, lines[] }`, one row per cash-up day: `{ cashupDate, practiceName, cashTakenPence, detailPence, variancePence, txPlansGiven, txPlanValuePence, newLeads, attended, refunds[] }`. **This day list is the deepest `txPlansGiven` / `newLeads` / `attended` can be drilled** — Emergent's cash-up sends a manager-keyed count per day and no per-plan or per-lead records.
