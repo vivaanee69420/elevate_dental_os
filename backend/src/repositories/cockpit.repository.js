@@ -52,7 +52,7 @@ export const cockpitRepository = {
             .eq('organisation_id', orgId)
             .eq('status', 'accepted')
             .gte('accepted_date', sinceDate)
-            .lte('accepted_date', untilDate);
+            .lt('accepted_date', untilDate);
         if (error) throw new Error(error.message);
         return data || [];
     },
@@ -72,5 +72,34 @@ export const cockpitRepository = {
             else if (row.provider === 'meta_ads') totals.meta_ads += row.spend_pence || 0;
         }
         return totals;
+    },
+
+    // Daily Command Cockpit — raw emergent_daily_cashup rows in the window
+    // [since, until) (half-open, cashup_date is a DATE). Aggregation (sum +
+    // group-by practice/business) happens in cockpitService, matching the
+    // repo-returns-rows / service-aggregates idiom used elsewhere in this file.
+    async cashupRollup(orgId, since, until) {
+        let q = supabase_1.serviceClient
+            .from('emergent_daily_cashup')
+            .select('practice_id, business_name, cashup_date, cash_up_money_taken_pence, treatments_accepted, ' +
+                'tx_plans_given, tx_plan_given_value_pence, num_new_leads, num_attended, detail_patient_money_total_pence')
+            .eq('organisation_id', orgId);
+        if (since) q = q.gte('cashup_date', since);
+        if (until) q = q.lt('cashup_date', until);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+
+    // Daily Command Cockpit — emergent_monthly_pl rows for one calendar month
+    // (monthStart is the exact period_month DATE, e.g. '2026-07-01').
+    async monthlyPl(orgId, monthStart) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('emergent_monthly_pl')
+            .select('practice_id, business_name, period_month, revenue_pence, net_profit_pence')
+            .eq('organisation_id', orgId)
+            .eq('period_month', monthStart);
+        if (error) throw new Error(error.message);
+        return data || [];
     },
 };
