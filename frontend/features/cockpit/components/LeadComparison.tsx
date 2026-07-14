@@ -37,7 +37,12 @@ export function LeadComparison({ data }: { data: LeadRoi }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-slate-900">Leads — Google vs Facebook</h2>
+        <h2 className="text-sm font-semibold text-slate-900">
+          <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[11px] text-white">
+            3
+          </span>
+          Leads — Google vs Facebook
+        </h2>
         <span className="text-xs text-slate-400">Matched to accepted treatments by phone/email</span>
       </div>
 
