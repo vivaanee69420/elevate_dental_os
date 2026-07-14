@@ -319,6 +319,64 @@ export async function fetchMonthlyPl(baseUrl, apiKey, startMonth, endMonth) {
     return Array.isArray(json?.months) ? json.months : [];
 }
 
+// --- Windowed backfill (avoids the API's ~1000-row single-page cap) ---------
+// Cash-ups are one row per business per day, so a wide window (1-year first
+// fill, or an all-time `full` pull) exceeds 1000 rows and would be silently
+// truncated. Page the pull by calendar month (day-granular cash-ups) and by
+// year (month-granular P&L), concatenating. Upserts are idempotent, so an
+// overlapping boundary just re-confirms rows.
+
+// [startDate, endDate] (YYYY-MM-DD) -> [[winStart, winEnd], ...] one calendar
+// month each, clamped to the range.
+export function monthWindows(startDate, endDate) {
+    const windows = [];
+    let y = Number(startDate.slice(0, 4));
+    let m = Number(startDate.slice(5, 7)); // 1-based
+    const endYM = endDate.slice(0, 7);
+    for (;;) {
+        const yyyy = String(y).padStart(4, '0');
+        const mm = String(m).padStart(2, '0');
+        const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate(); // day 0 of next month
+        const ws = `${yyyy}-${mm}-01`;
+        const we = `${yyyy}-${mm}-${String(lastDay).padStart(2, '0')}`;
+        windows.push([ws < startDate ? startDate : ws, we > endDate ? endDate : we]);
+        if (`${yyyy}-${mm}` === endYM) break;
+        m += 1;
+        if (m > 12) { m = 1; y += 1; }
+    }
+    return windows;
+}
+
+// [startMonth, endMonth] (YYYY-MM-01) -> [[winStart, winEnd], ...] one calendar
+// year each, clamped. P&L is low-volume (one row per business per month).
+export function yearWindows(startMonth, endMonth) {
+    const windows = [];
+    const endY = Number(endMonth.slice(0, 4));
+    for (let y = Number(startMonth.slice(0, 4)); y <= endY; y += 1) {
+        const yyyy = String(y).padStart(4, '0');
+        const ws = `${yyyy}-01-01`;
+        const we = `${yyyy}-12-01`;
+        windows.push([ws < startMonth ? startMonth : ws, we > endMonth ? endMonth : we]);
+    }
+    return windows;
+}
+
+// Paged pulls: iterate the windows and concatenate.
+export async function fetchAllCashups(baseUrl, apiKey, startDate, endDate) {
+    const out = [];
+    for (const [ws, we] of monthWindows(startDate, endDate)) {
+        out.push(...(await fetchCashups(baseUrl, apiKey, ws, we)));
+    }
+    return out;
+}
+export async function fetchAllMonthlyPl(baseUrl, apiKey, startMonth, endMonth) {
+    const out = [];
+    for (const [ws, we] of yearWindows(startMonth, endMonth)) {
+        out.push(...(await fetchMonthlyPl(baseUrl, apiKey, ws, we)));
+    }
+    return out;
+}
+
 // Validate a base URL + key by hitting the endpoint once (cheap, today's date).
 // Returns true on 2xx; throws with a readable message on 401/other.
 export async function verifyCredentials(baseUrl, apiKey) {
@@ -372,8 +430,8 @@ export async function syncOrg(orgId, { full = false } = {}) {
         const today = new Date().toISOString().slice(0, 10);
         const startMonth = `${startDate.slice(0, 7)}-01`;
         const [cashups, plRows] = await Promise.all([
-            fetchCashups(baseUrl, apiKey, startDate, today),
-            fetchMonthlyPl(baseUrl, apiKey, startMonth, `${today.slice(0, 7)}-01`),
+            fetchAllCashups(baseUrl, apiKey, startDate, today),
+            fetchAllMonthlyPl(baseUrl, apiKey, startMonth, `${today.slice(0, 7)}-01`),
         ]);
         await emergentPracticeMapRepository.discover(
             orgId,
