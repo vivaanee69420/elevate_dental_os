@@ -151,7 +151,7 @@ function TreatmentMetricBreakdown({
 }) {
   return (
     <Panel>
-      <PanelHead title={`${metricLabel} by practice`} sub="Sourced from this window's treatment &amp; close rollup." />
+      <PanelHead title={`${metricLabel} by practice`} sub="Sourced from this window's treatment and close rollup." />
       {rows.length === 0 ? (
         <p className="text-sm text-ink-muted">No practice data in this window.</p>
       ) : (
