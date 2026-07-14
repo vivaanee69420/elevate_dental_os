@@ -39,6 +39,11 @@ export function externalId(rec) {
     return crypto.createHash('sha256').update(parts).digest('hex').slice(0, 32);
 }
 
+// Decimal pounds -> integer pence (rule 2). null/undefined/'' -> 0.
+export function poundsToPence(x) {
+    return Math.round(Number(x || 0) * 100);
+}
+
 // Map one Emergent record to a treatment_accepted row. Money: amount (float GBP)
 // -> integer pence. status is forced to 'accepted'. practice_id resolution:
 //   - `maps` may be a { explicit: Map<business_id, practice_id|null>, fuzzy: Map }
