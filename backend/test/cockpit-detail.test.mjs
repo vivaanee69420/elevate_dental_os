@@ -12,7 +12,7 @@ vi.mock('../src/repositories/cockpit.repository.js', () => ({
       { id: 'l2', ghl_pipeline_id: 'g1', practice_id: 'P1', created_at: '2026-07-01T09:00:00Z', contacts: { first_name: 'Sam', last_name: 'Smith', phone: '07700 900999', email: 'sam@smith.com' } },
     ]),
     acceptedContactsInWindow: vi.fn(async () => [
-      { practice_id: 'P1', value_pence: 450000, phone: '+44 7700 900111', email: null, raw: {} },
+      { practice_id: 'P1', value_pence: 450000, phone: '+44 7700 900111', email: null, patient_name: 'Jane Doe', treatment_name: 'Implant', accepted_date: '2026-07-02', raw: {} },
     ]),
     treatmentsDetailRows: vi.fn(async () => [
       { id: 't1', accepted_date: '2026-07-02', practice_id: 'P1', patient_name: 'Jane Doe', treatment_name: 'Implant', value_pence: 250000, ext_source: 'facebook', raw: {}, practices: { name: 'Ashford' } },
@@ -39,7 +39,7 @@ beforeEach(async () => {
     { id: 'l2', ghl_pipeline_id: 'g1', practice_id: 'P1', created_at: '2026-07-01T09:00:00Z', contacts: { first_name: 'Sam', last_name: 'Smith', phone: '07700 900999', email: 'sam@smith.com' } },
   ]);
   cockpitRepository.acceptedContactsInWindow.mockImplementation(async () => [
-    { practice_id: 'P1', value_pence: 450000, phone: '+44 7700 900111', email: null, raw: {} },
+    { practice_id: 'P1', value_pence: 450000, phone: '+44 7700 900111', email: null, patient_name: 'Jane Doe', treatment_name: 'Implant', accepted_date: '2026-07-02', raw: {} },
   ]);
   cockpitRepository.treatmentsDetailRows.mockImplementation(async () => [
     { id: 't1', accepted_date: '2026-07-02', practice_id: 'P1', patient_name: 'Jane Doe', treatment_name: 'Implant', value_pence: 250000, ext_source: 'facebook', raw: {}, practices: { name: 'Ashford' } },
@@ -71,6 +71,9 @@ describe('cockpitService.leadsDetail', () => {
       phone: '07700 900111',
       converted: true,
       matchedValuePence: 450000,
+      matchedTreatmentName: 'Implant',
+      matchedPatientName: 'Jane Doe',
+      matchedAcceptedDate: '2026-07-02',
     });
 
     const l2 = r.lines.find(l => l.id === 'l2');
@@ -78,6 +81,9 @@ describe('cockpitService.leadsDetail', () => {
     expect(l2.pipelineName).toBe('2. Google Ads Leads');
     expect(l2.converted).toBe(false);
     expect(l2.matchedValuePence).toBe(0);
+    expect(l2.matchedTreatmentName).toBeNull();
+    expect(l2.matchedPatientName).toBeNull();
+    expect(l2.matchedAcceptedDate).toBeNull();
   });
 
   it('threads practiceId + limit/offset to the repo reads', async () => {

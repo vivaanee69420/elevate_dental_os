@@ -1,7 +1,17 @@
 import './setup.js';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../src/services/lead-attribution.service.js', () => ({
-  leadAttributionService: { channelBreakdown: vi.fn(async () => ({ channels: [], spendByChannel: { google: 0, facebook: 0 }, group: {} })) },
+  leadAttributionService: {
+    channelBreakdown: vi.fn(async () => ({
+      channels: [],
+      spendByChannel: { google: 0, facebook: 0 },
+      group: {},
+      groupChannels: {
+        google: { leads: 10, conversions: 1, matchedValuePence: 200000, spendPence: 100000, cplPence: 10000, roi: 2 },
+        facebook: { leads: 0, conversions: 0, matchedValuePence: 0, spendPence: 0, cplPence: null, roi: null },
+      },
+    })),
+  },
   classifyChannel: () => null,
 }));
 vi.mock('../src/repositories/cockpit.repository.js', () => ({
@@ -42,6 +52,18 @@ it('sums revenue from cash-up and threads leadRoi', async () => {
   expect(r.leadRoi).toBeDefined();
   expect(r.treatment.acceptedValuePence).toBe(570000);
   expect(r.treatment.acceptedCount).toBe(2);
+});
+it('threads groupChannels (org-wide per-channel CPL/ROI) onto leadRoi', async () => {
+  const r = await cockpitService.build('org1', { since: '2026-07-01', until: '2026-07-15' });
+  expect(r.leadRoi.groupChannels.google).toEqual({ leads: 10, conversions: 1, matchedValuePence: 200000, spendPence: 100000, cplPence: 10000, roi: 2 });
+  expect(r.leadRoi.groupChannels.facebook.cplPence).toBeNull();
+  expect(r.leadRoi.groupChannels.facebook.roi).toBeNull();
+});
+it('treatment.byPractice carries newLeads/attended per practice', async () => {
+  const r = await cockpitService.build('org1', { since: '2026-07-01', until: '2026-07-15' });
+  const p1 = r.treatment.byPractice.find(p => p.practiceId === 'P1');
+  expect(p1.newLeads).toBe(9);
+  expect(p1.attended).toBe(8);
 });
 it('includes monthly costLines/opexLines/customLines/lineNotes and revenue.dailySeries', async () => {
   const r = await cockpitService.build('org1', { since: '2026-07-01', until: '2026-07-15' });
