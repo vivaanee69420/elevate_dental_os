@@ -1,5 +1,22 @@
 # Treatment Accepted — Emergent Integration Plan
 
+## Status update (2026-07-14) — cash-up + monthly P&L ingestion (migration 000110)
+
+`treatment_accepted` now also persists `phone`, `email`, `quantity`,
+`ext_source`, `ext_campaign` (previously dropped into `raw`). `phone`/`email`
+are intentionally **not** added to the repo's `SAFE_COLS` — PII stays out of
+list responses.
+
+Two new Emergent surfaces landed alongside this: `emergent_daily_cashup` and
+`emergent_monthly_pl` (own tables, real-time webhook events `daily_cashup.saved`
+/ `monthly_pl.saved` + pull endpoints `GET /api/public/daily-cashups` /
+`GET /api/public/monthly-pl` — see `docs/API.md`). The `patients[]` array
+carried inside a `daily_cashup.saved` payload is upserted into
+`treatment_accepted` using the **same** deterministic `external_id` derivation
+as the standalone `treatment.accepted` event, so a patient reported via a
+cash-up converges onto the same row as one reported via the dedicated
+treatment event rather than double-counting.
+
 ## Status (2026-06-15) — display side SCAFFOLDED, ingest still blocked
 
 Built on the Dental-os side now (Business Hub "Treatments Accepted" card):

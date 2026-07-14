@@ -596,12 +596,30 @@ the same row builders as the poller (idempotent upsert). Unknown event types →
 deliveries. 401 on bad token/signature or unset secret.
 
 ### `POST /webhooks/emergent/:token`
-Treatments-Accepted events from the Emergent ops app. `:token` is the stable
-HMAC-signed org encoding (resolves the org; 401 on bad token). **Ingest is
-pending Emergent's API contract** (field names + signing secret): currently acks
-`202 {received:true, processed:false}` without persisting. When the contract
-lands, add `express.raw` on this path + HMAC verify + `mapRecord` → upsert
-`treatment_accepted`.
+Real-time events from the Emergent ops app. `:token` is the stable HMAC-signed
+org encoding (resolves the org; 401 on bad token). Body HMAC-verified via
+`X-Webhook-Signature: sha256=<hmac-hex>` computed over the **raw** request body
+with the org's `integrations.config.webhook_secret` (byte-identical scheme to
+the Dentally webhook) — 401 if the secret isn't set or the signature doesn't
+match. The event name arrives in the body (`event`) or the `X-Webhook-Event`
+header. Handles:
+- `treatment.accepted` / `treatment.updated` → upsert `treatment_accepted`
+  (`mapRecord`; `updated` on a hashed field mints a new `external_id` since
+  Emergent sends no stable record id — see `treatmentaccepted.md`).
+- `treatment.deleted` → delete by derived `external_id`.
+- `daily_cashup.saved` → upsert `emergent_daily_cashup`, plus upsert each row
+  in the payload's `patients[]` array into `treatment_accepted` (converges on
+  the shared `external_id` derivation, so it does not double-count against
+  `treatment.accepted` deliveries for the same patient).
+- `monthly_pl.saved` → upsert `emergent_monthly_pl`.
+
+Unrecognised events with no usable `data.business_id` ack
+`{received:true, ignored:true, reason:'no_data'}` rather than erroring — a
+transient DB error on apply also acks (fault isolation: the provider
+auto-disables a webhook after sustained failures, and the pull endpoints below
+are the reconciliation backstop). Business is auto-discovered into
+`emergent_practice_map` on every delivery so it shows up in the mapping UI
+immediately.
 
 ### `POST /webhooks/postmark/inbound`
 Records inbound email as communication.
@@ -645,10 +663,23 @@ Dentally accepts both connect methods, selected by `method` on the body:
 
 Token refresh is automatic in the sync path: `resolveDentallyAuth` refreshes a near-expiry OAuth access token (5-min skew) under a single-use-refresh-token claim guard, and the long backfill pagers retry once on a 401 by refreshing. API-key rows never refresh. `POST /api/integrations/dentally/refresh` forces a manual refresh. Env: `DENTALLY_CLIENT_ID`/`DENTALLY_CLIENT_SECRET`, optional `DENTALLY_AUTH_BASE` (default `https://api.dentally.co`) / `DENTALLY_SCOPES`; prod `BACKEND_PUBLIC_URL` must equal the host registered as the Dentally redirect URI (exact match) or OAuth is rejected.
 
-### Emergent (Treatments Accepted) — store-only connect
+### Emergent (Treatments Accepted / Daily Cash-Up / Monthly P&L)
 - `GET /api/integrations/emergent` (owner | practice_manager) → `{ connected, status, baseUrl, keyHint, webhookUrl, lastSyncAt }`. `keyHint` is the API key's last 4; `webhookUrl` is the org's signed `/webhooks/emergent/:token` to paste into Emergent.
-- `POST /api/integrations/emergent` (owner) — body `{ baseUrl, apiKey }`. Stores `base_url` + `key_hint` in config and the API key **encrypted** in `secrets`; status `active`. Does NOT yet validate against Emergent or pull (ingest pending the API contract).
+- `POST /api/integrations/emergent` (owner) — body `{ baseUrl, apiKey }`. Stores `base_url` + `key_hint` in config and the API key **encrypted** in `secrets`; status `active`. A connect/sync then pulls from Emergent's public API (below).
 - `DELETE /api/integrations/emergent` (owner) — disconnect: status `revoked`, secret cleared.
+
+Pull side (`lib/integrations/emergent-sync.js`, used by connect + `POST
+/api/integrations/emergent/sync` + the nightly backfill), all against
+`{baseUrl}` with header `X-API-Key: <apiKey>`:
+- `GET /api/public/treatments-accepted?start_date=YYYY-MM-DD` → `{ count, manager_reported_count, rows: [...], sheets: [...] }`. Maps to `treatment_accepted`.
+- `GET /api/public/daily-cashups` → maps to `emergent_daily_cashup` (+ the
+  payload's `patients[]` rows into `treatment_accepted`, same convergence as
+  the `daily_cashup.saved` webhook above).
+- `GET /api/public/monthly-pl` → maps to `emergent_monthly_pl`.
+
+Emergent records carry no stable id; `external_id` is derived deterministically
+from immutable fields (business/date/patient/treatment/amount), so the pull and
+the webhook upsert to the same row on `(organisation_id, source, external_id)`.
 
 ### `POST /api/integrations/:provider/refresh`
 Forces an OAuth token refresh. For `gohighlevel`, guarded against concurrent
