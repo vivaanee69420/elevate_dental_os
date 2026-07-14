@@ -3,7 +3,7 @@
 // monthly_pl (current calendar month), and Task 1's lead-attribution channel
 // breakdown. Money is integer pence throughout (rule 2).
 import { cockpitRepository } from "../repositories/cockpit.repository.js";
-import { leadAttributionService, classifyChannel, matchAcceptedValue, buildAcceptedByKey, normPhone, normEmail } from "./lead-attribution.service.js";
+import { leadAttributionService, classifyChannel, matchAcceptedValue, buildAcceptedByKey } from "./lead-attribution.service.js";
 
 const num = v => Number(v || 0);
 
@@ -298,14 +298,13 @@ export const cockpitService = {
         ]);
 
         const pipeById = new Map((pipes || []).map(p => [p.pipeline_id, p]));
-        const acceptedByKey = buildAcceptedByKey(accepted);
+        const { acceptedByKey, nameByPractice } = buildAcceptedByKey(accepted);
 
         let lines = (rows || []).map(row => {
             const pipe = pipeById.get(row.ghl_pipeline_id);
             const contact = row.contacts || {};
-            const phone = normPhone(contact.phone);
-            const email = normEmail(contact.email);
-            const matchedValue = matchAcceptedValue(acceptedByKey, phone, email);
+            const practiceId = pipe?.practice_id ?? row.practice_id ?? null;
+            const matched = matchAcceptedValue({ contacts: contact, practiceId }, acceptedByKey, nameByPractice);
             const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || null;
             return {
                 id: row.id,
@@ -316,8 +315,11 @@ export const cockpitService = {
                 name,
                 email: contact.email ?? null,
                 phone: contact.phone ?? null,
-                converted: matchedValue !== null,
-                matchedValuePence: matchedValue ?? 0,
+                converted: matched !== null,
+                matchedValuePence: matched ? matched.valuePence : 0,
+                matchedTreatmentName: matched ? matched.treatmentName : null,
+                matchedPatientName: matched ? matched.patientName : null,
+                matchedAcceptedDate: matched ? matched.acceptedDate : null,
             };
         });
 

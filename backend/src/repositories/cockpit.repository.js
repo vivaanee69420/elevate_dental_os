@@ -37,7 +37,7 @@ export const cockpitRepository = {
     async adLeadsInWindow(orgId, sinceISO, untilISO, practiceId) {
         let q = supabase_1.serviceClient
             .from('leads')
-            .select('id, ghl_pipeline_id, practice_id, integration_account_id, created_at, contacts(phone,email)')
+            .select('id, ghl_pipeline_id, practice_id, integration_account_id, created_at, contacts(phone,email,first_name,last_name)')
             .eq('organisation_id', orgId)
             .not('ghl_pipeline_id', 'is', null)
             .gte('created_at', sinceISO)
@@ -52,7 +52,7 @@ export const cockpitRepository = {
     async acceptedContactsInWindow(orgId, sinceDate, untilDate, practiceId) {
         let q = supabase_1.serviceClient
             .from('treatment_accepted')
-            .select('practice_id, value_pence, phone, email, raw, accepted_date')
+            .select('practice_id, value_pence, phone, email, raw, accepted_date, patient_name, treatment_name')
             .eq('organisation_id', orgId)
             .eq('status', 'accepted')
             .gte('accepted_date', sinceDate)
