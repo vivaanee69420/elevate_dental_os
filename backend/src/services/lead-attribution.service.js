@@ -15,6 +15,22 @@ export function matchAcceptedValue(acceptedByKey, phone, email) {
     return null;
 }
 
+// Builds the accepted-key (normalised phone/email) -> value_pence map from
+// raw treatment_accepted rows (first match wins per key). Exported so callers
+// that only need per-row matching (e.g. cockpitService.leadsDetail) don't have
+// to duplicate this — the single source of truth for the match key set.
+export function buildAcceptedByKey(accepted) {
+    const acceptedByKey = new Map();
+    for (const row of accepted || []) {
+        const phone = normPhone(row.phone ?? row.raw?.phone);
+        const email = normEmail(row.email ?? row.raw?.email);
+        const value = row.value_pence || 0;
+        if (phone && !acceptedByKey.has(phone)) acceptedByKey.set(phone, value);
+        if (email && !acceptedByKey.has(email)) acceptedByKey.set(email, value);
+    }
+    return acceptedByKey;
+}
+
 // Pipeline name -> channel. Checked in this order: facebook, google,
 // instagram, website, else 'other' (the catch-all — never null).
 export function classifyChannel(pipelineName) {
@@ -31,15 +47,8 @@ export function classifyChannel(pipelineName) {
 export function matchBreakdown(pipes, leads, accepted) {
     const pipeById = new Map((pipes || []).map((p) => [p.pipeline_id, p]));
 
-    // Build accepted key -> value_pence map (first match wins per key).
-    const acceptedByKey = new Map();
-    for (const row of accepted || []) {
-        const phone = normPhone(row.phone ?? row.raw?.phone);
-        const email = normEmail(row.email ?? row.raw?.email);
-        const value = row.value_pence || 0;
-        if (phone && !acceptedByKey.has(phone)) acceptedByKey.set(phone, value);
-        if (email && !acceptedByKey.has(email)) acceptedByKey.set(email, value);
-    }
+    // Accepted key -> value_pence map (first match wins per key).
+    const acceptedByKey = buildAcceptedByKey(accepted);
 
     // Group by practiceId x channel.
     const groups = new Map(); // key `${practiceId}|${channel}` -> stats

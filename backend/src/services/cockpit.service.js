@@ -3,9 +3,24 @@
 // monthly_pl (current calendar month), and Task 1's lead-attribution channel
 // breakdown. Money is integer pence throughout (rule 2).
 import { cockpitRepository } from "../repositories/cockpit.repository.js";
-import { leadAttributionService } from "./lead-attribution.service.js";
+import { leadAttributionService, classifyChannel, matchAcceptedValue, buildAcceptedByKey, normPhone, normEmail } from "./lead-attribution.service.js";
 
 const num = v => Number(v || 0);
+
+// Lazy detail-endpoint pagination — repo methods take LIMIT/OFFSET; cap at
+// 500 rows/page, default 100. Applies to leads/treatments/cashup-days.
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 500;
+function clampLimit(limit) {
+    const n = Number(limit);
+    if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT;
+    return Math.min(Math.trunc(n), MAX_LIMIT);
+}
+function clampOffset(offset) {
+    const n = Number(offset);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.trunc(n);
+}
 
 // Typed emergent_monthly_pl columns -> display name, in the two P&L
 // categories the cockpit surfaces. Order doesn't matter here; lineItems()
@@ -265,5 +280,95 @@ export const cockpitService = {
             },
             updatedAt: new Date().toISOString(),
         };
+    },
+
+    // Lazy detail — leads in-window, annotated with channel/pipelineName
+    // (Task 1's pipeline->channel map) and converted/matchedValuePence via
+    // the SAME phone/email matcher as leadAttributionService.matchBreakdown
+    // (buildAcceptedByKey/matchAcceptedValue, both reused — no duplicate
+    // normalise/match logic). Optional `channel` filters the shaped lines
+    // (applied after classification, since channel isn't a queryable column).
+    async leadsDetail(orgId, { since, until, practiceId, channel, limit, offset } = {}) {
+        const lim = clampLimit(limit);
+        const off = clampOffset(offset);
+        const [pipes, rows, accepted] = await Promise.all([
+            cockpitRepository.pipelineChannelMap(orgId, practiceId),
+            cockpitRepository.leadsDetailRows(orgId, since, until, practiceId, lim, off),
+            cockpitRepository.acceptedContactsInWindow(orgId, since, until, practiceId),
+        ]);
+
+        const pipeById = new Map((pipes || []).map(p => [p.pipeline_id, p]));
+        const acceptedByKey = buildAcceptedByKey(accepted);
+
+        let lines = (rows || []).map(row => {
+            const pipe = pipeById.get(row.ghl_pipeline_id);
+            const contact = row.contacts || {};
+            const phone = normPhone(contact.phone);
+            const email = normEmail(contact.email);
+            const matchedValue = matchAcceptedValue(acceptedByKey, phone, email);
+            const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || null;
+            return {
+                id: row.id,
+                createdAt: row.created_at,
+                practiceName: pipe?.practice_label ?? null,
+                channel: classifyChannel(pipe?.name),
+                pipelineName: pipe?.name ?? null,
+                name,
+                email: contact.email ?? null,
+                phone: contact.phone ?? null,
+                converted: matchedValue !== null,
+                matchedValuePence: matchedValue ?? 0,
+            };
+        });
+
+        if (channel) lines = lines.filter(l => l.channel === channel);
+
+        return { window: { since: since ?? null, until: until ?? null }, lines, limit: lim, offset: off };
+    },
+
+    // Lazy detail — accepted treatments (treatment_accepted, status='accepted')
+    // in-window. `source` prefers the typed ext_source column, falling back
+    // to raw.source for older rows synced before that column existed.
+    async treatmentsDetail(orgId, { since, until, practiceId, limit, offset } = {}) {
+        const lim = clampLimit(limit);
+        const off = clampOffset(offset);
+        const rows = await cockpitRepository.treatmentsDetailRows(orgId, since, until, practiceId, lim, off);
+
+        const lines = (rows || []).map(row => ({
+            id: row.id,
+            acceptedDate: row.accepted_date,
+            practiceName: row.practices?.name ?? null,
+            patientName: row.patient_name ?? null,
+            treatmentName: row.treatment_name ?? null,
+            valuePence: num(row.value_pence),
+            source: row.ext_source ?? row.raw?.source ?? null,
+        }));
+
+        return { window: { since: since ?? null, until: until ?? null }, lines, limit: lim, offset: off };
+    },
+
+    // Lazy detail — daily cash-up rows in-window, newest-first. variancePence
+    // is cashTakenPence minus detailPence (manager total vs detail-patient
+    // total); practiceName falls back to the Emergent business_name when the
+    // row hasn't been mapped to a practice yet (emergent_practice_map).
+    async cashupDaysDetail(orgId, { since, until, practiceId, limit, offset } = {}) {
+        const lim = clampLimit(limit);
+        const off = clampOffset(offset);
+        const rows = await cockpitRepository.cashupDaysDetailRows(orgId, since, until, practiceId, lim, off);
+
+        const lines = (rows || []).map(row => {
+            const cashTakenPence = num(row.cash_up_money_taken_pence);
+            const detailPence = num(row.detail_patient_money_total_pence);
+            return {
+                cashupDate: row.cashup_date,
+                practiceName: row.practices?.name ?? row.business_name ?? null,
+                cashTakenPence,
+                detailPence,
+                variancePence: cashTakenPence - detailPence,
+                refunds: row.refunds ?? [],
+            };
+        });
+
+        return { window: { since: since ?? null, until: until ?? null }, lines };
     },
 };
