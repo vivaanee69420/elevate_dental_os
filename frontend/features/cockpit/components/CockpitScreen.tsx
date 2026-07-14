@@ -16,6 +16,7 @@ import { Panel, PanelHead, th, td } from '@/features/intelligence/components/os-
 import { formatPence, formatNumber, formatDate } from '@/lib/format';
 import { useCockpit, useCockpitTreatments, useCockpitCashupDays } from '../hooks';
 import { LeadComparison } from './LeadComparison';
+import { LeadPerformanceChart, RevenueTrendChart } from './CockpitCharts';
 import type { CockpitResponse, PLLine, PLLineNote } from '../api';
 
 function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -100,6 +101,8 @@ function RevenueSection({
           </div>
         ) : null}
       </section>
+
+      <RevenueTrendChart dailySeries={data.revenue.dailySeries} />
 
       {active && (
         <Panel>
@@ -496,6 +499,7 @@ export default function CockpitScreen() {
         <div className="space-y-4">
           <RevenueSection data={data} drill={drill} onToggle={() => toggle('revenue')} />
           <TreatmentSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('treatment')} />
+          <LeadPerformanceChart channels={data.leadRoi.channels} />
           <LeadComparison data={data.leadRoi} practiceId={practiceId} win={win} />
           <CashUpSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('cashup')} />
           <MonthlySection data={data} />
