@@ -3,16 +3,27 @@
 // (treatment_accepted) conversions by phone/email. Money is integer pence.
 import { cockpitRepository } from "../repositories/cockpit.repository.js";
 
-const normPhone = (s) => (String(s || '').replace(/\D/g, '').slice(-10) || null);
-const normEmail = (s) => (String(s || '').trim().toLowerCase() || null);
+export const normPhone = (s) => (String(s || '').replace(/\D/g, '').slice(-10) || null);
+export const normEmail = (s) => (String(s || '').trim().toLowerCase() || null);
 
-// Pipeline name -> channel. facebook checked first since some pipeline names
-// could plausibly mention both; only google/facebook are supported channels.
+// Shared phone-or-email matcher against an accepted-key -> value_pence map
+// built by channelBreakdown/matchBreakdown. Exported so other tasks (e.g.
+// the cockpit lead list) don't have to duplicate the matching logic.
+export function matchAcceptedValue(acceptedByKey, phone, email) {
+    if (phone && acceptedByKey.has(phone)) return acceptedByKey.get(phone);
+    if (email && acceptedByKey.has(email)) return acceptedByKey.get(email);
+    return null;
+}
+
+// Pipeline name -> channel. Checked in this order: facebook, google,
+// instagram, website, else 'other' (the catch-all — never null).
 export function classifyChannel(pipelineName) {
     const name = String(pipelineName || '');
     if (/facebook|\bfb\b/i.test(name)) return 'facebook';
     if (/google/i.test(name)) return 'google';
-    return null;
+    if (/instagram|\big\b/i.test(name)) return 'instagram';
+    if (/website|web|organic/i.test(name)) return 'website';
+    return 'other';
 }
 
 // Pure matcher: pipes = pipelineChannelMap() rows, leads = adLeadsInWindow()
@@ -34,10 +45,10 @@ export function matchBreakdown(pipes, leads, accepted) {
     const groups = new Map(); // key `${practiceId}|${channel}` -> stats
     const groupKey = (practiceId, channel) => `${practiceId ?? ''}|${channel}`;
 
+    const annotatedLeads = [];
     for (const lead of leads || []) {
         const pipe = pipeById.get(lead.ghl_pipeline_id);
         const channel = classifyChannel(pipe?.name);
-        if (!channel) continue;
         const practiceId = pipe?.practice_id ?? lead.practice_id ?? null;
         const practiceLabel = pipe?.practice_label ?? null;
         const key = groupKey(practiceId, channel);
@@ -45,6 +56,8 @@ export function matchBreakdown(pipes, leads, accepted) {
             groups.set(key, {
                 practiceId,
                 practiceName: practiceLabel,
+                pipelineId: pipe?.pipeline_id ?? null,
+                pipelineName: pipe?.name ?? null,
                 channel,
                 leads: 0,
                 conversions: 0,
@@ -57,14 +70,19 @@ export function matchBreakdown(pipes, leads, accepted) {
         const contact = lead.contacts || {};
         const phone = normPhone(contact.phone);
         const email = normEmail(contact.email);
-        let matchedValue = null;
-        if (phone && acceptedByKey.has(phone)) matchedValue = acceptedByKey.get(phone);
-        else if (email && acceptedByKey.has(email)) matchedValue = acceptedByKey.get(email);
+        const matchedValue = matchAcceptedValue(acceptedByKey, phone, email);
 
         if (matchedValue !== null) {
             g.conversions += 1;
             g.matchedValuePence += matchedValue;
         }
+
+        annotatedLeads.push({
+            ...lead,
+            pipelineId: pipe?.pipeline_id ?? null,
+            pipelineName: pipe?.name ?? null,
+            channel,
+        });
     }
 
     const channels = Array.from(groups.values());
@@ -80,15 +98,15 @@ export function matchBreakdown(pipes, leads, accepted) {
         group[c.channel].matchedValuePence += c.matchedValuePence;
     }
 
-    return { channels, group };
+    return { channels, group, leads: annotatedLeads };
 }
 
 export const leadAttributionService = {
-    async channelBreakdown(orgId, { since, until } = {}) {
+    async channelBreakdown(orgId, { since, until, practiceId } = {}) {
         const [pipes, leads, accepted, spend] = await Promise.all([
-            cockpitRepository.pipelineChannelMap(orgId),
-            cockpitRepository.adLeadsInWindow(orgId, since, until),
-            cockpitRepository.acceptedContactsInWindow(orgId, since, until),
+            cockpitRepository.pipelineChannelMap(orgId, practiceId),
+            cockpitRepository.adLeadsInWindow(orgId, since, until, practiceId),
+            cockpitRepository.acceptedContactsInWindow(orgId, since, until, practiceId),
             cockpitRepository.adSpendByProvider(orgId, since, until),
         ]);
 

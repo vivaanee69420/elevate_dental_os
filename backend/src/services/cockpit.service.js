@@ -7,6 +7,77 @@ import { leadAttributionService } from "./lead-attribution.service.js";
 
 const num = v => Number(v || 0);
 
+// Typed emergent_monthly_pl columns -> display name, in the two P&L
+// categories the cockpit surfaces. Order doesn't matter here; lineItems()
+// sorts largest-first below.
+const COST_LINE_COLS = [
+    ['principal_fees_pence', 'Principal fees'],
+    ['hygienist_therapist_pence', 'Hygienist / therapist'],
+    ['lab_fees_pence', 'Lab fees'],
+    ['materials_pence', 'Materials'],
+    ['sedation_services_pence', 'Sedation services'],
+];
+const OPEX_LINE_COLS = [
+    ['advertising_marketing_pence', 'Advertising & marketing'],
+    ['bank_charges_pence', 'Bank charges'],
+    ['business_rates_rent_pence', 'Business rates & rent'],
+    ['salaries_staff_cost_pence', 'Salaries & staff cost'],
+    ['telephone_wifi_pence', 'Telephone & wifi'],
+    ['utilities_pence', 'Utilities'],
+    ['insurance_pence', 'Insurance'],
+    ['management_fees_pence', 'Management fees'],
+    ['subscriptions_pence', 'Subscriptions'],
+    ['it_expenses_pence', 'IT expenses'],
+    ['card_machine_charges_pence', 'Card machine charges'],
+];
+
+// Sums the given typed columns across all monthly_pl rows (one per business)
+// into a single largest-first [{name,amountPence}] list, dropping zero/absent
+// lines. Money is integer pence throughout.
+function sumTypedLines(rows, cols) {
+    const totals = new Map();
+    for (const row of rows || []) {
+        for (const [col, name] of cols) {
+            const v = num(row[col]);
+            if (v === 0) continue;
+            totals.set(name, (totals.get(name) || 0) + v);
+        }
+    }
+    return Array.from(totals, ([name, amountPence]) => ({ name, amountPence }))
+        .filter(l => l.amountPence !== 0)
+        .sort((a, b) => b.amountPence - a.amountPence);
+}
+
+// custom_lines is {name: pence} per business row — sum across businesses,
+// same shape/ordering as sumTypedLines.
+function sumCustomLines(rows) {
+    const totals = new Map();
+    for (const row of rows || []) {
+        for (const [name, pence] of Object.entries(row.custom_lines || {})) {
+            const v = num(pence);
+            if (v === 0) continue;
+            totals.set(name, (totals.get(name) || 0) + v);
+        }
+    }
+    return Array.from(totals, ([name, amountPence]) => ({ name, amountPence }))
+        .filter(l => l.amountPence !== 0)
+        .sort((a, b) => b.amountPence - a.amountPence);
+}
+
+// line_notes is {name: text} per business row — free-text, not money, so it
+// carries a `note` string rather than amountPence. Collected across
+// businesses, first note wins per name.
+function collectLineNotes(rows) {
+    const notes = new Map();
+    for (const row of rows || []) {
+        for (const [name, note] of Object.entries(row.line_notes || {})) {
+            if (note == null || String(note).trim() === '') continue;
+            if (!notes.has(name)) notes.set(name, String(note));
+        }
+    }
+    return Array.from(notes, ([name, note]) => ({ name, note }));
+}
+
 // Derive the current calendar month's period_month DATE ('YYYY-MM-01') from
 // `until` when present, else today. emergent_monthly_pl.period_month is
 // always the 1st of the month.
@@ -18,13 +89,13 @@ function monthStartFrom(until) {
 }
 
 export const cockpitService = {
-    async build(orgId, { since, until } = {}) {
+    async build(orgId, { since, until, practiceId } = {}) {
         let periodMonth = monthStartFrom(until);
         const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows] = await Promise.all([
-            cockpitRepository.cashupRollup(orgId, since, until),
-            cockpitRepository.monthlyPl(orgId, periodMonth),
-            leadAttributionService.channelBreakdown(orgId, { since, until }),
-            cockpitRepository.acceptedContactsInWindow(orgId, since, until),
+            cockpitRepository.cashupRollup(orgId, since, until, practiceId),
+            cockpitRepository.monthlyPl(orgId, periodMonth, practiceId),
+            leadAttributionService.channelBreakdown(orgId, { since, until, practiceId }),
+            cockpitRepository.acceptedContactsInWindow(orgId, since, until, practiceId),
         ]);
 
         // Emergent may not have sent the current calendar month's P&L yet —
@@ -103,6 +174,17 @@ export const cockpitService = {
         }
         const byPractice = Array.from(byPracticeMap.values());
 
+        // Daily cash-in series for the charts task — sum per calendar day
+        // across practices/businesses, ascending by date.
+        const dailyMap = new Map();
+        for (const row of cashupRows || []) {
+            const date = row.cashup_date;
+            if (!date) continue;
+            dailyMap.set(date, (dailyMap.get(date) || 0) + num(row.cash_up_money_taken_pence));
+        }
+        const dailySeries = Array.from(dailyMap, ([date, cashPence]) => ({ date, cashPence }))
+            .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
         const totals = byPractice.reduce((acc, p) => {
             acc.collectedPence += p.collectedPence;
             acc.detailPence += p.detailPence;
@@ -128,11 +210,17 @@ export const cockpitService = {
             return acc;
         }, { revenuePence: 0, netProfitPence: 0 });
 
+        const costLines = sumTypedLines(monthlyRows, COST_LINE_COLS);
+        const opexLines = sumTypedLines(monthlyRows, OPEX_LINE_COLS);
+        const customLines = sumCustomLines(monthlyRows);
+        const lineNotes = collectLineNotes(monthlyRows);
+
         return {
             window: { since: since ?? null, until: until ?? null },
             revenue: {
                 collectedPence: totals.collectedPence,
                 byPractice: byPractice.map(p => ({ practiceId: p.practiceId, name: p.name, collectedPence: p.collectedPence })),
+                dailySeries,
             },
             treatment: {
                 acceptedCount: totals.acceptedCount,
@@ -170,6 +258,10 @@ export const cockpitService = {
                 revenuePence: monthlyTotals.revenuePence,
                 netProfitPence: monthlyTotals.netProfitPence,
                 byBusiness,
+                costLines,
+                opexLines,
+                customLines,
+                lineNotes,
             },
             updatedAt: new Date().toISOString(),
         };
