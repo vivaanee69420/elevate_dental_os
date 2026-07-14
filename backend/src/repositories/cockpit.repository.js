@@ -102,4 +102,22 @@ export const cockpitRepository = {
         if (error) throw new Error(error.message);
         return data || [];
     },
+
+    // Daily Command Cockpit fallback — Emergent may not have sent the current
+    // calendar month's P&L yet, which would otherwise show £0. Returns the
+    // rows for whichever period_month is most recent for this org (all rows
+    // sharing that max period_month, i.e. one per business).
+    async latestMonthlyPl(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('emergent_monthly_pl')
+            .select('practice_id, business_name, period_month, revenue_pence, net_profit_pence')
+            .eq('organisation_id', orgId)
+            .order('period_month', { ascending: false })
+            .limit(50);
+        if (error) throw new Error(error.message);
+        const rows = data || [];
+        if (rows.length === 0) return { periodMonth: null, rows: [] };
+        const latest = rows[0].period_month;
+        return { periodMonth: latest, rows: rows.filter(r => r.period_month === latest) };
+    },
 };
