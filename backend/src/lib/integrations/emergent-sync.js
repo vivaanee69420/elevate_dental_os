@@ -170,6 +170,75 @@ export function mapCashup(data, orgId, maps = null) {
     return { row, patients };
 }
 
+// Headline roll-ups (payload key -> row column), all money -> pence.
+const PL_HEADLINE = {
+    revenue: 'revenue_pence',
+    gross_profit: 'gross_profit_pence',
+    net_profit: 'net_profit_pence',
+    total_cost_of_sales: 'total_cost_of_sales_pence',
+    total_operating_expenses: 'total_operating_expenses_pence',
+    cash_collected: 'cash_collected_pence',
+    tx_accepted_amount: 'tx_accepted_amount_pence',
+    bank_balance: 'bank_balance_pence',
+};
+// Known cost-of-sales + opex line items -> their typed pence column.
+const PL_KNOWN_LINES = [
+    'principal_fees', 'hygienist_therapist', 'lab_fees', 'materials', 'sedation_services',
+    'advertising_marketing', 'bank_charges', 'business_rates_rent', 'salaries_staff_cost',
+    'telephone_wifi', 'utilities', 'insurance', 'management_fees', 'subscriptions',
+    'it_expenses', 'card_machine_charges',
+];
+// Non-money / meta keys that must NOT be treated as custom money lines.
+const PL_META = new Set([
+    'id', 'business_id', 'business_name', 'date', 'notes', 'average_wait_time',
+    'created_at', 'created_by', 'last_updated_at', 'last_updated_by', 'last_updated_by_email',
+]);
+
+export function monthlyPlExternalId(data) {
+    return `${data.business_id}_${data.date}`;
+}
+
+// Map one monthly_pl payload -> emergent_monthly_pl row. Known lines become
+// typed pence columns; any other numeric line lands in custom_lines (pence) so
+// CEO-added lines survive; every *_notes lands in line_notes.
+export function mapMonthlyPl(data, orgId, maps = null) {
+    const empty = (s) => (s == null || String(s).trim() === '' ? null : String(s));
+    const practiceId = resolvePracticeFromMaps(data.business_id, data.business_name, maps);
+
+    const row = {
+        organisation_id: orgId,
+        business_id: data.business_id == null ? null : String(data.business_id),
+        business_name: empty(data.business_name),
+        practice_id: practiceId,
+        period_month: data.date ?? null,
+        external_id: monthlyPlExternalId(data),
+        notes: empty(data.notes),
+        average_wait_time: data.average_wait_time == null ? null : Number(data.average_wait_time),
+        custom_lines: {},
+        line_notes: {},
+        raw: data,
+        emergent_created_at: data.created_at ?? null,
+        emergent_created_by: data.created_by == null ? null : String(data.created_by),
+        last_updated_at: data.last_updated_at ?? null,
+        last_updated_by: data.last_updated_by == null ? null : String(data.last_updated_by),
+        last_updated_by_email: empty(data.last_updated_by_email),
+    };
+    for (const [key, col] of Object.entries(PL_HEADLINE)) row[col] = poundsToPence(data[key]);
+    for (const line of PL_KNOWN_LINES) row[`${line}_pence`] = poundsToPence(data[line]);
+
+    const known = new Set(PL_KNOWN_LINES);
+    for (const [k, v] of Object.entries(data)) {
+        if (k.endsWith('_notes')) {
+            const base = k.slice(0, -'_notes'.length);
+            if (v != null && String(v).trim() !== '') row.line_notes[base] = v;
+            continue;
+        }
+        if (k in PL_HEADLINE || known.has(k) || PL_META.has(k)) continue;
+        if (typeof v === 'number') row.custom_lines[k] = poundsToPence(v);
+    }
+    return row;
+}
+
 // Resolve an Emergent business_name to a practices.id. Emergent uses a short
 // name ("Ashford") while the practice record is the full trading name
 // ("GM Dental & Implant Centre Ashford"), so match by substring both ways
