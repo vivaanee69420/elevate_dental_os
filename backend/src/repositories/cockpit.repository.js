@@ -63,6 +63,66 @@ export const cockpitRepository = {
         return data || [];
     },
 
+    // Daily Command Cockpit drill-down — paginated leads windowed on
+    // created_at, only leads attributed to a GHL pipeline (mirrors
+    // adLeadsInWindow's filters), newest-first. Embeds the contact's
+    // name/phone/email for the detail line. offset/limit are the caller's
+    // already-clamped (<=500) values.
+    async leadsDetailRows(orgId, sinceISO, untilISO, practiceId, limit, offset) {
+        let q = supabase_1.serviceClient
+            .from('leads')
+            .select('id, ghl_pipeline_id, practice_id, created_at, contacts(first_name,last_name,phone,email)')
+            .eq('organisation_id', orgId)
+            .not('ghl_pipeline_id', 'is', null)
+            .gte('created_at', sinceISO)
+            .lt('created_at', untilISO)
+            .order('created_at', { ascending: false });
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        q = q.range(offset, offset + limit - 1);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+
+    // Daily Command Cockpit drill-down — paginated treatment_accepted rows
+    // windowed on accepted_date (half-open), newest-first, joined to the
+    // practice name.
+    async treatmentsDetailRows(orgId, sinceDate, untilDate, practiceId, limit, offset) {
+        let q = supabase_1.serviceClient
+            .from('treatment_accepted')
+            .select('id, accepted_date, practice_id, patient_name, treatment_name, value_pence, ext_source, raw, practices(name)')
+            .eq('organisation_id', orgId)
+            .eq('status', 'accepted')
+            .gte('accepted_date', sinceDate)
+            .lt('accepted_date', untilDate)
+            .order('accepted_date', { ascending: false });
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        q = q.range(offset, offset + limit - 1);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+
+    // Daily Command Cockpit drill-down — paginated emergent_daily_cashup rows
+    // windowed on cashup_date (half-open), newest-first, joined to the
+    // practice name (falls back to business_name in the service when a row
+    // isn't yet mapped to a practice).
+    async cashupDaysDetailRows(orgId, since, until, practiceId, limit, offset) {
+        let q = supabase_1.serviceClient
+            .from('emergent_daily_cashup')
+            .select('cashup_date, practice_id, business_name, cash_up_money_taken_pence, ' +
+                'detail_patient_money_total_pence, refunds, practices(name)')
+            .eq('organisation_id', orgId)
+            .order('cashup_date', { ascending: false });
+        if (since) q = q.gte('cashup_date', since);
+        if (until) q = q.lt('cashup_date', until);
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        q = q.range(offset, offset + limit - 1);
+        const { data, error } = await q;
+        if (error) throw new Error(error.message);
+        return data || [];
+    },
+
     // Sum ad spend by provider over [fromDate, toDate) — YYYY-MM-DD strings.
     async adSpendByProvider(orgId, fromDate, toDate) {
         const { data, error } = await supabase_1.serviceClient
