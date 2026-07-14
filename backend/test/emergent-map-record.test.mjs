@@ -70,6 +70,24 @@ describe('emergent mapRecord', () => {
     const map = new Map([['somewhere else', 'prac-x']]);
     expect(mapRecord(REC, ORG, map).practice_id).toBeNull();
   });
+
+  it('persists phone, email, quantity, source and campaign (previously raw-only)', () => {
+    const r = mapRecord(
+      { ...REC, phone: '07700 900 111', email: 'a@b.com', quantity: 2, source: 'Google', campaign: 'PPC-Aug' },
+      ORG,
+    );
+    expect(r.phone).toBe('07700 900 111');
+    expect(r.email).toBe('a@b.com');
+    expect(r.quantity).toBe(2);
+    expect(r.ext_source).toBe('Google');
+    expect(r.ext_campaign).toBe('PPC-Aug');
+  });
+  it('defaults quantity to 1 and coerces empty source/campaign to null', () => {
+    const r = mapRecord({ ...REC, quantity: undefined, source: '', campaign: '' }, ORG);
+    expect(r.quantity).toBe(1);
+    expect(r.ext_source).toBeNull();
+    expect(r.ext_campaign).toBeNull();
+  });
 });
 
 describe('emergent mapRecord explicit resolution', () => {
