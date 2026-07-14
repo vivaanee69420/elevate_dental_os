@@ -20,10 +20,11 @@ function monthStartFrom(until) {
 export const cockpitService = {
     async build(orgId, { since, until } = {}) {
         const periodMonth = monthStartFrom(until);
-        const [cashupRows, monthlyRows, leadRoi] = await Promise.all([
+        const [cashupRows, monthlyRows, leadRoi, acceptedRows] = await Promise.all([
             cockpitRepository.cashupRollup(orgId, since, until),
             cockpitRepository.monthlyPl(orgId, periodMonth),
             leadAttributionService.channelBreakdown(orgId, { since, until }),
+            cockpitRepository.acceptedContactsInWindow(orgId, since, until),
         ]);
 
         // Aggregate cash-up rows by practice (practice_id, falling back to
@@ -38,9 +39,6 @@ export const cockpitService = {
                     collectedPence: 0,
                     detailPence: 0,
                     acceptedCount: 0,
-                    // acceptedValuePence: the closest "value of accepted treatment"
-                    // figure the daily cash-up captures is tx_plan_given_value_pence
-                    // (there is no separate accepted-value column on the table).
                     acceptedValuePence: 0,
                     txPlansGiven: 0,
                     txPlanValuePence: 0,
@@ -51,12 +49,45 @@ export const cockpitService = {
             const g = byPracticeMap.get(key);
             g.collectedPence += num(row.cash_up_money_taken_pence);
             g.detailPence += num(row.detail_patient_money_total_pence);
-            g.acceptedCount += num(row.treatments_accepted);
-            g.acceptedValuePence += num(row.tx_plan_given_value_pence);
             g.txPlansGiven += num(row.tx_plans_given);
             g.txPlanValuePence += num(row.tx_plan_given_value_pence);
             g.newLeads += num(row.num_new_leads);
             g.attended += num(row.num_attended);
+        }
+
+        // ACCEPTED count/value come from the canonical Emergent conversions
+        // feed (treatment_accepted), not the cash-up's plans-given figure.
+        // Union practice keys: a practice may have cash-up data with no
+        // accepted rows in-window (or vice versa).
+        const acceptedByPractice = new Map();
+        for (const row of acceptedRows || []) {
+            const key = row.practice_id ?? '__unmapped__';
+            if (!acceptedByPractice.has(key)) {
+                acceptedByPractice.set(key, { practiceId: row.practice_id ?? null, count: 0, valuePence: 0 });
+            }
+            const a = acceptedByPractice.get(key);
+            a.count += 1;
+            a.valuePence += num(row.value_pence);
+        }
+        for (const [key, a] of acceptedByPractice) {
+            let g = a.practiceId !== null ? byPracticeMap.get(a.practiceId) : null;
+            if (!g) {
+                g = {
+                    practiceId: a.practiceId,
+                    name: null,
+                    collectedPence: 0,
+                    detailPence: 0,
+                    acceptedCount: 0,
+                    acceptedValuePence: 0,
+                    txPlansGiven: 0,
+                    txPlanValuePence: 0,
+                    newLeads: 0,
+                    attended: 0,
+                };
+                byPracticeMap.set(key, g);
+            }
+            g.acceptedCount = a.count;
+            g.acceptedValuePence = a.valuePence;
         }
         const byPractice = Array.from(byPracticeMap.values());
 
