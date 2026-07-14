@@ -15,7 +15,7 @@ describe('emergent daily cash-up repo', () => {
     supaRec.resultProvider = () => ({ data: { id: 'x' }, error: null });
     await cashupRepo.upsert({ organisation_id: ORG, business_id: 'b', cashup_date: '2026-08-20' });
     expect(supaRec.last.table).toBe('emergent_daily_cashup');
-    expect(supaRec.last.op).toBe('upsert');
+    expect(supaRec.last.upsertVals).toBeDefined();
     expect(supaRec.last.upsertOpts.onConflict).toBe('organisation_id,business_id,cashup_date');
   });
   it('listByOrg filters by organisation_id (rule 3)', async () => {
