@@ -41,13 +41,17 @@ function displayName(l: Lead): string {
 
 /** Pipeline kanban screen. */
 export default function PipelineScreen() {
-  const { data: pData } = usePipelines();
-  const pipelines = pData?.pipelines ?? [];
-  const [picked, setPicked] = useState<string | null>(null);
-  const selectedId = picked ?? pipelines[0]?.id ?? null;
-
   const [accountId, setAccountId] = useState<string | null>(null);
   const { data: ghlData } = useGhlAccounts();
+
+  // Pipelines are scoped to the selected subaccount — each GHL Location has its
+  // own disjoint set of pipeline ids, and a lead only ever carries its own
+  // Location's. A pipeline picked under one subaccount is meaningless under
+  // another, so fall back to the first of the current set when it isn't offered.
+  const { data: pData } = usePipelines(accountId);
+  const pipelines = pData?.pipelines ?? [];
+  const [picked, setPicked] = useState<string | null>(null);
+  const selectedId = (picked && pipelines.some((p) => p.id === picked) ? picked : pipelines[0]?.id) ?? null;
 
   // Fetch the selected pipeline's leads server-side (a pipeline can have 300+
   // leads, so client-side slicing of a 100-row page would drop most).
@@ -97,7 +101,9 @@ export default function PipelineScreen() {
               style={{ padding: '6px 10px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 6, background: 'white' }}
             >
               {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+                <option key={p.id} value={p.id}>
+                  {typeof p.lead_count === 'number' ? `${p.name} (${p.lead_count})` : p.name}
+                </option>
               ))}
             </select>
           </div>
