@@ -23,9 +23,13 @@ import { decryptSecret } from "../crypto.js";
 import { integrationRepository } from "../../repositories/integration.repository.js";
 import { treatmentAcceptedRepository } from "../../repositories/treatment-accepted.repository.js";
 import { emergentPracticeMapRepository } from "../../repositories/emergent-practice-map.repository.js";
+import { emergentDailyCashupRepository } from "../../repositories/emergent-daily-cashup.repository.js";
+import { emergentMonthlyPlRepository } from "../../repositories/emergent-monthly-pl.repository.js";
 
 const PROVIDER = 'emergent';
 const ENDPOINT = '/api/public/treatments-accepted';
+const CASHUP_ENDPOINT = '/api/public/daily-cashups';
+const MONTHLY_PL_ENDPOINT = '/api/public/monthly-pl';
 
 // Emergent records carry no stable id, so we derive a deterministic external_id
 // from the immutable fields. Re-pulling the same record yields the same key, so
@@ -288,6 +292,33 @@ async function fetchRecords(baseUrl, apiKey, startDate) {
     return Array.isArray(json?.rows) ? json.rows : [];
 }
 
+async function emergentGetJson(url, apiKey) {
+    const res = await fetch(url, { headers: { 'X-API-Key': apiKey, Accept: 'application/json' } });
+    if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`Emergent API ${res.status}: ${body.slice(0, 200)}`);
+    }
+    return res.json();
+}
+
+// Pull daily cash-up sheets in [startDate, endDate] (YYYY-MM-DD).
+export async function fetchCashups(baseUrl, apiKey, startDate, endDate) {
+    const base = baseUrl.replace(/\/+$/, '');
+    const url = `${base}${CASHUP_ENDPOINT}?start_date=${encodeURIComponent(startDate)}`
+        + `&end_date=${encodeURIComponent(endDate)}&limit=1000`;
+    const json = await emergentGetJson(url, apiKey);
+    return Array.isArray(json?.sheets) ? json.sheets : [];
+}
+
+// Pull monthly P&L rows in [startMonth, endMonth] (YYYY-MM-01).
+export async function fetchMonthlyPl(baseUrl, apiKey, startMonth, endMonth) {
+    const base = baseUrl.replace(/\/+$/, '');
+    const url = `${base}${MONTHLY_PL_ENDPOINT}?start_month=${encodeURIComponent(startMonth)}`
+        + `&end_month=${encodeURIComponent(endMonth)}&limit=1000`;
+    const json = await emergentGetJson(url, apiKey);
+    return Array.isArray(json?.months) ? json.months : [];
+}
+
 // Validate a base URL + key by hitting the endpoint once (cheap, today's date).
 // Returns true on 2xx; throws with a readable message on 401/other.
 export async function verifyCredentials(baseUrl, apiKey) {
@@ -337,8 +368,28 @@ export async function syncOrg(orgId, { full = false } = {}) {
             await treatmentAcceptedRepository.upsert(mapRecord(rec, orgId, maps));
             synced += 1;
         }
+
+        const today = new Date().toISOString().slice(0, 10);
+        const startMonth = `${startDate.slice(0, 7)}-01`;
+        const [cashups, plRows] = await Promise.all([
+            fetchCashups(baseUrl, apiKey, startDate, today),
+            fetchMonthlyPl(baseUrl, apiKey, startMonth, `${today.slice(0, 7)}-01`),
+        ]);
+        await emergentPracticeMapRepository.discover(
+            orgId,
+            cashups.map((r) => ({ business_id: r.business_id, business_name: r.business_name })),
+        );
+        for (const sheet of cashups) {
+            const { row, patients } = mapCashup(sheet, orgId, maps);
+            await emergentDailyCashupRepository.upsert(row);
+            for (const p of patients) await treatmentAcceptedRepository.upsert(p);
+        }
+        for (const plRow of plRows) {
+            await emergentMonthlyPlRepository.upsert(mapMonthlyPl(plRow, orgId, maps));
+        }
+
         await integrationRepository.setSyncTime(orgId, PROVIDER);
-        return { synced };
+        return { synced, cashups: cashups.length, monthlyPl: plRows.length };
     } catch (err) {
         await integrationRepository.markFailed(orgId, PROVIDER, err.message).catch(() => {});
         throw err;
