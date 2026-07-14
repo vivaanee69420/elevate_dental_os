@@ -15,11 +15,6 @@ function rate(n: number, d: number): string {
   return `${((n / d) * 100).toFixed(1)}%`;
 }
 
-function roiText(valuePence: number, spendPence: number): string {
-  if (!spendPence) return '—';
-  return `${(valuePence / spendPence).toFixed(1)}×`;
-}
-
 const CHANNELS: Array<{ key: 'google' | 'facebook'; label: string }> = [
   { key: 'google', label: 'Google' },
   { key: 'facebook', label: 'Facebook' },
@@ -75,6 +70,7 @@ function LeadsList({ practiceId, win }: { practiceId?: string; win: { since: str
                       <th className="py-2 pr-3 font-medium">Phone</th>
                       <th className="py-2 pr-3 font-medium">Pipeline</th>
                       <th className="py-2 pr-3 font-medium">Created</th>
+                      <th className="py-2 pr-3 font-medium">Treatment</th>
                       <th className="py-2 pr-3 text-right font-medium">Converted</th>
                     </tr>
                   </thead>
@@ -88,6 +84,7 @@ function LeadsList({ practiceId, win }: { practiceId?: string; win: { since: str
                           <PipelineTag channel={l.channel} pipelineName={l.pipelineName} />
                         </td>
                         <td className="py-2 pr-3 text-slate-600">{fmtDate(l.createdAt)}</td>
+                        <td className="py-2 pr-3 text-slate-600">{l.matchedTreatmentName ?? '—'}</td>
                         <td className="py-2 pr-3 text-right">
                           {l.converted ? (
                             <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[12px] font-medium text-emerald-700">
@@ -134,7 +131,7 @@ export function LeadComparison({
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex items-baseline justify-between">
+      <div className="mb-1 flex items-baseline justify-between">
         <h2 className="text-sm font-semibold text-slate-900">
           <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[11px] text-white">
             3
@@ -143,6 +140,9 @@ export function LeadComparison({
         </h2>
         <span className="text-xs text-slate-400">Matched to accepted treatments by phone/email</span>
       </div>
+      <p className="mb-3 text-xs text-slate-400">
+        Google/Facebook ad leads from GHL pipelines, matched to Emergent conversions by name, email or phone.
+      </p>
 
       <div className="mb-3 flex items-center justify-between gap-3 flex-wrap">
         <span className="text-[13px] text-slate-500">See every individual lead with its channel, pipeline and conversion outcome.</span>
@@ -220,18 +220,24 @@ export function LeadComparison({
 
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {CHANNELS.map((ch) => {
-          const g = data.group[ch.key];
-          const spend = data.spendByChannel[ch.key];
+          const g = data.groupChannels[ch.key];
+          const cpl = g.cplPence == null || g.spendPence === 0 ? '—' : formatPence(g.cplPence);
+          const roi = g.roi == null ? '—' : `${g.roi.toFixed(1)}×`;
           return (
             <div key={`spend-${ch.key}`} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
-              <div className="text-xs uppercase tracking-wide text-slate-500">{ch.label} ad spend (group)</div>
-              <div className="mt-1 flex items-baseline gap-3">
-                <span className="text-lg font-semibold text-slate-900">{formatPence(spend)}</span>
-                <span className="text-[13px] text-slate-500">
-                  CPL {g.leads ? formatPence(Math.round(spend / g.leads)) : '—'}
-                </span>
-                <span className="text-[13px] text-slate-500">ROI {roiText(g.matchedValuePence, spend)}</span>
-              </div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">{ch.label} — group (all practices)</div>
+              <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[13px]">
+                <dt className="text-slate-500">Leads</dt>
+                <dd className="text-right tabular-nums text-slate-900">{formatNumber(g.leads)}</dd>
+                <dt className="text-slate-500">Conversions</dt>
+                <dd className="text-right tabular-nums text-slate-900">{formatNumber(g.conversions)}</dd>
+                <dt className="text-slate-500">Ad spend</dt>
+                <dd className="text-right tabular-nums text-slate-900">{formatPence(g.spendPence)}</dd>
+                <dt className="text-slate-500">Cost/lead</dt>
+                <dd className="text-right tabular-nums text-slate-900">{cpl}</dd>
+                <dt className="text-slate-500">ROI</dt>
+                <dd className="text-right tabular-nums text-slate-900">{roi}</dd>
+              </dl>
             </div>
           );
         })}
