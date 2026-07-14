@@ -6,6 +6,46 @@ Captured 2026-05-20.
 
 ---
 
+## 0. Integration connection gating — hide/prompt when disconnected (added 2026-06-25, for tomorrow)
+
+**Full design spec:** `docs/superpowers/specs/2026-06-25-integration-connection-gating-design.md`
+
+**Problem:** Disconnecting an integration on the Integrations page does not propagate — Dentally/GHL/QuickBooks/Xero screens keep rendering empty/stale with no explanation or reconnect path. `useIntegrations()` (the only per-provider status source) is used **only** on the Integrations page.
+
+**Behaviour (locked):** when an integration is **not connected** (= anything but `active`: revoked/failed/pending/never), the things that depend on it show a **"connect" prompt** (nav + page stay; content replaced with a connect empty-state linking to `/integrations`). App-wide. Shared/multi-source screens stay — only provider-locked cards prompt per-card; whole-screen prompt only if **all** sources are disconnected. Manual/CSV-fed cards are never gated. Nav untouched. Frontend-only + minor backend logging. Also: **add proper error logging.**
+
+**Approach:** declarative gate primitives + targeted application (Approach 1).
+
+### Pending checklist
+
+- [ ] **Primitives**
+  - [ ] `frontend/features/integrations/useProviderStatus.ts` — wraps `useIntegrations()`; `isConnected/anyConnected/hasError/statusOf/labelOf`, `isLoading/isError`
+  - [ ] `frontend/components/integrations/ConnectPrompt.tsx` — not-connected / failed (shows `last_error`) / connecting variants + `compact`
+  - [ ] `frontend/components/integrations/RequiresIntegration.tsx` — `providers[]`, `mode` any/all, loading skeleton (no flash)
+  - [ ] `frontend/lib/log.ts` — shared tagged logger (level + tag + payload)
+- [ ] **Single-source whole-screen gates** (verify each component's real API/query keys before wrapping)
+  - [ ] Dentally/PMS `['dentally','soe']`: appointments, clinicians, treatments, patients, booking, chair, uda, leakage, day, workbench
+  - [ ] GHL `['gohighlevel']`: ghl-dashboard, crm-today, inbox, pipeline, leads, crm-enquiries, crm-reports
+  - [ ] QuickBooks `['quickbooks']`: quickbooks
+  - [ ] Xero `['xero']`: tax
+  - [ ] Verify-then-decide (may be multi-source/manual-fed → per-card or leave): associates, staff, pay, contacts
+- [ ] **Shared per-card prompts**
+  - [ ] cashflow — Open Banking section ("Connect Open Banking" when `!bankConnected`/gocardless inactive)
+  - [ ] marketing — name the missing ad provider (Google/Meta) in the existing empty state + CTA
+  - [ ] dashboard — paid-marketing card → compact ConnectPrompt naming ad providers
+  - [ ] Leave untouched (graceful degrade): business-hub, deep-dive, financial, profit, debt, alerts, ai-insights, board-report, exit-plan, p4g-ai, progress, kpiscorecard
+- [ ] **Error logging**
+  - [ ] Frontend: `useProviderStatus` logs status-query failures; gate logs when blocking on a `failed` provider; ConnectPrompt surfaces `last_error`
+  - [ ] Backend: pino logging on connect-callback failure / sync failure (`markFailed`) / revoke — `{orgId, provider, err}` (lands in Railway log files)
+- [ ] **Integrations page / nav** — confirm management panels stay visible on failed/pending (do NOT apply the hide rule there); nav not removed/disabled
+- [ ] **Verification** — `cd frontend && npm run typecheck && npm run lint && npm run build` green; manual QA matrix (disconnect each provider → single-source screens prompt, shared degrade per-card)
+
+**Open for sign-off:** Sections 3 & 4 (per-card targets + logging/edge cases) are recommended but not explicitly approved in chat. Section 2's screen→provider table partly from inferred endpoints — verify per component first.
+
+**Effort:** ~2.5–3.5 days (~3 sessions): primitives 0.5d · single-source wraps 1d · per-card 0.5d · integrations/nav + logging 0.5d · QA + plan 0.5d.
+
+---
+
 ## 1. Phase 1 — Frontend wiring (mock → real API)
 
 8 of 16 feature slices wired. 7 still mock or partially mock.
