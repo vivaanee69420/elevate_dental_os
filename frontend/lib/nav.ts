@@ -19,6 +19,7 @@ export type NavSection = {
 
 export const NAV: NavSection[] = [
   { label: 'Overview', items: [
+    { id: 'cockpit', label: 'Daily Cockpit', isNew: true },
     { id: 'dashboard', label: 'Command Centre' },
     { id: 'business-hub', label: 'Business Hub', isNew: true },
     { id: 'deep-dive', label: 'Practice Deep Dive', isNew: true },
