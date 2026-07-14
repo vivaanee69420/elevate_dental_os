@@ -86,6 +86,90 @@ export function mapRecord(rec, orgId, maps = null) {
     };
 }
 
+const KNOWN_SOURCES = [
+    'google', 'facebook', 'walk_in', 'friends_family', 'wl_website',
+    'dentist_referral', 'instagram', 'youtube', 'other',
+];
+
+export function cashupExternalId(data) {
+    return `${data.business_id}_${data.date}`;
+}
+
+// Map one daily_cashup payload -> { row (emergent_daily_cashup), patients
+// (treatment_accepted rows via mapRecord) }. Money -> pence. Known source_*
+// keys become typed columns; anything else lands in custom_sources.
+export function mapCashup(data, orgId, maps = null) {
+    const empty = (s) => (s == null || String(s).trim() === '' ? null : String(s));
+    const practiceId = resolvePracticeFromMaps(data.business_id, data.business_name, maps);
+
+    const sourceCols = {
+        source_google: 0, source_facebook: 0, source_walk_in: 0, source_friends_family: 0,
+        source_wl_website: 0, source_dentist_referral: 0, source_instagram: 0,
+        source_youtube: 0, source_other: 0,
+    };
+    const custom_sources = {};
+    for (const [k, v] of Object.entries(data)) {
+        const m = /^source_(.+)$/.exec(k);
+        if (!m) continue;
+        const key = m[1];
+        if (KNOWN_SOURCES.includes(key)) sourceCols[`source_${key}`] = Number(v || 0);
+        else custom_sources[key] = Number(v || 0);
+    }
+
+    const refunds = Array.isArray(data.refunds)
+        ? data.refunds.map((r) => ({
+            amount_pence: poundsToPence(r.amount),
+            reason: r.reason ?? null,
+            patient_name: r.patient_name ?? null,
+        }))
+        : [];
+
+    const row = {
+        organisation_id: orgId,
+        business_id: data.business_id == null ? null : String(data.business_id),
+        business_name: empty(data.business_name),
+        practice_id: practiceId,
+        cashup_date: data.date ?? null,
+        external_id: cashupExternalId(data),
+        treatments_accepted: Number(data.treatments_accepted ?? data.num_treatment_accepted ?? 0),
+        tx_plans_given: Number(data.tx_plans_given || 0),
+        tx_plan_given_value_pence: poundsToPence(data.total_tx_plan_given_value),
+        cash_up_money_taken_pence: poundsToPence(data.cash_up_money_taken),
+        num_bookings: Number(data.num_bookings || 0),
+        num_new_leads: Number(data.num_new_leads || 0),
+        num_follow_ups: Number(data.num_follow_ups || 0),
+        num_attended: Number(data.num_attended || 0),
+        total_chairs: Number(data.total_chairs || 0),
+        chairs_used: Number(data.chairs_used || 0),
+        chair_utilisation: data.chair_utilisation == null ? null : Number(data.chair_utilisation),
+        reviews_collected: Number(data.reviews_collected || 0),
+        before_after_pictures: Number(data.before_after_pictures || 0),
+        video_testimonials: Number(data.video_testimonials || 0),
+        practice_plan_signups: Number(data.practice_plan_signups || 0),
+        total_refunds_pence: poundsToPence(data.total_refunds),
+        ...sourceCols,
+        custom_sources,
+        refunds,
+        appointment_booked_for: empty(data.appointment_booked_for),
+        crm_system_notes: empty(data.crm_system_notes),
+        detail_patient_rows_count: Number(data.detail_patient_rows_count || 0),
+        detail_patient_money_total_pence: poundsToPence(data.detail_patient_money_total),
+        variance_manager_vs_detail: data.variance_manager_vs_detail == null ? null : Number(data.variance_manager_vs_detail),
+        emergent_created_at: data.created_at ?? null,
+        emergent_created_by: data.created_by == null ? null : String(data.created_by),
+        raw: data,
+    };
+
+    const patients = Array.isArray(data.patients)
+        ? data.patients.map((p) => mapRecord(
+            { ...p, business_id: data.business_id, business_name: data.business_name, date: data.date },
+            orgId, maps,
+        ))
+        : [];
+
+    return { row, patients };
+}
+
 // Resolve an Emergent business_name to a practices.id. Emergent uses a short
 // name ("Ashford") while the practice record is the full trading name
 // ("GM Dental & Implant Centre Ashford"), so match by substring both ways
