@@ -175,7 +175,7 @@ function MonthlySection({ data }: { data: CockpitResponse }) {
   const m = data.monthly;
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <SectionHeading n={6} title={`Monthly revenue — ${periodMonthLabel(m.periodMonth)}`} note="Latest calendar month Emergent has sent P&L for." />
+      <SectionHeading n={5} title={`Monthly revenue — ${periodMonthLabel(m.periodMonth)}`} note="Latest calendar month Emergent has sent P&L for." />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
         <Card label="Revenue" value={formatPence(m.revenuePence)} />
         <Card label="Net profit" value={formatPence(m.netProfitPence)} />
