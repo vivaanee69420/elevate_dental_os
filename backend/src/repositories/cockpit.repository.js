@@ -7,12 +7,14 @@ import * as supabase_1 from "../lib/supabase.js";
 export const cockpitRepository = {
     // Flattens each GHL integration_accounts row's config.pipelines into
     // { pipeline_id, name, practice_id, practice_label }.
-    async pipelineChannelMap(orgId) {
-        const { data, error } = await supabase_1.serviceClient
+    async pipelineChannelMap(orgId, practiceId) {
+        let q = supabase_1.serviceClient
             .from('integration_accounts')
             .select('practice_id, label, config')
             .eq('organisation_id', orgId)
             .eq('provider', 'gohighlevel');
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        const { data, error } = await q;
         if (error) throw new Error(error.message);
         const rows = data || [];
         const flat = [];
@@ -31,28 +33,32 @@ export const cockpitRepository = {
     },
 
     // leads join contacts, windowed on created_at, only leads attributed to a
-    // GHL pipeline.
-    async adLeadsInWindow(orgId, sinceISO, untilISO) {
-        const { data, error } = await supabase_1.serviceClient
+    // GHL pipeline. Optional practiceId restricts to that practice (l.practice_id).
+    async adLeadsInWindow(orgId, sinceISO, untilISO, practiceId) {
+        let q = supabase_1.serviceClient
             .from('leads')
             .select('id, ghl_pipeline_id, practice_id, integration_account_id, created_at, contacts(phone,email)')
             .eq('organisation_id', orgId)
             .not('ghl_pipeline_id', 'is', null)
             .gte('created_at', sinceISO)
             .lt('created_at', untilISO);
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        const { data, error } = await q;
         if (error) throw new Error(error.message);
         return data || [];
     },
 
     // Emergent-accepted conversions in the window (accepted_date is a DATE).
-    async acceptedContactsInWindow(orgId, sinceDate, untilDate) {
-        const { data, error } = await supabase_1.serviceClient
+    async acceptedContactsInWindow(orgId, sinceDate, untilDate, practiceId) {
+        let q = supabase_1.serviceClient
             .from('treatment_accepted')
             .select('practice_id, value_pence, phone, email, raw, accepted_date')
             .eq('organisation_id', orgId)
             .eq('status', 'accepted')
             .gte('accepted_date', sinceDate)
             .lt('accepted_date', untilDate);
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        const { data, error } = await q;
         if (error) throw new Error(error.message);
         return data || [];
     },
@@ -78,7 +84,7 @@ export const cockpitRepository = {
     // [since, until) (half-open, cashup_date is a DATE). Aggregation (sum +
     // group-by practice/business) happens in cockpitService, matching the
     // repo-returns-rows / service-aggregates idiom used elsewhere in this file.
-    async cashupRollup(orgId, since, until) {
+    async cashupRollup(orgId, since, until, practiceId) {
         let q = supabase_1.serviceClient
             .from('emergent_daily_cashup')
             .select('practice_id, business_name, cashup_date, cash_up_money_taken_pence, treatments_accepted, ' +
@@ -86,19 +92,28 @@ export const cockpitRepository = {
             .eq('organisation_id', orgId);
         if (since) q = q.gte('cashup_date', since);
         if (until) q = q.lt('cashup_date', until);
+        if (practiceId) q = q.eq('practice_id', practiceId);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
         return data || [];
     },
 
     // Daily Command Cockpit — emergent_monthly_pl rows for one calendar month
-    // (monthStart is the exact period_month DATE, e.g. '2026-07-01').
-    async monthlyPl(orgId, monthStart) {
-        const { data, error } = await supabase_1.serviceClient
+    // (monthStart is the exact period_month DATE, e.g. '2026-07-01'). Includes
+    // the typed cost/opex line columns + custom_lines/line_notes for the
+    // cockpit's monthly P&L line-item breakdown.
+    async monthlyPl(orgId, monthStart, practiceId) {
+        let q = supabase_1.serviceClient
             .from('emergent_monthly_pl')
-            .select('practice_id, business_name, period_month, revenue_pence, net_profit_pence')
+            .select('practice_id, business_name, period_month, revenue_pence, net_profit_pence, ' +
+                'principal_fees_pence, hygienist_therapist_pence, lab_fees_pence, materials_pence, sedation_services_pence, ' +
+                'advertising_marketing_pence, bank_charges_pence, business_rates_rent_pence, salaries_staff_cost_pence, ' +
+                'telephone_wifi_pence, utilities_pence, insurance_pence, management_fees_pence, subscriptions_pence, ' +
+                'it_expenses_pence, card_machine_charges_pence, custom_lines, line_notes')
             .eq('organisation_id', orgId)
             .eq('period_month', monthStart);
+        if (practiceId) q = q.eq('practice_id', practiceId);
+        const { data, error } = await q;
         if (error) throw new Error(error.message);
         return data || [];
     },
@@ -110,7 +125,11 @@ export const cockpitRepository = {
     async latestMonthlyPl(orgId) {
         const { data, error } = await supabase_1.serviceClient
             .from('emergent_monthly_pl')
-            .select('practice_id, business_name, period_month, revenue_pence, net_profit_pence')
+            .select('practice_id, business_name, period_month, revenue_pence, net_profit_pence, ' +
+                'principal_fees_pence, hygienist_therapist_pence, lab_fees_pence, materials_pence, sedation_services_pence, ' +
+                'advertising_marketing_pence, bank_charges_pence, business_rates_rent_pence, salaries_staff_cost_pence, ' +
+                'telephone_wifi_pence, utilities_pence, insurance_pence, management_fees_pence, subscriptions_pence, ' +
+                'it_expenses_pence, card_machine_charges_pence, custom_lines, line_notes')
             .eq('organisation_id', orgId)
             .order('period_month', { ascending: false })
             .limit(50);
