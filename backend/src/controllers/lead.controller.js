@@ -11,7 +11,8 @@ export const leadController = {
         res.json(await lead_service_1.leadService.funnel(req.user.organisation_id));
     },
     async pipelines(req, res) {
-        res.json(await lead_service_1.leadService.pipelines(req.user.organisation_id));
+        const q = lead_model_1.pipelinesQuerySchema.parse(req.query);
+        res.json(await lead_service_1.leadService.pipelines(req.user.organisation_id, q));
     },
     async getById(req, res) {
         const { id } = idParamSchema.parse(req.params);

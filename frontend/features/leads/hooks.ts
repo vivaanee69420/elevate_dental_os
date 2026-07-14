@@ -10,10 +10,10 @@ export function useLeads(filters: LeadsListFilters = {}) {
 }
 
 // GHL pipeline definitions for the dynamic Pipeline screen + selector.
-export function usePipelines() {
+export function usePipelines(accountId?: string | null) {
   return useQuery({
-    queryKey: ['lead-pipelines'],
-    queryFn: listPipelines,
+    queryKey: ['lead-pipelines', accountId ?? null],
+    queryFn: () => listPipelines(accountId),
     staleTime: 60_000,
   });
 }

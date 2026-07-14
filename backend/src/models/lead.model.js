@@ -19,6 +19,10 @@ export const leadListQuerySchema = zod_1.z.object({
     ghl_pipeline_id: zod_1.z.string().optional(),
     limit: zod_1.z.coerce.number().default(100),
 });
+// Pipeline definitions are per GHL Location — scope them to one subaccount.
+export const pipelinesQuerySchema = zod_1.z.object({
+    integration_account_id: zod_1.z.string().uuid().optional(),
+});
 export const leadCreateSchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),
     contact: zod_1.z.object({
