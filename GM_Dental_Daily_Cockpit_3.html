@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GM Dental — Daily Command Cockpit</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--line:#2a3340;--ink:#e6edf3;--mut:#93a1b0;--dim:#6b7a8d;
+    --teal:#2dd4bf;--teal-d:#0f766e;--amber:#f5b544;--red:#f87171;--green:#4ade80;--violet:#a78bfa;--blue:#60a5fa;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.5;font-size:15px}
+  .wrap{max-width:1100px;margin:0 auto;padding:26px 20px 80px}
+  h1{font-size:26px;font-weight:800;margin:6px 0 2px;letter-spacing:-.02em}
+  .eyebrow{color:var(--teal);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:11px}
+  .datebar{color:var(--mut);font-size:14px;margin-top:4px}
+  .datebar b{color:var(--ink)}
+  .sample{display:inline-block;margin-left:8px;font-size:11px;color:var(--amber);border:1px solid #5c4a1f;background:#3a3016;border-radius:20px;padding:2px 9px}
+  section{margin-top:28px}
+  .secnum{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;background:var(--teal-d);color:#eafffb;font-size:11px;font-weight:800;margin-right:8px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);font-weight:700;margin:0 0 12px;border-bottom:1px solid var(--line);padding-bottom:8px;display:flex;align-items:center}
+  .band{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:760px){.band{grid-template-columns:1fr}}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .tile .l{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  .tile .n{font-size:28px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em;margin-top:3px}
+  .tile .s{font-size:12px;color:var(--mut);margin-top:2px}
+  .hero{background:linear-gradient(135deg,#10201e,#12181f);border-color:var(--teal-d)}
+  .prog{height:8px;background:#0c1116;border-radius:6px;margin-top:10px;overflow:hidden;border:1px solid var(--line)}
+  .prog > i{display:block;height:100%;background:linear-gradient(90deg,var(--teal),var(--green))}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+  tr.total td{font-weight:700;background:#132019}
+  tr:last-child td{border-bottom:none}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .tag-ok{background:#122b1f;color:var(--green);border:1px solid #1c4a34}
+  .tag-warn{background:#3a2c16;color:var(--amber);border:1px solid #5c451f}
+  .tag-above{background:#122b1f;color:var(--green);border:1px solid #1c4a34}
+  .tag-below{background:#3a1d1d;color:var(--red);border:1px solid #5b2a2a}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px 4px;overflow:hidden}
+  .note{font-size:12px;color:var(--dim);margin-top:8px;font-style:italic}
+  .lev table td{font-size:13px}
+  .lev{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 4px}
+  .foot{margin-top:34px;color:var(--dim);font-size:12px;border-top:1px solid var(--line);padding-top:16px}
+  .foot b{color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">GM Dental Group — Operations</div>
+  <h1>Daily Command Cockpit</h1>
+  <div class="datebar">View period: <b>13 Jul 2026 → 13 Jul 2026</b> (1 day) · Owner sends by 09:30 <span class="sample">SAMPLE DATA — mirrors GM_Dental_Daily_Dashboard.xlsx</span></div>
+  <div class="note" style="margin-top:6px">The From/To range at the top of the Dashboard tab is editable — set it to a day, a week, a month, any window — and every section below (except Monthly Revenue, which always tracks the real calendar month) recalculates automatically. Targets scale with the number of days you pick.</div>
+
+  <section>
+    <h2><span class="secnum">1</span>Revenue — vs active target (set on the Targets tab)</h2>
+    <div class="band">
+      <div class="tile hero">
+        <div class="l">Revenue in period</div>
+        <div class="n teal">£71,000</div>
+        <div class="prog"><i style="width:71%"></i></div>
+      </div>
+      <div class="tile"><div class="l">Target for period</div><div class="n">£100,000</div><div class="s">Active £/day × days in period</div></div>
+      <div class="tile"><div class="l">% to target</div><div class="n amber">71.0%</div><div class="s">£29,000 behind</div></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+    <table>
+      <tr><th>Business</th><th class="n">Revenue collected £</th><th class="n">Target for period £</th><th class="n">% to target</th><th>Status</th></tr>
+      <tr><td>Fixed Teeth Solutions</td><td class="n">£12,000</td><td class="n">£12,500</td><td class="n">96.0%</td><td><span class="tag tag-below">Below target</span></td></tr>
+      <tr><td>GM Dental (4 practices)</td><td class="n">£26,500</td><td class="n">£32,500</td><td class="n">81.5%</td><td><span class="tag tag-below">Below target</span></td></tr>
+      <tr><td>Warwick Lodge D&amp;I Centre</td><td class="n">£9,500</td><td class="n">£10,000</td><td class="n">95.0%</td><td><span class="tag tag-below">Below target</span></td></tr>
+      <tr><td>GM Dental Lab</td><td class="n">£8,000</td><td class="n">£12,500</td><td class="n">64.0%</td><td><span class="tag tag-below">Below target</span></td></tr>
+      <tr><td>Plan for Growth</td><td class="n">£15,000</td><td class="n">£32,500</td><td class="n">46.2%</td><td><span class="tag tag-below">Below target</span></td></tr>
+      <tr class="total"><td>GROUP TOTAL</td><td class="n">£71,000</td><td class="n">£100,000</td><td class="n">71.0%</td><td></td></tr>
+    </table>
+    </div>
+    <div class="note">Targets live in the Targets tab — flip one cell there between £100k/day and £200k/day (or edit any business/practice figure) and every number here re-points instantly.</div>
+  </section>
+
+  <section>
+    <h2><span class="secnum">2</span>Treatment &amp; Close — selected period (+ new vs existing patients)</h2>
+    <div class="card">
+    <table>
+      <tr><th>Business</th><th class="n">Treatment value £</th><th class="n">Closes</th><th class="n">New patients seen</th><th class="n">Existing patient revenue £</th></tr>
+      <tr><td>Fixed Teeth Solutions</td><td class="n">£23,994</td><td class="n">2</td><td class="n">6</td><td class="n">£0</td></tr>
+      <tr><td>GM Dental (4 practices)</td><td class="n">£36,000</td><td class="n">26</td><td class="n">24</td><td class="n">£6,700</td></tr>
+      <tr><td>Warwick Lodge D&amp;I Centre</td><td class="n">£13,000</td><td class="n">10</td><td class="n">9</td><td class="n">£2,400</td></tr>
+      <tr><td>GM Dental Lab</td><td class="n">£12,000</td><td class="n">3</td><td class="n">0</td><td class="n">£0</td></tr>
+      <tr><td>Plan for Growth</td><td class="n">£24,000</td><td class="n">3</td><td class="n">0</td><td class="n">£0</td></tr>
+      <tr class="total"><td>GROUP TOTAL</td><td class="n">£108,994</td><td class="n">44</td><td class="n">39</td><td class="n">£9,100</td></tr>
+    </table>
+    </div>
+    <div class="note">"New patients seen" = new-patient exams attended (footfall). "Existing patient revenue" = revenue from recall/hygiene/existing-patient treatment, separate from new-case acquisition. FTS, Lab and Plan for Growth run on new cases only, so these read £0/0 by design.</div>
+  </section>
+
+  <section>
+    <h2><span class="secnum">3</span>ROI — leads &amp; ad spend (on cash collected, and on treatment closed)</h2>
+    <div class="card">
+    <table>
+      <tr><th>Business</th><th class="n">Leads</th><th class="n">Ad spend £</th><th class="n">Revenue £</th><th class="n">Cost/Lead £</th><th class="n">ROI (Rev÷Spend)</th><th class="n">Treatment closed £</th><th class="n">ROI (Treatment÷Spend)</th></tr>
+      <tr><td>Fixed Teeth Solutions</td><td class="n">18</td><td class="n">£750</td><td class="n">£12,000</td><td class="n">£41.67</td><td class="n">16.0×</td><td class="n">£23,994</td><td class="n">32.0×</td></tr>
+      <tr><td>GM Dental (4 practices)</td><td class="n">68</td><td class="n">£880</td><td class="n">£26,500</td><td class="n">£12.94</td><td class="n">30.1×</td><td class="n">£36,000</td><td class="n">40.9×</td></tr>
+      <tr><td>Warwick Lodge D&amp;I Centre</td><td class="n">24</td><td class="n">£290</td><td class="n">£9,500</td><td class="n">£12.08</td><td class="n">32.8×</td><td class="n">£13,000</td><td class="n">44.8×</td></tr>
+      <tr><td>GM Dental Lab</td><td class="n">6</td><td class="n">£50</td><td class="n">£8,000</td><td class="n">£8.33</td><td class="n">160.0×</td><td class="n">£12,000</td><td class="n">240.0×</td></tr>
+      <tr><td>Plan for Growth</td><td class="n">40</td><td class="n">£700</td><td class="n">£15,000</td><td class="n">£17.50</td><td class="n">21.4×</td><td class="n">£24,000</td><td class="n">34.3×</td></tr>
+      <tr class="total"><td>GROUP TOTAL</td><td class="n">156</td><td class="n">£2,670</td><td class="n">£71,000</td><td class="n">£17.12</td><td class="n">26.6×</td><td class="n">£108,994</td><td class="n">40.8×</td></tr>
+    </table>
+    </div>
+    <div class="note">ROI (Rev÷Spend) uses cash collected — what's actually banked. ROI (Treatment÷Spend) uses treatment value closed — the pipeline value before installments land, which is what "ROI after the treatments close" means: it credits the sale the moment it's accepted, not when the last payment clears. GM Dental Lab's multiples are inflated by near-zero spend — read as "free channel performing," not literal ad efficiency.</div>
+  </section>
+
+  <section>
+    <h2><span class="secnum">4</span>Cash Up — till reconciliation</h2>
+    <div class="card">
+    <table>
+      <tr><th>Business</th><th class="n">Revenue collected £</th><th class="n">Cash up (till) £</th><th class="n">Variance £</th><th>Status</th></tr>
+      <tr><td>Fixed Teeth Solutions</td><td class="n">£12,000</td><td class="n">£11,950</td><td class="n neg">−£50</td><td><span class="tag tag-ok">OK</span></td></tr>
+      <tr><td>GM Dental (4 practices)</td><td class="n">£26,500</td><td class="n">£26,430</td><td class="n neg">−£70</td><td><span class="tag tag-warn">⚠ recheck</span></td></tr>
+      <tr><td>Warwick Lodge D&amp;I Centre</td><td class="n">£9,500</td><td class="n">£9,500</td><td class="n">£0</td><td><span class="tag tag-ok">OK</span></td></tr>
+      <tr><td>GM Dental Lab</td><td class="n">£8,000</td><td class="n">£8,000</td><td class="n">£0</td><td><span class="tag tag-ok">OK</span></td></tr>
+      <tr><td>Plan for Growth</td><td class="n">£15,000</td><td class="n">£15,000</td><td class="n">£0</td><td><span class="tag tag-ok">OK</span></td></tr>
+      <tr class="total"><td>GROUP TOTAL</td><td class="n">£71,000</td><td class="n">£70,880</td><td class="n neg">−£120</td><td></td></tr>
+    </table>
+    </div>
+    <div class="note">Flags any business where the till/terminal total differs from system revenue by more than £50 — catches refund errors, mis-posting or theft the same day, not at month-end.</div>
+  </section>
+
+  <section>
+    <h2><span class="secnum">5</span>Profit vs Breakeven — selected period (5 clinics)</h2>
+    <div class="card">
+    <table>
+      <tr><th>Clinic</th><th class="n">Revenue £</th><th class="n">Breakeven £ (period)</th><th class="n">Profit £</th><th class="n">Profit %</th><th>Status</th></tr>
+      <tr><td>Ashford</td><td class="n">£8,500</td><td class="n">£2,465</td><td class="n pos">£3,794</td><td class="n pos">44.6%</td><td><span class="tag tag-above">Above breakeven</span></td></tr>
+      <tr><td>Rochester</td><td class="n">£8,000</td><td class="n">£2,465</td><td class="n pos">£3,480</td><td class="n pos">43.5%</td><td><span class="tag tag-above">Above breakeven</span></td></tr>
+      <tr><td>Barnet</td><td class="n">£7,000</td><td class="n">£2,465</td><td class="n pos">£2,851</td><td class="n pos">40.7%</td><td><span class="tag tag-above">Above breakeven</span></td></tr>
+      <tr><td>Bexleyheath</td><td class="n">£3,000</td><td class="n">£2,465</td><td class="n pos">£336</td><td class="n pos">11.2%</td><td><span class="tag tag-above">Above breakeven</span></td></tr>
+      <tr><td>Warwick Lodge D&amp;I Centre</td><td class="n">£9,500</td><td class="n">£2,465</td><td class="n pos">£4,423</td><td class="n pos">46.6%</td><td><span class="tag tag-above">Above breakeven</span></td></tr>
+      <tr class="total"><td>5 CLINICS TOTAL</td><td class="n">£36,000</td><td class="n">—</td><td class="n pos">£14,885</td><td class="n pos">41.3%</td><td></td></tr>
+    </table>
+    </div>
+    <div class="note">Breakeven assumption: £31,000 fixed costs/month per clinic; breakeven revenue £81k–£86k/month (mid £83.5k) → implied contribution margin 62.9%, fixed cost £1,550/day. Breakeven £/day = fixed cost/day ÷ contribution margin. FTS, the Lab and Plan for Growth run separate margin models, not shown here.</div>
+  </section>
+
+  <section>
+    <h2><span class="secnum">6</span>Monthly revenue — this calendar month to date</h2>
+    <div class="note" style="margin-top:0">This section always tracks the real calendar month — it ignores whatever From/To window you've set in Section 1 above.</div>
+    <div class="band" style="margin-top:10px">
+      <div class="tile hero">
+        <div class="l">Revenue MTD (1–14 Jul)</div>
+        <div class="n teal">£71,000</div>
+        <div class="prog"><i style="width:3.55%"></i></div>
+      </div>
+      <div class="tile"><div class="l">Monthly target (active)</div><div class="n">£2,000,000</div><div class="s">Targets tab Active £/day × 20</div></div>
+      <div class="tile"><div class="l">% to monthly target</div><div class="n amber">3.6%</div><div class="s">14 days elapsed, 17 remaining</div></div>
+    </div>
+    <div class="band" style="margin-top:12px">
+      <div class="tile"><div class="l">Projected full month (run-rate)</div><div class="n">£157,214</div><div class="s">extrapolated from days entered so far</div></div>
+      <div class="tile"><div class="l">Clinic profit MTD (5 clinics)</div><div class="n neg">−£47,365</div><div class="s">−131.6% of clinic revenue MTD</div></div>
+      <div class="tile"><div class="l">Days elapsed / remaining</div><div class="n">14 / 17</div><div class="s">of July 2026</div></div>
+    </div>
+    <div class="note">The scary-looking MTD profit and run-rate here are a demo artifact — only ONE sample day is loaded into the tracker. As real days are logged daily, MTD accumulates properly and this settles to the true monthly pace. Don't read today's demo MTD as a real forecast.</div>
+  </section>
+
+  <section>
+    <h2>Continuous improvement — watch → lever</h2>
+    <div class="lev">
+    <table>
+      <tr><th>Metric</th><th>Healthy</th><th>If it drifts — pull this lever</th></tr>
+      <tr><td>CPL</td><td>≤£50 / ≤£250 arch</td><td>Refresh AI creative daily (HeyGen/Manus), kill losing ad sets, tighten audiences</td></tr>
+      <tr><td>Lead → Booking</td><td>≥45%</td><td>Speed-to-lead &lt;5 min, missed-call-text-back, AI SMS/WhatsApp nurture</td></tr>
+      <tr><td>Booking → Conversion (TCO)</td><td>≥55% → 75%</td><td>TCO scripts, video consults, finance every time, same-day plans, follow-up</td></tr>
+      <tr><td>ROI</td><td>≥5×</td><td>Move budget to best-ROI practice/channel daily; scale winners, cut &lt;3×</td></tr>
+      <tr><td>Revenue vs £/day</td><td>≥100%</td><td>Raise case value (implant/full-arch), rebook no-shows, chase open plans</td></tr>
+      <tr><td>Profit vs Breakeven</td><td>Above, every day</td><td>Cut variable cost first (case mix, associate %, lab spend), then trim non-converting marketing</td></tr>
+      <tr><td>Cash up variance</td><td>Within £50</td><td>Recheck till/terminal reconciliation same day — small daily gaps compound if ignored</td></tr>
+    </table>
+    </div>
+  </section>
+
+  <div class="foot">
+    <b>One table, one owner, one cutoff.</b> Source owners drop yesterday's 8 numbers per business into the tracker by 09:00 (GHL → leads/bookings/conversions/treatment value · Google &amp; Meta Ads → spend · QuickBooks/PMS → revenue · till/terminal → Cash up). Dashboard Owner sends this view by 09:30. Everything else — CPL, ROI, breakeven, profit — auto-calculates. Companion file: GM_Dental_Daily_Dashboard.xlsx (Breakeven_Profit tab holds the full assumptions). Numbers shown are illustrative sample data.
+  </div>
+</div>
+</body>
+</html>
