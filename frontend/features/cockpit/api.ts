@@ -58,6 +58,18 @@ export interface LeadRoiGroupStats {
   spendPence: number;
 }
 
+// Org-wide, per-channel cost/lead + ROI — ad spend isn't practice-attributable,
+// so these live at group level only, always org-wide (even when scoped to a
+// practice). Null-guarded: cplPence null when leads=0, roi null when spend=0.
+export interface ChannelRoi {
+  leads: number;
+  conversions: number;
+  matchedValuePence: number;
+  spendPence: number;
+  cplPence: number | null;
+  roi: number | null;
+}
+
 export interface LeadRoi {
   channels: LeadRoiChannelRow[];
   group: {
@@ -67,6 +79,10 @@ export interface LeadRoi {
   spendByChannel: {
     google: number;
     facebook: number;
+  };
+  groupChannels: {
+    google: ChannelRoi;
+    facebook: ChannelRoi;
   };
 }
 
@@ -159,6 +175,9 @@ export interface CockpitLeadLine {
   phone: string | null;
   converted: boolean;
   matchedValuePence: number;
+  matchedTreatmentName: string | null;
+  matchedPatientName: string | null;
+  matchedAcceptedDate: string | null;
 }
 
 export interface CockpitLeadsDetail {
