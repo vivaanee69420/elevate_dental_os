@@ -14,10 +14,12 @@ import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { KpiTile } from '@/components/ui/KpiTile';
 import { Panel, PanelHead, th, td } from '@/features/intelligence/components/os-ui';
 import { formatPence, formatNumber, formatDate } from '@/lib/format';
-import { useCockpit, useCockpitTreatments, useCockpitCashupDays } from '../hooks';
+import { useCockpit, useCockpitTreatments, useCockpitCashupDays, useCockpitLeads } from '../hooks';
 import { LeadComparison } from './LeadComparison';
+import { PipelineTag } from './PipelineTag';
+import { LeadsTable, dedupeByPerson, CHANNEL_ORDER } from './LeadsTable';
 import { LeadPerformanceChart, RevenueTrendChart } from './CockpitCharts';
-import type { CockpitResponse, PLLine, PLLineNote } from '../api';
+import type { CockpitResponse, PLLine, PLLineNote, LeadChannel } from '../api';
 
 function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -137,42 +139,194 @@ function RevenueSection({
   );
 }
 
-// Per-practice breakdown for a single Treatment-section metric (Tx plans
-// given, New leads, Attended). Sourced entirely from the in-payload
-// `treatment.byPractice[]` — no extra fetch.
-function TreatmentMetricBreakdown({
-  rows,
-  metricLabel,
-  render,
+// Day-by-day breakdown behind a manager-keyed Emergent metric (Tx plans given,
+// New leads, Attended).
+//
+// This is as deep as these numbers go, by construction: the Emergent cash-up
+// sends a COUNT PER DAY, with no per-plan or per-lead records behind it. The
+// old drill-down re-printed the same single total as a one-row "by practice"
+// table, which looked broken — a day list is the real detail that exists.
+function EmergentDailyBreakdown({
+  metric,
+  title,
+  sub,
+  practiceId,
+  win,
+  byPractice,
+  footer,
 }: {
-  rows: CockpitResponse['treatment']['byPractice'];
-  metricLabel: string;
-  render: (p: CockpitResponse['treatment']['byPractice'][number]) => string;
+  metric: 'txPlansGiven' | 'newLeads' | 'attended';
+  title: string;
+  sub: string;
+  practiceId?: string;
+  win: { since: string; until: string };
+  byPractice: CockpitResponse['treatment']['byPractice'];
+  footer?: React.ReactNode;
 }) {
+  const { data, isLoading, isError } = useCockpitCashupDays(true, {
+    since: win.since,
+    until: win.until,
+    practiceId,
+    limit: 500,
+  });
+
+  const showValue = metric === 'txPlansGiven';
+  // Only days that actually carry the metric — a day the manager keyed no
+  // plans on is noise in a "where did the 42 come from" list.
+  const days = (data?.lines ?? []).filter((l) => l[metric] > 0).sort((a, b) => (a.cashupDate < b.cashupDate ? 1 : -1));
+
   return (
     <Panel>
-      <PanelHead title={`${metricLabel} by practice`} sub="Sourced from this window's treatment and close rollup." />
-      {rows.length === 0 ? (
-        <p className="text-sm text-ink-muted">No practice data in this window.</p>
-      ) : (
-        <div className="overflow-x-auto">
+      <PanelHead title={title} sub={sub} />
+
+      {byPractice.length > 1 && (
+        <div className="mb-3 overflow-x-auto">
           <table className="w-full border-collapse" style={{ minWidth: 360 }}>
             <thead>
               <tr className="border-b border-border">
                 <th className={`${th} text-left`}>Practice</th>
-                <th className={`${th} text-right`}>{metricLabel}</th>
+                <th className={`${th} text-right`}>Total</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((p) => (
+              {byPractice.map((p) => (
                 <tr key={p.practiceId ?? p.name ?? 'unmapped'} className="border-b border-border last:border-0">
                   <td className={td}>{p.name ?? 'Unmapped practice'}</td>
-                  <td className={`${td} text-right tabular-nums`}>{render(p)}</td>
+                  <td className={`${td} text-right tabular-nums`}>{formatNumber(p[metric])}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {isLoading && <p className="text-sm text-ink-muted">Loading days…</p>}
+      {isError && <p className="text-sm text-danger">Couldn&rsquo;t load the daily breakdown.</p>}
+      {!isLoading && !isError && days.length === 0 && (
+        <p className="text-sm text-ink-muted">No day in this window has a figure keyed in for this metric.</p>
+      )}
+
+      {days.length > 0 && (
+        <div className="overflow-x-auto" style={{ maxHeight: 420 }}>
+          <table className="w-full border-collapse" style={{ minWidth: 480 }}>
+            <thead>
+              <tr className="border-b border-border">
+                <th className={`${th} text-left`}>Date</th>
+                <th className={`${th} text-left`}>Practice</th>
+                <th className={`${th} text-right`}>{title}</th>
+                {showValue && <th className={`${th} text-right`}>Value £</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {days.map((l, i) => (
+                <tr key={`${l.cashupDate}-${l.practiceName ?? i}`} className="border-b border-border last:border-0">
+                  <td className={`${td} whitespace-nowrap`}>{fmtDay(l.cashupDate)}</td>
+                  <td className={td}>{l.practiceName ?? '—'}</td>
+                  <td className={`${td} text-right tabular-nums`}>{formatNumber(l[metric])}</td>
+                  {showValue && (
+                    <td className={`${td} text-right tabular-nums`}>
+                      {l.txPlanValuePence > 0 ? formatPence(l.txPlanValuePence) : <span className="text-ink-muted">not sent</span>}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {footer}
+    </Panel>
+  );
+}
+
+// "New leads" is a number the practice manager types into the Emergent cash-up —
+// it has no records of its own. But the people behind it usually DO exist, in
+// the GoHighLevel pipelines, over the same window. So rather than showing a bare
+// count, look them up and show each one tagged with the pipeline it came in on.
+//
+// The two counts measure different things (Emergent's tally includes phone calls,
+// walk-ins and referrals; GoHighLevel only sees what came through a pipeline), so
+// they are reconciled openly rather than forced to agree.
+function PipelineLeadsForWindow({
+  keyedIn,
+  practiceId,
+  win,
+}: {
+  keyedIn: number;
+  practiceId?: string;
+  win: { since: string; until: string };
+}) {
+  const { data, isLoading, isError } = useCockpitLeads(true, {
+    since: win.since,
+    until: win.until,
+    practiceId,
+    limit: 500,
+  });
+
+  const rows = dedupeByPerson(data?.lines ?? [], false); // one row per person, across all channels
+  const byChannel = new Map<LeadChannel, number>();
+  for (const r of rows) byChannel.set(r.channel, (byChannel.get(r.channel) ?? 0) + 1);
+  // The gap runs both ways, and both directions are worth saying out loud.
+  const untracked = Math.max(0, keyedIn - rows.length);
+  const unkeyed = Math.max(0, rows.length - keyedIn);
+
+  return (
+    <Panel>
+      <PanelHead
+        title="The same leads, found in GoHighLevel"
+        sub="Every person who came in through a GoHighLevel pipeline over this window, tagged with the pipeline they arrived on. This is where the leads behind the keyed-in number actually live."
+      />
+
+      {isLoading && <p className="text-sm text-ink-muted">Looking these leads up in GoHighLevel…</p>}
+      {isError && <p className="text-sm text-danger">Couldn&rsquo;t load the pipeline leads.</p>}
+
+      {!isLoading && !isError && (
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-border bg-surface-muted/50 p-3 text-[13px]">
+            <span>
+              <span className="text-ink-muted">Keyed into Emergent: </span>
+              <strong className="tabular-nums text-ink">{formatNumber(keyedIn)}</strong>
+            </span>
+            <span>
+              <span className="text-ink-muted">Found in GoHighLevel pipelines: </span>
+              <strong className="tabular-nums text-ink">{formatNumber(rows.length)}</strong>
+            </span>
+            {untracked > 0 ? (
+              <span className="text-ink-muted">
+                {formatNumber(untracked)} of the keyed-in leads have no pipeline record — phone calls, walk-ins and
+                referrals never reach GoHighLevel.
+              </span>
+            ) : null}
+            {unkeyed > 0 ? (
+              <span className="text-ink-muted">
+                GoHighLevel has {formatNumber(unkeyed)} more than were keyed in — the daily tally is under-recording
+                what the pipelines actually brought in.
+              </span>
+            ) : null}
+          </div>
+
+          {rows.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              {CHANNEL_ORDER.filter((ch) => byChannel.has(ch)).map((ch) => (
+                <span key={ch} className="flex items-center gap-1">
+                  <PipelineTag channel={ch} />
+                  <span className="text-xs text-ink-muted">{formatNumber(byChannel.get(ch)!)}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {rows.length === 0 ? (
+            <p className="text-sm text-ink-muted">
+              No GoHighLevel pipeline leads at all in this window for this practice — so every one of the{' '}
+              {formatNumber(keyedIn)} keyed-in leads came in some other way, or the practice&rsquo;s GoHighLevel
+              subaccount isn&rsquo;t linked under System &gt; Integrations.
+            </p>
+          ) : (
+            <LeadsTable rows={rows} />
+          )}
+        </>
       )}
     </Panel>
   );
@@ -200,38 +354,49 @@ function TreatmentSection({
     limit: 100,
   });
 
+  // Emergent sends a plan COUNT every day but only sometimes a plan value —
+  // for some practices it never does. Rendering that as "£0.00" reads as "we
+  // proposed 42 plans worth nothing"; it means "Emergent didn't tell us".
+  const txValueMissing = t.txPlansGiven > 0 && t.txPlanValuePence === 0;
+
   return (
     <>
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <SectionHeading
           n={2}
           title="Treatment &amp; close"
-          note="Treatments a patient accepted (Emergent), and the plans proposed."
+          note="What the practice proposed and what patients accepted. Keyed into Emergent by the practice each day, except Accepted, which comes from Emergent's treatment feed."
         />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <KpiTile
             label="Accepted"
             value={formatNumber(t.acceptedCount)}
             delta={formatPence(t.acceptedValuePence)}
+            info="Treatments a patient said yes to, from Emergent's treatment feed — one record per treatment, so this is the one number here that can be opened patient by patient. Click to see them, including which ad pipeline each patient first came in on."
             onClick={() => onToggle('treatment')}
             active={active}
           />
           <KpiTile
             label="Tx plans given"
             value={formatNumber(t.txPlansGiven)}
-            delta={formatPence(t.txPlanValuePence)}
+            delta={txValueMissing ? 'Value not sent by Emergent' : formatPence(t.txPlanValuePence)}
+            info="Treatment plans presented to patients — the number the practice manager keys into the Emergent cash-up at the end of each day. Emergent sends a count per day and no per-plan records, so the deepest this can go is day by day. Some practices never key the plan value, which is why the value can be blank while the count is not."
             onClick={() => onToggle('txPlans')}
             active={drill === 'txPlans'}
           />
           <KpiTile
             label="New leads"
             value={formatNumber(t.newLeads)}
+            delta="Keyed in — click to see who they are"
+            info="The practice manager's own daily tally of new enquiries, typed into the Emergent cash-up. The number itself has no records behind it, but the people usually do — click through and we look them up in the GoHighLevel pipelines for the same window and show each one tagged with the pipeline it came in on. Emergent's tally also counts phone calls, walk-ins and referrals, which never reach GoHighLevel, so the two counts are reconciled rather than forced to match."
             onClick={() => onToggle('newLeads')}
             active={drill === 'newLeads'}
           />
           <KpiTile
             label="Attended"
             value={formatNumber(t.attended)}
+            delta={t.attended === 0 ? 'Not being keyed in' : undefined}
+            info="Patients who attended their appointment, keyed into the Emergent cash-up each day. It reads zero because no practice is filling this field in — it is a data-entry gap in Emergent, not a day with no patients."
             onClick={() => onToggle('attended')}
             active={drill === 'attended'}
           />
@@ -270,7 +435,10 @@ function TreatmentSection({
 
       {active && (
         <Panel>
-          <PanelHead title="Accepted treatments" sub="Every treatment accepted (Emergent) in this window." />
+          <PanelHead
+            title="Accepted treatments"
+            sub="Every treatment accepted in this window. 'Came in on' is the GoHighLevel pipeline the patient first arrived through — that is the link between an ad and the treatment it paid for."
+          />
           {isLoading && <p className="text-sm text-ink-muted">Loading accepted treatments…</p>}
           {isError && <p className="text-sm text-danger">Couldn&rsquo;t load accepted treatments.</p>}
           {!isLoading && !isError && (detail?.lines.length ?? 0) === 0 && (
@@ -278,10 +446,10 @@ function TreatmentSection({
           )}
           {(detail?.lines.length ?? 0) > 0 && (
             <div className="overflow-x-auto" style={{ maxHeight: 480 }}>
-              <table className="w-full border-collapse" style={{ minWidth: 720 }}>
+              <table className="w-full border-collapse" style={{ minWidth: 860 }}>
                 <thead>
                   <tr className="border-b border-border">
-                    {['Date', 'Patient', 'Treatment', 'Practice', 'Source', 'Value'].map((h, i) => (
+                    {['Date', 'Patient', 'Treatment', 'Practice', 'Came in on', 'Value'].map((h, i) => (
                       <th key={h} className={`${th} ${i === 5 ? 'text-right' : 'text-left'}`}>{h}</th>
                     ))}
                   </tr>
@@ -293,7 +461,18 @@ function TreatmentSection({
                       <td className={td}>{l.patientName ?? '—'}</td>
                       <td className={td}>{l.treatmentName ?? '—'}</td>
                       <td className={td}>{l.practiceName ?? '—'}</td>
-                      <td className={td}>{l.source ?? '—'}</td>
+                      <td className={td}>
+                        {l.leadChannel ? (
+                          <span className="flex flex-wrap items-center gap-1">
+                            <PipelineTag channel={l.leadChannel} pipelineName={l.leadPipelineName} />
+                            <span className="text-[12px] text-ink-muted">{l.leadPipelineName ?? '—'}</span>
+                          </span>
+                        ) : (
+                          <span className="text-ink-muted" title="No GoHighLevel lead matched this patient by phone, email or name — a walk-in, a referral, or a lead we can't tie back.">
+                            Not from a tracked pipeline
+                          </span>
+                        )}
+                      </td>
                       <td className={`${td} text-right tabular-nums`}>{formatPence(l.valuePence)}</td>
                     </tr>
                   ))}
@@ -308,19 +487,46 @@ function TreatmentSection({
       )}
 
       {drill === 'txPlans' && (
-        <TreatmentMetricBreakdown
-          rows={t.byPractice}
-          metricLabel="Tx plans given"
-          render={(p) => `${formatNumber(p.txPlansGiven)} (${formatPence(p.txPlanValuePence)})`}
+        <EmergentDailyBreakdown
+          metric="txPlansGiven"
+          title="Tx plans given"
+          sub="Day by day, as keyed into the Emergent cash-up. This is the full detail — Emergent sends a count per day, never the individual plans."
+          practiceId={practiceId}
+          win={win}
+          byPractice={t.byPractice}
+          footer={
+            txValueMissing ? (
+              <p className="mt-3 text-xs text-ink-muted">
+                Plan value shows as &ldquo;not sent&rdquo; because Emergent isn&rsquo;t sending a value with these plans —
+                the count is real, the £0 was not. Ask the practice to key the plan value into the cash-up and it will
+                appear here.
+              </p>
+            ) : undefined
+          }
         />
       )}
 
       {drill === 'newLeads' && (
-        <TreatmentMetricBreakdown rows={t.byPractice} metricLabel="New leads" render={(p) => formatNumber(p.newLeads)} />
+        <PipelineLeadsForWindow keyedIn={t.newLeads} practiceId={practiceId} win={win} />
       )}
 
       {drill === 'attended' && (
-        <TreatmentMetricBreakdown rows={t.byPractice} metricLabel="Attended" render={(p) => formatNumber(p.attended)} />
+        <EmergentDailyBreakdown
+          metric="attended"
+          title="Attended"
+          sub="Day by day, as keyed into the Emergent cash-up."
+          practiceId={practiceId}
+          win={win}
+          byPractice={t.byPractice}
+          footer={
+            t.attended === 0 ? (
+              <p className="mt-3 text-xs text-ink-muted">
+                No practice is keying this field into Emergent, so it reads zero everywhere. Nothing is broken here —
+                there is simply nothing being entered.
+              </p>
+            ) : undefined
+          }
+        />
       )}
     </>
   );
@@ -559,6 +765,15 @@ export default function CockpitScreen() {
   const [drill, setDrill] = useState<Drill>(null);
   const toggle = (m: Exclude<Drill, null>) => setDrill((cur) => (cur === m ? null : m));
 
+  // The scope bar only carries the practice id; the payload is where the name
+  // lives. Either feed can name it — a practice may have Emergent cash-up but
+  // no GoHighLevel subaccount, or the other way round.
+  const practiceName = practiceId
+    ? data?.treatment.byPractice.find((p) => p.practiceId === practiceId)?.name ??
+      data?.leadRoi.channels.find((c) => c.practiceId === practiceId)?.practiceName ??
+      null
+    : null;
+
   return (
     <div className="space-y-4 p-4">
       <div>
@@ -583,7 +798,7 @@ export default function CockpitScreen() {
           <RevenueSection data={data} drill={drill} onToggle={() => toggle('revenue')} />
           <TreatmentSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={toggle} />
           <LeadPerformanceChart channels={data.leadRoi.channels} />
-          <LeadComparison data={data.leadRoi} practiceId={practiceId} win={win} />
+          <LeadComparison data={data.leadRoi} practiceId={practiceId} practiceName={practiceName} win={win} />
           <CashUpSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('cashup')} />
           <MonthlySection data={data} />
           <p className="text-right text-[11px] text-slate-400">Last updated {formatDate(data.updatedAt)}</p>
