@@ -57,7 +57,7 @@ function fmtDay(date: string): string {
 // Which section's headline metric is expanded into an inline breakdown below
 // its tile grid. One open at a time (copies the CliniciansScreen `drill`
 // pattern) — clicking the active tile again closes it.
-type Drill = 'revenue' | 'treatment' | 'cashup' | null;
+type Drill = 'revenue' | 'treatment' | 'txPlans' | 'newLeads' | 'attended' | 'cashup' | null;
 
 function RevenueSection({
   data,
@@ -73,7 +73,7 @@ function RevenueSection({
   return (
     <>
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <SectionHeading n={1} title="Revenue — cash taken (Emergent)" />
+        <SectionHeading n={1} title="Revenue — cash taken (Emergent)" note="Till cash taken, keyed into Emergent each day." />
         <KpiTile
           label="Cash taken (Emergent) in period"
           value={formatPence(data.revenue.collectedPence)}
@@ -137,6 +137,47 @@ function RevenueSection({
   );
 }
 
+// Per-practice breakdown for a single Treatment-section metric (Tx plans
+// given, New leads, Attended). Sourced entirely from the in-payload
+// `treatment.byPractice[]` — no extra fetch.
+function TreatmentMetricBreakdown({
+  rows,
+  metricLabel,
+  render,
+}: {
+  rows: CockpitResponse['treatment']['byPractice'];
+  metricLabel: string;
+  render: (p: CockpitResponse['treatment']['byPractice'][number]) => string;
+}) {
+  return (
+    <Panel>
+      <PanelHead title={`${metricLabel} by practice`} sub="Sourced from this window's treatment &amp; close rollup." />
+      {rows.length === 0 ? (
+        <p className="text-sm text-ink-muted">No practice data in this window.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse" style={{ minWidth: 360 }}>
+            <thead>
+              <tr className="border-b border-border">
+                <th className={`${th} text-left`}>Practice</th>
+                <th className={`${th} text-right`}>{metricLabel}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p) => (
+                <tr key={p.practiceId ?? p.name ?? 'unmapped'} className="border-b border-border last:border-0">
+                  <td className={td}>{p.name ?? 'Unmapped practice'}</td>
+                  <td className={`${td} text-right tabular-nums`}>{render(p)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function TreatmentSection({
   data,
   practiceId,
@@ -148,7 +189,7 @@ function TreatmentSection({
   practiceId?: string;
   win: { since: string; until: string };
   drill: Drill;
-  onToggle: () => void;
+  onToggle: (m: Exclude<Drill, null>) => void;
 }) {
   const t = data.treatment;
   const active = drill === 'treatment';
@@ -162,12 +203,38 @@ function TreatmentSection({
   return (
     <>
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <SectionHeading n={2} title="Treatment &amp; close" />
+        <SectionHeading
+          n={2}
+          title="Treatment &amp; close"
+          note="Treatments a patient accepted (Emergent), and the plans proposed."
+        />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <KpiTile label="Accepted" value={formatNumber(t.acceptedCount)} delta={formatPence(t.acceptedValuePence)} onClick={onToggle} active={active} />
-          <Card label="Tx plans given" value={formatNumber(t.txPlansGiven)} sub={formatPence(t.txPlanValuePence)} />
-          <Card label="New leads" value={formatNumber(t.newLeads)} />
-          <Card label="Attended" value={formatNumber(t.attended)} />
+          <KpiTile
+            label="Accepted"
+            value={formatNumber(t.acceptedCount)}
+            delta={formatPence(t.acceptedValuePence)}
+            onClick={() => onToggle('treatment')}
+            active={active}
+          />
+          <KpiTile
+            label="Tx plans given"
+            value={formatNumber(t.txPlansGiven)}
+            delta={formatPence(t.txPlanValuePence)}
+            onClick={() => onToggle('txPlans')}
+            active={drill === 'txPlans'}
+          />
+          <KpiTile
+            label="New leads"
+            value={formatNumber(t.newLeads)}
+            onClick={() => onToggle('newLeads')}
+            active={drill === 'newLeads'}
+          />
+          <KpiTile
+            label="Attended"
+            value={formatNumber(t.attended)}
+            onClick={() => onToggle('attended')}
+            active={drill === 'attended'}
+          />
         </div>
         {t.byPractice.length > 0 ? (
           <div className="mt-4 overflow-x-auto">
@@ -239,6 +306,22 @@ function TreatmentSection({
           )}
         </Panel>
       )}
+
+      {drill === 'txPlans' && (
+        <TreatmentMetricBreakdown
+          rows={t.byPractice}
+          metricLabel="Tx plans given"
+          render={(p) => `${formatNumber(p.txPlansGiven)} (${formatPence(p.txPlanValuePence)})`}
+        />
+      )}
+
+      {drill === 'newLeads' && (
+        <TreatmentMetricBreakdown rows={t.byPractice} metricLabel="New leads" render={(p) => formatNumber(p.newLeads)} />
+      )}
+
+      {drill === 'attended' && (
+        <TreatmentMetricBreakdown rows={t.byPractice} metricLabel="Attended" render={(p) => formatNumber(p.attended)} />
+      )}
     </>
   );
 }
@@ -268,7 +351,7 @@ function CashUpSection({
   return (
     <>
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <SectionHeading n={4} title="Cash up — till reconciliation" note="Flags where the till/terminal total differs from system revenue." />
+        <SectionHeading n={4} title="Cash up — till reconciliation" note="System revenue vs the till/terminal total — flags same-day gaps." />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <Card label="Cash taken £" value={formatPence(c.collectedPence)} />
           <Card label="Till detail £" value={formatPence(c.detailPence)} />
@@ -431,7 +514,7 @@ function MonthlySection({ data }: { data: CockpitResponse }) {
   const m = data.monthly;
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <SectionHeading n={5} title={`Monthly revenue — ${periodMonthLabel(m.periodMonth)}`} note="Latest calendar month Emergent has sent P&L for." />
+      <SectionHeading n={5} title={`Monthly revenue — ${periodMonthLabel(m.periodMonth)}`} note="The latest month Emergent has sent a P&amp;L for." />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
         <Card label="Revenue" value={formatPence(m.revenuePence)} />
         <Card label="Net profit" value={formatPence(m.netProfitPence)} />
@@ -498,7 +581,7 @@ export default function CockpitScreen() {
       ) : (
         <div className="space-y-4">
           <RevenueSection data={data} drill={drill} onToggle={() => toggle('revenue')} />
-          <TreatmentSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('treatment')} />
+          <TreatmentSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={toggle} />
           <LeadPerformanceChart channels={data.leadRoi.channels} />
           <LeadComparison data={data.leadRoi} practiceId={practiceId} win={win} />
           <CashUpSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('cashup')} />
