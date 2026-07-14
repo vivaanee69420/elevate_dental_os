@@ -855,3 +855,153 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_accounts_practice
 -- Fast webhook routing by the random per-account token.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_integration_accounts_webhook_token
   ON integration_accounts(webhook_token) WHERE webhook_token IS NOT NULL;
+
+-- ============================================================================
+-- EMERGENT (Treatments Accepted / Daily Cash-Up / Monthly P&L; migrations
+-- 000096, 000100, 000110). Sourced from the Emergent ops app (pull endpoints
+-- + webhooks). See treatmentaccepted.md.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS treatment_accepted (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id     UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  source              TEXT NOT NULL DEFAULT 'emergent',
+  external_id         TEXT NOT NULL,                      -- Emergent record id (derived, no stable id)
+  business_id         TEXT,                                -- Emergent business id (migration 000100)
+  patient_name        TEXT,
+  patient_external_id TEXT,                                -- maps to dentally pms_external_id
+  contact_id          UUID REFERENCES contacts(id) ON DELETE SET NULL,
+  practice_id         UUID REFERENCES practices(id) ON DELETE SET NULL,
+  practitioner_name   TEXT,
+  associate_id        UUID REFERENCES associates(id) ON DELETE SET NULL,
+  treatment_name      TEXT,
+  value_pence         BIGINT NOT NULL DEFAULT 0,          -- value_gbp * 100, rounded
+  accepted_date       DATE,
+  status              TEXT,                                -- accepted | declined | pending (Emergent's own)
+  phone               TEXT,                                -- migration 000110; NOT in repo SAFE_COLS (PII)
+  email               TEXT,                                -- migration 000110; NOT in repo SAFE_COLS (PII)
+  quantity            INTEGER,                              -- migration 000110
+  ext_source          TEXT,                                 -- migration 000110 (Emergent lead source)
+  ext_campaign        TEXT,                                 -- migration 000110 (Emergent campaign)
+  raw                 JSONB,                                -- full original payload for audit/replay
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (organisation_id, source, external_id)             -- upsert key
+);
+CREATE INDEX IF NOT EXISTS treatment_accepted_org_date_idx
+  ON treatment_accepted (organisation_id, accepted_date);
+CREATE INDEX IF NOT EXISTS treatment_accepted_org_practice_idx
+  ON treatment_accepted (organisation_id, practice_id);
+CREATE INDEX IF NOT EXISTS treatment_accepted_org_business_idx
+  ON treatment_accepted (organisation_id, business_id);
+
+CREATE TABLE IF NOT EXISTS emergent_daily_cashup (
+  id                               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id                  UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  business_id                      TEXT NOT NULL,
+  business_name                    TEXT,
+  practice_id                      UUID REFERENCES practices(id) ON DELETE SET NULL,
+  cashup_date                      DATE NOT NULL,
+  external_id                      TEXT NOT NULL,
+  treatments_accepted              INTEGER,
+  tx_plans_given                   INTEGER,
+  tx_plan_given_value_pence        BIGINT,
+  cash_up_money_taken_pence        BIGINT,
+  num_bookings                     INTEGER,
+  num_new_leads                    INTEGER,
+  num_follow_ups                   INTEGER,
+  num_attended                     INTEGER,
+  total_chairs                     INTEGER,
+  chairs_used                      INTEGER,
+  chair_utilisation                NUMERIC(6,2),
+  reviews_collected                INTEGER,
+  before_after_pictures            INTEGER,
+  video_testimonials               INTEGER,
+  practice_plan_signups            INTEGER,
+  total_refunds_pence              BIGINT,
+  source_google                    INTEGER DEFAULT 0,
+  source_facebook                  INTEGER DEFAULT 0,
+  source_walk_in                   INTEGER DEFAULT 0,
+  source_friends_family            INTEGER DEFAULT 0,
+  source_wl_website                INTEGER DEFAULT 0,
+  source_dentist_referral          INTEGER DEFAULT 0,
+  source_instagram                 INTEGER DEFAULT 0,
+  source_youtube                   INTEGER DEFAULT 0,
+  source_other                     INTEGER DEFAULT 0,
+  custom_sources                   JSONB NOT NULL DEFAULT '{}'::JSONB,
+  refunds                          JSONB NOT NULL DEFAULT '[]'::JSONB,
+  appointment_booked_for           TEXT,
+  crm_system_notes                 TEXT,
+  detail_patient_rows_count        INTEGER,
+  detail_patient_money_total_pence BIGINT,
+  variance_manager_vs_detail       NUMERIC,
+  emergent_created_at              TIMESTAMPTZ,
+  emergent_created_by              TEXT,
+  raw                              JSONB,
+  synced_at                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (organisation_id, business_id, cashup_date)
+);
+CREATE INDEX IF NOT EXISTS emergent_daily_cashup_org_date_idx
+  ON emergent_daily_cashup (organisation_id, cashup_date);
+
+CREATE TABLE IF NOT EXISTS emergent_monthly_pl (
+  id                              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id                 UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  business_id                     TEXT NOT NULL,
+  business_name                   TEXT,
+  practice_id                     UUID REFERENCES practices(id) ON DELETE SET NULL,
+  period_month                    DATE NOT NULL,
+  external_id                     TEXT NOT NULL,
+  notes                           TEXT,
+  revenue_pence                   BIGINT,
+  gross_profit_pence              BIGINT,
+  net_profit_pence                BIGINT,
+  total_cost_of_sales_pence       BIGINT,
+  total_operating_expenses_pence  BIGINT,
+  cash_collected_pence            BIGINT,
+  tx_accepted_amount_pence        BIGINT,
+  bank_balance_pence              BIGINT,
+  average_wait_time               NUMERIC,
+  principal_fees_pence            BIGINT,
+  hygienist_therapist_pence       BIGINT,
+  lab_fees_pence                  BIGINT,
+  materials_pence                 BIGINT,
+  sedation_services_pence         BIGINT,
+  advertising_marketing_pence     BIGINT,
+  bank_charges_pence              BIGINT,
+  business_rates_rent_pence       BIGINT,
+  salaries_staff_cost_pence       BIGINT,
+  telephone_wifi_pence            BIGINT,
+  utilities_pence                 BIGINT,
+  insurance_pence                 BIGINT,
+  management_fees_pence           BIGINT,
+  subscriptions_pence             BIGINT,
+  it_expenses_pence               BIGINT,
+  card_machine_charges_pence      BIGINT,
+  custom_lines                    JSONB NOT NULL DEFAULT '{}'::JSONB,
+  line_notes                      JSONB NOT NULL DEFAULT '{}'::JSONB,
+  raw                             JSONB,
+  emergent_created_at             TIMESTAMPTZ,
+  emergent_created_by             TEXT,
+  last_updated_at                 TIMESTAMPTZ,
+  last_updated_by                 TEXT,
+  last_updated_by_email           TEXT,
+  synced_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (organisation_id, business_id, period_month)
+);
+CREATE INDEX IF NOT EXISTS emergent_monthly_pl_org_month_idx
+  ON emergent_monthly_pl (organisation_id, period_month);
+
+CREATE TABLE IF NOT EXISTS emergent_practice_map (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id  UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  business_id      TEXT NOT NULL,
+  business_name    TEXT,
+  practice_id      UUID REFERENCES practices(id) ON DELETE SET NULL,  -- NULL = intentionally unmapped
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (organisation_id, business_id)
+);
+CREATE INDEX IF NOT EXISTS emergent_practice_map_org_idx
+  ON emergent_practice_map (organisation_id);
