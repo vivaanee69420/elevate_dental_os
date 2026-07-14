@@ -19,13 +19,25 @@ function monthStartFrom(until) {
 
 export const cockpitService = {
     async build(orgId, { since, until } = {}) {
-        const periodMonth = monthStartFrom(until);
-        const [cashupRows, monthlyRows, leadRoi, acceptedRows] = await Promise.all([
+        let periodMonth = monthStartFrom(until);
+        const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows] = await Promise.all([
             cockpitRepository.cashupRollup(orgId, since, until),
             cockpitRepository.monthlyPl(orgId, periodMonth),
             leadAttributionService.channelBreakdown(orgId, { since, until }),
             cockpitRepository.acceptedContactsInWindow(orgId, since, until),
         ]);
+
+        // Emergent may not have sent the current calendar month's P&L yet —
+        // that would otherwise render as a false £0. Fall back to the latest
+        // available month for the org and label it accordingly.
+        let monthlyRows = monthlyRowsForCurrent;
+        if (!monthlyRows || monthlyRows.length === 0) {
+            const latest = await cockpitRepository.latestMonthlyPl(orgId);
+            if (latest.periodMonth) {
+                periodMonth = latest.periodMonth;
+                monthlyRows = latest.rows;
+            }
+        }
 
         // Aggregate cash-up rows by practice (practice_id, falling back to
         // business_name for practices not yet mapped in emergent_practice_map).
