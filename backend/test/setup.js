@@ -43,7 +43,13 @@ const h = vi.hoisted(() => {
     const settle = () => Promise.resolve(supaRec.resultProvider(q));
     const builder = {
       select(...a) {
-        q.op = 'select';
+        // Preserve primary operations (upsert, insert, update, delete) when
+        // select is chained as a terminal modifier. Only set to 'select' if
+        // this is a primary select operation (no prior write operation).
+        const primaryOps = ['upsert', 'insert', 'update', 'delete'];
+        if (!primaryOps.includes(q.op)) {
+          q.op = 'select';
+        }
         q.selectArgs = a;
         return builder;
       },

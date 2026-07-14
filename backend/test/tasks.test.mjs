@@ -143,7 +143,8 @@ describe('taskService.generateAiTasks', () => {
     expect(result).toEqual(mockInserted);
     const tasksQuery = queries.find((q) => q.table === 'tasks');
     expect(tasksQuery).toBeDefined();
-    expect(tasksQuery.op).toBe('select');
+    // Primary operation is 'insert'; select() is chained as terminal modifier
+    expect(tasksQuery.op).toBe('insert');
 
     const insertedRows = tasksQuery.insertVals;
     expect(insertedRows.length).toBe(1);
