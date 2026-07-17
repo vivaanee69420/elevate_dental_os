@@ -19,6 +19,7 @@ import { LeadComparison } from './LeadComparison';
 import { PipelineTag } from './PipelineTag';
 import { LeadsTable, dedupeByPerson, CHANNEL_ORDER } from './LeadsTable';
 import { LeadPerformanceChart, RevenueTrendChart } from './CockpitCharts';
+import { RevenueByLine } from './RevenueByLine';
 import type { CockpitResponse, PLLine, PLLineNote, LeadChannel } from '../api';
 
 function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -835,6 +836,7 @@ export default function CockpitScreen() {
           <LeadComparison data={data.leadRoi} practiceId={practiceId} practiceName={practiceName} win={win} />
           <CashUpSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('cashup')} />
           <MonthlySection data={data} />
+          <RevenueByLine lines={data.revenueByLine} />
           <p className="text-right text-[11px] text-slate-400">Last updated {formatDate(data.updatedAt)}</p>
         </div>
       )}

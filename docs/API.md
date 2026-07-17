@@ -1158,6 +1158,11 @@ byBusiness[], costLines[], opexLines[], customLines[], lineNotes[] }`.
 - `marginPct` — `netProfit / revenue`, to 2dp. **`null` when revenue is 0** (a
   margin on no revenue is undefined, not 0%).
 
+`revenueByLine[]` — `{ name, amountPence, sharePct }`, largest-first, zero-fee
+lines dropped. Invoiced fee per treatment from the `treatment_revenue_matrix`
+RPC (migration `…000041`), scoped to `scope` when it's a practice. **Empty for
+windows before 10 Jun 2026** — that's where `invoice_items` starts, not a zero.
+
 ### Detail endpoints (lazy — fetched when a drill-down opens)
 
 - `GET /api/cockpit/leads?since&until&practiceId&channel&limit&offset` -> `{ window, lines[], limit, offset }`. Each line: `{ id, contactId, createdAt, practiceName, channel, pipelineName, name, email, phone, converted, matchedValuePence, matchedTreatmentName, matchedPatientName, matchedAcceptedDate }`. `limit` defaults 100, capped 500.
