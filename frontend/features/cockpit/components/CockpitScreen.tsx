@@ -14,7 +14,7 @@ import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { KpiTile } from '@/components/ui/KpiTile';
 import { Panel, PanelHead, th, td } from '@/features/intelligence/components/os-ui';
 import { formatPence, formatNumber, formatDate } from '@/lib/format';
-import { useCockpit, useCockpitTreatments, useCockpitCashupDays, useCockpitLeads } from '../hooks';
+import { useCockpit, useCockpitTreatments, useCockpitCashupDays, useCockpitLeads, useCostModel, useSaveCostModel } from '../hooks';
 import { LeadComparison } from './LeadComparison';
 import { PipelineTag } from './PipelineTag';
 import { LeadsTable, dedupeByPerson, CHANNEL_ORDER } from './LeadsTable';
@@ -53,6 +53,12 @@ function periodMonthLabel(periodMonth: string): string {
   return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 }
 
+function monthLabelShort(periodMonth: string): string {
+  const d = new Date(`${periodMonth}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return periodMonth;
+  return d.toLocaleDateString('en-GB', { month: 'short', timeZone: 'UTC' });
+}
+
 function fmtDay(date: string): string {
   const t = Date.parse(date);
   return Number.isNaN(t) ? date : new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -63,12 +69,112 @@ function fmtDay(date: string): string {
 // pattern) — clicking the active tile again closes it.
 type Drill = 'revenue' | 'treatment' | 'txPlans' | 'newLeads' | 'attended' | 'cashup' | null;
 
+// The daily target is typed straight into the card. It is stored per practice
+// (revenue_target_pence_month on practice_cost_model) and the group figure is the
+// SUM of the practices, so the group can never disagree with its parts — which is
+// why it's only editable when a single practice is in scope.
+function DailyTargetCard({
+  month,
+  practiceId,
+}: {
+  month: CockpitResponse['revenue']['month'];
+  practiceId?: string;
+}) {
+  const { data: cm, isPending: cmPending, isError: cmError } = useCostModel();
+  const save = useSaveCostModel();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const row = practiceId ? cm?.rows.find((r) => r.practiceId === practiceId) : undefined;
+  const workingDays = row?.workingDaysPerMonth ?? 20;
+  // The cost model must be loaded (and not errored) before we trust
+  // `workingDays` — otherwise a fallback of 20 against a practice whose real
+  // working-days figure differs would silently store the wrong monthly
+  // target. So the editor itself is gated on the cost model having resolved.
+  const costModelReady = practiceId ? !cmPending && !cmError : false;
+
+  const submit = () => {
+    if (!practiceId || !costModelReady) return;
+    const dailyPounds = Number(draft);
+    if (!Number.isFinite(dailyPounds) || dailyPounds < 0) return;
+    // The card edits a DAILY figure; the model stores a MONTHLY target.
+    save.mutate(
+      { practiceId, input: { revenueTargetPenceMonth: Math.round(dailyPounds * 100) * workingDays } },
+      { onSuccess: () => setEditing(false) },
+    );
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Daily target</div>
+      {editing && practiceId ? (
+        <div className="mt-1 flex items-center gap-2">
+          <input
+            autoFocus
+            type="number"
+            className="w-28 rounded border border-slate-200 px-2 py-1 text-[15px] tabular-nums"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+              if (e.key === 'Escape') setEditing(false);
+            }}
+          />
+          <button
+            type="button"
+            onClick={submit}
+            disabled={save.isPending || !costModelReady}
+            className="rounded bg-slate-900 px-2 py-1 text-[12px] text-white disabled:opacity-40"
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
+          </button>
+          <button type="button" onClick={() => setEditing(false)} className="text-[12px] text-slate-500 underline">
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">
+          {month.dailyTargetPence === null ? <span className="text-slate-400">Not set</span> : formatPence(month.dailyTargetPence)}
+        </div>
+      )}
+
+      {!editing ? (
+        <div className="mt-0.5 text-[12px] text-slate-400">
+          {practiceId ? (
+            costModelReady ? (
+              <button
+                type="button"
+                className="underline"
+                onClick={() => {
+                  setDraft(month.dailyTargetPence !== null ? String(month.dailyTargetPence / 100) : '');
+                  setEditing(true);
+                }}
+              >
+                {month.dailyTargetPence === null ? 'Set a target' : 'Edit'}
+              </button>
+            ) : (
+              <span>{cmError ? "Couldn't load cost model" : 'Loading cost model…'}</span>
+            )
+          ) : (
+            <>Sum of each practice&rsquo;s target. Pick a practice above to set one.</>
+          )}
+        </div>
+      ) : (
+        <div className="mt-0.5 text-[12px] text-slate-400">Daily figure, in £. Stored as {workingDays} working days a month.</div>
+      )}
+      {save.isError ? <div className="mt-1 text-[11px] text-danger">Couldn&rsquo;t save. Owners only.</div> : null}
+    </div>
+  );
+}
+
 function RevenueSection({
   data,
+  practiceId,
   drill,
   onToggle,
 }: {
   data: CockpitResponse;
+  practiceId?: string;
   drill: Drill;
   onToggle: () => void;
 }) {
@@ -78,8 +184,34 @@ function RevenueSection({
     <>
       <section className="rounded-xl border border-slate-200 bg-white p-4">
         <SectionHeading n={1} title="Revenue — cash taken (Emergent)" note="Till cash taken, keyed into Emergent each day." />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <KpiTile
+            label="Cash taken today"
+            value={data.revenue.month.todayPence === null ? '—' : formatPence(data.revenue.month.todayPence)}
+            delta={data.revenue.month.todayDate ? fmtDay(data.revenue.month.todayDate) : 'No cash-up yet this month'}
+            info="The latest day Emergent has sent a cash-up for in this month. This card and the next three are anchored to the calendar month, not to the period you've selected — a month-to-date figure against an arbitrary window would be meaningless."
+          />
+          <KpiTile
+            label={`Cash ${monthLabelShort(data.revenue.month.periodMonth)} to date`}
+            value={formatPence(data.revenue.month.mtdPence)}
+            delta={
+              data.revenue.month.avgPerDayPence !== null
+                ? `${formatNumber(data.revenue.month.workingDaysElapsed)} days traded · ${formatPence(data.revenue.month.avgPerDayPence)}/day`
+                : 'No days traded yet'
+            }
+            info="Cash taken from the 1st of the month to now. 'Days traded' counts days a practice actually sent a cash-up, not calendar weekdays."
+          />
+          <KpiTile
+            label="Projected month"
+            value={data.revenue.month.projectedPence === null ? '—' : formatPence(data.revenue.month.projectedPence)}
+            delta={data.revenue.month.projectedPence === null ? 'Nothing traded yet' : 'at current run-rate'}
+            info="Each practice is projected on its own run-rate (month-to-date ÷ days traded × its working days per month) and the results are summed, so the group figure is always the sum of its parts."
+          />
+          <DailyTargetCard month={data.revenue.month} practiceId={practiceId} />
+        </div>
+
         <KpiTile
-          label="Cash taken (Emergent) in period"
+          label="Cash taken (Emergent) in the selected period"
           value={formatPence(data.revenue.collectedPence)}
           onClick={onToggle}
           active={active}
@@ -831,7 +963,7 @@ export default function CockpitScreen() {
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500">No data for this window.</div>
       ) : (
         <div className="space-y-4">
-          <RevenueSection data={data} drill={drill} onToggle={() => toggle('revenue')} />
+          <RevenueSection data={data} practiceId={practiceId} drill={drill} onToggle={() => toggle('revenue')} />
           <TreatmentSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={toggle} />
           <LeadPerformanceChart channels={data.leadRoi.channels} />
           <LeadComparison data={data.leadRoi} practiceId={practiceId} practiceName={practiceName} win={win} />
