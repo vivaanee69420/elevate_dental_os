@@ -207,7 +207,7 @@ function RevenueSection({
             delta={data.revenue.month.projectedPence === null ? 'Nothing traded yet' : 'at current run-rate'}
             info="Each practice is projected on its own run-rate (month-to-date ÷ days traded × its working days per month) and the results are summed, so the group figure is always the sum of its parts."
           />
-          <DailyTargetCard month={data.revenue.month} practiceId={practiceId} />
+          <DailyTargetCard key={practiceId ?? 'all'} month={data.revenue.month} practiceId={practiceId} />
         </div>
 
         <KpiTile
