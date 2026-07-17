@@ -23,6 +23,9 @@ vi.mock('../src/repositories/cockpit.repository.js', () => ({
     ]),
   },
 }));
+vi.mock('../src/repositories/practice-cost-model.repository.js', () => ({
+  practiceCostModelRepository: { asOf: vi.fn(async () => []) },
+}));
 
 let cockpitService;
 beforeEach(async () => {
