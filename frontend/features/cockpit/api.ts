@@ -149,6 +149,13 @@ export interface CockpitResponse {
     periodMonth: string;
     revenuePence: number;
     netProfitPence: number;
+    clinicianFeesPence: number;
+    labOverheadPence: number;
+    // revenue − clinician − labOverhead − netProfit. Non-zero means Emergent's
+    // own P&L lines don't reconcile to the net profit it sent.
+    residualPence: number;
+    // null when revenue is 0 — a margin on no revenue is undefined, not 0%.
+    marginPct: number | null;
     byBusiness: CockpitBusinessMonthly[];
     costLines: PLLine[];
     opexLines: PLLine[];

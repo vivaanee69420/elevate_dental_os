@@ -1145,6 +1145,19 @@ Conversion matching is **open-ended on the accepted side** — a lead created in
 window is "converted" if it has been accepted *by now*, not only if it was accepted
 inside the same window (leads typically convert weeks later).
 
+`monthly` carries the latest month Emergent has sent a P&L for (falling back from
+the current calendar month via `latestMonthlyPl`): `{ periodMonth, revenuePence,
+netProfitPence, clinicianFeesPence, labOverheadPence, residualPence, marginPct,
+byBusiness[], costLines[], opexLines[], customLines[], lineNotes[] }`.
+
+- `clinicianFeesPence` — `principal_fees_pence + hygienist_therapist_pence`.
+- `labOverheadPence` — every other cost line + all opex lines + `custom_lines`.
+- `residualPence` — `revenue − clinician − labOverhead − netProfit`. **Non-zero
+  means Emergent's own lines don't add up to the net profit it sent.** Surfaced
+  rather than plugged, so a broken feed can't masquerade as a balanced one.
+- `marginPct` — `netProfit / revenue`, to 2dp. **`null` when revenue is 0** (a
+  margin on no revenue is undefined, not 0%).
+
 ### Detail endpoints (lazy — fetched when a drill-down opens)
 
 - `GET /api/cockpit/leads?since&until&practiceId&channel&limit&offset` -> `{ window, lines[], limit, offset }`. Each line: `{ id, contactId, createdAt, practiceName, channel, pipelineName, name, email, phone, converted, matchedValuePence, matchedTreatmentName, matchedPatientName, matchedAcceptedDate }`. `limit` defaults 100, capped 500.

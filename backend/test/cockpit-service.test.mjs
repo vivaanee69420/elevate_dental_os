@@ -113,3 +113,35 @@ it('stays on the current month with zeroed totals when no P&L data exists at all
   expect(r.monthly.revenuePence).toBe(0);
   expect(r.monthly.byBusiness).toEqual([]);
 });
+
+describe('monthly clinician / lab+overhead split', () => {
+  it('splits clinician fees from lab+overhead and reconciles to net profit', async () => {
+    const out = await cockpitService.build('ORG1', { since: '2026-07-01', until: '2026-08-01' });
+
+    // clinician = principal_fees + hygienist_therapist = 300000 + 0
+    expect(out.monthly.clinicianFeesPence).toBe(300000);
+
+    // lab+overhead = every other cost line + all opex + custom lines
+    //   cost side : lab 150000 + materials 0 + sedation 50000            = 200000
+    //   opex side : 80000+0+200000+500000+0+40000+0+0+10000+0+5000       = 835000
+    //   custom    : 60000 + 0                                            =  60000
+    expect(out.monthly.labOverheadPence).toBe(1095000);
+
+    // residual = revenue - clinician - labOverhead - netProfit
+    //          = 9500000 - 300000 - 1095000 - 2122000 = 5983000
+    // Emergent's own lines do not add up to its net_profit; we surface that
+    // rather than plugging it.
+    expect(out.monthly.residualPence).toBe(5983000);
+
+    // margin = netProfit / revenue = 2122000/9500000 = 22.34%
+    expect(out.monthly.marginPct).toBe(22.34);
+  });
+
+  it('reports a null margin rather than 0% when there is no revenue', async () => {
+    cockpitRepository.monthlyPl.mockImplementation(async () => [
+      { business_name: 'Ashford', revenue_pence: 0, net_profit_pence: 0, custom_lines: {}, line_notes: {} },
+    ]);
+    const out = await cockpitService.build('ORG1', { since: '2026-07-01', until: '2026-08-01' });
+    expect(out.monthly.marginPct).toBeNull();
+  });
+});
