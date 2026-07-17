@@ -129,13 +129,65 @@ export interface RevenueLine {
   sharePct: number;
 }
 
+export type BreakevenStatus = 'above' | 'below' | 'not_set' | 'not_reporting';
+
+export interface BreakevenRow {
+  practiceId: string;
+  name: string;
+  /** null when the practice sent no cash-up at all in this window. */
+  revenuePence: number | null;
+  /** Days the practice actually traded — distinct cash-up dates, not weekdays. */
+  workingDaysInWindow: number;
+  breakevenDayPence: number | null;
+  contributionPence: number | null;
+  fixedDayPence: number | null;
+  fixedPence: number | null;
+  profitPence: number | null;
+  status: BreakevenStatus;
+}
+
+export interface BreakevenGroup {
+  revenuePence: number | null;
+  contributionPence: number | null;
+  fixedPence: number | null;
+  breakevenPence: number | null;
+  profitPence: number | null;
+  status: BreakevenStatus;
+  /** Practices left out of the group row — no cost model, or not reporting. */
+  excludedCount: number;
+}
+
+export interface RevenueMonthPractice {
+  practiceId: string;
+  name: string;
+  /** null when the practice did not report in the month. */
+  mtdPence: number | null;
+  workingDaysElapsed: number;
+  projectedPence: number | null;
+  dailyTargetPence: number | null;
+}
+
+export interface RevenueMonth {
+  periodMonth: string;
+  todayPence: number | null;
+  todayDate: string | null;
+  mtdPence: number;
+  workingDaysElapsed: number;
+  avgPerDayPence: number | null;
+  projectedPence: number | null;
+  dailyTargetPence: number | null;
+  byPractice: RevenueMonthPractice[];
+}
+
 export interface CockpitResponse {
   window: { since: string | null; until: string | null };
   revenue: {
     collectedPence: number;
     byPractice: CockpitPracticeRevenue[];
     dailySeries: CockpitDailyRevenue[];
+    month: RevenueMonth;
   };
+  breakeven: { rows: BreakevenRow[]; group: BreakevenGroup };
   treatment: {
     acceptedCount: number;
     acceptedValuePence: number;
