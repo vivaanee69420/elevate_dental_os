@@ -801,7 +801,7 @@ Bexleyheath stay below under either margin.
 *reduce to* `breakevenMid / workingDays`, because
 `fixedDay/margin = (fixed/wd)/(fixed/mid) = mid/wd`. With the correct margin,
 `£1,550 / (62/167) = £1,550 × 167/62 = £4,175`, exactly matching
-`£8,350,000/20 = £4,175` ✓ — because in this example `fixed` divides evenly by
+`£83,500/20 = £4,175` ✓ — because in this example `fixed` divides evenly by
 `workingDaysPerMonth` (£31,000/20 = £1,550 exactly, no rounding). Note the
 rounded *display* margin does **not** reproduce this: `£1,550/0.371 = £4,177.90`,
 not £4,175 — proof that the code must carry the exact rational margin
