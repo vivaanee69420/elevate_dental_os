@@ -10,9 +10,9 @@
 // Practices with no cost model ("Not set") and no cash-up feed ("Not reporting")
 // show their state rather than £0, and are excluded from the Group row.
 import { Fragment, useState } from 'react';
-import { Panel, PanelHead, th, td } from '@/features/intelligence/components/os-ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useCostModel, useSaveCostModel } from '../hooks';
+import { SectionCard, SecHead, cx, cockpitStyles as s } from './cockpit-ui';
 import type { BreakevenRow, BreakevenStatus, CockpitResponse } from '../api';
 import type { CostModelRow } from '../cost-model-api';
 
@@ -24,18 +24,13 @@ const STATUS_LABEL: Record<BreakevenStatus, string> = {
 };
 
 function StatusPill({ status }: { status: BreakevenStatus }) {
-  const tone =
-    status === 'above'
-      ? 'bg-emerald-50 text-emerald-700'
-      : status === 'below'
-        ? 'bg-rose-50 text-rose-700'
-        : 'bg-slate-100 text-slate-500';
-  return <span className={`rounded-full px-2 py-0.5 text-[12px] font-medium ${tone}`}>{STATUS_LABEL[status]}</span>;
+  const tone = status === 'above' ? s.stAbove : status === 'below' ? s.stBelow : s.stMuted;
+  return <span className={cx(s.st, tone)}>{STATUS_LABEL[status]}</span>;
 }
 
 // "—" for anything we can't state. Never £0: a practice with no feed has not
 // earned nothing, we simply cannot say.
-const money = (v: number | null) => (v === null ? <span className="text-ink-muted">&mdash;</span> : formatPence(v));
+const money = (v: number | null) => (v === null ? <span className={s.subtle}>&mdash;</span> : formatPence(v));
 
 // A stored 0 must seed as "0", not "" — "" round-trips back to null on save.
 const poundsFromPence = (p: number | null | undefined) => (p == null ? '' : String(p / 100));
@@ -45,10 +40,8 @@ function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => voi
 
   if (isPending) {
     return (
-      <tr className="bg-slate-50">
-        <td className={td} colSpan={7}>
-          Loading the cost model&hellip;
-        </td>
+      <tr style={{ background: 'var(--tint2)' }}>
+        <td colSpan={7}>Loading the cost model&hellip;</td>
       </tr>
     );
   }
@@ -58,10 +51,10 @@ function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => voi
   // and Save would write those blanks back as nulls, wiping a real cost model.
   if (isError || !data) {
     return (
-      <tr className="bg-slate-50">
-        <td className={td} colSpan={7}>
-          <span className="text-danger">Couldn&rsquo;t load the cost model.</span>{' '}
-          <button type="button" className="underline" onClick={onDone}>
+      <tr style={{ background: 'var(--tint2)' }}>
+        <td colSpan={7}>
+          <span className={s.danger}>Couldn&rsquo;t load the cost model.</span>{' '}
+          <button type="button" className={s.btnLink} onClick={onDone}>
             Close
           </button>
         </td>
@@ -109,51 +102,44 @@ function CostModelForm({
     );
   };
 
-  const field = 'w-32 rounded border border-slate-200 px-2 py-1 text-[13px] tabular-nums';
+  const label = { fontSize: 12, color: 'var(--muted)' } as const;
 
   return (
-    <tr className="bg-slate-50">
-      <td className={td} colSpan={7}>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="text-[12px] text-slate-600">
+    <tr style={{ background: 'var(--tint2)' }}>
+      <td colSpan={7}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: 12 }}>
+          <label style={label}>
             Fixed cost / month £<br />
-            <input className={field} type="number" value={fixed} onChange={(e) => setFixed(e.target.value)} />
+            <input className={s.field} style={{ width: '8rem' }} type="number" value={fixed} onChange={(e) => setFixed(e.target.value)} />
           </label>
-          <label className="text-[12px] text-slate-600">
+          <label style={label}>
             Breakeven revenue low £<br />
-            <input className={field} type="number" value={low} onChange={(e) => setLow(e.target.value)} />
+            <input className={s.field} style={{ width: '8rem' }} type="number" value={low} onChange={(e) => setLow(e.target.value)} />
           </label>
-          <label className="text-[12px] text-slate-600">
+          <label style={label}>
             Breakeven revenue high £<br />
-            <input className={field} type="number" value={high} onChange={(e) => setHigh(e.target.value)} />
+            <input className={s.field} style={{ width: '8rem' }} type="number" value={high} onChange={(e) => setHigh(e.target.value)} />
           </label>
-          <label className="text-[12px] text-slate-600">
+          <label style={label}>
             Working days / month<br />
-            <input className={field} type="number" min={1} max={31} value={days} onChange={(e) => setDays(e.target.value)} />
+            <input className={s.field} style={{ width: '8rem' }} type="number" min={1} max={31} value={days} onChange={(e) => setDays(e.target.value)} />
           </label>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={save.isPending || invalid || daysInvalid}
-            className="rounded bg-slate-900 px-3 py-1.5 text-[13px] font-medium text-white disabled:opacity-40"
-          >
+          <button type="button" className={s.btn} onClick={submit} disabled={save.isPending || invalid || daysInvalid}>
             {save.isPending ? 'Saving…' : 'Save'}
           </button>
-          <button type="button" onClick={onDone} className="text-[13px] text-slate-500 underline">
+          <button type="button" className={s.btnLink} onClick={onDone}>
             Cancel
           </button>
         </div>
-        {invalid ? (
-          <p className="mt-2 text-xs text-danger">Breakeven low can&rsquo;t be higher than breakeven high.</p>
-        ) : null}
-        {daysInvalid ? <p className="mt-2 text-xs text-danger">Working days must be at least 1.</p> : null}
+        {invalid ? <p className={cx(s.footNote, s.danger)}>Breakeven low can&rsquo;t be higher than breakeven high.</p> : null}
+        {daysInvalid ? <p className={cx(s.footNote, s.danger)}>Working days must be at least 1.</p> : null}
         {save.isError ? (
-          <p className="mt-2 text-xs text-danger">
+          <p className={cx(s.footNote, s.danger)}>
             Couldn&rsquo;t save your changes.
             {save.error instanceof Error && save.error.message ? ` ${save.error.message}` : ''}
           </p>
         ) : null}
-        <p className="mt-2 text-xs text-ink-muted">
+        <p className={s.footNote}>
           These fields show today&rsquo;s cost model, which may differ from the figures in the table above if you are
           viewing an earlier period. Saved against today, so past months keep the costs that were actually in force
           then.
@@ -168,74 +154,71 @@ export function BreakevenSection({ data }: { data: CockpitResponse['breakeven'] 
   const g = data.group;
 
   return (
-    <Panel>
-      <PanelHead
+    <SectionCard>
+      <SecHead
+        n={6}
         title="Profit vs breakeven"
-        sub="Per practice: is the cash taken covering the cost of opening the doors? Contribution is revenue x the practice's contribution margin (fixed cost / breakeven revenue); fixed is charged for the days it actually traded."
+        desc="Per practice: is the cash taken covering the cost of opening the doors? Contribution is revenue × the practice's contribution margin (fixed cost ÷ breakeven revenue); fixed is charged for the days it actually traded."
       />
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse" style={{ minWidth: 760 }}>
+      <div className={s.scrollX}>
+        <table className={s.table} style={{ minWidth: 760 }}>
           <thead>
-            <tr className="border-b border-border">
-              <th className={`${th} text-left`}>Practice</th>
-              <th className={`${th} text-right`}>Revenue</th>
-              <th className={`${th} text-right`}>Breakeven/day</th>
-              <th className={`${th} text-right`}>Contribution</th>
-              <th className={`${th} text-right`}>Fixed</th>
-              <th className={`${th} text-right`}>Profit</th>
-              <th className={`${th} text-left`}>Status</th>
+            <tr>
+              <th>Practice</th>
+              <th className={s.r}>Revenue</th>
+              <th className={s.r}>Breakeven/day</th>
+              <th className={s.r}>Contribution</th>
+              <th className={s.r}>Fixed</th>
+              <th className={s.r}>Profit</th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody>
             {data.rows.map((r) => (
               <Fragment key={r.practiceId}>
-                <tr className="border-b border-border">
-                  <td className={td}>
-                    <button type="button" className="text-left underline decoration-dotted" onClick={() => setEditing(editing === r.practiceId ? null : r.practiceId)}>
+                <tr>
+                  <td>
+                    <button type="button" className={s.btnLink} style={{ textDecorationStyle: 'dotted' }} onClick={() => setEditing(editing === r.practiceId ? null : r.practiceId)}>
                       {r.name}
                     </button>
                     {r.status === 'not_reporting' ? (
-                      <div className="text-[11px] text-ink-muted">Emergent isn&rsquo;t sending a business for this practice</div>
+                      <div className={s.subtle} style={{ fontSize: 11 }}>Emergent isn&rsquo;t sending a business for this practice</div>
                     ) : null}
                     {r.status === 'not_set' ? (
-                      <div className="text-[11px] text-ink-muted">No cost model &mdash; click to set one</div>
+                      <div className={s.subtle} style={{ fontSize: 11 }}>No cost model &mdash; click to set one</div>
                     ) : null}
                   </td>
-                  <td className={`${td} text-right tabular-nums`}>{money(r.revenuePence)}</td>
-                  <td className={`${td} text-right tabular-nums`}>{money(r.breakevenDayPence)}</td>
-                  <td className={`${td} text-right tabular-nums`}>{money(r.contributionPence)}</td>
-                  <td className={`${td} text-right tabular-nums`}>{money(r.fixedPence)}</td>
-                  <td className={`${td} text-right tabular-nums ${r.profitPence !== null && r.profitPence < 0 ? 'text-danger' : ''}`}>
-                    {money(r.profitPence)}
-                  </td>
-                  <td className={td}><StatusPill status={r.status} /></td>
+                  <td className={cx(s.r, s.money)}>{money(r.revenuePence)}</td>
+                  <td className={cx(s.r, s.money)}>{money(r.breakevenDayPence)}</td>
+                  <td className={cx(s.r, s.money)}>{money(r.contributionPence)}</td>
+                  <td className={cx(s.r, s.money)}>{money(r.fixedPence)}</td>
+                  <td className={cx(s.r, s.money, r.profitPence !== null && r.profitPence < 0 && s.danger)}>{money(r.profitPence)}</td>
+                  <td><StatusPill status={r.status} /></td>
                 </tr>
                 {editing === r.practiceId ? <CostModelEditor row={r} onDone={() => setEditing(null)} /> : null}
               </Fragment>
             ))}
           </tbody>
           <tfoot>
-            <tr className="bg-slate-50 font-semibold">
-              <td className={td}>Group</td>
-              <td className={`${td} text-right tabular-nums`}>{money(g.revenuePence)}</td>
-              <td className={`${td} text-right tabular-nums`}>{money(g.breakevenPence)}</td>
-              <td className={`${td} text-right tabular-nums`}>{money(g.contributionPence)}</td>
-              <td className={`${td} text-right tabular-nums`}>{money(g.fixedPence)}</td>
-              <td className={`${td} text-right tabular-nums ${g.profitPence !== null && g.profitPence < 0 ? 'text-danger' : ''}`}>
-                {money(g.profitPence)}
-              </td>
-              <td className={td}><StatusPill status={g.status} /></td>
+            <tr className={s.totalRow}>
+              <td>Group</td>
+              <td className={cx(s.r, s.money)}>{money(g.revenuePence)}</td>
+              <td className={cx(s.r, s.money)}>{money(g.breakevenPence)}</td>
+              <td className={cx(s.r, s.money)}>{money(g.contributionPence)}</td>
+              <td className={cx(s.r, s.money)}>{money(g.fixedPence)}</td>
+              <td className={cx(s.r, s.money, g.profitPence !== null && g.profitPence < 0 && s.danger)}>{money(g.profitPence)}</td>
+              <td><StatusPill status={g.status} /></td>
             </tr>
           </tfoot>
         </table>
       </div>
       {g.excludedCount > 0 ? (
-        <p className="mt-3 text-xs text-ink-muted">
+        <p className={s.footNote}>
           {formatNumber(g.excludedCount)} {g.excludedCount === 1 ? 'practice is' : 'practices are'} left out of the group
           row &mdash; no cost model set, or no cash-up feed. Counting them as £0 fixed cost would make the group look more
           profitable than it is.
         </p>
       ) : null}
-    </Panel>
+    </SectionCard>
   );
 }

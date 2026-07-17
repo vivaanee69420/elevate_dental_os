@@ -1,18 +1,16 @@
 'use client';
-// Daily Command Cockpit — one page pulling together yesterday's numbers:
-// cash taken, treatment accepted/closed, Google vs Facebook lead performance,
-// till reconciliation, and the latest monthly P&L Emergent has sent. Mirrors
-// the GM_Dental_Daily_Cockpit reference layout but renders light (rule 1).
+// Daily Command Cockpit — one page pulling together the day's numbers: cash
+// taken, treatment accepted/closed, Google vs Facebook lead performance, till
+// reconciliation, monthly P&L, profit vs breakeven, and revenue by line.
 //
-// v2: practice filter (ScopePeriodBar's scope row) + click-to-expand
-// drill-downs on the headline metrics, sourced either from the in-payload
-// dailySeries/costLines/opexLines (no extra fetch) or the lazy
-// leads/treatments/cashup-days detail endpoints (fetched only on open).
+// Skinned to match the `elevate-cockpit-mockup_1.html` reference: Georgia-green
+// headings, mint KPI tiles, green pill filter (via cockpit.module.css /
+// cockpit-ui). Light only (rule 1). The mockup's blue developer callouts, "NEW
+// MODULE" badges and dev-summary card are notes to the developer and are not
+// reproduced. Data wiring, drill-downs and honest empty states are unchanged.
 import { Fragment, useState } from 'react';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
-import { KpiTile } from '@/components/ui/KpiTile';
-import { Panel, PanelHead, th, td } from '@/features/intelligence/components/os-ui';
 import { formatPence, formatNumber, formatDate } from '@/lib/format';
 import { useCockpit, useCockpitTreatments, useCockpitCashupDays, useCockpitLeads, useCostModel, useSaveCostModel } from '../hooks';
 import { LeadComparison } from './LeadComparison';
@@ -21,31 +19,8 @@ import { LeadsTable, dedupeByPerson, CHANNEL_ORDER } from './LeadsTable';
 import { LeadPerformanceChart, RevenueTrendChart } from './CockpitCharts';
 import { RevenueByLine } from './RevenueByLine';
 import { BreakevenSection } from './BreakevenSection';
+import { SecHead, SectionCard, Kpi, DetailPanel, cx, cockpitStyles as s } from './cockpit-ui';
 import type { CockpitResponse, PLLine, PLLineNote, LeadChannel } from '../api';
-
-function Card({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">{value}</div>
-      {sub ? <div className="mt-0.5 text-[12px] text-slate-400">{sub}</div> : null}
-    </div>
-  );
-}
-
-function SectionHeading({ n, title, note }: { n: number; title: string; note?: string }) {
-  return (
-    <div className="mb-3">
-      <h2 className="text-sm font-semibold text-slate-900">
-        <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[11px] text-white">
-          {n}
-        </span>
-        {title}
-      </h2>
-      {note ? <p className="mt-1 text-xs text-slate-400">{note}</p> : null}
-    </div>
-  );
-}
 
 function periodMonthLabel(periodMonth: string): string {
   const d = new Date(`${periodMonth}T00:00:00Z`);
@@ -65,14 +40,13 @@ function fmtDay(date: string): string {
 }
 
 // Which section's headline metric is expanded into an inline breakdown below
-// its tile grid. One open at a time (copies the CliniciansScreen `drill`
-// pattern) — clicking the active tile again closes it.
+// its tile grid. One open at a time — clicking the active tile again closes it.
 type Drill = 'revenue' | 'treatment' | 'txPlans' | 'newLeads' | 'attended' | 'cashup' | null;
 
-// The daily target is typed straight into the card. It is stored per practice
-// (revenue_target_pence_month on practice_cost_model) and the group figure is the
-// SUM of the practices, so the group can never disagree with its parts — which is
-// why it's only editable when a single practice is in scope.
+// The daily target is typed straight into the card. Stored per practice
+// (revenue_target_pence_month on practice_cost_model); the group figure is the
+// SUM of the practices, so the group can never disagree with its parts — which
+// is why it is only editable when a single practice is in scope.
 function DailyTargetCard({
   month,
   practiceId,
@@ -87,10 +61,9 @@ function DailyTargetCard({
 
   const row = practiceId ? cm?.rows.find((r) => r.practiceId === practiceId) : undefined;
   const workingDays = row?.workingDaysPerMonth ?? 20;
-  // The cost model must be loaded (and not errored) before we trust
-  // `workingDays` — otherwise a fallback of 20 against a practice whose real
-  // working-days figure differs would silently store the wrong monthly
-  // target. So the editor itself is gated on the cost model having resolved.
+  // Trust `workingDays` only once the cost model has resolved — otherwise a
+  // fallback of 20 against a practice whose real figure differs would silently
+  // store the wrong monthly target. So the editor is gated on it having loaded.
   const costModelReady = practiceId ? !cmPending && !cmError : false;
 
   const submit = () => {
@@ -105,14 +78,16 @@ function DailyTargetCard({
   };
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Daily target — {monthLabelShort(month.periodMonth)}</div>
+    <div className={s.kpi}>
+      <div className={s.lbl}>
+        <span>Daily target — {monthLabelShort(month.periodMonth)}</span>
+      </div>
       {editing && practiceId ? (
-        <div className="mt-1 flex items-center gap-2">
+        <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
           <input
             autoFocus
             type="number"
-            className="w-28 rounded border border-slate-200 px-2 py-1 text-[15px] tabular-nums"
+            className={s.field}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -120,31 +95,26 @@ function DailyTargetCard({
               if (e.key === 'Escape') setEditing(false);
             }}
           />
-          <button
-            type="button"
-            onClick={submit}
-            disabled={save.isPending || !costModelReady}
-            className="rounded bg-slate-900 px-2 py-1 text-[12px] text-white disabled:opacity-40"
-          >
+          <button type="button" className={s.btn} onClick={submit} disabled={save.isPending || !costModelReady}>
             {save.isPending ? 'Saving…' : 'Save'}
           </button>
-          <button type="button" onClick={() => setEditing(false)} className="text-[12px] text-slate-500 underline">
+          <button type="button" className={s.btnLink} onClick={() => setEditing(false)}>
             Cancel
           </button>
         </div>
       ) : (
-        <div className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">
-          {month.dailyTargetPence === null ? <span className="text-slate-400">Not set</span> : formatPence(month.dailyTargetPence)}
+        <div className={cx(s.val, month.dailyTargetPence === null && s.valMuted)}>
+          {month.dailyTargetPence === null ? 'Not set' : formatPence(month.dailyTargetPence)}
         </div>
       )}
 
       {!editing ? (
-        <div className="mt-0.5 text-[12px] text-slate-400">
+        <div className={s.note}>
           {practiceId ? (
             costModelReady ? (
               <button
                 type="button"
-                className="underline"
+                className={s.btnLink}
                 onClick={() => {
                   setDraft(month.dailyTargetPence !== null ? String(month.dailyTargetPence / 100) : '');
                   setEditing(true);
@@ -160,9 +130,9 @@ function DailyTargetCard({
           )}
         </div>
       ) : (
-        <div className="mt-0.5 text-[12px] text-slate-400">Daily figure, in £. Stored as {workingDays} working days a month.</div>
+        <div className={s.note}>Daily figure, in £. Stored as {workingDays} working days a month.</div>
       )}
-      {save.isError ? <div className="mt-1 text-[11px] text-danger">Couldn&rsquo;t save. Owners only.</div> : null}
+      {save.isError ? <div className={cx(s.note, s.danger)}>Couldn&rsquo;t save your changes.</div> : null}
     </div>
   );
 }
@@ -179,118 +149,124 @@ function RevenueSection({
   onToggle: () => void;
 }) {
   const rows = data.revenue.byPractice;
+  const m = data.revenue.month;
   const active = drill === 'revenue';
   return (
     <>
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <SectionHeading n={1} title="Revenue — cash taken (Emergent)" note="Till cash taken, keyed into Emergent each day." />
+      <SectionCard>
+        <SecHead
+          n={1}
+          title="Revenue — cash taken (Emergent)"
+          desc="Till cash taken, keyed into Emergent each day."
+          src={{ label: 'Emergent daily push' }}
+        />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <KpiTile
-            label={`Cash taken today — ${monthLabelShort(data.revenue.month.periodMonth)}`}
-            value={data.revenue.month.todayPence === null ? '—' : formatPence(data.revenue.month.todayPence)}
-            delta={data.revenue.month.todayDate ? fmtDay(data.revenue.month.todayDate) : `No cash-up yet in ${monthLabelShort(data.revenue.month.periodMonth)}`}
+          <Kpi
+            label={`Cash taken today — ${monthLabelShort(m.periodMonth)}`}
+            value={m.todayPence === null ? '—' : formatPence(m.todayPence)}
+            valueMuted={m.todayPence === null}
+            note={m.todayDate ? fmtDay(m.todayDate) : `No cash-up yet in ${monthLabelShort(m.periodMonth)}`}
             info="The latest day Emergent has sent a cash-up for in this month. This card and the next three are anchored to the calendar month, not to the period you've selected — a month-to-date figure against an arbitrary window would be meaningless."
           />
-          <KpiTile
-            label={`Cash ${monthLabelShort(data.revenue.month.periodMonth)} to date`}
-            value={data.revenue.month.mtdPence === null ? '—' : formatPence(data.revenue.month.mtdPence)}
-            delta={
-              data.revenue.month.mtdPence === null
+          <Kpi
+            label={`Cash ${monthLabelShort(m.periodMonth)} to date`}
+            value={m.mtdPence === null ? '—' : formatPence(m.mtdPence)}
+            valueMuted={m.mtdPence === null}
+            note={
+              m.mtdPence === null
                 ? 'No cash-up feed this month'
-                : data.revenue.month.avgPerDayPence !== null
-                  ? `${formatNumber(data.revenue.month.workingDaysElapsed)} days traded · ${formatPence(data.revenue.month.avgPerDayPence)}/day`
+                : m.avgPerDayPence !== null
+                  ? `${formatNumber(m.workingDaysElapsed)} days traded · ${formatPence(m.avgPerDayPence)}/day`
                   : 'No days traded yet'
             }
             info="Cash taken from the 1st of the month to now. 'Days traded' counts days a practice actually sent a cash-up, not calendar weekdays."
           />
-          <KpiTile
-            label={`Projected ${monthLabelShort(data.revenue.month.periodMonth)}`}
-            value={data.revenue.month.projectedPence === null ? '—' : formatPence(data.revenue.month.projectedPence)}
-            delta={data.revenue.month.projectedPence === null ? 'Nothing traded yet' : 'at current run-rate'}
+          <Kpi
+            label={`Projected ${monthLabelShort(m.periodMonth)}`}
+            value={m.projectedPence === null ? '—' : formatPence(m.projectedPence)}
+            valueMuted={m.projectedPence === null}
+            note={m.projectedPence === null ? 'Nothing traded yet' : 'at current run-rate'}
             info="Each practice is projected on its own run-rate (month-to-date ÷ days traded × its working days per month) and the results are summed, so the group figure is always the sum of its parts."
           />
-          <DailyTargetCard key={practiceId ?? 'all'} month={data.revenue.month} practiceId={practiceId} />
+          <DailyTargetCard key={practiceId ?? 'all'} month={m} practiceId={practiceId} />
         </div>
 
-        <KpiTile
-          label="Cash taken (Emergent) in the selected period"
-          value={formatPence(data.revenue.collectedPence)}
-          onClick={onToggle}
-          active={active}
-        />
+        <div style={{ marginTop: 12 }}>
+          <Kpi
+            label="Cash taken (Emergent) in the selected period"
+            value={formatPence(data.revenue.collectedPence)}
+            note="Click to see the day-by-day breakdown."
+            onClick={onToggle}
+            active={active}
+          />
+        </div>
+
         {rows.length > 0 ? (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[420px] border-collapse text-[13px]">
+          <div className={s.scrollX} style={{ marginTop: 16 }}>
+            <table className={s.table} style={{ minWidth: 420 }}>
               <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="py-2 pr-3 font-medium">Practice</th>
-                  <th className="py-2 pr-3 text-right font-medium">Cash taken £</th>
+                <tr>
+                  <th>Practice</th>
+                  <th className={s.r}>Cash taken £</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.practiceId ?? r.name ?? 'unmapped'} className="border-b border-slate-100">
-                    <td className="py-2 pr-3 text-slate-900">{r.name ?? 'Unmapped practice'}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatPence(r.collectedPence)}</td>
+                  <tr key={r.practiceId ?? r.name ?? 'unmapped'}>
+                    <td>{r.name ?? 'Unmapped practice'}</td>
+                    <td className={cx(s.r, s.money)}>{formatPence(r.collectedPence)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : null}
-      </section>
+      </SectionCard>
 
       <RevenueTrendChart dailySeries={data.revenue.dailySeries} />
 
       {active && (
-        <Panel>
-          <PanelHead title="Cash taken by day" sub="Every day with Emergent cash-up in this window, most recent first." />
+        <DetailPanel title="Cash taken by day" sub="Every day with Emergent cash-up in this window, most recent first.">
           {data.revenue.dailySeries.length === 0 ? (
-            <p className="text-sm text-ink-muted">No daily cash-up rows in this window.</p>
+            <p className={s.subtle} style={{ fontSize: 13 }}>No daily cash-up rows in this window.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse" style={{ minWidth: 360 }}>
+            <div className={s.scrollX}>
+              <table className={s.table} style={{ minWidth: 360 }}>
                 <thead>
-                  <tr className="border-b border-border">
-                    <th className={`${th} text-left`}>Date</th>
-                    <th className={`${th} text-right`}>Cash taken £</th>
+                  <tr>
+                    <th>Date</th>
+                    <th className={s.r}>Cash taken £</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...data.revenue.dailySeries]
                     .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
                     .map((d) => (
-                      <tr key={d.date} className="border-b border-border last:border-0">
-                        <td className={td}>{fmtDay(d.date)}</td>
-                        <td className={`${td} text-right tabular-nums`}>{formatPence(d.cashPence)}</td>
+                      <tr key={d.date}>
+                        <td>{fmtDay(d.date)}</td>
+                        <td className={cx(s.r, s.money)}>{formatPence(d.cashPence)}</td>
                       </tr>
                     ))}
                 </tbody>
               </table>
             </div>
           )}
-        </Panel>
+        </DetailPanel>
       )}
     </>
   );
 }
 
-// "close rate 8/15 = 53%" — accepted as a share of the plans presented.
-// Returns null when no plans were keyed in: a close rate out of zero plans is
-// undefined, not 0%.
+// "close rate 8/15 = 53%" — accepted as a share of the plans presented. Returns
+// null when no plans were keyed in: a close rate out of zero plans is undefined.
 function closeRate(acceptedCount: number, txPlansGiven: number): string | null {
   if (txPlansGiven <= 0) return null;
   const rounded = Math.round((acceptedCount / txPlansGiven) * 100);
   return `close rate ${acceptedCount}/${txPlansGiven} = ${rounded}%`;
 }
 
-// Day-by-day breakdown behind a manager-keyed Emergent metric (Tx plans given,
-// New leads, Attended).
-//
-// This is as deep as these numbers go, by construction: the Emergent cash-up
-// sends a COUNT PER DAY, with no per-plan or per-lead records behind it. The
-// old drill-down re-printed the same single total as a one-row "by practice"
-// table, which looked broken — a day list is the real detail that exists.
+// Day-by-day breakdown behind a manager-keyed Emergent metric. This is as deep
+// as these numbers go: the cash-up sends a COUNT PER DAY, no per-plan records.
 function EmergentDailyBreakdown({
   metric,
   title,
@@ -316,28 +292,24 @@ function EmergentDailyBreakdown({
   });
 
   const showValue = metric === 'txPlansGiven';
-  // Only days that actually carry the metric — a day the manager keyed no
-  // plans on is noise in a "where did the 42 come from" list.
   const days = (data?.lines ?? []).filter((l) => l[metric] > 0).sort((a, b) => (a.cashupDate < b.cashupDate ? 1 : -1));
 
   return (
-    <Panel>
-      <PanelHead title={title} sub={sub} />
-
+    <DetailPanel title={title} sub={sub}>
       {byPractice.length > 1 && (
-        <div className="mb-3 overflow-x-auto">
-          <table className="w-full border-collapse" style={{ minWidth: 360 }}>
+        <div className={s.scrollX} style={{ marginBottom: 12 }}>
+          <table className={s.table} style={{ minWidth: 360 }}>
             <thead>
-              <tr className="border-b border-border">
-                <th className={`${th} text-left`}>Practice</th>
-                <th className={`${th} text-right`}>Total</th>
+              <tr>
+                <th>Practice</th>
+                <th className={s.r}>Total</th>
               </tr>
             </thead>
             <tbody>
               {byPractice.map((p) => (
-                <tr key={p.practiceId ?? p.name ?? 'unmapped'} className="border-b border-border last:border-0">
-                  <td className={td}>{p.name ?? 'Unmapped practice'}</td>
-                  <td className={`${td} text-right tabular-nums`}>{formatNumber(p[metric])}</td>
+                <tr key={p.practiceId ?? p.name ?? 'unmapped'}>
+                  <td>{p.name ?? 'Unmapped practice'}</td>
+                  <td className={cx(s.r, s.money)}>{formatNumber(p[metric])}</td>
                 </tr>
               ))}
             </tbody>
@@ -345,32 +317,32 @@ function EmergentDailyBreakdown({
         </div>
       )}
 
-      {isLoading && <p className="text-sm text-ink-muted">Loading days…</p>}
-      {isError && <p className="text-sm text-danger">Couldn&rsquo;t load the daily breakdown.</p>}
+      {isLoading && <p className={s.subtle} style={{ fontSize: 13 }}>Loading days…</p>}
+      {isError && <p className={cx(s.danger)} style={{ fontSize: 13 }}>Couldn&rsquo;t load the daily breakdown.</p>}
       {!isLoading && !isError && days.length === 0 && (
-        <p className="text-sm text-ink-muted">No day in this window has a figure keyed in for this metric.</p>
+        <p className={s.subtle} style={{ fontSize: 13 }}>No day in this window has a figure keyed in for this metric.</p>
       )}
 
       {days.length > 0 && (
-        <div className="overflow-x-auto" style={{ maxHeight: 420 }}>
-          <table className="w-full border-collapse" style={{ minWidth: 480 }}>
+        <div className={s.scrollX} style={{ maxHeight: 420 }}>
+          <table className={s.table} style={{ minWidth: 480 }}>
             <thead>
-              <tr className="border-b border-border">
-                <th className={`${th} text-left`}>Date</th>
-                <th className={`${th} text-left`}>Practice</th>
-                <th className={`${th} text-right`}>{title}</th>
-                {showValue && <th className={`${th} text-right`}>Value £</th>}
+              <tr>
+                <th>Date</th>
+                <th>Practice</th>
+                <th className={s.r}>{title}</th>
+                {showValue && <th className={s.r}>Value £</th>}
               </tr>
             </thead>
             <tbody>
               {days.map((l, i) => (
-                <tr key={`${l.cashupDate}-${l.practiceName ?? i}`} className="border-b border-border last:border-0">
-                  <td className={`${td} whitespace-nowrap`}>{fmtDay(l.cashupDate)}</td>
-                  <td className={td}>{l.practiceName ?? '—'}</td>
-                  <td className={`${td} text-right tabular-nums`}>{formatNumber(l[metric])}</td>
+                <tr key={`${l.cashupDate}-${l.practiceName ?? i}`}>
+                  <td style={{ whiteSpace: 'nowrap' }}>{fmtDay(l.cashupDate)}</td>
+                  <td>{l.practiceName ?? '—'}</td>
+                  <td className={cx(s.r, s.money)}>{formatNumber(l[metric])}</td>
                   {showValue && (
-                    <td className={`${td} text-right tabular-nums`}>
-                      {l.txPlanValuePence > 0 ? formatPence(l.txPlanValuePence) : <span className="text-ink-muted">not sent</span>}
+                    <td className={cx(s.r, s.money)}>
+                      {l.txPlanValuePence > 0 ? formatPence(l.txPlanValuePence) : <span className={s.subtle}>not sent</span>}
                     </td>
                   )}
                 </tr>
@@ -381,18 +353,14 @@ function EmergentDailyBreakdown({
       )}
 
       {footer}
-    </Panel>
+    </DetailPanel>
   );
 }
 
-// "New leads" is a number the practice manager types into the Emergent cash-up —
-// it has no records of its own. But the people behind it usually DO exist, in
-// the GoHighLevel pipelines, over the same window. So rather than showing a bare
-// count, look them up and show each one tagged with the pipeline it came in on.
-//
-// The two counts measure different things (Emergent's tally includes phone calls,
-// walk-ins and referrals; GoHighLevel only sees what came through a pipeline), so
-// they are reconciled openly rather than forced to agree.
+// "New leads" is a count the manager types into the cash-up — no records of its
+// own. But the people usually exist in the GoHighLevel pipelines over the same
+// window, so we look them up and tag each with the pipeline it came in on. The
+// two counts measure different things, so they are reconciled, not forced equal.
 function PipelineLeadsForWindow({
   keyedIn,
   practiceId,
@@ -409,42 +377,52 @@ function PipelineLeadsForWindow({
     limit: 500,
   });
 
-  const rows = dedupeByPerson(data?.lines ?? [], false); // one row per person, across all channels
+  const rows = dedupeByPerson(data?.lines ?? [], false);
   const byChannel = new Map<LeadChannel, number>();
   for (const r of rows) byChannel.set(r.channel, (byChannel.get(r.channel) ?? 0) + 1);
-  // The gap runs both ways, and both directions are worth saying out loud.
   const untracked = Math.max(0, keyedIn - rows.length);
   const unkeyed = Math.max(0, rows.length - keyedIn);
 
   return (
-    <Panel>
-      <PanelHead
-        title="The same leads, found in GoHighLevel"
-        sub="Every person who came in through a GoHighLevel pipeline over this window, tagged with the pipeline they arrived on. This is where the leads behind the keyed-in number actually live."
-      />
-
-      {isLoading && <p className="text-sm text-ink-muted">Looking these leads up in GoHighLevel…</p>}
-      {isError && <p className="text-sm text-danger">Couldn&rsquo;t load the pipeline leads.</p>}
+    <DetailPanel
+      title="The same leads, found in GoHighLevel"
+      sub="Every person who came in through a GoHighLevel pipeline over this window, tagged with the pipeline they arrived on. This is where the leads behind the keyed-in number actually live."
+    >
+      {isLoading && <p className={s.subtle} style={{ fontSize: 13 }}>Looking these leads up in GoHighLevel…</p>}
+      {isError && <p className={s.danger} style={{ fontSize: 13 }}>Couldn&rsquo;t load the pipeline leads.</p>}
 
       {!isLoading && !isError && (
         <>
-          <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-border bg-surface-muted/50 p-3 text-[13px]">
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: '8px 24px',
+              border: '1px solid var(--line)',
+              background: 'var(--tint2)',
+              borderRadius: 8,
+              padding: 12,
+              fontSize: 13,
+              marginBottom: 12,
+            }}
+          >
             <span>
-              <span className="text-ink-muted">Keyed into Emergent: </span>
-              <strong className="tabular-nums text-ink">{formatNumber(keyedIn)}</strong>
+              <span className={s.subtle}>Keyed into Emergent: </span>
+              <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{formatNumber(keyedIn)}</strong>
             </span>
             <span>
-              <span className="text-ink-muted">Found in GoHighLevel pipelines: </span>
-              <strong className="tabular-nums text-ink">{formatNumber(rows.length)}</strong>
+              <span className={s.subtle}>Found in GoHighLevel pipelines: </span>
+              <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{formatNumber(rows.length)}</strong>
             </span>
             {untracked > 0 ? (
-              <span className="text-ink-muted">
+              <span className={s.subtle}>
                 {formatNumber(untracked)} of the keyed-in leads have no pipeline record — phone calls, walk-ins and
                 referrals never reach GoHighLevel.
               </span>
             ) : null}
             {unkeyed > 0 ? (
-              <span className="text-ink-muted">
+              <span className={s.subtle}>
                 GoHighLevel has {formatNumber(unkeyed)} more than were keyed in — the daily tally is under-recording
                 what the pipelines actually brought in.
               </span>
@@ -452,18 +430,18 @@ function PipelineLeadsForWindow({
           </div>
 
           {rows.length > 0 && (
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 }}>
               {CHANNEL_ORDER.filter((ch) => byChannel.has(ch)).map((ch) => (
-                <span key={ch} className="flex items-center gap-1">
+                <span key={ch} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <PipelineTag channel={ch} />
-                  <span className="text-xs text-ink-muted">{formatNumber(byChannel.get(ch)!)}</span>
+                  <span className={s.subtle} style={{ fontSize: 12 }}>{formatNumber(byChannel.get(ch)!)}</span>
                 </span>
               ))}
             </div>
           )}
 
           {rows.length === 0 ? (
-            <p className="text-sm text-ink-muted">
+            <p className={s.subtle} style={{ fontSize: 13 }}>
               No GoHighLevel pipeline leads at all in this window for this practice — so every one of the{' '}
               {formatNumber(keyedIn)} keyed-in leads came in some other way, or the practice&rsquo;s GoHighLevel
               subaccount isn&rsquo;t linked under System &gt; Integrations.
@@ -473,7 +451,7 @@ function PipelineLeadsForWindow({
           )}
         </>
       )}
-    </Panel>
+    </DetailPanel>
   );
 }
 
@@ -499,126 +477,126 @@ function TreatmentSection({
     limit: 100,
   });
 
-  // Emergent sends a plan COUNT every day but only sometimes a plan value —
-  // for some practices it never does. Rendering that as "£0.00" reads as "we
-  // proposed 42 plans worth nothing"; it means "Emergent didn't tell us".
+  // Emergent sends a plan COUNT every day but only sometimes a plan value.
+  // Rendering that as "£0.00" reads as "42 plans worth nothing"; it means
+  // "Emergent didn't tell us".
   const txValueMissing = t.txPlansGiven > 0 && t.txPlanValuePence === 0;
 
   return (
     <>
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <SectionHeading
+      <SectionCard>
+        <SecHead
           n={2}
-          title="Treatment &amp; close"
-          note="What the practice proposed and what patients accepted. Keyed into Emergent by the practice each day, except Accepted, which comes from Emergent's treatment feed."
+          title="Treatment & close"
+          desc="What the practice proposed and what patients accepted. Keyed into Emergent by the practice each day, except Accepted, which comes from Emergent's treatment feed."
+          src={{ label: 'Emergent daily push' }}
         />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <KpiTile
+          <Kpi
             label="Accepted"
             value={formatNumber(t.acceptedCount)}
-            delta={formatPence(t.acceptedValuePence)}
+            note={formatPence(t.acceptedValuePence)}
             info="Treatments a patient said yes to, from Emergent's treatment feed — one record per treatment, so this is the one number here that can be opened patient by patient. Click to see them, including which ad pipeline each patient first came in on."
             onClick={() => onToggle('treatment')}
             active={active}
           />
-          <KpiTile
+          <Kpi
             label="Tx plans given"
             value={formatNumber(t.txPlansGiven)}
-            delta={txValueMissing ? 'Value not sent by Emergent' : formatPence(t.txPlanValuePence)}
-            info="Treatment plans presented to patients — the number the practice manager keys into the Emergent cash-up at the end of each day. Emergent sends a count per day and no per-plan records, so the deepest this can go is day by day. Some practices never key the plan value, which is why the value can be blank while the count is not."
+            note={txValueMissing ? 'Value not sent by Emergent' : formatPence(t.txPlanValuePence)}
+            info="Treatment plans presented to patients — the number the practice manager keys into the Emergent cash-up. Emergent sends a count per day and no per-plan records, so the deepest this can go is day by day. Some practices never key the plan value, which is why the value can be blank while the count is not."
             onClick={() => onToggle('txPlans')}
             active={drill === 'txPlans'}
           />
-          <KpiTile
+          <Kpi
             label="New leads"
             value={formatNumber(t.newLeads)}
-            delta="Keyed in — click to see who they are"
-            info="The practice manager's own daily tally of new enquiries, typed into the Emergent cash-up. The number itself has no records behind it, but the people usually do — click through and we look them up in the GoHighLevel pipelines for the same window and show each one tagged with the pipeline it came in on. Emergent's tally also counts phone calls, walk-ins and referrals, which never reach GoHighLevel, so the two counts are reconciled rather than forced to match."
+            note="Keyed in — click to see who they are"
+            info="The practice manager's own daily tally of new enquiries, typed into the Emergent cash-up. The number has no records behind it, but the people usually do — click through and we look them up in the GoHighLevel pipelines for the same window. Emergent's tally also counts phone calls, walk-ins and referrals, which never reach GoHighLevel, so the two counts are reconciled rather than forced to match."
             onClick={() => onToggle('newLeads')}
             active={drill === 'newLeads'}
           />
-          <KpiTile
+          <Kpi
             label="Attended"
             value={formatNumber(t.attended)}
-            delta={t.attended === 0 ? 'Not being keyed in' : (closeRate(t.acceptedCount, t.txPlansGiven) ?? undefined)}
-            info="Patients who attended their appointment, keyed into the Emergent cash-up each day. It reads zero because no practice is filling this field in — it is a data-entry gap in Emergent, not a day with no patients."
+            note={t.attended === 0 ? 'Not being keyed in' : (closeRate(t.acceptedCount, t.txPlansGiven) ?? undefined)}
+            info="Patients who attended their appointment, keyed into the Emergent cash-up each day. It reads zero because no practice is filling this field in — a data-entry gap in Emergent, not a day with no patients."
             onClick={() => onToggle('attended')}
             active={drill === 'attended'}
           />
         </div>
         {t.byPractice.length > 0 ? (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse text-[13px]">
+          <div className={s.scrollX} style={{ marginTop: 16 }}>
+            <table className={s.table} style={{ minWidth: 720 }}>
               <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="py-2 pr-3 font-medium">Practice</th>
-                  <th className="py-2 pr-3 text-right font-medium">Accepted</th>
-                  <th className="py-2 pr-3 text-right font-medium">Accepted value £</th>
-                  <th className="py-2 pr-3 text-right font-medium">Tx plans given</th>
-                  <th className="py-2 pr-3 text-right font-medium">Tx plan value £</th>
-                  <th className="py-2 pr-3 text-right font-medium">New leads</th>
-                  <th className="py-2 pr-3 text-right font-medium">Attended</th>
+                <tr>
+                  <th>Practice</th>
+                  <th className={s.r}>Accepted</th>
+                  <th className={s.r}>Accepted value £</th>
+                  <th className={s.r}>Tx plans given</th>
+                  <th className={s.r}>Tx plan value £</th>
+                  <th className={s.r}>New leads</th>
+                  <th className={s.r}>Attended</th>
                 </tr>
               </thead>
               <tbody>
                 {t.byPractice.map((p) => (
-                  <tr key={p.practiceId ?? p.name ?? 'unmapped'} className="border-b border-slate-100">
-                    <td className="py-2 pr-3 text-slate-900">{p.name ?? 'Unmapped practice'}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(p.acceptedCount)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatPence(p.acceptedValuePence)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(p.txPlansGiven)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatPence(p.txPlanValuePence)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(p.newLeads)}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums">{formatNumber(p.attended)}</td>
+                  <tr key={p.practiceId ?? p.name ?? 'unmapped'}>
+                    <td>{p.name ?? 'Unmapped practice'}</td>
+                    <td className={cx(s.r, s.money)}>{formatNumber(p.acceptedCount)}</td>
+                    <td className={cx(s.r, s.money)}>{formatPence(p.acceptedValuePence)}</td>
+                    <td className={cx(s.r, s.money)}>{formatNumber(p.txPlansGiven)}</td>
+                    <td className={cx(s.r, s.money)}>{formatPence(p.txPlanValuePence)}</td>
+                    <td className={cx(s.r, s.money)}>{formatNumber(p.newLeads)}</td>
+                    <td className={cx(s.r, s.money)}>{formatNumber(p.attended)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         ) : null}
-      </section>
+      </SectionCard>
 
       {active && (
-        <Panel>
-          <PanelHead
-            title="Accepted treatments"
-            sub="Every treatment accepted in this window. 'Came in on' is the GoHighLevel pipeline the patient first arrived through — that is the link between an ad and the treatment it paid for."
-          />
-          {isLoading && <p className="text-sm text-ink-muted">Loading accepted treatments…</p>}
-          {isError && <p className="text-sm text-danger">Couldn&rsquo;t load accepted treatments.</p>}
+        <DetailPanel
+          title="Accepted treatments"
+          sub="Every treatment accepted in this window. 'Came in on' is the GoHighLevel pipeline the patient first arrived through — the link between an ad and the treatment it paid for."
+        >
+          {isLoading && <p className={s.subtle} style={{ fontSize: 13 }}>Loading accepted treatments…</p>}
+          {isError && <p className={s.danger} style={{ fontSize: 13 }}>Couldn&rsquo;t load accepted treatments.</p>}
           {!isLoading && !isError && (detail?.lines.length ?? 0) === 0 && (
-            <p className="text-sm text-ink-muted">No accepted treatments in this window.</p>
+            <p className={s.subtle} style={{ fontSize: 13 }}>No accepted treatments in this window.</p>
           )}
           {(detail?.lines.length ?? 0) > 0 && (
-            <div className="overflow-x-auto" style={{ maxHeight: 480 }}>
-              <table className="w-full border-collapse" style={{ minWidth: 860 }}>
+            <div className={s.scrollX} style={{ maxHeight: 480 }}>
+              <table className={s.table} style={{ minWidth: 860 }}>
                 <thead>
-                  <tr className="border-b border-border">
+                  <tr>
                     {['Date', 'Patient', 'Treatment', 'Practice', 'Came in on', 'Value'].map((h, i) => (
-                      <th key={h} className={`${th} ${i === 5 ? 'text-right' : 'text-left'}`}>{h}</th>
+                      <th key={h} className={i === 5 ? s.r : undefined}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {detail!.lines.map((l) => (
-                    <tr key={l.id} className="border-b border-border last:border-0">
-                      <td className={`${td} whitespace-nowrap`}>{fmtDay(l.acceptedDate)}</td>
-                      <td className={td}>{l.patientName ?? '—'}</td>
-                      <td className={td}>{l.treatmentName ?? '—'}</td>
-                      <td className={td}>{l.practiceName ?? '—'}</td>
-                      <td className={td}>
+                    <tr key={l.id}>
+                      <td style={{ whiteSpace: 'nowrap' }}>{fmtDay(l.acceptedDate)}</td>
+                      <td>{l.patientName ?? '—'}</td>
+                      <td>{l.treatmentName ?? '—'}</td>
+                      <td>{l.practiceName ?? '—'}</td>
+                      <td>
                         {l.leadChannel ? (
-                          <span className="flex flex-wrap items-center gap-1">
+                          <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
                             <PipelineTag channel={l.leadChannel} pipelineName={l.leadPipelineName} />
-                            <span className="text-[12px] text-ink-muted">{l.leadPipelineName ?? '—'}</span>
+                            <span className={s.subtle} style={{ fontSize: 12 }}>{l.leadPipelineName ?? '—'}</span>
                           </span>
                         ) : (
-                          <span className="text-ink-muted" title="No GoHighLevel lead matched this patient by phone, email or name — a walk-in, a referral, or a lead we can't tie back.">
+                          <span className={s.subtle} title="No GoHighLevel lead matched this patient by phone, email or name — a walk-in, a referral, or a lead we can't tie back.">
                             Not from a tracked pipeline
                           </span>
                         )}
                       </td>
-                      <td className={`${td} text-right tabular-nums`}>{formatPence(l.valuePence)}</td>
+                      <td className={cx(s.r, s.money)}>{formatPence(l.valuePence)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -626,9 +604,9 @@ function TreatmentSection({
             </div>
           )}
           {(detail?.lines.length ?? 0) === (detail?.limit ?? 0) && (
-            <p className="mt-2 text-xs text-ink-muted">Showing the first {detail?.limit} — narrow the period or practice to see fewer at once.</p>
+            <p className={s.footNote}>Showing the first {detail?.limit} — narrow the period or practice to see fewer at once.</p>
           )}
-        </Panel>
+        </DetailPanel>
       )}
 
       {drill === 'txPlans' && (
@@ -641,7 +619,7 @@ function TreatmentSection({
           byPractice={t.byPractice}
           footer={
             txValueMissing ? (
-              <p className="mt-3 text-xs text-ink-muted">
+              <p className={s.footNote}>
                 Plan value shows as &ldquo;not sent&rdquo; because Emergent isn&rsquo;t sending a value with these plans —
                 the count is real, the £0 was not. Ask the practice to key the plan value into the cash-up and it will
                 appear here.
@@ -651,9 +629,7 @@ function TreatmentSection({
         />
       )}
 
-      {drill === 'newLeads' && (
-        <PipelineLeadsForWindow keyedIn={t.newLeads} practiceId={practiceId} win={win} />
-      )}
+      {drill === 'newLeads' && <PipelineLeadsForWindow keyedIn={t.newLeads} practiceId={practiceId} win={win} />}
 
       {drill === 'attended' && (
         <EmergentDailyBreakdown
@@ -665,7 +641,7 @@ function TreatmentSection({
           byPractice={t.byPractice}
           footer={
             t.attended === 0 ? (
-              <p className="mt-3 text-xs text-ink-muted">
+              <p className={s.footNote}>
                 No practice is keying this field into Emergent, so it reads zero everywhere. Nothing is broken here —
                 there is simply nothing being entered.
               </p>
@@ -692,6 +668,7 @@ function CashUpSection({
 }) {
   const c = data.cashUp;
   const active = drill === 'cashup';
+  const flaggedGroup = Math.abs(c.variancePence) > 5000;
   const { data: detail, isLoading, isError } = useCockpitCashupDays(active, {
     since: win.since,
     until: win.until,
@@ -701,50 +678,47 @@ function CashUpSection({
 
   return (
     <>
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <SectionHeading n={4} title="Cash up — till reconciliation" note="System revenue vs the till/terminal total — flags same-day gaps." />
+      <SectionCard>
+        <SecHead
+          n={4}
+          title="Cash up — till reconciliation"
+          desc="System revenue vs the till/terminal total — flags same-day gaps."
+          src={{ label: 'Emergent daily push' }}
+        />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          <Card label="Cash taken £" value={formatPence(c.collectedPence)} />
-          <Card label="Till detail £" value={formatPence(c.detailPence)} />
-          <KpiTile
+          <Kpi label="Cash taken £" value={formatPence(c.collectedPence)} />
+          <Kpi label="Till detail £" value={formatPence(c.detailPence)} />
+          <Kpi
             label="Variance £"
             value={formatPence(c.variancePence)}
-            delta={Math.abs(c.variancePence) > 5000 ? 'Over £50 — check today' : 'Within tolerance'}
-            deltaTone={Math.abs(c.variancePence) > 5000 ? 'down' : 'muted'}
+            tag={flaggedGroup ? { text: 'Over £50 — check today', tone: 'neg' } : { text: 'Within tolerance', tone: 'pos' }}
             onClick={onToggle}
             active={active}
           />
         </div>
         {c.byPractice.length > 0 ? (
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[560px] border-collapse text-[13px]">
+          <div className={s.scrollX} style={{ marginTop: 16 }}>
+            <table className={s.table} style={{ minWidth: 560 }}>
               <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="py-2 pr-3 font-medium">Practice</th>
-                  <th className="py-2 pr-3 text-right font-medium">Cash taken £</th>
-                  <th className="py-2 pr-3 text-right font-medium">Till detail £</th>
-                  <th className="py-2 pr-3 text-right font-medium">Variance £</th>
-                  <th className="py-2 pr-3 text-left font-medium">Status</th>
+                <tr>
+                  <th>Practice</th>
+                  <th className={s.r}>Cash taken £</th>
+                  <th className={s.r}>Till detail £</th>
+                  <th className={s.r}>Variance £</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {c.byPractice.map((p) => {
                   const flagged = Math.abs(p.variancePence) > 5000;
                   return (
-                    <tr key={p.practiceId ?? p.name ?? 'unmapped'} className="border-b border-slate-100">
-                      <td className="py-2 pr-3 text-slate-900">{p.name ?? 'Unmapped practice'}</td>
-                      <td className="py-2 pr-3 text-right tabular-nums">{formatPence(p.collectedPence)}</td>
-                      <td className="py-2 pr-3 text-right tabular-nums">{formatPence(p.detailPence)}</td>
-                      <td className="py-2 pr-3 text-right tabular-nums">{formatPence(p.variancePence)}</td>
-                      <td className="py-2 pr-3">
-                        <span
-                          className={
-                            'rounded-full px-2 py-0.5 text-[12px] font-medium ' +
-                            (flagged ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700')
-                          }
-                        >
-                          {flagged ? 'Check' : 'OK'}
-                        </span>
+                    <tr key={p.practiceId ?? p.name ?? 'unmapped'}>
+                      <td>{p.name ?? 'Unmapped practice'}</td>
+                      <td className={cx(s.r, s.money)}>{formatPence(p.collectedPence)}</td>
+                      <td className={cx(s.r, s.money)}>{formatPence(p.detailPence)}</td>
+                      <td className={cx(s.r, s.money)}>{formatPence(p.variancePence)}</td>
+                      <td>
+                        <span className={cx(s.st, flagged ? s.stBelow : s.stAbove)}>{flagged ? 'Check' : 'OK'}</span>
                       </td>
                     </tr>
                   );
@@ -753,23 +727,22 @@ function CashUpSection({
             </table>
           </div>
         ) : null}
-      </section>
+      </SectionCard>
 
       {active && (
-        <Panel>
-          <PanelHead title="Cash-up days" sub="Every day's till reconciliation in this window, most recent first — flags where the variance is over £50." />
-          {isLoading && <p className="text-sm text-ink-muted">Loading cash-up days…</p>}
-          {isError && <p className="text-sm text-danger">Couldn&rsquo;t load cash-up days.</p>}
+        <DetailPanel title="Cash-up days" sub="Every day's till reconciliation in this window, most recent first — flags where the variance is over £50.">
+          {isLoading && <p className={s.subtle} style={{ fontSize: 13 }}>Loading cash-up days…</p>}
+          {isError && <p className={s.danger} style={{ fontSize: 13 }}>Couldn&rsquo;t load cash-up days.</p>}
           {!isLoading && !isError && (detail?.lines.length ?? 0) === 0 && (
-            <p className="text-sm text-ink-muted">No cash-up rows in this window.</p>
+            <p className={s.subtle} style={{ fontSize: 13 }}>No cash-up rows in this window.</p>
           )}
           {(detail?.lines.length ?? 0) > 0 && (
-            <div className="overflow-x-auto" style={{ maxHeight: 480 }}>
-              <table className="w-full border-collapse" style={{ minWidth: 680 }}>
+            <div className={s.scrollX} style={{ maxHeight: 480 }}>
+              <table className={s.table} style={{ minWidth: 680 }}>
                 <thead>
-                  <tr className="border-b border-border">
+                  <tr>
                     {['Date', 'Practice', 'Cash taken £', 'Till detail £', 'Variance £', 'Refunds'].map((h, i) => (
-                      <th key={h} className={`${th} ${i >= 2 ? 'text-right' : 'text-left'}`}>{h}</th>
+                      <th key={h} className={i >= 2 ? s.r : undefined}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -779,13 +752,13 @@ function CashUpSection({
                     .map((l, i) => {
                       const flagged = Math.abs(l.variancePence) > 5000;
                       return (
-                        <tr key={`${l.cashupDate}-${l.practiceName ?? i}`} className="border-b border-border last:border-0">
-                          <td className={`${td} whitespace-nowrap`}>{fmtDay(l.cashupDate)}</td>
-                          <td className={td}>{l.practiceName ?? '—'}</td>
-                          <td className={`${td} text-right tabular-nums`}>{formatPence(l.cashTakenPence)}</td>
-                          <td className={`${td} text-right tabular-nums`}>{formatPence(l.detailPence)}</td>
-                          <td className={`${td} text-right tabular-nums ${flagged ? 'text-danger' : ''}`}>{formatPence(l.variancePence)}</td>
-                          <td className={`${td} text-right tabular-nums`}>{l.refunds?.length ?? 0}</td>
+                        <tr key={`${l.cashupDate}-${l.practiceName ?? i}`}>
+                          <td style={{ whiteSpace: 'nowrap' }}>{fmtDay(l.cashupDate)}</td>
+                          <td>{l.practiceName ?? '—'}</td>
+                          <td className={cx(s.r, s.money)}>{formatPence(l.cashTakenPence)}</td>
+                          <td className={cx(s.r, s.money)}>{formatPence(l.detailPence)}</td>
+                          <td className={cx(s.r, s.money, flagged && s.danger)}>{formatPence(l.variancePence)}</td>
+                          <td className={cx(s.r, s.money)}>{l.refunds?.length ?? 0}</td>
                         </tr>
                       );
                     })}
@@ -793,16 +766,14 @@ function CashUpSection({
               </table>
             </div>
           )}
-        </Panel>
+        </DetailPanel>
       )}
     </>
   );
 }
 
-// Sums a [{name,amountPence}] group's total (used for the parent-row figure
-// in the expandable P&L line-items panel below).
 function groupTotal(lines: PLLine[]): number {
-  return lines.reduce((s, l) => s + l.amountPence, 0);
+  return lines.reduce((sum, l) => sum + l.amountPence, 0);
 }
 
 function MonthlyLineItemsPanel({ data }: { data: CockpitResponse }) {
@@ -823,33 +794,35 @@ function MonthlyLineItemsPanel({ data }: { data: CockpitResponse }) {
   const noteByName = new Map<string, string>((m.lineNotes as PLLineNote[]).map((n) => [n.name, n.note]));
 
   if (groups.length === 0) {
-    return <p className="mt-3 text-xs text-slate-400">No itemised P&amp;L lines from Emergent for this month.</p>;
+    return <p className={s.footNote}>No itemised P&amp;L lines from Emergent for this month.</p>;
   }
 
   return (
-    <div className="mt-4 overflow-x-auto">
-      <table className="w-full border-collapse" style={{ minWidth: 420 }}>
+    <div className={s.scrollX} style={{ marginTop: 8 }}>
+      <table className={s.table} style={{ minWidth: 420 }}>
         <tbody>
           {groups.map((g) => {
             const isOpen = expanded.has(g.key);
             return (
               <Fragment key={g.key}>
-                <tr className="border-b border-border cursor-pointer hover:bg-surface-muted" onClick={() => toggleRow(g.key)}>
-                  <td className={`${td} font-semibold`}>
-                    <span className="inline-block w-3 mr-1 text-[10px] text-ink-muted" aria-hidden>{isOpen ? '▾' : '▸'}</span>
+                <tr className={s.rowClickable} onClick={() => toggleRow(g.key)}>
+                  <td style={{ fontWeight: 600 }}>
+                    <span style={{ display: 'inline-block', width: 12, marginRight: 4, fontSize: 10, color: 'var(--muted)' }} aria-hidden>
+                      {isOpen ? '▾' : '▸'}
+                    </span>
                     {g.label}
-                    <span className="ml-1 text-[11px] text-ink-muted">({g.lines.length})</span>
+                    <span className={s.subtle} style={{ marginLeft: 4, fontSize: 11 }}>({g.lines.length})</span>
                   </td>
-                  <td className={`${td} text-right tabular-nums font-semibold`}>{formatPence(groupTotal(g.lines))}</td>
+                  <td className={cx(s.r, s.money)}>{formatPence(groupTotal(g.lines))}</td>
                 </tr>
                 {isOpen &&
                   g.lines.map((l) => (
-                    <tr key={`${g.key}:${l.name}`} className="border-b border-border last:border-0 bg-surface-muted/40">
-                      <td className={`${td} pl-7 text-ink-muted`} title={noteByName.get(l.name)}>
+                    <tr key={`${g.key}:${l.name}`} style={{ background: 'var(--tint2)' }}>
+                      <td className={s.subtle} style={{ paddingLeft: 28 }} title={noteByName.get(l.name)}>
                         {l.name}
-                        {noteByName.has(l.name) ? <span className="ml-1 text-[10px] text-ink-muted">note</span> : null}
+                        {noteByName.has(l.name) ? <span className={s.subtle} style={{ marginLeft: 4, fontSize: 10 }}>note</span> : null}
                       </td>
-                      <td className={`${td} text-right tabular-nums text-ink-muted`}>{formatPence(l.amountPence)}</td>
+                      <td className={cx(s.r, s.money, s.subtle)}>{formatPence(l.amountPence)}</td>
                     </tr>
                   ))}
               </Fragment>
@@ -864,71 +837,67 @@ function MonthlyLineItemsPanel({ data }: { data: CockpitResponse }) {
 function MonthlySection({ data }: { data: CockpitResponse }) {
   const m = data.monthly;
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-4">
-      <SectionHeading n={5} title={`Monthly revenue — ${periodMonthLabel(m.periodMonth)}`} note="The latest month Emergent has sent a P&amp;L for." />
+    <SectionCard>
+      <SecHead
+        n={5}
+        title={`Monthly revenue & P&L — ${periodMonthLabel(m.periodMonth)}`}
+        desc="The latest month Emergent has sent a P&L for."
+        src={{ label: 'Emergent P&L push + Xero' }}
+      />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Card label="Revenue" value={formatPence(m.revenuePence)} />
-        <Card
+        <Kpi label="Revenue" value={formatPence(m.revenuePence)} />
+        <Kpi
           label="Net profit"
           value={formatPence(m.netProfitPence)}
-          sub={m.marginPct === null ? undefined : `${m.marginPct.toFixed(1)}% margin`}
+          tag={m.marginPct === null ? undefined : { text: `${m.marginPct.toFixed(1)}% margin`, tone: m.netProfitPence >= 0 ? 'pos' : 'neg' }}
         />
-        <Card
+        <Kpi
           label="Clinician fees"
           value={formatPence(m.clinicianFeesPence)}
-          sub={
-            m.revenuePence > 0
-              ? `${((m.clinicianFeesPence / m.revenuePence) * 100).toFixed(1)}% of revenue`
-              : undefined
-          }
+          note={m.revenuePence > 0 ? `${((m.clinicianFeesPence / m.revenuePence) * 100).toFixed(1)}% of revenue` : undefined}
         />
-        <Card
-          label="Lab &amp; overhead"
-          value={formatPence(m.labOverheadPence)}
-          sub="Lab, materials, rent, staff, marketing"
-        />
+        <Kpi label="Lab & overhead" value={formatPence(m.labOverheadPence)} note="Lab, materials, rent, staff, marketing" />
       </div>
       {/* Gated on revenuePence > 0 deliberately: a zero-revenue month means
-          Emergent hasn't sent a P&L feed for this org/period at all (nothing
-          to reconcile), not a reconciliation failure — showing the residual
-          banner there would flag a non-issue as a broken feed. */}
+          Emergent hasn't sent a P&L feed for this org/period at all (nothing to
+          reconcile), not a reconciliation failure. */}
       {m.residualPence !== 0 && m.revenuePence > 0 ? (
-        <p className="mt-3 text-xs text-slate-400">
+        <p className={s.footNote}>
           Emergent&rsquo;s P&amp;L lines don&rsquo;t reconcile to the net profit it sent &mdash;{' '}
           {formatPence(Math.abs(m.residualPence))} is {m.residualPence > 0 ? 'unaccounted for' : 'double-counted'}. The
           cards above show what Emergent actually sent, not a balanced figure.
         </p>
       ) : null}
       {m.byBusiness.length > 0 ? (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[420px] border-collapse text-[13px]">
+        <div className={s.scrollX} style={{ marginTop: 16 }}>
+          <table className={s.table} style={{ minWidth: 420 }}>
             <thead>
-              <tr className="border-b border-slate-200 text-left text-slate-500">
-                <th className="py-2 pr-3 font-medium">Business</th>
-                <th className="py-2 pr-3 text-right font-medium">Revenue £</th>
-                <th className="py-2 pr-3 text-right font-medium">Net profit £</th>
+              <tr>
+                <th>Business</th>
+                <th className={s.r}>Revenue £</th>
+                <th className={s.r}>Net profit £</th>
               </tr>
             </thead>
             <tbody>
               {m.byBusiness.map((b) => (
-                <tr key={b.practiceId ?? b.name ?? 'unmapped'} className="border-b border-slate-100">
-                  <td className="py-2 pr-3 text-slate-900">{b.name ?? 'Unmapped practice'}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums">{formatPence(b.revenuePence)}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums">{formatPence(b.netProfitPence)}</td>
+                <tr key={b.practiceId ?? b.name ?? 'unmapped'}>
+                  <td>{b.name ?? 'Unmapped practice'}</td>
+                  <td className={cx(s.r, s.money)}>{formatPence(b.revenuePence)}</td>
+                  <td className={cx(s.r, s.money)}>{formatPence(b.netProfitPence)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       ) : (
-        <p className="mt-3 text-xs text-slate-400">No monthly P&amp;L data from Emergent yet for this org.</p>
+        <p className={s.footNote}>No monthly P&amp;L data from Emergent yet for this org.</p>
       )}
 
-      <div className="mt-5">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Line items</h3>
+      <div style={{ marginTop: 20 }}>
+        <h3 className={s.lbl} style={{ display: 'block' }}>Line items</h3>
         <MonthlyLineItemsPanel data={data} />
       </div>
-    </section>
+    </SectionCard>
   );
 }
 
@@ -939,9 +908,9 @@ export default function CockpitScreen() {
   const [drill, setDrill] = useState<Drill>(null);
   const toggle = (m: Exclude<Drill, null>) => setDrill((cur) => (cur === m ? null : m));
 
-  // The scope bar only carries the practice id; the payload is where the name
-  // lives. Either feed can name it — a practice may have Emergent cash-up but
-  // no GoHighLevel subaccount, or the other way round.
+  // The scope bar carries only the practice id; the payload names it. Either
+  // feed can name it — a practice may have Emergent cash-up but no GoHighLevel
+  // subaccount, or the other way round.
   const practiceName = practiceId
     ? data?.treatment.byPractice.find((p) => p.practiceId === practiceId)?.name ??
       data?.leadRoi.channels.find((c) => c.practiceId === practiceId)?.practiceName ??
@@ -949,37 +918,46 @@ export default function CockpitScreen() {
     : null;
 
   return (
-    <div className="space-y-4 p-4">
-      <div>
-        <h1 className="text-lg font-semibold text-slate-900">Daily Command Cockpit</h1>
-        <p className="text-[13px] text-slate-500">
-          One-page daily snapshot: cash taken, treatment closed, lead performance, and till reconciliation.
-        </p>
+    <div className={s.shell}>
+      <div className={s.wrap}>
+        <div className={s.topbar}>
+          <div className={s.h1}>
+            Daily Command Cockpit
+          </div>
+          <div className={s.sub}>
+            One-page daily snapshot: cash taken, treatment closed, lead performance, till reconciliation, profit vs
+            breakeven and revenue by line.
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <ScopePeriodBar />
+          </div>
+          <div className={s.legend}>
+            <span><span className={s.swatch} style={{ background: 'var(--pos)' }} />above breakeven</span>
+            <span><span className={s.swatch} style={{ background: 'var(--neg)' }} />below breakeven</span>
+            <span>Money in £ pence, integer throughout.</span>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className={s.stateBox}>Loading…</div>
+        ) : isError ? (
+          <div className={cx(s.stateBox, s.errorBox)}>Could not load the cockpit data. Retry shortly.</div>
+        ) : !data ? (
+          <div className={s.stateBox}>No data for this window.</div>
+        ) : (
+          <>
+            <RevenueSection data={data} practiceId={practiceId} drill={drill} onToggle={() => toggle('revenue')} />
+            <TreatmentSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={toggle} />
+            <LeadPerformanceChart channels={data.leadRoi.channels} />
+            <LeadComparison data={data.leadRoi} practiceId={practiceId} practiceName={practiceName} win={win} />
+            <CashUpSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('cashup')} />
+            <BreakevenSection data={data.breakeven} />
+            <MonthlySection data={data} />
+            <RevenueByLine lines={data.revenueByLine} />
+            <p className={s.lastUpdated}>Last updated {formatDate(data.updatedAt)}</p>
+          </>
+        )}
       </div>
-
-      <ScopePeriodBar />
-
-      {isLoading ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500">Loading…</div>
-      ) : isError ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-8 text-center text-rose-700">
-          Could not load the cockpit data. Retry shortly.
-        </div>
-      ) : !data ? (
-        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500">No data for this window.</div>
-      ) : (
-        <div className="space-y-4">
-          <RevenueSection data={data} practiceId={practiceId} drill={drill} onToggle={() => toggle('revenue')} />
-          <TreatmentSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={toggle} />
-          <LeadPerformanceChart channels={data.leadRoi.channels} />
-          <LeadComparison data={data.leadRoi} practiceId={practiceId} practiceName={practiceName} win={win} />
-          <CashUpSection data={data} practiceId={practiceId} win={win} drill={drill} onToggle={() => toggle('cashup')} />
-          <BreakevenSection data={data.breakeven} />
-          <MonthlySection data={data} />
-          <RevenueByLine lines={data.revenueByLine} />
-          <p className="text-right text-[11px] text-slate-400">Last updated {formatDate(data.updatedAt)}</p>
-        </div>
-      )}
     </div>
   );
 }
