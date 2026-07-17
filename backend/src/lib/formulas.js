@@ -1267,13 +1267,17 @@ export function calculateRetention({ active = 0, lapsed = 0, dormant = 0 } = {},
 // reality and flips practices from below to above breakeven.
 //
 // The identity breakevenDay === breakevenMid/workingDays is the check that the
-// margin is right: fixedDay/margin = (fixed/wd)/(fixed/mid) = mid/wd. The
-// mockup's own £2,464/day implied a £49,280/mo breakeven, contradicting the
-// £81-86k/mo it stated two lines earlier.
+// margin is right: fixedDay/margin = (fixed/wd)/(fixed/mid) = mid/wd. This
+// REDUCES to that identity within +/-1p: fixedDay is itself a rounded pence
+// value (fixed/workingDaysPerMonth), so breakevenDay = pence(fixedDay/margin)
+// can differ from round(mid/wd) by a penny when fixed doesn't divide evenly
+// across the month. The mockup's own £2,464/day implied a £49,280/mo
+// breakeven, contradicting the £81-86k/mo it stated two lines earlier.
 //
-// NULLS, NOT ZEROS. Without a usable model every derived figure is null and
-// status is 'not_set'. A practice with no cost model has not made £0 profit —
-// we simply cannot say, and £0 would drag a group total down with a fiction.
+// NULLS, NOT ZEROS. Without a usable model every derived figure — including
+// breakevenMidPence — is null and status is 'not_set'. A practice with no cost
+// model has not made £0 profit — we simply cannot say, and £0 would drag a
+// group total down with a fiction.
 export function calculateBreakeven({
     revenuePence = 0,
     fixedCostPenceMonth = 0,
@@ -1294,7 +1298,7 @@ export function calculateBreakeven({
 
     if (!usable) {
         return {
-            breakevenMidPence,
+            breakevenMidPence: null,
             contributionMarginPct: null,
             fixedDayPence: null,
             breakevenDayPence: null,
