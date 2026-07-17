@@ -1168,3 +1168,35 @@ windows before 10 Jun 2026** — that's where `invoice_items` starts, not a zero
 - `GET /api/cockpit/leads?since&until&practiceId&channel&limit&offset` -> `{ window, lines[], limit, offset }`. Each line: `{ id, contactId, createdAt, practiceName, channel, pipelineName, name, email, phone, converted, matchedValuePence, matchedTreatmentName, matchedPatientName, matchedAcceptedDate }`. `limit` defaults 100, capped 500.
 - `GET /api/cockpit/treatments?since&until&practiceId&limit&offset` -> accepted treatments, each tagged with the ad pipeline the patient **first** came in on: `{ id, acceptedDate, practiceName, patientName, treatmentName, valuePence, source, leadChannel, leadPipelineName, leadCreatedAt }`. The last three are `null` when no GoHighLevel lead matches the patient (walk-in, referral, or unmatchable). Backed by the `cockpit_accepted_lead_source` RPC (migration `…000112`) — phone → email → practice-scoped name, earliest lead wins.
 - `GET /api/cockpit/cashup-days?since&until&practiceId&limit&offset` -> `{ window, lines[] }`, one row per cash-up day: `{ cashupDate, practiceName, cashTakenPence, detailPence, variancePence, txPlansGiven, txPlanValuePence, newLeads, attended, refunds[] }`. **This day list is the deepest `txPlansGiven` / `newLeads` / `attended` can be drilled** — Emergent's cash-up sends a manager-keyed count per day and no per-plan or per-lead records.
+
+### `GET /api/cockpit/cost-model?asOf=YYYY-MM-DD`
+
+The manual per-practice inputs behind §6 Profit vs Breakeven and §1's Daily
+target. `finance.view`. `asOf` defaults to today; the read returns the model **in
+force on that date** (latest `effective_from <= asOf`), so a past window is
+costed with the model that was actually in force then.
+
+```
+{ asOf, rows: [{ practiceId, name, effectiveFrom, fixedCostPenceMonth,
+                 breakevenLowPence, breakevenHighPence, workingDaysPerMonth,
+                 revenueTargetPenceMonth }] }
+```
+
+One row per **active practice**, not per stored model — a practice with no model
+returns `null` for every input (and `effectiveFrom: null`), never `0`.
+`workingDaysPerMonth` defaults to 20.
+
+### `PUT /api/cockpit/cost-model/:practiceId`
+
+**Owner only** (`requireRole('owner')`) — rule 5 makes Practice Manager finance
+access owner-toggled, so a manager cannot set targets by default. Body is any
+subset of `{ fixedCostPenceMonth, breakevenLowPence, breakevenHighPence,
+workingDaysPerMonth, revenueTargetPenceMonth }`; money is integer **pence**.
+Omitted fields are left untouched.
+
+Writes at `effective_from = today`, upserting on `(practice_id, effective_from)`
+— so two edits in one day update one row rather than stacking two, and yesterday's
+model is preserved. Returns the written row in the same shape as the list.
+
+`400` on a malformed `practiceId`, an empty body, or `breakevenLowPence >
+breakevenHighPence`.
