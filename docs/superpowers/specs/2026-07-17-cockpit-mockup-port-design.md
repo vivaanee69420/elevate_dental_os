@@ -207,9 +207,12 @@ Note: the latest Emergent P&L for Plan4growth is **June 2026**, not July. The ex
 ### §7 Revenue by line
 
 Port the horizontal bar chart onto the cockpit, reusing the existing treatment-mix RPC, scoped
-to the same `ScopePeriodBar`. **Known limitation:** `invoice_items` for Plan4growth only runs
-from 10 Jun 2026, so windows before that render empty. The empty state must say so rather than
-implying zero revenue.
+to the same `ScopePeriodBar`. **Correction (post-review):** an earlier draft of this spec
+claimed `invoice_items` for Plan4growth only runs from 10 Jun 2026 — that figure was
+`min(created_at)` (when rows were synced), not `min(invoiced_on)` (the period they actually
+cover, which runs back to mid-2025 live). There is no fixed cutoff date; a window/practice can
+legitimately have no invoiced lines for either reason (nothing invoiced, or no Dentally feed for
+that practice), and the empty state must say so without asserting a specific date.
 
 ## Phase B — Profit vs Breakeven (the core ask)
 
