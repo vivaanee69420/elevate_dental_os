@@ -34,7 +34,7 @@ The real gaps are §6 (doesn't exist), the extra cards on §1 and §5, per-pract
 | 3 | **Per-practice cost inputs, historised** in a new `practice_cost_model` table, read as-of the window. | Matches the precedent set for business-health baseline/targets (memory `manual-input-history`). A rent rise must not rewrite March. |
 | 4 | **Daily target typed into the card**, per-practice; group = sum, read-only. | User instruction: "targets will be manually added on the card itself". Group-as-sum means the group figure can never drift from its parts. |
 | 5 | **Per-practice ad spend via the `ad_accounts.practice_id` join, with unmapped shown as its own row.** | Never invent attribution; make the gap visible so it gets fixed. |
-| 6 | **Rename the practice rows to site names.** | See "The naming problem" below. |
+| 6 | **Rename the practice rows to site names**, and create Warwick Lodge with an explicit "Not reporting" state. | See "The naming problem" below. A £0 would read as "traded nothing"; the truth is "no feed configured". |
 | 7 | **Keep the existing "New leads" card**; do not build "New patients seen". | Emergent sends no new-vs-existing field. The existing card already reconciles keyed-in vs GoHighLevel. |
 | 8 | **Add "Revenue by line" to the cockpit.** | The mockup shows it on this page. |
 
@@ -83,8 +83,17 @@ a **naming** problem. `emergent_practice_map` for Plan4growth shows:
 | Elevate360 Academy | *(unmapped — correct, not a practice)* | 1 | 3 Mar 2026 |
 | Webhook Test Ping | *(unmapped — test artifact)* | 0 | — |
 
-Barnet is already on the cockpit, under a name nobody recognises. Only **Warwick Lodge** is
-genuinely absent (no Emergent business, no cash-up, no ad account).
+Barnet is already on the cockpit, under a name nobody recognises.
+
+**Bexleyheath and Fixed Teeth Solutions are the same site** (confirmed by the owner, 2026-07-17).
+The current map is therefore correct: the Bexleyheath business belongs on the FTS practice row, and
+the Meta account "GM - FTS" maps to that same practice. The mockup listing them as two separate
+practices was an error. QuickBooks independently corroborates this — one of the four live
+companies is "Gmd Bexleyheath Ltd".
+
+**Warwick Lodge is a real practice** (confirmed by the owner, 2026-07-17) but has no data feed of
+any kind: no Emergent business, no cash-up, no ad account, no GoHighLevel subaccount. See
+"Warwick Lodge" under Phase 0.
 
 A fifth practice row, `675c4bfc-fa5f-480e-a120-876a81ddcc0c` "GM Dental And Implant Centre",
 has **zero** cash-up rows, zero GHL accounts and zero ad accounts. This is the dead duplicate
@@ -98,15 +107,35 @@ Run against Plan4growth only.
    - `bf70e504…` → `Ashford`
    - `853affdd…` → `Barnet`
    - `a0ddc392…` → `Rochester`
-   - `03117019…` → `Bexleyheath (Fixed Teeth Solutions)` *(default — see Open questions)*
+   - `03117019…` → `Bexleyheath (Fixed Teeth Solutions)` — one site, two names both in active use
+     (Emergent says Bexleyheath, Meta says FTS), so the compound name keeps both recognisable.
 2. Delete the dead duplicate practice `675c4bfc…` after re-verifying it still has zero
    dependent rows.
-3. Reconnect the three GoHighLevel subaccounts currently `status = 'failed'` (Barnet,
+3. **Create the Warwick Lodge practice row.** See below.
+4. Reconnect the three GoHighLevel subaccounts currently `status = 'failed'` (Barnet,
    Rochester, Ashford). Only Bexleyheath/FTS is `active`; §3's lead counts are going stale.
-4. Populate `ad_accounts.practice_id` via the Phase C UI once it ships.
+5. Populate `ad_accounts.practice_id` via the Phase C UI once it ships.
 
-**Not done here:** creating Warwick Lodge, or splitting Bexleyheath from FTS. Both need
-Gaurav's answer first.
+### Warwick Lodge
+
+A real practice with **no data feed of any kind** — no Emergent business, no cash-up, no ad
+account, no GoHighLevel subaccount. Its row is created now so the gap is visible and gets fixed,
+rather than the practice being silently invisible.
+
+Every section that reads a Warwick Lodge figure must render an explicit **"Not reporting —
+Emergent isn't sending a Warwick Lodge business"** state, *never* `£0`. A zero would read as "traded
+nothing today", which is precisely the £0.00 failure the mockup is complaining about; the truth is
+"nobody has configured the feed".
+
+Consequently Warwick Lodge is **excluded from the Group row** in §6 and from the group sums in §1
+(it has no cash-up days, so `working_days_in_window = 0` and it falls out naturally — the same
+guard that handles a practice with no cost model). It appears in the scope selector.
+
+Nothing else can substitute: §5 reads `emergent_monthly_pl`, not QuickBooks, so mapping Warwick
+Lodge to a QuickBooks company would not populate the cockpit.
+
+**Owner action required:** configure Emergent to send a Warwick Lodge business. The Emergent map
+auto-discovers businesses on every sync, so the row will light up on its own once cash-up arrives.
 
 ## Phase A — cards from existing data
 
@@ -283,9 +312,13 @@ All six accounts have `practice_id = null`. The names map cleanly and line up wi
 | meta_ads | GM Dental Ashford | £90,752.08 | Ashford |
 | meta_ads | GM Dental Barnet | £45,710.55 | Barnet |
 | meta_ads | GM Dental And Implant Centre I | £94,585.84 | **ambiguous — needs Gaurav** |
-| meta_ads | GM - FTS | £0.00 | Bexleyheath/FTS |
+| meta_ads | GM - FTS | £0.00 | Bexleyheath (Fixed Teeth Solutions) — same site, confirmed |
 | google_ads | GM-Dental-Rochester | £41,291.60 | Rochester |
 | google_ads | *(unnamed, 9074914150)* | £0.00 | unknown |
+
+Four of the six map on sight. The two that don't stay unmapped and surface in the unmapped row —
+the £94,585.84 account is the largest spender, so leaving it unattributed is materially better than
+guessing which practice it belongs to.
 
 ### Known data hazard — spend split across two orgs
 
@@ -334,20 +367,30 @@ Frontend has no test framework; not gated by CI. Verify via `npm run typecheck` 
   its own investigation.
 - "New patients seen" / new-vs-existing split (decision 7). Derivable from Dentally's 109k
   appointments if ever wanted, but not now.
-- Creating Warwick Lodge; splitting Bexleyheath from FTS.
 - Restyling the cockpit or the app to the mockup's green/serif language.
+- Mapping QuickBooks companies to practices. The four live companies (G Mehta Limited, Gmd
+  Bexleyheath Ltd, Gmvalley Limited, Smilevalley Limited) have no practice mapping by design
+  (memory `quickbooks-multi-account`), and the cockpit doesn't read them — §5 uses
+  `emergent_monthly_pl`.
 
-## Open questions (need Gaurav, not blocking Phase A/B)
+## Resolved by the owner, 2026-07-17
 
-1. **Is Bexleyheath the same site as Fixed Teeth Solutions?** Emergent has a Bexleyheath business
-   and no FTS business, yet there is a live Meta account named "GM - FTS", and the mockup lists
-   both as separate practices. Either FTS is the brand operating at the Bexleyheath site (4
-   practices, current map correct), or they are distinct (5 practices, and Bexleyheath's cash-up
-   is currently landing on the wrong row). **Default until answered:** name the row
-   "Bexleyheath (Fixed Teeth Solutions)" so neither name is lost.
-2. **Is Warwick Lodge real?** No Emergent business, no cash-up, no ad account, no practice row.
-3. **Which practice is the Meta account "GM Dental And Implant Centre I"?** It is the largest
-   spender at £94,585.84 and its name matches no practice cleanly. Stays unmapped until answered.
-4. **What is the actual daily target?** The mockup's card says £40,000 while its own note says
-   "£2M/mo ÷ 20 · £100k/day". Moot for the build — the figure is typed into the card — but the
-   real per-practice numbers are needed to make §1 useful.
+1. **Bexleyheath and Fixed Teeth Solutions are the same site.** The existing map is correct; the
+   mockup listing them separately was an error. Practice count stays at 4 reporting + Warwick Lodge.
+2. **Warwick Lodge is real.** Its row is created in Phase 0 with an explicit "Not reporting" state
+   until Emergent is configured to send it.
+
+## Open questions (need Gaurav, not blocking any phase)
+
+1. **Which practice is the Meta account "GM Dental And Implant Centre I"?** It is the largest
+   spender at £94,585.84 and its name matches no practice cleanly. Stays in the unmapped row until
+   answered — its spend is excluded from every practice's CPL/ROAS rather than guessed at.
+2. **Which practice, if any, is the unnamed Google account `9074914150`?** £0 spend, so immaterial
+   for now.
+3. **What are the real per-practice daily targets?** The mockup's card says £40,000 while its own
+   note says "£2M/mo ÷ 20 · £100k/day". Moot for the build — the figure is typed into the card —
+   but the real numbers are needed before §1's target card means anything.
+4. **Should Elevate360 Academy be surfaced anywhere?** It is an Emergent business (1 cash-up row,
+   3 Mar 2026) and correctly not a dental practice, so it is excluded from the cockpit. The
+   mockup's FIX #5 mentions "Academy/Lab", which may mean Gaurav wants them reported somewhere —
+   but not, on the evidence, as practices on this page.
