@@ -257,4 +257,18 @@ export const cockpitRepository = {
         const latest = rows[0].period_month;
         return { periodMonth: latest, rows: rows.filter(r => r.period_month === latest) };
     },
+
+    // §7 Revenue by line — invoiced fee per treatment name, via the same RPC
+    // the analytics treatment-revenue matrix uses (migration 000041). The RPC
+    // has no practice param; it returns practice_id per row, so the caller
+    // filters. organisation_id is passed as p_org — the RPC filters on it.
+    async revenueByLine(orgId, since, until) {
+        const { data, error } = await supabase_1.serviceClient.rpc('treatment_revenue_matrix', {
+            p_org: orgId,
+            p_since: since,
+            p_until: until,
+        });
+        if (error) throw new Error(`treatment_revenue_matrix: ${error.message}`);
+        return data ?? [];
+    },
 };

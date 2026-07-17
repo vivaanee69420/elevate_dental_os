@@ -122,6 +122,13 @@ export interface PLLineNote {
   note: string;
 }
 
+export interface RevenueLine {
+  name: string;
+  amountPence: number;
+  /** Share of the window's invoiced total, 0–100, 1dp. */
+  sharePct: number;
+}
+
 export interface CockpitResponse {
   window: { since: string | null; until: string | null };
   revenue: {
@@ -139,6 +146,7 @@ export interface CockpitResponse {
     byPractice: CockpitPracticeTreatment[];
   };
   leadRoi: LeadRoi;
+  revenueByLine: RevenueLine[];
   cashUp: {
     collectedPence: number;
     detailPence: number;
