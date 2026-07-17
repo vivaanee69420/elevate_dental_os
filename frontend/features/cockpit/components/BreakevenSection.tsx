@@ -9,11 +9,12 @@
 //
 // Practices with no cost model ("Not set") and no cash-up feed ("Not reporting")
 // show their state rather than £0, and are excluded from the Group row.
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Panel, PanelHead, th, td } from '@/features/intelligence/components/os-ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useCostModel, useSaveCostModel } from '../hooks';
 import type { BreakevenRow, BreakevenStatus, CockpitResponse } from '../api';
+import type { CostModelRow } from '../cost-model-api';
 
 const STATUS_LABEL: Record<BreakevenStatus, string> = {
   above: 'Above',
@@ -36,22 +37,50 @@ function StatusPill({ status }: { status: BreakevenStatus }) {
 // earned nothing, we simply cannot say.
 const money = (v: number | null) => (v === null ? <span className="text-ink-muted">&mdash;</span> : formatPence(v));
 
+// A stored 0 must seed as "0", not "" — "" round-trips back to null on save.
+const poundsFromPence = (p: number | null | undefined) => (p == null ? '' : String(p / 100));
+
 function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => void }) {
-  const { data } = useCostModel();
+  const { data, isPending } = useCostModel();
+
+  if (isPending) {
+    return (
+      <tr className="bg-slate-50">
+        <td className={td} colSpan={7}>
+          Loading the cost model&hellip;
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <CostModelForm row={row} current={data?.rows.find((r) => r.practiceId === row.practiceId)} onDone={onDone} />
+  );
+}
+
+function CostModelForm({
+  row,
+  current,
+  onDone,
+}: {
+  row: BreakevenRow;
+  current: CostModelRow | undefined;
+  onDone: () => void;
+}) {
   const save = useSaveCostModel();
-  const current = data?.rows.find((r) => r.practiceId === row.practiceId);
 
   // Edit in whole pounds; convert to integer pence at the boundary.
-  const [fixed, setFixed] = useState(() => (current?.fixedCostPenceMonth ?? 0) / 100 || '');
-  const [low, setLow] = useState(() => (current?.breakevenLowPence ?? 0) / 100 || '');
-  const [high, setHigh] = useState(() => (current?.breakevenHighPence ?? 0) / 100 || '');
-  const [days, setDays] = useState(() => current?.workingDaysPerMonth ?? 20);
+  const [fixed, setFixed] = useState(() => poundsFromPence(current?.fixedCostPenceMonth));
+  const [low, setLow] = useState(() => poundsFromPence(current?.breakevenLowPence));
+  const [high, setHigh] = useState(() => poundsFromPence(current?.breakevenHighPence));
+  const [days, setDays] = useState(() => String(current?.workingDaysPerMonth ?? 20));
 
   const toPence = (v: string | number) => Math.round(Number(v) * 100);
   const invalid = low !== '' && high !== '' && Number(low) > Number(high);
+  const daysInvalid = days === '' || Number(days) < 1;
 
   const submit = () => {
-    if (invalid) return;
+    if (invalid || daysInvalid) return;
     save.mutate(
       {
         practiceId: row.practiceId,
@@ -86,12 +115,12 @@ function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => voi
           </label>
           <label className="text-[12px] text-slate-600">
             Working days / month<br />
-            <input className={field} type="number" min={1} max={31} value={days} onChange={(e) => setDays(Number(e.target.value))} />
+            <input className={field} type="number" min={1} max={31} value={days} onChange={(e) => setDays(e.target.value)} />
           </label>
           <button
             type="button"
             onClick={submit}
-            disabled={save.isPending || invalid}
+            disabled={save.isPending || invalid || daysInvalid}
             className="rounded bg-slate-900 px-3 py-1.5 text-[13px] font-medium text-white disabled:opacity-40"
           >
             {save.isPending ? 'Saving…' : 'Save'}
@@ -103,6 +132,7 @@ function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => voi
         {invalid ? (
           <p className="mt-2 text-xs text-danger">Breakeven low can&rsquo;t be higher than breakeven high.</p>
         ) : null}
+        {daysInvalid ? <p className="mt-2 text-xs text-danger">Working days must be at least 1.</p> : null}
         {save.isError ? (
           <p className="mt-2 text-xs text-danger">
             Couldn&rsquo;t save your changes.
@@ -110,7 +140,9 @@ function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => voi
           </p>
         ) : null}
         <p className="mt-2 text-xs text-ink-muted">
-          Saved against today, so past months keep the costs that were actually in force then.
+          These fields show today&rsquo;s cost model, which may differ from the figures in the table above if you are
+          viewing an earlier period. Saved against today, so past months keep the costs that were actually in force
+          then.
         </p>
       </td>
     </tr>
@@ -142,29 +174,31 @@ export function BreakevenSection({ data }: { data: CockpitResponse['breakeven'] 
           </thead>
           <tbody>
             {data.rows.map((r) => (
-              <tr key={r.practiceId} className="border-b border-border">
-                <td className={td}>
-                  <button type="button" className="text-left underline decoration-dotted" onClick={() => setEditing(editing === r.practiceId ? null : r.practiceId)}>
-                    {r.name}
-                  </button>
-                  {r.status === 'not_reporting' ? (
-                    <div className="text-[11px] text-ink-muted">Emergent isn&rsquo;t sending a business for this practice</div>
-                  ) : null}
-                  {r.status === 'not_set' ? (
-                    <div className="text-[11px] text-ink-muted">No cost model &mdash; click to set one</div>
-                  ) : null}
-                </td>
-                <td className={`${td} text-right tabular-nums`}>{money(r.revenuePence)}</td>
-                <td className={`${td} text-right tabular-nums`}>{money(r.breakevenDayPence)}</td>
-                <td className={`${td} text-right tabular-nums`}>{money(r.contributionPence)}</td>
-                <td className={`${td} text-right tabular-nums`}>{money(r.fixedPence)}</td>
-                <td className={`${td} text-right tabular-nums ${r.profitPence !== null && r.profitPence < 0 ? 'text-danger' : ''}`}>
-                  {money(r.profitPence)}
-                </td>
-                <td className={td}><StatusPill status={r.status} /></td>
-              </tr>
+              <Fragment key={r.practiceId}>
+                <tr className="border-b border-border">
+                  <td className={td}>
+                    <button type="button" className="text-left underline decoration-dotted" onClick={() => setEditing(editing === r.practiceId ? null : r.practiceId)}>
+                      {r.name}
+                    </button>
+                    {r.status === 'not_reporting' ? (
+                      <div className="text-[11px] text-ink-muted">Emergent isn&rsquo;t sending a business for this practice</div>
+                    ) : null}
+                    {r.status === 'not_set' ? (
+                      <div className="text-[11px] text-ink-muted">No cost model &mdash; click to set one</div>
+                    ) : null}
+                  </td>
+                  <td className={`${td} text-right tabular-nums`}>{money(r.revenuePence)}</td>
+                  <td className={`${td} text-right tabular-nums`}>{money(r.breakevenDayPence)}</td>
+                  <td className={`${td} text-right tabular-nums`}>{money(r.contributionPence)}</td>
+                  <td className={`${td} text-right tabular-nums`}>{money(r.fixedPence)}</td>
+                  <td className={`${td} text-right tabular-nums ${r.profitPence !== null && r.profitPence < 0 ? 'text-danger' : ''}`}>
+                    {money(r.profitPence)}
+                  </td>
+                  <td className={td}><StatusPill status={r.status} /></td>
+                </tr>
+                {editing === r.practiceId ? <CostModelEditor row={r} onDone={() => setEditing(null)} /> : null}
+              </Fragment>
             ))}
-            {data.rows.map((r) => (editing === r.practiceId ? <CostModelEditor key={`${r.practiceId}-edit`} row={r} onDone={() => setEditing(null)} /> : null))}
           </tbody>
           <tfoot>
             <tr className="bg-slate-50 font-semibold">
