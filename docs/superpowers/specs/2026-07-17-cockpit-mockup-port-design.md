@@ -109,8 +109,21 @@ Run against Plan4growth only.
    - `a0ddc392…` → `Rochester`
    - `03117019…` → `Bexleyheath (Fixed Teeth Solutions)` — one site, two names both in active use
      (Emergent says Bexleyheath, Meta says FTS), so the compound name keeps both recognisable.
-2. Delete the dead duplicate practice `675c4bfc…` after re-verifying it still has zero
-   dependent rows.
+2. Delete the dead duplicate practice `675c4bfc…`. **It is not fully empty** — an exhaustive sweep
+   of every FK referencing `practices.id` (2026-07-17) found exactly one table still pointing at
+   it: `contacts.practice_id`, **49 rows**, all GoHighLevel-sourced (17 also carry a
+   `pms_external_id`). That FK is `ON DELETE NO ACTION`, so `DELETE FROM practices` **fails** while
+   they exist.
+
+   Null the contacts first, then delete:
+   ```sql
+   update contacts set practice_id = null where practice_id = '675c4bfc-fa5f-480e-a120-876a81ddcc0c';
+   delete from practices where id = '675c4bfc-fa5f-480e-a120-876a81ddcc0c';
+   ```
+   The 49 become unmapped, which every read path already handles ("Unmapped practice"), and the
+   next GoHighLevel sync re-stamps them from their subaccount's `practice_id`. Do **not** guess a
+   practice for them: the dead row has no `integration_accounts` entry, so there is no evidence of
+   which site they belong to — null is the honest state.
 3. **Create the Warwick Lodge practice row.** See below.
 4. Reconnect the three GoHighLevel subaccounts currently `status = 'failed'` (Barnet,
    Rochester, Ashford). Only Bexleyheath/FTS is `active`; §3's lead counts are going stale.
