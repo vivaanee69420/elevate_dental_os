@@ -1219,11 +1219,35 @@ breakevenHighPence`.
 - `group` — `{ revenuePence, contributionPence, fixedPence, breakevenPence,
   profitPence, status, excludedCount }`. Sums **only** the `above`/`below` rows;
   `excludedCount` reports how many were left out. A costless practice folded in as
-  £0 fixed would silently overstate group profit.
+  £0 fixed would silently overstate group profit. **When no practice is counted
+  (`excludedCount` == total), every field here is `null`, not `0`** — summing an
+  empty set to a hard zero would render "£0" beside the `not_set` status badge.
+- `group.revenuePence` here is `Σ` of the counted rows' `revenuePence` — the
+  cash-up feed, same source as each row. `group.breakevenPence` is `Σ
+  (breakevenDayPence × workingDaysInWindow)`, an **INDICATIVE aggregate** of
+  the per-practice requirements. `group.status` is derived from **summed
+  profit** (the authoritative figure), not from comparing `revenuePence` to
+  `breakevenPence`. With heterogeneous per-practice margins the two aggregates
+  can legitimately diverge — e.g. group revenue can sit below group breakeven
+  while `status` is still `above`, because one practice's higher margin
+  outweighs another's shortfall. A consumer must not infer `status` by
+  comparing group revenue to group breakeven; read `status`/`profitPence`
+  directly.
+- Revenue for `rows[]` and `group` comes from `emergent_daily_cashup`
+  **only** — never from `treatment_accepted` (a separate Emergent feed). A
+  practice with an accepted treatment but no cash-up row is `not_reporting`,
+  not `£0`.
 
 `revenue.month` — §1's Cash today / MTD / Projected / Daily target cards.
 **Anchored to the calendar month containing `until`**, not to the window ("month
 to date" against an arbitrary window is meaningless); the UI labels the month.
+Both `since`/`until` and the window used to read the as-of cost model are
+resolved to **London-local calendar dates** (`Europe/London`), since the scope
+bar sends London-wall-clock-midnight ISO instants (e.g. July's window starts
+at `2026-06-30T23:00:00.000Z` in BST) rather than plain `YYYY-MM-DD` strings;
+truncating those as UTC would land a day early every BST month, and because
+`until` is exclusive its instant is resolved from the last instant *inside*
+the window so it doesn't roll into the next month.
 `{ periodMonth, todayPence, todayDate, mtdPence, workingDaysElapsed,
 avgPerDayPence, projectedPence, dailyTargetPence, byPractice[] }`.
 
@@ -1234,3 +1258,12 @@ avgPerDayPence, projectedPence, dailyTargetPence, byPractice[] }`.
   workingDaysPerMonth`. `null` when no practice has a target set.
 - `todayPence` / `todayDate` — the latest cash-up day in the month; `null` when
   the month has no cash-up at all.
+- `avgPerDayPence` — group `mtdPence` ÷ the count of distinct calendar days ANY
+  practice traded so far in the month. `null` when nothing has traded (never a
+  divide-by-zero).
+- `byPractice[].mtdPence` — `null` when that practice has no cash-up row
+  anywhere in the month (it did not report), matching `breakeven.rows`'
+  `not_reporting` story for the same practice — never a contradictory `£0
+  MTD`. The group `mtdPence` total still sums real cash-up cash, treating a
+  non-reporting practice as contributing 0 to the total (the total is a known
+  fact even though the individual row is not).

@@ -107,27 +107,44 @@ function collectLineNotes(rows) {
     return Array.from(notes, ([name, note]) => ({ name, note }));
 }
 
-// Derive the current calendar month's period_month DATE ('YYYY-MM-01') from
-// `until` when present, else today. emergent_monthly_pl.period_month is
-// always the 1st of the month.
-function monthStartFrom(until) {
-    const d = until ? new Date(until) : new Date();
-    const y = d.getUTCFullYear();
-    const m = d.getUTCMonth();
-    return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+// The scope bar sends London-wall-clock instants, not plain dates (July's
+// window starts at 2026-06-30T23:00:00Z, December's ends at
+// 2027-01-01T00:00:00Z). Truncating those as UTC (`.slice(0, 10)`) lands a day
+// early every BST month and, for month bounds, `until` is EXCLUSIVE so its
+// instant belongs to the NEXT month. Resolve London-local calendar dates
+// instead — no new dependency, `Intl.DateTimeFormat` + `en-CA` gives
+// `YYYY-MM-DD`. A plain date string like '2026-03-01' still round-trips
+// correctly: `new Date('2026-03-01')` is UTC midnight, which is still
+// 2026-03-01 in London.
+const LONDON_YMD = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+});
+function londonDate(value) {
+    return LONDON_YMD.format(new Date(value));
 }
 
-// The calendar month containing `until` (or today). §1's today/MTD/projected
-// cards are anchored to this month, NOT to the window — "month to date" against
-// an arbitrary window is meaningless. Each card is labelled with the month.
+// The calendar month containing `until` (or today), in LONDON-local terms.
+// §1's today/MTD/projected cards are anchored to this month, NOT to the
+// window — "month to date" against an arbitrary window is meaningless. Each
+// card is labelled with the month. `until` is exclusive, so we resolve the
+// month of the last instant INSIDE the window (until - 1ms) rather than the
+// boundary instant itself, which would belong to the next month.
 function monthBoundsFrom(until) {
-    const d = until ? new Date(until) : new Date();
-    const y = d.getUTCFullYear();
-    const m = d.getUTCMonth();
+    const anchorInstant = until ? new Date(new Date(until).getTime() - 1) : new Date();
+    const ymd = londonDate(anchorInstant);
+    const [y, m] = ymd.split('-').map(Number);
     return {
-        start: new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10),
-        endExclusive: new Date(Date.UTC(y, m + 1, 1)).toISOString().slice(0, 10),
+        start: new Date(Date.UTC(y, m - 1, 1)).toISOString().slice(0, 10),
+        endExclusive: new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10),
     };
+}
+
+// Derive the current calendar month's period_month DATE ('YYYY-MM-01') from
+// `until` when present, else today. emergent_monthly_pl.period_month is
+// always the 1st of the month. Kept as a thin alias of monthBoundsFrom so the
+// timezone/exclusive-boundary logic is fixed in exactly one place.
+function monthStartFrom(until) {
+    return monthBoundsFrom(until).start;
 }
 
 // Days the practice ACTUALLY TRADED, from its cash-up rows — not calendar
@@ -176,8 +193,10 @@ export const cockpitService = {
             cockpitRepository.revenueByLine(orgId, since, until),
             cockpitRepository.activePractices(orgId, practiceId),
             // As-of the window's START: a March window must be costed with the
-            // model in force in March, not the one set last week.
-            practiceCostModelRepository.asOf(orgId, (since || month.start).slice(0, 10)),
+            // model in force in March, not the one set last week. `since` may be
+            // a London-wall-clock instant (e.g. '2026-06-30T23:00:00.000Z' for a
+            // July window) — resolve its London-local date, don't truncate as UTC.
+            practiceCostModelRepository.asOf(orgId, londonDate(since || month.start)),
             cockpitRepository.cashupRollup(orgId, month.start, month.endExclusive, practiceId),
         ]);
 
@@ -320,12 +339,27 @@ export const cockpitService = {
         // ---- §6 Profit vs Breakeven, and §1's month-anchored cards ----------
         const modelByPractice = new Map((costModels || []).map(m => [m.practice_id, m]));
         const windowTradedDays = tradedDaysByPractice(cashupRows);
-        const revenueByPractice = new Map(byPractice.filter(p => p.practiceId).map(p => [p.practiceId, p.collectedPence]));
+        // §6's revenue must come from the cash-up feed ALONE. `byPractice` is a
+        // UNION of cash-up AND treatment_accepted rows (see the accepted-merge
+        // loop above), so a practice with an accepted treatment but NO cash-up
+        // appears there with collectedPence: 0 — indistinguishable from a
+        // practice that traded and took nothing. Only emergent_daily_cashup
+        // tells us a practice actually reported (same feed `traded` uses).
+        const cashupRevenueByPractice = new Map();
+        for (const row of cashupRows || []) {
+            if (!row.practice_id) continue;
+            cashupRevenueByPractice.set(
+                row.practice_id,
+                (cashupRevenueByPractice.get(row.practice_id) || 0) + num(row.cash_up_money_taken_pence),
+            );
+        }
 
         const breakevenRows = (practices || []).map(p => {
             const model = modelByPractice.get(p.id);
             const traded = windowTradedDays.get(p.id)?.size ?? 0;
-            const revenuePence = revenueByPractice.get(p.id) ?? null;
+            // `.has()` keeps a genuine £0 cash-up day present; a practice with no
+            // cash-up row at all stays null (not_reporting), never folded to £0.
+            const revenuePence = cashupRevenueByPractice.has(p.id) ? cashupRevenueByPractice.get(p.id) : null;
 
             // No cash-up at all in this window: the practice is not REPORTING.
             // That is not "£0 revenue" — Warwick Lodge has no Emergent feed.
@@ -358,11 +392,17 @@ export const cockpitService = {
         // £0 — a costless practice would silently overstate group profit.
         const counted = breakevenRows.filter(r => r.status === 'above' || r.status === 'below');
         const groupProfit = counted.reduce((s, r) => s + r.profitPence, 0);
+        // NULLS, NOT ZEROS: when nothing is counted, every group money field is
+        // null — summing an empty set to a hard 0 would render "£0" beside the
+        // "not set" status badge, contradicting revenue.collectedPence in the
+        // same payload.
         const breakevenGroup = {
-            revenuePence: counted.reduce((s, r) => s + r.revenuePence, 0),
-            contributionPence: counted.reduce((s, r) => s + r.contributionPence, 0),
-            fixedPence: counted.reduce((s, r) => s + r.fixedPence, 0),
-            breakevenPence: counted.reduce((s, r) => s + r.breakevenDayPence * r.workingDaysInWindow, 0),
+            revenuePence: counted.length > 0 ? counted.reduce((s, r) => s + r.revenuePence, 0) : null,
+            contributionPence: counted.length > 0 ? counted.reduce((s, r) => s + r.contributionPence, 0) : null,
+            fixedPence: counted.length > 0 ? counted.reduce((s, r) => s + r.fixedPence, 0) : null,
+            breakevenPence: counted.length > 0
+                ? counted.reduce((s, r) => s + r.breakevenDayPence * r.workingDaysInWindow, 0)
+                : null,
             profitPence: counted.length > 0 ? groupProfit : null,
             status: counted.length === 0 ? 'not_set' : groupProfit >= 0 ? 'above' : 'below',
             excludedCount: breakevenRows.length - counted.length,
@@ -379,7 +419,11 @@ export const cockpitService = {
         }
 
         const monthRowsOut = (practices || []).map(p => {
-            const mtdPence = monthByPractice.get(p.id)?.mtdPence ?? 0;
+            // A practice with no cash-up row anywhere in the month gets
+            // mtdPence: null — reporting the same "unknown" story as
+            // breakeven.rows' not_reporting, not a contradictory "£0 MTD".
+            const hasMonthCashup = monthByPractice.has(p.id);
+            const mtdPence = hasMonthCashup ? monthByPractice.get(p.id).mtdPence : null;
             const elapsed = monthTradedDays.get(p.id)?.size ?? 0;
             const wdpm = modelByPractice.get(p.id)?.working_days_per_month ?? 20;
             const target = modelByPractice.get(p.id)?.revenue_target_pence_month ?? null;
@@ -390,12 +434,15 @@ export const cockpitService = {
                 workingDaysElapsed: elapsed,
                 // Project each practice separately and sum — same principle as
                 // the target: the group is the sum of its parts, so it can't drift.
-                projectedPence: elapsed > 0 ? Math.round((mtdPence / elapsed) * wdpm) : null,
+                projectedPence: elapsed > 0 && mtdPence !== null ? Math.round((mtdPence / elapsed) * wdpm) : null,
                 dailyTargetPence: target !== null && wdpm > 0 ? Math.round(target / wdpm) : null,
             };
         });
 
-        const monthMtdPence = monthRowsOut.reduce((s, r) => s + r.mtdPence, 0);
+        // Group MTD sums across all practices — treat a reporting-null practice
+        // as 0 when SUMMING (the group total is honest even though the row
+        // itself stays null), matching how the group already handles breakeven.
+        const monthMtdPence = monthRowsOut.reduce((s, r) => s + (r.mtdPence ?? 0), 0);
         const monthElapsed = new Set((monthCashupRows || []).map(r => r.cashup_date).filter(Boolean)).size;
         const projectedRows = monthRowsOut.filter(r => r.projectedPence !== null);
         const targetRows = monthRowsOut.filter(r => r.dailyTargetPence !== null);

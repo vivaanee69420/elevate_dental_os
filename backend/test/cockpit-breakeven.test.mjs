@@ -106,4 +106,77 @@ describe('cockpit revenue.month block', () => {
     expect(out.revenue.month.projectedPence).toBeNull();
     expect(out.revenue.month.todayPence).toBeNull();
   });
+
+  it('gives a non-reporting practice a null mtdPence, not £0, matching breakeven.rows', async () => {
+    // Warwick Lodge has no cash-up in-window OR in-month by default fixture.
+    // Restore the default fixture explicitly — a prior test in this file
+    // (mockImplementation persists across vi.clearAllMocks()) may have left
+    // cashupRollup returning [].
+    const { cockpitRepository } = await import('../src/repositories/cockpit.repository.js');
+    cockpitRepository.cashupRollup.mockImplementation(async () => CASHUP);
+    const out = await cockpitService.build('ORG1', WIN);
+    const warwick = out.revenue.month.byPractice.find((r) => r.practiceId === 'P9');
+    expect(warwick.mtdPence).toBeNull();
+    expect(warwick.projectedPence).toBeNull();
+    // The group total still sums real cash-up cash regardless.
+    expect(out.revenue.month.mtdPence).toBe(490000);
+  });
+});
+
+describe('cockpit breakeven — Critical 1 (cash-up-only revenue source)', () => {
+  it('reports a practice with an accepted treatment but NO cash-up as not_reporting, never £0', async () => {
+    const { cockpitRepository } = await import('../src/repositories/cockpit.repository.js');
+    // Restore the default cash-up fixture explicitly (mockImplementation
+    // persists across vi.clearAllMocks(); an earlier test in this file may
+    // have left cashupRollup returning []).
+    cockpitRepository.cashupRollup.mockImplementation(async () => CASHUP);
+    // Warwick Lodge (P9) has one accepted treatment but no cash-up row at all —
+    // this must NOT be folded into byPractice as collectedPence: 0 and read
+    // back as a reporting £0 revenue practice.
+    cockpitRepository.acceptedContactsInWindow.mockImplementation(async () => [
+      { practice_id: 'P9', value_pence: 250000 },
+    ]);
+    const out = await cockpitService.build('ORG1', WIN);
+    const warwick = out.breakeven.rows.find((r) => r.practiceId === 'P9');
+    expect(warwick.status).toBe('not_reporting');
+    expect(warwick.revenuePence).toBeNull();
+    expect(warwick.profitPence).toBeNull();
+    expect(out.breakeven.group.excludedCount).toBeGreaterThanOrEqual(1);
+    expect(out.breakeven.group.status).not.toBe('not_set');
+    // Ashford (the only real cash-up practice) still carries the group.
+    expect(out.breakeven.group.profitPence).toBe(26916);
+  });
+});
+
+describe('cockpit breakeven — Important 4 (group money nulls when nothing counted)', () => {
+  it('returns null for every group money field when no practice has a usable model', async () => {
+    const { practiceCostModelRepository } = await import('../src/repositories/practice-cost-model.repository.js');
+    practiceCostModelRepository.asOf.mockImplementation(async () => []); // no models at all
+    const out = await cockpitService.build('ORG1', WIN);
+    expect(out.breakeven.group.revenuePence).toBeNull();
+    expect(out.breakeven.group.contributionPence).toBeNull();
+    expect(out.breakeven.group.fixedPence).toBeNull();
+    expect(out.breakeven.group.breakevenPence).toBeNull();
+    expect(out.breakeven.group.profitPence).toBeNull();
+    expect(out.breakeven.group.status).toBe('not_set');
+  });
+});
+
+describe('cockpit — Critical 2 & 3 (London-local window dates)', () => {
+  it('anchors revenue.month.periodMonth to December, not January, for a GMT month-end exclusive boundary', async () => {
+    const out = await cockpitService.build('ORG1', {
+      since: '2026-12-01T00:00:00.000Z',
+      until: '2027-01-01T00:00:00.000Z',
+    });
+    expect(out.revenue.month.periodMonth).toBe('2026-12-01');
+  });
+
+  it('reads the cost model as-of the London-local window start, not the UTC-truncated date, for a BST window', async () => {
+    const { practiceCostModelRepository } = await import('../src/repositories/practice-cost-model.repository.js');
+    await cockpitService.build('ORG1', {
+      since: '2026-06-30T23:00:00.000Z',
+      until: '2026-07-31T23:00:00.000Z',
+    });
+    expect(practiceCostModelRepository.asOf).toHaveBeenCalledWith('ORG1', '2026-07-01');
+  });
 });

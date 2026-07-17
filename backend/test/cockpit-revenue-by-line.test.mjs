@@ -14,7 +14,6 @@ vi.mock('../src/repositories/cockpit.repository.js', () => ({
     latestMonthlyPl: vi.fn(async () => ({ periodMonth: null, rows: [] })),
     acceptedContactsInWindow: vi.fn(async () => []),
     activePractices: vi.fn(async () => []),
-    costModelAsOf: vi.fn(async () => []),
     revenueByLine: vi.fn(async () => [
       { practice_id: 'P1', treatment_name: 'Implants', fee_pence: 10764300, item_count: 20 },
       { practice_id: 'P2', treatment_name: 'Implants', fee_pence: 0, item_count: 0 },
