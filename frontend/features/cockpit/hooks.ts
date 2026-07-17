@@ -1,5 +1,5 @@
 // frontend/features/cockpit/hooks.ts
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   fetchCockpit,
   fetchCockpitLeads,
@@ -8,6 +8,7 @@ import {
   type CockpitParams,
   type CockpitDetailParams,
 } from './api';
+import { fetchCostModel, saveCostModel, type CostModelInput } from './cost-model-api';
 
 // Daily Command Cockpit. Key includes since/until/scope (from the shared
 // ScopePeriod window + practice filter) so it refetches when either changes.
@@ -46,5 +47,28 @@ export function useCockpitCashupDays(open: boolean, params: CockpitDetailParams 
     queryFn: () => fetchCockpitCashupDays(params),
     enabled: open,
     staleTime: 30_000,
+  });
+}
+
+export function useCostModel(asOf?: string) {
+  return useQuery({
+    queryKey: ['cockpit-cost-model', asOf ?? 'today'],
+    queryFn: () => fetchCostModel(asOf),
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveCostModel() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ practiceId, input }: { practiceId: string; input: CostModelInput }) =>
+      saveCostModel(practiceId, input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['cockpit-cost-model'] });
+      // The cockpit payload derives §6 and §1's target from this model, so it
+      // must refetch too — invalidate the key prefix, since the cockpit query is
+      // keyed by scope+window and we don't know which one is mounted.
+      qc.invalidateQueries({ queryKey: ['cockpit'] });
+    },
   });
 }
