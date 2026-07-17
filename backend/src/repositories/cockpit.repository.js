@@ -271,4 +271,20 @@ export const cockpitRepository = {
         if (error) throw new Error(`treatment_revenue_matrix: ${error.message}`);
         return data ?? [];
     },
+
+    // Every active practice, so §6 can show a practice that is REPORTING NOTHING
+    // (Warwick Lodge) rather than silently omitting it. cashupRollup only knows
+    // practices that have sent a cash-up.
+    async activePractices(orgId, practiceId) {
+        let q = supabase_1.serviceClient
+            .from('practices')
+            .select('id, name')
+            .eq('organisation_id', orgId)
+            .eq('active', true)
+            .order('name', { ascending: true });
+        if (practiceId) q = q.eq('id', practiceId);
+        const { data, error } = await q;
+        if (error) throw new Error(`activePractices: ${error.message}`);
+        return data ?? [];
+    },
 };
