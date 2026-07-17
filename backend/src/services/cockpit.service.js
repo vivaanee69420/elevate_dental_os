@@ -115,14 +115,35 @@ function monthStartFrom(until) {
     return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
 }
 
+// §7 Revenue by line — sum invoiced fee per treatment name, largest-first, with
+// each line's share of the total. Practice filtering happens here because the
+// RPC returns practice_id per row and takes no practice param.
+function shapeRevenueByLine(rows, practiceId) {
+    const totals = new Map();
+    for (const row of rows || []) {
+        if (practiceId && row.practice_id !== practiceId) continue;
+        const v = num(row.fee_pence);
+        if (v === 0) continue;
+        const name = row.treatment_name || 'Unspecified';
+        totals.set(name, (totals.get(name) || 0) + v);
+    }
+    const grand = Array.from(totals.values()).reduce((s, v) => s + v, 0);
+    return Array.from(totals, ([name, amountPence]) => ({
+        name,
+        amountPence,
+        sharePct: grand > 0 ? Math.round((amountPence / grand) * 1000) / 10 : 0,
+    })).sort((a, b) => b.amountPence - a.amountPence);
+}
+
 export const cockpitService = {
     async build(orgId, { since, until, practiceId } = {}) {
         let periodMonth = monthStartFrom(until);
-        const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows] = await Promise.all([
+        const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows, revenueLineRows] = await Promise.all([
             cockpitRepository.cashupRollup(orgId, since, until, practiceId),
             cockpitRepository.monthlyPl(orgId, periodMonth, practiceId),
             leadAttributionService.channelBreakdown(orgId, { since, until, practiceId }),
             cockpitRepository.acceptedContactsInWindow(orgId, since, until, practiceId),
+            cockpitRepository.revenueByLine(orgId, since, until),
         ]);
 
         // Emergent may not have sent the current calendar month's P&L yet —
@@ -287,6 +308,7 @@ export const cockpitService = {
                 })),
             },
             leadRoi,
+            revenueByLine: shapeRevenueByLine(revenueLineRows, practiceId),
             cashUp: {
                 collectedPence: totals.collectedPence,
                 detailPence: totals.detailPence,
