@@ -758,6 +758,56 @@ allowed for cost/contra lines). They are a **standalone planning artifact**:
 This keeps the "finance screen = real actuals or honest empty, never fabricated"
 guarantee while still giving the owner an editable what-if spreadsheet beside it.
 
+## 17. Profit vs Breakeven (Daily Command Cockpit — §6)
+
+Source: `backend/src/lib/formulas.js` (`calculateBreakeven`); tested in
+`backend/test/formulas-breakeven.test.mjs`. Pure function, integer pence.
+Surfaced on `GET /api/cockpit` as the `breakeven` block. Inputs are manual,
+per-practice and historised in `practice_cost_model` (migration `…000113`), read
+as-of the window's start.
+
+    breakevenMid       = (breakevenLow + breakevenHigh) / 2
+    contributionMargin = fixed / breakevenMid                 (NOT 1 - fixed/breakevenMid)
+    fixedDay           = fixed / workingDaysPerMonth
+    breakevenDay       = fixedDay / contributionMargin        ( === breakevenMid / workingDaysPerMonth )
+    contribution       = revenue x contributionMargin
+    fixedForWindow     = fixedDay x workingDaysInWindow
+    profit             = contribution - fixedForWindow
+    status             = profit >= 0 -> above ; else below ; no usable model -> not_set
+
+**The margin is fixed/breakeven, not 1 − fixed/breakeven.** At breakeven, revenue
+covers fixed + variable costs, so `variable/revenue = 1 − fixed/breakeven`. That
+quantity is the **variable-cost ratio**; the contribution margin is what remains,
+`fixed/breakeven`. With £31,000/mo fixed and an £81–86k/mo breakeven the two are
+62.9% and 37.1% respectively. The source mockup specified the former as the
+margin. Building it as specified reports a five-practice group £2,125/day in
+profit on a day it actually lost £1,925 — £4,050/day adrift — and flips three of
+five practices from below to above breakeven.
+
+**The identity is the check.** `breakevenDay` must reduce to
+`breakevenMid / workingDays`, because `fixedDay/margin = (fixed/wd)/(fixed/mid) =
+mid/wd`. With the correct margin, £1,550/0.371 = £4,175 = £83,500/20 ✓. With the
+mockup's, £1,550/0.629 = £2,464, implying a £49,280/mo breakeven — contradicting
+the £81–86k/mo the same document states.
+
+**Nulls, not zeros.** Without a usable model (`fixed <= 0`, `breakevenMid <= 0`,
+`workingDays <= 0`, or `fixed > breakevenMid`) every derived figure is `null` and
+status is `not_set`. A practice with no cost model has not earned £0 — we cannot
+say. It is excluded from the group row rather than dragging it down with a
+fiction.
+
+**Working days are days actually traded**, counted from the practice's cash-up
+rows in the window, not calendar weekdays. A day with no cash-up contributes
+neither revenue nor fixed cost, so a practice that failed to key a cash-up shows
+a shorter window rather than a phantom loss.
+
+**No fixed/variable split from the P&L.** `emergent_monthly_pl` carries monthly
+actuals with no fixed/variable tagging, so the margin cannot yet be derived from
+real costs — it comes from the manual breakeven-revenue input. Once a tagged P&L
+exists, replace the assumed margin with the real one.
+
+---
+
 ## Revenue Leakage — `calculateRevenueLeakage(input, rates)`
 
 "Money left on the table" over a window. Five recoverable pools, integer pence
@@ -841,6 +891,16 @@ Patient retention/attrition economics + the recoverable reactivation revenue poo
 - `reactivationRate` is clamped to `[0,1]` and defaults to `RETENTION_DEFAULTS.reactivationRate` (0.25 — the share of lapsed patients a recall campaign realistically wins back; accountant-repointable).
 
 The service feeds `avgPatientValuePence` = trailing-12mo settled receipts ÷ active patients per practice (org-blended fallback when a practice banked revenue but has no active patients linked). Appointments with neither a CRM contact nor a Dentally patient id are the **linkage data wall** — flagged (`unlinkedAppts`), never counted in a cohort. Tests: `backend/test/formulas-retention.test.mjs` (6 cases) + `backend/test/analytics-retention.test.mjs` (6 service cases).
+
+## Profit vs Breakeven — `calculateBreakeven(input)`
+
+Per-practice contribution-margin breakeven (Daily Command Cockpit — §6, see §17 above for the full derivation). Pure function, integer pence. Inputs: `revenuePence`, `fixedCostPenceMonth`, `breakevenLowPence`, `breakevenHighPence`, `workingDaysPerMonth` (default 20), `workingDaysInWindow`.
+
+- **contribution margin** = `fixed / breakevenMid` — **not** `1 − fixed/breakevenMid` (that quantity is the variable-cost ratio, the source mockup's mistake).
+- **profit** = `revenue × margin − (fixed/workingDaysPerMonth) × workingDaysInWindow`; **status** = `above` (profit ≥ 0), `below`, or `not_set` when there's no usable model.
+- **Nulls, not zeros**: `fixed <= 0`, `breakevenMid <= 0`, `workingDaysPerMonth <= 0`, or `fixed > breakevenMid` (margin would exceed 100%) all return `not_set` with every money field `null`, never a fabricated `£0`.
+
+Tests: `backend/test/formulas-breakeven.test.mjs` (9 cases).
 
 ## Audit trail
 
