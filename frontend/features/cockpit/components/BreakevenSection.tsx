@@ -41,7 +41,7 @@ const money = (v: number | null) => (v === null ? <span className="text-ink-mute
 const poundsFromPence = (p: number | null | undefined) => (p == null ? '' : String(p / 100));
 
 function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => void }) {
-  const { data, isPending } = useCostModel();
+  const { data, isPending, isError } = useCostModel();
 
   if (isPending) {
     return (
@@ -53,9 +53,23 @@ function CostModelEditor({ row, onDone }: { row: BreakevenRow; onDone: () => voi
     );
   }
 
-  return (
-    <CostModelForm row={row} current={data?.rows.find((r) => r.practiceId === row.practiceId)} onDone={onDone} />
-  );
+  // Never mount the form on a failed fetch. `isPending` is false once the query
+  // errors, but `data` is still undefined — the form would seed every field blank
+  // and Save would write those blanks back as nulls, wiping a real cost model.
+  if (isError || !data) {
+    return (
+      <tr className="bg-slate-50">
+        <td className={td} colSpan={7}>
+          <span className="text-danger">Couldn&rsquo;t load the cost model.</span>{' '}
+          <button type="button" className="underline" onClick={onDone}>
+            Close
+          </button>
+        </td>
+      </tr>
+    );
+  }
+
+  return <CostModelForm row={row} current={data.rows.find((r) => r.practiceId === row.practiceId)} onDone={onDone} />;
 }
 
 function CostModelForm({
