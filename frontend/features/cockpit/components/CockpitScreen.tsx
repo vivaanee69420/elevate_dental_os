@@ -139,6 +139,15 @@ function RevenueSection({
   );
 }
 
+// "close rate 8/15 = 53%" — accepted as a share of the plans presented.
+// Returns null when no plans were keyed in: a close rate out of zero plans is
+// undefined, not 0%.
+function closeRate(acceptedCount: number, txPlansGiven: number): string | null {
+  if (txPlansGiven <= 0) return null;
+  const rounded = Math.round((acceptedCount / txPlansGiven) * 100);
+  return `close rate ${acceptedCount}/${txPlansGiven} = ${rounded}%`;
+}
+
 // Day-by-day breakdown behind a manager-keyed Emergent metric (Tx plans given,
 // New leads, Attended).
 //
@@ -395,7 +404,7 @@ function TreatmentSection({
           <KpiTile
             label="Attended"
             value={formatNumber(t.attended)}
-            delta={t.attended === 0 ? 'Not being keyed in' : undefined}
+            delta={t.attended === 0 ? 'Not being keyed in' : (closeRate(t.acceptedCount, t.txPlansGiven) ?? undefined)}
             info="Patients who attended their appointment, keyed into the Emergent cash-up each day. It reads zero because no practice is filling this field in — it is a data-entry gap in Emergent, not a day with no patients."
             onClick={() => onToggle('attended')}
             active={drill === 'attended'}
