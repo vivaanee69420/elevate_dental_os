@@ -46,6 +46,18 @@ const OPEX_LINE_COLS = [
     ['card_machine_charges_pence', 'Card machine charges'],
 ];
 
+// The two clinician-pay columns, split out of COST_LINE_COLS for the §5
+// "Clinician fees" card. Everything else in COST_LINE_COLS (lab, materials,
+// sedation) is lab+overhead.
+const CLINICIAN_LINE_COLS = ['principal_fees_pence', 'hygienist_therapist_pence'];
+
+// Sums the named typed columns across all monthly_pl rows.
+function sumCols(rows, cols) {
+    let total = 0;
+    for (const row of rows || []) for (const col of cols) total += num(row[col]);
+    return total;
+}
+
 // Sums the given typed columns across all monthly_pl rows (one per business)
 // into a single largest-first [{name,amountPence}] list, dropping zero/absent
 // lines. Money is integer pence throughout.
@@ -230,6 +242,25 @@ export const cockpitService = {
         const customLines = sumCustomLines(monthlyRows);
         const lineNotes = collectLineNotes(monthlyRows);
 
+        // §5 card split. Clinician fees are the two pay columns; lab+overhead
+        // is every other cost line + all opex + custom lines.
+        const clinicianFeesPence = sumCols(monthlyRows, CLINICIAN_LINE_COLS);
+        const otherCostCols = COST_LINE_COLS.map(([col]) => col).filter(c => !CLINICIAN_LINE_COLS.includes(c));
+        const labOverheadPence =
+            sumCols(monthlyRows, otherCostCols) +
+            sumCols(monthlyRows, OPEX_LINE_COLS.map(([col]) => col)) +
+            customLines.reduce((s, l) => s + l.amountPence, 0);
+
+        // Revenue - clinician - lab/overhead SHOULD equal the net profit Emergent
+        // sent. Where it doesn't, Emergent's own lines don't add up — surface the
+        // gap rather than plugging it, or a broken feed looks like a healthy one.
+        const residualPence =
+            monthlyTotals.revenuePence - clinicianFeesPence - labOverheadPence - monthlyTotals.netProfitPence;
+
+        const marginPct = monthlyTotals.revenuePence > 0
+            ? Math.round((monthlyTotals.netProfitPence / monthlyTotals.revenuePence) * 10000) / 100
+            : null;
+
         return {
             window: { since: since ?? null, until: until ?? null },
             revenue: {
@@ -272,6 +303,10 @@ export const cockpitService = {
                 periodMonth,
                 revenuePence: monthlyTotals.revenuePence,
                 netProfitPence: monthlyTotals.netProfitPence,
+                clinicianFeesPence,
+                labOverheadPence,
+                residualPence,
+                marginPct,
                 byBusiness,
                 costLines,
                 opexLines,

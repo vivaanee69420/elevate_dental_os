@@ -730,10 +730,35 @@ function MonthlySection({ data }: { data: CockpitResponse }) {
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4">
       <SectionHeading n={5} title={`Monthly revenue — ${periodMonthLabel(m.periodMonth)}`} note="The latest month Emergent has sent a P&amp;L for." />
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Card label="Revenue" value={formatPence(m.revenuePence)} />
-        <Card label="Net profit" value={formatPence(m.netProfitPence)} />
+        <Card
+          label="Net profit"
+          value={formatPence(m.netProfitPence)}
+          sub={m.marginPct === null ? undefined : `${m.marginPct.toFixed(1)}% margin`}
+        />
+        <Card
+          label="Clinician fees"
+          value={formatPence(m.clinicianFeesPence)}
+          sub={
+            m.revenuePence > 0
+              ? `${((m.clinicianFeesPence / m.revenuePence) * 100).toFixed(1)}% of revenue`
+              : undefined
+          }
+        />
+        <Card
+          label="Lab &amp; overhead"
+          value={formatPence(m.labOverheadPence)}
+          sub="Lab, materials, rent, staff, marketing"
+        />
       </div>
+      {m.residualPence !== 0 && m.revenuePence > 0 ? (
+        <p className="mt-3 text-xs text-slate-400">
+          Emergent&rsquo;s P&amp;L lines don&rsquo;t reconcile to the net profit it sent &mdash;{' '}
+          {formatPence(Math.abs(m.residualPence))} is {m.residualPence > 0 ? 'unaccounted for' : 'double-counted'}. The
+          cards above show what Emergent actually sent, not a balanced figure.
+        </p>
+      ) : null}
       {m.byBusiness.length > 0 ? (
         <div className="mt-4 overflow-x-auto">
           <table className="w-full min-w-[420px] border-collapse text-[13px]">
