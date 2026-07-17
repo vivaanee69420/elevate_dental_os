@@ -25,6 +25,7 @@ import {
   YAxis,
 } from 'recharts';
 import { formatPence, formatNumber } from '@/lib/format';
+import { cockpitStyles as s } from './cockpit-ui';
 import type { CockpitDailyRevenue, LeadRoiChannelRow, LeadChannel } from '../api';
 
 // Validated palette (light) — channel identity colours, fixed order, never
@@ -40,17 +41,16 @@ const CHANNEL_LABEL: Record<LeadChannel, string> = {
 const CHANNEL_ORDER: LeadChannel[] = ['google', 'facebook', 'website', 'instagram', 'other'];
 
 const LEADS_COLOUR = '#2563eb';
-const CONVERSIONS_COLOUR = '#10b981';
-const GRID_COLOUR = '#e2e8f0';
-const AXIS_TEXT = { fill: '#94a3b8', fontSize: 12 };
+const CONVERSIONS_COLOUR = '#1f7a5c';
+const REVENUE_COLOUR = '#1f7a5c';
+const GRID_COLOUR = '#e2ebe6';
+const AXIS_TEXT = { fill: '#6b7c74', fontSize: 12 };
 
 function ChartCard({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-        {sub ? <p className="mt-0.5 text-xs text-slate-400">{sub}</p> : null}
-      </div>
+    <div className={s.card}>
+      <div className={s.sechead} style={{ marginBottom: sub ? 3 : 12 }}>{title}</div>
+      {sub ? <div className={s.secdesc} style={{ marginLeft: 0 }}>{sub}</div> : null}
       {children}
     </div>
   );
@@ -88,7 +88,7 @@ export function LeadPerformanceChart({ channels }: { channels: LeadRoiChannelRow
   if (data.length === 0) {
     return (
       <ChartCard title="Lead performance by channel" sub="Leads vs conversions, all channels this window.">
-        <p className="text-sm text-slate-400">No lead data in this window.</p>
+        <p className={s.subtle} style={{ fontSize: 13 }}>No lead data in this window.</p>
       </ChartCard>
     );
   }
@@ -146,7 +146,7 @@ export function RevenueTrendChart({ dailySeries }: { dailySeries: CockpitDailyRe
   if (data.length === 0) {
     return (
       <ChartCard title="Cash taken trend" sub="Daily cash taken (Emergent) over this window.">
-        <p className="text-sm text-slate-400">No daily cash-up rows in this window.</p>
+        <p className={s.subtle} style={{ fontSize: 13 }}>No daily cash-up rows in this window.</p>
       </ChartCard>
     );
   }
@@ -158,8 +158,8 @@ export function RevenueTrendChart({ dailySeries }: { dailySeries: CockpitDailyRe
           <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="cockpitRevenueFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={LEADS_COLOUR} stopOpacity={0.18} />
-                <stop offset="100%" stopColor={LEADS_COLOUR} stopOpacity={0} />
+                <stop offset="0%" stopColor={REVENUE_COLOUR} stopOpacity={0.18} />
+                <stop offset="100%" stopColor={REVENUE_COLOUR} stopOpacity={0} />
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke={GRID_COLOUR} vertical={false} />
@@ -176,7 +176,7 @@ export function RevenueTrendChart({ dailySeries }: { dailySeries: CockpitDailyRe
               type="monotone"
               dataKey="cashPence"
               name="Cash taken"
-              stroke={LEADS_COLOUR}
+              stroke={REVENUE_COLOUR}
               strokeWidth={2}
               fill="url(#cockpitRevenueFill)"
               dot={false}
