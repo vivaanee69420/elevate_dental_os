@@ -1,5 +1,7 @@
 import * as cockpit_service_1 from "../services/cockpit.service.js";
 import * as cockpit_model_1 from "../models/cockpit.model.js";
+import { practiceCostModelService } from "../services/practice-cost-model.service.js";
+import { costModelQuerySchema, costModelUpsertSchema } from "../models/practice-cost-model.model.js";
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
@@ -30,5 +32,17 @@ export const cockpitController = {
         res.json(await cockpit_service_1.cockpitService.cashupDaysDetail(req.user.organisation_id, {
             since: q.since, until: q.until, practiceId: q.practiceId, limit: q.limit, offset: q.offset,
         }));
+    },
+
+    async costModel(req, res) {
+        const q = costModelQuerySchema.parse(req.query);
+        res.json(await practiceCostModelService.list(req.user.organisation_id, { asOf: q.asOf }));
+    },
+
+    async saveCostModel(req, res) {
+        const practiceId = String(req.params.practiceId || '');
+        if (!UUID_RE.test(practiceId)) return res.status(400).json({ error: 'invalid practiceId' });
+        const input = costModelUpsertSchema.parse(req.body);
+        res.json(await practiceCostModelService.save(req.user.organisation_id, practiceId, input));
     },
 };
