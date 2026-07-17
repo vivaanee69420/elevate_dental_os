@@ -1254,3 +1254,72 @@ export function calculateRetention({ active = 0, lapsed = 0, dormant = 0 } = {},
         reactivationValuePence,
     };
 }
+
+// Per-practice breakeven and profit (Daily Command Cockpit — §6 Profit vs
+// Breakeven). Pure; integer pence.
+//
+// THE MARGIN. contributionMargin is fixed/breakevenMid, NOT 1 - fixed/breakevenMid.
+// At breakeven, revenue covers fixed + variable, so variable/revenue =
+// 1 - fixed/breakeven — that quantity is the VARIABLE-COST RATIO, and what's
+// left over, fixed/breakeven, is the contribution margin. The source mockup
+// used the variable ratio as the margin (0.629 instead of 0.371); with
+// £31k fixed and £83.5k breakeven that reports a group £4,050/day better than
+// reality and flips practices from below to above breakeven.
+//
+// The identity breakevenDay === breakevenMid/workingDays is the check that the
+// margin is right: fixedDay/margin = (fixed/wd)/(fixed/mid) = mid/wd. The
+// mockup's own £2,464/day implied a £49,280/mo breakeven, contradicting the
+// £81-86k/mo it stated two lines earlier.
+//
+// NULLS, NOT ZEROS. Without a usable model every derived figure is null and
+// status is 'not_set'. A practice with no cost model has not made £0 profit —
+// we simply cannot say, and £0 would drag a group total down with a fiction.
+export function calculateBreakeven({
+    revenuePence = 0,
+    fixedCostPenceMonth = 0,
+    breakevenLowPence = 0,
+    breakevenHighPence = 0,
+    workingDaysPerMonth = 20,
+    workingDaysInWindow = 0,
+} = {}) {
+    const breakevenMidPence = Math.round((breakevenLowPence + breakevenHighPence) / 2);
+
+    // margin = fixed/mid must land in (0, 1]. mid < fixed would mean revenue has
+    // to cover more than 100% contribution — a bad input, not a great practice.
+    const usable =
+        fixedCostPenceMonth > 0 &&
+        breakevenMidPence > 0 &&
+        fixedCostPenceMonth <= breakevenMidPence &&
+        workingDaysPerMonth > 0;
+
+    if (!usable) {
+        return {
+            breakevenMidPence,
+            contributionMarginPct: null,
+            fixedDayPence: null,
+            breakevenDayPence: null,
+            contributionPence: null,
+            fixedPence: null,
+            profitPence: null,
+            status: 'not_set',
+        };
+    }
+
+    const margin = fixedCostPenceMonth / breakevenMidPence;
+    const fixedDayPence = pence(fixedCostPenceMonth / workingDaysPerMonth);
+    const breakevenDayPence = pence(fixedDayPence / margin);
+    const contributionPence = pence(revenuePence * margin);
+    const fixedPence = pence(fixedDayPence * workingDaysInWindow);
+    const profitPence = contributionPence - fixedPence;
+
+    return {
+        breakevenMidPence,
+        contributionMarginPct: pct(margin * 100, 2),
+        fixedDayPence,
+        breakevenDayPence,
+        contributionPence,
+        fixedPence,
+        profitPence,
+        status: profitPence >= 0 ? 'above' : 'below',
+    };
+}
