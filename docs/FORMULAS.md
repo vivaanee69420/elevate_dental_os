@@ -769,7 +769,7 @@ as-of the window's start.
     breakevenMid       = (breakevenLow + breakevenHigh) / 2
     contributionMargin = fixed / breakevenMid                 (NOT 1 - fixed/breakevenMid)
     fixedDay           = fixed / workingDaysPerMonth
-    breakevenDay       = fixedDay / contributionMargin        ( === breakevenMid / workingDaysPerMonth )
+    breakevenDay       = fixedDay / contributionMargin        ( reduces to breakevenMid / workingDaysPerMonth, within ±1p )
     contribution       = revenue x contributionMargin
     fixedForWindow     = fixedDay x workingDaysInWindow
     profit             = contribution - fixedForWindow
@@ -778,23 +778,50 @@ as-of the window's start.
 **The margin is fixed/breakeven, not 1 − fixed/breakeven.** At breakeven, revenue
 covers fixed + variable costs, so `variable/revenue = 1 − fixed/breakeven`. That
 quantity is the **variable-cost ratio**; the contribution margin is what remains,
-`fixed/breakeven`. With £31,000/mo fixed and an £81–86k/mo breakeven the two are
-62.9% and 37.1% respectively. The source mockup specified the former as the
-margin. Building it as specified reports a five-practice group £2,125/day in
-profit on a day it actually lost £1,925 — £4,050/day adrift — and flips three of
-five practices from below to above breakeven.
+`fixed/breakeven`. With £31,000/mo fixed and an £81–86k/mo breakeven (mid
+£83,500/mo) the exact margin is `3,100,000/8,350,000 = 62/167 =
+0.3712574850299401…` — displayed as **37.13%** (`contributionMarginPct`, the
+code's own 2-d.p. rounding). The variable-cost ratio the mockup used instead is
+`105/167 = 0.6287425149700598…` — **62.87%**. The worked figures below are the
+*exact* rational margin carried through in full and only rounded to the penny
+at the very end, exactly as the code does it (never round the margin itself
+mid-calculation — see the identity note below for why that matters).
 
-**The identity is the check.** `breakevenDay` must reduce to
-`breakevenMid / workingDays`, because `fixedDay/margin = (fixed/wd)/(fixed/mid) =
-mid/wd`. With the correct margin, £1,550/0.371 = £4,175 = £83,500/20 ✓. With the
-mockup's, £1,550/0.629 = £2,464, implying a £49,280/mo breakeven — contradicting
-the £81–86k/mo the same document states.
+Reproducing the source mockup's own five-practice table (`£31,000/mo` fixed and
+`£81–86k/mo` breakeven at every practice, one day's revenue each — the exact
+inputs in `backend/test/formulas-breakeven.test.mjs`'s `MODEL`, revenues
+£4,900 / £3,780 / £2,100 / £1,700 / £3,220), building it as the mockup specified
+(margin = variable-cost ratio) reports a group profit of **+£2,121.26** on a day
+the correct margin shows it actually **lost £1,921.26** — **£4,042.52/day
+adrift** — and flips two of the five practices (Rochester £3,780 and FTS
+£3,220) from below to above breakeven; Ashford stays above and Barnet/
+Bexleyheath stay below under either margin.
+
+**The identity is the check, not an exact equality.** `breakevenDay` must
+*reduce to* `breakevenMid / workingDays`, because
+`fixedDay/margin = (fixed/wd)/(fixed/mid) = mid/wd`. With the correct margin,
+`£1,550 / (62/167) = £1,550 × 167/62 = £4,175`, exactly matching
+`£8,350,000/20 = £4,175` ✓ — because in this example `fixed` divides evenly by
+`workingDaysPerMonth` (£31,000/20 = £1,550 exactly, no rounding). Note the
+rounded *display* margin does **not** reproduce this: `£1,550/0.371 = £4,177.90`,
+not £4,175 — proof that the code must carry the exact rational margin
+(`fixed/breakevenMid`) through the division, not the rounded 0.371 percentage.
+More generally the identity only holds to within ±1p: `fixedDayPence` is
+itself rounded (`pence(fixed/workingDaysPerMonth)`) before `breakevenDayPence`
+divides it by the margin, so if `fixed` does *not* divide evenly across the
+month the two sides can differ by a penny (e.g. `fixed=£31,000.10`,
+`workingDaysPerMonth=3` gives `breakevenDayPence=2,783,334` against
+`round(mid/wd)=2,783,333`).
+
+With the mockup's margin, `£1,550/0.629 ≈ £2,464`, implying a `£49,280/mo`
+breakeven — contradicting the `£81–86k/mo` the same document states two lines
+earlier.
 
 **Nulls, not zeros.** Without a usable model (`fixed <= 0`, `breakevenMid <= 0`,
-`workingDays <= 0`, or `fixed > breakevenMid`) every derived figure is `null` and
-status is `not_set`. A practice with no cost model has not earned £0 — we cannot
-say. It is excluded from the group row rather than dragging it down with a
-fiction.
+`workingDays <= 0`, or `fixed > breakevenMid`) every derived figure — including
+`breakevenMidPence` itself — is `null` and status is `not_set`. A practice with
+no cost model has not earned £0 — we cannot say. It is excluded from the group
+row rather than dragging it down with a fiction.
 
 **Working days are days actually traded**, counted from the practice's cash-up
 rows in the window, not calendar weekdays. A day with no cash-up contributes
@@ -891,16 +918,6 @@ Patient retention/attrition economics + the recoverable reactivation revenue poo
 - `reactivationRate` is clamped to `[0,1]` and defaults to `RETENTION_DEFAULTS.reactivationRate` (0.25 — the share of lapsed patients a recall campaign realistically wins back; accountant-repointable).
 
 The service feeds `avgPatientValuePence` = trailing-12mo settled receipts ÷ active patients per practice (org-blended fallback when a practice banked revenue but has no active patients linked). Appointments with neither a CRM contact nor a Dentally patient id are the **linkage data wall** — flagged (`unlinkedAppts`), never counted in a cohort. Tests: `backend/test/formulas-retention.test.mjs` (6 cases) + `backend/test/analytics-retention.test.mjs` (6 service cases).
-
-## Profit vs Breakeven — `calculateBreakeven(input)`
-
-Per-practice contribution-margin breakeven (Daily Command Cockpit — §6, see §17 above for the full derivation). Pure function, integer pence. Inputs: `revenuePence`, `fixedCostPenceMonth`, `breakevenLowPence`, `breakevenHighPence`, `workingDaysPerMonth` (default 20), `workingDaysInWindow`.
-
-- **contribution margin** = `fixed / breakevenMid` — **not** `1 − fixed/breakevenMid` (that quantity is the variable-cost ratio, the source mockup's mistake).
-- **profit** = `revenue × margin − (fixed/workingDaysPerMonth) × workingDaysInWindow`; **status** = `above` (profit ≥ 0), `below`, or `not_set` when there's no usable model.
-- **Nulls, not zeros**: `fixed <= 0`, `breakevenMid <= 0`, `workingDaysPerMonth <= 0`, or `fixed > breakevenMid` (margin would exceed 100%) all return `not_set` with every money field `null`, never a fabricated `£0`.
-
-Tests: `backend/test/formulas-breakeven.test.mjs` (9 cases).
 
 ## Audit trail
 

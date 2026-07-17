@@ -69,6 +69,11 @@ describe('calculateBreakeven', () => {
       expect(r.profitPence).toBeNull();
       expect(r.contributionMarginPct).toBeNull();
       expect(r.breakevenDayPence).toBeNull();
+      // breakevenMidPence must also be nulled — otherwise a group rollup would
+      // sum a phantom breakeven target for a practice the function refuses to
+      // report profit for, and Math.round((NaN + x)/2) would leak a raw NaN
+      // past the null contract in-process (JSON only coerces it to null).
+      expect(r.breakevenMidPence).toBeNull();
     }
   });
 
