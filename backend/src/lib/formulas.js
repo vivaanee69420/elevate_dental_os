@@ -1263,7 +1263,7 @@ export function calculateRetention({ active = 0, lapsed = 0, dormant = 0 } = {},
 // 1 - fixed/breakeven — that quantity is the VARIABLE-COST RATIO, and what's
 // left over, fixed/breakeven, is the contribution margin. The source mockup
 // used the variable ratio as the margin (0.629 instead of 0.371); with
-// £31k fixed and £83.5k breakeven that reports a group £4,050/day better than
+// £31k fixed and £83.5k breakeven that reports a group £4,042.52/day better than
 // reality and flips practices from below to above breakeven.
 //
 // The identity breakevenDay === breakevenMid/workingDays is the check that the
