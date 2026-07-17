@@ -1200,3 +1200,37 @@ model is preserved. Returns the written row in the same shape as the list.
 
 `400` on a malformed `practiceId`, an empty body, or `breakevenLowPence >
 breakevenHighPence`.
+
+### `breakeven` and `revenue.month` on the main cockpit payload
+
+`breakeven` — §6 Profit vs Breakeven. Inputs come from `practice_cost_model`
+(migration `…000113`), read **as-of the window's start**. Maths in
+`calculateBreakeven` (`docs/FORMULAS.md` §15).
+
+- `rows[]` — one per **active practice**: `{ practiceId, name, revenuePence,
+  workingDaysInWindow, breakevenDayPence, contributionPence, fixedDayPence,
+  fixedPence, profitPence, status }`.
+- `status` — `above` | `below` | `not_set` (no usable cost model) |
+  `not_reporting` (no cash-up in the window at all, e.g. Warwick Lodge). For the
+  last two, every money field is **`null`, not `0`** — a practice with no feed has
+  not earned £0.
+- `workingDaysInWindow` counts **days the practice actually traded** (distinct
+  cash-up dates), not calendar weekdays.
+- `group` — `{ revenuePence, contributionPence, fixedPence, breakevenPence,
+  profitPence, status, excludedCount }`. Sums **only** the `above`/`below` rows;
+  `excludedCount` reports how many were left out. A costless practice folded in as
+  £0 fixed would silently overstate group profit.
+
+`revenue.month` — §1's Cash today / MTD / Projected / Daily target cards.
+**Anchored to the calendar month containing `until`**, not to the window ("month
+to date" against an arbitrary window is meaningless); the UI labels the month.
+`{ periodMonth, todayPence, todayDate, mtdPence, workingDaysElapsed,
+avgPerDayPence, projectedPence, dailyTargetPence, byPractice[] }`.
+
+- `projectedPence` — each practice projected separately (`mtd / daysElapsed ×
+  workingDaysPerMonth`) then summed, so the group can't drift from its parts.
+  **`null` when nothing has traded** — never a divide-by-zero or a £0.
+- `dailyTargetPence` — sum of each practice's `revenueTargetPenceMonth /
+  workingDaysPerMonth`. `null` when no practice has a target set.
+- `todayPence` / `todayDate` — the latest cash-up day in the month; `null` when
+  the month has no cash-up at all.

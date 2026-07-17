@@ -4,6 +4,8 @@
 // breakdown. Money is integer pence throughout (rule 2).
 import { cockpitRepository } from "../repositories/cockpit.repository.js";
 import { leadAttributionService, classifyChannel, matchAcceptedValue, buildAcceptedByKey } from "./lead-attribution.service.js";
+import { practiceCostModelRepository } from "../repositories/practice-cost-model.repository.js";
+import { calculateBreakeven } from "../lib/formulas.js";
 
 const num = v => Number(v || 0);
 
@@ -115,6 +117,32 @@ function monthStartFrom(until) {
     return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
 }
 
+// The calendar month containing `until` (or today). §1's today/MTD/projected
+// cards are anchored to this month, NOT to the window — "month to date" against
+// an arbitrary window is meaningless. Each card is labelled with the month.
+function monthBoundsFrom(until) {
+    const d = until ? new Date(until) : new Date();
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    return {
+        start: new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10),
+        endExclusive: new Date(Date.UTC(y, m + 1, 1)).toISOString().slice(0, 10),
+    };
+}
+
+// Days the practice ACTUALLY TRADED, from its cash-up rows — not calendar
+// weekdays. A day with no cash-up contributes neither revenue nor fixed cost, so
+// a missed cash-up shortens the window rather than manufacturing a loss.
+function tradedDaysByPractice(rows) {
+    const days = new Map();
+    for (const row of rows || []) {
+        if (!row.practice_id || !row.cashup_date) continue;
+        if (!days.has(row.practice_id)) days.set(row.practice_id, new Set());
+        days.get(row.practice_id).add(row.cashup_date);
+    }
+    return days;
+}
+
 // §7 Revenue by line — sum invoiced fee per treatment name, largest-first, with
 // each line's share of the total. Practice filtering happens here because the
 // RPC returns practice_id per row and takes no practice param.
@@ -138,12 +166,19 @@ function shapeRevenueByLine(rows, practiceId) {
 export const cockpitService = {
     async build(orgId, { since, until, practiceId } = {}) {
         let periodMonth = monthStartFrom(until);
-        const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows, revenueLineRows] = await Promise.all([
+        const month = monthBoundsFrom(until);
+        const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows, revenueLineRows,
+               practices, costModels, monthCashupRows] = await Promise.all([
             cockpitRepository.cashupRollup(orgId, since, until, practiceId),
             cockpitRepository.monthlyPl(orgId, periodMonth, practiceId),
             leadAttributionService.channelBreakdown(orgId, { since, until, practiceId }),
             cockpitRepository.acceptedContactsInWindow(orgId, since, until, practiceId),
             cockpitRepository.revenueByLine(orgId, since, until),
+            cockpitRepository.activePractices(orgId, practiceId),
+            // As-of the window's START: a March window must be costed with the
+            // model in force in March, not the one set last week.
+            practiceCostModelRepository.asOf(orgId, (since || month.start).slice(0, 10)),
+            cockpitRepository.cashupRollup(orgId, month.start, month.endExclusive, practiceId),
         ]);
 
         // Emergent may not have sent the current calendar month's P&L yet —
@@ -282,12 +317,113 @@ export const cockpitService = {
             ? Math.round((monthlyTotals.netProfitPence / monthlyTotals.revenuePence) * 10000) / 100
             : null;
 
+        // ---- §6 Profit vs Breakeven, and §1's month-anchored cards ----------
+        const modelByPractice = new Map((costModels || []).map(m => [m.practice_id, m]));
+        const windowTradedDays = tradedDaysByPractice(cashupRows);
+        const revenueByPractice = new Map(byPractice.filter(p => p.practiceId).map(p => [p.practiceId, p.collectedPence]));
+
+        const breakevenRows = (practices || []).map(p => {
+            const model = modelByPractice.get(p.id);
+            const traded = windowTradedDays.get(p.id)?.size ?? 0;
+            const revenuePence = revenueByPractice.get(p.id) ?? null;
+
+            // No cash-up at all in this window: the practice is not REPORTING.
+            // That is not "£0 revenue" — Warwick Lodge has no Emergent feed.
+            if (revenuePence === null) {
+                return {
+                    practiceId: p.id, name: p.name, revenuePence: null, workingDaysInWindow: 0,
+                    breakevenDayPence: null, contributionPence: null, fixedDayPence: null,
+                    fixedPence: null, profitPence: null, status: 'not_reporting',
+                };
+            }
+
+            const b = calculateBreakeven({
+                revenuePence,
+                fixedCostPenceMonth: num(model?.fixed_cost_pence_month),
+                breakevenLowPence: num(model?.breakeven_low_pence),
+                breakevenHighPence: num(model?.breakeven_high_pence),
+                workingDaysPerMonth: model?.working_days_per_month ?? 20,
+                workingDaysInWindow: traded,
+            });
+            return {
+                practiceId: p.id, name: p.name, revenuePence, workingDaysInWindow: traded,
+                breakevenDayPence: b.breakevenDayPence, contributionPence: b.contributionPence,
+                fixedDayPence: b.fixedDayPence, fixedPence: b.fixedPence,
+                profitPence: b.profitPence, status: b.status,
+            };
+        });
+
+        // Group = sum of the practices that HAVE a usable model and are
+        // reporting. Anything else is excluded and counted, never folded in as
+        // £0 — a costless practice would silently overstate group profit.
+        const counted = breakevenRows.filter(r => r.status === 'above' || r.status === 'below');
+        const groupProfit = counted.reduce((s, r) => s + r.profitPence, 0);
+        const breakevenGroup = {
+            revenuePence: counted.reduce((s, r) => s + r.revenuePence, 0),
+            contributionPence: counted.reduce((s, r) => s + r.contributionPence, 0),
+            fixedPence: counted.reduce((s, r) => s + r.fixedPence, 0),
+            breakevenPence: counted.reduce((s, r) => s + r.breakevenDayPence * r.workingDaysInWindow, 0),
+            profitPence: counted.length > 0 ? groupProfit : null,
+            status: counted.length === 0 ? 'not_set' : groupProfit >= 0 ? 'above' : 'below',
+            excludedCount: breakevenRows.length - counted.length,
+        };
+
+        // §1's month-anchored cards.
+        const monthTradedDays = tradedDaysByPractice(monthCashupRows);
+        const monthByPractice = new Map();
+        for (const row of monthCashupRows || []) {
+            const key = row.practice_id;
+            if (!key) continue;
+            if (!monthByPractice.has(key)) monthByPractice.set(key, { mtdPence: 0 });
+            monthByPractice.get(key).mtdPence += num(row.cash_up_money_taken_pence);
+        }
+
+        const monthRowsOut = (practices || []).map(p => {
+            const mtdPence = monthByPractice.get(p.id)?.mtdPence ?? 0;
+            const elapsed = monthTradedDays.get(p.id)?.size ?? 0;
+            const wdpm = modelByPractice.get(p.id)?.working_days_per_month ?? 20;
+            const target = modelByPractice.get(p.id)?.revenue_target_pence_month ?? null;
+            return {
+                practiceId: p.id,
+                name: p.name,
+                mtdPence,
+                workingDaysElapsed: elapsed,
+                // Project each practice separately and sum — same principle as
+                // the target: the group is the sum of its parts, so it can't drift.
+                projectedPence: elapsed > 0 ? Math.round((mtdPence / elapsed) * wdpm) : null,
+                dailyTargetPence: target !== null && wdpm > 0 ? Math.round(target / wdpm) : null,
+            };
+        });
+
+        const monthMtdPence = monthRowsOut.reduce((s, r) => s + r.mtdPence, 0);
+        const monthElapsed = new Set((monthCashupRows || []).map(r => r.cashup_date).filter(Boolean)).size;
+        const projectedRows = monthRowsOut.filter(r => r.projectedPence !== null);
+        const targetRows = monthRowsOut.filter(r => r.dailyTargetPence !== null);
+        const latestDay = (monthCashupRows || []).reduce((a, r) => (r.cashup_date > a ? r.cashup_date : a), '');
+        const todayPence = latestDay
+            ? (monthCashupRows || []).filter(r => r.cashup_date === latestDay)
+                .reduce((s, r) => s + num(r.cash_up_money_taken_pence), 0)
+            : null;
+
+        const revenueMonth = {
+            periodMonth: month.start,
+            todayPence,
+            todayDate: latestDay || null,
+            mtdPence: monthMtdPence,
+            workingDaysElapsed: monthElapsed,
+            avgPerDayPence: monthElapsed > 0 ? Math.round(monthMtdPence / monthElapsed) : null,
+            projectedPence: projectedRows.length > 0 ? projectedRows.reduce((s, r) => s + r.projectedPence, 0) : null,
+            dailyTargetPence: targetRows.length > 0 ? targetRows.reduce((s, r) => s + r.dailyTargetPence, 0) : null,
+            byPractice: monthRowsOut,
+        };
+
         return {
             window: { since: since ?? null, until: until ?? null },
             revenue: {
                 collectedPence: totals.collectedPence,
                 byPractice: byPractice.map(p => ({ practiceId: p.practiceId, name: p.name, collectedPence: p.collectedPence })),
                 dailySeries,
+                month: revenueMonth,
             },
             treatment: {
                 acceptedCount: totals.acceptedCount,
@@ -308,6 +444,7 @@ export const cockpitService = {
                 })),
             },
             leadRoi,
+            breakeven: { rows: breakevenRows, group: breakevenGroup },
             revenueByLine: shapeRevenueByLine(revenueLineRows, practiceId),
             cashUp: {
                 collectedPence: totals.collectedPence,

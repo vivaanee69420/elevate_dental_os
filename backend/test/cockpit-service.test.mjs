@@ -28,7 +28,11 @@ vi.mock('../src/repositories/cockpit.repository.js', () => ({
     latestMonthlyPl: vi.fn(async () => ({ periodMonth: null, rows: [] })),
     acceptedContactsInWindow: vi.fn(async () => [{ practice_id: 'P1', value_pence: 450000 }, { practice_id: 'P1', value_pence: 120000 }]),
     revenueByLine: vi.fn(async () => []),
+    activePractices: vi.fn(async () => []),
   },
+}));
+vi.mock('../src/repositories/practice-cost-model.repository.js', () => ({
+  practiceCostModelRepository: { asOf: vi.fn(async () => []) },
 }));
 let cockpitService, cockpitRepository;
 beforeEach(async () => {
