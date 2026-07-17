@@ -1005,3 +1005,38 @@ CREATE TABLE IF NOT EXISTS emergent_practice_map (
 );
 CREATE INDEX IF NOT EXISTS emergent_practice_map_org_idx
   ON emergent_practice_map (organisation_id);
+
+-- ============================================================================
+-- practice_cost_model — historised per-practice fixed-cost / breakeven /
+-- working-days / revenue-target inputs behind the cockpit's "Profit vs
+-- Breakeven" section. Manual inputs; no feed supplies these. One row per
+-- (practice, effective_from); reads take the latest row with
+-- effective_from <= the window start (migration 20260101000113).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS practice_cost_model (
+  id                         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id            UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  practice_id                UUID NOT NULL REFERENCES practices(id) ON DELETE CASCADE,
+  effective_from             DATE NOT NULL,
+  fixed_cost_pence_month     BIGINT,
+  breakeven_low_pence        BIGINT,
+  breakeven_high_pence       BIGINT,
+  working_days_per_month     INT NOT NULL DEFAULT 20,
+  revenue_target_pence_month BIGINT,
+  created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (practice_id, effective_from),
+  CONSTRAINT practice_cost_model_working_days_chk
+    CHECK (working_days_per_month BETWEEN 1 AND 31),
+  CONSTRAINT practice_cost_model_breakeven_order_chk
+    CHECK (breakeven_low_pence IS NULL OR breakeven_high_pence IS NULL
+           OR breakeven_low_pence <= breakeven_high_pence),
+  CONSTRAINT practice_cost_model_non_negative_chk
+    CHECK (COALESCE(fixed_cost_pence_month, 0) >= 0
+       AND COALESCE(breakeven_low_pence, 0) >= 0
+       AND COALESCE(breakeven_high_pence, 0) >= 0
+       AND COALESCE(revenue_target_pence_month, 0) >= 0)
+);
+CREATE INDEX IF NOT EXISTS practice_cost_model_org_practice_from_idx
+  ON practice_cost_model (organisation_id, practice_id, effective_from DESC);
+CREATE TRIGGER practice_cost_model_updated_at BEFORE UPDATE ON practice_cost_model FOR EACH ROW EXECUTE FUNCTION set_updated_at();

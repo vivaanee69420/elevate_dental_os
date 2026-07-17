@@ -309,3 +309,10 @@ CREATE POLICY "treatment_plans_read" ON treatment_plans
   FOR SELECT USING (organisation_id = current_org_id() AND current_user_role() != 'reception');
 CREATE POLICY "treatment_plans_write" ON treatment_plans
   FOR ALL USING (organisation_id = current_org_id() AND current_user_role() != 'reception');
+
+-- ============================================================================
+-- PRACTICE COST MODEL (migration 20260101000113) — RLS enabled, no policies;
+-- repositories read via serviceClient (bypasses RLS), matching the other
+-- Emergent-era tables.
+-- ============================================================================
+ALTER TABLE practice_cost_model ENABLE ROW LEVEL SECURITY;
