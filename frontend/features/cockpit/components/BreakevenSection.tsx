@@ -5,7 +5,7 @@
 // The margin is fixed/breakeven (37.1% on GM's numbers), NOT 1 - fixed/breakeven
 // (62.9%). The latter is the variable-cost ratio; using it as the margin — as
 // the source mockup did — reports a group in profit on a day it lost money. See
-// docs/FORMULAS.md §15.
+// docs/FORMULAS.md §17.
 //
 // Practices with no cost model ("Not set") and no cash-up feed ("Not reporting")
 // show their state rather than £0, and are excluded from the Group row.

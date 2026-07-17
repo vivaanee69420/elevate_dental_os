@@ -17,12 +17,19 @@ export const practiceCostModelRepository = {
     // Ordered newest-first and collapsed in JS — a window function would need an
     // RPC, and the row count here is one per practice per edit, not per day.
     async asOf(orgId, asOfDate) {
+        // Default to TODAY when omitted, not "no upper bound". An unbounded
+        // read would return the absolute latest row per practice regardless of
+        // its effective_from — i.e. a cost model dated in the future (entered
+        // ahead of a planned rent rise) would apply retroactively to every
+        // caller that forgets to pass a date. Every current call site does
+        // pass one explicitly; this is a safety net for the next one.
+        const on = asOfDate || new Date().toISOString().slice(0, 10);
         let q = supabase_1.serviceClient
             .from('practice_cost_model')
             .select(COLS)
             .eq('organisation_id', orgId)
+            .lte('effective_from', on)
             .order('effective_from', { ascending: false });
-        if (asOfDate) q = q.lte('effective_from', asOfDate);
         const { data, error } = await q;
         if (error) throw new Error(`practice_cost_model asOf: ${error.message}`);
 
