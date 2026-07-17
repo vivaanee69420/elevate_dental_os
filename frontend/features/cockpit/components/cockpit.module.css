@@ -1,0 +1,400 @@
+/*
+ * Daily Command Cockpit skin — ported from preview `elevate-cockpit-mockup_1.html`.
+ * Scoped to the cockpit only (these classes are imported as a CSS Module, so
+ * they never leak into the ~60 slate/white screens that share KpiTile/Panel).
+ * Georgia-serif green headings, mint-tinted tiles, green pill filters. Light
+ * only (rule 1). The mockup's blue developer callouts / NEW badges / dev-summary
+ * card are notes to the developer and are intentionally not reproduced.
+ */
+.shell {
+  --bg: #ffffff;
+  --tint: #eef4f0;
+  --tint2: #f6faf8;
+  --line: #e2ebe6;
+  --green: #14503c;
+  --green2: #1f7a5c;
+  --pill: #1c6b52;
+  --ink: #1a2b22;
+  --muted: #6b7c74;
+  --pos: #2e7d32;
+  --posbg: #e4f3e8;
+  --neg: #c62828;
+  --negbg: #fcebeb;
+  --amber: #8a6d1a;
+  --amberbg: #fbf3d8;
+  --note: #2563eb;
+  --notebg: #eef3ff;
+  --noteline: #c7d7fb;
+
+  background: #f4f7f5;
+  color: var(--ink);
+  line-height: 1.5;
+  padding: 24px;
+  min-height: 100%;
+}
+.wrap {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+/* ---- top bar ---- */
+.topbar {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 22px;
+  margin-bottom: 16px;
+}
+.h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+  color: var(--green);
+  font-weight: 600;
+}
+.h1 .ink {
+  color: var(--ink);
+}
+.sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+.legend {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.legend b {
+  color: var(--ink);
+}
+.swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 5px;
+}
+
+/* ---- cards / sections ---- */
+.card {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+.secnum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: var(--green);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  margin-right: 9px;
+  flex: 0 0 auto;
+}
+.secnumOk {
+  background: var(--green2);
+}
+.sechead {
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 3px;
+  color: var(--ink);
+}
+.secdesc {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-bottom: 16px;
+  margin-left: 31px;
+}
+.src {
+  display: inline-block;
+  background: var(--notebg);
+  border: 1px solid var(--noteline);
+  color: var(--note);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.srcOk {
+  background: var(--posbg);
+  color: var(--pos);
+  border-color: #bfe3c9;
+}
+
+/* ---- pills (practice filter) ---- */
+.pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 14px 0 0;
+}
+.pill {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pillOn {
+  background: var(--pill);
+  color: #fff;
+  border-color: var(--pill);
+}
+
+/* ---- KPI tiles ---- */
+.kpi {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--tint2);
+  position: relative;
+}
+.kpiClickable {
+  cursor: pointer;
+}
+.kpiClickable:hover {
+  border-color: var(--green2);
+}
+.kpiActive {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px rgba(20, 80, 60, 0.25);
+}
+.lbl {
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: 700;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+}
+.val {
+  font-size: 23px;
+  font-weight: 700;
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.valMuted {
+  color: var(--muted);
+  font-weight: 600;
+}
+.note {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.notePos {
+  color: var(--pos);
+}
+.noteNeg {
+  color: var(--neg);
+}
+.infoBtn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  border-radius: 50%;
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.infoPanel {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  line-height: 1.5;
+}
+
+/* editable daily-target field */
+.field {
+  width: 7rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.btn {
+  background: var(--green);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btnLink {
+  background: none;
+  border: none;
+  color: var(--green2);
+  text-decoration: underline;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* ---- tags / status ---- */
+.tag {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 5px;
+  margin-top: 6px;
+}
+.tagPos {
+  background: var(--posbg);
+  color: var(--pos);
+}
+.tagNeg {
+  background: var(--negbg);
+  color: var(--neg);
+}
+.tagAmb {
+  background: var(--amberbg);
+  color: var(--amber);
+}
+.tagMuted {
+  background: var(--tint);
+  color: var(--muted);
+}
+.st {
+  font-weight: 700;
+  font-size: 12px;
+}
+.stAbove {
+  color: var(--pos);
+}
+.stBelow {
+  color: var(--neg);
+}
+.stMuted {
+  color: var(--muted);
+}
+
+/* ---- tables ---- */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 6px;
+}
+.table th {
+  text-align: left;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.r {
+  text-align: right;
+}
+.money {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.totalRow {
+  background: var(--tint);
+}
+.totalRow td {
+  font-weight: 700;
+}
+.rowClickable {
+  cursor: pointer;
+}
+.rowClickable:hover {
+  background: var(--tint2);
+}
+.subtle {
+  color: var(--muted);
+}
+
+/* ---- revenue-by-line bars ---- */
+.barrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 5px 0;
+}
+.barLabel {
+  width: 150px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.bar {
+  height: 9px;
+  border-radius: 5px;
+  background: var(--green2);
+}
+
+/* ---- misc ---- */
+.footNote {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 12px;
+}
+.danger {
+  color: var(--neg);
+}
+.scrollX {
+  overflow-x: auto;
+}
+.lastUpdated {
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+}
+.stateBox {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 32px;
+  text-align: center;
+  color: var(--muted);
+}
+.errorBox {
+  border-color: var(--noteline);
+  background: var(--negbg);
+  color: var(--neg);
+}
