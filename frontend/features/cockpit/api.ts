@@ -171,7 +171,8 @@ export interface RevenueMonth {
   periodMonth: string;
   todayPence: number | null;
   todayDate: string | null;
-  mtdPence: number;
+  /** null when the month has no cash-up at all — never a fabricated £0. */
+  mtdPence: number | null;
   workingDaysElapsed: number;
   avgPerDayPence: number | null;
   projectedPence: number | null;

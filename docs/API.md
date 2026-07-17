@@ -1161,7 +1161,14 @@ byBusiness[], costLines[], opexLines[], customLines[], lineNotes[] }`.
 `revenueByLine[]` — `{ name, amountPence, sharePct }`, largest-first, zero-fee
 lines dropped. Invoiced fee per treatment from the `treatment_revenue_matrix`
 RPC (migration `…000041`), scoped to `scope` when it's a practice. **Empty for
-windows before 10 Jun 2026** — that's where `invoice_items` starts, not a zero.
+a window/practice with no invoiced treatment lines** — this can mean nothing
+was invoiced in the window, or that there is no Dentally feed for that
+practice at all; either way it is not the same as `£0` invoiced. (An earlier
+version of this doc asserted a fixed "data starts 10 Jun 2026" cutoff — that
+was wrong: it was `min(created_at)` on `invoice_items`, i.e. when rows were
+SYNCED, not the period they cover; the live coverage for `invoiced_on` in fact
+runs back to mid-2025. There is no fixed platform-wide start date — it
+depends on each org's Dentally connection.)
 
 ### Detail endpoints (lazy — fetched when a drill-down opens)
 
@@ -1205,7 +1212,7 @@ breakevenHighPence`.
 
 `breakeven` — §6 Profit vs Breakeven. Inputs come from `practice_cost_model`
 (migration `…000113`), read **as-of the window's start**. Maths in
-`calculateBreakeven` (`docs/FORMULAS.md` §15).
+`calculateBreakeven` (`docs/FORMULAS.md` §17).
 
 - `rows[]` — one per **active practice**: `{ practiceId, name, revenuePence,
   workingDaysInWindow, breakevenDayPence, contributionPence, fixedDayPence,
@@ -1239,18 +1246,31 @@ breakevenHighPence`.
   not `£0`.
 
 `revenue.month` — §1's Cash today / MTD / Projected / Daily target cards.
-**Anchored to the calendar month containing `until`**, not to the window ("month
-to date" against an arbitrary window is meaningless); the UI labels the month.
-Both `since`/`until` and the window used to read the as-of cost model are
-resolved to **London-local calendar dates** (`Europe/London`), since the scope
-bar sends London-wall-clock-midnight ISO instants (e.g. July's window starts
-at `2026-06-30T23:00:00.000Z` in BST) rather than plain `YYYY-MM-DD` strings;
-truncating those as UTC would land a day early every BST month, and because
-`until` is exclusive its instant is resolved from the last instant *inside*
-the window so it doesn't roll into the next month.
+**Anchored to the calendar month containing `min(until, today)`**, not to the
+window ("month to date" against an arbitrary window is meaningless), and not
+blindly to the window's last month either — a window ending in the future
+(e.g. "This year" sends `until` = next 1 Jan) anchors to the CURRENT month,
+never to a month that hasn't happened yet. The UI labels the month on all four
+cards. Both `since`/`until` and the window used to read the as-of cost model
+are resolved to **London-local calendar dates** (`Europe/London`), since the
+scope bar sends London-wall-clock-midnight ISO instants (e.g. July's window
+starts at `2026-06-30T23:00:00.000Z` in BST) rather than plain `YYYY-MM-DD`
+strings; truncating those as UTC would land a day early every BST month, and
+because `until` is exclusive its instant is resolved from the last instant
+*inside* the window so it doesn't roll into the next month. A bare
+`YYYY-MM-DD` `until` (accepted by `cockpitQuerySchema`, though the scope bar
+never sends one) is handled as a plain date rather than round-tripped through
+an instant, which would otherwise land inside the BST offset and skip a day.
 `{ periodMonth, todayPence, todayDate, mtdPence, workingDaysElapsed,
 avgPerDayPence, projectedPence, dailyTargetPence, byPractice[] }`.
 
+- The `workingDaysPerMonth` and `revenueTargetPenceMonth` behind
+  `dailyTargetPence`/`projectedPence` are read from the cost model **as-of
+  TODAY**, not the window start — a target saved this afternoon must show up
+  on this card even when the default "This month" window starts on the 1st.
+  `breakeven`'s per-day figures keep reading as-of the window start (a March
+  window is costed with March's model); these are two independent reads of
+  `practice_cost_model`.
 - `projectedPence` — each practice projected separately (`mtd / daysElapsed ×
   workingDaysPerMonth`) then summed, so the group can't drift from its parts.
   **`null` when nothing has traded** — never a divide-by-zero or a £0.
@@ -1258,12 +1278,16 @@ avgPerDayPence, projectedPence, dailyTargetPence, byPractice[] }`.
   workingDaysPerMonth`. `null` when no practice has a target set.
 - `todayPence` / `todayDate` — the latest cash-up day in the month; `null` when
   the month has no cash-up at all.
+- `mtdPence` — **`null` when the month has no cash-up at all** (never a
+  fabricated `£0`), otherwise the sum of real cash-up cash across practices
+  that reported (see `byPractice[].mtdPence` below).
 - `avgPerDayPence` — group `mtdPence` ÷ the count of distinct calendar days ANY
-  practice traded so far in the month. `null` when nothing has traded (never a
-  divide-by-zero).
+  practice traded so far in the month. `null` when nothing has traded, or when
+  `mtdPence` itself is `null` (never a divide-by-zero).
 - `byPractice[].mtdPence` — `null` when that practice has no cash-up row
   anywhere in the month (it did not report), matching `breakeven.rows`'
   `not_reporting` story for the same practice — never a contradictory `£0
   MTD`. The group `mtdPence` total still sums real cash-up cash, treating a
   non-reporting practice as contributing 0 to the total (the total is a known
-  fact even though the individual row is not).
+  fact even though the individual row is not) — but is `null` itself when no
+  practice reported at all this month.

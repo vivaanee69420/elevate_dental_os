@@ -3,6 +3,7 @@
 // history is preserved (a rent rise in July must not rewrite March).
 import { practiceCostModelRepository } from "../repositories/practice-cost-model.repository.js";
 import { cockpitRepository } from "../repositories/cockpit.repository.js";
+import { AppError } from "../middleware/errors.js";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -47,11 +48,25 @@ export const practiceCostModelService = {
         // org-filtered, so an id from another tenant simply isn't in the list.
         const practices = await cockpitRepository.activePractices(orgId, practiceId);
         const practice = (practices || []).find(p => p.id === practiceId);
-        if (!practice) throw new Error('practice not found');
+        if (!practice) throw new AppError('practice not found', 404);
+
+        // The model in force TODAY (if any). Upserting at effective_from=today
+        // is an INSERT when today has no row yet — an INSERT takes column
+        // defaults (NULL) for anything not supplied, which would silently wipe
+        // every field the caller didn't mention (see docs: "Omitted fields are
+        // left untouched"). Merging the existing row's own columns underneath
+        // the supplied ones makes an INSERT carry the prior values forward
+        // exactly like an UPDATE would.
+        const todayModels = await practiceCostModelRepository.asOf(orgId, today());
+        const existing = (todayModels || []).find(m => m.practice_id === practiceId);
 
         const fields = {};
         for (const [key, col] of Object.entries(FIELD_MAP)) {
-            if (input[key] !== undefined) fields[col] = input[key];
+            if (input[key] !== undefined) {
+                fields[col] = input[key];
+            } else if (existing && existing[col] !== undefined) {
+                fields[col] = existing[col];
+            }
         }
 
         const row = await practiceCostModelRepository.upsert(orgId, practiceId, today(), fields);

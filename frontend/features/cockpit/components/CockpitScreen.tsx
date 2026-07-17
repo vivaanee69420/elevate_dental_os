@@ -106,7 +106,7 @@ function DailyTargetCard({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Daily target</div>
+      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Daily target — {monthLabelShort(month.periodMonth)}</div>
       {editing && practiceId ? (
         <div className="mt-1 flex items-center gap-2">
           <input
@@ -186,23 +186,25 @@ function RevenueSection({
         <SectionHeading n={1} title="Revenue — cash taken (Emergent)" note="Till cash taken, keyed into Emergent each day." />
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <KpiTile
-            label="Cash taken today"
+            label={`Cash taken today — ${monthLabelShort(data.revenue.month.periodMonth)}`}
             value={data.revenue.month.todayPence === null ? '—' : formatPence(data.revenue.month.todayPence)}
-            delta={data.revenue.month.todayDate ? fmtDay(data.revenue.month.todayDate) : 'No cash-up yet this month'}
+            delta={data.revenue.month.todayDate ? fmtDay(data.revenue.month.todayDate) : `No cash-up yet in ${monthLabelShort(data.revenue.month.periodMonth)}`}
             info="The latest day Emergent has sent a cash-up for in this month. This card and the next three are anchored to the calendar month, not to the period you've selected — a month-to-date figure against an arbitrary window would be meaningless."
           />
           <KpiTile
             label={`Cash ${monthLabelShort(data.revenue.month.periodMonth)} to date`}
-            value={formatPence(data.revenue.month.mtdPence)}
+            value={data.revenue.month.mtdPence === null ? '—' : formatPence(data.revenue.month.mtdPence)}
             delta={
-              data.revenue.month.avgPerDayPence !== null
-                ? `${formatNumber(data.revenue.month.workingDaysElapsed)} days traded · ${formatPence(data.revenue.month.avgPerDayPence)}/day`
-                : 'No days traded yet'
+              data.revenue.month.mtdPence === null
+                ? 'No cash-up feed this month'
+                : data.revenue.month.avgPerDayPence !== null
+                  ? `${formatNumber(data.revenue.month.workingDaysElapsed)} days traded · ${formatPence(data.revenue.month.avgPerDayPence)}/day`
+                  : 'No days traded yet'
             }
             info="Cash taken from the 1st of the month to now. 'Days traded' counts days a practice actually sent a cash-up, not calendar weekdays."
           />
           <KpiTile
-            label="Projected month"
+            label={`Projected ${monthLabelShort(data.revenue.month.periodMonth)}`}
             value={data.revenue.month.projectedPence === null ? '—' : formatPence(data.revenue.month.projectedPence)}
             delta={data.revenue.month.projectedPence === null ? 'Nothing traded yet' : 'at current run-rate'}
             info="Each practice is projected on its own run-rate (month-to-date ÷ days traded × its working days per month) and the results are summed, so the group figure is always the sum of its parts."
@@ -886,6 +888,10 @@ function MonthlySection({ data }: { data: CockpitResponse }) {
           sub="Lab, materials, rent, staff, marketing"
         />
       </div>
+      {/* Gated on revenuePence > 0 deliberately: a zero-revenue month means
+          Emergent hasn't sent a P&L feed for this org/period at all (nothing
+          to reconcile), not a reconciliation failure — showing the residual
+          banner there would flag a non-issue as a broken feed. */}
       {m.residualPence !== 0 && m.revenuePence > 0 ? (
         <p className="mt-3 text-xs text-slate-400">
           Emergent&rsquo;s P&amp;L lines don&rsquo;t reconcile to the net profit it sent &mdash;{' '}

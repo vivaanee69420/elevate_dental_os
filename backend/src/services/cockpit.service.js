@@ -129,8 +129,28 @@ function londonDate(value) {
 // card is labelled with the month. `until` is exclusive, so we resolve the
 // month of the last instant INSIDE the window (until - 1ms) rather than the
 // boundary instant itself, which would belong to the next month.
+const BARE_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 function monthBoundsFrom(until) {
-    const anchorInstant = until ? new Date(new Date(until).getTime() - 1) : new Date();
+    const now = new Date();
+    let anchorInstant;
+    if (until && BARE_DATE.test(until)) {
+        // A bare calendar date (no time/zone) is unambiguous — go back one
+        // calendar day in UTC terms rather than round-tripping through an
+        // instant. `new Date(until).getTime() - 1` lands INSIDE the BST
+        // offset (UTC midnight minus 1ms is still after London's local
+        // midnight in summer), so e.g. until='2026-08-01' resolved to August,
+        // not July. `cockpitQuerySchema` accepts any parseable string, though
+        // the scope bar always sends a full ISO instant in practice.
+        anchorInstant = new Date(new Date(`${until}T00:00:00Z`).getTime() - 24 * 60 * 60 * 1000);
+    } else {
+        anchorInstant = until ? new Date(new Date(until).getTime() - 1) : now;
+    }
+    // A window ending in the future (e.g. "This year" sends `until` = next
+    // Jan 1st) must anchor §1's month-to-date cards to the CURRENT month, not
+    // to the window's own last month — "Cash Dec to date" in July, rendered
+    // from a window that merely happens to include December, is meaningless.
+    if (anchorInstant.getTime() > now.getTime()) anchorInstant = now;
     const ymd = londonDate(anchorInstant);
     const [y, m] = ymd.split('-').map(Number);
     return {
@@ -185,7 +205,7 @@ export const cockpitService = {
         let periodMonth = monthStartFrom(until);
         const month = monthBoundsFrom(until);
         const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows, revenueLineRows,
-               practices, costModels, monthCashupRows] = await Promise.all([
+               practices, costModels, costModelsToday, monthCashupRows] = await Promise.all([
             cockpitRepository.cashupRollup(orgId, since, until, practiceId),
             cockpitRepository.monthlyPl(orgId, periodMonth, practiceId),
             leadAttributionService.channelBreakdown(orgId, { since, until, practiceId }),
@@ -197,6 +217,13 @@ export const cockpitService = {
             // a London-wall-clock instant (e.g. '2026-06-30T23:00:00.000Z' for a
             // July window) — resolve its London-local date, don't truncate as UTC.
             practiceCostModelRepository.asOf(orgId, londonDate(since || month.start)),
+            // As-of TODAY — §1's daily-target/working-days cards are about
+            // "right now", not the selected window. On the default "This
+            // month" window (`since` = the 1st) a target saved on the 17th
+            // was excluded by the window-start read above, so a successful
+            // save appeared to do nothing. §6 keeps reading as-of the window
+            // start (that's deliberate); only §1 needs this second read.
+            practiceCostModelRepository.asOf(orgId, londonDate(new Date())),
             cockpitRepository.cashupRollup(orgId, month.start, month.endExclusive, practiceId),
         ]);
 
@@ -338,6 +365,9 @@ export const cockpitService = {
 
         // ---- §6 Profit vs Breakeven, and §1's month-anchored cards ----------
         const modelByPractice = new Map((costModels || []).map(m => [m.practice_id, m]));
+        // §1 reads the model as-of TODAY, not the window start — see the
+        // asOf(orgId, londonDate(new Date())) fetch above.
+        const modelByPracticeToday = new Map((costModelsToday || []).map(m => [m.practice_id, m]));
         const windowTradedDays = tradedDaysByPractice(cashupRows);
         // §6's revenue must come from the cash-up feed ALONE. `byPractice` is a
         // UNION of cash-up AND treatment_accepted rows (see the accepted-merge
@@ -425,8 +455,8 @@ export const cockpitService = {
             const hasMonthCashup = monthByPractice.has(p.id);
             const mtdPence = hasMonthCashup ? monthByPractice.get(p.id).mtdPence : null;
             const elapsed = monthTradedDays.get(p.id)?.size ?? 0;
-            const wdpm = modelByPractice.get(p.id)?.working_days_per_month ?? 20;
-            const target = modelByPractice.get(p.id)?.revenue_target_pence_month ?? null;
+            const wdpm = modelByPracticeToday.get(p.id)?.working_days_per_month ?? 20;
+            const target = modelByPracticeToday.get(p.id)?.revenue_target_pence_month ?? null;
             return {
                 practiceId: p.id,
                 name: p.name,
@@ -439,10 +469,17 @@ export const cockpitService = {
             };
         });
 
-        // Group MTD sums across all practices — treat a reporting-null practice
-        // as 0 when SUMMING (the group total is honest even though the row
-        // itself stays null), matching how the group already handles breakeven.
-        const monthMtdPence = monthRowsOut.reduce((s, r) => s + (r.mtdPence ?? 0), 0);
+        // Group MTD sums across all practices that DID report — a
+        // reporting-null practice contributes 0 to that sum (the group total
+        // is honest even though its own row stays null), matching how the
+        // group already handles breakeven. But when NOTHING reported all
+        // month (no cash-up feed at all), reducing an empty set to a hard 0
+        // is the fabricated-zero defect this section exists to avoid — a
+        // month with no data must render "—", not "£0.00".
+        const reportingMonthRows = monthRowsOut.filter(r => r.mtdPence !== null);
+        const monthMtdPence = reportingMonthRows.length > 0
+            ? reportingMonthRows.reduce((s, r) => s + r.mtdPence, 0)
+            : null;
         const monthElapsed = new Set((monthCashupRows || []).map(r => r.cashup_date).filter(Boolean)).size;
         const projectedRows = monthRowsOut.filter(r => r.projectedPence !== null);
         const targetRows = monthRowsOut.filter(r => r.dailyTargetPence !== null);
@@ -458,7 +495,7 @@ export const cockpitService = {
             todayDate: latestDay || null,
             mtdPence: monthMtdPence,
             workingDaysElapsed: monthElapsed,
-            avgPerDayPence: monthElapsed > 0 ? Math.round(monthMtdPence / monthElapsed) : null,
+            avgPerDayPence: monthElapsed > 0 && monthMtdPence !== null ? Math.round(monthMtdPence / monthElapsed) : null,
             projectedPence: projectedRows.length > 0 ? projectedRows.reduce((s, r) => s + r.projectedPence, 0) : null,
             dailyTargetPence: targetRows.length > 0 ? targetRows.reduce((s, r) => s + r.dailyTargetPence, 0) : null,
             byPractice: monthRowsOut,

@@ -1,5 +1,5 @@
 import './setup.js';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../src/services/lead-attribution.service.js', () => ({
   leadAttributionService: { channelBreakdown: vi.fn(async () => ({ channels: [], group: {}, groupChannels: {} })) },
@@ -39,10 +39,30 @@ vi.mock('../src/repositories/practice-cost-model.repository.js', () => ({
   },
 }));
 
+const DEFAULT_MODEL = [
+  { practice_id: 'P1', effective_from: '2026-01-01', fixed_cost_pence_month: 3100000,
+    breakeven_low_pence: 8100000, breakeven_high_pence: 8600000,
+    working_days_per_month: 20, revenue_target_pence_month: 16000000 },
+  // P9 (Warwick Lodge) deliberately has no model.
+];
+
 let cockpitService;
 beforeEach(async () => {
   vi.clearAllMocks();
   ({ cockpitService } = await import('../src/services/cockpit.service.js'));
+
+  // vi.clearAllMocks() clears CALL HISTORY only — a plain .mockImplementation(...)
+  // set by an earlier test (as opposed to .mockImplementationOnce) sticks as the
+  // mock's implementation for every test that runs after it, which made this
+  // file's outcome depend on execution order under --shuffle. Re-assert each
+  // ad-hoc-overridden mock's default here, every test, so order never matters —
+  // any test that needs different behaviour still overrides it locally
+  // (preferably via .mockImplementationOnce, consumed by its own call(s)).
+  const { cockpitRepository } = await import('../src/repositories/cockpit.repository.js');
+  const { practiceCostModelRepository } = await import('../src/repositories/practice-cost-model.repository.js');
+  cockpitRepository.cashupRollup.mockImplementation(async () => CASHUP);
+  cockpitRepository.acceptedContactsInWindow.mockImplementation(async () => []);
+  practiceCostModelRepository.asOf.mockImplementation(async () => DEFAULT_MODEL);
 });
 
 const WIN = { since: '2026-07-15', until: '2026-07-16' };
@@ -151,7 +171,14 @@ describe('cockpit breakeven — Critical 1 (cash-up-only revenue source)', () =>
 describe('cockpit breakeven — Important 4 (group money nulls when nothing counted)', () => {
   it('returns null for every group money field when no practice has a usable model', async () => {
     const { practiceCostModelRepository } = await import('../src/repositories/practice-cost-model.repository.js');
-    practiceCostModelRepository.asOf.mockImplementation(async () => []); // no models at all
+    // mockImplementationOnce, NOT mockImplementation — a plain
+    // mockImplementation call persists across vi.clearAllMocks() in
+    // beforeEach (that only clears call history, not a previously-set
+    // implementation), which made this file order-dependent under --shuffle:
+    // whichever test ran after this one inherited the empty-array override
+    // instead of the module's default fixture. Once consumes exactly the
+    // next asOf() call (the §6 as-of-window-start read) and self-clears.
+    practiceCostModelRepository.asOf.mockImplementationOnce(async () => []); // no models at all
     const out = await cockpitService.build('ORG1', WIN);
     expect(out.breakeven.group.revenuePence).toBeNull();
     expect(out.breakeven.group.contributionPence).toBeNull();
@@ -163,7 +190,13 @@ describe('cockpit breakeven — Important 4 (group money nulls when nothing coun
 });
 
 describe('cockpit — Critical 2 & 3 (London-local window dates)', () => {
-  it('anchors revenue.month.periodMonth to December, not January, for a GMT month-end exclusive boundary', async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('anchors revenue.month.periodMonth to December, not January, for a GMT month-end exclusive boundary (window entirely in the past)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-12-15T12:00:00.000Z'));
     const out = await cockpitService.build('ORG1', {
       since: '2026-12-01T00:00:00.000Z',
       until: '2027-01-01T00:00:00.000Z',
@@ -178,5 +211,69 @@ describe('cockpit — Critical 2 & 3 (London-local window dates)', () => {
       until: '2026-07-31T23:00:00.000Z',
     });
     expect(practiceCostModelRepository.asOf).toHaveBeenCalledWith('ORG1', '2026-07-01');
+  });
+});
+
+describe('cockpit — Important 3 (month anchor clamps to today, never a future month)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('"This year" (until = next 1 Jan) anchors to the CURRENT month, not December, when today is earlier in the year', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-17T12:00:00.000Z'));
+    const out = await cockpitService.build('ORG1', {
+      since: '2026-01-01T00:00:00.000Z',
+      until: '2027-01-01T00:00:00.000Z',
+    });
+    // Not '2026-12-01' — December hasn't happened yet relative to "today".
+    expect(out.revenue.month.periodMonth).toBe('2026-07-01');
+  });
+
+  it('a window ending in the past still anchors to the window\'s own last month (no clamp needed)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-17T12:00:00.000Z'));
+    const out = await cockpitService.build('ORG1', {
+      // London-wall-clock midnight of 1 April in BST is 23:00 UTC on the 31st
+      // — the same convention the scope bar uses (see the July/BST test above).
+      since: '2026-02-28T00:00:00.000Z',
+      until: '2026-03-31T23:00:00.000Z',
+    });
+    expect(out.revenue.month.periodMonth).toBe('2026-03-01');
+  });
+
+  it('a bare YYYY-MM-DD `until` is treated as a plain date, not round-tripped through an instant', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-15T12:00:00.000Z'));
+    const out = await cockpitService.build('ORG1', { since: '2026-07-01', until: '2026-08-01' });
+    // A bug once resolved this to August (the exclusive boundary itself)
+    // because `until`'s UTC-midnight instant minus 1ms still lands inside
+    // BST's +1h offset and doesn't cross local midnight.
+    expect(out.revenue.month.periodMonth).toBe('2026-07-01');
+  });
+});
+
+describe('cockpit — Important 1 (§1 daily target/working-days read as-of TODAY, not the window start)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a target saved today still shows on revenue.month even when the window starts earlier in the month', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-17T12:00:00.000Z'));
+    const { practiceCostModelRepository } = await import('../src/repositories/practice-cost-model.repository.js');
+    // Window start (1st) has NO model at all; today's model (read separately)
+    // carries a target. Before the fix, revenue.month reused the window-start
+    // read and this target was invisible — a successful save appeared to do
+    // nothing.
+    practiceCostModelRepository.asOf.mockImplementationOnce(async () => []); // window-start read: nothing
+    practiceCostModelRepository.asOf.mockImplementationOnce(async () => [ // today's read: a target exists
+      { practice_id: 'P1', effective_from: '2026-07-17', fixed_cost_pence_month: null,
+        breakeven_low_pence: null, breakeven_high_pence: null,
+        working_days_per_month: 22, revenue_target_pence_month: 22000000 },
+    ]);
+    const out = await cockpitService.build('ORG1', { since: '2026-07-01', until: '2026-07-31' });
+    const ashford = out.revenue.month.byPractice.find((r) => r.practiceId === 'P1');
+    expect(ashford.dailyTargetPence).toBe(1000000); // 22,000,000 / 22
   });
 });
