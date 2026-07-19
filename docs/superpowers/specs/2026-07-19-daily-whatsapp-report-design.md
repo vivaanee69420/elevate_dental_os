@@ -24,12 +24,11 @@ An owner-only "Send now" button triggers the identical code path on demand.
 
 WhatsApp template parameters **cannot contain newlines, tabs, or 4+ consecutive
 spaces** (Meta Cloud API restriction, enforced downstream of GHL). Therefore the
-report is a single pipe-separated line, not a formatted multi-line block.
-
-**Decided:** use pipe separators on a single line. No newline verification needed.
+report is a single pipe-separated line, not a formatted multi-line block. This is
+settled — no newline verification is needed.
 
 The GHL Multi line custom field value cap is unknown. Rather than block on
-measuring it, the report is capped at **300 characters** — short enough to be
+measuring it, the report is capped at **350 characters** — short enough to be
 comfortably under any plausible limit, and short enough to read in well under a
 minute, which was the original goal.
 
@@ -63,7 +62,7 @@ yesterday's spend would produce a wrong headline efficiency metric — the singl
 number most likely to be acted on. Reporting a complete, internally consistent
 yesterday is the only trustworthy option without adding a second daily ad sync.
 
-The report is explicitly dated (`Daily Report Tue 21 Jul`) so there is no ambiguity
+The report is explicitly dated (`Daily 21 Jul`) so there is no ambiguity
 about which day it describes.
 
 ## Architecture
@@ -158,7 +157,7 @@ Formatter rules:
    currently-dead Meta feed is visible rather than silently reporting zero spend.
    Dependent metrics render `n/a`. Covered by a test.
 3. **`report_line` is guaranteed free of newlines, tabs and 4+ consecutive spaces.**
-4. **`report_line` is capped at 300 characters.** This is an enforced guard, not an
+4. **`report_line` is capped at 350 characters.** This is an enforced guard, not an
    assumption: the typical line is ~215 chars, but wide values (six-figure spend,
    `not reporting` on both channels) can reach ~280. When the cap would be exceeded,
    sections are dropped in this order:
@@ -239,7 +238,7 @@ Vitest, backend. Value concentrates in the pure functions.
 
 - `formatReportLine`: null spend → `not reporting`; dependent metrics → `n/a`;
   pence→£ formatting; output contains no newline/tab/4-space run; truncation at
-  the 300-char cap drops QuickBooks first, then Dentally, and never the ad metrics
+  the 350-char cap drops QuickBooks first, then Dentally, and never the ad metrics
   or cash in; a worst-case wide-value line still fits.
 - `buildDailyReport`: correct window — yesterday in Europe/London, not UTC. A
   naive `new Date()` would select the wrong day for part of the year.
@@ -261,5 +260,5 @@ None blocking. All three earlier questions are resolved:
 
 1. Newlines — avoided entirely by using pipe separators on a single line.
 2. Custom field value cap — unmeasured, but sidestepped by capping the report at
-   300 characters.
+   350 characters.
 3. Boss as a GHL Contact — confirmed handled on the GHL side.
