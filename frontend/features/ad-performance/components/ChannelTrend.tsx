@@ -7,7 +7,7 @@
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend,
 } from 'recharts';
-import { Card } from '@/components/ui';
+import { SectionCard, SecHead } from '@/components/ui';
 import type { TrendMonth } from '../api';
 
 interface Point {
@@ -40,8 +40,12 @@ function toPoints(trend: TrendMonth[]): Point[] {
 export function ChannelTrend({ trend }: { trend: TrendMonth[] }) {
   const points = toPoints(trend);
   return (
-    <Card>
-      <h2 className="mb-2 text-[15px] font-semibold text-slate-900">Trend</h2>
+    <SectionCard>
+      <SecHead
+        n={5}
+        title="Trend"
+        desc="Lead volume and cost per lead month by month. These points dedupe per person within each month, so they are not additive to the totals above — someone who enquired in two different months is one lead up there but two down here. A gap in a cost line means spend was not reported that month, not that leads were free."
+      />
       <div style={{ width: '100%', height: 260 }}>
         <ResponsiveContainer>
           <LineChart data={points} margin={{
@@ -85,6 +89,6 @@ export function ChannelTrend({ trend }: { trend: TrendMonth[] }) {
         </ResponsiveContainer>
       </div>
       {points.length === 0 ? <p className="py-3 text-sm text-slate-500">Not enough history to plot a trend.</p> : null}
-    </Card>
+    </SectionCard>
   );
 }
