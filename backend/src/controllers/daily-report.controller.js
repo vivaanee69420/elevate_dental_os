@@ -56,7 +56,14 @@ export const dailyReportController = {
     },
 
     async preview(req, res) {
-        const { line, payload } = await dailyReportService.buildPayload(req.user.organisation_id, {});
+        let line;
+        let payload;
+        try {
+            ({ line, payload } = await dailyReportService.buildPayload(req.user.organisation_id, {}));
+        } catch (err) {
+            console.error(`[daily-report] preview buildPayload failed for ${req.user.organisation_id}`, err);
+            return res.status(503).json({ error: 'Could not build the preview: ad performance data is unavailable.' });
+        }
         return res.json({ line, length: line.length, payload });
     },
 
