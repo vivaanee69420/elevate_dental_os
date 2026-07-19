@@ -16,10 +16,12 @@ export function AttributionSection({
   lines,
   totalAcceptedPence,
   loading,
+  error,
 }: {
   lines: AdLeadLine[];
   totalAcceptedPence: number;
   loading: boolean;
+  error: boolean;
 }) {
   const st = matchStats(lines);
   const capped = lines.length >= LEAD_FETCH_LIMIT;
@@ -38,6 +40,19 @@ export function AttributionSection({
       />
       {loading ? (
         <p className="text-sm text-slate-500">Loading attribution…</p>
+      ) : error ? (
+        <>
+          <p className="mb-3 text-sm text-red-700">
+            The leads data behind these figures could not be loaded, so match and attribution
+            figures are unavailable for this window.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+            <Kpi label="Leads matched to a treatment" value="Not reporting" valueMuted />
+            <Kpi label="Match rate" value="Not reporting" valueMuted />
+            <Kpi label="Value from matched leads" value="Not reporting" valueMuted />
+            <Kpi label="Accepted value with no lead" value="Not reporting" valueMuted />
+          </div>
+        </>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
           <Kpi
