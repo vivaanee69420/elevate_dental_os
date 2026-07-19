@@ -838,7 +838,9 @@ exists, replace the assumed margin with the real one.
 ## 18. Ad channel attribution — pipeline→channel map (`/ad-performance`)
 
 Source: `backend/src/services/ad-attribution.service.js` (`computePerformance`,
-`finalise`, `totalsFromStats`); tested in `backend/test/ad-attribution.service.test.mjs`.
+`finalise`, `totalsFromStats`); tested in `backend/test/ad-attribution.service.test.mjs`,
+`backend/test/ad-attribution.isolation.test.mjs`, and
+`backend/test/ad-attribution.repository.test.mjs`.
 Surfaced via `GET /api/ad-attribution/performance` and `GET
 /api/ad-attribution/leads` (see `docs/API.md`). Money is integer pence
 throughout.
@@ -853,7 +855,8 @@ channel bucket, not hidden and not folded into either paid channel.
 **Practice comes from the GHL subaccount**, via `integration_accounts.practice_id`.
 A subaccount mapped to no practice (the academy/accounting Locations that
 share an org with dental practices) is excluded from every practice-scoped
-figure; its leads are counted only in `excludedUnmappedLeads`.
+and group-level figure; its leads are counted only in `excludedUnmappedLeads`
+(the loop continues before any per-practice or group-level accumulation).
 
 **Leads are counted per PERSON**, not per pipeline row: `contact_id`, falling
 back to the lead id when a contact is absent. One person sitting in two
