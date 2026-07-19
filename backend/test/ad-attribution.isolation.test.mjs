@@ -26,6 +26,7 @@ describe('every ad-attribution read pins organisation_id', () => {
     ['practiceOptions', () => adAttributionRepository.practiceOptions(ORG_A)],
     ['adAccounts', () => adAttributionRepository.adAccounts(ORG_A)],
     ['adSpend', () => adAttributionRepository.adSpend(ORG_A, '2026-07-01', '2026-08-01')],
+    ['adSpendDetailed', () => adAttributionRepository.adSpendDetailed(ORG_A, '2026-07-01', '2026-08-01')],
     ['acceptedForMatching', () => adAttributionRepository.acceptedForMatching(ORG_A, '2026-07-01', '2026-08-01')],
     ['leadsInWindow', () => adAttributionRepository.leadsInWindow(ORG_A, '2026-07-01', '2026-08-01')],
     ['emergentBusinesses', () => adAttributionRepository.emergentBusinesses(ORG_A)],
