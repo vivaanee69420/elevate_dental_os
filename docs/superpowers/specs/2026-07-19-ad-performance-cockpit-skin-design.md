@@ -90,9 +90,9 @@ Banner order, conditions and copy are unchanged.
 ### 4. Finish the two half-converted children
 
 - **`ByPracticeTable.tsx`** — the table markup adopts the module's `.table` (which already styles `th` and `td`, including the uppercase muted header treatment and the hairline `border-bottom: 1px solid var(--line)`). The raw slate classes at `:34-54` are removed. The `SectionCard`/`SecHead` wrapper is unchanged.
-- **`OverlapTable.tsx`** — same `.table` treatment, and it gains the `SectionCard`/`SecHead` wrapper it currently lacks so it reads as a section rather than a loose block.
+- **`OverlapTable.tsx`** — same `.table` treatment. It does **not** gain a `SectionCard`/`SecHead` wrapper: it renders inside a `DetailPanel` (`AdPerformanceScreen.tsx:204`, the `drill === 'overlap'` branch), so adding a card would nest a card inside a panel. Only its table markup changes.
 
-Muted secondary text in both uses the module's `.r`.
+Both follow the cockpit's established table idiom, e.g. `CockpitScreen.tsx:205-218`: a `div.scrollX` wrapper, `<table className={s.table} style={{ minWidth: N }}>`, right-aligned numeric cells as `cx(s.r, s.money)` with matching `th className={s.r}`. `ByPracticeTable`'s deduped total row uses the module's `.totalRow`, and its trailing caveat paragraph uses `.footNote`.
 
 ### 5. Deliberately out of scope
 
