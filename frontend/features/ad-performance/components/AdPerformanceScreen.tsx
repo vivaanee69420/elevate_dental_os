@@ -9,7 +9,7 @@
 // per-channel fetch — it would fire a request per tile and let the panels
 // disagree with one another.
 import { useMemo, useState } from 'react';
-import { PageHeader, SectionCard, SecHead, DetailPanel } from '@/components/ui';
+import { SectionCard, SecHead, DetailPanel, cx, cockpitStyles as s } from '@/components/ui';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useAdPerformance, useAdLeads } from '../hooks';
@@ -75,13 +75,20 @@ function rowsFor(drill: Exclude<ScorecardDrill, 'overlap'>, lines: AdLeadLine[])
 // and drops focus from the month selector.
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Ad performance"
-        subtitle="Google and Facebook leads, cost per lead and conversions, from the pipelines you have mapped to each channel."
-      />
-      <ScopePeriodBar />
-      {children}
+    <div className={s.shell}>
+      <div className={s.wrap}>
+        <div className={s.topbar}>
+          <h1 className={s.h1}>Ad performance</h1>
+          <div className={s.sub}>
+            Google and Facebook leads, cost per lead and conversions, from the pipelines you
+            have mapped to each channel.
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <ScopePeriodBar />
+          </div>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }
@@ -103,9 +110,13 @@ export default function AdPerformanceScreen() {
   const lines = useMemo(() => leads.data?.leads ?? [], [leads.data]);
   const overlap = useMemo(() => overlapPeople(lines), [lines]);
 
-  if (isLoading) return <Frame><p className="text-sm text-slate-500">Loading…</p></Frame>;
+  if (isLoading) return <Frame><div className={s.stateBox}>Loading…</div></Frame>;
   if (error || !data) {
-    return <Frame><p className="text-sm text-slate-500">Could not load ad performance.</p></Frame>;
+    return (
+      <Frame>
+        <div className={cx(s.stateBox, s.errorBox)}>Could not load ad performance.</div>
+      </Frame>
+    );
   }
 
   const noPaidLeads = data.channels.every((c) => c.channel === 'unassigned' || c.leads === 0);
@@ -144,21 +155,21 @@ export default function AdPerformanceScreen() {
   return (
     <Frame>
       {nothingMapped ? (
-        <div className="rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
+        <div className={cx(s.notice, s.noticeWarn)}>
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
           <a className="underline" href="/settings/ad-attribution">Set up ad attribution</a>.
         </div>
       ) : null}
 
       {mappedButQuiet ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+        <div className={s.notice}>
           No Google or Facebook leads in this window. Pipelines are already mapped to a
           channel — this is just a quiet period.
         </div>
       ) : null}
 
       {spendIsGroupWide ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+        <div className={s.notice}>
           Leads, conversions and treatment value are for this practice. Spend, cost per lead
           and cost per acquisition cannot be shown for a single practice: advertising spend is
           recorded for the organisation as a whole rather than per practice, so it cannot be
@@ -167,7 +178,7 @@ export default function AdPerformanceScreen() {
       ) : null}
 
       {practiceHasNoLeads ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+        <div className={s.notice}>
           No ad leads are attributed to this practice in this window. The figures below are
           zero because there is nothing to count, not because the campaigns measured zero.
         </div>
@@ -194,7 +205,7 @@ export default function AdPerformanceScreen() {
           ) : (
             <>
               {lines.length >= LEAD_FETCH_LIMIT ? (
-                <div className="mb-3 rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
+                <div className={cx(s.notice, s.noticeWarn)}>
                   This list is incomplete — the leads it is built from were truncated to{' '}
                   {count(LEAD_FETCH_LIMIT)} rows, which is an arbitrary sample rather than the
                   most recent leads. This panel may not match the tile above it.

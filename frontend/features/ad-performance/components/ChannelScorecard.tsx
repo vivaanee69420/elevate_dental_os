@@ -8,7 +8,7 @@
 // per-account or per-campaign breakdown to open, and an empty panel is worse
 // than no panel. They carry an Explainer instead.
 import { formatPence } from '@/lib/format';
-import { SectionCard, SecHead, Kpi, Explainer } from '@/components/ui';
+import { SectionCard, SecHead, Kpi, Explainer, cockpitStyles as s } from '@/components/ui';
 import { money, pct, count } from '../format';
 import type { AdTotals, ChannelStats, PerfChannel } from '../api';
 
@@ -235,8 +235,8 @@ export function ChannelScorecard({
 function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-slate-500">{label}</div>
-      <div className="font-semibold text-slate-900">{value}</div>
+      <div className={s.subtle}>{label}</div>
+      <div className={s.money} style={{ color: 'var(--ink)' }}>{value}</div>
     </div>
   );
 }
