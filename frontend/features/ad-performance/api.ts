@@ -100,10 +100,16 @@ export function fetchAdPerformance(p: AdPerfParams) {
   return api<AdPerformance>(`/api/ad-attribution/performance?${sp.toString()}`);
 }
 
+// The drill-down panels on the Ad Performance page are computed CLIENT-side
+// from this list, so the request limit must be high enough that it does not
+// bind in practice. The backend zod schema (backend/src/models/ad-attribution.model.js)
+// has no maximum, so raising this is a frontend-only change.
+export const LEAD_FETCH_LIMIT = 5000;
+
 export function fetchAdLeads(p: AdPerfParams & { channel?: PerfChannel; limit?: number }) {
   const sp = new URLSearchParams({ since: p.since, until: p.until });
   if (p.practiceId) sp.set('practice_id', p.practiceId);
   if (p.channel) sp.set('channel', p.channel);
-  sp.set('limit', String(p.limit ?? 500));
+  sp.set('limit', String(p.limit ?? LEAD_FETCH_LIMIT));
   return api<{ leads: AdLeadLine[] }>(`/api/ad-attribution/leads?${sp.toString()}`);
 }

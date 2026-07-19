@@ -20,7 +20,7 @@ import { AttributionSection } from './AttributionSection';
 import { OverlapTable } from './OverlapTable';
 import { distinctPeople, overlapPeople } from '../derive';
 import { count } from '../format';
-import type { AdLeadLine } from '../api';
+import { LEAD_FETCH_LIMIT, type AdLeadLine } from '../api';
 
 const PANEL_TITLE: Record<ScorecardDrill, string> = {
   leads: 'Every lead',
@@ -34,19 +34,21 @@ const PANEL_TITLE: Record<ScorecardDrill, string> = {
 };
 
 const PANEL_SUB: Record<ScorecardDrill, string> = {
-  leads: 'One row per person, most recent first.',
+  leads: 'One row per person, newest first.',
   paidLeads: 'People who came in through a Google-tagged or Facebook-tagged pipeline.',
   conversions: 'People who went on to accept a treatment.',
   acceptedValue: 'Highest accepted value first.',
-  overlap: 'These people are why the channel columns do not add up to the group total. This is a lower bound — leads with no contact record cannot be matched across channels.',
+  overlap: 'These people are why the channel columns do not add up to the group total. This is a lower bound — leads with no contact record cannot be matched across channels, and detecting an overlap needs both of a person\'s channel rows to have survived the leads list cap, so truncation shrinks this count further.',
   google_ads: 'People on pipelines mapped to Google Ads.',
   meta_ads: 'People on pipelines mapped to Facebook Ads.',
   unassigned: 'People on pipelines with no channel set.',
 };
 
 // Which rows a given drill-down shows. Every branch works off the same fetched
-// list so the panels can never disagree with one another.
-function rowsFor(drill: ScorecardDrill, lines: AdLeadLine[]): AdLeadLine[] {
+// list so the panels can never disagree with one another. 'overlap' is handled
+// separately by the caller (OverlapTable), so it is excluded from the type here
+// rather than returning a dead [] branch.
+function rowsFor(drill: Exclude<ScorecardDrill, 'overlap'>, lines: AdLeadLine[]): AdLeadLine[] {
   switch (drill) {
     case 'leads':
       return distinctPeople(lines);
@@ -57,8 +59,6 @@ function rowsFor(drill: ScorecardDrill, lines: AdLeadLine[]): AdLeadLine[] {
     case 'acceptedValue':
       return distinctPeople(lines.filter((l) => l.matchedValuePence > 0))
         .sort((a, b) => b.matchedValuePence - a.matchedValuePence);
-    case 'overlap':
-      return [];
     default:
       return lines.filter((l) => l.channel === drill);
   }
@@ -125,10 +125,21 @@ export default function AdPerformanceScreen() {
         <DetailPanel title={PANEL_TITLE[drill]} sub={PANEL_SUB[drill]}>
           {leads.isLoading ? (
             <p className="text-sm text-slate-500">Loading leads…</p>
-          ) : drill === 'overlap' ? (
-            <OverlapTable people={overlap} />
           ) : (
-            <AdLeadsDrilldown lines={rowsFor(drill, lines)} />
+            <>
+              {lines.length >= LEAD_FETCH_LIMIT ? (
+                <div className="mb-3 rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
+                  This list is incomplete — the leads it is built from were truncated to{' '}
+                  {count(LEAD_FETCH_LIMIT)} rows, which is an arbitrary sample rather than the
+                  most recent leads. This panel may not match the tile above it.
+                </div>
+              ) : null}
+              {drill === 'overlap' ? (
+                <OverlapTable people={overlap} />
+              ) : (
+                <AdLeadsDrilldown lines={rowsFor(drill, lines)} />
+              )}
+            </>
           )}
         </DetailPanel>
       ) : null}
@@ -154,18 +165,25 @@ export default function AdPerformanceScreen() {
           <ul className="ml-4 list-disc text-[13px] text-slate-700">
             {data.unmappedPipelineCount > 0 ? (
               <li className="py-1">
-                <strong>{count(data.unmappedPipelineCount)} pipeline(s) have no channel set.</strong>{' '}
+                <strong>
+                  {count(data.unmappedPipelineCount)} {data.unmappedPipelineCount === 1 ? 'pipeline has' : 'pipelines have'} no channel set.
+                </strong>{' '}
                 Their leads appear under Unassigned and no advertising spend can be attributed
                 to them, so they pull the group conversion rate down without contributing to
-                cost per lead.
+                cost per lead. This count is group-wide — it is not narrowed by the practice
+                selector above.
               </li>
             ) : null}
             {data.excludedUnmappedLeads > 0 ? (
               <li className="py-1">
-                <strong>{count(data.excludedUnmappedLeads)} lead(s) are excluded entirely.</strong>{' '}
+                <strong>
+                  {count(data.excludedUnmappedLeads)} {data.excludedUnmappedLeads === 1 ? 'lead is' : 'leads are'} excluded entirely.
+                </strong>{' '}
                 They sit on GoHighLevel subaccounts that are not connected to a practice, so
-                they cannot be attributed to anywhere and are left out of every figure on this
-                page rather than being counted against the wrong practice.
+                they cannot be attributed to anywhere and are left out of every other figure on
+                this page rather than being counted against the wrong practice. This count is
+                also group-wide, computed before any practice filter, so it does not shrink when
+                you scope to one practice.
               </li>
             ) : null}
           </ul>
