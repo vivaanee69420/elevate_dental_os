@@ -20,6 +20,7 @@ export type NavSection = {
 export const NAV: NavSection[] = [
   { label: 'Overview', items: [
     { id: 'cockpit', label: 'Daily Cockpit', isNew: true },
+    { id: 'ad-performance', label: 'Ad Performance', isNew: true },
     { id: 'dashboard', label: 'Command Centre' },
     { id: 'business-hub', label: 'Business Hub', isNew: true },
     { id: 'deep-dive', label: 'Practice Deep Dive', isNew: true },
@@ -61,7 +62,6 @@ export const NAV: NavSection[] = [
   { label: 'Growth', items: [
     { id: 'patients', label: 'Patients' },
     { id: 'marketing', label: 'Marketing & ROI' },
-    { id: 'ad-performance', label: 'Ad Performance', isNew: true },
     { id: 'loyalty', label: 'Loyalty & Members' },
     { id: 'booking', label: 'Online Booking' },
     { id: 'benchmark', label: 'Benchmark' },
