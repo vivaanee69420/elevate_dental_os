@@ -413,5 +413,5 @@
 .noticeWarn {
   background: var(--amberbg);
   border-color: var(--amber);
-  color: var(--amber);
+  color: #6b5310;
 }
