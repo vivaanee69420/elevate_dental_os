@@ -75,8 +75,54 @@ describe('previousDayInLondon', () => {
     const r = previousDayInLondon(new Date('2026-07-21T17:00:00.000Z'));
     expect(r.date).toBe('2026-07-20');
     expect(r.since).toBe('2026-07-20');
-    expect(r.until).toBe('2026-07-20');
+    // `until` is EXCLUSIVE (see previousDayInLondon): the day AFTER the report
+    // date. The previous assertion here expected until === since, which would
+    // have made every downstream `.gte(since).lt(until)` match nothing.
+    expect(r.until).toBe('2026-07-21');
     expect(r.label).toBe('20 Jul');
+  });
+
+  // The whole codebase treats a window end as exclusive: ad-attribution's
+  // leadsInWindow is `.gte(since).lt(until)`, cockpit names its variable
+  // `endExclusive`, analytics' businessHub recovers the last inclusive day as
+  // `until - 86400000`. So the one-day window for a report on date D must be
+  // [D, D+1) — `until` is always exactly one day after `since`.
+  describe('exclusive-end window convention', () => {
+    const nextDay = (iso) => {
+      const d = new Date(`${iso}T00:00:00.000Z`);
+      d.setUTCDate(d.getUTCDate() + 1);
+      return d.toISOString().slice(0, 10);
+    };
+
+    it('always returns `until` exactly one day after `since`', () => {
+      const r = previousDayInLondon(new Date('2026-07-21T17:00:00.000Z'));
+      expect(r.since).toBe(r.date);
+      expect(r.until).toBe(nextDay(r.since));
+    });
+
+    it('rolls over a month boundary: a report for 31 Jan ends on 1 Feb', () => {
+      // 2026-02-01 18:00 London (GMT) -> reports on 2026-01-31.
+      const r = previousDayInLondon(new Date('2026-02-01T18:00:00.000Z'));
+      expect(r.date).toBe('2026-01-31');
+      expect(r.since).toBe('2026-01-31');
+      expect(r.until).toBe('2026-02-01');
+      expect(r.label).toBe('31 Jan');
+    });
+
+    it('rolls over a year boundary: a report for 31 Dec ends on 1 Jan', () => {
+      // 2027-01-01 18:00 London (GMT) -> reports on 2026-12-31.
+      const r = previousDayInLondon(new Date('2027-01-01T18:00:00.000Z'));
+      expect(r.date).toBe('2026-12-31');
+      expect(r.since).toBe('2026-12-31');
+      expect(r.until).toBe('2027-01-01');
+      expect(r.label).toBe('31 Dec');
+    });
+
+    it('rolls over a leap-day boundary: a report for 29 Feb ends on 1 Mar', () => {
+      const r = previousDayInLondon(new Date('2028-03-01T18:00:00.000Z'));
+      expect(r.date).toBe('2028-02-29');
+      expect(r.until).toBe('2028-03-01');
+    });
   });
 
   it('returns the previous day in winter (UTC offset zero)', () => {

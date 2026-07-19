@@ -109,15 +109,38 @@ describe('preview', () => {
   });
 });
 
-describe('send rate limit', () => {
+describe('send', () => {
+  // The handler MUST be invoked the way Express invokes it: (req, res, next).
+  // These tests previously passed a fake service as the third argument, which
+  // exercised a code path production never takes — at runtime the third
+  // argument is always Express's `next`. The service is stubbed by spying on
+  // the module, the same way the `preview` test above does it.
+  const next = () => vi.fn();
+
+  it('sends via the real service module when called with Express\'s (req, res, next)', async () => {
+    const spy = vi.spyOn(dailyReportService, 'send').mockResolvedValue({ sent: true, status: 'ok' });
+
+    const r = res();
+    await dailyReportController.send(req(), r, next());
+
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toEqual({ sent: true, status: 'ok' });
+    expect(spy).toHaveBeenCalledWith(ORG, { trigger: 'manual' });
+
+    spy.mockRestore();
+  });
+
   it('blocks manual sends beyond the hourly allowance', async () => {
-    const deps = { send: vi.fn().mockResolvedValue({ sent: true, status: 'ok' }) };
+    const spy = vi.spyOn(dailyReportService, 'send').mockResolvedValue({ sent: true, status: 'ok' });
+
     let last;
     for (let i = 0; i < 7; i++) {
       last = res();
-      await dailyReportController.send(req(), last, deps);
+      await dailyReportController.send(req(), last, next());
     }
     expect(last.statusCode).toBe(429);
-    expect(deps.send).toHaveBeenCalledTimes(6);
+    expect(spy).toHaveBeenCalledTimes(6);
+
+    spy.mockRestore();
   });
 });

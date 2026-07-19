@@ -4,6 +4,7 @@ import { postToInboundWebhook } from "../lib/integrations/ghl-webhook.js";
 import { adAttributionService } from "./ad-attribution.service.js";
 import { cockpitService } from "./cockpit.service.js";
 import { analyticsService } from "./analytics.service.js";
+import { authService } from "./auth.service.js";
 
 // Dependencies are injected so tests never touch the network or the real
 // service graph. Production callers omit `deps` and get these.
@@ -12,6 +13,7 @@ function defaultDeps() {
         adAttribution: adAttributionService,
         cockpit: cockpitService,
         analytics: analyticsService,
+        auth: authService,
         postWebhook: postToInboundWebhook,
     };
 }
@@ -34,7 +36,14 @@ export const dailyReportService = {
         let cashInPence = null;
         try {
             const cockpit = await deps.cockpit.build(orgId, window);
-            cashInPence = cockpit?.revenue?.month?.todayPence ?? null;
+            const month = cockpit?.revenue?.month ?? {};
+            // `todayPence` is the cash-up total for MAX(cashup_date) across the
+            // whole calendar month, not for the requested window. If a practice
+            // misses a cash-up, or the overnight Emergent sync fails, that date
+            // can be days behind the day we are reporting on. Asserting a
+            // stale figure under a "Daily 20 Jul" heading is worse than saying
+            // nothing, so only report it when the date actually matches.
+            cashInPence = month.todayDate === day.date ? (month.todayPence ?? null) : null;
         } catch (err) {
             console.error(`[daily-report] cockpit build failed for ${orgId}`, err);
         }
@@ -98,6 +107,21 @@ export const dailyReportService = {
 
     async buildPayload(orgId, { now = new Date(), deps = defaultDeps(), organisationName = null } = {}) {
         const metrics = await this.buildMetrics(orgId, { now, deps });
+
+        // The payload contract documents an `organisation` name, and no caller
+        // has one to hand — resolve it here so every path (cron, manual send,
+        // preview) fills it. Best-effort: a missing label must never cost the
+        // owner the whole report, so a failure logs and leaves it null.
+        let name = organisationName;
+        if (name === null || name === undefined) {
+            try {
+                name = await deps.auth.organisationName(orgId);
+            } catch (err) {
+                console.error(`[daily-report] organisationName failed for ${orgId}`, err);
+                name = null;
+            }
+        }
+
         const line = format_1.formatReportLine(metrics);
         const f = format_1.formatPence;
         const p = format_1.formatPercent;
@@ -105,7 +129,7 @@ export const dailyReportService = {
         const payload = {
             report_date: metrics.reportDate,
             report_date_label: metrics.reportDateLabel,
-            organisation: organisationName,
+            organisation: name,
             report_line: line,
 
             leads_total: metrics.leads.total,
