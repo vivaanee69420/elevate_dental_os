@@ -23,6 +23,9 @@ const AD_CHANNELS = ['google_ads', 'meta_ads'];
 // Pipeline ids are unique only within a GHL Location.
 const pipeKey = (accountId, pipelineId) => `${accountId}|${pipelineId}`;
 
+// 'YYYY-MM' from an ISO timestamp or a YYYY-MM-DD date string.
+const monthKey = (value) => String(value ?? '').slice(0, 7);
+
 export function resolveChannel(channelMap, accountId, pipelineId) {
     return channelMap.get(pipeKey(accountId, pipelineId)) ?? 'unassigned';
 }
@@ -145,6 +148,20 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         return byPractice.get(practiceId).get(channel);
     };
 
+    // Monthly trend — paid channels only (google_ads/meta_ads); an unassigned
+    // pipeline has no spend feed, so a cost-per-lead line for it would be
+    // meaningless. Threaded through the SAME `finalise()` funnel as every
+    // other derived metric on this page, just bucketed by month instead of by
+    // practice.
+    const trend = new Map();    // 'YYYY-MM' -> Map<channel, stats>
+    const trendSeen = new Map(); // `${month}|${channel}` -> Set(personKey)
+    const trendStats = (month, channel) => {
+        if (!trend.has(month)) {
+            trend.set(month, new Map(AD_CHANNELS.map((c) => [c, emptyStats(c)])));
+        }
+        return trend.get(month).get(channel);
+    };
+
     for (const lead of leads || []) {
         const accountId = lead.integration_account_id;
         const practiceId = accountPractice.get(accountId) ?? null;
@@ -174,6 +191,21 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         const matched = matchAcceptedValue(
             { contacts: lead.contacts, practiceId }, acceptedByKey, nameByPractice,
         );
+
+        // Trend covers the two paid channels only — an unassigned pipeline has
+        // no spend, so a cost-per-lead line for it would be meaningless.
+        if (AD_CHANNELS.includes(channel)) {
+            const m = monthKey(lead.created_at);
+            const tKey = `${m}|${channel}`;
+            if (!trendSeen.has(tKey)) trendSeen.set(tKey, new Set());
+            const tSeen = trendSeen.get(tKey);
+            if (!tSeen.has(person)) {
+                tSeen.add(person);
+                const t = trendStats(m, channel);
+                t.leads += 1;
+                if (matched) { t.conversions += 1; t.acceptedValuePence += matched.valuePence; }
+            }
+        }
 
         if (isNewToGroup) {
             const g = group.get(channel);
@@ -229,6 +261,9 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
             const p = practiceStats(row.practice_id, row.provider);
             p.spendPence += row.spend_pence || 0;
         }
+        const m = monthKey(row.metric_date);
+        const t = trendStats(m, row.provider);
+        t.spendPence += row.spend_pence || 0;
     }
 
     // A paid channel with leads but a spend total that never accumulated
@@ -264,6 +299,12 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
                 incompleteSpend: incompleteSpendAcross(chans),
             }),
         })),
+        trend: [...trend.entries()]
+            .sort(([a], [b]) => (a < b ? -1 : 1))
+            .map(([month, chans]) => ({
+                month,
+                channels: AD_CHANNELS.map((c) => finalise(chans.get(c), { allowSpend: true })),
+            })),
         excludedUnmappedLeads,
     };
 }
@@ -364,6 +405,7 @@ export const adAttributionService = {
                 }))
                 : result.totals,
             byPractice,
+            trend: result.trend,
             excludedUnmappedLeads: result.excludedUnmappedLeads,
             unmappedPipelineCount: accounts.reduce((n, a) => n + a.pipelines.filter(
                 (p) => !channelMap.has(pipeKey(a.id, p.id))).length, 0),
