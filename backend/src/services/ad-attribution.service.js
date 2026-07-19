@@ -162,6 +162,24 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         return trend.get(month).get(channel);
     };
 
+    // Practice-scoped trend, mirroring the group trend above but keyed also
+    // by practice — so selecting a practice on the page can show a trend that
+    // actually obeys that scope instead of silently falling back to the
+    // group-wide series. Dedup is per (practice, month, channel), the same
+    // asymmetry the group/practice split already uses everywhere else in
+    // this function: a person seen at two practices in the same month counts
+    // once for each practice AND once for the group.
+    const trendByPractice = new Map();   // practiceId -> Map<'YYYY-MM', Map<channel, stats>>
+    const trendSeenByPractice = new Map(); // `${practiceId}|${month}|${channel}` -> Set(personKey)
+    const practiceTrendStats = (practiceId, month, channel) => {
+        if (!trendByPractice.has(practiceId)) trendByPractice.set(practiceId, new Map());
+        const byMonth = trendByPractice.get(practiceId);
+        if (!byMonth.has(month)) {
+            byMonth.set(month, new Map(AD_CHANNELS.map((c) => [c, emptyStats(c)])));
+        }
+        return byMonth.get(month).get(channel);
+    };
+
     for (const lead of leads || []) {
         const accountId = lead.integration_account_id;
         const practiceId = accountPractice.get(accountId) ?? null;
@@ -204,6 +222,16 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
                 const t = trendStats(m, channel);
                 t.leads += 1;
                 if (matched) { t.conversions += 1; t.acceptedValuePence += matched.valuePence; }
+            }
+
+            const ptKey = `${practiceId}|${m}|${channel}`;
+            if (!trendSeenByPractice.has(ptKey)) trendSeenByPractice.set(ptKey, new Set());
+            const ptSeen = trendSeenByPractice.get(ptKey);
+            if (!ptSeen.has(person)) {
+                ptSeen.add(person);
+                const pt = practiceTrendStats(practiceId, m, channel);
+                pt.leads += 1;
+                if (matched) { pt.conversions += 1; pt.acceptedValuePence += matched.valuePence; }
             }
         }
 
@@ -264,6 +292,13 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         const m = monthKey(row.metric_date);
         const t = trendStats(m, row.provider);
         t.spendPence += row.spend_pence || 0;
+        // Only spend on an ad account mapped to a practice can be attributed
+        // to that practice's trend, exactly as the group-vs-practice spend
+        // split above.
+        if (row.practice_id) {
+            const pt = practiceTrendStats(row.practice_id, m, row.provider);
+            pt.spendPence += row.spend_pence || 0;
+        }
     }
 
     // A paid channel with leads but a spend total that never accumulated
@@ -277,6 +312,16 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         const s = chans.get(c);
         return s.leads > 0 && s.spendPence === 0;
     });
+
+    // Every trend point — group or practice-scoped — goes through the SAME
+    // finalise() funnel as everything else on this page; only the source map
+    // (bucketed by month, then by practice) differs.
+    const finaliseTrend = (byMonth) => [...byMonth.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([month, chans]) => ({
+            month,
+            channels: AD_CHANNELS.map((c) => finalise(chans.get(c), { allowSpend: true })),
+        }));
 
     return {
         channels: CHANNELS.map((c) => finalise(group.get(c), { allowSpend: c !== 'unassigned' })),
@@ -298,13 +343,9 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
                 spendPence: chans.get('google_ads').spendPence + chans.get('meta_ads').spendPence,
                 incompleteSpend: incompleteSpendAcross(chans),
             }),
+            trend: finaliseTrend(trendByPractice.get(practiceId) ?? new Map()),
         })),
-        trend: [...trend.entries()]
-            .sort(([a], [b]) => (a < b ? -1 : 1))
-            .map(([month, chans]) => ({
-                month,
-                channels: AD_CHANNELS.map((c) => finalise(chans.get(c), { allowSpend: true })),
-            })),
+        trend: finaliseTrend(trend),
         excludedUnmappedLeads,
     };
 }
@@ -405,7 +446,9 @@ export const adAttributionService = {
                 }))
                 : result.totals,
             byPractice,
-            trend: result.trend,
+            trend: practiceId
+                ? (byPractice[0]?.trend ?? [])
+                : result.trend,
             excludedUnmappedLeads: result.excludedUnmappedLeads,
             unmappedPipelineCount: accounts.reduce((n, a) => n + a.pipelines.filter(
                 (p) => !channelMap.has(pipeKey(a.id, p.id))).length, 0),
