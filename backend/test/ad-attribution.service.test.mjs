@@ -5,6 +5,7 @@ import { adAttributionRepository } from '../src/repositories/ad-attribution.repo
 import { adChannelPipelineRepository } from '../src/repositories/ad-channel-pipeline.repository.js';
 import {
   resolveChannel, ratio, computePerformance, adAttributionService, accountPracticeByCustomerId,
+  FEED_STALE_AFTER_DAYS,
 } from '../src/services/ad-attribution.service.js';
 
 vi.mock('../src/repositories/ad-attribution.repository.js', () => ({
@@ -19,6 +20,7 @@ vi.mock('../src/repositories/ad-attribution.repository.js', () => ({
     setAdAccountPractice: vi.fn(),
     emergentBusinesses: vi.fn(),
     adSpendDetailed: vi.fn(),
+    adAccountFeedHealth: vi.fn(),
   },
 }));
 vi.mock('../src/repositories/ad-channel-pipeline.repository.js', () => ({
@@ -614,6 +616,7 @@ describe('getMappingHealth', () => {
     adAttributionRepository.ghlAccounts.mockResolvedValue([]);
     adAttributionRepository.emergentBusinesses.mockResolvedValue([]);
     adChannelPipelineRepository.channelMap.mockResolvedValue(new Map());
+    adAttributionRepository.adAccountFeedHealth.mockResolvedValue(new Map());
   });
 
   it('resolves a mapped ad account to its practice name and marks it mapped', async () => {
@@ -621,11 +624,69 @@ describe('getMappingHealth', () => {
       { id: 'a1', provider: 'google_ads', customer_id: '123', name: 'Main', practice_id: 'p1' },
     ]);
     const out = await adAttributionService.getMappingHealth('org1');
-    expect(out.adAccounts[0]).toEqual({
+    expect(out.adAccounts[0]).toMatchObject({
       id: 'a1', provider: 'google_ads', customerId: '123', name: 'Main',
       practiceId: 'p1', practiceName: 'Ashford', mapped: true,
     });
     expect(out.summary.adAccountsUnmapped).toBe(0);
+  });
+
+  it('a fresh feed (daysStale: 0) reports reporting and is not counted stale', async () => {
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a1', provider: 'google_ads', customer_id: '123', name: 'Main', practice_id: 'p1' },
+    ]);
+    adAttributionRepository.adAccountFeedHealth.mockResolvedValue(new Map([
+      ['google_ads|123', {
+        lastMetricDate: '2026-07-19', daysStale: 0, metricRows: 10, spendPence: 500,
+      }],
+    ]));
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.adAccounts[0].feedStatus).toBe('reporting');
+    expect(out.adAccounts[0].lastMetricDate).toBe('2026-07-19');
+    expect(out.adAccounts[0].daysStale).toBe(0);
+    expect(out.summary.adAccountsStale).toBe(0);
+  });
+
+  it('an account at exactly FEED_STALE_AFTER_DAYS reports stale and counts it', async () => {
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a1', provider: 'google_ads', customer_id: '123', name: 'Main', practice_id: 'p1' },
+    ]);
+    adAttributionRepository.adAccountFeedHealth.mockResolvedValue(new Map([
+      ['google_ads|123', {
+        lastMetricDate: '2026-07-12', daysStale: FEED_STALE_AFTER_DAYS, metricRows: 10, spendPence: 500,
+      }],
+    ]));
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.adAccounts[0].feedStatus).toBe('stale');
+    expect(out.summary.adAccountsStale).toBe(1);
+  });
+
+  it('the real incident: a MAPPED account with daysStale 214 is mapped AND stale', async () => {
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a1', provider: 'meta_ads', customer_id: '1', name: 'Meta 1', practice_id: 'p1' },
+    ]);
+    adAttributionRepository.adAccountFeedHealth.mockResolvedValue(new Map([
+      ['meta_ads|1', {
+        lastMetricDate: '2025-12-17', daysStale: 214, metricRows: 900, spendPence: 0,
+      }],
+    ]));
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.adAccounts[0].mapped).toBe(true);
+    expect(out.adAccounts[0].feedStatus).toBe('stale');
+    expect(out.summary.adAccountsStale).toBe(1);
+  });
+
+  it('an account with no feed-health entry reports no-data, null date/stale, and counts it — not stale', async () => {
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a1', provider: 'google_ads', customer_id: '123', name: 'Main', practice_id: 'p1' },
+    ]);
+    adAttributionRepository.adAccountFeedHealth.mockResolvedValue(new Map());
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.adAccounts[0].feedStatus).toBe('no-data');
+    expect(out.adAccounts[0].lastMetricDate).toBeNull();
+    expect(out.adAccounts[0].daysStale).toBeNull();
+    expect(out.summary.adAccountsNoData).toBe(1);
+    expect(out.summary.adAccountsStale).toBe(0);
   });
 
   it('marks an unmapped ad account and counts it, with a null practice name', async () => {
@@ -689,8 +750,33 @@ describe('getMappingHealth', () => {
     expect(out.ghlAccounts).toEqual([]);
     expect(out.emergentBusinesses).toEqual([]);
     expect(out.summary).toEqual({
-      adAccountsUnmapped: 0, ghlAccountsUnmapped: 0, emergentUnmapped: 0, pipelinesUnmapped: 0,
+      adAccountsUnmapped: 0,
+      ghlAccountsUnmapped: 0,
+      emergentUnmapped: 0,
+      pipelinesUnmapped: 0,
+      adAccountsStale: 0,
+      adAccountsNoData: 0,
     });
+  });
+
+  it('pipelinesUnmapped is unchanged by feed health', async () => {
+    adAttributionRepository.ghlAccounts.mockResolvedValue([
+      {
+        id: 'g1', label: 'Ashford', external_account_id: 'LOC1', practice_id: 'p1',
+        status: 'active', pipelines: [{ id: 'pl1', name: 'A' }, { id: 'pl2', name: 'B' }],
+      },
+    ]);
+    adChannelPipelineRepository.channelMap.mockResolvedValue(new Map([['g1|pl1', 'google_ads']]));
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a1', provider: 'meta_ads', customer_id: '1', name: 'Meta 1', practice_id: 'p1' },
+    ]);
+    adAttributionRepository.adAccountFeedHealth.mockResolvedValue(new Map([
+      ['meta_ads|1', {
+        lastMetricDate: '2025-12-17', daysStale: 214, metricRows: 900, spendPence: 0,
+      }],
+    ]));
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.summary.pipelinesUnmapped).toBe(1);
   });
 });
 

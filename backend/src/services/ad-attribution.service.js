@@ -21,6 +21,11 @@ import { AppError } from "../middleware/errors.js";
 export const CHANNELS = ['google_ads', 'meta_ads', 'unassigned'];
 const AD_CHANNELS = ['google_ads', 'meta_ads'];
 
+// An ad feed that has not delivered a row in this many days is reported stale.
+// Both connectors sync nightly, so a week's silence is well beyond normal
+// jitter (a weekend gap plus a retry is at most ~3 days).
+export const FEED_STALE_AFTER_DAYS = 7;
+
 // Pipeline ids are unique only within a GHL Location.
 const pipeKey = (accountId, pipelineId) => `${accountId}|${pipelineId}`;
 
@@ -468,25 +473,36 @@ export const adAttributionService = {
     // the whole group, and a practice filter would hide exactly the rows the
     // operator needs to see.
     async getMappingHealth(orgId) {
-        const [adAccountRows, ghlRows, emergentRows, practices, channelMap] = await Promise.all([
+        const [adAccountRows, ghlRows, emergentRows, practices, channelMap, feedHealth] = await Promise.all([
             adAttributionRepository.adAccounts(orgId),
             adAttributionRepository.ghlAccounts(orgId),
             adAttributionRepository.emergentBusinesses(orgId),
             adAttributionRepository.practiceOptions(orgId),
             adChannelPipelineRepository.channelMap(orgId),
+            adAttributionRepository.adAccountFeedHealth(orgId),
         ]);
         const practiceName = new Map(practices.map((p) => [p.id, p.name]));
         const named = (practiceId) => practiceName.get(practiceId) ?? null;
 
-        const adAccounts = (adAccountRows ?? []).map((a) => ({
-            id: a.id,
-            provider: a.provider,
-            customerId: a.customer_id,
-            name: a.name ?? null,
-            practiceId: a.practice_id ?? null,
-            practiceName: a.practice_id ? named(a.practice_id) : null,
-            mapped: a.practice_id !== null && a.practice_id !== undefined,
-        }));
+        const adAccounts = (adAccountRows ?? []).map((a) => {
+            const health = feedHealth.get(`${a.provider}|${a.customer_id}`) ?? null;
+            const daysStale = health ? health.daysStale : null;
+            const feedStatus = !health
+                ? 'no-data'
+                : (daysStale !== null && daysStale >= FEED_STALE_AFTER_DAYS ? 'stale' : 'reporting');
+            return {
+                id: a.id,
+                provider: a.provider,
+                customerId: a.customer_id,
+                name: a.name ?? null,
+                practiceId: a.practice_id ?? null,
+                practiceName: a.practice_id ? named(a.practice_id) : null,
+                mapped: a.practice_id !== null && a.practice_id !== undefined,
+                lastMetricDate: health ? health.lastMetricDate : null,
+                daysStale,
+                feedStatus,
+            };
+        });
 
         const ghlAccounts = (ghlRows ?? []).map((g) => {
             const unmappedPipelines = g.pipelines.filter(
@@ -528,6 +544,8 @@ export const adAttributionService = {
                 pipelinesUnmapped: ghlAccounts
                     .filter((g) => g.mapped)
                     .reduce((n, g) => n + g.unmappedPipelineCount, 0),
+                adAccountsStale: adAccounts.filter((a) => a.feedStatus === 'stale').length,
+                adAccountsNoData: adAccounts.filter((a) => a.feedStatus === 'no-data').length,
             },
         };
     },
