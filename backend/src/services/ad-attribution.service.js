@@ -586,17 +586,19 @@ export const adAttributionService = {
     // The drill-in list: one row per person, in the same shape the shared
     // LeadsTable already renders for the cockpit.
     async getLeads(orgId, { since, until, channel, practiceId, limit }) {
-        const [channelMap, accounts, leads, accepted] = await Promise.all([
+        const [channelMap, accounts, leads, accepted, practices] = await Promise.all([
             adChannelPipelineRepository.channelMap(orgId),
             adAttributionRepository.ghlAccounts(orgId),
             adAttributionRepository.leadsInWindow(orgId, since, until),
             adAttributionRepository.acceptedForMatching(orgId, since, until),
+            adAttributionRepository.practiceOptions(orgId),
         ]);
         const accountPractice = new Map(accounts.map((a) => [a.id, a.practice_id]));
         const pipelineName = new Map();
         for (const a of accounts) {
             for (const p of a.pipelines) pipelineName.set(pipeKey(a.id, p.id), p.name);
         }
+        const practiceName = new Map((practices ?? []).map((p) => [p.id, p.name]));
         const { acceptedByKey, nameByPractice } = buildAcceptedByKey(accepted);
 
         const rows = [];
@@ -616,14 +618,22 @@ export const adAttributionService = {
             rows.push({
                 id: lead.id,
                 contactId: lead.contact_id ?? null,
+                // The same identity the dedupe above uses. Exposed so the client
+                // can group a person across channels exactly rather than
+                // re-deriving it and getting a lower bound.
+                personKey: personKey(lead),
                 name: [c.first_name, c.last_name].filter(Boolean).join(' ') || null,
                 email: c.email ?? null,
                 phone: c.phone ?? null,
                 channel: ch,
+                practiceId: practice,
+                practiceName: practiceName.get(practice) ?? null,
                 pipelineName: pipelineName.get(pipeKey(lead.integration_account_id, lead.ghl_pipeline_id)) ?? null,
                 createdAt: lead.created_at,
                 converted: matched !== null,
                 matchedTreatmentName: matched?.treatmentName ?? null,
+                matchedPatientName: matched?.patientName ?? null,
+                matchedAcceptedDate: matched?.acceptedDate ?? null,
                 matchedValuePence: matched?.valuePence ?? 0,
             });
             if (rows.length >= limit) break;

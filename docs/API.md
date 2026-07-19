@@ -1401,6 +1401,8 @@ selected channel); a lead on an unmapped subaccount is excluded. `channel`
 filters to one of `google_ads` | `meta_ads` | `unassigned`; omitted returns
 all three. `limit` applies to the returned deduped rows and defaults 500.
 
+Each row also carries `personKey` (the identity used to dedupe per person — contact id, or `lead:<id>` when there is no contact), `practiceId`, `practiceName`, `matchedPatientName` and `matchedAcceptedDate`.
+
 ### `GET /api/ad-attribution/mapping-health`
 
 Roles: `owner`, `practice_manager`. No query parameters — deliberately group-wide, not narrowed by practice.
