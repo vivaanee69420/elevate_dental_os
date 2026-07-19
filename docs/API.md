@@ -1341,8 +1341,8 @@ null }`.
 ### `GET /api/ad-attribution/performance?since&until&practice_id`
 
 The channel scorecard. `practice_id` omitted (or the shared ScopePeriod's
-`scope=all`) returns the group view; a UUID scopes every block below to that
-one practice.
+`scope=all`) returns the group view; a UUID scopes every block below except
+`excludedUnmappedLeads` and `unmappedPipelineCount` to that one practice.
 
 ```
 { channels[], totals, byPractice[], trend[], excludedUnmappedLeads,
@@ -1374,15 +1374,17 @@ one practice.
   leads. See FORMULAS §18 for a fully worked example.
 - `byPractice[]` — `{ practiceId, practiceName, channels[], total, trend[] }`,
   same shapes as above, scoped to that practice. Only practices with at least
-  one mapped subaccount lead appear.
+  one mapped-subaccount lead **or** any spend on a practice-mapped ad account
+  in the window appear.
 - `trend[]` — monthly series (`{ month, channels[] }`), `google_ads`/
   `meta_ads` only. **Dedupes per person per MONTH**, not per person across the
   whole window like `channels[]`/`totals` — a person enquiring in two
   different months is one lead in the scorecard but two across `trend[]`. The
   months are therefore deliberately not additive back to the scorecard totals.
-- `excludedUnmappedLeads` — count of leads on a GHL subaccount with no
+- `excludedUnmappedLeads` — count of lead **rows** on a GHL subaccount with no
   practice mapping; excluded from every block above rather than folded into
-  the group.
+  the group. (Opportunity-row count before any dedup, so contrast with
+  totals.leads which is a person-level count.)
 - `unmappedPipelineCount` — how many pipelines across all subaccounts have no
   row in `ad_channel_pipelines` (Unassigned), for a settings-page nudge.
 
@@ -1390,7 +1392,8 @@ one practice.
 
 The people behind a number, in the shared `LeadsTable` shape: `{ leads: [{ id,
 contactId, name, email, phone, channel, pipelineName, createdAt, converted,
-matchedTreatmentName, matchedValuePence }] }`. One row per person (same
-`contact_id`-or-lead-id dedup as the scorecard); a lead on an unmapped
-subaccount is excluded. `channel` filters to one of `google_ads` | `meta_ads`
-| `unassigned`; omitted returns all three. `limit` defaults 500.
+matchedTreatmentName, matchedValuePence }] }`. One row per person **per
+channel** (same `contact_id`-or-lead-id dedup as the scorecard, scoped to the
+selected channel); a lead on an unmapped subaccount is excluded. `channel`
+filters to one of `google_ads` | `meta_ads` | `unassigned`; omitted returns
+all three. `limit` applies to the returned deduped rows and defaults 500.
