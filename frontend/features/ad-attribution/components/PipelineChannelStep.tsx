@@ -65,6 +65,7 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
   const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const groups = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -95,8 +96,11 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
   async function handle(row: PipelineRow, channel: AdChannel | null) {
     const key = pipelineKey(row.accountId, row.pipelineId);
     setBusy(key);
+    setError(null);
     try {
       await setChannel.mutateAsync({ accountId: row.accountId, pipelineId: row.pipelineId, channel });
+    } catch (e) {
+      setError(`${row.pipelineName}: ${(e as Error).message || 'Could not save that change. Please try again.'}`);
     } finally {
       setBusy(null);
     }
@@ -111,6 +115,10 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
         Leads are counted as Google or Facebook based only on the pipeline they arrive in.
         Anything you leave unassigned is reported separately, never guessed at.
       </p>
+
+      {error && (
+        <p className="mb-3 text-[13px] text-danger">{error}</p>
+      )}
 
       <div className="mb-3 flex flex-wrap items-center gap-3">
         {(['google_ads', 'meta_ads', 'unassigned'] as const).map((c) => (

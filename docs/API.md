@@ -1385,8 +1385,11 @@ The channel scorecard. `practice_id` omitted (or the shared ScopePeriod's
   practice mapping; excluded from every block above rather than folded into
   the group. (Opportunity-row count before any dedup, so contrast with
   totals.leads which is a person-level count.)
-- `unmappedPipelineCount` — how many pipelines across all subaccounts have no
-  row in `ad_channel_pipelines` (Unassigned), for a settings-page nudge.
+- `unmappedPipelineCount` — how many pipelines, across subaccounts mapped to a
+  practice only, have no row in `ad_channel_pipelines` (Unassigned), for a
+  settings-page nudge. A subaccount with no practice mapping (the
+  academy/accounting Location) is excluded entirely from this feature, so its
+  pipelines never count here — they could never legitimately be mapped.
 
 ### `GET /api/ad-attribution/leads?since&until&channel&practice_id&limit`
 
