@@ -134,7 +134,9 @@ function totalsFromStats({
     return { ...base, paidLeads, paidConversions };
 }
 
-export function computePerformance({ leads, accepted, spend, channelMap, accountPractice }) {
+export function computePerformance({
+    leads, accepted, spend, channelMap, accountPractice, adAccountPractice = new Map(),
+}) {
     const { acceptedByKey, nameByPractice } = buildAcceptedByKey(accepted);
 
     const group = new Map(CHANNELS.map((c) => [c, emptyStats(c)]));
@@ -329,10 +331,15 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         if (!AD_CHANNELS.includes(row.provider)) continue;
         const g = group.get(row.provider);
         g.spendPence += row.spend_pence || 0;
-        // Only spend on an ad account that has been mapped to a practice can be
-        // attributed below group level.
-        if (row.practice_id) {
-            const p = practiceStats(row.practice_id, row.provider);
+        // ad_metrics.practice_id is written as literal null by BOTH connectors
+        // and nothing backfills it, so it can never attribute spend below group
+        // level. The mapping that IS maintained is ad_accounts.practice_id,
+        // reached from this row via customer_id — see
+        // accountPracticeByCustomerId. Only spend on an account mapped to a
+        // practice can be attributed to that practice.
+        const rowPractice = adAccountPractice.get(`${row.provider}|${row.customer_id}`) ?? null;
+        if (rowPractice) {
+            const p = practiceStats(rowPractice, row.provider);
             p.spendPence += row.spend_pence || 0;
         }
         const m = monthKey(row.metric_date);
@@ -342,11 +349,8 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         if (m === '') continue;
         const t = trendStats(m, row.provider);
         t.spendPence += row.spend_pence || 0;
-        // Only spend on an ad account mapped to a practice can be attributed
-        // to that practice's trend, exactly as the group-vs-practice spend
-        // split above.
-        if (row.practice_id) {
-            const pt = practiceTrendStats(row.practice_id, m, row.provider);
+        if (rowPractice) {
+            const pt = practiceTrendStats(rowPractice, m, row.provider);
             pt.spendPence += row.spend_pence || 0;
         }
     }
@@ -544,17 +548,21 @@ export const adAttributionService = {
     },
 
     async getPerformance(orgId, { since, until, practiceId }) {
-        const [channelMap, accounts, leads, accepted, spend, practiceOptions] = await Promise.all([
+        const [channelMap, accounts, leads, accepted, spend, practiceOptions, adAccountRows] = await Promise.all([
             adChannelPipelineRepository.channelMap(orgId),
             adAttributionRepository.ghlAccounts(orgId),
             adAttributionRepository.leadsInWindow(orgId, since, until),
             adAttributionRepository.acceptedForMatching(orgId, since, until),
             adAttributionRepository.adSpend(orgId, since, until),
             adAttributionRepository.practiceOptions(orgId),
+            adAttributionRepository.adAccounts(orgId),
         ]);
         const accountPractice = new Map(accounts.map((a) => [a.id, a.practice_id]));
         const practiceName = new Map(practiceOptions.map((p) => [p.id, p.name]));
-        const result = computePerformance({ leads, accepted, spend, channelMap, accountPractice });
+        const result = computePerformance({
+            leads, accepted, spend, channelMap, accountPractice,
+            adAccountPractice: accountPracticeByCustomerId(adAccountRows),
+        });
         const byPractice = result.byPractice
             .filter((p) => !practiceId || p.practiceId === practiceId)
             .map((p) => ({ ...p, practiceName: practiceName.get(p.practiceId) ?? null }));

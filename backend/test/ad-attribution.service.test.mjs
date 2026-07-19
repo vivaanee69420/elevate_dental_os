@@ -308,9 +308,18 @@ describe('computePerformance', () => {
       const untaggedLeads = Array.from({ length: 10 }, (_, i) => ({
         id: `untagged-${i}`, contact_id: `untagged-${i}`, integration_account_id: 'acc1', ghl_pipeline_id: 'other', created_at: '2026-07-02', contacts: {},
       }));
-      const spend = [{ provider: 'google_ads', practice_id: 'p1', spend_pence: 10000, metric_date: '2026-07-02' }];
+      // practice_id null on the spend row, exactly as both connectors write
+      // it — attribution now flows through customer_id + adAccountPractice.
+      const spend = [{ provider: 'google_ads', customer_id: '111', practice_id: null, spend_pence: 10000, metric_date: '2026-07-02' }];
       const out = computePerformance({
-        leads: [...paidLeads, ...untaggedLeads], accepted: [], spend, channelMap, accountPractice,
+        leads: [...paidLeads, ...untaggedLeads],
+        accepted: [],
+        spend,
+        channelMap,
+        accountPractice,
+        adAccountPractice: accountPracticeByCustomerId([
+          { provider: 'google_ads', customer_id: '111', practice_id: 'p1' },
+        ]),
       });
       const row = out.byPractice.find((p) => p.practiceId === 'p1');
 
@@ -842,5 +851,70 @@ describe('getLeads additive fields', () => {
       'createdAt', 'converted', 'matchedTreatmentName', 'matchedValuePence']) {
       expect(out.leads[0]).toHaveProperty(k);
     }
+  });
+});
+
+describe('computePerformance per-practice spend via the ad_accounts join', () => {
+  const base = {
+    leads: [], accepted: [], channelMap: new Map(), accountPractice: new Map(),
+  };
+
+  it('attributes spend to a practice through customer_id, not ad_metrics.practice_id', () => {
+    const out = computePerformance({
+      ...base,
+      spend: [
+        // practice_id null on the row, exactly as both connectors write it.
+        { provider: 'google_ads', customer_id: '111', practice_id: null, spend_pence: 4000, metric_date: '2026-07-01' },
+      ],
+      adAccountPractice: accountPracticeByCustomerId([
+        { provider: 'google_ads', customer_id: '111', practice_id: 'p1' },
+      ]),
+    });
+    const practice = out.byPractice.find((p) => p.practiceId === 'p1');
+    expect(practice).toBeDefined();
+    const google = practice.channels.find((c) => c.channel === 'google_ads');
+    expect(google.spendPence).toBe(4000);
+  });
+
+  it('leaves spend group-only when the account is not mapped to a practice', () => {
+    const out = computePerformance({
+      ...base,
+      spend: [
+        { provider: 'google_ads', customer_id: '111', practice_id: null, spend_pence: 4000, metric_date: '2026-07-01' },
+      ],
+      adAccountPractice: accountPracticeByCustomerId([
+        { provider: 'google_ads', customer_id: '111', practice_id: null },
+      ]),
+    });
+    expect(out.byPractice.find((p) => p.practiceId === 'p1')).toBeUndefined();
+    const google = out.channels.find((c) => c.channel === 'google_ads');
+    expect(google.spendPence).toBe(4000);
+  });
+
+  it('still counts group spend when no ad account map is supplied at all', () => {
+    const out = computePerformance({
+      ...base,
+      spend: [
+        { provider: 'google_ads', customer_id: '111', practice_id: null, spend_pence: 4000, metric_date: '2026-07-01' },
+      ],
+    });
+    const google = out.channels.find((c) => c.channel === 'google_ads');
+    expect(google.spendPence).toBe(4000);
+  });
+
+  it('attributes the per-practice trend through the same join', () => {
+    const out = computePerformance({
+      ...base,
+      spend: [
+        { provider: 'google_ads', customer_id: '111', practice_id: null, spend_pence: 4000, metric_date: '2026-07-01' },
+      ],
+      adAccountPractice: accountPracticeByCustomerId([
+        { provider: 'google_ads', customer_id: '111', practice_id: 'p1' },
+      ]),
+    });
+    const practice = out.byPractice.find((p) => p.practiceId === 'p1');
+    const july = practice.trend.find((t) => t.month === '2026-07');
+    expect(july).toBeDefined();
+    expect(july.channels.find((c) => c.channel === 'google_ads').spendPence).toBe(4000);
   });
 });
