@@ -19,6 +19,20 @@ export default function SettingsScreen() {
       </Card>
 
       <Card className="mb-4">
+        <h2 className="display text-lg font-semibold mb-2">Ad attribution</h2>
+        <p className="text-sm text-ink-muted">
+          Connect GoHighLevel subaccounts to practices, sort pipelines into Google and Facebook
+          Ads, and connect ad accounts so cost per lead can be split by practice
+        </p>
+        <a
+          href="/settings/ad-attribution"
+          className="text-brand hover:underline text-sm mt-2 inline-block"
+        >
+          Set up ad attribution →
+        </a>
+      </Card>
+
+      <Card className="mb-4">
         <h2 className="display text-lg font-semibold mb-2">Team</h2>
         <p className="text-sm text-ink-muted">
           Invite users, set roles, manage permissions
