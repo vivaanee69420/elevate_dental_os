@@ -2,13 +2,22 @@
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
+  // Dev writes to .next-dev, `next build` keeps .next. Both used to share
+  // .next, so running `next build` while `next dev` was up overwrote the
+  // running server's webpack-runtime.js and chunk layout underneath it —
+  // the runtime then resolved chunks it could no longer find
+  // ("Cannot find module './8948.js'"), every route 500'd, and the CSS
+  // request fell through to the HTML 404 page, rendering the whole app
+  // unstyled. Separate directories make that collision impossible.
+  // Production output stays at .next — the Dockerfile copies
+  // .next/standalone and .next/static.
+  distDir: process.env.NODE_ENV === 'development' ? '.next-dev' : '.next',
   experimental: { instrumentationHook: true },
   webpack: (config, { dev }) => {
     // Dev: use memory-only webpack cache. The default on-disk PackFileCache
-    // persists corrupted chunks across restarts (e.g. when two dev servers
-    // briefly share .next), causing chunk 404s -> CSS/JS served as the HTML
-    // 404 page -> "MIME type ('text/html')" errors. Memory cache makes a plain
-    // restart self-healing, so no more manual `rm -rf .next`.
+    // persists corrupted chunks across restarts, causing chunk 404s -> CSS/JS
+    // served as the HTML 404 page -> "MIME type ('text/html')" errors.
+    // Memory cache makes a plain restart self-healing.
     if (dev) {
       config.cache = { type: 'memory' };
     }
