@@ -10,6 +10,7 @@ import { useGhlAccounts, useAddGhlAccount } from '../hooks';
 import { syncGhlAccount } from '../api';
 import GhlAccountRow from './GhlAccountRow';
 import CollapsibleCard from './CollapsibleCard';
+import DailyReportCard from './DailyReportCard';
 
 export default function GoHighLevelPanel() {
   const qc = useQueryClient();
@@ -99,6 +100,8 @@ export default function GoHighLevelPanel() {
           </tbody>
         </table>
       )}
+
+      <DailyReportCard />
     </CollapsibleCard>
   );
 }

@@ -24,6 +24,10 @@ import {
   syncGhlAccount,
   getEmergentPractices,
   setEmergentPractice,
+  getDailyReportSettings,
+  saveDailyReportSettings,
+  previewDailyReport,
+  sendDailyReport,
   type ConnectInput,
   type DentallySyncResource,
 } from './api';
@@ -270,5 +274,34 @@ export function useSetEmergentPractice() {
       qc.invalidateQueries({ queryKey: ['growth', 'marketing-roi'] });
       qc.invalidateQueries({ queryKey: ['business-hub'] });
     },
+  });
+}
+
+// --- GoHighLevel daily WhatsApp report ---------------------------------------
+export function useDailyReportSettings() {
+  return useQuery({
+    queryKey: ['daily-report-settings'],
+    queryFn: getDailyReportSettings,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveDailyReportSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { webhookUrl: string; enabled: boolean }) => saveDailyReportSettings(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['daily-report-settings'] }),
+  });
+}
+
+export function usePreviewDailyReport() {
+  return useMutation({ mutationFn: previewDailyReport });
+}
+
+export function useSendDailyReport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: sendDailyReport,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['daily-report-settings'] }),
   });
 }
