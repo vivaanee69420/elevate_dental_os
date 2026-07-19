@@ -9,7 +9,7 @@
 // per-channel fetch — it would fire a request per tile and let the panels
 // disagree with one another.
 import { useMemo, useState } from 'react';
-import { PageHeader, SectionCard, SecHead, DetailPanel } from '@/components/ui';
+import { SectionCard, SecHead, DetailPanel, cx, cockpitStyles as s } from '@/components/ui';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useAdPerformance, useAdLeads } from '../hooks';
@@ -75,13 +75,20 @@ function rowsFor(drill: Exclude<ScorecardDrill, 'overlap'>, lines: AdLeadLine[])
 // and drops focus from the month selector.
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Ad performance"
-        subtitle="Google and Facebook leads, cost per lead and conversions, from the pipelines you have mapped to each channel."
-      />
-      <ScopePeriodBar />
-      {children}
+    <div className={s.shell}>
+      <div className={s.wrap}>
+        <div className={s.topbar}>
+          <div className={s.h1}>Ad performance</div>
+          <div className={s.sub}>
+            Google and Facebook leads, cost per lead and conversions, from the pipelines you
+            have mapped to each channel.
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <ScopePeriodBar />
+          </div>
+        </div>
+        {children}
+      </div>
     </div>
   );
 }
@@ -103,9 +110,13 @@ export default function AdPerformanceScreen() {
   const lines = useMemo(() => leads.data?.leads ?? [], [leads.data]);
   const overlap = useMemo(() => overlapPeople(lines), [lines]);
 
-  if (isLoading) return <Frame><p className="text-sm text-slate-500">Loading…</p></Frame>;
+  if (isLoading) return <Frame><div className={s.stateBox}>Loading…</div></Frame>;
   if (error || !data) {
-    return <Frame><p className="text-sm text-slate-500">Could not load ad performance.</p></Frame>;
+    return (
+      <Frame>
+        <div className={cx(s.stateBox, s.errorBox)}>Could not load ad performance.</div>
+      </Frame>
+    );
   }
 
   const noPaidLeads = data.channels.every((c) => c.channel === 'unassigned' || c.leads === 0);
