@@ -445,6 +445,75 @@ export const adAttributionService = {
         };
     },
 
+    // What is and is not mapped, across all three mapping surfaces. Deliberately
+    // NOT narrowed by practice: its purpose is to show what is missing across
+    // the whole group, and a practice filter would hide exactly the rows the
+    // operator needs to see.
+    async getMappingHealth(orgId) {
+        const [adAccountRows, ghlRows, emergentRows, practices, channelMap] = await Promise.all([
+            adAttributionRepository.adAccounts(orgId),
+            adAttributionRepository.ghlAccounts(orgId),
+            adAttributionRepository.emergentBusinesses(orgId),
+            adAttributionRepository.practiceOptions(orgId),
+            adChannelPipelineRepository.channelMap(orgId),
+        ]);
+        const practiceName = new Map(practices.map((p) => [p.id, p.name]));
+        const named = (practiceId) => practiceName.get(practiceId) ?? null;
+
+        const adAccounts = (adAccountRows ?? []).map((a) => ({
+            id: a.id,
+            provider: a.provider,
+            customerId: a.customer_id,
+            name: a.name ?? null,
+            practiceId: a.practice_id ?? null,
+            practiceName: a.practice_id ? named(a.practice_id) : null,
+            mapped: a.practice_id !== null && a.practice_id !== undefined,
+        }));
+
+        const ghlAccounts = (ghlRows ?? []).map((g) => {
+            const unmappedPipelines = g.pipelines.filter(
+                (p) => !channelMap.has(pipeKey(g.id, p.id)),
+            ).length;
+            return {
+                id: g.id,
+                label: g.label ?? null,
+                externalAccountId: g.external_account_id,
+                practiceId: g.practice_id,
+                practiceName: g.practice_id ? named(g.practice_id) : null,
+                mapped: g.practice_id !== null,
+                status: g.status,
+                pipelineCount: g.pipelines.length,
+                unmappedPipelineCount: unmappedPipelines,
+            };
+        });
+
+        const emergentBusinesses = (emergentRows ?? []).map((e) => ({
+            businessId: e.businessId,
+            businessName: e.businessName,
+            practiceId: e.practiceId,
+            practiceName: e.practiceId ? named(e.practiceId) : null,
+            mapped: e.practiceId !== null,
+        }));
+
+        return {
+            adAccounts,
+            ghlAccounts,
+            emergentBusinesses,
+            summary: {
+                adAccountsUnmapped: adAccounts.filter((a) => !a.mapped).length,
+                ghlAccountsUnmapped: ghlAccounts.filter((g) => !g.mapped).length,
+                emergentUnmapped: emergentBusinesses.filter((e) => !e.mapped).length,
+                // Only a subaccount that IS mapped to a practice can have
+                // mappable pipelines — an academy/accounting Location's
+                // pipelines must never inflate this. Same rule as
+                // getPerformance's unmappedPipelineCount, so the two agree.
+                pipelinesUnmapped: ghlAccounts
+                    .filter((g) => g.mapped)
+                    .reduce((n, g) => n + g.unmappedPipelineCount, 0),
+            },
+        };
+    },
+
     async setPipelineChannel(orgId, accountId, pipelineId, channel) {
         const accounts = await adAttributionRepository.ghlAccounts(orgId);
         const account = accounts.find((a) => a.id === accountId);

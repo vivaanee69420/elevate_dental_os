@@ -8,6 +8,9 @@ export const adAttributionController = {
     async config(req, res) {
         res.json(await adAttributionService.getConfig(req.user.organisation_id));
     },
+    async mappingHealth(req, res) {
+        res.json(await adAttributionService.getMappingHealth(req.user.organisation_id));
+    },
     async setPipelineChannel(req, res) {
         const { channel } = setPipelineChannelSchema.parse(req.body);
         res.json(await adAttributionService.setPipelineChannel(

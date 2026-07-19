@@ -1400,3 +1400,9 @@ channel** (same `contact_id`-or-lead-id dedup as the scorecard, scoped to the
 selected channel); a lead on an unmapped subaccount is excluded. `channel`
 filters to one of `google_ads` | `meta_ads` | `unassigned`; omitted returns
 all three. `limit` applies to the returned deduped rows and defaults 500.
+
+### `GET /api/ad-attribution/mapping-health`
+
+Roles: `owner`, `practice_manager`. No query parameters — deliberately group-wide, not narrowed by practice.
+
+Returns every ad account, GoHighLevel subaccount and Emergent business with the practice it maps to, plus a `summary` of what is unmapped. `mapped` is `practiceId !== null`. `practiceName` is null when unmapped. `summary.pipelinesUnmapped` counts pipelines with no channel, excluding subaccounts that have no practice (academy/accounting Locations), matching the `unmappedPipelineCount` returned by `/performance`.
