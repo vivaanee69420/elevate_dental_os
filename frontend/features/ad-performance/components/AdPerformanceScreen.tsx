@@ -78,7 +78,7 @@ function Frame({ children }: { children: React.ReactNode }) {
     <div className={s.shell}>
       <div className={s.wrap}>
         <div className={s.topbar}>
-          <div className={s.h1}>Ad performance</div>
+          <h1 className={s.h1}>Ad performance</h1>
           <div className={s.sub}>
             Google and Facebook leads, cost per lead and conversions, from the pipelines you
             have mapped to each channel.
