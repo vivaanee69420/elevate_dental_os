@@ -1346,8 +1346,17 @@ The channel scorecard. `practice_id` omitted (or the shared ScopePeriod's
 
 ```
 { channels[], totals, byPractice[], trend[], excludedUnmappedLeads,
-  unmappedPipelineCount }
+  unmappedPipelineCount, groupOnlySpendPence }
 ```
+
+This endpoint deliberately reports EVERY synced `ad_metrics` row, without the
+`is_selected` account filter or the revoked-provider gating the Marketing
+screens apply (`integration.repository.js` / `integration-gating.js`). If an
+owner deselects a legacy ad account, or an ad provider integration is
+revoked, Marketing's spend figures drop while this endpoint's do not — the
+two surfaces will disagree in that case. Whether to apply the same gating
+here is a separate product decision; this note only makes the divergence
+explicit.
 
 - `channels[]` — one row per `google_ads` | `meta_ads` | `unassigned`: `{
   channel, leads, conversions, acceptedValuePence, spendPence,
@@ -1390,6 +1399,19 @@ The channel scorecard. `practice_id` omitted (or the shared ScopePeriod's
   settings-page nudge. A subaccount with no practice mapping (the
   academy/accounting Location) is excluded entirely from this feature, so its
   pipelines never count here — they could never legitimately be mapped.
+- `groupOnlySpendPence` — total spend, across all channels, on rows whose ad
+  account did NOT resolve to a practice (i.e. `ad_accounts.practice_id` is
+  null for that `customer_id`). `channels[]`/`totals` spend sums EVERY spend
+  row regardless of mapping, but each `byPractice[]` entry only accumulates a
+  row when its account maps to that practice — so whenever some ad accounts
+  are mapped and others are not (the normal in-between state while an owner
+  maps accounts one at a time), group spend and the sum of `byPractice[]`
+  spend differ by exactly this amount, and `byPractice[]` spend will not sum
+  back to the group figure while it is non-zero. It is a real sum over rows
+  that exist, so it is always a number, never null; `0` correctly means
+  "everything attributed". Always the group-wide figure regardless of the
+  `practice_id` query parameter — it describes the org's mapping state, not
+  any one practice's spend.
 
 ### `GET /api/ad-attribution/leads?since&until&channel&practice_id&limit`
 
@@ -1409,10 +1431,19 @@ Roles: `owner`, `practice_manager`. No query parameters — deliberately group-w
 
 Returns every ad account, GoHighLevel subaccount and Emergent business with the practice it maps to, plus a `summary` of what is unmapped. `mapped` is `practiceId !== null`. `practiceName` is null when unmapped. `summary.pipelinesUnmapped` counts pipelines with no channel, excluding subaccounts that have no practice (academy/accounting Locations), matching the `unmappedPipelineCount` returned by `/performance`.
 
-### GET /api/ad-attribution/spend
+### `GET /api/ad-attribution/spend`
 
 Roles: `owner`, `practice_manager`. Query: `since`, `until`, optional `practice_id`.
 
 Returns `byAccount[]` and `byCampaign[]` (both sorted by `spendPence` descending) plus `unattributedSpendPence`. Money is integer pence.
 
-Practice attribution comes from joining `ad_metrics.customer_id` to `ad_accounts.practice_id` — `ad_metrics.practice_id` is null on every row and is not used. `unattributedSpendPence` is spend on a `customer_id` with no matching `ad_accounts` row; it is 0, never null, because it is a real sum. `reach` and `frequency` are deliberately not returned: they cannot be summed across days.
+Practice attribution comes from joining `ad_metrics.customer_id` to `ad_accounts.practice_id` — `ad_metrics.practice_id` is null on every row and is not used. `unattributedSpendPence` is spend on a `customer_id` with no matching `ad_accounts` row; group-wide (no `practice_id` filter) it is `0`, never null, because it is a real sum. Under a `practice_id` filter it is `null`, not `0` — the loop deliberately never accumulates unattributed spend into a practice-scoped view (spend that cannot be tied to any account certainly cannot be tied to one practice), so a `0` there would falsely read as "everything attributed" when group-level unattributed spend may still exist; `null` means "not known/not applicable" here, per the project rule that `null` — never `0` — signals an unknown figure. `reach` and `frequency` are deliberately not returned: they cannot be summed across days.
+
+This endpoint deliberately reports EVERY synced `ad_metrics` row, without the
+`is_selected` account filter or the revoked-provider gating the Marketing
+screens apply (`integration.repository.js` / `integration-gating.js`). If an
+owner deselects a legacy ad account, or an ad provider integration is
+revoked, Marketing's spend figures drop while this endpoint's do not — the
+two surfaces will disagree in that case. Whether to apply the same gating
+here is a separate product decision; this note only makes the divergence
+explicit.

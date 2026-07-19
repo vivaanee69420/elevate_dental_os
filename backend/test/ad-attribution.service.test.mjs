@@ -761,16 +761,19 @@ describe('getSpend', () => {
     expect(out.byCampaign.map((c) => c.campaignId)).toEqual(['c1']);
   });
 
-  it('does not count unattributed spend into a practice-scoped view', async () => {
+  it('is null, not 0, under a practice filter — the suppressed sum is not known to be zero', async () => {
     // Spend that cannot be tied to any account certainly cannot be tied to one
-    // practice, so a practice-scoped request must not inherit it.
+    // practice, so a practice-scoped request must not inherit it. But a
+    // practice-scoped 0 falsely reads as "everything attributed" when group-
+    // level unattributed spend may exist — null is the honest "not known"
+    // signal here, per the project rule that null means not known, never 0.
     adAttributionRepository.adSpendDetailed.mockResolvedValue([
       { provider: 'google_ads', customer_id: 'GHOST', campaign_id: 'c9', campaign_name: 'Z', spend_pence: 700, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
     ]);
     const out = await adAttributionService.getSpend('org1', {
       since: '2026-07-01', until: '2026-08-01', practiceId: 'p1',
     });
-    expect(out.unattributedSpendPence).toBe(0);
+    expect(out.unattributedSpendPence).toBeNull();
   });
 
   it('does not return reach or frequency — they are not summable across days', async () => {
@@ -780,6 +783,23 @@ describe('getSpend', () => {
     const out = await adAttributionService.getSpend('org1', { since: '2026-07-01', until: '2026-08-01' });
     expect(out.byAccount[0]).not.toHaveProperty('reach');
     expect(out.byCampaign[0]).not.toHaveProperty('frequency');
+  });
+
+  it('skips a row whose provider is not a known ad channel, same guard as computePerformance', async () => {
+    // ad_metrics.provider is only ever google_ads/meta_ads today, but
+    // computePerformance already ignores anything outside AD_CHANNELS — this
+    // mirrors that guard here so the two endpoints keep reconciling the day a
+    // third provider is synced.
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a3', provider: 'bing_ads', customer_id: '333', name: 'Bing Main', practice_id: null },
+    ]);
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'bing_ads', customer_id: '333', campaign_id: 'c1', campaign_name: 'B', spend_pence: 500, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', { since: '2026-07-01', until: '2026-08-01' });
+    expect(out.byAccount).toHaveLength(0);
+    expect(out.byCampaign).toHaveLength(0);
+    expect(out.unattributedSpendPence).toBe(0);
   });
 });
 
@@ -916,5 +936,41 @@ describe('computePerformance per-practice spend via the ad_accounts join', () =>
     const july = practice.trend.find((t) => t.month === '2026-07');
     expect(july).toBeDefined();
     expect(july.channels.find((c) => c.channel === 'google_ads').spendPence).toBe(4000);
+  });
+
+  describe('groupOnlySpendPence — surfaces spend that reaches no practice', () => {
+    it('equals the spend on the unmapped account when one account is mapped and one is not', () => {
+      const out = computePerformance({
+        ...base,
+        spend: [
+          { provider: 'google_ads', customer_id: 'mapped', practice_id: null, spend_pence: 4000, metric_date: '2026-07-01' },
+          { provider: 'meta_ads', customer_id: 'unmapped', practice_id: null, spend_pence: 1500, metric_date: '2026-07-01' },
+        ],
+        adAccountPractice: accountPracticeByCustomerId([
+          { provider: 'google_ads', customer_id: 'mapped', practice_id: 'p1' },
+          { provider: 'meta_ads', customer_id: 'unmapped', practice_id: null },
+        ]),
+      });
+      expect(out.groupOnlySpendPence).toBe(1500);
+      // Group spend must not change — this finding only adds a new field, it
+      // never touches an existing figure.
+      const google = out.channels.find((c) => c.channel === 'google_ads');
+      const meta = out.channels.find((c) => c.channel === 'meta_ads');
+      expect(google.spendPence).toBe(4000);
+      expect(meta.spendPence).toBe(1500);
+    });
+
+    it('is 0 when every account is mapped to a practice', () => {
+      const out = computePerformance({
+        ...base,
+        spend: [
+          { provider: 'google_ads', customer_id: 'mapped', practice_id: null, spend_pence: 4000, metric_date: '2026-07-01' },
+        ],
+        adAccountPractice: accountPracticeByCustomerId([
+          { provider: 'google_ads', customer_id: 'mapped', practice_id: 'p1' },
+        ]),
+      });
+      expect(out.groupOnlySpendPence).toBe(0);
+    });
   });
 });
