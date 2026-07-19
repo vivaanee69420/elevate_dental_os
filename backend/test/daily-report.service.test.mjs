@@ -21,8 +21,14 @@ function deps(overrides = {}) {
       build: vi.fn().mockResolvedValue({ revenue: { month: { todayPence: 624000 } } }),
     },
     analytics: {
+      // NB: noShowRate is a 0..100 PERCENTAGE (e.g. 5.9 means 5.9%), same as
+      // marginPct — this is the REAL shape analyticsService.businessHub
+      // emits (backend/src/services/analytics.service.js: `rate()` returns
+      // Math.round((n / d) * 1000) / 10). Do NOT "correct" this back to
+      // 0.059 — that shape doesn't exist in production and previously hid a
+      // units bug that would have rendered "590% DNA" to the practice owner.
       businessHub: vi.fn().mockResolvedValue({
-        group: { appointments: 118, noShows: 7, noShowRate: 0.059, newPatients: 12, marginPct: 18.4, revenuePence: 14200000 },
+        group: { appointments: 118, noShows: 7, noShowRate: 5.9, newPatients: 12, marginPct: 18.4, revenuePence: 14200000 },
       }),
     },
     postWebhook: vi.fn().mockResolvedValue({ ok: true, status: 200 }),
@@ -69,6 +75,12 @@ describe('buildPayload', () => {
     expect(payload.leads_total).toBe(24);
     expect(payload.spend_meta).toBe('not reporting');
     expect(payload.cash_in).toBe('£6,240');
+    // noShowRate (5.9, a 0..100 percentage) must be scaled to a 0..1 ratio
+    // before formatPercent, and marginPct (18.4, already 0..100) must pass
+    // through unscaled. Getting either wrong renders a wildly wrong figure
+    // in a message to the business owner (e.g. "590% DNA").
+    expect(payload.dna_rate).toBe('5.9%');
+    expect(payload.qbo_margin).toBe('18.4%');
   });
 
   it('exposes no raw pence integers, which must never reach a message', async () => {
@@ -117,9 +129,9 @@ describe('send', () => {
     expect(d.postWebhook).not.toHaveBeenCalled();
   });
 
-  it('blocks a second automatic send on the same day', async () => {
+  it('blocks a second automatic send on the same day after a SUCCESSFUL send', async () => {
     const d = deps();
-    const settings = { webhookUrl: 'https://a.test/h', enabled: true, lastSentAt: '2026-07-21T17:00:00.000Z' };
+    const settings = { webhookUrl: 'https://a.test/h', enabled: true, lastSentAt: '2026-07-21T17:00:00.000Z', lastStatus: 'ok' };
 
     const res = await dailyReportService.send(ORG, { now: NOW, trigger: 'cron', deps: d, settings });
 
@@ -127,9 +139,23 @@ describe('send', () => {
     expect(d.postWebhook).not.toHaveBeenCalled();
   });
 
+  it('does NOT block a same-day retry after an earlier FAILED send', async () => {
+    const d = deps();
+    // Same London day as NOW, but the earlier attempt failed — a worker
+    // restart later that day must be able to retry, not be told "already
+    // sent today" when nothing was ever delivered.
+    const settings = { webhookUrl: 'https://a.test/h', enabled: true, lastSentAt: '2026-07-21T15:00:00.000Z', lastStatus: 'failed' };
+
+    const res = await dailyReportService.send(ORG, { now: NOW, trigger: 'cron', deps: d, settings });
+
+    expect(res.sent).toBe(true);
+    expect(res.status).toBe('ok');
+    expect(d.postWebhook).toHaveBeenCalledTimes(1);
+  });
+
   it('allows a manual send to bypass the same-day block', async () => {
     const d = deps();
-    const settings = { webhookUrl: 'https://a.test/h', enabled: true, lastSentAt: '2026-07-21T17:00:00.000Z' };
+    const settings = { webhookUrl: 'https://a.test/h', enabled: true, lastSentAt: '2026-07-21T17:00:00.000Z', lastStatus: 'ok' };
 
     const res = await dailyReportService.send(ORG, { now: NOW, trigger: 'manual', deps: d, settings });
 
@@ -145,5 +171,19 @@ describe('send', () => {
 
     expect(res.sent).toBe(false);
     expect(res.status).toBe('failed');
+  });
+
+  it('contains a mandatory-source failure instead of throwing out of send()', async () => {
+    const d = deps({
+      adAttribution: { getPerformance: vi.fn().mockRejectedValue(new Error('ad attribution unreachable')) },
+    });
+    const settings = { webhookUrl: 'https://a.test/h', enabled: true, lastSentAt: null };
+
+    const res = await dailyReportService.send(ORG, { now: NOW, trigger: 'cron', deps: d, settings });
+
+    expect(res.sent).toBe(false);
+    expect(res.status).toBe('failed');
+    expect(res.reason).toContain('ad attribution unreachable');
+    expect(d.postWebhook).not.toHaveBeenCalled();
   });
 });

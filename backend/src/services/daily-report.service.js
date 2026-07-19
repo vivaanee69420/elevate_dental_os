@@ -164,12 +164,27 @@ export const dailyReportService = {
             return { sent: false, status: 'skipped', reason: 'disabled' };
         }
         // A worker restart at 18:05 must not send the report twice.
-        // Manual sends bypass this deliberately.
-        if (trigger === 'cron' && cfg.lastSentAt && this._sameLondonDay(new Date(cfg.lastSentAt), now)) {
+        // Manual sends bypass this deliberately. Gate on the last outcome
+        // having been a SUCCESS: a failed attempt earlier the same day must
+        // not block a retry, or a dead webhook silently blacks out the day.
+        if (trigger === 'cron' && cfg.lastSentAt && cfg.lastStatus === 'ok' && this._sameLondonDay(new Date(cfg.lastSentAt), now)) {
             return { sent: false, status: 'skipped', reason: 'already sent today' };
         }
 
-        const { metrics, payload } = await this.buildPayload(orgId, { now, deps, organisationName });
+        // Ad metrics are mandatory (see buildMetrics): a dead ad integration
+        // must resolve to a failed result like every other failure path in
+        // `send`, not throw out of it.
+        let metrics;
+        let payload;
+        try {
+            ({ metrics, payload } = await this.buildPayload(orgId, { now, deps, organisationName }));
+        } catch (err) {
+            console.error(`[daily-report] buildPayload failed for ${orgId}`, err);
+            await whatsappReportRepository.markSent(orgId, {
+                status: 'failed', error: err.message, payload: null, sentAt: now.toISOString(),
+            });
+            return { sent: false, status: 'failed', reason: err.message };
+        }
 
         if (!this._hasContent(metrics)) {
             await whatsappReportRepository.markSent(orgId, {
