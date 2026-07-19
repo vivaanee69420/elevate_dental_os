@@ -195,6 +195,55 @@ describe('emergentBusinesses', () => {
   });
 });
 
+describe('adSpend selects customer_id', () => {
+  it('includes customer_id so spend can be joined to an ad account practice', async () => {
+    await adAttributionRepository.adSpend(ORG, '2026-07-01', '2026-08-01');
+    expect(supaRec.last.select).toContain('customer_id');
+  });
+});
+
+describe('adSpendDetailed', () => {
+  it('scopes by org and the date window', async () => {
+    await adAttributionRepository.adSpendDetailed(ORG, '2026-07-01', '2026-08-01');
+    expect(supaRec.last.table).toBe('ad_metrics');
+    expect(orgFilter(supaRec.last)).toEqual({ col: 'organisation_id', val: ORG });
+    expect(supaRec.last.gtes).toContainEqual({ col: 'metric_date', val: '2026-07-01' });
+    expect(supaRec.last.lts).toContainEqual({ col: 'metric_date', val: '2026-08-01' });
+  });
+
+  it('selects the campaign and engagement columns adSpend omits', async () => {
+    await adAttributionRepository.adSpendDetailed(ORG, '2026-07-01', '2026-08-01');
+    for (const col of ['customer_id', 'campaign_id', 'campaign_name', 'campaign_status',
+      'impressions', 'clicks', 'conversions']) {
+      expect(supaRec.last.select).toContain(col);
+    }
+  });
+
+  it('does not select reach or frequency — they are not summable across days', async () => {
+    await adAttributionRepository.adSpendDetailed(ORG, '2026-07-01', '2026-08-01');
+    expect(supaRec.last.select).not.toContain('reach');
+    expect(supaRec.last.select).not.toContain('frequency');
+  });
+
+  it('orders by id (required for deterministic pagination)', async () => {
+    await adAttributionRepository.adSpendDetailed(ORG, '2026-07-01', '2026-08-01');
+    expect(supaRec.last.order).toEqual({ col: 'id', opts: { ascending: true } });
+  });
+
+  it('pages past the 1000-row PostgREST cap', async () => {
+    let call = 0;
+    supaRec.resultProvider = () => {
+      call += 1;
+      // First page full (1000) forces a second request; second page short ends it.
+      if (call === 1) return { data: Array.from({ length: 1000 }, (_, i) => ({ id: `r${i}` })), error: null };
+      return { data: [{ id: 'last' }], error: null };
+    };
+    const rows = await adAttributionRepository.adSpendDetailed(ORG, '2026-07-01', '2026-08-01');
+    expect(call).toBe(2);
+    expect(rows).toHaveLength(1001);
+  });
+});
+
 describe('pagination', () => {
   // Proves fetchAllPages actually stitches multiple pages together, and that
   // range() advances between calls — not just that the loop compiles. Without

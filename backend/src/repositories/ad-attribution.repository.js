@@ -142,7 +142,24 @@ export const adAttributionRepository = {
     async adSpend(orgId, since, until) {
         return fetchAllPages(() => supabase_1.serviceClient
             .from('ad_metrics')
-            .select('id, provider, practice_id, spend_pence, metric_date')
+            .select('id, provider, practice_id, customer_id, spend_pence, metric_date')
+            .eq('organisation_id', orgId)
+            .gte('metric_date', since)
+            .lt('metric_date', until)
+            .order('id', { ascending: true }));
+    },
+
+    // Spend at its real grain — org x provider x account (customer_id) x
+    // CAMPAIGN x day — for the spend drill-down. adSpend deliberately keeps a
+    // narrower select because the performance path only needs a total.
+    //
+    // reach/frequency are NOT selected: they cannot be summed across days (the
+    // same person seen on three days is one person, not three). Any
+    // window-level reach must come from ad_accounts.period_* instead.
+    async adSpendDetailed(orgId, since, until) {
+        return fetchAllPages(() => supabase_1.serviceClient
+            .from('ad_metrics')
+            .select('id, provider, customer_id, campaign_id, campaign_name, campaign_status, spend_pence, impressions, clicks, conversions, metric_date')
             .eq('organisation_id', orgId)
             .gte('metric_date', since)
             .lt('metric_date', until)

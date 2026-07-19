@@ -45,6 +45,7 @@ const h = vi.hoisted(() => {
       select(...a) {
         q.op = 'select';
         q.selectArgs = a;
+        q.select = a[0];
         return builder;
       },
       update(vals) {
