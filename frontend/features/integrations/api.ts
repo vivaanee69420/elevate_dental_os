@@ -368,3 +368,40 @@ export function setEmergentPractice(businessId: string, practiceId: string | nul
     body: JSON.stringify({ business_id: businessId, practice_id: practiceId }),
   });
 }
+
+// --- GoHighLevel daily WhatsApp report ---------------------------------------
+// Owner-only. The raw webhook URL is never returned by the API — only a masked
+// version — so the UI never round-trips it back into a text field.
+export type DailyReportSettings = {
+  webhookUrlMasked: string | null;
+  configured: boolean;
+  enabled: boolean;
+  lastSentAt: string | null;
+  lastStatus: string | null;
+  lastError: string | null;
+};
+
+export function getDailyReportSettings() {
+  return api<{ settings: DailyReportSettings | null }>('/api/integrations/gohighlevel/daily-report');
+}
+
+export function saveDailyReportSettings(body: { webhookUrl: string; enabled: boolean }) {
+  return api<{ settings: DailyReportSettings }>('/api/integrations/gohighlevel/daily-report', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+export function previewDailyReport() {
+  return api<{ line: string; length: number; payload: Record<string, unknown> }>(
+    '/api/integrations/gohighlevel/daily-report/preview',
+    { method: 'POST' },
+  );
+}
+
+export function sendDailyReport() {
+  return api<{ sent: boolean; status: string; reason?: string }>(
+    '/api/integrations/gohighlevel/daily-report/send',
+    { method: 'POST' },
+  );
+}
