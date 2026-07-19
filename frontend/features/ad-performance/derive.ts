@@ -14,7 +14,8 @@ export function personKey(l: AdLeadLine): string {
 }
 
 // The API dedupes per `channel|personKey`, so a person in two channels comes
-// back twice. Collapse to one row per person, keeping the earliest touch.
+// back twice. Collapse to one row per person, keeping the earliest touch. The
+// returned list is sorted most-recent-first (newest createdAt first).
 export function distinctPeople(lines: AdLeadLine[]): AdLeadLine[] {
   const byPerson = new Map<string, AdLeadLine>();
   for (const l of lines) {

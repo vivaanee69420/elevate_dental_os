@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Elevate Dental OS — Daily Cockpit (Target State Mockup)</title>
+<style>
+  :root{
+    --bg:#ffffff; --tint:#eef4f0; --tint2:#f6faf8; --line:#e2ebe6;
+    --green:#14503c; --green2:#1f7a5c; --pill:#1c6b52;
+    --ink:#1a2b22; --muted:#6b7c74;
+    --pos:#2e7d32; --posbg:#e4f3e8; --neg:#c62828; --negbg:#fcebeb;
+    --amber:#8a6d1a; --amberbg:#fbf3d8;
+    --note:#2563eb; --notebg:#eef3ff; --noteline:#c7d7fb;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f4f7f5;color:var(--ink);line-height:1.5;padding:24px}
+  .wrap{max-width:1180px;margin:0 auto}
+  .topbar{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:18px 22px;margin-bottom:16px}
+  h1{font-family:Georgia,"Times New Roman",serif;font-size:24px;color:var(--green);font-weight:600}
+  .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--muted)}
+  .legend b{color:var(--ink)}
+  .swatch{display:inline-block;width:11px;height:11px;border-radius:3px;vertical-align:middle;margin-right:5px}
+  .pills{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 0}
+  .pill{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:20px;padding:6px 14px;font-size:13px;font-weight:600}
+  .pill.on{background:var(--pill);color:#fff;border-color:var(--pill)}
+  .card{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin-bottom:16px}
+  .secnum{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;background:var(--green);color:#fff;border-radius:50%;font-size:12px;font-weight:700;margin-right:9px}
+  .sechead{display:flex;align-items:center;font-weight:700;font-size:15px;margin-bottom:3px}
+  .secdesc{color:var(--muted);font-size:12.5px;margin-bottom:16px;margin-left:31px}
+  .grid{display:grid;gap:12px}
+  .g4{grid-template-columns:repeat(4,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  .kpi{border:1px solid var(--line);border-radius:8px;padding:14px;background:var(--tint2);position:relative}
+  .kpi .lbl{font-size:10.5px;letter-spacing:.4px;color:var(--muted);text-transform:uppercase;font-weight:700}
+  .kpi .val{font-size:23px;font-weight:700;margin-top:5px}
+  .kpi .note{font-size:11.5px;color:var(--muted);margin-top:4px}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;margin-top:6px}
+  .tag.pos{background:var(--posbg);color:var(--pos)} .tag.neg{background:var(--negbg);color:var(--neg)} .tag.amb{background:var(--amberbg);color:var(--amber)}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  th{text-align:left;font-size:10.5px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);font-weight:700;padding:9px 10px;border-bottom:1px solid var(--line)}
+  td{padding:10px;border-bottom:1px solid var(--line)}
+  td.r,th.r{text-align:right}
+  .money{font-variant-numeric:tabular-nums;font-weight:600}
+  .st{font-weight:700;font-size:12px} .st.above{color:var(--pos)} .st.below{color:var(--neg)}
+  /* dev callout */
+  .callout{background:var(--notebg);border:1px solid var(--noteline);border-left:3px solid var(--note);border-radius:7px;padding:11px 13px;margin:12px 0;font-size:12.5px;color:#1e3a8a}
+  .callout b{color:var(--note)}
+  .src{display:inline-block;background:var(--notebg);border:1px solid var(--noteline);color:var(--note);font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:6px;vertical-align:middle}
+  .newbadge{background:var(--amberbg);color:var(--amber);font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px;margin-left:8px;letter-spacing:.5px}
+  .barrow{display:flex;align-items:center;gap:10px;margin:5px 0}
+  .bar{height:9px;border-radius:5px;background:var(--green2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>Daily Command Cockpit — <span style="color:var(--ink)">what it looks like once the pipes are connected</span></h1>
+    <div class="sub">Mockup for the developer. Blue callouts = where each number must come from. This is the target state, not live data.</div>
+    <div class="pills">
+      <span class="pill on">All practices</span><span class="pill">Ashford</span><span class="pill">Rochester</span>
+      <span class="pill">Barnet</span><span class="pill">Bexleyheath</span><span class="pill">Warwick Lodge</span>
+      <span class="pill">Fixed Teeth Solutions</span>
+    </div>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--note)"></span><b>Blue callout</b> = data source / fix required</span>
+      <span><span class="swatch" style="background:var(--amber)"></span><b>NEW</b> = module that doesn't exist yet</span>
+      <span><span class="swatch" style="background:var(--pos)"></span>above breakeven</span>
+      <span><span class="swatch" style="background:var(--neg)"></span>below breakeven</span>
+    </div>
+  </div>
+
+  <!-- 1 REVENUE -->
+  <div class="card">
+    <div class="sechead"><span class="secnum">1</span> Revenue — cash taken (Emergent) <span class="src">Emergent daily push</span></div>
+    <div class="secdesc">Till cash keyed into Emergent each day, one row per practice.</div>
+    <div class="grid g4">
+      <div class="kpi"><div class="lbl">Cash taken today</div><div class="val">£13,604</div><div class="note">Mon 15 Jul · index 745 vs 100 avg day</div></div>
+      <div class="kpi"><div class="lbl">Cash MTD</div><div class="val">£130,351</div><div class="note">10 working days · £13,035/day</div></div>
+      <div class="kpi"><div class="lbl">Projected month</div><div class="val">£273,700</div><div class="note">at current run-rate · 21 days</div></div>
+      <div class="kpi"><div class="lbl">Daily target</div><div class="val">£40,000</div><div class="note">£2M/mo ÷ 20 · <span style="color:var(--neg)">£100k/day group goal</span></div></div>
+    </div>
+    <div class="callout"><b>FIX #1:</b> currently £0.00 — Emergent isn't pushing. Needs <code>POST /api/ingest/emergent/daily</code> with <code>cash_taken</code> per practice per day. <b>FIX #6:</b> daily target reads £50.8M/£80M somewhere — should be £2M/month (£100k/day × 20).</div>
+  </div>
+
+  <!-- 2 TREATMENT & CLOSE -->
+  <div class="card">
+    <div class="sechead"><span class="secnum">2</span> Treatment &amp; close <span class="src">Emergent daily push</span></div>
+    <div class="secdesc">What the practice proposed vs what patients accepted, keyed into Emergent daily.</div>
+    <div class="grid g4">
+      <div class="kpi"><div class="lbl">Accepted</div><div class="val">£22,400</div><div class="note">8 plans accepted today</div></div>
+      <div class="kpi"><div class="lbl">TX plans given</div><div class="val">£41,000</div><div class="note">15 plans presented</div></div>
+      <div class="kpi"><div class="lbl">New patients seen</div><div class="val">21</div><div class="note">vs 9 existing · <span style="color:var(--pos)">£1,240 avg value</span></div></div>
+      <div class="kpi"><div class="lbl">Attended</div><div class="val">62</div><div class="note">close rate 8/15 = 53%</div></div>
+    </div>
+    <div class="callout"><b>FIX #1 + #9:</b> all four read 0 / "not being keyed in". Same Emergent push carries <code>treatments_accepted</code>, <code>tx_plans_given</code>, <code>new_leads_keyed</code>, <code>attended</code>. Add a <b>new vs existing</b> split so returning-patient value is visible.</div>
+  </div>
+
+  <!-- 3 LEADS -->
+  <div class="card">
+    <div class="sechead"><span class="secnum">3</span> Leads — Google vs Facebook, by practice <span class="src">GHL + ad-account mapping</span></div>
+    <div class="secdesc">Each lead matched to a practice via its GoHighLevel subaccount, spend via its ad account.</div>
+    <table>
+      <thead><tr><th>Practice</th><th>Channel</th><th class="r">Leads</th><th class="r">Accepted</th><th class="r">Conv %</th><th class="r">Ad spend</th><th class="r">CPL</th><th class="r">ROAS</th></tr></thead>
+      <tbody>
+        <tr><td>Ashford</td><td>Meta</td><td class="r">312</td><td class="r">18</td><td class="r">5.8%</td><td class="r money">£6,070</td><td class="r">£19.45</td><td class="r st above">6.1×</td></tr>
+        <tr><td>Barnet</td><td>Meta</td><td class="r">128</td><td class="r">6</td><td class="r">4.7%</td><td class="r money">£2,395</td><td class="r">£18.71</td><td class="r st above">4.4×</td></tr>
+        <tr><td>Rochester</td><td>Google</td><td class="r">41</td><td class="r">3</td><td class="r">7.3%</td><td class="r money">£1,759</td><td class="r">£42.90</td><td class="r st above">3.2×</td></tr>
+        <tr><td>Fixed Teeth Solutions</td><td>Meta</td><td class="r">33</td><td class="r">2</td><td class="r">6.1%</td><td class="r money">£749</td><td class="r">£22.70</td><td class="r st above">9.1×</td></tr>
+        <tr style="background:var(--tint)"><td><b>Group</b></td><td></td><td class="r"><b>2,619</b></td><td class="r"><b>181</b></td><td class="r"><b>6.9%</b></td><td class="r money"><b>£15,762</b></td><td class="r"><b>£6.02</b></td><td class="r st above"><b>8.27×</b></td></tr>
+      </tbody>
+    </table>
+    <div class="callout"><b>FIX #2 + #3:</b> today every practice row is <b>0 leads / 0%</b> and "37 leads not counted". The lead exists at group level but is dropped at practice level. Add <code>ghl_subaccount_id → practice_id</code> and <code>ad_account_id → practice_id</code> maps (System → Integrations). The ad accounts are <i>already named per practice</i> — 1:1 map them and stop the "group-level only" fallback.</div>
+  </div>
+
+  <!-- 4 CASH UP -->
+  <div class="card">
+    <div class="sechead"><span class="secnum">4</span> Cash up — till reconciliation <span class="src">Emergent daily push</span></div>
+    <div class="secdesc">System revenue vs the till/terminal total — flags same-day gaps.</div>
+    <div class="grid g3">
+      <div class="kpi"><div class="lbl">Cash taken £</div><div class="val">£13,604</div></div>
+      <div class="kpi"><div class="lbl">Till detail £</div><div class="val">£13,650</div></div>
+      <div class="kpi"><div class="lbl">Variance £</div><div class="val" style="color:var(--pos)">+£46</div><div class="tag pos">Within tolerance</div></div>
+    </div>
+    <div class="callout"><b>FIX #1:</b> both read £0.00. <code>cash_taken</code> and <code>till_detail</code> come in the same daily Emergent push; variance is computed here.</div>
+  </div>
+
+  <!-- 5 MONTHLY REVENUE / P&L -->
+  <div class="card">
+    <div class="sechead"><span class="secnum">5</span> Monthly revenue &amp; P&amp;L — July 2026 <span class="src">Emergent P&L push + Xero</span></div>
+    <div class="secdesc">The latest month Emergent has sent a P&amp;L for.</div>
+    <div class="grid g4">
+      <div class="kpi"><div class="lbl">Revenue</div><div class="val">£226,698</div></div>
+      <div class="kpi"><div class="lbl">Net profit</div><div class="val" style="color:var(--pos)">£48,900</div><div class="tag pos">21.6% margin</div></div>
+      <div class="kpi"><div class="lbl">Clinician fees</div><div class="val">£28,996</div><div class="note">45% of production</div></div>
+      <div class="kpi"><div class="lbl">Lab + overhead</div><div class="val">£148,802</div><div class="note">rent, staff, materials</div></div>
+    </div>
+    <div class="callout"><b>FIX #1 + #7:</b> reads £0.00 / "No monthly P&L from Emergent yet". Needs <code>POST /api/ingest/emergent/pnl</code> with revenue, net_profit, line_items. Connect Xero to validate against live P&L and unlock the AI Analyst "Net Position / Net Margin" columns.</div>
+  </div>
+
+  <!-- 6 BREAKEVEN — NEW -->
+  <div class="card" style="border:2px solid var(--amber)">
+    <div class="sechead"><span class="secnum" style="background:var(--amber)">6</span> Profit vs Breakeven <span class="newbadge">NEW MODULE — DOESN'T EXIST YET</span></div>
+    <div class="secdesc">Gaurav's core ask. Per practice: £31k fixed cost/mo, £81–86k breakeven revenue → 62.9% contribution margin, £1,550 fixed/day, £2,464 breakeven revenue/day.</div>
+    <table>
+      <thead><tr><th>Practice</th><th class="r">Revenue today</th><th class="r">Breakeven/day</th><th class="r">Contribution</th><th class="r">Fixed/day</th><th class="r">Profit today</th><th class="r">Status</th></tr></thead>
+      <tbody>
+        <tr><td>Ashford</td><td class="r money">£4,900</td><td class="r">£2,464</td><td class="r">£3,082</td><td class="r">£1,550</td><td class="r money" style="color:var(--pos)">£1,532</td><td class="r st above">Above</td></tr>
+        <tr><td>Rochester</td><td class="r money">£3,780</td><td class="r">£2,464</td><td class="r">£2,378</td><td class="r">£1,550</td><td class="r money" style="color:var(--pos)">£828</td><td class="r st above">Above</td></tr>
+        <tr><td>Barnet</td><td class="r money">£2,100</td><td class="r">£2,464</td><td class="r">£1,321</td><td class="r">£1,550</td><td class="r money" style="color:var(--neg)">−£229</td><td class="r st below">Below</td></tr>
+        <tr><td>Bexleyheath</td><td class="r money">£1,700</td><td class="r">£2,464</td><td class="r">£1,069</td><td class="r">£1,550</td><td class="r money" style="color:var(--neg)">−£481</td><td class="r st below">Below</td></tr>
+        <tr><td>Fixed Teeth Solutions</td><td class="r money">£3,220</td><td class="r">£2,464</td><td class="r">£2,026</td><td class="r">£1,550</td><td class="r money" style="color:var(--pos)">£476</td><td class="r st above">Above</td></tr>
+        <tr style="background:var(--tint)"><td><b>Group</b></td><td class="r money"><b>£15,700</b></td><td class="r"><b>£12,320</b></td><td class="r"><b>£9,875</b></td><td class="r"><b>£7,750</b></td><td class="r money" style="color:var(--pos)"><b>£2,125</b></td><td class="r st above"><b>Above</b></td></tr>
+      </tbody>
+    </table>
+    <div class="callout"><b>BUILD #4:</b> net-new. Formula per practice:<br>
+    <code>contribution_margin = 1 − fixed/breakeven_mid = 1 − 31000/83500 = 0.629</code><br>
+    <code>breakeven_day = (fixed/20) / margin = 1550 / 0.629 = £2,464</code><br>
+    <code>profit_day = revenue × margin − fixed/20</code> · <code>status = revenue ≥ breakeven_day</code><br>
+    Fixed cost, breakeven low/high are per-practice inputs in Settings. Once Xero P&L is live (#7), replace the assumed 62.9% with the real margin.</div>
+  </div>
+
+  <!-- REVENUE BY LINE (already works) -->
+  <div class="card">
+    <div class="sechead"><span class="secnum" style="background:var(--green2)">✓</span> Revenue by line <span class="src" style="background:var(--posbg);color:var(--pos);border-color:#bfe3c9">Already working — keep</span></div>
+    <div class="secdesc">This one is live from Dentally and correct. Shown so the dev knows what "good" looks like.</div>
+    <div style="margin-top:8px">
+      <div class="barrow"><div style="width:150px;font-size:12px">Implants</div><div class="bar" style="width:47%"></div><span class="money">£107,643 · 47%</span></div>
+      <div class="barrow"><div style="width:150px;font-size:12px">Restorative</div><div class="bar" style="width:24%"></div><span class="money">£54,931 · 24%</span></div>
+      <div class="barrow"><div style="width:150px;font-size:12px">Oral Surgery</div><div class="bar" style="width:7%"></div><span class="money">£14,834 · 7%</span></div>
+      <div class="barrow"><div style="width:150px;font-size:12px">Hygiene &amp; Prevention</div><div class="bar" style="width:4%"></div><span class="money">£9,949 · 4%</span></div>
+      <div class="barrow"><div style="width:150px;font-size:12px">Orthodontics</div><div class="bar" style="width:3%"></div><span class="money">£7,744 · 3%</span></div>
+    </div>
+  </div>
+
+  <div class="card" style="background:var(--tint);border-color:#cfe0d8">
+    <div style="font-weight:700;margin-bottom:6px;color:var(--green)">One-line summary for the dev</div>
+    <div style="font-size:13.5px">The shell is done. <b>9 fixes</b>, in order: (1) Emergent daily+P&amp;L push, (2) GHL→practice map, (3) ad-account→practice map, (4) build the breakeven module above, (5) add Barnet/Warwick/Academy/Lab, (6) fix the £80M target to £2M/mo, then (7) Xero, (8) chair grid, (9) new-vs-existing split. Everything except #4 is plumbing into slots you already built.</div>
+  </div>
+
+</div>
+</body>
+</html>
