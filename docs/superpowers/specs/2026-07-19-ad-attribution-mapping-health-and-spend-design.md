@@ -118,7 +118,7 @@ Three org-scoped methods on `ad-attribution.repository.js`:
 - `adSpendDetailed(orgId, since, until)` — selects the columns `adSpend` drops: `customer_id`, `campaign_id`, `campaign_name`, `campaign_status`, `impressions`, `clicks`, `conversions`, alongside `provider`, `spend_pence`, `metric_date`. **Must page via `fetchAllPages`** — at campaign × day grain a 12-month window will exceed 1000 rows.
 `adAccounts(orgId)` needs no change — it already selects `id, provider, customer_id, name, practice_id`, which is everything the mapping-health and join paths require.
 
-`adSpend` is left untouched so the existing performance path keeps its narrow, cheap select.
+`adSpend` gains exactly one column, `customer_id`. The join needs it and there is no other way to reach `practice_id` from a spend row; adding one text column keeps the performance path narrow while making the per-practice fix possible. It does not gain the campaign or engagement columns — those stay exclusive to `adSpendDetailed`.
 
 `unmappedPipelineCount` reuses the existing `adChannelPipelineRepository.channelMap(orgId)` and the `pipeKey(accountId, pipelineId)` helper rather than introducing a second notion of what "mapped" means — the count must agree with the one `getPerformance` already returns.
 
