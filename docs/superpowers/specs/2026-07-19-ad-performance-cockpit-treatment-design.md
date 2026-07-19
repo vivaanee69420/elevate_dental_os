@@ -41,6 +41,7 @@ Five `SectionCard`s, each with a numbered `SecHead` carrying `desc` prose.
 3. **Attribution & match quality** — Emergent linkage: match rate, matched pairs, accepted value with no matching lead.
 4. **By practice** — existing `ByPracticeTable` plus the per-practice trend that is already being sent.
 5. **Trend** — existing `ChannelTrend`, restyled to the section language.
+6. **Mapping health** — rendered only when there is a gap. See below.
 
 ### Component promotion
 
