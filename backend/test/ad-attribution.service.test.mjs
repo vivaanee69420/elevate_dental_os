@@ -17,6 +17,7 @@ vi.mock('../src/repositories/ad-attribution.repository.js', () => ({
     adSpend: vi.fn(),
     leadCountsByPipeline: vi.fn(),
     setAdAccountPractice: vi.fn(),
+    emergentBusinesses: vi.fn(),
   },
 }));
 vi.mock('../src/repositories/ad-channel-pipeline.repository.js', () => ({
@@ -591,5 +592,94 @@ describe('accountPracticeByCustomerId', () => {
   it('tolerates a null or undefined account list', () => {
     expect(accountPracticeByCustomerId(null).size).toBe(0);
     expect(accountPracticeByCustomerId(undefined).size).toBe(0);
+  });
+});
+
+describe('getMappingHealth', () => {
+  beforeEach(() => {
+    adAttributionRepository.practiceOptions.mockResolvedValue([
+      { id: 'p1', name: 'Ashford' },
+    ]);
+    adAttributionRepository.adAccounts.mockResolvedValue([]);
+    adAttributionRepository.ghlAccounts.mockResolvedValue([]);
+    adAttributionRepository.emergentBusinesses.mockResolvedValue([]);
+    adChannelPipelineRepository.channelMap.mockResolvedValue(new Map());
+  });
+
+  it('resolves a mapped ad account to its practice name and marks it mapped', async () => {
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a1', provider: 'google_ads', customer_id: '123', name: 'Main', practice_id: 'p1' },
+    ]);
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.adAccounts[0]).toEqual({
+      id: 'a1', provider: 'google_ads', customerId: '123', name: 'Main',
+      practiceId: 'p1', practiceName: 'Ashford', mapped: true,
+    });
+    expect(out.summary.adAccountsUnmapped).toBe(0);
+  });
+
+  it('marks an unmapped ad account and counts it, with a null practice name', async () => {
+    adAttributionRepository.adAccounts.mockResolvedValue([
+      { id: 'a1', provider: 'meta_ads', customer_id: '999', name: null, practice_id: null },
+    ]);
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.adAccounts[0].mapped).toBe(false);
+    expect(out.adAccounts[0].practiceName).toBeNull();
+    expect(out.summary.adAccountsUnmapped).toBe(1);
+  });
+
+  it('counts a GHL subaccount pipeline with no channel as unmapped', async () => {
+    adAttributionRepository.ghlAccounts.mockResolvedValue([
+      {
+        id: 'g1', label: 'Ashford', external_account_id: 'LOC1', practice_id: 'p1',
+        status: 'active', pipelines: [{ id: 'pl1', name: 'A' }, { id: 'pl2', name: 'B' }],
+      },
+    ]);
+    adChannelPipelineRepository.channelMap.mockResolvedValue(new Map([['g1|pl1', 'google_ads']]));
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.ghlAccounts[0].pipelineCount).toBe(2);
+    expect(out.ghlAccounts[0].unmappedPipelineCount).toBe(1);
+    expect(out.summary.pipelinesUnmapped).toBe(1);
+  });
+
+  it('excludes a practice-less GHL subaccount from pipelinesUnmapped', async () => {
+    // The academy and accounting Locations live in integration_accounts too.
+    // Their pipelines must never inflate the count — same rule getPerformance
+    // already applies.
+    adAttributionRepository.ghlAccounts.mockResolvedValue([
+      {
+        id: 'g2', label: 'Academy', external_account_id: 'LOC2', practice_id: null,
+        status: 'active', pipelines: [{ id: 'plx', name: 'X' }],
+      },
+    ]);
+    adChannelPipelineRepository.channelMap.mockResolvedValue(new Map());
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.summary.pipelinesUnmapped).toBe(0);
+    expect(out.ghlAccounts[0].mapped).toBe(false);
+    expect(out.summary.ghlAccountsUnmapped).toBe(1);
+  });
+
+  it('reports an intentionally unmapped Emergent business', async () => {
+    adAttributionRepository.emergentBusinesses.mockResolvedValue([
+      { businessId: 'BIZ1', businessName: 'Ashford', practiceId: 'p1' },
+      { businessId: 'BIZ2', businessName: 'Unknown', practiceId: null },
+    ]);
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.emergentBusinesses[0]).toEqual({
+      businessId: 'BIZ1', businessName: 'Ashford',
+      practiceId: 'p1', practiceName: 'Ashford', mapped: true,
+    });
+    expect(out.emergentBusinesses[1].mapped).toBe(false);
+    expect(out.summary.emergentUnmapped).toBe(1);
+  });
+
+  it('returns empty surfaces rather than throwing when nothing is configured', async () => {
+    const out = await adAttributionService.getMappingHealth('org1');
+    expect(out.adAccounts).toEqual([]);
+    expect(out.ghlAccounts).toEqual([]);
+    expect(out.emergentBusinesses).toEqual([]);
+    expect(out.summary).toEqual({
+      adAccountsUnmapped: 0, ghlAccountsUnmapped: 0, emergentUnmapped: 0, pipelinesUnmapped: 0,
+    });
   });
 });
