@@ -12,6 +12,12 @@ import { matchStats } from '../derive';
 import { pct, count } from '../format';
 import type { AdLeadLine } from '../api';
 
+// Must match the default `limit` fetchAdLeads (../api) sends the API when
+// the caller doesn't specify one. When the lead list comes back at this cap,
+// it may have been truncated, so match-value figures derived from it can be
+// understated (and the "no lead" figure correspondingly overstated).
+const LEAD_LIMIT = 500;
+
 export function AttributionSection({
   lines,
   totalAcceptedPence,
@@ -22,6 +28,7 @@ export function AttributionSection({
   loading: boolean;
 }) {
   const st = matchStats(lines);
+  const capped = lines.length >= LEAD_LIMIT;
   // Accepted value the group recorded that no tracked lead accounts for.
   // Clamped at zero: the lead list is capped at 500 rows, so on a large window
   // the matched sum can legitimately exceed nothing but never go negative.
@@ -76,14 +83,18 @@ export function AttributionSection({
             label="Accepted value with no lead"
             value={formatPence(unmatchedPence)}
             valueMuted={unmatchedPence === 0}
+            note={capped ? 'Upper bound — only the most recent 500 leads were matched.' : undefined}
             info={(
               <Explainer
                 what="Treatment accepted in this window that no tracked lead accounts for."
                 how="Group accepted value minus the value traced to matched leads. Usually walk-ins, referrals, returning patients, or enquiries that never reached a mapped pipeline."
                 now={
-                  unmatchedPence === 0
+                  (unmatchedPence === 0
                     ? 'Everything traced back to a lead.'
-                    : `${formatPence(unmatchedPence)} untraced.`
+                    : `${formatPence(unmatchedPence)} untraced.`) +
+                  (capped
+                    ? ' Only the most recent 500 leads were checked, so some of this value may in fact belong to leads that were not loaded.'
+                    : '')
                 }
               />
             )}
