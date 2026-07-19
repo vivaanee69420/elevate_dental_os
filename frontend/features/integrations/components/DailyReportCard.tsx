@@ -24,17 +24,28 @@ export default function DailyReportCard() {
   const [url, setUrl] = useState('');
   const [enabledDraft, setEnabledDraft] = useState(false);
 
-  // Seed the draft toggle from the loaded settings once, so it reflects the
-  // saved state without fighting the owner's in-progress edits.
+  // Seed the draft toggle from the loaded settings. Depend on the primitive
+  // `enabled` value, not the `settings` object: React Query hands back a new
+  // object reference on every refetch (including refetchOnWindowFocus) even
+  // when nothing changed, so depending on `settings` would re-run this and
+  // silently discard a toggle the owner has flipped but not yet saved.
+  const loadedEnabled = settings?.enabled;
   useEffect(() => {
-    if (settings) setEnabledDraft(settings.enabled);
-  }, [settings]);
+    if (loadedEnabled !== undefined) setEnabledDraft(loadedEnabled);
+  }, [loadedEnabled]);
 
-  const canSave = url.trim().length > 0 && !save.isPending;
+  // A save is valid either as a full (re)configure — a fresh URL pasted in —
+  // or, once a webhook is already stored, as a toggle-only pause/resume that
+  // leaves the stored URL untouched. Only block saving when there is neither
+  // a URL to send nor an existing row to flip `enabled` on.
+  const hasUrlInput = url.trim().length > 0;
+  const canSave = (hasUrlInput || configured) && !save.isPending;
 
   function onSave() {
     if (!canSave) return;
-    save.mutate({ webhookUrl: url.trim(), enabled: enabledDraft });
+    save.mutate(
+      hasUrlInput ? { webhookUrl: url.trim(), enabled: enabledDraft } : { enabled: enabledDraft },
+    );
   }
 
   return (
@@ -63,7 +74,7 @@ export default function DailyReportCard() {
           </div>
           <p className="text-ink-muted" style={{ fontSize: 10, margin: '0 0 10px' }}>
             {configured
-              ? `Currently configured: ${settings?.webhookUrlMasked}. Re-paste the URL above to change these settings — it is never sent back to the browser.`
+              ? `Currently configured: ${settings?.webhookUrlMasked}. It is never sent back to the browser — leave this blank and use the toggle below to pause or resume without re-pasting it, or paste a new URL to replace it.`
               : "Paste the URL from your GoHighLevel workflow's Inbound Webhook trigger."}
           </p>
 
@@ -72,7 +83,7 @@ export default function DailyReportCard() {
               <input
                 type="checkbox"
                 checked={enabledDraft}
-                disabled={url.trim().length === 0 || save.isPending}
+                disabled={(!hasUrlInput && !configured) || save.isPending}
                 onChange={(e) => setEnabledDraft(e.target.checked)}
               />
               Send daily

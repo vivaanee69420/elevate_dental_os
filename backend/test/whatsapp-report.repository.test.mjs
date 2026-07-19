@@ -55,6 +55,31 @@ describe('upsert', () => {
   });
 });
 
+describe('updateEnabled', () => {
+  it('writes only enabled, scoped to the organisation, and does not touch webhook_url', async () => {
+    supaRec.resultProvider = () => ({
+      data: {
+        organisation_id: ORG,
+        webhook_url: encryptSecret('https://services.leadconnectorhq.com/hooks/abc'),
+        enabled: false,
+        last_sent_at: null,
+        last_status: null,
+        last_error: null,
+      },
+      error: null,
+    });
+
+    const row = await whatsappReportRepository.updateEnabled(ORG, false);
+
+    const written = supaRec.last.updateVals;
+    expect(written.enabled).toBe(false);
+    expect(written.webhook_url).toBeUndefined();
+    expect(orgFilter(supaRec.last).val).toBe(ORG);
+    expect(row.enabled).toBe(false);
+    expect(row.webhookUrl).toBe('https://services.leadconnectorhq.com/hooks/abc');
+  });
+});
+
 describe('listEnabled', () => {
   it('returns only enabled rows with decrypted urls', async () => {
     supaRec.resultProvider = () => ({

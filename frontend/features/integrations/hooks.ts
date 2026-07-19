@@ -289,7 +289,7 @@ export function useDailyReportSettings() {
 export function useSaveDailyReportSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { webhookUrl: string; enabled: boolean }) => saveDailyReportSettings(body),
+    mutationFn: (body: { webhookUrl?: string; enabled: boolean }) => saveDailyReportSettings(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['daily-report-settings'] }),
   });
 }

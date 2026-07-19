@@ -32,6 +32,82 @@ describe('saveSettings', () => {
   });
 });
 
+describe('saveSettings pause without re-pasting the url', () => {
+  it('a toggle-only update (no webhookUrl) succeeds and preserves the stored url when a row exists', async () => {
+    // The controller does a `get` first to check a row exists, then an
+    // `update`. Distinguish the two calls by whether `updateVals` was
+    // recorded (the mock's `select()` chained after `update()` resets
+    // `q.op` back to 'select', so `q.op` alone can't tell them apart).
+    supaRec.resultProvider = (q) => {
+      if (!q.updateVals) {
+        return {
+          data: {
+            organisation_id: ORG,
+            webhook_url: encryptSecret(RAW_URL),
+            enabled: true,
+            last_sent_at: null,
+            last_status: null,
+            last_error: null,
+          },
+          error: null,
+        };
+      }
+      // The partial-update path: webhook_url must come back unchanged.
+      return {
+        data: {
+          organisation_id: ORG,
+          webhook_url: encryptSecret(RAW_URL),
+          enabled: false,
+          last_sent_at: null,
+          last_status: null,
+          last_error: null,
+        },
+        error: null,
+      };
+    };
+
+    const r = res();
+    await dailyReportController.saveSettings(req({ enabled: false }), r);
+
+    expect(r.statusCode).toBe(200);
+    expect(r.body.settings.configured).toBe(true);
+    expect(r.body.settings.enabled).toBe(false);
+    expect(r.body.settings.webhookUrlMasked).toBeTruthy();
+    expect(JSON.stringify(r.body)).not.toContain(RAW_URL);
+    expect(JSON.stringify(r.body)).not.toContain('super-secret-path');
+  });
+
+  it('a toggle-only update with no existing row is rejected with a clear message', async () => {
+    supaRec.resultProvider = () => ({ data: null, error: null });
+
+    const r = res();
+    await dailyReportController.saveSettings(req({ enabled: true }), r);
+
+    expect(r.statusCode).toBe(400);
+    expect(r.body.error).toBeTruthy();
+    expect(r.body.error.toLowerCase()).toContain('webhook url');
+  });
+
+  it('still rejects a non-https url even when a row already exists', async () => {
+    supaRec.resultProvider = () => ({
+      data: {
+        organisation_id: ORG,
+        webhook_url: encryptSecret(RAW_URL),
+        enabled: true,
+        last_sent_at: null,
+        last_status: null,
+        last_error: null,
+      },
+      error: null,
+    });
+
+    const r = res();
+    await dailyReportController.saveSettings(req({ webhookUrl: 'http://a.test/h', enabled: true }), r);
+
+    expect(r.statusCode).toBe(400);
+  });
+});
+
 describe('getSettings', () => {
   it('never leaks the raw webhook url and returns the masked shape', async () => {
     supaRec.resultProvider = () => ({

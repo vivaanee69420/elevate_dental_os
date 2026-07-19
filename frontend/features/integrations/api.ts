@@ -385,7 +385,11 @@ export function getDailyReportSettings() {
   return api<{ settings: DailyReportSettings | null }>('/api/integrations/gohighlevel/daily-report');
 }
 
-export function saveDailyReportSettings(body: { webhookUrl: string; enabled: boolean }) {
+// `webhookUrl` is optional: the backend accepts a toggle-only save (enable/
+// disable) when a settings row already exists, so an owner who has lost the
+// URL can still pause the report without re-pasting it. Omitting it with no
+// existing row is rejected server-side with a 400.
+export function saveDailyReportSettings(body: { webhookUrl?: string; enabled: boolean }) {
   return api<{ settings: DailyReportSettings }>('/api/integrations/gohighlevel/daily-report', {
     method: 'PUT',
     body: JSON.stringify(body),
