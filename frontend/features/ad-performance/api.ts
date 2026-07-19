@@ -50,6 +50,13 @@ export interface PracticeChannels {
   practiceName: string | null;
   channels: ChannelStats[];
   total: AdTotals;
+  /**
+   * Per-practice monthly trend. The backend has always sent this
+   * (`ad-attribution.service.js` byPractice), it was simply not declared here
+   * and so was discarded. Same non-additive caveat as the group `trend`:
+   * points dedupe per person PER MONTH, so they do not sum to the scorecard.
+   */
+  trend: TrendMonth[];
 }
 
 export interface TrendMonth {
