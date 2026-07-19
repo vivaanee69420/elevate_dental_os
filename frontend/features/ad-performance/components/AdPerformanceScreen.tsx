@@ -155,21 +155,21 @@ export default function AdPerformanceScreen() {
   return (
     <Frame>
       {nothingMapped ? (
-        <div className="rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
+        <div className={cx(s.notice, s.noticeWarn)}>
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
           <a className="underline" href="/settings/ad-attribution">Set up ad attribution</a>.
         </div>
       ) : null}
 
       {mappedButQuiet ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+        <div className={s.notice}>
           No Google or Facebook leads in this window. Pipelines are already mapped to a
           channel — this is just a quiet period.
         </div>
       ) : null}
 
       {spendIsGroupWide ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+        <div className={s.notice}>
           Leads, conversions and treatment value are for this practice. Spend, cost per lead
           and cost per acquisition cannot be shown for a single practice: advertising spend is
           recorded for the organisation as a whole rather than per practice, so it cannot be
@@ -178,7 +178,7 @@ export default function AdPerformanceScreen() {
       ) : null}
 
       {practiceHasNoLeads ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+        <div className={s.notice}>
           No ad leads are attributed to this practice in this window. The figures below are
           zero because there is nothing to count, not because the campaigns measured zero.
         </div>
@@ -205,7 +205,7 @@ export default function AdPerformanceScreen() {
           ) : (
             <>
               {lines.length >= LEAD_FETCH_LIMIT ? (
-                <div className="mb-3 rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
+                <div className={cx(s.notice, s.noticeWarn)}>
                   This list is incomplete — the leads it is built from were truncated to{' '}
                   {count(LEAD_FETCH_LIMIT)} rows, which is an arbitrary sample rather than the
                   most recent leads. This panel may not match the tile above it.
