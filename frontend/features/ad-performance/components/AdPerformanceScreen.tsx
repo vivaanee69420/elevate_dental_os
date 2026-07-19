@@ -120,6 +120,12 @@ export default function AdPerformanceScreen() {
   // trend, but not spend: ad_metrics.practice_id is null on every synced row,
   // so per-practice spend, cost per lead and cost per acquisition come back
   // null. Say so rather than letting the operator read blank tiles as a fault.
+  //
+  // The copy deliberately does NOT promise that mapping an ad account fixes
+  // this today. adSpend reads ad_metrics.practice_id directly, which the
+  // connectors hardcode to null, so a mapping alone changes nothing until the
+  // separately-specced customer_id -> practice_id join ships. Promising an
+  // immediate fix would send the operator to do work with no visible result.
   const practiceSelected = sp.scope !== 'all';
   const spendIsGroupWide = practiceSelected && data.totals.spendPence === null;
   // With no leads for this practice the service returns synthetic zeros, which
@@ -131,9 +137,10 @@ export default function AdPerformanceScreen() {
       {spendIsGroupWide ? (
         <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
           Leads, conversions and treatment value are for this practice. Spend, cost per lead
-          and cost per acquisition remain group-wide — no ad account is mapped to a practice
-          yet, so advertising spend cannot be split between them.{' '}
-          <a className="underline" href="/settings/ad-attribution">Map ad accounts to practices</a>.
+          and cost per acquisition stay group-wide: advertising spend is recorded for the
+          organisation as a whole rather than per practice, so it cannot be split between
+          them. Mapping each ad account to a practice is what will make that split possible.{' '}
+          <a className="underline" href="/settings/ad-attribution">Review ad attribution</a>.
         </div>
       ) : null}
 
