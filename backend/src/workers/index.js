@@ -30,6 +30,7 @@ import { notificationService } from "../services/notification.service.js";
 import { analyticsService } from "../services/analytics.service.js";
 import { getSnapshot, finalizePreviousMonth } from "../services/ai-context.service.js";
 import { boardReportRepository, isScheduleDue } from "../repositories/boardReport.repository.js";
+import { runDailyWhatsappReports } from "../services/daily-report.service.js";
 
 // --------------------------------------------------------------------------
 // Cron monitoring helper. Wraps every node-cron job in Sentry.withMonitor so
@@ -413,6 +414,20 @@ scheduleMonitored('board-report-delivery', '30 6 * * *', async () => {
         if (sent > 0) console.log(`[worker] Board reports: ${sent} sent`);
     } catch (err) {
         console.error('[worker] Board report delivery job failed', err);
+    }
+}, { timezone: 'Europe/London' });
+
+// --------------------------------------------------------------------------
+// Daily WhatsApp report — daily 18:00 Europe/London. Scans every org with
+// an enabled webhook and sends yesterday's ads/cash/clinical digest. One
+// organisation's failure must never block the rest (see runDailyWhatsappReports).
+// --------------------------------------------------------------------------
+scheduleMonitored('daily-whatsapp-report', '0 18 * * *', async () => {
+    try {
+        const { sent, skipped, failed } = await runDailyWhatsappReports({ now: new Date() });
+        console.log(`[worker] Daily WhatsApp reports: ${sent} sent, ${skipped} skipped, ${failed} failed`);
+    } catch (err) {
+        console.error('[worker] Daily WhatsApp report job failed', err);
     }
 }, { timezone: 'Europe/London' });
 
