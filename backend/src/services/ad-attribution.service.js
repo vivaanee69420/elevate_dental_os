@@ -39,24 +39,36 @@ export function ratio(numerator, denominator) {
 }
 
 const emptyStats = (channel) => ({
-    channel, leads: 0, conversions: 0, acceptedValuePence: 0, spendPence: 0, _hasSpend: false,
+    channel, leads: 0, conversions: 0, acceptedValuePence: 0, spendPence: 0,
 });
+
+// Round a ratio to whole pence at the boundary — costPerLeadPence /
+// costPerAcquisitionPence are money and must not carry fractional pence.
+const roundPence = (value) => (value === null ? null : Math.round(value));
 
 function finalise(stats, { allowSpend }) {
     // 'unassigned' has no spend feed at all; its spend and derived costs are
-    // unknown rather than zero.
-    const spendPence = allowSpend && stats._hasSpend ? stats.spendPence : null;
+    // unknown rather than zero. And ad_metrics.spend_pence defaults to 0 for a
+    // synced day with genuinely no spend, so a zero ACCUMULATED total is just
+    // as "unknown" as no rows at all — a real feed with £0 spend still reads
+    // as "Not reporting", never a fabricated £0.
+    const spendPence = allowSpend && stats.spendPence > 0 ? stats.spendPence : null;
     return {
         channel: stats.channel,
         leads: stats.leads,
         conversions: stats.conversions,
         acceptedValuePence: stats.acceptedValuePence,
         spendPence,
-        costPerLeadPence: spendPence === null ? null : ratio(spendPence, stats.leads),
-        costPerAcquisitionPence: spendPence === null ? null : ratio(spendPence, stats.conversions),
+        costPerLeadPence: spendPence === null ? null : roundPence(ratio(spendPence, stats.leads)),
+        costPerAcquisitionPence: spendPence === null ? null : roundPence(ratio(spendPence, stats.conversions)),
         conversionRate: ratio(stats.conversions, stats.leads),
     };
 }
+
+// finalise() expects per-channel stats; a "total" isn't a channel but has the
+// same shape (leads/conversions/acceptedValuePence/spendPence), so it goes
+// through the same derivation rather than a second copy of the ratio logic.
+const totalsFromStats = (stats) => finalise({ channel: 'total', ...stats }, { allowSpend: true });
 
 export function computePerformance({ leads, accepted, spend, channelMap, accountPractice }) {
     const { acceptedByKey, nameByPractice } = buildAcceptedByKey(accepted);
@@ -66,6 +78,15 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
     const seenGroup = new Map(CHANNELS.map((c) => [c, new Set()]));
     const seenPractice = new Map();    // `${practiceId}|${channel}` -> Set(personKey)
     let excludedUnmappedLeads = 0;
+
+    // Deduped-across-channel totals: keyed on personKey ALONE (no channel), so
+    // a person tagged under two channels (or one mapped + one unassigned
+    // pipeline) is counted once here even though the per-channel rows above
+    // still count them once per channel by design.
+    const seenGroupTotal = new Set();
+    const seenPracticeTotal = new Map(); // practiceId -> Set(personKey)
+    const groupTotal = { leads: 0, conversions: 0, acceptedValuePence: 0 };
+    const practiceTotal = new Map();     // practiceId -> { leads, conversions, acceptedValuePence }
 
     const practiceStats = (practiceId, channel) => {
         if (!byPractice.has(practiceId)) {
@@ -93,6 +114,13 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         groupSeen.add(person);
         practiceSeen.add(person);
 
+        const isNewToGroupTotal = !seenGroupTotal.has(person);
+        if (isNewToGroupTotal) seenGroupTotal.add(person);
+        if (!seenPracticeTotal.has(practiceId)) seenPracticeTotal.set(practiceId, new Set());
+        const practiceTotalSeen = seenPracticeTotal.get(practiceId);
+        const isNewToPracticeTotal = !practiceTotalSeen.has(person);
+        if (isNewToPracticeTotal) practiceTotalSeen.add(person);
+
         const matched = matchAcceptedValue(
             { contacts: lead.contacts, practiceId }, acceptedByKey, nameByPractice,
         );
@@ -107,27 +135,46 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
             p.leads += 1;
             if (matched) { p.conversions += 1; p.acceptedValuePence += matched.valuePence; }
         }
+        if (isNewToGroupTotal) {
+            groupTotal.leads += 1;
+            if (matched) { groupTotal.conversions += 1; groupTotal.acceptedValuePence += matched.valuePence; }
+        }
+        if (isNewToPracticeTotal) {
+            if (!practiceTotal.has(practiceId)) {
+                practiceTotal.set(practiceId, { leads: 0, conversions: 0, acceptedValuePence: 0 });
+            }
+            const pt = practiceTotal.get(practiceId);
+            pt.leads += 1;
+            if (matched) { pt.conversions += 1; pt.acceptedValuePence += matched.valuePence; }
+        }
     }
 
     for (const row of spend || []) {
         if (!AD_CHANNELS.includes(row.provider)) continue;
         const g = group.get(row.provider);
         g.spendPence += row.spend_pence || 0;
-        g._hasSpend = true;
         // Only spend on an ad account that has been mapped to a practice can be
         // attributed below group level.
         if (row.practice_id) {
             const p = practiceStats(row.practice_id, row.provider);
             p.spendPence += row.spend_pence || 0;
-            p._hasSpend = true;
         }
     }
 
     return {
         channels: CHANNELS.map((c) => finalise(group.get(c), { allowSpend: c !== 'unassigned' })),
+        totals: totalsFromStats({
+            ...groupTotal,
+            // 'unassigned' contributes no spend, so only the two ad channels sum.
+            spendPence: group.get('google_ads').spendPence + group.get('meta_ads').spendPence,
+        }),
         byPractice: [...byPractice.entries()].map(([practiceId, chans]) => ({
             practiceId,
             channels: CHANNELS.map((c) => finalise(chans.get(c), { allowSpend: c !== 'unassigned' })),
+            total: totalsFromStats({
+                ...(practiceTotal.get(practiceId) ?? { leads: 0, conversions: 0, acceptedValuePence: 0 }),
+                spendPence: chans.get('google_ads').spendPence + chans.get('meta_ads').spendPence,
+            }),
         })),
         excludedUnmappedLeads,
     };
@@ -205,17 +252,16 @@ export const adAttributionService = {
     },
 
     async getPerformance(orgId, { since, until, practiceId }) {
-        const [channelMap, accounts, leads, accepted, spend] = await Promise.all([
+        const [channelMap, accounts, leads, accepted, spend, practiceOptions] = await Promise.all([
             adChannelPipelineRepository.channelMap(orgId),
             adAttributionRepository.ghlAccounts(orgId),
             adAttributionRepository.leadsInWindow(orgId, since, until),
             adAttributionRepository.acceptedForMatching(orgId, since, until),
             adAttributionRepository.adSpend(orgId, since, until),
+            adAttributionRepository.practiceOptions(orgId),
         ]);
         const accountPractice = new Map(accounts.map((a) => [a.id, a.practice_id]));
-        const practiceName = new Map(
-            (await adAttributionRepository.practiceOptions(orgId)).map((p) => [p.id, p.name]),
-        );
+        const practiceName = new Map(practiceOptions.map((p) => [p.id, p.name]));
         const result = computePerformance({ leads, accepted, spend, channelMap, accountPractice });
         const byPractice = result.byPractice
             .filter((p) => !practiceId || p.practiceId === practiceId)
@@ -224,12 +270,13 @@ export const adAttributionService = {
             channels: practiceId
                 ? (byPractice[0]?.channels ?? CHANNELS.map((c) => finalise(emptyStats(c), { allowSpend: c !== 'unassigned' })))
                 : result.channels,
+            totals: practiceId
+                ? (byPractice[0]?.total ?? totalsFromStats({ leads: 0, conversions: 0, acceptedValuePence: 0, spendPence: 0 }))
+                : result.totals,
             byPractice,
             excludedUnmappedLeads: result.excludedUnmappedLeads,
-            unmappedPipelineCount: [...channelMap.keys()].length === 0
-                ? accounts.reduce((n, a) => n + a.pipelines.length, 0)
-                : accounts.reduce((n, a) => n + a.pipelines.filter(
-                    (p) => !channelMap.has(pipeKey(a.id, p.id))).length, 0),
+            unmappedPipelineCount: accounts.reduce((n, a) => n + a.pipelines.filter(
+                (p) => !channelMap.has(pipeKey(a.id, p.id))).length, 0),
         };
     },
 };
