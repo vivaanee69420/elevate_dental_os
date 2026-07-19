@@ -228,7 +228,8 @@ export async function runDailyWhatsappReports({ now = new Date(), deps = {} } = 
     for (const row of rows) {
         try {
             const result = await send(row.organisationId, { now, trigger: 'cron', settings: row });
-            if (result.sent) sent++;
+            if (result.status === 'failed') failed++;
+            else if (result.sent) sent++;
             else skipped++;
         } catch (err) {
             failed++;

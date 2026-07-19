@@ -42,4 +42,15 @@ describe('runDailyWhatsappReports', () => {
 
         expect(res).toEqual({ sent: 0, skipped: 1, failed: 0 });
     });
+
+    it('counts a failed delivery as failed, not skipped', async () => {
+        const send = vi.fn().mockResolvedValue({ sent: false, status: 'failed', reason: 'webhook 500' });
+        const repo = { listEnabled: vi.fn().mockResolvedValue([
+            { organisationId: 'org-a', webhookUrl: 'https://a.test/h', enabled: true, lastSentAt: null },
+        ]) };
+
+        const res = await runDailyWhatsappReports({ now: NOW, deps: { repo, send } });
+
+        expect(res).toEqual({ sent: 0, skipped: 0, failed: 1 });
+    });
 });
