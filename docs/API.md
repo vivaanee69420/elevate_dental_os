@@ -1291,3 +1291,106 @@ avgPerDayPence, projectedPence, dailyTargetPence, byPractice[] }`.
   non-reporting practice as contributing 0 to the total (the total is a known
   fact even though the individual row is not) — but is `null` itself when no
   practice reported at all this month.
+
+## Ad attribution (`/api/ad-attribution/*`)
+
+Google-vs-Facebook lead performance from an explicit, operator-maintained
+pipeline→channel map (`ad_channel_pipelines`, migration `…000114`), replacing
+name-based channel guessing. All routes gated `requireRole('owner',
+'practice_manager')`. Money is integer **pence**. Maths: `docs/FORMULAS.md`
+§18.
+
+### `GET /api/ad-attribution/config`
+
+Everything the settings screen needs in one round trip: `{ practices,
+subaccounts[], pipelines[], adAccounts[] }`.
+
+- `subaccounts[]` — one per connected GoHighLevel Location: `{ id, label,
+  locationId, status, practiceId, practiceName, pipelineCount, leadCount }`.
+  `practiceId`/`practiceName` are `null` when the subaccount is not mapped to a
+  practice (e.g. the academy/accounting Locations that share an org with
+  dental practices).
+- `pipelines[]` — one row per pipeline across every subaccount: `{ accountId,
+  accountLabel, practiceId, practiceName, pipelineId, pipelineName, channel,
+  leadCount }`. `channel` is `null` when the pipeline has no row in
+  `ad_channel_pipelines` (Unassigned) — there is deliberately no
+  `'unassigned'` value stored; absence of a row **is** the unassigned state.
+- `adAccounts[]` — connected Google/Meta ad accounts: `{ id, provider,
+  customerId, name, practiceId, practiceName }`, `practiceId` `null` when
+  unmapped.
+
+### `PUT /api/ad-attribution/pipelines/:accountId/:pipelineId`
+
+Set (or clear) a pipeline's channel. Body `{ channel: 'google_ads' |
+'meta_ads' | null }` — `null` deletes the mapping row, returning the pipeline
+to Unassigned. `500` (a plain `Error`, not a status-coded `AppError`) if
+`:accountId` is not a GHL subaccount belonging to the caller's organisation.
+
+### `PATCH /api/ad-attribution/subaccounts/:id`
+
+Map a GHL subaccount to a practice. Body `{ practice_id: <uuid> | null }`.
+Delegates to the existing `integration_accounts` update path (not a direct
+write), so the one-subaccount-per-practice unique index stays enforced in one
+place.
+
+### `PATCH /api/ad-attribution/ad-accounts/:id`
+
+Map a Google/Meta ad account to a practice. Body `{ practice_id: <uuid> |
+null }`.
+
+### `GET /api/ad-attribution/performance?since&until&practice_id`
+
+The channel scorecard. `practice_id` omitted (or the shared ScopePeriod's
+`scope=all`) returns the group view; a UUID scopes every block below to that
+one practice.
+
+```
+{ channels[], totals, byPractice[], trend[], excludedUnmappedLeads,
+  unmappedPipelineCount }
+```
+
+- `channels[]` — one row per `google_ads` | `meta_ads` | `unassigned`: `{
+  channel, leads, conversions, acceptedValuePence, spendPence,
+  costPerLeadPence, costPerAcquisitionPence, conversionRate }`. **`leads`
+  counts people** (`contact_id`, or the lead id when absent), not pipeline
+  rows — one person sitting in two pipelines of the same channel is one lead.
+  `spendPence` and everything derived from it is `null` — never `£0` — for
+  `unassigned` (no spend feed exists) and for any channel whose spend for the
+  window accumulated to exactly `0` (indistinguishable, on the wire, from "no
+  feed connected"; see FORMULAS §18).
+- `totals` — the group's (or the scoped practice's) reach **deduped per person
+  across all three channels**, plus `paidLeads`/`paidConversions` (the same
+  dedup restricted to `google_ads`+`meta_ads`). Summing `channels[]`'
+  `leads`/`conversions` overstates this figure whenever a person is tagged
+  under two channels; `totals` is the correct one to show as "total leads".
+  `totals.costPerLeadPence`/`costPerAcquisitionPence` divide by `paidLeads`/
+  `paidConversions`, NOT by `totals.leads`/`totals.conversions` — an
+  `unassigned` lead cost nothing to acquire. `totals.conversionRate` is the
+  one exception: it deliberately uses `totals.conversions / totals.leads`
+  (all-channel), since it is a funnel rate over everyone attracted, not a
+  paid-media cost metric. Both cost metrics on `totals` are forced `null` if
+  either paid channel has leads but no accumulated spend — a reporting
+  channel's spend must never be charged against a non-reporting channel's
+  leads. See FORMULAS §18 for a fully worked example.
+- `byPractice[]` — `{ practiceId, practiceName, channels[], total, trend[] }`,
+  same shapes as above, scoped to that practice. Only practices with at least
+  one mapped subaccount lead appear.
+- `trend[]` — monthly series (`{ month, channels[] }`), `google_ads`/
+  `meta_ads` only. **Dedupes per person per MONTH**, not per person across the
+  whole window like `channels[]`/`totals` — a person enquiring in two
+  different months is one lead in the scorecard but two across `trend[]`. The
+  months are therefore deliberately not additive back to the scorecard totals.
+- `excludedUnmappedLeads` — count of leads on a GHL subaccount with no
+  practice mapping; excluded from every block above rather than folded into
+  the group.
+- `unmappedPipelineCount` — how many pipelines across all subaccounts have no
+  row in `ad_channel_pipelines` (Unassigned), for a settings-page nudge.
+
+### `GET /api/ad-attribution/leads?since&until&channel&practice_id&limit`
+
+The people behind a number, in the shared `LeadsTable` shape: `{ leads: [{ id,
+contactId, name, email, phone, channel, pipelineName, createdAt, converted,
+matchedTreatmentName, matchedValuePence }] }`. One row per person (same
+`contact_id`-or-lead-id dedup as the scorecard); a lead on an unmapped
+subaccount is excluded. `channel` filters to one of `google_ads` | `meta_ads`
+| `unassigned`; omitted returns all three. `limit` defaults 500.

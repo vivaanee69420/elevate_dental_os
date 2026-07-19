@@ -835,6 +835,151 @@ exists, replace the assumed margin with the real one.
 
 ---
 
+## 18. Ad channel attribution — pipeline→channel map (`/ad-performance`)
+
+Source: `backend/src/services/ad-attribution.service.js` (`computePerformance`,
+`finalise`, `totalsFromStats`); tested in `backend/test/ad-attribution.service.test.mjs`.
+Surfaced via `GET /api/ad-attribution/performance` and `GET
+/api/ad-attribution/leads` (see `docs/API.md`). Money is integer pence
+throughout.
+
+**Channel is explicit, never inferred.** A lead's channel comes from
+`ad_channel_pipelines` — an operator-maintained map of `(integration_account_id,
+ghl_pipeline_id) -> 'google_ads' | 'meta_ads'`. There is no name-based
+inference (the predecessor `classifyChannel` regex is not used here). A
+pipeline with no row in the map is `unassigned` and is reported as its own
+channel bucket, not hidden and not folded into either paid channel.
+
+**Practice comes from the GHL subaccount**, via `integration_accounts.practice_id`.
+A subaccount mapped to no practice (the academy/accounting Locations that
+share an org with dental practices) is excluded from every practice-scoped
+figure; its leads are counted only in `excludedUnmappedLeads`.
+
+**Leads are counted per PERSON**, not per pipeline row: `contact_id`, falling
+back to the lead id when a contact is absent. One person sitting in two
+pipelines of the *same* channel is one lead, not two. This dedup is scoped —
+see below — so the same person can legitimately appear once per channel, once
+per practice, and once in the deduped totals, all at the same time.
+
+A lead is a **conversion** when it matches a row in `treatment_accepted`, by
+phone, then email, then practice-scoped name (`lib/lead-emergent-match.js`).
+
+### Per-channel figures (`channels[]`, and each practice's `byPractice[].channels[]`)
+
+    costPerLeadPence        = round(spendPence / leads)
+    costPerAcquisitionPence = round(spendPence / conversions)
+    conversionRate          = conversions / leads
+
+Each of these three is **null when its own denominator is zero** — never zero,
+never `Infinity`. `spendPence` itself is null (not `0`) for the `unassigned`
+channel (it has no ad spend feed at all) and for a channel whose **accumulated**
+spend for the window is exactly `0`. The second case matters because
+`ad_metrics.spend_pence` is `NOT NULL DEFAULT 0`: a day the sync recorded with
+genuinely no activity looks identical, on the wire, to a channel with no feed
+connected at all. Rendering either as a confident `£0.00` — and a `£0.00` cost
+per lead alongside it — would read as "these leads cost nothing", so both
+collapse to the same `null` → "Not reporting". A **negative** accumulated total
+(credits/refund adjustments) is real, known spend and is NOT treated as
+"no feed" — only exactly `0` is.
+
+### Group and per-practice totals (`totals`, and each `byPractice[].total`)
+
+`totals` exists because summing the three per-channel lead counts overstates
+true reach: a person who enquired through a Google-tagged pipeline **and** a
+Facebook-tagged pipeline is counted once under `google_ads` and once under
+`meta_ads` above — correct for comparing channels side by side — but is one
+person, not two. `totals.leads` / `totals.conversions` / `totals.acceptedValuePence`
+dedupe per person across **all three** channels (including `unassigned`), so
+they are the true group (or practice) reach and cannot be derived by adding
+the three channel rows together.
+
+The cost metrics on `totals` do **not** divide by `totals.leads` /
+`totals.conversions`. They divide by `paidLeads` / `paidConversions` — the same
+per-person dedup, but scoped to only `google_ads` + `meta_ads` — because a
+person seen solely via an `unassigned` pipeline has no spend behind them at
+all, and `unassigned` leads inflating the denominator would understate true
+cost per lead. `paidLeads` and `paidConversions` are returned alongside the
+totals block so the arithmetic reconciles visibly (`spendPence / paidLeads` on
+screen should visibly equal `costPerLeadPence`, not look like a rounding
+mismatch).
+
+    totals.spendPence            = raw accumulated google_ads spend + raw accumulated meta_ads spend
+                                    (summed BEFORE the null-if-zero rule above is applied to the total
+                                     itself — so the total is only null if the SUM is exactly 0)
+    totals.costPerLeadPence       = round(totals.spendPence / paidLeads)
+    totals.costPerAcquisitionPence = round(totals.spendPence / paidConversions)
+    totals.conversionRate         = totals.conversions / totals.leads     -- NOTE: all-channel denominator
+
+`totals.conversionRate` is the one figure on this row that deliberately keeps
+the all-channel denominator rather than the paid one. It answers "of everyone
+who enquired, what share went on to accept treatment" — a funnel rate over the
+whole intake, not a paid-media efficiency number — so it is expected to use a
+different population from the two cost metrics beside it. This is not an
+inconsistency; the two families of metric answer different questions.
+
+**Incomplete-spend guard.** If either `google_ads` or `meta_ads` has leads in
+the window but its own accumulated spend is exactly `0` (that channel's feed is
+not reporting, per the null-vs-zero rule above), `totals.costPerLeadPence` and
+`totals.costPerAcquisitionPence` are forced `null`, even though the *other*
+channel's spend is known and non-zero. Without this guard, one channel's real
+spend would be charged against leads that channel never paid to acquire —
+understating cost per lead in exactly the way the per-person dedup above
+already fixes for lead counts, just triggered by a missing spend feed instead
+of a double-counted lead.
+
+### Worked example (self-computed, all figures in pence unless stated)
+
+Window with two overlap people — one counted under both `google_ads` and
+`meta_ads`, having converted; one uncounted overlap seen under both channels
+but not converted:
+
+- `google_ads`: 12 leads, 3 conversions, spend £600.00 = 60,000p
+- `meta_ads`: 8 leads, 2 conversions, spend £200.00 = 20,000p
+- `unassigned`: 5 leads, 1 conversion, spend `null` (no feed)
+
+Per-channel figures use only their own numbers, e.g. `google_ads` cost per lead
+`= round(60,000 / 12) = 5,000p = £50.00`.
+
+Two people appear in both `google_ads` and `meta_ads` pipelines; one of them
+converted. Deduping across all three channels removes 2 from the raw lead sum
+and 1 from the raw conversion sum (the other channels have no overlap with
+each other or with `unassigned` in this example):
+
+    totals.leads        = (12 + 8 + 5) - 2 = 23
+    totals.conversions  = (3 + 2 + 1) - 1  = 5
+    paidLeads           = (12 + 8) - 2     = 18   (dedup within google_ads+meta_ads only)
+    paidConversions     = (3 + 2) - 1      = 4    (unassigned's conversion is excluded, not overlapping)
+
+    totals.spendPence             = 60,000 + 20,000 = 80,000p (= £800.00)
+    totals.costPerLeadPence       = round(80,000 / 18) = round(4,444.44…) = 4,444p (= £44.44)
+    totals.costPerAcquisitionPence = round(80,000 / 4)  = 20,000p (= £200.00 exactly)
+    totals.conversionRate         = 5 / 23 = 0.217391… (≈ 21.74%, all-channel denominator)
+
+Both paid channels have non-zero accumulated spend and both have leads, so the
+incomplete-spend guard does not fire here; if `meta_ads` spend had accumulated
+to exactly `0` instead, `totals.costPerLeadPence` and
+`totals.costPerAcquisitionPence` would both be `null` despite `google_ads`'
+known £600.00.
+
+### Monthly trend (`trend[]`, and each `byPractice[].trend[]`)
+
+Bucketed by calendar month (`YYYY-MM`, from `created_at`), **paid channels
+only** (`unassigned` has no spend feed, so a cost-per-lead trend line for it
+would be meaningless). Each month goes through the same per-channel `finalise`
+above.
+
+**The trend dedupes per person *per month*, not per person across the whole
+window** — the same dedup scope the scorecard's per-channel rows use, just
+re-run independently inside each month's bucket. A person who enquired in June
+and again in July is **one lead** in the scorecard's `channels[]` (window-wide
+dedup) but **two** leads across `trend[]` (one in June's bucket, one in July's)
+— the trend months are therefore deliberately **not additive** to the
+scorecard total; summing every month in `trend[]` will not reconcile to
+`channels[].leads` when any person spans a month boundary. `byPractice[].trend`
+is the same series scoped to that one practice.
+
+---
+
 ## Revenue Leakage — `calculateRevenueLeakage(input, rates)`
 
 "Money left on the table" over a window. Five recoverable pools, integer pence
