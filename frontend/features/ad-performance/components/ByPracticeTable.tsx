@@ -9,7 +9,9 @@
 // once under EACH channel (correct for comparison), so summing inflates leads
 // and revenue. `total` is the true, non-additive figure.
 import { formatPence } from '@/lib/format';
-import { Card } from '@/components/ui';
+import { SectionCard, SecHead } from '@/components/ui';
+import { money } from '../format';
+import { PracticeSparkline } from './PracticeSparkline';
 import type { PracticeChannels, PerfChannel } from '../api';
 
 const LABEL: Record<PerfChannel, string> = {
@@ -18,16 +20,16 @@ const LABEL: Record<PerfChannel, string> = {
   unassigned: 'Unassigned',
 };
 
-// Load-bearing null guard — formatPence() must never be called directly on a
-// nullable pence value anywhere in this file.
-const money = (p: number | null) => (p === null ? 'Not reporting' : formatPence(p));
-
 export function ByPracticeTable({ rows }: { rows: PracticeChannels[] }) {
   return (
-    <Card>
-      <h2 className="mb-2 text-[15px] font-semibold text-slate-900">By practice</h2>
+    <SectionCard>
+      <SecHead
+        n={4}
+        title="By practice"
+        desc="The same metrics split by practice, with each practice's deduped total on its own row. The trend column is lead volume month by month."
+      />
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] border-collapse text-[13px]">
+        <table className="w-full min-w-[860px] border-collapse text-[13px]">
           <thead>
             <tr className="border-b border-slate-200 text-left text-slate-500">
               <th className="py-2 pr-3 font-medium">Practice</th>
@@ -37,6 +39,7 @@ export function ByPracticeTable({ rows }: { rows: PracticeChannels[] }) {
               <th className="py-2 pr-3 text-right font-medium">Cost per lead</th>
               <th className="py-2 pr-3 text-right font-medium">Conversions</th>
               <th className="py-2 pr-3 text-right font-medium">Accepted value</th>
+              <th className="py-2 pr-3 font-medium">Trend</th>
             </tr>
           </thead>
           <tbody>
@@ -50,6 +53,7 @@ export function ByPracticeTable({ rows }: { rows: PracticeChannels[] }) {
                   <td className="py-2 pr-3 text-right text-slate-600">{money(c.costPerLeadPence)}</td>
                   <td className="py-2 pr-3 text-right text-slate-600">{c.conversions.toLocaleString('en-GB')}</td>
                   <td className="py-2 pr-3 text-right text-slate-600">{formatPence(c.acceptedValuePence)}</td>
+                  <td className="py-2 pr-3"></td>
                 </tr>
               )),
               <tr key={`${p.practiceId}|total`} className="border-b border-slate-200 bg-slate-50 font-medium">
@@ -60,6 +64,7 @@ export function ByPracticeTable({ rows }: { rows: PracticeChannels[] }) {
                 <td className="py-2 pr-3 text-right text-slate-900">{money(p.total.costPerLeadPence)}</td>
                 <td className="py-2 pr-3 text-right text-slate-900">{p.total.conversions.toLocaleString('en-GB')}</td>
                 <td className="py-2 pr-3 text-right text-slate-900">{formatPence(p.total.acceptedValuePence)}</td>
+                <td className="py-2 pr-3"><PracticeSparkline trend={p.trend} /></td>
               </tr>,
             ])}
           </tbody>
@@ -73,6 +78,6 @@ export function ByPracticeTable({ rows }: { rows: PracticeChannels[] }) {
           true lead count.
         </p>
       ) : null}
-    </Card>
+    </SectionCard>
   );
 }
