@@ -210,3 +210,31 @@ export const dailyReportService = {
         };
     },
 };
+
+/**
+ * Cron entry point. One organisation failing must never stop the rest, so
+ * every send is individually caught — this mirrors the isolation in
+ * gohighlevel-sync's syncAllOrgs.
+ */
+export async function runDailyWhatsappReports({ now = new Date(), deps = {} } = {}) {
+    const repo = deps.repo ?? whatsappReportRepository;
+    const send = deps.send ?? ((orgId, opts) => dailyReportService.send(orgId, opts));
+
+    const rows = await repo.listEnabled();
+    let sent = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+        try {
+            const result = await send(row.organisationId, { now, trigger: 'cron', settings: row });
+            if (result.sent) sent++;
+            else skipped++;
+        } catch (err) {
+            failed++;
+            console.error(`[worker] daily whatsapp report failed for org ${row.organisationId}`, err);
+        }
+    }
+
+    return { sent, skipped, failed };
+}
