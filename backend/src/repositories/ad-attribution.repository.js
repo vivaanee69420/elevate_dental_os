@@ -53,6 +53,28 @@ export const adAttributionRepository = {
         return (data ?? []).map((p) => ({ id: p.id, name: p.name }));
     },
 
+    // Emergent businesses and the practice each is mapped to. Read here rather
+    // than through emergent-practice-map.repository.js so this feature's reads
+    // stay in one repository; the alternative couples two features'
+    // repositories together for a single query.
+    //
+    // practice_id null is legitimate and means "intentionally unmapped" — it is
+    // kept in the result, not filtered out, because the whole point of the
+    // mapping-health endpoint is to show what is unmapped.
+    async emergentBusinesses(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('emergent_practice_map')
+            .select('business_id, business_name, practice_id')
+            .eq('organisation_id', orgId)
+            .order('business_name', { ascending: true });
+        if (error) throw new Error(error.message);
+        return (data ?? []).map((r) => ({
+            businessId: r.business_id,
+            businessName: r.business_name ?? null,
+            practiceId: r.practice_id ?? null,
+        }));
+    },
+
     async adAccounts(orgId) {
         const { data, error } = await supabase_1.serviceClient
             .from('ad_accounts')

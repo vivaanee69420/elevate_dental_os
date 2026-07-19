@@ -28,6 +28,7 @@ describe('every ad-attribution read pins organisation_id', () => {
     ['adSpend', () => adAttributionRepository.adSpend(ORG_A, '2026-07-01', '2026-08-01')],
     ['acceptedForMatching', () => adAttributionRepository.acceptedForMatching(ORG_A, '2026-07-01', '2026-08-01')],
     ['leadsInWindow', () => adAttributionRepository.leadsInWindow(ORG_A, '2026-07-01', '2026-08-01')],
+    ['emergentBusinesses', () => adAttributionRepository.emergentBusinesses(ORG_A)],
   ];
 
   for (const [name, run] of reads) {
