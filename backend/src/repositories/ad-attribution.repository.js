@@ -129,6 +129,32 @@ export const adAttributionRepository = {
         return counts;
     },
 
+    // Feed health per ad account — when each account's metric feed last delivered.
+    //
+    // Aggregated in SQL (migration 000116) rather than paged: ad_metrics is
+    // campaign x day grain, so computing a handful of maxima in JS would mean
+    // reading the whole table (10,675 rows today and growing daily) on every
+    // call. Same reasoning as leadCountsByPipeline.
+    //
+    // p_org is applied inside the function, so this stays org-scoped without an
+    // explicit .eq() — the tenant guard moves into the RPC rather than
+    // disappearing.
+    async adAccountFeedHealth(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('ad_account_feed_health', { p_org: orgId });
+        if (error) throw new Error(error.message);
+        const byAccount = new Map();
+        for (const r of data ?? []) {
+            byAccount.set(`${r.provider}|${r.customer_id}`, {
+                lastMetricDate: r.last_metric_date ?? null,
+                daysStale: r.days_stale === null || r.days_stale === undefined ? null : Number(r.days_stale),
+                metricRows: Number(r.metric_rows) || 0,
+                spendPence: Number(r.spend_pence) || 0,
+            });
+        }
+        return byAccount;
+    },
+
     async acceptedForMatching(orgId, since, until) {
         return fetchAllPages(() => supabase_1.serviceClient
             .from('treatment_accepted')

@@ -79,3 +79,18 @@ describe('leadCountsByPipeline pins the org through the RPC argument', () => {
     expect(supaRec.rpcCalls.some((c) => c.params?.p_org === ORG_B)).toBe(false);
   });
 });
+
+// adAccountFeedHealth aggregates in SQL (migration 000116), same reasoning as
+// leadCountsByPipeline above — its tenant guard is the RPC's p_org argument.
+describe('adAccountFeedHealth pins the org through the RPC argument', () => {
+  it('passes the caller org as p_org and never a foreign org', async () => {
+    supaRec.rpcCalls = [];
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    await adAttributionRepository.adAccountFeedHealth(ORG_A);
+    expect(supaRec.rpcCalls).toContainEqual({
+      fn: 'ad_account_feed_health',
+      params: { p_org: ORG_A },
+    });
+    expect(supaRec.rpcCalls.some((c) => c.params?.p_org === ORG_B)).toBe(false);
+  });
+});

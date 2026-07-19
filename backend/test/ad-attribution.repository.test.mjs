@@ -173,6 +173,71 @@ describe('leadCountsByPipeline', () => {
   });
 });
 
+// Aggregated in SQL via the ad_account_feed_health RPC (migration 000116).
+// See the migration's WHY header for the incident this closes (a mapped
+// account whose feed died silently). What is left to test here is the org
+// guard, the composite key, and the numeric coercions.
+describe('adAccountFeedHealth', () => {
+  it('calls the RPC with the caller org — the tenant guard on this path', async () => {
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    await adAttributionRepository.adAccountFeedHealth(ORG);
+    expect(supaRec.rpcCalls).toContainEqual({
+      fn: 'ad_account_feed_health',
+      params: { p_org: ORG },
+    });
+  });
+
+  it('keys the map on provider|customerId, keeping providers apart', async () => {
+    supaRec.rpcProvider = () => ({
+      data: [
+        {
+          provider: 'google_ads', customer_id: '123', last_metric_date: '2026-07-10',
+          days_stale: 2, metric_rows: 40, spend_pence: 12345,
+        },
+        {
+          provider: 'meta_ads', customer_id: '123', last_metric_date: '2025-12-17',
+          days_stale: 214, metric_rows: 900, spend_pence: 0,
+        },
+      ],
+      error: null,
+    });
+    const health = await adAttributionRepository.adAccountFeedHealth(ORG);
+    expect(health.get('google_ads|123')).toEqual({
+      lastMetricDate: '2026-07-10', daysStale: 2, metricRows: 40, spendPence: 12345,
+    });
+    expect(health.get('meta_ads|123')).toEqual({
+      lastMetricDate: '2025-12-17', daysStale: 214, metricRows: 900, spendPence: 0,
+    });
+    expect(health.size).toBe(2);
+  });
+
+  it('coerces bigint/date-string fields returned as strings', async () => {
+    supaRec.rpcProvider = () => ({
+      data: [{
+        provider: 'google_ads', customer_id: '123', last_metric_date: '2026-07-10',
+        days_stale: '2', metric_rows: '1122', spend_pence: '99999',
+      }],
+      error: null,
+    });
+    const health = await adAttributionRepository.adAccountFeedHealth(ORG);
+    const row = health.get('google_ads|123');
+    expect(row.daysStale).toBe(2);
+    expect(row.metricRows).toBe(1122);
+    expect(row.spendPence).toBe(99999);
+  });
+
+  it('returns an empty Map when the RPC returns no rows', async () => {
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    const health = await adAttributionRepository.adAccountFeedHealth(ORG);
+    expect(health.size).toBe(0);
+  });
+
+  it('throws when the RPC errors rather than reporting every account as healthy', async () => {
+    supaRec.rpcProvider = () => ({ data: null, error: { message: 'boom' } });
+    await expect(adAttributionRepository.adAccountFeedHealth(ORG)).rejects.toThrow('boom');
+  });
+});
+
 describe('emergentBusinesses', () => {
   it('scopes by org and maps to camelCase', async () => {
     supaRec.resultProvider = () => ({
