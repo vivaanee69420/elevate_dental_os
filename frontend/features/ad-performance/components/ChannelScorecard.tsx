@@ -80,7 +80,7 @@ export function ChannelScorecard({
               <Explainer
                 what="People who enquired through both a Google-tagged and a Facebook-tagged pipeline. They are why the channel columns do not sum to the total."
                 how="Lead rows grouped by contact, keeping anyone who appears under more than one channel."
-                now="A lower bound: leads with no contact record cannot be matched across channels, so the true figure may be higher."
+                now="A lower bound: leads with no contact record cannot be matched across channels, and detecting an overlap needs both of a person's channel rows to have survived the leads list cap — so the true figure may be higher."
               />
             )}
           />

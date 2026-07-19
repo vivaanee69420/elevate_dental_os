@@ -10,13 +10,7 @@ import { formatPence } from '@/lib/format';
 import { SectionCard, SecHead, Kpi, Explainer } from '@/components/ui';
 import { matchStats } from '../derive';
 import { pct, count } from '../format';
-import type { AdLeadLine } from '../api';
-
-// Must match the default `limit` fetchAdLeads (../api) sends the API when
-// the caller doesn't specify one. When the lead list comes back at this cap,
-// it may have been truncated, so match-value figures derived from it can be
-// understated (and the "no lead" figure correspondingly overstated).
-const LEAD_LIMIT = 500;
+import { LEAD_FETCH_LIMIT, type AdLeadLine } from '../api';
 
 export function AttributionSection({
   lines,
@@ -28,10 +22,11 @@ export function AttributionSection({
   loading: boolean;
 }) {
   const st = matchStats(lines);
-  const capped = lines.length >= LEAD_LIMIT;
+  const capped = lines.length >= LEAD_FETCH_LIMIT;
   // Accepted value the group recorded that no tracked lead accounts for.
-  // Clamped at zero: the lead list is capped at 500 rows, so on a large window
-  // the matched sum can legitimately exceed nothing but never go negative.
+  // Clamped at zero: the lead list is capped at LEAD_FETCH_LIMIT rows, so on a
+  // large window the matched sum can legitimately fall short of the group
+  // total, but a rounding/timing quirk should never push it negative.
   const unmatchedPence = Math.max(0, totalAcceptedPence - st.matchedValuePence);
 
   return (
@@ -83,7 +78,7 @@ export function AttributionSection({
             label="Accepted value with no lead"
             value={formatPence(unmatchedPence)}
             valueMuted={unmatchedPence === 0}
-            note={capped ? 'Upper bound — only the most recent 500 leads were matched.' : undefined}
+            note={capped ? `Upper bound — the leads list was truncated to an arbitrary sample of ${count(LEAD_FETCH_LIMIT)}.` : undefined}
             info={(
               <Explainer
                 what="Treatment accepted in this window that no tracked lead accounts for."
@@ -93,7 +88,7 @@ export function AttributionSection({
                     ? 'Everything traced back to a lead.'
                     : `${formatPence(unmatchedPence)} untraced.`) +
                   (capped
-                    ? ' Only the most recent 500 leads were checked, so some of this value may in fact belong to leads that were not loaded.'
+                    ? ` The leads list was truncated to an arbitrary sample of ${count(LEAD_FETCH_LIMIT)}, so this figure is an upper bound — some of this value may in fact belong to leads that were not loaded.`
                     : '')
                 }
               />
