@@ -1,16 +1,68 @@
 'use client';
 // Ad performance — Google vs Facebook, measured against explicitly mapped
-// pipelines. Uses the shared ScopePeriod window and practice scope so it
-// agrees with every other analytics screen.
+// pipelines, in the Daily Cockpit's section language. Uses the shared
+// ScopePeriod window and practice scope so it agrees with every other
+// analytics screen.
+//
+// ONE leads request serves every drill-down: useAdLeads is called without a
+// channel filter and each panel filters the result in memory. Do not add a
+// per-channel fetch — it would fire a request per tile and let the panels
+// disagree with one another.
 import { useMemo, useState } from 'react';
-import { PageHeader } from '@/components/ui';
+import { PageHeader, SectionCard, SecHead, DetailPanel } from '@/components/ui';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { useAdPerformance, useAdLeads } from '../hooks';
-import { ChannelScorecard } from './ChannelScorecard';
+import { ChannelScorecard, type ScorecardDrill } from './ChannelScorecard';
 import { ByPracticeTable } from './ByPracticeTable';
 import { ChannelTrend } from './ChannelTrend';
 import { AdLeadsDrilldown } from './AdLeadsDrilldown';
-import type { PerfChannel } from '../api';
+import { AttributionSection } from './AttributionSection';
+import { OverlapTable } from './OverlapTable';
+import { distinctPeople, overlapPeople } from '../derive';
+import { count } from '../format';
+import type { AdLeadLine } from '../api';
+
+const PANEL_TITLE: Record<ScorecardDrill, string> = {
+  leads: 'Every lead',
+  paidLeads: 'Paid leads',
+  conversions: 'Leads that converted',
+  acceptedValue: 'Leads with accepted treatment',
+  overlap: 'People counted under more than one channel',
+  google_ads: 'Google Ads leads',
+  meta_ads: 'Facebook Ads leads',
+  unassigned: 'Unassigned leads',
+};
+
+const PANEL_SUB: Record<ScorecardDrill, string> = {
+  leads: 'One row per person, most recent first.',
+  paidLeads: 'People who came in through a Google-tagged or Facebook-tagged pipeline.',
+  conversions: 'People who went on to accept a treatment.',
+  acceptedValue: 'Highest accepted value first.',
+  overlap: 'These people are why the channel columns do not add up to the group total. This is a lower bound — leads with no contact record cannot be matched across channels.',
+  google_ads: 'People on pipelines mapped to Google Ads.',
+  meta_ads: 'People on pipelines mapped to Facebook Ads.',
+  unassigned: 'People on pipelines with no channel set.',
+};
+
+// Which rows a given drill-down shows. Every branch works off the same fetched
+// list so the panels can never disagree with one another.
+function rowsFor(drill: ScorecardDrill, lines: AdLeadLine[]): AdLeadLine[] {
+  switch (drill) {
+    case 'leads':
+      return distinctPeople(lines);
+    case 'paidLeads':
+      return distinctPeople(lines.filter((l) => l.channel !== 'unassigned'));
+    case 'conversions':
+      return distinctPeople(lines.filter((l) => l.converted));
+    case 'acceptedValue':
+      return distinctPeople(lines.filter((l) => l.matchedValuePence > 0))
+        .sort((a, b) => b.matchedValuePence - a.matchedValuePence);
+    case 'overlap':
+      return [];
+    default:
+      return lines.filter((l) => l.channel === drill);
+  }
+}
 
 export default function AdPerformanceScreen() {
   const sp = useScopePeriod();
@@ -21,8 +73,13 @@ export default function AdPerformanceScreen() {
   );
 
   const { data, isLoading, error } = useAdPerformance(params);
-  const [drill, setDrill] = useState<PerfChannel | null>(null);
-  const leads = useAdLeads(drill !== null, { ...params, channel: drill ?? undefined });
+  const [drill, setDrill] = useState<ScorecardDrill | null>(null);
+
+  // Fetched for the attribution section as well as the drill-downs, so it is
+  // enabled unconditionally once the page has data rather than on drill.
+  const leads = useAdLeads(Boolean(data), params);
+  const lines = useMemo(() => leads.data?.leads ?? [], [leads.data]);
+  const overlap = useMemo(() => overlapPeople(lines), [lines]);
 
   if (isLoading) return <p className="p-6 text-sm text-slate-500">Loading…</p>;
   if (error || !data) return <p className="p-6 text-sm text-slate-500">Could not load ad performance.</p>;
@@ -33,6 +90,7 @@ export default function AdPerformanceScreen() {
   // but would send them to redo work that's already done if conflated).
   const nothingMapped = noPaidLeads && data.unmappedPipelineCount > 0;
   const mappedButQuiet = noPaidLeads && data.unmappedPipelineCount === 0;
+  const hasMappingGap = data.unmappedPipelineCount > 0 || data.excludedUnmappedLeads > 0;
 
   return (
     <div className="space-y-4">
@@ -55,29 +113,67 @@ export default function AdPerformanceScreen() {
         </div>
       ) : null}
 
-      <ChannelScorecard channels={data.channels} totals={data.totals} onDrill={(c) => setDrill(c === drill ? null : c)} />
+      <ChannelScorecard
+        channels={data.channels}
+        totals={data.totals}
+        overlapCount={overlap.length}
+        drill={drill}
+        onDrill={(d) => setDrill(d === drill ? null : d)}
+      />
 
       {drill !== null ? (
-        <div className="rounded border border-slate-200 p-3">
+        <DetailPanel title={PANEL_TITLE[drill]} sub={PANEL_SUB[drill]}>
           {leads.isLoading ? (
             <p className="text-sm text-slate-500">Loading leads…</p>
+          ) : drill === 'overlap' ? (
+            <OverlapTable people={overlap} />
           ) : (
-            <AdLeadsDrilldown lines={leads.data?.leads ?? []} />
+            <AdLeadsDrilldown lines={rowsFor(drill, lines)} />
           )}
-        </div>
+        </DetailPanel>
       ) : null}
+
+      <AttributionSection
+        lines={lines}
+        totalAcceptedPence={data.totals.acceptedValuePence}
+        loading={leads.isLoading}
+      />
 
       <ByPracticeTable rows={data.byPractice} />
 
       <ChannelTrend trend={data.trend} />
 
-      {data.unmappedPipelineCount > 0 || data.excludedUnmappedLeads > 0 ? (
-        <p className="text-[12px] text-slate-500">
-          {data.unmappedPipelineCount} pipeline(s) have no channel set.{' '}
-          {data.excludedUnmappedLeads.toLocaleString('en-GB')} lead(s) are on subaccounts not
-          connected to a practice and are excluded.{' '}
-          <a className="underline" href="/settings/ad-attribution">Review ad attribution</a>.
-        </p>
+      {hasMappingGap ? (
+        <SectionCard>
+          <SecHead
+            n={6}
+            title="Mapping health"
+            desc="What is missing from the figures above, and why."
+            tone="ok"
+          />
+          <ul className="ml-4 list-disc text-[13px] text-slate-700">
+            {data.unmappedPipelineCount > 0 ? (
+              <li className="py-1">
+                <strong>{count(data.unmappedPipelineCount)} pipeline(s) have no channel set.</strong>{' '}
+                Their leads appear under Unassigned and no advertising spend can be attributed
+                to them, so they pull the group conversion rate down without contributing to
+                cost per lead.
+              </li>
+            ) : null}
+            {data.excludedUnmappedLeads > 0 ? (
+              <li className="py-1">
+                <strong>{count(data.excludedUnmappedLeads)} lead(s) are excluded entirely.</strong>{' '}
+                They sit on GoHighLevel subaccounts that are not connected to a practice, so
+                they cannot be attributed to anywhere and are left out of every figure on this
+                page rather than being counted against the wrong practice.
+              </li>
+            ) : null}
+          </ul>
+          <p className="mt-2 text-[12px] text-slate-500">
+            <a className="underline" href="/settings/ad-attribution">Review ad attribution</a> to
+            close these gaps.
+          </p>
+        </SectionCard>
       ) : null}
     </div>
   );
