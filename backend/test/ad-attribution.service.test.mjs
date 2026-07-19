@@ -298,6 +298,42 @@ describe('computePerformance', () => {
     });
   });
 
+  describe('computePerformance trend', () => {
+    const accountPractice = new Map([['acc1', 'p1']]);
+    const channelMap = new Map([['acc1|g', 'google_ads']]);
+
+    it('buckets leads and spend by month and dedupes per person within a month', () => {
+      const leads = [
+        { id: 'l1', contact_id: 'c1', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-06-10T09:00:00Z', contacts: {} },
+        { id: 'l2', contact_id: 'c1', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-06-20T09:00:00Z', contacts: {} },
+        { id: 'l3', contact_id: 'c2', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-05T09:00:00Z', contacts: {} },
+      ];
+      const spend = [
+        { provider: 'google_ads', practice_id: 'p1', spend_pence: 60000, metric_date: '2026-06-15' },
+        { provider: 'google_ads', practice_id: 'p1', spend_pence: 20000, metric_date: '2026-07-02' },
+      ];
+      const out = computePerformance({
+        leads, accepted: [], spend, channelMap, accountPractice,
+      });
+      expect(out.trend.map((t) => t.month)).toEqual(['2026-06', '2026-07']);
+      const june = out.trend[0].channels.find((c) => c.channel === 'google_ads');
+      // c1 appears twice in June — one person, one lead.
+      expect(june.leads).toBe(1);
+      expect(june.costPerLeadPence).toBe(60000);
+    });
+
+    it('reports a month with spend but no leads as an unknown cost per lead', () => {
+      const spend = [{ provider: 'google_ads', practice_id: 'p1', spend_pence: 50000, metric_date: '2026-06-15' }];
+      const out = computePerformance({
+        leads: [], accepted: [], spend, channelMap, accountPractice,
+      });
+      const june = out.trend[0].channels.find((c) => c.channel === 'google_ads');
+      expect(june.leads).toBe(0);
+      // Spending with nothing to show for it must not render as a £0 cost per lead.
+      expect(june.costPerLeadPence).toBeNull();
+    });
+  });
+
   describe('group-vs-practice dedupe asymmetry', () => {
     it('counts a person once at the group level AND once at each of two different practices', () => {
       // This is the subtlest line in the file: isNewToPractice must be

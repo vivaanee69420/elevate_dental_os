@@ -52,10 +52,16 @@ export interface PracticeChannels {
   total: AdTotals;
 }
 
+export interface TrendMonth {
+  month: string;            // 'YYYY-MM'
+  channels: ChannelStats[]; // google_ads and meta_ads only
+}
+
 export interface AdPerformance {
   channels: ChannelStats[];
   totals: AdTotals;
   byPractice: PracticeChannels[];
+  trend: TrendMonth[];
   /** Leads on a GHL subaccount with no practice mapped — deliberately excluded. */
   excludedUnmappedLeads: number;
   unmappedPipelineCount: number;
