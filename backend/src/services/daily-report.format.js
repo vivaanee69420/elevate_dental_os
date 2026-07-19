@@ -28,6 +28,10 @@ function londonParts(instant) {
  * silently wrong for part of the year.
  */
 export function previousDayInLondon(now) {
+    if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
+        throw new TypeError('previousDayInLondon: expected `now` to be a valid Date instance');
+    }
+
     const { year, month, day } = londonParts(now);
     // Step back one day using a UTC-anchored date built from London parts.
     const anchor = new Date(Date.UTC(year, month - 1, day));

@@ -39,6 +39,22 @@ describe('formatPence', () => {
   it('formats zero as a real zero, not null', () => {
     expect(formatPence(0)).toBe('£0.00');
   });
+
+  it('stays on the 2dp branch just below one hundred pounds', () => {
+    expect(formatPence(9999)).toBe('£99.99');
+  });
+  it('crosses to the whole-pounds branch at exactly one hundred pounds', () => {
+    expect(formatPence(10000)).toBe('£100');
+  });
+  it('rounds whole-pounds-with-separator values that round up to six figures', () => {
+    // 9999999p = £99,999.99. This is still < £100,000 so it takes the
+    // whole-pounds branch (no decimals), but Math.round(99999.99) rounds up
+    // to 100000 — so the display is "£100,000", not "£99,999.99" or "£100k".
+    expect(formatPence(9999999)).toBe('£100,000');
+  });
+  it('crosses to the k-abbreviation branch at exactly one hundred thousand pounds', () => {
+    expect(formatPence(10000000)).toBe('£100k');
+  });
 });
 
 describe('formatPercent', () => {
@@ -74,6 +90,16 @@ describe('previousDayInLondon', () => {
     // London's "yesterday" is the 20th; UTC's would be the 19th.
     const r = previousDayInLondon(new Date('2026-07-20T23:30:00.000Z'));
     expect(r.date).toBe('2026-07-20');
+  });
+
+  it('throws a TypeError when `now` is undefined, instead of falling back to the real clock', () => {
+    expect(() => previousDayInLondon(undefined)).toThrow(TypeError);
+    expect(() => previousDayInLondon(undefined)).toThrow(/previousDayInLondon/);
+  });
+
+  it('throws a TypeError for an invalid Date', () => {
+    expect(() => previousDayInLondon(new Date('nonsense'))).toThrow(TypeError);
+    expect(() => previousDayInLondon(new Date('nonsense'))).toThrow(/previousDayInLondon/);
   });
 });
 
@@ -122,6 +148,46 @@ describe('formatReportLine', () => {
     const line = formatReportLine(FULL);
     expect(line).not.toMatch(/[\n\r\t]/);
     expect(line).not.toMatch(/ {4}/);
+  });
+
+  it('sanitises newlines, tabs, and runs of spaces from dirty upstream data', () => {
+    const dirty = {
+      ...FULL,
+      reportDateLabel: '21\tJul\n2026',
+      leads: { total: 24, google: 14, meta: 10 },
+    };
+    const line = formatReportLine(dirty);
+    expect(line).not.toMatch(/[\n\r\t]/);
+    expect(line).not.toMatch(/ {2,}/);
+    // The surrounding content still renders — sanitisation isn't dropping data.
+    expect(line).toContain('Daily 21 Jul 2026');
+    expect(line).toContain('Leads 24 (Google 14, Meta 10)');
+  });
+
+  it('renders a null conversionRate as n/a without dropping the rest of the section', () => {
+    const line = formatReportLine({ ...FULL, conversionRate: null });
+    expect(line).toContain(`Conv ${FULL.conversions} (n/a), CPA ${formatPence(FULL.cpaPence)}`);
+  });
+
+  it('renders a null dentally.dnaRate as n/a while the rest of the Dentally section still renders', () => {
+    const line = formatReportLine({
+      ...FULL,
+      dentally: { ...FULL.dentally, dnaRate: null },
+    });
+    expect(line).toContain('Appts 118, DNA 7 (n/a), New pts 12');
+  });
+
+  it('renders a null qbo.marginPct as n/a while the QBO revenue still renders', () => {
+    const line = formatReportLine({
+      ...FULL,
+      qbo: { ...FULL.qbo, marginPct: null },
+    });
+    expect(line).toContain('QBO MTD £142k, margin n/a');
+  });
+
+  it('truncates to exactly MAX_REPORT_CHARS for an unforeseen absurdly long value', () => {
+    const line = formatReportLine({ ...FULL, reportDateLabel: 'X'.repeat(500) });
+    expect(line.length).toBe(MAX_REPORT_CHARS);
   });
 
   it('stays within the cap and keeps the typical line well under it', () => {
