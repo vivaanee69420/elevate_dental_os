@@ -44,12 +44,25 @@ export const whatsappReportRepository = {
     },
 
     // Cron use: every org with the report switched on, across all tenants.
+    // One organisation's undecryptable row (key rotation, manual DB edit)
+    // must not abort every other organisation's daily report.
     async listEnabled() {
         const { data } = await this._client()
             .from(TABLE)
             .select(COLS)
             .eq('enabled', true);
-        return (data ?? []).map(toDomain);
+        const rows = [];
+        for (const row of data ?? []) {
+            try {
+                rows.push(toDomain(row));
+            } catch (err) {
+                console.error(
+                    `[whatsapp-report] failed to decrypt webhook_url for organisation ${row?.organisation_id}, skipping`,
+                    err,
+                );
+            }
+        }
+        return rows;
     },
 
     async markSent(orgId, { status, error = null, payload = null, sentAt }) {

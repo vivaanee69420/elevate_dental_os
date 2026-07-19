@@ -70,4 +70,41 @@ describe('listEnabled', () => {
     expect(rows[0].webhookUrl).toBe('https://a.test/hook');
     expect(supaRec.last.eqs.find((e) => e.col === 'enabled').val).toBe(true);
   });
+
+  it('skips an undecryptable row and still returns the good ones', async () => {
+    const ORG2 = 'org-bbbb';
+    supaRec.resultProvider = () => ({
+      data: [
+        { organisation_id: ORG, webhook_url: 'not-valid-ciphertext', enabled: true, last_sent_at: null },
+        { organisation_id: ORG2, webhook_url: encryptSecret('https://b.test/hook'), enabled: true, last_sent_at: null },
+      ],
+      error: null,
+    });
+
+    const rows = await whatsappReportRepository.listEnabled();
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].organisationId).toBe(ORG2);
+    expect(rows[0].webhookUrl).toBe('https://b.test/hook');
+  });
+});
+
+describe('markSent', () => {
+  it('writes the expected columns scoped to the organisation', async () => {
+    supaRec.resultProvider = () => ({ data: null, error: null });
+
+    await whatsappReportRepository.markSent(ORG, {
+      status: 'failed',
+      error: 'timeout',
+      payload: { foo: 'bar' },
+      sentAt: '2026-07-21T17:00:00.000Z',
+    });
+
+    const written = supaRec.last.updateVals;
+    expect(written.last_sent_at).toBe('2026-07-21T17:00:00.000Z');
+    expect(written.last_status).toBe('failed');
+    expect(written.last_error).toBe('timeout');
+    expect(written.last_payload).toEqual({ foo: 'bar' });
+    expect(orgFilter(supaRec.last).val).toBe(ORG);
+  });
 });
