@@ -109,11 +109,21 @@ export default function AdPerformanceScreen() {
   }
 
   const noPaidLeads = data.channels.every((c) => c.channel === 'unassigned' || c.leads === 0);
+  const practiceSelected = sp.scope !== 'all';
   // Distinguish "nothing is mapped yet" (a real setup gap — send the operator
   // to fix it) from "everything is mapped, this window is just quiet" (true
   // but would send them to redo work that's already done if conflated).
-  const nothingMapped = noPaidLeads && data.unmappedPipelineCount > 0;
-  const mappedButQuiet = noPaidLeads && data.unmappedPipelineCount === 0;
+  //
+  // Both flags mix an operand that IS practice-scoped (noPaidLeads, derived
+  // from data.channels) with one that is NOT (data.unmappedPipelineCount is
+  // org-wide, never narrowed by the practice selector). With a practice
+  // selected, a quiet practice plus an unmapped pipeline anywhere else in the
+  // organisation would wrongly trip "nothing mapped", and a quiet practice
+  // with zero unmapped pipelines would wrongly claim the whole organisation
+  // is quiet. So: group view only. Do not re-widen these to practice view
+  // without also scoping data.unmappedPipelineCount to the practice.
+  const nothingMapped = !practiceSelected && noPaidLeads && data.unmappedPipelineCount > 0;
+  const mappedButQuiet = !practiceSelected && noPaidLeads && data.unmappedPipelineCount === 0;
   const hasMappingGap = data.unmappedPipelineCount > 0 || data.excludedUnmappedLeads > 0;
 
   // A practice selection scopes leads, conversions, accepted value and the
@@ -126,7 +136,6 @@ export default function AdPerformanceScreen() {
   // connectors hardcode to null, so a mapping alone changes nothing until the
   // separately-specced customer_id -> practice_id join ships. Promising an
   // immediate fix would send the operator to do work with no visible result.
-  const practiceSelected = sp.scope !== 'all';
   const spendIsGroupWide = practiceSelected && data.totals.spendPence === null;
   // With no leads for this practice the service returns synthetic zeros, which
   // would otherwise read as a measured result rather than an absence.
@@ -134,23 +143,6 @@ export default function AdPerformanceScreen() {
 
   return (
     <Frame>
-      {spendIsGroupWide ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
-          Leads, conversions and treatment value are for this practice. Spend, cost per lead
-          and cost per acquisition stay group-wide: advertising spend is recorded for the
-          organisation as a whole rather than per practice, so it cannot be split between
-          them. Mapping each ad account to a practice is what will make that split possible.{' '}
-          <a className="underline" href="/settings/ad-attribution">Review ad attribution</a>.
-        </div>
-      ) : null}
-
-      {practiceHasNoLeads ? (
-        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
-          No ad leads are attributed to this practice in this window. The figures below are
-          zero because there is nothing to count, not because the campaigns measured zero.
-        </div>
-      ) : null}
-
       {nothingMapped ? (
         <div className="rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
@@ -162,6 +154,22 @@ export default function AdPerformanceScreen() {
         <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
           No Google or Facebook leads in this window. Pipelines are already mapped to a
           channel — this is just a quiet period.
+        </div>
+      ) : null}
+
+      {spendIsGroupWide ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+          Leads, conversions and treatment value are for this practice. Spend, cost per lead
+          and cost per acquisition cannot be shown for a single practice: advertising spend is
+          recorded for the organisation as a whole rather than per practice, so it cannot be
+          split between them. Switch to All practices to see group spend.
+        </div>
+      ) : null}
+
+      {practiceHasNoLeads ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+          No ad leads are attributed to this practice in this window. The figures below are
+          zero because there is nothing to count, not because the campaigns measured zero.
         </div>
       ) : null}
 
