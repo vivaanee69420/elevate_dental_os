@@ -116,8 +116,34 @@ export default function AdPerformanceScreen() {
   const mappedButQuiet = noPaidLeads && data.unmappedPipelineCount === 0;
   const hasMappingGap = data.unmappedPipelineCount > 0 || data.excludedUnmappedLeads > 0;
 
+  // A practice selection scopes leads, conversions, accepted value and the
+  // trend, but not spend: ad_metrics.practice_id is null on every synced row,
+  // so per-practice spend, cost per lead and cost per acquisition come back
+  // null. Say so rather than letting the operator read blank tiles as a fault.
+  const practiceSelected = sp.scope !== 'all';
+  const spendIsGroupWide = practiceSelected && data.totals.spendPence === null;
+  // With no leads for this practice the service returns synthetic zeros, which
+  // would otherwise read as a measured result rather than an absence.
+  const practiceHasNoLeads = practiceSelected && data.totals.leads === 0;
+
   return (
     <Frame>
+      {spendIsGroupWide ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+          Leads, conversions and treatment value are for this practice. Spend, cost per lead
+          and cost per acquisition remain group-wide — no ad account is mapped to a practice
+          yet, so advertising spend cannot be split between them.{' '}
+          <a className="underline" href="/settings/ad-attribution">Map ad accounts to practices</a>.
+        </div>
+      ) : null}
+
+      {practiceHasNoLeads ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+          No ad leads are attributed to this practice in this window. The figures below are
+          zero because there is nothing to count, not because the campaigns measured zero.
+        </div>
+      ) : null}
+
       {nothingMapped ? (
         <div className="rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
