@@ -18,8 +18,11 @@ function deps(overrides = {}) {
       }),
     },
     cockpit: {
-      build: vi.fn().mockResolvedValue({ revenue: { month: { todayPence: 624000 } } }),
+      // todayDate must match the reported day (2026-07-20) or the cash figure
+      // is deliberately suppressed — see buildMetrics.
+      build: vi.fn().mockResolvedValue({ revenue: { month: { todayPence: 624000, todayDate: '2026-07-20' } } }),
     },
+    auth: { organisationName: vi.fn().mockResolvedValue('Plan4growth') },
     analytics: {
       // NB: noShowRate is a 0..100 PERCENTAGE (e.g. 5.9 means 5.9%), same as
       // marginPct — this is the REAL shape analyticsService.businessHub
@@ -46,7 +49,11 @@ describe('buildMetrics', () => {
     const d = deps();
     const m = await dailyReportService.buildMetrics(ORG, { now: NOW, deps: d });
 
-    expect(d.adAttribution.getPerformance).toHaveBeenCalledWith(ORG, { since: '2026-07-20', until: '2026-07-20' });
+    // `until` is EXCLUSIVE across every repository, so the one-day window for
+    // 2026-07-20 is [2026-07-20, 2026-07-21). The previous assertion expected
+    // until === since, which matches no rows at all and made the whole report
+    // come back zeroes.
+    expect(d.adAttribution.getPerformance).toHaveBeenCalledWith(ORG, { since: '2026-07-20', until: '2026-07-21' });
     expect(m.reportDateLabel).toBe('20 Jul');
     expect(m.leads).toEqual({ total: 24, google: 14, meta: 10 });
     expect(m.spendPence.google).toBe(41200);
@@ -63,6 +70,41 @@ describe('buildMetrics', () => {
     expect(m.dentally).toBeNull();
     expect(m.qbo).toBeNull();
     expect(m.leads.total).toBe(24); // ad metrics survived
+  });
+
+  // cockpit.revenue.month.todayPence is the cash-up total for MAX(cashup_date)
+  // across the whole month, which can lag the reported day when a practice
+  // misses a cash-up or the overnight sync fails. Reporting the 18th's cash
+  // under a "Daily 20 Jul" heading would be silently wrong.
+  it('reports cash in when the cash-up date matches the reported day', async () => {
+    const d = deps({
+      cockpit: { build: vi.fn().mockResolvedValue({ revenue: { month: { todayPence: 624000, todayDate: '2026-07-20' } } }) },
+    });
+
+    const m = await dailyReportService.buildMetrics(ORG, { now: NOW, deps: d });
+
+    expect(m.reportDate).toBe('2026-07-20');
+    expect(m.cashInPence).toBe(624000);
+  });
+
+  it('suppresses cash in when the cash-up date is stale, rather than asserting another day\'s figure', async () => {
+    const d = deps({
+      cockpit: { build: vi.fn().mockResolvedValue({ revenue: { month: { todayPence: 624000, todayDate: '2026-07-18' } } }) },
+    });
+
+    const m = await dailyReportService.buildMetrics(ORG, { now: NOW, deps: d });
+
+    expect(m.cashInPence).toBeNull();
+  });
+
+  it('suppresses cash in when the cockpit reports no cash-up date at all', async () => {
+    const d = deps({
+      cockpit: { build: vi.fn().mockResolvedValue({ revenue: { month: { todayPence: 624000, todayDate: null } } }) },
+    });
+
+    const m = await dailyReportService.buildMetrics(ORG, { now: NOW, deps: d });
+
+    expect(m.cashInPence).toBeNull();
   });
 });
 
@@ -81,6 +123,25 @@ describe('buildPayload', () => {
     // in a message to the business owner (e.g. "590% DNA").
     expect(payload.dna_rate).toBe('5.9%');
     expect(payload.qbo_margin).toBe('18.4%');
+  });
+
+  it('resolves the organisation name so payload.organisation is never a permanent null', async () => {
+    const d = deps();
+    const { payload } = await dailyReportService.buildPayload(ORG, { now: NOW, deps: d });
+
+    expect(d.auth.organisationName).toHaveBeenCalledWith(ORG);
+    expect(payload.organisation).toBe('Plan4growth');
+  });
+
+  it('still builds the report when the organisation name cannot be resolved', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const d = deps({ auth: { organisationName: vi.fn().mockRejectedValue(new Error('db down')) } });
+
+    const { payload } = await dailyReportService.buildPayload(ORG, { now: NOW, deps: d });
+
+    expect(payload.organisation).toBeNull();
+    expect(payload.report_line).toContain('Daily 20 Jul');
+    errSpy.mockRestore();
   });
 
   it('exposes no raw pence integers, which must never reach a message', async () => {

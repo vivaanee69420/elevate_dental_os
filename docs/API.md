@@ -864,7 +864,9 @@ Owner only. Returns `{ settings: { webhookUrlMasked, configured, enabled, lastSe
 Owner only. Body `{ webhookUrl, enabled }` — `webhookUrl` must be `https://` (plain `http://` is rejected, 400). Upserts the org's settings row (URL encrypted at rest). Returns `{ settings }` (masked, as above).
 
 ### `POST /api/integrations/gohighlevel/daily-report/preview`
-Owner only. Builds today's report without sending it. Returns `{ line, length, payload }`.
+Owner only. Builds the report for the previous full day in Europe/London — the
+same day the 18:00 cron would report on — without sending it. Returns
+`{ line, length, payload }`.
 
 ### `POST /api/integrations/gohighlevel/daily-report/send`
 Owner only. Triggers an immediate manual send to the configured webhook. Rate-limited in-memory to 6 sends/hour/org (429 `{ error }` beyond that — a double-click guard, not a security control). Returns `{ sent, status, reason? }`.

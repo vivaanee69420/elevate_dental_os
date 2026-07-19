@@ -67,12 +67,16 @@ export const dailyReportController = {
         return res.json({ line, length: line.length, payload });
     },
 
-    async send(req, res, deps = dailyReportService) {
+    // NOTE: no third parameter. Express always passes `next` as the third
+    // argument (asyncHandler forwards it), so a `deps = ...` default would
+    // never apply and `deps` would be `next` at runtime. Tests stub the
+    // service by spying on the module, exactly as `preview` above does.
+    async send(req, res) {
         const orgId = req.user.organisation_id;
         if (!allowSend(orgId, Date.now())) {
             return res.status(429).json({ error: 'Too many manual sends. Try again later.' });
         }
-        const result = await deps.send(orgId, { trigger: 'manual' });
+        const result = await dailyReportService.send(orgId, { trigger: 'manual' });
         return res.json(result);
     },
 };

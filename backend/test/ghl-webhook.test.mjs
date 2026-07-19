@@ -57,5 +57,9 @@ describe('postToInboundWebhook', () => {
 
     expect(res.ok).toBe(false);
     expect(res.error).toContain('ECONNRESET');
+    // A network error must still be retried — initial attempt + 2 retries.
+    // Without pinning the count, a regression that stopped retrying network
+    // failures would pass this test unnoticed.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 });

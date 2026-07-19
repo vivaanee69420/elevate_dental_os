@@ -26,6 +26,13 @@ function londonParts(instant) {
  * Using the London day (not the UTC day) matters: at 00:30 London in summer it
  * is still the previous day in UTC, and reporting on the wrong date would be
  * silently wrong for part of the year.
+ *
+ * WINDOW CONVENTION: `until` is EXCLUSIVE, matching every downstream
+ * repository (ad-attribution's `.gte(since).lt(until)`, cockpit's
+ * `endExclusive`, analytics' `adToDate = until - one day`). So `until` is the
+ * day AFTER the report date — a report for 2026-07-20 asks for
+ * [2026-07-20, 2026-07-21). Setting `until` equal to `since` would match
+ * nothing at all and every figure would come back zero.
  */
 export function previousDayInLondon(now) {
     if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
@@ -42,7 +49,14 @@ export function previousDayInLondon(now) {
     const d = anchor.getUTCDate();
     const date = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-    return { date, since: date, until: date, label: `${d} ${MONTHS[m]}` };
+    // Exclusive end: the day after the report date. Same UTC-anchored
+    // arithmetic as the step back above, so month and year boundaries
+    // (31 Jan -> 1 Feb, 31 Dec -> 1 Jan) roll over correctly.
+    const endAnchor = new Date(Date.UTC(y, m, d));
+    endAnchor.setUTCDate(endAnchor.getUTCDate() + 1);
+    const until = `${endAnchor.getUTCFullYear()}-${String(endAnchor.getUTCMonth() + 1).padStart(2, '0')}-${String(endAnchor.getUTCDate()).padStart(2, '0')}`;
+
+    return { date, since: date, until, label: `${d} ${MONTHS[m]}` };
 }
 
 /** Integer pence to a display string. Null in, null out — callers decide the copy. */
