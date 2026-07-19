@@ -158,7 +158,7 @@ export const dailyReportService = {
         }
         if (metrics.qbo) {
             payload.qbo_revenue_mtd = f(metrics.qbo.revenueMtdPence) ?? 'n/a';
-            payload.qbo_margin = metrics.qbo.marginPct === null ? 'n/a' : `${Math.round(metrics.qbo.marginPct * 10) / 10}%`;
+            payload.qbo_margin = format_1.formatMarginPct(metrics.qbo.marginPct) ?? 'n/a';
         }
 
         return { metrics, payload, line };

@@ -51,7 +51,25 @@ export const dailyReportController = {
         if (!parsed.success) {
             return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid settings' });
         }
-        const settings = await whatsappReportRepository.upsert(req.user.organisation_id, parsed.data);
+        const orgId = req.user.organisation_id;
+        const { webhookUrl, enabled } = parsed.data;
+
+        // No URL in the request: this is a pause/resume-only save (an owner
+        // who has lost the URL can still switch the report off). Only valid
+        // when a row already exists — with nothing stored there is nothing to
+        // send to, so keep the old hard requirement in that case.
+        if (webhookUrl === undefined) {
+            const existing = await whatsappReportRepository.get(orgId);
+            if (!existing) {
+                return res.status(400).json({
+                    error: 'Add a webhook URL before saving these settings.',
+                });
+            }
+            const settings = await whatsappReportRepository.updateEnabled(orgId, enabled);
+            return res.json({ settings: present(settings) });
+        }
+
+        const settings = await whatsappReportRepository.upsert(orgId, { webhookUrl, enabled });
         return res.json({ settings: present(settings) });
     },
 

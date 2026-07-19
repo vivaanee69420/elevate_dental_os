@@ -4,6 +4,7 @@ import {
   previousDayInLondon,
   formatPence,
   formatPercent,
+  formatMarginPct,
   formatReportLine,
 } from '../src/services/daily-report.format.js';
 
@@ -66,6 +67,29 @@ describe('formatPercent', () => {
   });
   it('returns null for null', () => {
     expect(formatPercent(null)).toBeNull();
+  });
+});
+
+describe('formatMarginPct', () => {
+  // The single source for the QuickBooks margin rounding — buildPayload
+  // (daily-report.service.js) and formatReportLine (below) both call this
+  // instead of each rounding independently, so the report line and the
+  // outgoing payload can never disagree.
+  it('renders one decimal place', () => {
+    expect(formatMarginPct(18.4)).toBe('18.4%');
+  });
+  it('rounds to one decimal place', () => {
+    expect(formatMarginPct(18.44)).toBe('18.4%');
+    expect(formatMarginPct(18.46)).toBe('18.5%');
+  });
+  it('returns null for null', () => {
+    expect(formatMarginPct(null)).toBeNull();
+  });
+  it('returns null for undefined', () => {
+    expect(formatMarginPct(undefined)).toBeNull();
+  });
+  it('renders zero as a real zero, not null', () => {
+    expect(formatMarginPct(0)).toBe('0%');
   });
 });
 

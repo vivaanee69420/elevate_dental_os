@@ -62,4 +62,33 @@ describe('postToInboundWebhook', () => {
     // failures would pass this test unnoticed.
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
+
+  it('scrubs the webhook url out of a network error before returning it', async () => {
+    // Some Node/undici network errors embed the request URL in the message
+    // (e.g. "fetch failed: <url>"). last_error is persisted and shown in the
+    // UI, so the URL — the send-anything credential — must never survive
+    // into it, even though the error classes seen in practice today don't do
+    // this.
+    const fetchImpl = vi.fn().mockRejectedValue(new Error(`connect ECONNREFUSED ${URL}`));
+
+    const res = await postToInboundWebhook(URL, PAYLOAD, { fetchImpl, retryDelayMs: 0 });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).not.toContain(URL);
+    expect(res.error).not.toContain('leadconnectorhq');
+    expect(res.error).toContain('[webhook url]');
+  });
+
+  it('scrubs a bare origin (no path) out of a network error too', async () => {
+    // `URL` above is the test fixture (a string), not the global URL
+    // constructor — it shadows it in this file — so the origin is just
+    // hardcoded from the known fixture value.
+    const origin = 'https://services.leadconnectorhq.com';
+    const fetchImpl = vi.fn().mockRejectedValue(new Error(`getaddrinfo ENOTFOUND ${origin}`));
+
+    const res = await postToInboundWebhook(URL, PAYLOAD, { fetchImpl, retryDelayMs: 0 });
+
+    expect(res.error).not.toContain(origin);
+    expect(res.error).toContain('[webhook url]');
+  });
 });

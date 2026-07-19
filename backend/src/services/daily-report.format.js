@@ -81,6 +81,18 @@ function money(pence) {
     return formatPence(pence) ?? 'n/a';
 }
 
+/**
+ * A 0..100 percentage (already scaled, unlike formatPercent's 0..1 ratio) to
+ * a one-decimal-place display string, e.g. "18.4%". Null in, null out —
+ * callers decide the copy (`buildPayload` and `formatReportLine` both want
+ * their own 'n/a' text). Single source for the QuickBooks margin rounding so
+ * the report line and the outgoing payload can never disagree.
+ */
+export function formatMarginPct(pct) {
+    if (pct === null || pct === undefined) return null;
+    return `${Math.round(pct * 10) / 10}%`;
+}
+
 function spend(pence) {
     return formatPence(pence) ?? 'not reporting';
 }
@@ -113,9 +125,7 @@ export function formatReportLine(metrics) {
         );
     }
     if (m.qbo) {
-        const margin = m.qbo.marginPct === null || m.qbo.marginPct === undefined
-            ? 'n/a'
-            : `${Math.round(m.qbo.marginPct * 10) / 10}%`;
+        const margin = formatMarginPct(m.qbo.marginPct) ?? 'n/a';
         sections.push(`QBO MTD ${money(m.qbo.revenueMtdPence)}, margin ${margin}`);
     }
 

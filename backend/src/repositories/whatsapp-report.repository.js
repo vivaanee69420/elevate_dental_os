@@ -43,6 +43,26 @@ export const whatsappReportRepository = {
         return toDomain(data);
     },
 
+    // Partial update for a row that already exists: flips `enabled` only,
+    // leaving the stored (encrypted) webhook_url untouched. Deliberately a
+    // separate path from `upsert` above — `upsert` always writes webhook_url,
+    // and encryptSecret(undefined) returns null, which the NOT NULL column
+    // would reject (or silently wipe the secret if it didn't). Never call
+    // this for a row that doesn't exist yet: there would be nothing to send
+    // to, and the caller is expected to have checked via `get` first.
+    async updateEnabled(orgId, enabled) {
+        const { data } = await this._client()
+            .from(TABLE)
+            .update({
+                enabled: enabled === true,
+                updated_at: new Date().toISOString(),
+            })
+            .eq('organisation_id', orgId)
+            .select(COLS)
+            .maybeSingle();
+        return toDomain(data);
+    },
+
     // Cron use: every org with the report switched on, across all tenants.
     // One organisation's undecryptable row (key rotation, manual DB edit)
     // must not abort every other organisation's daily report.
