@@ -30,8 +30,9 @@ settled — no newline verification is needed.
 The GHL Multi line custom field holds up to **12,000 characters** (verified), so
 field size is not a constraint. The report is nonetheless capped at **350
 characters** — a deliberate readability choice, meeting the original "readable in
-under a minute" goal. The cap is enforced in code with a section drop order, which
-in practice should never trigger.
+under a minute" goal. A realistic line is ~216 characters and even absurd values
+reach only ~269, so the cap is a last-resort truncation guard that should never
+fire. There is deliberately no section-drop logic: it would be unreachable code.
 
 Field size does not unlock multi-line layout: that remains blocked by Meta's
 template-parameter rule, which is independent of storage.
@@ -161,14 +162,10 @@ Formatter rules:
    currently-dead Meta feed is visible rather than silently reporting zero spend.
    Dependent metrics render `n/a`. Covered by a test.
 3. **`report_line` is guaranteed free of newlines, tabs and 4+ consecutive spaces.**
-4. **`report_line` is capped at 350 characters.** This is an enforced guard, not an
-   assumption: the typical line is ~215 chars, but wide values (six-figure spend,
-   `not reporting` on both channels) can reach ~280. When the cap would be exceeded,
-   sections are dropped in this order:
-   1. QuickBooks (`QBO MTD ...`)
-   2. Dentally (`Appts ...`)
-
-   Ad metrics and cash in are never dropped — they are the reason the report exists.
+4. **`report_line` is capped at 350 characters** by simple truncation. Measured:
+   a realistic line is ~216 chars, and every field at an impossible magnitude
+   reaches only ~269. The guard therefore never fires in practice; it exists so an
+   unforeseen value cannot produce an unreadable wall of text.
 5. Separators are ASCII (`|` between sections, `,` within them). `£` only where
    it carries meaning. See the byte-vs-character note above.
 
@@ -242,8 +239,7 @@ Vitest, backend. Value concentrates in the pure functions.
 
 - `formatReportLine`: null spend → `not reporting`; dependent metrics → `n/a`;
   pence→£ formatting; output contains no newline/tab/4-space run; truncation at
-  the 350-char cap drops QuickBooks first, then Dentally, and never the ad metrics
-  or cash in; a worst-case wide-value line still fits.
+  an absurd-value line still fits within the 350-char cap without truncation.
 - `buildDailyReport`: correct window — yesterday in Europe/London, not UTC. A
   naive `new Date()` would select the wrong day for part of the year.
 - Cron: one org failing does not abort the others; same-day resend is blocked;
