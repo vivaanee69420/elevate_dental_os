@@ -28,7 +28,6 @@ describe('every ad-attribution read pins organisation_id', () => {
     ['adSpend', () => adAttributionRepository.adSpend(ORG_A, '2026-07-01', '2026-08-01')],
     ['acceptedForMatching', () => adAttributionRepository.acceptedForMatching(ORG_A, '2026-07-01', '2026-08-01')],
     ['leadsInWindow', () => adAttributionRepository.leadsInWindow(ORG_A, '2026-07-01', '2026-08-01')],
-    ['leadCountsByPipeline', () => adAttributionRepository.leadCountsByPipeline(ORG_A)],
   ];
 
   for (const [name, run] of reads) {
@@ -59,5 +58,22 @@ describe('every ad-attribution write pins organisation_id', () => {
     await adAttributionRepository.setAdAccountPractice(ORG_A, 'ad-in-B', 'p1');
     expect(orgFilter(supaRec.last).val).toBe(ORG_A);
     expect(supaRec.last.eqs.map((e) => e.col).sort()).toEqual(['id', 'organisation_id']);
+  });
+});
+
+// leadCountsByPipeline aggregates in SQL (migration 000115) rather than paging
+// the leads table, so its tenant guard is the RPC's p_org argument rather than
+// a chained .eq(). It is tested separately for that reason — it is the one read
+// on this path whose isolation does not live in the query builder.
+describe('leadCountsByPipeline pins the org through the RPC argument', () => {
+  it('passes the caller org as p_org and never a foreign org', async () => {
+    supaRec.rpcCalls = [];
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    await adAttributionRepository.leadCountsByPipeline(ORG_A);
+    expect(supaRec.rpcCalls).toContainEqual({
+      fn: 'ad_channel_pipeline_lead_counts',
+      params: { p_org: ORG_A },
+    });
+    expect(supaRec.rpcCalls.some((c) => c.params?.p_org === ORG_B)).toBe(false);
   });
 });

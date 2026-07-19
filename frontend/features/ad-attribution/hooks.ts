@@ -5,7 +5,10 @@ import {
   setSubaccountPractice,
   setAdAccountPractice,
   type AdChannel,
+  type AdAttributionConfig,
 } from './api';
+
+const CONFIG_KEY = ['ad-attribution-config'] as const;
 
 export function useAdAttributionConfig() {
   return useQuery({
@@ -24,12 +27,35 @@ function invalidateAdAttribution(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ['ad-performance'] });
 }
 
+// Optimistic: the button flips the moment it is clicked, then the refetch
+// confirms it. Sorting 113 pipelines means a lot of clicks in a row, and
+// waiting for a server round trip after each one made a saved change look like
+// a dead button — the write had succeeded, the refreshed state just had not
+// arrived yet. onError rolls the row back to the exact snapshot taken before
+// the click, so a failure never leaves a lie on screen.
 export function useSetPipelineChannel() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ accountId, pipelineId, channel }: { accountId: string; pipelineId: string; channel: AdChannel | null }) =>
       setPipelineChannel(accountId, pipelineId, channel),
-    onSuccess: () => invalidateAdAttribution(qc),
+    onMutate: async ({ accountId, pipelineId, channel }) => {
+      // Stop an in-flight refetch from landing on top of the optimistic write.
+      await qc.cancelQueries({ queryKey: CONFIG_KEY });
+      const previous = qc.getQueryData<AdAttributionConfig>(CONFIG_KEY);
+      if (previous) {
+        qc.setQueryData<AdAttributionConfig>(CONFIG_KEY, {
+          ...previous,
+          pipelines: previous.pipelines.map((p) =>
+            p.accountId === accountId && p.pipelineId === pipelineId ? { ...p, channel } : p,
+          ),
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previous) qc.setQueryData(CONFIG_KEY, ctx.previous);
+    },
+    onSettled: () => invalidateAdAttribution(qc),
   });
 }
 

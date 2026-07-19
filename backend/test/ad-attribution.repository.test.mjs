@@ -120,49 +120,56 @@ describe('acceptedForMatching', () => {
   });
 });
 
+// Aggregated in SQL via the ad_channel_pipeline_lead_counts RPC (migration
+// 000115). This previously paged every lead row and counted in JS, which at
+// 20,509 live leads meant 21 sequential round trips on every config load.
+// The null-account / null-pipeline filtering and the grouping now happen in
+// the function, so what is left to test here is the org guard, the composite
+// key, and the bigint coercion.
 describe('leadCountsByPipeline', () => {
-  it('aggregates counts by composite accountId|pipelineId key', async () => {
-    supaRec.resultProvider = () => ({
+  it('calls the RPC with the caller org — the tenant guard on this path', async () => {
+    // There is no .eq() to assert any more: p_org IS the isolation boundary,
+    // applied inside the function where the caller cannot widen it.
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    await adAttributionRepository.leadCountsByPipeline(ORG);
+    expect(supaRec.rpcCalls).toContainEqual({
+      fn: 'ad_channel_pipeline_lead_counts',
+      params: { p_org: ORG },
+    });
+  });
+
+  it('keys the map on accountId|pipelineId, keeping two subaccounts apart', async () => {
+    // The same pipeline id under two subaccounts means two different things —
+    // GHL ids are unique only within a Location.
+    supaRec.rpcProvider = () => ({
       data: [
-        { id: 'l1', integration_account_id: 'acc1', ghl_pipeline_id: 'pl1' },
-        { id: 'l2', integration_account_id: 'acc1', ghl_pipeline_id: 'pl1' },
-        { id: 'l3', integration_account_id: 'acc1', ghl_pipeline_id: 'pl2' },
-        { id: 'l4', integration_account_id: 'acc2', ghl_pipeline_id: 'pl1' },
+        { integration_account_id: 'acc1', ghl_pipeline_id: 'pl1', lead_count: 2 },
+        { integration_account_id: 'acc1', ghl_pipeline_id: 'pl2', lead_count: 1 },
+        { integration_account_id: 'acc2', ghl_pipeline_id: 'pl1', lead_count: 7 },
       ],
       error: null,
     });
     const counts = await adAttributionRepository.leadCountsByPipeline(ORG);
     expect(counts.get('acc1|pl1')).toBe(2);
     expect(counts.get('acc1|pl2')).toBe(1);
-    expect(counts.get('acc2|pl1')).toBe(1);
+    expect(counts.get('acc2|pl1')).toBe(7);
     expect(counts.size).toBe(3);
   });
 
-  it('skips rows with a null account id or null pipeline id rather than producing a garbage key', async () => {
-    supaRec.resultProvider = () => ({
-      data: [
-        { id: 'l1', integration_account_id: null, ghl_pipeline_id: 'pl1' },
-        { id: 'l2', integration_account_id: 'acc1', ghl_pipeline_id: null },
-        { id: 'l3', integration_account_id: null, ghl_pipeline_id: null },
-        { id: 'l4', integration_account_id: 'acc1', ghl_pipeline_id: 'pl1' },
-      ],
+  it('coerces a bigint count returned as a string', async () => {
+    // PostgREST serialises bigint as a JSON string; without the coercion the
+    // settings screen would sort pipelines lexicographically ("9" > "113").
+    supaRec.rpcProvider = () => ({
+      data: [{ integration_account_id: 'acc1', ghl_pipeline_id: 'pl1', lead_count: '1122' }],
       error: null,
     });
     const counts = await adAttributionRepository.leadCountsByPipeline(ORG);
-    // Only the one fully-populated row should be counted.
-    expect(counts.size).toBe(1);
-    expect(counts.get('acc1|pl1')).toBe(1);
+    expect(counts.get('acc1|pl1')).toBe(1122);
   });
 
-  it('scopes by org', async () => {
-    await adAttributionRepository.leadCountsByPipeline(ORG);
-    expect(supaRec.last.table).toBe('leads');
-    expect(orgFilter(supaRec.last)).toEqual({ col: 'organisation_id', val: ORG });
-  });
-
-  it('orders by id (required for deterministic pagination)', async () => {
-    await adAttributionRepository.leadCountsByPipeline(ORG);
-    expect(supaRec.last.order).toEqual({ col: 'id', opts: { ascending: true } });
+  it('throws when the RPC errors rather than reporting every pipeline as empty', async () => {
+    supaRec.rpcProvider = () => ({ data: null, error: { message: 'boom' } });
+    await expect(adAttributionRepository.leadCountsByPipeline(ORG)).rejects.toThrow('boom');
   });
 });
 

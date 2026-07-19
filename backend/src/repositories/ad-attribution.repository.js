@@ -86,17 +86,23 @@ export const adAttributionRepository = {
     // Lead volume per pipeline, for the settings screen. Counted over all time
     // so the operator can tell a busy pipeline from a dormant one regardless of
     // the window they happen to be looking at.
+    //
+    // Aggregated in SQL (migration 000115). This used to page every lead row
+    // through PostgREST and count in JS, which at 20,509 leads meant 21
+    // sequential round trips on EVERY config load — including the refetch after
+    // each single click, so a saved change appeared seconds later and the screen
+    // read as broken. One RPC call replaces the whole scan.
+    //
+    // p_org is applied inside the function, so this stays org-scoped without an
+    // explicit .eq() — the tenant guard moves into the RPC rather than
+    // disappearing.
     async leadCountsByPipeline(orgId) {
-        const rows = await fetchAllPages(() => supabase_1.serviceClient
-            .from('leads')
-            .select('id, integration_account_id, ghl_pipeline_id')
-            .eq('organisation_id', orgId)
-            .order('id', { ascending: true }));
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('ad_channel_pipeline_lead_counts', { p_org: orgId });
+        if (error) throw new Error(error.message);
         const counts = new Map();
-        for (const r of rows) {
-            if (!r.integration_account_id || !r.ghl_pipeline_id) continue;
-            const k = `${r.integration_account_id}|${r.ghl_pipeline_id}`;
-            counts.set(k, (counts.get(k) ?? 0) + 1);
+        for (const r of data ?? []) {
+            counts.set(`${r.integration_account_id}|${r.ghl_pipeline_id}`, Number(r.lead_count) || 0);
         }
         return counts;
     },
