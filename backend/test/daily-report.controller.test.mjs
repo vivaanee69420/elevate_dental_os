@@ -1,14 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { supaRec } from './setup.js';
+import { encryptSecret } from '../src/lib/crypto.js';
 import { dailyReportController, _resetSendLimiter } from '../src/controllers/daily-report.controller.js';
+import { dailyReportService } from '../src/services/daily-report.service.js';
 
 const ORG = 'org-aaaa';
+const RAW_URL = 'https://services.leadconnectorhq.com/hooks/super-secret-path';
 
 function res() {
   return { statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
 }
 const req = (body = {}) => ({ user: { id: 'u1', organisation_id: ORG }, body });
 
-beforeEach(() => { _resetSendLimiter(); });
+beforeEach(() => {
+  _resetSendLimiter();
+  supaRec.last = undefined;
+  supaRec.resultProvider = () => ({ data: null, error: null });
+});
 
 describe('saveSettings', () => {
   it('rejects a non-https webhook url', async () => {
@@ -21,6 +29,83 @@ describe('saveSettings', () => {
     const r = res();
     await dailyReportController.saveSettings(req({ webhookUrl: 'paste-here', enabled: true }), r);
     expect(r.statusCode).toBe(400);
+  });
+});
+
+describe('getSettings', () => {
+  it('never leaks the raw webhook url and returns the masked shape', async () => {
+    supaRec.resultProvider = () => ({
+      data: {
+        organisation_id: ORG,
+        webhook_url: encryptSecret(RAW_URL),
+        enabled: true,
+        last_sent_at: '2026-07-21T17:00:00.000Z',
+        last_status: 'ok',
+        last_error: null,
+      },
+      error: null,
+    });
+
+    const r = res();
+    await dailyReportController.getSettings(req(), r);
+
+    expect(r.statusCode).toBe(200);
+    expect(r.body.settings.webhookUrlMasked).toBeTruthy();
+    expect(r.body.settings.configured).toBe(true);
+    expect(JSON.stringify(r.body)).not.toContain(RAW_URL);
+    expect(JSON.stringify(r.body)).not.toContain('super-secret-path');
+  });
+
+  it('returns { settings: null } when no row exists', async () => {
+    supaRec.resultProvider = () => ({ data: null, error: null });
+
+    const r = res();
+    await dailyReportController.getSettings(req(), r);
+
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toEqual({ settings: null });
+  });
+});
+
+describe('saveSettings happy path', () => {
+  it('accepts a valid https url, returns 200 with masked settings, never leaks the raw url', async () => {
+    supaRec.resultProvider = () => ({
+      data: {
+        organisation_id: ORG,
+        webhook_url: encryptSecret(RAW_URL),
+        enabled: true,
+        last_sent_at: null,
+        last_status: null,
+        last_error: null,
+      },
+      error: null,
+    });
+
+    const r = res();
+    await dailyReportController.saveSettings(req({ webhookUrl: RAW_URL, enabled: true }), r);
+
+    expect(r.statusCode).toBe(200);
+    expect(r.body.settings.webhookUrlMasked).toBeTruthy();
+    expect(r.body.settings.configured).toBe(true);
+    expect(JSON.stringify(r.body)).not.toContain(RAW_URL);
+    expect(JSON.stringify(r.body)).not.toContain('super-secret-path');
+  });
+});
+
+describe('preview', () => {
+  it('returns 503 with a clear message when buildPayload fails, instead of throwing', async () => {
+    const spy = vi.spyOn(dailyReportService, 'buildPayload').mockRejectedValue(new Error('ad attribution unreachable'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const r = res();
+    await dailyReportController.preview(req(), r);
+
+    expect(r.statusCode).toBe(503);
+    expect(r.body.error).toBeTruthy();
+    expect(r.body.error).not.toContain('ad attribution unreachable');
+
+    spy.mockRestore();
+    errSpy.mockRestore();
   });
 });
 
