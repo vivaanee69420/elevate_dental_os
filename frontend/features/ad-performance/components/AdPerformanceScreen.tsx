@@ -11,6 +11,7 @@
 import { useMemo, useState } from 'react';
 import { PageHeader, SectionCard, SecHead, DetailPanel } from '@/components/ui';
 import { useScopePeriod } from '@/features/_shared/scope-context';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useAdPerformance, useAdLeads } from '../hooks';
 import { ChannelScorecard, type ScorecardDrill } from './ChannelScorecard';
 import { ByPracticeTable } from './ByPracticeTable';
@@ -64,6 +65,27 @@ function rowsFor(drill: Exclude<ScorecardDrill, 'overlap'>, lines: AdLeadLine[])
   }
 }
 
+// The header and filter bar render in every state, including loading and
+// error. If they only rendered on success, a window that failed to load would
+// leave the operator with no control to change it, and every filter change
+// would flash the whole page chrome away.
+//
+// Declared at module scope on purpose: a component defined inside the render
+// function gets a new identity each render, which remounts the whole subtree
+// and drops focus from the month selector.
+function Frame({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Ad performance"
+        subtitle="Google and Facebook leads, cost per lead and conversions, from the pipelines you have mapped to each channel."
+      />
+      <ScopePeriodBar />
+      {children}
+    </div>
+  );
+}
+
 export default function AdPerformanceScreen() {
   const sp = useScopePeriod();
   const practiceId = sp.scope === 'all' ? undefined : sp.scope;
@@ -81,24 +103,46 @@ export default function AdPerformanceScreen() {
   const lines = useMemo(() => leads.data?.leads ?? [], [leads.data]);
   const overlap = useMemo(() => overlapPeople(lines), [lines]);
 
-  if (isLoading) return <p className="p-6 text-sm text-slate-500">Loading…</p>;
-  if (error || !data) return <p className="p-6 text-sm text-slate-500">Could not load ad performance.</p>;
+  if (isLoading) return <Frame><p className="text-sm text-slate-500">Loading…</p></Frame>;
+  if (error || !data) {
+    return <Frame><p className="text-sm text-slate-500">Could not load ad performance.</p></Frame>;
+  }
 
   const noPaidLeads = data.channels.every((c) => c.channel === 'unassigned' || c.leads === 0);
+  const practiceSelected = sp.scope !== 'all';
   // Distinguish "nothing is mapped yet" (a real setup gap — send the operator
   // to fix it) from "everything is mapped, this window is just quiet" (true
   // but would send them to redo work that's already done if conflated).
-  const nothingMapped = noPaidLeads && data.unmappedPipelineCount > 0;
-  const mappedButQuiet = noPaidLeads && data.unmappedPipelineCount === 0;
+  //
+  // Both flags mix an operand that IS practice-scoped (noPaidLeads, derived
+  // from data.channels) with one that is NOT (data.unmappedPipelineCount is
+  // org-wide, never narrowed by the practice selector). With a practice
+  // selected, a quiet practice plus an unmapped pipeline anywhere else in the
+  // organisation would wrongly trip "nothing mapped", and a quiet practice
+  // with zero unmapped pipelines would wrongly claim the whole organisation
+  // is quiet. So: group view only. Do not re-widen these to practice view
+  // without also scoping data.unmappedPipelineCount to the practice.
+  const nothingMapped = !practiceSelected && noPaidLeads && data.unmappedPipelineCount > 0;
+  const mappedButQuiet = !practiceSelected && noPaidLeads && data.unmappedPipelineCount === 0;
   const hasMappingGap = data.unmappedPipelineCount > 0 || data.excludedUnmappedLeads > 0;
 
-  return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Ad performance"
-        subtitle="Google and Facebook leads, cost per lead and conversions, from the pipelines you have mapped to each channel."
-      />
+  // A practice selection scopes leads, conversions, accepted value and the
+  // trend, but not spend: ad_metrics.practice_id is null on every synced row,
+  // so per-practice spend, cost per lead and cost per acquisition come back
+  // null. Say so rather than letting the operator read blank tiles as a fault.
+  //
+  // The copy deliberately does NOT promise that mapping an ad account fixes
+  // this today. adSpend reads ad_metrics.practice_id directly, which the
+  // connectors hardcode to null, so a mapping alone changes nothing until the
+  // separately-specced customer_id -> practice_id join ships. Promising an
+  // immediate fix would send the operator to do work with no visible result.
+  const spendIsGroupWide = practiceSelected && data.totals.spendPence === null;
+  // With no leads for this practice the service returns synthetic zeros, which
+  // would otherwise read as a measured result rather than an absence.
+  const practiceHasNoLeads = practiceSelected && data.totals.leads === 0;
 
+  return (
+    <Frame>
       {nothingMapped ? (
         <div className="rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
@@ -110,6 +154,22 @@ export default function AdPerformanceScreen() {
         <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
           No Google or Facebook leads in this window. Pipelines are already mapped to a
           channel — this is just a quiet period.
+        </div>
+      ) : null}
+
+      {spendIsGroupWide ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+          Leads, conversions and treatment value are for this practice. Spend, cost per lead
+          and cost per acquisition cannot be shown for a single practice: advertising spend is
+          recorded for the organisation as a whole rather than per practice, so it cannot be
+          split between them. Switch to All practices to see group spend.
+        </div>
+      ) : null}
+
+      {practiceHasNoLeads ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+          No ad leads are attributed to this practice in this window. The figures below are
+          zero because there is nothing to count, not because the campaigns measured zero.
         </div>
       ) : null}
 
@@ -200,6 +260,6 @@ export default function AdPerformanceScreen() {
           </p>
         </SectionCard>
       ) : null}
-    </div>
+    </Frame>
   );
 }

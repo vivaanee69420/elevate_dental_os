@@ -78,6 +78,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   loyalty: 'growth.view',
   booking: 'growth.view',
   benchmark: 'growth.view',
+  'ad-performance': 'growth.view',
 
   // Elevate CRM
   'crm-today': 'crm.view',
