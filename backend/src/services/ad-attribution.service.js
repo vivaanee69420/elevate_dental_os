@@ -35,6 +35,24 @@ export function resolveChannel(channelMap, accountId, pipelineId) {
 // somebody sits in two pipelines.
 export const personKey = (lead) => lead.contact_id ?? `lead:${lead.id}`;
 
+// ad_metrics.practice_id is written as literal null by BOTH ad connectors
+// (meta-ads-sync.js, google-ads-sync.js) and nothing backfills it, so a spend
+// row cannot say which practice it belongs to on its own. The mapping that IS
+// maintained lives on ad_accounts.practice_id, reachable from a spend row via
+// customer_id. This map is that join, and it is the ONLY place it is
+// expressed — both the spend endpoint and computePerformance use it.
+//
+// Keyed on provider AND customer_id: ad_accounts is unique on
+// (organisation_id, provider, customer_id), so a bare customer id could
+// collide across providers.
+export function accountPracticeByCustomerId(adAccounts) {
+    const map = new Map();
+    for (const a of adAccounts ?? []) {
+        map.set(`${a.provider}|${a.customer_id}`, a.practice_id ?? null);
+    }
+    return map;
+}
+
 // Null, never 0 and never Infinity: a zero-denominator cost per lead is
 // unknown, and rendering it as 0 reads as "free leads".
 export function ratio(numerator, denominator) {

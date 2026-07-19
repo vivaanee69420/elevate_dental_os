@@ -4,7 +4,7 @@ import {
 import { adAttributionRepository } from '../src/repositories/ad-attribution.repository.js';
 import { adChannelPipelineRepository } from '../src/repositories/ad-channel-pipeline.repository.js';
 import {
-  resolveChannel, ratio, computePerformance, adAttributionService,
+  resolveChannel, ratio, computePerformance, adAttributionService, accountPracticeByCustomerId,
 } from '../src/services/ad-attribution.service.js';
 
 vi.mock('../src/repositories/ad-attribution.repository.js', () => ({
@@ -563,5 +563,33 @@ describe('adAttributionService.setPipelineChannel — unknown subaccount', () =>
     await expect(
       adAttributionService.setPipelineChannel('org1', 'acc-does-not-exist', 'g', 'google_ads'),
     ).rejects.toMatchObject({ statusCode: 404, message: 'Unknown subaccount' });
+  });
+});
+
+describe('accountPracticeByCustomerId', () => {
+  it('keys on provider AND customer id so two providers cannot collide', () => {
+    const map = accountPracticeByCustomerId([
+      { provider: 'google_ads', customer_id: '123', practice_id: 'p-google' },
+      { provider: 'meta_ads', customer_id: '123', practice_id: 'p-meta' },
+    ]);
+    expect(map.get('google_ads|123')).toBe('p-google');
+    expect(map.get('meta_ads|123')).toBe('p-meta');
+  });
+
+  it('keeps an unmapped account as null rather than dropping it', () => {
+    const map = accountPracticeByCustomerId([
+      { provider: 'google_ads', customer_id: '123', practice_id: null },
+    ]);
+    expect(map.has('google_ads|123')).toBe(true);
+    expect(map.get('google_ads|123')).toBeNull();
+  });
+
+  it('returns an empty map for no accounts', () => {
+    expect(accountPracticeByCustomerId([]).size).toBe(0);
+  });
+
+  it('tolerates a null or undefined account list', () => {
+    expect(accountPracticeByCustomerId(null).size).toBe(0);
+    expect(accountPracticeByCustomerId(undefined).size).toBe(0);
   });
 });
