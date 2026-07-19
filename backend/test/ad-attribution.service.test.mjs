@@ -126,6 +126,10 @@ describe('computePerformance', () => {
     const row = out.byPractice.find((p) => p.practiceId === 'p1');
     const pg = row.channels.find((c) => c.channel === 'google_ads');
     expect(pg.spendPence).toBeNull();
+    // The totals block must follow the same zero-means-unknown rule as the
+    // per-channel rows above it — this is the assertion the original round
+    // never added.
+    expect(out.totals.spendPence).toBeNull();
   });
 
   it('rounds costPerLeadPence and costPerAcquisitionPence to whole pence', () => {
@@ -200,6 +204,97 @@ describe('computePerformance', () => {
       const out = computePerformance({ leads, accepted: [], spend: [], channelMap, accountPractice });
       const row = out.byPractice.find((p) => p.practiceId === 'p1');
       expect(row.total.leads).toBe(1);
+    });
+
+    it('CRITICAL: divides totals cost metrics by PAID leads, not by every deduped lead including unassigned', () => {
+      // 100 people through a mapped google_ads pipeline with £1,000 spend,
+      // plus 100 people seen only in an untagged (unassigned) pipeline. The
+      // untagged pipelines are the ordinary state, not an edge case — most of
+      // this org's 113 pipelines are untagged today.
+      //
+      // Hand-worked expectation: spend is 100000p, paid leads are the 100
+      // google_ads people (unassigned people cost nothing and must not be in
+      // the denominator). costPerLeadPence = 100000 / 100 = 1000p (£10.00) —
+      // matching the per-channel google_ads cost per lead exactly.
+      //
+      // Against the pre-fix implementation this divided by totals.leads (200,
+      // ALL deduped people including unassigned), giving 100000 / 200 = 500p
+      // (£5.00) — half the true paid cost per lead. This test fails against
+      // that implementation and passes against the fix.
+      const paidLeads = Array.from({ length: 100 }, (_, i) => ({
+        id: `paid-${i}`, contact_id: `paid-${i}`, integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-02', contacts: {},
+      }));
+      const untaggedLeads = Array.from({ length: 100 }, (_, i) => ({
+        id: `untagged-${i}`, contact_id: `untagged-${i}`, integration_account_id: 'acc1', ghl_pipeline_id: 'other', created_at: '2026-07-02', contacts: {},
+      }));
+      const spend = [{ provider: 'google_ads', practice_id: 'p1', spend_pence: 100000, metric_date: '2026-07-02' }];
+      const out = computePerformance({
+        leads: [...paidLeads, ...untaggedLeads], accepted: [], spend, channelMap, accountPractice,
+      });
+
+      // totals.leads counts EVERYONE — that is the honest funnel total and
+      // the reason the totals block exists.
+      expect(out.totals.leads).toBe(200);
+      // paidLeads counts only the google_ads/meta_ads people.
+      expect(out.totals.paidLeads).toBe(100);
+      expect(out.totals.spendPence).toBe(100000);
+      // The defect: this must be spend / paidLeads (1000), never spend /
+      // totals.leads (500).
+      expect(out.totals.costPerLeadPence).toBe(1000);
+      expect(out.totals.costPerLeadPence).not.toBe(500);
+    });
+
+    it('nulls totals cost metrics when one paid channel has leads but its spend feed is not reporting', () => {
+      // google_ads spend IS known (£1,000); meta_ads has a lead but no spend
+      // row at all for the window, so its accumulated spend stays the
+      // emptyStats() 0 — "not reporting", same as no rows. Charging the
+      // known google spend against BOTH channels' leads (as a naive
+      // spend/paidLeads division would) understates meta's true cost by
+      // pretending it was free, the same class of error as the Critical
+      // defect. costPerLeadPence and costPerAcquisitionPence must both be
+      // null; spendPence must still show the known £1,000.
+      //
+      // Against an implementation with the paidLeads fix but WITHOUT this
+      // guard, costPerLeadPence would come out as 100000 / 2 = 50000 — a
+      // real, present-looking number silently built on an absent meta spend
+      // feed. This test fails against that half-fixed implementation.
+      const leads = [
+        { id: 'l1', contact_id: 'c1', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-02', contacts: {} },
+        { id: 'l2', contact_id: 'c2', integration_account_id: 'acc1', ghl_pipeline_id: 'f', created_at: '2026-07-02', contacts: {} },
+      ];
+      const spend = [{ provider: 'google_ads', practice_id: 'p1', spend_pence: 100000, metric_date: '2026-07-02' }];
+      const out = computePerformance({ leads, accepted: [], spend, channelMap, accountPractice });
+
+      expect(out.totals.paidLeads).toBe(2);
+      expect(out.totals.spendPence).toBe(100000);
+      expect(out.totals.costPerLeadPence).toBeNull();
+      expect(out.totals.costPerAcquisitionPence).toBeNull();
+    });
+
+    it('applies the same paid-leads denominator to a byPractice total', () => {
+      // Same shape as the CRITICAL test above, but scoped through
+      // byPractice[].total rather than the group-level totals block — the
+      // ruling applies "as well" to the per-practice total, and that path is
+      // a separate call site in computePerformance, not automatically
+      // covered by testing the group level alone.
+      const paidLeads = Array.from({ length: 10 }, (_, i) => ({
+        id: `paid-${i}`, contact_id: `paid-${i}`, integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-02', contacts: {},
+      }));
+      const untaggedLeads = Array.from({ length: 10 }, (_, i) => ({
+        id: `untagged-${i}`, contact_id: `untagged-${i}`, integration_account_id: 'acc1', ghl_pipeline_id: 'other', created_at: '2026-07-02', contacts: {},
+      }));
+      const spend = [{ provider: 'google_ads', practice_id: 'p1', spend_pence: 10000, metric_date: '2026-07-02' }];
+      const out = computePerformance({
+        leads: [...paidLeads, ...untaggedLeads], accepted: [], spend, channelMap, accountPractice,
+      });
+      const row = out.byPractice.find((p) => p.practiceId === 'p1');
+
+      // 20 people through this practice in total, only 10 of them paid.
+      expect(row.total.leads).toBe(20);
+      expect(row.total.paidLeads).toBe(10);
+      // 10000p / 10 paid leads = 1000p, NOT 10000p / 20 = 500p.
+      expect(row.total.costPerLeadPence).toBe(1000);
+      expect(row.total.costPerLeadPence).not.toBe(500);
     });
   });
 
