@@ -14,9 +14,11 @@ export function useAdPerformance(p: AdPerfParams) {
   });
 }
 
+// The key must start with 'ad-performance' (element zero) because settings mutations
+// invalidate by that prefix — any other structure will be missed.
 export function useAdLeads(open: boolean, p: AdPerfParams & { channel?: PerfChannel }) {
   return useQuery({
-    queryKey: ['ad-performance-leads', p.since, p.until, p.practiceId ?? '', p.channel ?? ''],
+    queryKey: ['ad-performance', 'leads', p.since, p.until, p.practiceId ?? '', p.channel ?? ''],
     queryFn: () => fetchAdLeads(p),
     enabled: open,
     staleTime: 30_000,
