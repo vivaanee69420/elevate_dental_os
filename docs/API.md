@@ -850,6 +850,25 @@ every 2h in `workers/index.js`, plus first-pull-on-connect and on-demand `/sync`
 > GoHighLevel inbound sync (opportunities + contacts → leads/contacts) runs
 > hourly in `workers/index.js`; not an HTTP endpoint.
 
+### Daily WhatsApp report
+
+Owner-only settings, preview and manual-send endpoints for the daily
+WhatsApp digest (sent to a GHL inbound webhook). The stored webhook URL is a
+send-anything credential — `GET` never returns it in the clear, only a
+masked form.
+
+### `GET /api/integrations/gohighlevel/daily-report`
+Owner only. Returns `{ settings: { webhookUrlMasked, configured, enabled, lastSentAt, lastStatus, lastError } | null }`. `settings` is `null` when nothing has been configured yet.
+
+### `PUT /api/integrations/gohighlevel/daily-report`
+Owner only. Body `{ webhookUrl, enabled }` — `webhookUrl` must be `https://` (plain `http://` is rejected, 400). Upserts the org's settings row (URL encrypted at rest). Returns `{ settings }` (masked, as above).
+
+### `POST /api/integrations/gohighlevel/daily-report/preview`
+Owner only. Builds today's report without sending it. Returns `{ line, length, payload }`.
+
+### `POST /api/integrations/gohighlevel/daily-report/send`
+Owner only. Triggers an immediate manual send to the configured webhook. Rate-limited in-memory to 6 sends/hour/org (429 `{ error }` beyond that — a double-click guard, not a security control). Returns `{ sent, status, reason? }`.
+
 ## Notifications
 
 In-app notification inbox and delivery-preference management for the current authenticated user. All endpoints under `/api/notifications` require tenant auth (JWT cookie via the same-origin proxy). Notifications are scoped to the calling user within their organisation.
