@@ -26,16 +26,16 @@ WhatsApp template parameters **cannot contain newlines, tabs, or 4+ consecutive
 spaces** (Meta Cloud API restriction, enforced downstream of GHL). Therefore the
 report is a single pipe-separated line, not a formatted multi-line block.
 
-**Pre-implementation verification (blocking):** send a throwaway one-variable
-template containing `"a\nb"` and observe the result. If newlines survive, the
-multi-line layout becomes available and only the formatter changes — the rest of
-this design is unaffected.
+**Decided:** use pipe separators on a single line. No newline verification needed.
 
-**Second verification (blocking):** confirm the actual value-length cap on a GHL
-Multi line custom field. The `0/200` counters visible in the field editor apply to
-Description and Placeholder, not the stored value. A full report is 350–700 chars.
-If the value caps at 200 this approach is not viable and we fall back to a
-multi-variable template.
+The GHL Multi line custom field value cap is unknown. Rather than block on
+measuring it, the report is capped at **300 characters** — short enough to be
+comfortably under any plausible limit, and short enough to read in well under a
+minute, which was the original goal.
+
+Byte-vs-character note: if GHL counts bytes rather than characters, `£` and `·`
+cost 2 bytes each in UTF-8. Separators are therefore plain ASCII (`|`, `,`) and
+`£` is used only where it carries meaning, buying headroom for free.
 
 ## Scope
 
@@ -136,10 +136,10 @@ works today; moving to a multi-variable template later requires no backend chang
   "report_date": "2026-07-21",
   "report_date_label": "Tue 21 Jul",
   "organisation": "Plan4growth",
-  "report_line": "Daily Report Tue 21 Jul | LEADS 24 (Google 14 · Meta 10) | ...",
+  "report_line": "Daily 21 Jul | Leads 24 (Google 14, Meta 10) | Spend £412 ...",
 
   "leads_total": 24, "leads_google": 14, "leads_meta": 10,
-  "spend_total": "£412", "spend_google": "£412", "spend_meta": "Not reporting",
+  "spend_total": "£412", "spend_google": "£412", "spend_meta": "not reporting",
   "cpl_total": "£17.17", "cpl_google": "£29.43", "cpl_meta": "n/a",
   "conversions": 6, "conversion_rate": "25%", "cpa": "£68.67",
   "cash_in": "£6,240",
@@ -153,24 +153,31 @@ Formatter rules:
 1. **Money is pre-formatted as display strings.** Pence→`£6,240` happens in our
    formatter. Raw pence integers are excluded from the payload entirely, so no one
    can accidentally map `624000` into a message.
-2. **Null spend renders `"Not reporting"`, never `£0`.** `adAttributionService`
+2. **Null spend renders `"not reporting"`, never `£0`.** `adAttributionService`
    returns `spendPence: null` when a feed reports nothing; that guard is why the
    currently-dead Meta feed is visible rather than silently reporting zero spend.
    Dependent metrics render `n/a`. Covered by a test.
 3. **`report_line` is guaranteed free of newlines, tabs and 4+ consecutive spaces.**
-4. **`report_line` is capped at 700 characters**, truncating the trailing QuickBooks
-   section gracefully, so an unexpected value cannot exceed the custom-field limit.
+4. **`report_line` is capped at 300 characters.** This is an enforced guard, not an
+   assumption: the typical line is ~215 chars, but wide values (six-figure spend,
+   `not reporting` on both channels) can reach ~280. When the cap would be exceeded,
+   sections are dropped in this order:
+   1. QuickBooks (`QBO MTD ...`)
+   2. Dentally (`Appts ...`)
+
+   Ad metrics and cash in are never dropped — they are the reason the report exists.
+5. Separators are ASCII (`|` between sections, `,` within them). `£` only where
+   it carries meaning. See the byte-vs-character note above.
 
 ## Example output
 
 ```
-Daily Report Tue 21 Jul | LEADS 24 (Google 14 · Meta 10) | SPEND £412
-(Google £412 · Meta Not reporting) | CPL £17.17 (Google £29.43 · Meta n/a)
-| CONVERSIONS 6 · 25% · CPA £68.67 | CASH IN £6,240 | DENTALLY 118 appts ·
-7 DNA (5.9%) · 12 new pts | QBO MTD rev £142k · margin 18.4%
+Daily 21 Jul | Leads 24 (Google 14, Meta 10) | Spend £412 (Google £412,
+Meta not reporting) | CPL £17.17 | Conv 6 (25%), CPA £68.67 | Cash in
+£6,240 | Appts 118, DNA 7 (5.9%), New pts 12 | QBO MTD £142k, margin 18.4%
 ```
 
-Shown wrapped for readability; sends as one unbroken line. ~330 characters.
+Shown wrapped for readability; sends as one unbroken line. ~215 characters.
 
 ## UI
 
@@ -230,9 +237,10 @@ existing GHL dashboard route ordering.
 
 Vitest, backend. Value concentrates in the pure functions.
 
-- `formatReportLine`: null spend → `Not reporting`; dependent metrics → `n/a`;
+- `formatReportLine`: null spend → `not reporting`; dependent metrics → `n/a`;
   pence→£ formatting; output contains no newline/tab/4-space run; truncation at
-  the 700-char cap preserves the leading sections.
+  the 300-char cap drops QuickBooks first, then Dentally, and never the ad metrics
+  or cash in; a worst-case wide-value line still fits.
 - `buildDailyReport`: correct window — yesterday in Europe/London, not UTC. A
   naive `new Date()` would select the wrong day for part of the year.
 - Cron: one org failing does not abort the others; same-day resend is blocked;
@@ -249,9 +257,9 @@ the formatter and its tests.
 
 ## Open items before implementation
 
-1. Verify newline handling in a WhatsApp template variable (blocking — decides
-   single-line vs multi-line layout).
-2. Verify the GHL Multi line custom field value length cap (blocking — decides
-   whether one-field delivery is viable at all).
-3. Confirm the boss exists as a Contact in the target GHL subaccount, since the
-   custom field is on the Contact object.
+None blocking. All three earlier questions are resolved:
+
+1. Newlines — avoided entirely by using pipe separators on a single line.
+2. Custom field value cap — unmeasured, but sidestepped by capping the report at
+   300 characters.
+3. Boss as a GHL Contact — confirmed handled on the GHL side.
