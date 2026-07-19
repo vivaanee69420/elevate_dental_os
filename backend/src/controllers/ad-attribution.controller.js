@@ -1,7 +1,7 @@
 import { adAttributionService } from "../services/ad-attribution.service.js";
 import {
     setPipelineChannelSchema, setPracticeSchema,
-    performanceQuerySchema, adLeadsQuerySchema,
+    performanceQuerySchema, adLeadsQuerySchema, spendQuerySchema,
 } from "../models/ad-attribution.model.js";
 
 export const adAttributionController = {
@@ -40,6 +40,12 @@ export const adAttributionController = {
         res.json(await adAttributionService.getLeads(req.user.organisation_id, {
             since: q.since, until: q.until, channel: q.channel,
             practiceId: q.practice_id, limit: q.limit,
+        }));
+    },
+    async spend(req, res) {
+        const q = spendQuerySchema.parse(req.query);
+        res.json(await adAttributionService.getSpend(req.user.organisation_id, {
+            since: q.since, until: q.until, practiceId: q.practice_id,
         }));
     },
 };

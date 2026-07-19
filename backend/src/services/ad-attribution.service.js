@@ -630,4 +630,88 @@ export const adAttributionService = {
         }
         return { leads: rows };
     },
+
+    // Spend broken out per account and per campaign, so the Spend tile has
+    // something to open. Practice attribution comes from the ad_accounts join,
+    // NOT from ad_metrics.practice_id — that column is null on every row.
+    //
+    // reach/frequency are deliberately absent: they are not summable across
+    // days, and summing them (as growth.routes.js does) overcounts.
+    async getSpend(orgId, { since, until, practiceId }) {
+        const [rows, accounts, practices] = await Promise.all([
+            adAttributionRepository.adSpendDetailed(orgId, since, until),
+            adAttributionRepository.adAccounts(orgId),
+            adAttributionRepository.practiceOptions(orgId),
+        ]);
+        const practiceOf = accountPracticeByCustomerId(accounts);
+        const accountName = new Map(
+            (accounts ?? []).map((a) => [`${a.provider}|${a.customer_id}`, a.name ?? null]),
+        );
+        const practiceName = new Map((practices ?? []).map((p) => [p.id, p.name]));
+
+        const byAccount = new Map();
+        const byCampaign = new Map();
+        let unattributedSpendPence = 0;
+
+        for (const r of rows ?? []) {
+            const acctKey = `${r.provider}|${r.customer_id}`;
+            const known = practiceOf.has(acctKey);
+            const practice = known ? practiceOf.get(acctKey) : null;
+            // Spend on a customer_id with no ad_accounts row cannot be tied to
+            // an account at all. Reported separately so byAccount and the group
+            // total visibly reconcile rather than quietly disagreeing.
+            //
+            // Only counted when NO practice filter is applied: spend that
+            // cannot be attributed to any account certainly cannot be
+            // attributed to a specific practice, so adding it to a
+            // practice-scoped view would overstate that practice's spend.
+            if (!known) {
+                if (!practiceId) unattributedSpendPence += r.spend_pence || 0;
+                continue;
+            }
+            if (practiceId && practice !== practiceId) continue;
+
+            if (!byAccount.has(acctKey)) {
+                byAccount.set(acctKey, {
+                    customerId: r.customer_id,
+                    provider: r.provider,
+                    accountName: accountName.get(acctKey) ?? null,
+                    practiceId: practice,
+                    practiceName: practice ? (practiceName.get(practice) ?? null) : null,
+                    spendPence: 0, impressions: 0, clicks: 0, conversions: 0,
+                });
+            }
+            const a = byAccount.get(acctKey);
+            a.spendPence += r.spend_pence || 0;
+            a.impressions += r.impressions || 0;
+            a.clicks += r.clicks || 0;
+            a.conversions += r.conversions || 0;
+
+            const campKey = `${acctKey}|${r.campaign_id ?? ''}`;
+            if (!byCampaign.has(campKey)) {
+                byCampaign.set(campKey, {
+                    customerId: r.customer_id,
+                    provider: r.provider,
+                    campaignId: r.campaign_id ?? null,
+                    campaignName: r.campaign_name ?? null,
+                    campaignStatus: r.campaign_status ?? null,
+                    practiceId: practice,
+                    practiceName: practice ? (practiceName.get(practice) ?? null) : null,
+                    spendPence: 0, impressions: 0, clicks: 0, conversions: 0,
+                });
+            }
+            const c = byCampaign.get(campKey);
+            c.spendPence += r.spend_pence || 0;
+            c.impressions += r.impressions || 0;
+            c.clicks += r.clicks || 0;
+            c.conversions += r.conversions || 0;
+        }
+
+        const bySpendDesc = (x, y) => y.spendPence - x.spendPence;
+        return {
+            byAccount: [...byAccount.values()].sort(bySpendDesc),
+            byCampaign: [...byCampaign.values()].sort(bySpendDesc),
+            unattributedSpendPence,
+        };
+    },
 };

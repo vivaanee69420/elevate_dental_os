@@ -29,3 +29,11 @@ export const adLeadsQuerySchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid().optional(),
     limit: zod_1.z.coerce.number().default(500),
 });
+
+// Same window/scope contract as performanceQuerySchema — the spend drill-down
+// is opened from the same ScopePeriod bar.
+export const spendQuerySchema = zod_1.z.object({
+    since: zod_1.z.string(),
+    until: zod_1.z.string(),
+    practice_id: zod_1.z.string().uuid().optional(),
+});

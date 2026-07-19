@@ -18,6 +18,7 @@ vi.mock('../src/repositories/ad-attribution.repository.js', () => ({
     leadCountsByPipeline: vi.fn(),
     setAdAccountPractice: vi.fn(),
     emergentBusinesses: vi.fn(),
+    adSpendDetailed: vi.fn(),
   },
 }));
 vi.mock('../src/repositories/ad-channel-pipeline.repository.js', () => ({
@@ -681,5 +682,94 @@ describe('getMappingHealth', () => {
     expect(out.summary).toEqual({
       adAccountsUnmapped: 0, ghlAccountsUnmapped: 0, emergentUnmapped: 0, pipelinesUnmapped: 0,
     });
+  });
+});
+
+describe('getSpend', () => {
+  const ACCOUNTS = [
+    { id: 'a1', provider: 'google_ads', customer_id: '111', name: 'G Main', practice_id: 'p1' },
+    { id: 'a2', provider: 'meta_ads', customer_id: '222', name: 'M Main', practice_id: null },
+  ];
+
+  beforeEach(() => {
+    adAttributionRepository.adAccounts.mockResolvedValue(ACCOUNTS);
+    adAttributionRepository.practiceOptions.mockResolvedValue([{ id: 'p1', name: 'Ashford' }]);
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([]);
+  });
+
+  it('rolls day rows up to one row per account and one per campaign', async () => {
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'google_ads', customer_id: '111', campaign_id: 'c1', campaign_name: 'Brand', campaign_status: 'ENABLED', spend_pence: 1000, impressions: 10, clicks: 2, conversions: 1, metric_date: '2026-07-01' },
+      { provider: 'google_ads', customer_id: '111', campaign_id: 'c1', campaign_name: 'Brand', campaign_status: 'ENABLED', spend_pence: 500, impressions: 5, clicks: 1, conversions: 0, metric_date: '2026-07-02' },
+      { provider: 'google_ads', customer_id: '111', campaign_id: 'c2', campaign_name: 'Generic', campaign_status: 'PAUSED', spend_pence: 250, impressions: 3, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', { since: '2026-07-01', until: '2026-08-01' });
+    expect(out.byAccount).toHaveLength(1);
+    expect(out.byAccount[0]).toMatchObject({
+      customerId: '111', provider: 'google_ads', accountName: 'G Main',
+      practiceId: 'p1', practiceName: 'Ashford',
+      spendPence: 1750, impressions: 18, clicks: 3, conversions: 1,
+    });
+    expect(out.byCampaign).toHaveLength(2);
+    expect(out.byCampaign[0]).toMatchObject({ campaignId: 'c1', spendPence: 1500 });
+  });
+
+  it('sorts both arrays by spend descending', async () => {
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'google_ads', customer_id: '111', campaign_id: 'small', campaign_name: 'S', spend_pence: 100, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+      { provider: 'meta_ads', customer_id: '222', campaign_id: 'big', campaign_name: 'B', spend_pence: 9000, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', { since: '2026-07-01', until: '2026-08-01' });
+    expect(out.byCampaign.map((c) => c.campaignId)).toEqual(['big', 'small']);
+    expect(out.byAccount.map((a) => a.customerId)).toEqual(['222', '111']);
+  });
+
+  it('reports spend on an unknown customer_id as unattributed rather than dropping it', async () => {
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'google_ads', customer_id: 'GHOST', campaign_id: 'c9', campaign_name: 'Z', spend_pence: 700, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', { since: '2026-07-01', until: '2026-08-01' });
+    expect(out.unattributedSpendPence).toBe(700);
+  });
+
+  it('is zero, not null, when everything is attributed — it is a real sum', async () => {
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'google_ads', customer_id: '111', campaign_id: 'c1', campaign_name: 'B', spend_pence: 100, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', { since: '2026-07-01', until: '2026-08-01' });
+    expect(out.unattributedSpendPence).toBe(0);
+  });
+
+  it('filters to accounts mapped to the requested practice, excluding unmapped ones', async () => {
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'google_ads', customer_id: '111', campaign_id: 'c1', campaign_name: 'B', spend_pence: 100, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+      { provider: 'meta_ads', customer_id: '222', campaign_id: 'c2', campaign_name: 'M', spend_pence: 900, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', {
+      since: '2026-07-01', until: '2026-08-01', practiceId: 'p1',
+    });
+    expect(out.byAccount.map((a) => a.customerId)).toEqual(['111']);
+    expect(out.byCampaign.map((c) => c.campaignId)).toEqual(['c1']);
+  });
+
+  it('does not count unattributed spend into a practice-scoped view', async () => {
+    // Spend that cannot be tied to any account certainly cannot be tied to one
+    // practice, so a practice-scoped request must not inherit it.
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'google_ads', customer_id: 'GHOST', campaign_id: 'c9', campaign_name: 'Z', spend_pence: 700, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', {
+      since: '2026-07-01', until: '2026-08-01', practiceId: 'p1',
+    });
+    expect(out.unattributedSpendPence).toBe(0);
+  });
+
+  it('does not return reach or frequency — they are not summable across days', async () => {
+    adAttributionRepository.adSpendDetailed.mockResolvedValue([
+      { provider: 'google_ads', customer_id: '111', campaign_id: 'c1', campaign_name: 'B', spend_pence: 100, impressions: 0, clicks: 0, conversions: 0, metric_date: '2026-07-01' },
+    ]);
+    const out = await adAttributionService.getSpend('org1', { since: '2026-07-01', until: '2026-08-01' });
+    expect(out.byAccount[0]).not.toHaveProperty('reach');
+    expect(out.byCampaign[0]).not.toHaveProperty('frequency');
   });
 });

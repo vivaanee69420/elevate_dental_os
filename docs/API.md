@@ -1406,3 +1406,11 @@ all three. `limit` applies to the returned deduped rows and defaults 500.
 Roles: `owner`, `practice_manager`. No query parameters — deliberately group-wide, not narrowed by practice.
 
 Returns every ad account, GoHighLevel subaccount and Emergent business with the practice it maps to, plus a `summary` of what is unmapped. `mapped` is `practiceId !== null`. `practiceName` is null when unmapped. `summary.pipelinesUnmapped` counts pipelines with no channel, excluding subaccounts that have no practice (academy/accounting Locations), matching the `unmappedPipelineCount` returned by `/performance`.
+
+### GET /api/ad-attribution/spend
+
+Roles: `owner`, `practice_manager`. Query: `since`, `until`, optional `practice_id`.
+
+Returns `byAccount[]` and `byCampaign[]` (both sorted by `spendPence` descending) plus `unattributedSpendPence`. Money is integer pence.
+
+Practice attribution comes from joining `ad_metrics.customer_id` to `ad_accounts.practice_id` — `ad_metrics.practice_id` is null on every row and is not used. `unattributedSpendPence` is spend on a `customer_id` with no matching `ad_accounts` row; it is 0, never null, because it is a real sum. `reach` and `frequency` are deliberately not returned: they cannot be summed across days.
