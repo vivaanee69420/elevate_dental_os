@@ -190,6 +190,17 @@ export function computePerformance({
     // asymmetry the group/practice split already uses everywhere else in
     // this function: a person seen at two practices in the same month counts
     // once for each practice AND once for the group.
+    // Total spend, across all channels, on rows whose ad account did NOT
+    // resolve to a practice. Group spend (channels[].spendPence) sums EVERY
+    // spend row regardless of mapping, but byPractice only accumulates a row
+    // when its account maps to a practice — so whenever some accounts are
+    // mapped and others are not (the realistic in-between state, since
+    // accounts are mapped one at a time), group spend and the sum of
+    // byPractice spend diverge by exactly this amount. It is a real sum over
+    // rows that exist, so it is always a number, never null; 0 correctly
+    // means "everything attributed".
+    let groupOnlySpendPence = 0;
+
     const trendByPractice = new Map();   // practiceId -> Map<'YYYY-MM', Map<channel, stats>>
     const trendSeenByPractice = new Map(); // `${practiceId}|${month}|${channel}` -> Set(personKey)
     const practiceTrendStats = (practiceId, month, channel) => {
@@ -341,6 +352,8 @@ export function computePerformance({
         if (rowPractice) {
             const p = practiceStats(rowPractice, row.provider);
             p.spendPence += row.spend_pence || 0;
+        } else {
+            groupOnlySpendPence += row.spend_pence || 0;
         }
         const m = monthKey(row.metric_date);
         // A null/blank metric_date must not become an "Invalid Date" point on
@@ -401,6 +414,7 @@ export function computePerformance({
         })),
         trend: finaliseTrend(trend),
         excludedUnmappedLeads,
+        groupOnlySpendPence,
     };
 }
 
@@ -580,6 +594,10 @@ export const adAttributionService = {
                 ? (byPractice[0]?.trend ?? [])
                 : result.trend,
             excludedUnmappedLeads: result.excludedUnmappedLeads,
+            // Always the group-wide figure, regardless of practiceId scope —
+            // it describes spend that reaches NO practice, which is a
+            // property of the org's mapping state, not of any one practice.
+            groupOnlySpendPence: result.groupOnlySpendPence,
             // Only pipelines on a subaccount mapped to a practice are eligible
             // to be mapped at all — a subaccount with practice_id null (the
             // academy/accounting Locations) is excluded from this feature
@@ -672,6 +690,11 @@ export const adAttributionService = {
         let unattributedSpendPence = 0;
 
         for (const r of rows ?? []) {
+            // Same guard as computePerformance's spend loop: ad_metrics.provider
+            // is only ever google_ads/meta_ads today, so this is a no-op now,
+            // but without it the two endpoints silently stop reconciling the
+            // day a third provider is synced.
+            if (!AD_CHANNELS.includes(r.provider)) continue;
             const acctKey = `${r.provider}|${r.customer_id}`;
             const known = practiceOf.has(acctKey);
             const practice = known ? practiceOf.get(acctKey) : null;
@@ -729,7 +752,13 @@ export const adAttributionService = {
         return {
             byAccount: [...byAccount.values()].sort(bySpendDesc),
             byCampaign: [...byCampaign.values()].sort(bySpendDesc),
-            unattributedSpendPence,
+            // Under a practice filter this loop deliberately never
+            // accumulates unattributed spend (see the `if (!known)` guard
+            // above) — a `0` here would falsely read as "everything is
+            // attributed" when unattributed spend may still exist at group
+            // level. null is the honest "not known/not applicable" signal;
+            // only the unscoped, group-wide call returns the real sum.
+            unattributedSpendPence: practiceId ? null : unattributedSpendPence,
         };
     },
 };
