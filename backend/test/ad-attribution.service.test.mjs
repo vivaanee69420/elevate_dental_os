@@ -773,3 +773,74 @@ describe('getSpend', () => {
     expect(out.byCampaign[0]).not.toHaveProperty('frequency');
   });
 });
+
+describe('getLeads additive fields', () => {
+  beforeEach(() => {
+    adChannelPipelineRepository.channelMap.mockResolvedValue(new Map([['g1|pl1', 'google_ads']]));
+    adAttributionRepository.ghlAccounts.mockResolvedValue([
+      { id: 'g1', label: 'Ashford', external_account_id: 'LOC1', practice_id: 'p1', status: 'active', pipelines: [{ id: 'pl1', name: 'Open Day' }] },
+    ]);
+    adAttributionRepository.practiceOptions.mockResolvedValue([{ id: 'p1', name: 'Ashford' }]);
+    adAttributionRepository.acceptedForMatching.mockResolvedValue([]);
+    adAttributionRepository.leadsInWindow.mockResolvedValue([]);
+  });
+
+  it('exposes personKey as the contact id when there is one', async () => {
+    adAttributionRepository.leadsInWindow.mockResolvedValue([
+      { id: 'l1', contact_id: 'c1', integration_account_id: 'g1', ghl_pipeline_id: 'pl1', created_at: '2026-07-01T00:00:00Z', contacts: { first_name: 'A', last_name: 'B' } },
+    ]);
+    const out = await adAttributionService.getLeads('org1', { since: '2026-07-01', until: '2026-08-01', limit: 500 });
+    expect(out.leads[0].personKey).toBe('c1');
+  });
+
+  it('falls back to the synthetic lead key when the contact id is null', async () => {
+    adAttributionRepository.leadsInWindow.mockResolvedValue([
+      { id: 'l1', contact_id: null, integration_account_id: 'g1', ghl_pipeline_id: 'pl1', created_at: '2026-07-01T00:00:00Z', contacts: {} },
+    ]);
+    const out = await adAttributionService.getLeads('org1', { since: '2026-07-01', until: '2026-08-01', limit: 500 });
+    expect(out.leads[0].personKey).toBe('lead:l1');
+  });
+
+  it('carries the practice id and resolved name', async () => {
+    adAttributionRepository.leadsInWindow.mockResolvedValue([
+      { id: 'l1', contact_id: 'c1', integration_account_id: 'g1', ghl_pipeline_id: 'pl1', created_at: '2026-07-01T00:00:00Z', contacts: {} },
+    ]);
+    const out = await adAttributionService.getLeads('org1', { since: '2026-07-01', until: '2026-08-01', limit: 500 });
+    expect(out.leads[0].practiceId).toBe('p1');
+    expect(out.leads[0].practiceName).toBe('Ashford');
+  });
+
+  it('exposes the matched patient name and accepted date the matcher already computed', async () => {
+    adAttributionRepository.leadsInWindow.mockResolvedValue([
+      { id: 'l1', contact_id: 'c1', integration_account_id: 'g1', ghl_pipeline_id: 'pl1', created_at: '2026-07-01T00:00:00Z', contacts: { phone: '07700900000' } },
+    ]);
+    adAttributionRepository.acceptedForMatching.mockResolvedValue([
+      { id: 't1', practice_id: 'p1', patient_name: 'Jane Doe', value_pence: 5000, treatment_name: 'Implant', accepted_date: '2026-07-05', raw: { phone: '07700900000' } },
+    ]);
+    const out = await adAttributionService.getLeads('org1', { since: '2026-07-01', until: '2026-08-01', limit: 500 });
+    expect(out.leads[0].matchedPatientName).toBe('Jane Doe');
+    expect(out.leads[0].matchedAcceptedDate).toBe('2026-07-05');
+    expect(out.leads[0].matchedValuePence).toBe(5000);
+  });
+
+  it('leaves the matched fields null when nothing matched', async () => {
+    adAttributionRepository.leadsInWindow.mockResolvedValue([
+      { id: 'l1', contact_id: 'c1', integration_account_id: 'g1', ghl_pipeline_id: 'pl1', created_at: '2026-07-01T00:00:00Z', contacts: {} },
+    ]);
+    const out = await adAttributionService.getLeads('org1', { since: '2026-07-01', until: '2026-08-01', limit: 500 });
+    expect(out.leads[0].matchedPatientName).toBeNull();
+    expect(out.leads[0].matchedAcceptedDate).toBeNull();
+    expect(out.leads[0].converted).toBe(false);
+  });
+
+  it('still returns every pre-existing field, so consumers do not break', async () => {
+    adAttributionRepository.leadsInWindow.mockResolvedValue([
+      { id: 'l1', contact_id: 'c1', integration_account_id: 'g1', ghl_pipeline_id: 'pl1', created_at: '2026-07-01T00:00:00Z', contacts: { first_name: 'A', last_name: 'B', email: 'a@b.c', phone: '07700900000' } },
+    ]);
+    const out = await adAttributionService.getLeads('org1', { since: '2026-07-01', until: '2026-08-01', limit: 500 });
+    for (const k of ['id', 'contactId', 'name', 'email', 'phone', 'channel', 'pipelineName',
+      'createdAt', 'converted', 'matchedTreatmentName', 'matchedValuePence']) {
+      expect(out.leads[0]).toHaveProperty(k);
+    }
+  });
+});
