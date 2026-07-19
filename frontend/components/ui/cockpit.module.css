@@ -398,3 +398,20 @@
   background: var(--negbg);
   color: var(--neg);
 }
+
+/* ---- inline notices ---- */
+/* Page-level callouts. Distinct from .note, which is the Kpi sub-caption. */
+.notice {
+  background: var(--tint2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 16px;
+}
+.noticeWarn {
+  background: var(--amberbg);
+  border-color: var(--amber);
+  color: #6b5310;
+}
