@@ -38,7 +38,7 @@ const PANEL_SUB: Record<ScorecardDrill, string> = {
   paidLeads: 'People who came in through a Google-tagged or Facebook-tagged pipeline.',
   conversions: 'People who went on to accept a treatment.',
   acceptedValue: 'Highest accepted value first.',
-  overlap: 'These people are why the channel columns do not add up to the group total. This is a lower bound — leads with no contact record cannot be matched across channels, and detecting an overlap needs both of a person\'s channel rows to have survived the leads list cap, so truncation shrinks this count further.',
+  overlap: 'People counted under more than one channel column — Google, Facebook or Unassigned — which is why the channel columns do not add up to the group total. This is a lower bound — leads with no contact record cannot be matched across channels, and detecting an overlap needs both of a person\'s channel rows to have survived the leads list cap, so truncation shrinks this count further.',
   google_ads: 'People on pipelines mapped to Google Ads.',
   meta_ads: 'People on pipelines mapped to Facebook Ads.',
   unassigned: 'People on pipelines with no channel set.',
@@ -117,6 +117,8 @@ export default function AdPerformanceScreen() {
         channels={data.channels}
         totals={data.totals}
         overlapCount={overlap.length}
+        overlapLoading={leads.isLoading}
+        overlapError={leads.isError}
         drill={drill}
         onDrill={(d) => setDrill(d === drill ? null : d)}
       />
@@ -125,6 +127,10 @@ export default function AdPerformanceScreen() {
         <DetailPanel title={PANEL_TITLE[drill]} sub={PANEL_SUB[drill]}>
           {leads.isLoading ? (
             <p className="text-sm text-slate-500">Loading leads…</p>
+          ) : leads.isError ? (
+            <p className="text-sm text-red-700">
+              Could not load the leads behind this panel. Try again shortly.
+            </p>
           ) : (
             <>
               {lines.length >= LEAD_FETCH_LIMIT ? (
@@ -148,6 +154,7 @@ export default function AdPerformanceScreen() {
         lines={lines}
         totalAcceptedPence={data.totals.acceptedValuePence}
         loading={leads.isLoading}
+        error={leads.isError}
       />
 
       <ByPracticeTable rows={data.byPractice} />

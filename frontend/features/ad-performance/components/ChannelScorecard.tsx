@@ -25,15 +25,22 @@ export function ChannelScorecard({
   channels,
   totals,
   overlapCount,
+  overlapLoading,
+  overlapError,
   drill,
   onDrill,
 }: {
   channels: ChannelStats[];
   totals: AdTotals;
   overlapCount: number;
+  /** True while the leads query the overlap figure is derived from is still in flight. */
+  overlapLoading: boolean;
+  /** True when that leads query failed. */
+  overlapError: boolean;
   drill: ScorecardDrill | null;
   onDrill: (d: ScorecardDrill) => void;
 }) {
+  const overlapUnknown = overlapLoading || overlapError;
   return (
     <>
       <SectionCard>
@@ -72,13 +79,18 @@ export function ChannelScorecard({
           />
           <Kpi
             label="In more than one channel"
-            value={count(overlapCount)}
-            note={overlapCount > 0 ? 'At least this many — see panel' : undefined}
+            value={overlapUnknown ? '—' : count(overlapCount)}
+            valueMuted={overlapUnknown}
+            note={
+              overlapUnknown
+                ? (overlapError ? 'Could not load' : 'Loading…')
+                : (overlapCount > 0 ? 'At least this many — see panel' : undefined)
+            }
             onClick={() => onDrill('overlap')}
             active={drill === 'overlap'}
             info={(
               <Explainer
-                what="People who enquired through both a Google-tagged and a Facebook-tagged pipeline. They are why the channel columns do not sum to the total."
+                what="People counted under more than one channel — Google, Facebook or Unassigned. They are why the channel columns do not sum to the total."
                 how="Lead rows grouped by contact, keeping anyone who appears under more than one channel."
                 now="A lower bound: leads with no contact record cannot be matched across channels, and detecting an overlap needs both of a person's channel rows to have survived the leads list cap — so the true figure may be higher."
               />
