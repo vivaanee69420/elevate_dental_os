@@ -1806,11 +1806,15 @@ Start the backend (`cd backend && npm run dev`) and frontend (`cd frontend && np
 
 Compare the previewed numbers against the Ad Performance page for the same date (yesterday). Leads, spend and CPL must match exactly. If they do not, the window passed to `getPerformance` is wrong — check `previousDayInLondon` output rather than adjusting the formatter.
 
-- [ ] **Step 4: Verify the length against a real GHL custom field**
+- [ ] **Step 4: Confirm the line stores in the GHL custom field**
 
-Copy the previewed line, paste it into the `dental_os` Multi line custom field in GoHighLevel, and save. Confirm it stores without truncation.
+The `dental_os` Multi line field holds 12,000 characters, so a ~215-character line
+has ample headroom — this step is a sanity check, not a risk. Paste the previewed
+line into the field and save.
 
-If GHL truncates, lower `MAX_REPORT_CHARS` in `backend/src/services/daily-report.format.js` to the observed limit and re-run the formatter tests — the drop order will shed QuickBooks first automatically.
+The 350-character cap in `daily-report.format.js` is a readability choice, not a
+technical limit. Do not raise it to fit more metrics without revisiting the spec:
+the whole point is a message readable in under a minute.
 
 - [ ] **Step 5: Send a real test message**
 

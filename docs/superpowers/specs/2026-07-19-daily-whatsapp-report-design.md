@@ -27,10 +27,14 @@ spaces** (Meta Cloud API restriction, enforced downstream of GHL). Therefore the
 report is a single pipe-separated line, not a formatted multi-line block. This is
 settled — no newline verification is needed.
 
-The GHL Multi line custom field value cap is unknown. Rather than block on
-measuring it, the report is capped at **350 characters** — short enough to be
-comfortably under any plausible limit, and short enough to read in well under a
-minute, which was the original goal.
+The GHL Multi line custom field holds up to **12,000 characters** (verified), so
+field size is not a constraint. The report is nonetheless capped at **350
+characters** — a deliberate readability choice, meeting the original "readable in
+under a minute" goal. The cap is enforced in code with a section drop order, which
+in practice should never trigger.
+
+Field size does not unlock multi-line layout: that remains blocked by Meta's
+template-parameter rule, which is independent of storage.
 
 Byte-vs-character note: if GHL counts bytes rather than characters, `£` and `·`
 cost 2 bytes each in UTF-8. Separators are therefore plain ASCII (`|`, `,`) and
@@ -259,6 +263,6 @@ the formatter and its tests.
 None blocking. All three earlier questions are resolved:
 
 1. Newlines — avoided entirely by using pipe separators on a single line.
-2. Custom field value cap — unmeasured, but sidestepped by capping the report at
-   350 characters.
+2. Custom field value cap — verified at 12,000 characters. The 350-char cap is a
+   readability choice, not a technical limit.
 3. Boss as a GHL Contact — confirmed handled on the GHL side.
