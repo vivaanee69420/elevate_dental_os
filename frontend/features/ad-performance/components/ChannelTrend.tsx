@@ -1,7 +1,9 @@
 'use client';
-// Cost per lead and lead volume by month, per channel. The points come from the
-// same server-side computation as the scorecard, so the trend can never
-// disagree with the totals above it.
+// Cost per lead and lead volume by month, per channel. The points share the
+// scorecard's computation and the same finalise() funnel, but dedupe per
+// person PER MONTH rather than across the whole window — so these monthly
+// figures are not additive to the scorecard totals above (a person enquiring
+// in two different months is 1 scorecard lead but 2 trend leads).
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend,
 } from 'recharts';
@@ -66,7 +68,7 @@ export function ChannelTrend({ trend }: { trend: TrendMonth[] }) {
               name="Google cost per lead"
               stroke="#0f766e"
               strokeDasharray="4 3"
-              dot={false}
+              dot={{ r: 2 }}
               connectNulls={false}
             />
             <Line
@@ -76,7 +78,7 @@ export function ChannelTrend({ trend }: { trend: TrendMonth[] }) {
               name="Facebook cost per lead"
               stroke="#1d4ed8"
               strokeDasharray="4 3"
-              dot={false}
+              dot={{ r: 2 }}
               connectNulls={false}
             />
           </LineChart>

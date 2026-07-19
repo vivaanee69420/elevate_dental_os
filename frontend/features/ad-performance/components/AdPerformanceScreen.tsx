@@ -27,7 +27,12 @@ export default function AdPerformanceScreen() {
   if (isLoading) return <p className="p-6 text-sm text-slate-500">Loading…</p>;
   if (error || !data) return <p className="p-6 text-sm text-slate-500">Could not load ad performance.</p>;
 
-  const nothingMapped = data.channels.every((c) => c.channel === 'unassigned' || c.leads === 0);
+  const noPaidLeads = data.channels.every((c) => c.channel === 'unassigned' || c.leads === 0);
+  // Distinguish "nothing is mapped yet" (a real setup gap — send the operator
+  // to fix it) from "everything is mapped, this window is just quiet" (true
+  // but would send them to redo work that's already done if conflated).
+  const nothingMapped = noPaidLeads && data.unmappedPipelineCount > 0;
+  const mappedButQuiet = noPaidLeads && data.unmappedPipelineCount === 0;
 
   return (
     <div className="space-y-4">
@@ -40,6 +45,13 @@ export default function AdPerformanceScreen() {
         <div className="rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
           <a className="underline" href="/settings/ad-attribution">Set up ad attribution</a>.
+        </div>
+      ) : null}
+
+      {mappedButQuiet ? (
+        <div className="rounded border border-slate-200 bg-slate-50 p-3 text-[13px] text-slate-700">
+          No Google or Facebook leads in this window. Pipelines are already mapped to a
+          channel — this is just a quiet period.
         </div>
       ) : null}
 

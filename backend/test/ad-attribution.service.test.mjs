@@ -332,6 +332,64 @@ describe('computePerformance', () => {
       // Spending with nothing to show for it must not render as a £0 cost per lead.
       expect(june.costPerLeadPence).toBeNull();
     });
+
+    describe('per-practice trend (obeys the practice selector)', () => {
+      it('dedupes a person seen at two practices in the same month: once per practice, once for the group', () => {
+        // Against the pre-fix implementation there is no `trend` on a
+        // byPractice row at all, so `row.trend` is undefined and this
+        // fails immediately. Even patched naively (e.g. reusing the group
+        // trend for every practice), p1 and p3 would each show 1 lead from
+        // this fixture but ALSO get credit for leads that never touched
+        // that practice — the group-trend-shared-everywhere bug this test
+        // guards against.
+        const cp = new Map([['acc1', 'p1'], ['acc3', 'p3']]);
+        const cm = new Map([['acc1|g', 'google_ads'], ['acc3|g', 'google_ads']]);
+        const leads = [
+          { id: 'l1', contact_id: 'shared', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-02', contacts: {} },
+          { id: 'l2', contact_id: 'shared', integration_account_id: 'acc3', ghl_pipeline_id: 'g', created_at: '2026-07-10', contacts: {} },
+        ];
+        const out = computePerformance({ leads, accepted: [], spend: [], channelMap: cm, accountPractice: cp });
+
+        const groupJuly = out.trend.find((t) => t.month === '2026-07').channels.find((c) => c.channel === 'google_ads');
+        expect(groupJuly.leads).toBe(1);
+
+        const p1 = out.byPractice.find((p) => p.practiceId === 'p1');
+        const p3 = out.byPractice.find((p) => p.practiceId === 'p3');
+        const p1July = p1.trend.find((t) => t.month === '2026-07').channels.find((c) => c.channel === 'google_ads');
+        const p3July = p3.trend.find((t) => t.month === '2026-07').channels.find((c) => c.channel === 'google_ads');
+        expect(p1July.leads).toBe(1);
+        expect(p3July.leads).toBe(1);
+      });
+
+      it('reports null spend and null cost per lead for a practice with leads but no mapped ad account spend', () => {
+        // This is the exact case the whole fix is for: a practice whose
+        // scorecard correctly shows "Not reporting" must not have a
+        // priced trend line built from group-wide spend divided by
+        // group-wide leads. Against the pre-fix implementation `row.trend`
+        // is undefined (there is no per-practice trend at all), so this
+        // fails immediately; against a naive fix that just copies the
+        // group trend onto every practice, this would show the group's
+        // £1,000 spend / real cost-per-lead instead of null.
+        const leads = [
+          { id: 'l1', contact_id: 'c1', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-02', contacts: {} },
+        ];
+        // Spend exists at group level but carries no practice_id, so p1
+        // cannot claim it — mirrors the existing group-vs-practice spend
+        // fixture above.
+        const spend = [{ provider: 'google_ads', practice_id: null, spend_pence: 100000, metric_date: '2026-07-02' }];
+        const out = computePerformance({ leads, accepted: [], spend, channelMap, accountPractice });
+
+        const row = out.byPractice.find((p) => p.practiceId === 'p1');
+        const july = row.trend.find((t) => t.month === '2026-07').channels.find((c) => c.channel === 'google_ads');
+        expect(july.leads).toBe(1);
+        expect(july.spendPence).toBeNull();
+        expect(july.costPerLeadPence).toBeNull();
+
+        // The group trend still sees the (unattributed) spend.
+        const groupJuly = out.trend.find((t) => t.month === '2026-07').channels.find((c) => c.channel === 'google_ads');
+        expect(groupJuly.spendPence).toBe(100000);
+      });
+    });
   });
 
   describe('group-vs-practice dedupe asymmetry', () => {
