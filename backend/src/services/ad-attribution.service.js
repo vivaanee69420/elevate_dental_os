@@ -46,29 +46,71 @@ const emptyStats = (channel) => ({
 // costPerAcquisitionPence are money and must not carry fractional pence.
 const roundPence = (value) => (value === null ? null : Math.round(value));
 
-function finalise(stats, { allowSpend }) {
+// `costLeadsDenom`/`costConversionsDenom` let a caller (the totals adapter,
+// below) divide the cost metrics by a different — narrower — population than
+// `leads`/`conversions` without duplicating the ratio/rounding logic here.
+// `forceCostNull` covers the incomplete-spend guard: a known spend total that
+// is nonetheless not safe to divide (see totalsFromStats).
+function finalise(stats, {
+    allowSpend, costLeadsDenom, costConversionsDenom, forceCostNull = false,
+} = {}) {
     // 'unassigned' has no spend feed at all; its spend and derived costs are
     // unknown rather than zero. And ad_metrics.spend_pence defaults to 0 for a
     // synced day with genuinely no spend, so a zero ACCUMULATED total is just
     // as "unknown" as no rows at all — a real feed with £0 spend still reads
     // as "Not reporting", never a fabricated £0.
-    const spendPence = allowSpend && stats.spendPence > 0 ? stats.spendPence : null;
+    //
+    // `!== 0` rather than `> 0`: spend_pence is a signed BIGINT, so a
+    // net-negative window (credits/adjustments) is real, known spend and must
+    // not be flattened into "Not reporting" just because it isn't positive.
+    // Zero is the only value that means "no feed".
+    const spendPence = allowSpend && stats.spendPence !== 0 ? stats.spendPence : null;
+    const costUnknown = forceCostNull || spendPence === null;
+    const leadsDenom = costLeadsDenom ?? stats.leads;
+    const conversionsDenom = costConversionsDenom ?? stats.conversions;
     return {
         channel: stats.channel,
         leads: stats.leads,
         conversions: stats.conversions,
         acceptedValuePence: stats.acceptedValuePence,
         spendPence,
-        costPerLeadPence: spendPence === null ? null : roundPence(ratio(spendPence, stats.leads)),
-        costPerAcquisitionPence: spendPence === null ? null : roundPence(ratio(spendPence, stats.conversions)),
+        costPerLeadPence: costUnknown ? null : roundPence(ratio(spendPence, leadsDenom)),
+        costPerAcquisitionPence: costUnknown ? null : roundPence(ratio(spendPence, conversionsDenom)),
         conversionRate: ratio(stats.conversions, stats.leads),
     };
 }
 
 // finalise() expects per-channel stats; a "total" isn't a channel but has the
-// same shape (leads/conversions/acceptedValuePence/spendPence), so it goes
-// through the same derivation rather than a second copy of the ratio logic.
-const totalsFromStats = (stats) => finalise({ channel: 'total', ...stats }, { allowSpend: true });
+// same shape, so it goes through the same derivation rather than a second
+// copy of the ratio logic. The one place a total genuinely differs from a
+// channel: cost metrics must divide paid spend by PAID leads/conversions
+// (google_ads + meta_ads, deduped), never by `leads`/`conversions` — those
+// are deduped across ALL channels including unassigned, which has no spend
+// feed. Dividing known spend by that inflated denominator is the Critical
+// defect this adapter exists to close.
+//
+// `conversionRate` deliberately still uses the all-channel leads/conversions
+// via `finalise()`'s default — it is a funnel rate over everyone attracted,
+// not a paid-media efficiency metric, so its denominator differs on purpose
+// from the cost metrics next to it.
+function totalsFromStats({
+    leads, conversions, acceptedValuePence, paidLeads, paidConversions, spendPence, incompleteSpend,
+}) {
+    const base = finalise(
+        {
+            channel: 'total', leads, conversions, acceptedValuePence, spendPence,
+        },
+        {
+            allowSpend: true,
+            costLeadsDenom: paidLeads,
+            costConversionsDenom: paidConversions,
+            forceCostNull: incompleteSpend,
+        },
+    );
+    // Exposed so the arithmetic reconciles visibly on screen: spendPence /
+    // paidLeads should visibly equal costPerLeadPence, not look like a typo.
+    return { ...base, paidLeads, paidConversions };
+}
 
 export function computePerformance({ leads, accepted, spend, channelMap, accountPractice }) {
     const { acceptedByKey, nameByPractice } = buildAcceptedByKey(accepted);
@@ -87,6 +129,14 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
     const seenPracticeTotal = new Map(); // practiceId -> Set(personKey)
     const groupTotal = { leads: 0, conversions: 0, acceptedValuePence: 0 };
     const practiceTotal = new Map();     // practiceId -> { leads, conversions, acceptedValuePence }
+
+    // Deduped across PAID channels only (google_ads + meta_ads) — the
+    // denominator the totals cost metrics must use. A person seen solely via
+    // an unassigned pipeline costs nothing and must not appear here.
+    const seenGroupPaid = new Set();
+    const seenPracticePaid = new Map(); // practiceId -> Set(personKey)
+    const groupPaid = { leads: 0, conversions: 0 };
+    const practicePaid = new Map();     // practiceId -> { leads, conversions }
 
     const practiceStats = (practiceId, channel) => {
         if (!byPractice.has(practiceId)) {
@@ -147,6 +197,26 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
             pt.leads += 1;
             if (matched) { pt.conversions += 1; pt.acceptedValuePence += matched.valuePence; }
         }
+
+        if (AD_CHANNELS.includes(channel)) {
+            const isNewToGroupPaid = !seenGroupPaid.has(person);
+            if (isNewToGroupPaid) seenGroupPaid.add(person);
+            if (!seenPracticePaid.has(practiceId)) seenPracticePaid.set(practiceId, new Set());
+            const practicePaidSeen = seenPracticePaid.get(practiceId);
+            const isNewToPracticePaid = !practicePaidSeen.has(person);
+            if (isNewToPracticePaid) practicePaidSeen.add(person);
+
+            if (isNewToGroupPaid) {
+                groupPaid.leads += 1;
+                if (matched) groupPaid.conversions += 1;
+            }
+            if (isNewToPracticePaid) {
+                if (!practicePaid.has(practiceId)) practicePaid.set(practiceId, { leads: 0, conversions: 0 });
+                const pp = practicePaid.get(practiceId);
+                pp.leads += 1;
+                if (matched) pp.conversions += 1;
+            }
+        }
     }
 
     for (const row of spend || []) {
@@ -161,19 +231,37 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
         }
     }
 
+    // A paid channel with leads but a spend total that never accumulated
+    // (still the emptyStats() 0) means that channel's feed is not reporting
+    // for this window. Charging the OTHER channel's known spend against
+    // every paid lead — including that non-reporting channel's — is the same
+    // understatement as the Critical defect, just with a different trigger,
+    // so the guard forces both cost metrics to null while still showing
+    // whatever spend genuinely IS known.
+    const incompleteSpendAcross = (chans) => AD_CHANNELS.some((c) => {
+        const s = chans.get(c);
+        return s.leads > 0 && s.spendPence === 0;
+    });
+
     return {
         channels: CHANNELS.map((c) => finalise(group.get(c), { allowSpend: c !== 'unassigned' })),
         totals: totalsFromStats({
             ...groupTotal,
+            paidLeads: groupPaid.leads,
+            paidConversions: groupPaid.conversions,
             // 'unassigned' contributes no spend, so only the two ad channels sum.
             spendPence: group.get('google_ads').spendPence + group.get('meta_ads').spendPence,
+            incompleteSpend: incompleteSpendAcross(group),
         }),
         byPractice: [...byPractice.entries()].map(([practiceId, chans]) => ({
             practiceId,
             channels: CHANNELS.map((c) => finalise(chans.get(c), { allowSpend: c !== 'unassigned' })),
             total: totalsFromStats({
                 ...(practiceTotal.get(practiceId) ?? { leads: 0, conversions: 0, acceptedValuePence: 0 }),
+                paidLeads: practicePaid.get(practiceId)?.leads ?? 0,
+                paidConversions: practicePaid.get(practiceId)?.conversions ?? 0,
                 spendPence: chans.get('google_ads').spendPence + chans.get('meta_ads').spendPence,
+                incompleteSpend: incompleteSpendAcross(chans),
             }),
         })),
         excludedUnmappedLeads,
@@ -271,7 +359,9 @@ export const adAttributionService = {
                 ? (byPractice[0]?.channels ?? CHANNELS.map((c) => finalise(emptyStats(c), { allowSpend: c !== 'unassigned' })))
                 : result.channels,
             totals: practiceId
-                ? (byPractice[0]?.total ?? totalsFromStats({ leads: 0, conversions: 0, acceptedValuePence: 0, spendPence: 0 }))
+                ? (byPractice[0]?.total ?? totalsFromStats({
+                    leads: 0, conversions: 0, acceptedValuePence: 0, paidLeads: 0, paidConversions: 0, spendPence: 0, incompleteSpend: false,
+                }))
                 : result.totals,
             byPractice,
             excludedUnmappedLeads: result.excludedUnmappedLeads,
