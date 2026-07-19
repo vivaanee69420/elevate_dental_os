@@ -11,6 +11,7 @@
 import { useMemo, useState } from 'react';
 import { PageHeader, SectionCard, SecHead, DetailPanel } from '@/components/ui';
 import { useScopePeriod } from '@/features/_shared/scope-context';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useAdPerformance, useAdLeads } from '../hooks';
 import { ChannelScorecard, type ScorecardDrill } from './ChannelScorecard';
 import { ByPracticeTable } from './ByPracticeTable';
@@ -64,6 +65,27 @@ function rowsFor(drill: Exclude<ScorecardDrill, 'overlap'>, lines: AdLeadLine[])
   }
 }
 
+// The header and filter bar render in every state, including loading and
+// error. If they only rendered on success, a window that failed to load would
+// leave the operator with no control to change it, and every filter change
+// would flash the whole page chrome away.
+//
+// Declared at module scope on purpose: a component defined inside the render
+// function gets a new identity each render, which remounts the whole subtree
+// and drops focus from the month selector.
+function Frame({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Ad performance"
+        subtitle="Google and Facebook leads, cost per lead and conversions, from the pipelines you have mapped to each channel."
+      />
+      <ScopePeriodBar />
+      {children}
+    </div>
+  );
+}
+
 export default function AdPerformanceScreen() {
   const sp = useScopePeriod();
   const practiceId = sp.scope === 'all' ? undefined : sp.scope;
@@ -81,8 +103,10 @@ export default function AdPerformanceScreen() {
   const lines = useMemo(() => leads.data?.leads ?? [], [leads.data]);
   const overlap = useMemo(() => overlapPeople(lines), [lines]);
 
-  if (isLoading) return <p className="p-6 text-sm text-slate-500">Loading…</p>;
-  if (error || !data) return <p className="p-6 text-sm text-slate-500">Could not load ad performance.</p>;
+  if (isLoading) return <Frame><p className="text-sm text-slate-500">Loading…</p></Frame>;
+  if (error || !data) {
+    return <Frame><p className="text-sm text-slate-500">Could not load ad performance.</p></Frame>;
+  }
 
   const noPaidLeads = data.channels.every((c) => c.channel === 'unassigned' || c.leads === 0);
   // Distinguish "nothing is mapped yet" (a real setup gap — send the operator
@@ -93,12 +117,7 @@ export default function AdPerformanceScreen() {
   const hasMappingGap = data.unmappedPipelineCount > 0 || data.excludedUnmappedLeads > 0;
 
   return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Ad performance"
-        subtitle="Google and Facebook leads, cost per lead and conversions, from the pipelines you have mapped to each channel."
-      />
-
+    <Frame>
       {nothingMapped ? (
         <div className="rounded border border-amber-200 bg-amber-50 p-3 text-[13px] text-amber-900">
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
@@ -200,6 +219,6 @@ export default function AdPerformanceScreen() {
           </p>
         </SectionCard>
       ) : null}
-    </div>
+    </Frame>
   );
 }
