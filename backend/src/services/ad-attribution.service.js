@@ -369,4 +369,52 @@ export const adAttributionService = {
                 (p) => !channelMap.has(pipeKey(a.id, p.id))).length, 0),
         };
     },
+
+    // The drill-in list: one row per person, in the same shape the shared
+    // LeadsTable already renders for the cockpit.
+    async getLeads(orgId, { since, until, channel, practiceId, limit }) {
+        const [channelMap, accounts, leads, accepted] = await Promise.all([
+            adChannelPipelineRepository.channelMap(orgId),
+            adAttributionRepository.ghlAccounts(orgId),
+            adAttributionRepository.leadsInWindow(orgId, since, until),
+            adAttributionRepository.acceptedForMatching(orgId, since, until),
+        ]);
+        const accountPractice = new Map(accounts.map((a) => [a.id, a.practice_id]));
+        const pipelineName = new Map();
+        for (const a of accounts) {
+            for (const p of a.pipelines) pipelineName.set(pipeKey(a.id, p.id), p.name);
+        }
+        const { acceptedByKey, nameByPractice } = buildAcceptedByKey(accepted);
+
+        const rows = [];
+        const seen = new Set();
+        for (const lead of leads) {
+            const practice = accountPractice.get(lead.integration_account_id) ?? null;
+            if (practice === null) continue;
+            if (practiceId && practice !== practiceId) continue;
+            const ch = resolveChannel(channelMap, lead.integration_account_id, lead.ghl_pipeline_id);
+            if (channel && ch !== channel) continue;
+            const person = `${ch}|${personKey(lead)}`;
+            if (seen.has(person)) continue;
+            seen.add(person);
+
+            const c = lead.contacts || {};
+            const matched = matchAcceptedValue({ contacts: c, practiceId: practice }, acceptedByKey, nameByPractice);
+            rows.push({
+                id: lead.id,
+                contactId: lead.contact_id ?? null,
+                name: [c.first_name, c.last_name].filter(Boolean).join(' ') || null,
+                email: c.email ?? null,
+                phone: c.phone ?? null,
+                channel: ch,
+                pipelineName: pipelineName.get(pipeKey(lead.integration_account_id, lead.ghl_pipeline_id)) ?? null,
+                createdAt: lead.created_at,
+                converted: matched !== null,
+                matchedTreatmentName: matched?.treatmentName ?? null,
+                matchedValuePence: matched?.valuePence ?? 0,
+            });
+            if (rows.length >= limit) break;
+        }
+        return { leads: rows };
+    },
 };
