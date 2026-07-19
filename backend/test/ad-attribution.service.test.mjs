@@ -1,7 +1,30 @@
-import { describe, it, expect } from 'vitest';
 import {
-  resolveChannel, ratio, computePerformance,
+  describe, it, expect, vi, beforeEach,
+} from 'vitest';
+import { adAttributionRepository } from '../src/repositories/ad-attribution.repository.js';
+import { adChannelPipelineRepository } from '../src/repositories/ad-channel-pipeline.repository.js';
+import {
+  resolveChannel, ratio, computePerformance, adAttributionService,
 } from '../src/services/ad-attribution.service.js';
+
+vi.mock('../src/repositories/ad-attribution.repository.js', () => ({
+  adAttributionRepository: {
+    ghlAccounts: vi.fn(),
+    practiceOptions: vi.fn(),
+    adAccounts: vi.fn(),
+    leadsInWindow: vi.fn(),
+    acceptedForMatching: vi.fn(),
+    adSpend: vi.fn(),
+    leadCountsByPipeline: vi.fn(),
+    setAdAccountPractice: vi.fn(),
+  },
+}));
+vi.mock('../src/repositories/ad-channel-pipeline.repository.js', () => ({
+  adChannelPipelineRepository: {
+    channelMap: vi.fn(),
+    setChannel: vi.fn(),
+  },
+}));
 
 describe('resolveChannel', () => {
   const map = new Map([['acc1|pl1', 'google_ads']]);
@@ -333,6 +356,70 @@ describe('computePerformance', () => {
       expect(june.costPerLeadPence).toBeNull();
     });
 
+    it('counts the SAME person in TWO different months once per month (archive-pipeline repeat enquirer)', () => {
+      // Against the pre-fix implementation, the trend blocks sat after the
+      // `if (!isNewToGroup && !isNewToPractice) continue;` guard, which is
+      // keyed on `person` alone (± practiceId) — NOT on month. So the second
+      // (July) lead from the same person, same channel, same practice was
+      // already "seen" by that guard from the June visit and got skipped
+      // before the trend code ever ran. July would show leads: 0, and with
+      // known spend that renders as a null cost-per-lead gap on the chart
+      // despite real spend and a real repeat enquiry — exactly the dominant
+      // multi-year archive-pipeline case on the live data.
+      const leads = [
+        { id: 'l1', contact_id: 'repeat', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-06-10T09:00:00Z', contacts: {} },
+        { id: 'l2', contact_id: 'repeat', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-10T09:00:00Z', contacts: {} },
+      ];
+      const spend = [
+        { provider: 'google_ads', practice_id: 'p1', spend_pence: 50000, metric_date: '2026-06-15' },
+        { provider: 'google_ads', practice_id: 'p1', spend_pence: 70000, metric_date: '2026-07-15' },
+      ];
+      const out = computePerformance({
+        leads, accepted: [], spend, channelMap, accountPractice,
+      });
+
+      expect(out.trend.map((t) => t.month)).toEqual(['2026-06', '2026-07']);
+      const june = out.trend.find((t) => t.month === '2026-06').channels.find((c) => c.channel === 'google_ads');
+      const july = out.trend.find((t) => t.month === '2026-07').channels.find((c) => c.channel === 'google_ads');
+      expect(june.leads).toBe(1);
+      expect(july.leads).toBe(1);
+
+      const row = out.byPractice.find((p) => p.practiceId === 'p1');
+      const juneP = row.trend.find((t) => t.month === '2026-06').channels.find((c) => c.channel === 'google_ads');
+      const julyP = row.trend.find((t) => t.month === '2026-07').channels.find((c) => c.channel === 'google_ads');
+      expect(juneP.leads).toBe(1);
+      expect(julyP.leads).toBe(1);
+
+      // Meanwhile the scorecard (group-level, month-agnostic) still counts
+      // this repeat enquirer once — the trend is deliberately not additive
+      // to the scorecard.
+      expect(out.channels.find((c) => c.channel === 'google_ads').leads).toBe(1);
+    });
+
+    it('skips a lead with no created_at from the trend rather than rendering an Invalid Date point', () => {
+      const leads = [
+        { id: 'l1', contact_id: 'c1', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: null, contacts: {} },
+        { id: 'l2', contact_id: 'c2', integration_account_id: 'acc1', ghl_pipeline_id: 'g', created_at: '2026-07-05T09:00:00Z', contacts: {} },
+      ];
+      const out = computePerformance({
+        leads, accepted: [], spend: [], channelMap, accountPractice,
+      });
+      expect(out.trend.map((t) => t.month)).toEqual(['2026-07']);
+      expect(out.trend.some((t) => t.month === '')).toBe(false);
+    });
+
+    it('skips a spend row with no metric_date from the trend rather than rendering an Invalid Date point', () => {
+      const spend = [
+        { provider: 'google_ads', practice_id: 'p1', spend_pence: 10000, metric_date: null },
+        { provider: 'google_ads', practice_id: 'p1', spend_pence: 20000, metric_date: '2026-07-15' },
+      ];
+      const out = computePerformance({
+        leads: [], accepted: [], spend, channelMap, accountPractice,
+      });
+      expect(out.trend.map((t) => t.month)).toEqual(['2026-07']);
+      expect(out.trend.some((t) => t.month === '')).toBe(false);
+    });
+
     describe('per-practice trend (obeys the practice selector)', () => {
       it('dedupes a person seen at two practices in the same month: once per practice, once for the group', () => {
         // Against the pre-fix implementation there is no `trend` on a
@@ -415,5 +502,66 @@ describe('computePerformance', () => {
       expect(p1.leads).toBe(1);
       expect(p3.leads).toBe(1);
     });
+  });
+});
+
+describe('adAttributionService.getPerformance — unmappedPipelineCount', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    adAttributionRepository.leadsInWindow.mockResolvedValue([]);
+    adAttributionRepository.acceptedForMatching.mockResolvedValue([]);
+    adAttributionRepository.adSpend.mockResolvedValue([]);
+    adAttributionRepository.practiceOptions.mockResolvedValue([]);
+  });
+
+  it('excludes pipelines on a subaccount with no practice mapping (the academy/accounting Location)', async () => {
+    // The client's own agency/academy Location carries ~67 pipelines that are
+    // business leads, not patient leads, and is deliberately excluded from
+    // this whole feature. Counting its pipelines as "unmapped" means the
+    // footer note never clears and the "mapped but quiet" nudge can never
+    // fire — against the pre-fix implementation this test fails because it
+    // sums ALL accounts' pipelines regardless of practice_id.
+    adAttributionRepository.ghlAccounts.mockResolvedValue([
+      { id: 'acc-practice', label: 'Practice A', practice_id: 'p1', pipelines: [{ id: 'g', name: 'Google' }, { id: 'f', name: 'Facebook' }] },
+      { id: 'acc-academy', label: 'Academy', practice_id: null, pipelines: Array.from({ length: 67 }, (_, i) => ({ id: `a${i}`, name: `Pipeline ${i}` })) },
+    ]);
+    adChannelPipelineRepository.channelMap.mockResolvedValue(new Map([['acc-practice|g', 'google_ads']]));
+
+    const out = await adAttributionService.getPerformance('org1', { since: '2026-01-01', until: '2026-08-01', practiceId: null });
+    // Only acc-practice's unmapped pipeline ('f') should count — none of the
+    // academy Location's 67 pipelines, which can never legitimately be mapped.
+    expect(out.unmappedPipelineCount).toBe(1);
+  });
+
+  it('is zero once every pipeline on a practice-mapped subaccount is set (mapped-but-quiet stays reachable)', async () => {
+    adAttributionRepository.ghlAccounts.mockResolvedValue([
+      { id: 'acc-practice', label: 'Practice A', practice_id: 'p1', pipelines: [{ id: 'g', name: 'Google' }] },
+      { id: 'acc-academy', label: 'Academy', practice_id: null, pipelines: [{ id: 'a1', name: 'Business pipeline' }] },
+    ]);
+    adChannelPipelineRepository.channelMap.mockResolvedValue(new Map([['acc-practice|g', 'google_ads']]));
+
+    const out = await adAttributionService.getPerformance('org1', { since: '2026-01-01', until: '2026-08-01', practiceId: null });
+    expect(out.unmappedPipelineCount).toBe(0);
+  });
+});
+
+describe('adAttributionService.setPipelineChannel — unknown subaccount', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('throws an AppError with statusCode 404, not a bare 500-mapped Error', async () => {
+    // A stale accountId (after a disconnect) or a cross-org probe is ordinary
+    // client input, not a server fault. errorHandler maps a non-AppError to
+    // 500 + logs a stack + reports to Sentry — this must not happen for
+    // input this routine. Against the pre-fix implementation (`throw new
+    // Error(...)`), `err instanceof AppError` is false and this fails.
+    adAttributionRepository.ghlAccounts.mockResolvedValue([
+      { id: 'acc-real', label: 'Real', practice_id: 'p1', pipelines: [{ id: 'g', name: 'Google' }] },
+    ]);
+
+    await expect(
+      adAttributionService.setPipelineChannel('org1', 'acc-does-not-exist', 'g', 'google_ads'),
+    ).rejects.toMatchObject({ statusCode: 404, message: 'Unknown subaccount' });
   });
 });

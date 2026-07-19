@@ -15,11 +15,15 @@ const PROVIDER_LABEL: Record<string, string> = {
 export default function AdAccountPracticeStep({ config }: { config: AdAttributionConfig }) {
   const setPractice = useSetAdAccountPractice();
   const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function handle(id: string, practiceId: string) {
     setSaving(id);
+    setError(null);
     try {
       await setPractice.mutateAsync({ id, practiceId: practiceId || null });
+    } catch (e) {
+      setError((e as Error).message || 'Could not save that change. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -34,6 +38,9 @@ export default function AdAccountPracticeStep({ config }: { config: AdAttributio
         Spend from an unconnected ad account is still counted for the group, but it cannot be
         split by practice — those practices show cost per lead as unknown.
       </p>
+      {error && (
+        <p className="mb-3 text-[13px] text-danger">{error}</p>
+      )}
       {config.adAccounts.length === 0 ? (
         <p className="py-3 text-sm text-slate-500">
           No ad accounts connected yet. Connect Google Ads or Facebook Ads on the Integrations page first.

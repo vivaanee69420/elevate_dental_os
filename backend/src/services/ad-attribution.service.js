@@ -16,6 +16,7 @@ import { adChannelPipelineRepository } from "../repositories/ad-channel-pipeline
 import { adAttributionRepository } from "../repositories/ad-attribution.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { buildAcceptedByKey, matchAcceptedValue } from "../lib/lead-emergent-match.js";
+import { AppError } from "../middleware/errors.js";
 
 export const CHANNELS = ['google_ads', 'meta_ads', 'unassigned'];
 const AD_CHANNELS = ['google_ads', 'meta_ads'];
@@ -195,16 +196,6 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
 
         const isNewToGroup = !groupSeen.has(person);
         const isNewToPractice = !practiceSeen.has(person);
-        if (!isNewToGroup && !isNewToPractice) continue;
-        groupSeen.add(person);
-        practiceSeen.add(person);
-
-        const isNewToGroupTotal = !seenGroupTotal.has(person);
-        if (isNewToGroupTotal) seenGroupTotal.add(person);
-        if (!seenPracticeTotal.has(practiceId)) seenPracticeTotal.set(practiceId, new Set());
-        const practiceTotalSeen = seenPracticeTotal.get(practiceId);
-        const isNewToPracticeTotal = !practiceTotalSeen.has(person);
-        if (isNewToPracticeTotal) practiceTotalSeen.add(person);
 
         const matched = matchAcceptedValue(
             { contacts: lead.contacts, practiceId }, acceptedByKey, nameByPractice,
@@ -212,8 +203,21 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
 
         // Trend covers the two paid channels only — an unassigned pipeline has
         // no spend, so a cost-per-lead line for it would be meaningless.
-        if (AD_CHANNELS.includes(channel)) {
-            const m = monthKey(lead.created_at);
+        //
+        // MUST run BEFORE the `continue` guard below: these accumulators are
+        // keyed on month|channel (and practice|month|channel), not on `person`
+        // alone, so they deliberately admit the same person again in a
+        // DIFFERENT month. The guard below only protects accumulators keyed on
+        // `person` (± practiceId) and does not know about "month" as a
+        // dimension — putting this block after it would silently drop a
+        // repeat visitor's second month (see the same-person-two-months test).
+        const leadMonth = monthKey(lead.created_at);
+        // A blank month (null/missing created_at) must never become an
+        // "Invalid Date" point on the trend chart's X axis, so it is skipped
+        // for the trend only — the per-channel/practice totals above already
+        // counted this lead regardless of date.
+        if (AD_CHANNELS.includes(channel) && leadMonth !== '') {
+            const m = leadMonth;
             const tKey = `${m}|${channel}`;
             if (!trendSeen.has(tKey)) trendSeen.set(tKey, new Set());
             const tSeen = trendSeen.get(tKey);
@@ -234,6 +238,30 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
                 if (matched) { pt.conversions += 1; pt.acceptedValuePence += matched.valuePence; }
             }
         }
+
+        // Everything from here down is keyed on `person` alone or on
+        // `person` + practiceId: groupSeen/practiceSeen, groupTotal/
+        // practiceTotal, groupPaid/practicePaid, and the per-channel
+        // group/practice stats below. A person already counted under BOTH
+        // the group and this practice for this channel has nothing left to
+        // add to any of THOSE accumulators, so skip.
+        //
+        // Do not weaken or delete this guard — it is still correct for what
+        // it protects. But any NEW accumulator keyed on something other than
+        // `person` (± practiceId) — e.g. month, a date bucket, or any
+        // dimension that intentionally admits the same person twice — MUST be
+        // computed ABOVE this line, like the trend blocks above. Putting it
+        // below silently underreports repeat visitors on that dimension.
+        if (!isNewToGroup && !isNewToPractice) continue;
+        groupSeen.add(person);
+        practiceSeen.add(person);
+
+        const isNewToGroupTotal = !seenGroupTotal.has(person);
+        if (isNewToGroupTotal) seenGroupTotal.add(person);
+        if (!seenPracticeTotal.has(practiceId)) seenPracticeTotal.set(practiceId, new Set());
+        const practiceTotalSeen = seenPracticeTotal.get(practiceId);
+        const isNewToPracticeTotal = !practiceTotalSeen.has(person);
+        if (isNewToPracticeTotal) practiceTotalSeen.add(person);
 
         if (isNewToGroup) {
             const g = group.get(channel);
@@ -290,6 +318,10 @@ export function computePerformance({ leads, accepted, spend, channelMap, account
             p.spendPence += row.spend_pence || 0;
         }
         const m = monthKey(row.metric_date);
+        // A null/blank metric_date must not become an "Invalid Date" point on
+        // the trend chart's X axis — skip it for the trend only; the
+        // channel/practice totals above already captured this spend.
+        if (m === '') continue;
         const t = trendStats(m, row.provider);
         t.spendPence += row.spend_pence || 0;
         // Only spend on an ad account mapped to a practice can be attributed
@@ -399,8 +431,11 @@ export const adAttributionService = {
         const accounts = await adAttributionRepository.ghlAccounts(orgId);
         const account = accounts.find((a) => a.id === accountId);
         // Rejecting an unknown account is the tenant guard on this write: the
-        // account list is already org-scoped.
-        if (!account) throw new Error('Unknown subaccount');
+        // account list is already org-scoped. This is ordinary client input
+        // (a stale accountId after a disconnect, or a cross-org probe), not a
+        // server fault — it must map to 404, not the default 500 a bare Error
+        // gets from errorHandler (which also logs + reports to Sentry).
+        if (!account) throw new AppError('Unknown subaccount', 404);
         const pipeline = account.pipelines.find((p) => String(p.id) === String(pipelineId));
         await adChannelPipelineRepository.setChannel(
             orgId, accountId, pipelineId, pipeline?.name ?? null, channel,
@@ -450,8 +485,14 @@ export const adAttributionService = {
                 ? (byPractice[0]?.trend ?? [])
                 : result.trend,
             excludedUnmappedLeads: result.excludedUnmappedLeads,
-            unmappedPipelineCount: accounts.reduce((n, a) => n + a.pipelines.filter(
-                (p) => !channelMap.has(pipeKey(a.id, p.id))).length, 0),
+            // Only pipelines on a subaccount mapped to a practice are eligible
+            // to be mapped at all — a subaccount with practice_id null (the
+            // academy/accounting Locations) is excluded from this feature
+            // entirely, so its pipelines must never inflate this count.
+            unmappedPipelineCount: accounts
+                .filter((a) => a.practice_id !== null)
+                .reduce((n, a) => n + a.pipelines.filter(
+                    (p) => !channelMap.has(pipeKey(a.id, p.id))).length, 0),
         };
     },
 

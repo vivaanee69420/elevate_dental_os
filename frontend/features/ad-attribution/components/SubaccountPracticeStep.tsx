@@ -17,6 +17,7 @@ import type { AdAttributionConfig } from '../api';
 export default function SubaccountPracticeStep({ config }: { config: AdAttributionConfig }) {
   const setPractice = useSetSubaccountPractice();
   const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const takenBy = new Map<string, string>();
   for (const s of config.subaccounts) {
@@ -25,8 +26,11 @@ export default function SubaccountPracticeStep({ config }: { config: AdAttributi
 
   async function handle(id: string, practiceId: string) {
     setSaving(id);
+    setError(null);
     try {
       await setPractice.mutateAsync({ id, practiceId: practiceId || null });
+    } catch (e) {
+      setError((e as Error).message || 'Could not save that change. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -41,6 +45,9 @@ export default function SubaccountPracticeStep({ config }: { config: AdAttributi
         Each GoHighLevel subaccount belongs to one practice. Leave a subaccount unconnected
         if it is not a practice — its leads are then excluded from ad performance.
       </p>
+      {error && (
+        <p className="mb-3 text-[13px] text-danger">{error}</p>
+      )}
       {config.subaccounts.length === 0 ? (
         <p className="py-3 text-sm text-slate-500">
           No GoHighLevel subaccounts connected yet. Connect one on the Integrations page first.
