@@ -18,3 +18,4 @@ export {
   SkeletonChart,
   SkeletonTable,
 } from './Skeleton';
+export { cx, SecHead, SectionCard, Kpi, DetailPanel, cockpitStyles } from './SectionKit';
