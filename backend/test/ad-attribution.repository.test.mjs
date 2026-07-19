@@ -173,6 +173,28 @@ describe('leadCountsByPipeline', () => {
   });
 });
 
+describe('emergentBusinesses', () => {
+  it('scopes by org and maps to camelCase', async () => {
+    supaRec.resultProvider = () => ({
+      data: [{ business_id: 'BIZ1', business_name: 'Ashford', practice_id: 'p1' }],
+      error: null,
+    });
+    const rows = await adAttributionRepository.emergentBusinesses(ORG);
+    expect(supaRec.last.table).toBe('emergent_practice_map');
+    expect(orgFilter(supaRec.last)).toEqual({ col: 'organisation_id', val: ORG });
+    expect(rows).toEqual([{ businessId: 'BIZ1', businessName: 'Ashford', practiceId: 'p1' }]);
+  });
+
+  it('keeps an intentionally unmapped business with a null practice', async () => {
+    supaRec.resultProvider = () => ({
+      data: [{ business_id: 'BIZ2', business_name: null, practice_id: null }],
+      error: null,
+    });
+    const rows = await adAttributionRepository.emergentBusinesses(ORG);
+    expect(rows[0]).toEqual({ businessId: 'BIZ2', businessName: null, practiceId: null });
+  });
+});
+
 describe('pagination', () => {
   // Proves fetchAllPages actually stitches multiple pages together, and that
   // range() advances between calls — not just that the loop compiles. Without
