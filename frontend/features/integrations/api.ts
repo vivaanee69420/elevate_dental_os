@@ -239,12 +239,14 @@ export function setStageMappings(provider: string, mappings: Record<string, stri
 // Each provider discovers every reachable ad account; the owner picks which are
 // included in the marketing views. Selection is org-isolated; default = all.
 export interface AdAccount {
+  id: string;
   provider: string;
   customer_id: string;
   name: string | null;
   currency: string | null;
   status: string | null;
   is_selected: boolean;
+  practice_id: string | null;
 }
 
 export function listAdAccounts(provider: string) {
@@ -256,6 +258,14 @@ export function setAdAccountSelection(provider: string, selectedIds: string[]) {
     `/api/integrations/${provider}/ad-accounts/selection`,
     { method: 'POST', body: JSON.stringify({ selected_ids: selectedIds }) },
   );
+}
+
+// Map an ad account to a practice so its spend splits below group level.
+// Same endpoint as the Settings -> Ad attribution page (Step 3).
+export function setAdAccountPractice(id: string, practiceId: string | null) {
+  return api<{ ok: true }>(`/api/ad-attribution/ad-accounts/${id}`, {
+    method: 'PATCH', body: JSON.stringify({ practice_id: practiceId }),
+  });
 }
 
 // --- GoHighLevel subaccounts (multi-location) -------------------------------

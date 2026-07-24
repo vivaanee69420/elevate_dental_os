@@ -8,12 +8,34 @@
 
 import { useEffect, useState } from 'react';
 import { Chip } from '@/components/ui';
-import { useAdAccounts, useSetAdAccountSelection, useSyncIntegration } from '@/features/integrations/hooks';
+import {
+  useAdAccounts, useSetAdAccountSelection, useSetAdAccountPractice, usePractices,
+  useSyncIntegration,
+} from '@/features/integrations/hooks';
 import CollapsibleCard from './CollapsibleCard';
 
 export default function AdAccountSelector({ provider, label }: { provider: string; label: string }) {
   const { data: accounts, isLoading } = useAdAccounts(provider);
   const save = useSetAdAccountSelection(provider);
+  // Practice mapping: which practice each account's spend belongs to. Without
+  // it the marketing "By practice" split shows spend as "Not reporting".
+  const { data: practiceData } = usePractices();
+  const practices = practiceData?.practices ?? [];
+  const setPractice = useSetAdAccountPractice(provider);
+  const [mappingSaving, setMappingSaving] = useState<string | null>(null);
+  const [mappingError, setMappingError] = useState<string | null>(null);
+
+  async function onMapPractice(id: string, practiceId: string) {
+    setMappingSaving(id);
+    setMappingError(null);
+    try {
+      await setPractice.mutateAsync({ id, practiceId: practiceId || null });
+    } catch (e) {
+      setMappingError((e as Error).message || 'Could not save that mapping. Please try again.');
+    } finally {
+      setMappingSaving(null);
+    }
+  }
   // Full 12-month backfill. The Refresh button only pulls the incremental
   // (~31-day) window, so historical months show low spend/impressions/clicks
   // (summed from daily rows) until a full pull lands. Fire-and-forget server-side.
@@ -55,8 +77,14 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
     >
       <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 10 }}>
         Choose which ad accounts feed the marketing dashboards. Unticking an account hides it from
-        the views — its synced history is kept and returns when re-ticked.
+        the views — its synced history is kept and returns when re-ticked. Map each account to its
+        practice so spend and cost per lead split by practice; unmapped spend counts for the group
+        only and shows as &ldquo;Not reporting&rdquo; on practice rows.
       </p>
+
+      {mappingError && (
+        <p style={{ fontSize: 12, marginBottom: 10, color: 'var(--danger, #b91c1c)' }}>{mappingError}</p>
+      )}
 
       <div style={{ display: 'flex', gap: 12, marginBottom: 10 }}>
         <button onClick={() => setAll(true)} style={linkBtn}>Select all</button>
@@ -65,26 +93,47 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {accounts.map((a) => (
-          <label
+          <div
             key={a.customer_id}
             style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
-              border: '1px solid var(--border)', borderRadius: 8, cursor: 'pointer', fontSize: 13,
+              border: '1px solid var(--border)', borderRadius: 8, fontSize: 13,
             }}
           >
-            <input
-              type="checkbox"
-              checked={selected[a.customer_id] ?? false}
-              onChange={() => toggle(a.customer_id)}
-            />
-            <span style={{ flex: 1, fontWeight: 600 }}>{a.name || a.customer_id}</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, cursor: 'pointer', minWidth: 0 }}>
+              <input
+                type="checkbox"
+                checked={selected[a.customer_id] ?? false}
+                onChange={() => toggle(a.customer_id)}
+              />
+              <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {a.name || a.customer_id}
+              </span>
+            </label>
+            {practices.length > 0 && (
+              <select
+                value={a.practice_id ?? ''}
+                disabled={mappingSaving === a.id}
+                onChange={(e) => onMapPractice(a.id, e.target.value)}
+                style={{
+                  maxWidth: 200, padding: '4px 6px', fontSize: 12,
+                  border: '1px solid var(--border)', borderRadius: 6,
+                  color: a.practice_id ? 'inherit' : 'var(--ink-muted, #64748b)',
+                }}
+              >
+                <option value="">Group only — no practice</option>
+                {practices.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            )}
             {a.currency && <span className="text-ink-muted" style={{ fontSize: 11 }}>{a.currency}</span>}
             {a.status && a.status !== 'active' && (
               <Chip colour="amber">{a.status}</Chip>
             )}
             {/* Only show the raw account id when there's no readable name. */}
             {!a.name && <span className="text-ink-muted" style={{ fontSize: 11 }}>{a.customer_id}</span>}
-          </label>
+          </div>
         ))}
       </div>
 
