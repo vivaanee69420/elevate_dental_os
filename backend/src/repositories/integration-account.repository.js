@@ -156,13 +156,21 @@ export const integrationAccountRepository = {
         if (error) throw new Error(error.message);
     },
 
-    // All active GHL accounts across every org — for the worker.
-    async listAllActive(provider) {
+    // Every account the worker should attempt across all orgs. Includes
+    // 'failed' on purpose: markFailed flips the row on ANY sync error, and when
+    // this filtered to 'active' only, one transient upstream blip removed a
+    // subaccount from every future nightly run — it sat on a red "failed" badge
+    // indefinitely (July 2026 incident, 5 of 7 GHL subaccounts frozen for over
+    // a week). markSynced flips it back to 'active', so a failed account now
+    // self-heals on the next successful run. Mirrors the google_ads/meta_ads
+    // workers, which already select ['active','failed']. 'revoked' stays out —
+    // the user disconnected it and its secrets are gone.
+    async listAllSyncable(provider) {
         const { data } = await this._client()
             .from('integration_accounts')
             .select('*')
             .eq('provider', provider)
-            .eq('status', 'active');
+            .in('status', ['active', 'failed']);
         return data ?? [];
     },
 };

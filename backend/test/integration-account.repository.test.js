@@ -51,4 +51,26 @@ describe('integrationAccountRepository', () => {
     await repo.list('org-1', 'gohighlevel');
     expect(selected).not.toContain('secrets');
   });
+
+  // Regression: the worker used to select status='active' only, so markFailed
+  // permanently removed an account from every future nightly run — a single
+  // transient GHL error froze the subaccount on a red "failed" badge forever.
+  it('listAllSyncable includes failed accounts so they self-heal on the next run', async () => {
+    const repo = mod.integrationAccountRepository;
+    const state = { table: null, filters: {}, ins: {} };
+    const builder = {
+      select() { return builder; },
+      eq(col, val) { state.filters[col] = val; return builder; },
+      in(col, vals) { state.ins[col] = vals; return builder; },
+      then(r) { return Promise.resolve({ data: [{ id: 'a1' }], error: null }).then(r); },
+    };
+    vi.spyOn(repo, '_client').mockReturnValue({ from(t) { state.table = t; return builder; } });
+
+    await repo.listAllSyncable('gohighlevel');
+
+    expect(state.table).toBe('integration_accounts');
+    expect(state.filters.provider).toBe('gohighlevel');
+    expect(state.ins.status).toEqual(['active', 'failed']);
+    expect(state.ins.status).not.toContain('revoked');
+  });
 });

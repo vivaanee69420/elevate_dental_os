@@ -20,6 +20,9 @@ process.env.SUPABASE_ANON_KEY ||= 'test-anon-key';
 // test imports it. lib/oauth-state.js reads its secret per-call (set here too
 // for convenience; individual tests may override).
 process.env.INTEGRATIONS_SECRET_KEY ||= 'test-integrations-key';
+// Collapse the GoHighLevel retry backoff so tests that exercise the retry path
+// don't spend ~17s sleeping through real exponential waits.
+process.env.GHL_RETRY_BASE_MS ||= '1';
 process.env.OAUTH_STATE_SECRET ||= 'test-state-secret';
 // Messaging clients (postmark/twilio) construct at module import; give them
 // non-empty dummy creds so importing any service that pulls in lib/messaging.js

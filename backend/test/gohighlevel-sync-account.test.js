@@ -11,7 +11,7 @@ vi.mock('../src/repositories/integration-account.repository.js', () => ({
     mergeConfig: vi.fn(async () => ({})),
     markSynced: vi.fn(async () => {}),
     markFailed: vi.fn(async () => {}),
-    listAllActive: vi.fn(async () => [account]),
+    listAllSyncable: vi.fn(async () => [account]),
   },
 }));
 
