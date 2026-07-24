@@ -27,19 +27,21 @@ describe('getDashboard', () => {
       { id: 'a1', label: 'Ashford', practice_id: 'p1', status: 'active', last_sync_at: '2026-01-30T00:00:00Z', last_error: null },
       { id: 'a2', label: 'Maidstone', practice_id: 'p2', status: 'active', last_sync_at: null, last_error: null },
     ]);
+    // RPC v3 groups by integration_account_id — perAccount matches on that, not
+    // on practice_id (two subaccounts can share one practice).
     stubAggregate([
-      { practice_id: 'p1', contacts_total: 10, contacts_new: 3, contacts_by_source: { ads: 6, referral: 4 },
+      { integration_account_id: 'a1', practice_id: 'p1', contacts_total: 10, contacts_new: 3, contacts_by_source: { ads: 6, referral: 4 },
         leads_total: 8, leads_new: 2, leads_open: 4, leads_won: 3, leads_lost: 1, pipeline_value_pence: 500000,
         leads_by_stage: { New: 4, Won: 3, Lost: 1 },
         conversations_total: 20, conversations_inbound: 12, conversations_outbound: 8, conversations_last7d: 5 },
-      { practice_id: 'p2', contacts_total: 5, contacts_new: 1, contacts_by_source: { ads: 5 },
+      { integration_account_id: 'a2', practice_id: 'p2', contacts_total: 5, contacts_new: 1, contacts_by_source: { ads: 5 },
         leads_total: 2, leads_new: 0, leads_open: 1, leads_won: 1, leads_lost: 0, pipeline_value_pence: 100000,
         leads_by_stage: { New: 1, Won: 1 },
         conversations_total: 4, conversations_inbound: 1, conversations_outbound: 3, conversations_last7d: 0 },
     ]);
     stubAppointments([
-      { practice_id: 'p1', appts_total: 12, appts_in_window: 5, appts_upcoming: 3, appts_showed: 4, appts_noshow: 1, appts_cancelled: 2, appts_booked: 5, appts_by_calendar: { 'New Patient': 8, 'Review': 4 } },
-      { practice_id: 'p2', appts_total: 6, appts_in_window: 3, appts_upcoming: 1, appts_showed: 2, appts_noshow: 0, appts_cancelled: 1, appts_booked: 2, appts_by_calendar: { 'New Patient': 3, 'Follow-up': 3 } },
+      { integration_account_id: 'a1', practice_id: 'p1', appts_total: 12, appts_in_window: 5, appts_upcoming: 3, appts_showed: 4, appts_noshow: 1, appts_cancelled: 2, appts_booked: 5, appts_by_calendar: { 'New Patient': 8, 'Review': 4 } },
+      { integration_account_id: 'a2', practice_id: 'p2', appts_total: 6, appts_in_window: 3, appts_upcoming: 1, appts_showed: 2, appts_noshow: 0, appts_cancelled: 1, appts_booked: 2, appts_by_calendar: { 'New Patient': 3, 'Follow-up': 3 } },
     ]);
 
     const out = await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: null, practiceId: null });
@@ -90,13 +92,15 @@ describe('getDashboard', () => {
     expect(out.perAccount).toEqual([]);
   });
 
-  it('buckets a null-practice aggregate row as Unmapped in perAccount', async () => {
+  // A row whose integration_account_id matches no live account (revoked/deleted
+  // account, or a NULL id) must land in the Unmapped bucket rather than vanish.
+  it('buckets a row with no matching account as Unmapped in perAccount', async () => {
     stubAccounts([{ id: 'a1', label: 'Ashford', practice_id: 'p1', status: 'active', last_sync_at: null, last_error: null }]);
     stubAggregate([
-      { practice_id: 'p1', contacts_total: 4, contacts_new: 0, contacts_by_source: {}, leads_total: 0, leads_new: 0,
+      { integration_account_id: 'a1', practice_id: 'p1', contacts_total: 4, contacts_new: 0, contacts_by_source: {}, leads_total: 0, leads_new: 0,
         leads_open: 0, leads_won: 0, leads_lost: 0, pipeline_value_pence: 0, leads_by_stage: {},
         conversations_total: 0, conversations_inbound: 0, conversations_outbound: 0, conversations_last7d: 0 },
-      { practice_id: null, contacts_total: 7, contacts_new: 0, contacts_by_source: {}, leads_total: 0, leads_new: 0,
+      { integration_account_id: null, practice_id: null, contacts_total: 7, contacts_new: 0, contacts_by_source: {}, leads_total: 0, leads_new: 0,
         leads_open: 0, leads_won: 0, leads_lost: 0, pipeline_value_pence: 0, leads_by_stage: {},
         conversations_total: 0, conversations_inbound: 0, conversations_outbound: 0, conversations_last7d: 0 },
     ]);
@@ -107,7 +111,10 @@ describe('getDashboard', () => {
     expect(unmapped).toMatchObject({ label: 'Unmapped', contacts: 7 });
   });
 
-  it('scopes the aggregate to a single account practice when accountId given', async () => {
+  // Scoping to one subaccount passes the ACCOUNT id through, not its practice:
+  // two accounts can share a practice, and an unmapped account has none, so
+  // practice-scoping would leak the sibling's numbers or return nothing.
+  it('scopes the aggregate by accountId, leaving practice null', async () => {
     stubAccounts([
       { id: 'a1', label: 'Ashford', practice_id: 'p1', status: 'active', last_sync_at: null, last_error: null },
       { id: 'a2', label: 'Maidstone', practice_id: 'p2', status: 'active', last_sync_at: null, last_error: null },
@@ -115,10 +122,10 @@ describe('getDashboard', () => {
     const spy = vi.spyOn(ghlDashboardRepository, 'aggregate').mockResolvedValue([]);
     stubAppointments([]);
     await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: 'a2', practiceId: null });
-    expect(spy).toHaveBeenCalledWith('org-1', WINDOW.since, WINDOW.until, 'p2');
+    expect(spy).toHaveBeenCalledWith('org-1', WINDOW.since, WINDOW.until, null, 'a2');
   });
 
-  it('scopes appointments aggregate to the account practice when accountId given', async () => {
+  it('scopes the appointments aggregate by accountId too', async () => {
     stubAccounts([
       { id: 'a1', label: 'Ashford', practice_id: 'p1', status: 'active', last_sync_at: null, last_error: null },
       { id: 'a2', label: 'Maidstone', practice_id: 'p2', status: 'active', last_sync_at: null, last_error: null },
@@ -126,6 +133,6 @@ describe('getDashboard', () => {
     stubAggregate([]);
     const apptSpy = vi.spyOn(ghlDashboardRepository, 'aggregateAppointments').mockResolvedValue([]);
     await ghlDashboardService.getDashboard('org-1', { ...WINDOW, accountId: 'a2', practiceId: null });
-    expect(apptSpy).toHaveBeenCalledWith('org-1', WINDOW.since, WINDOW.until, 'p2');
+    expect(apptSpy).toHaveBeenCalledWith('org-1', WINDOW.since, WINDOW.until, null, 'a2');
   });
 });

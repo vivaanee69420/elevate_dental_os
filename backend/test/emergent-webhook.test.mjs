@@ -74,6 +74,17 @@ it('routes treatment.deleted to a delete', async () => {
   expect(res.deleted).toBe(1);
 });
 
+// An org is paused by flipping its integrations to 'revoked'. Pushed events must
+// be refused too, not just the nightly pull — otherwise a paused org keeps
+// writing tenant data in real time.
+it('rejects a correctly-signed event once the integration is revoked', async () => {
+  getByProvider.mockResolvedValue({ status: 'revoked', config: { webhook_secret: SECRET } });
+  const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
+  await expect(webhookService.emergent(token, raw, sign(raw), 'treatment.accepted'))
+    .rejects.toMatchObject({ statusCode: 404 });
+  expect(upsert).not.toHaveBeenCalled();
+});
+
 it('rejects a bad signature with 401', async () => {
   const raw = Buffer.from(JSON.stringify({ event: 'treatment.accepted', data: DATA }));
   await expect(webhookService.emergent(token, raw, 'sha256=deadbeef', 'treatment.accepted'))

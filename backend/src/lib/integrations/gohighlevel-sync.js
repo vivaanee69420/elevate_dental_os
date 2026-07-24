@@ -91,9 +91,13 @@ export function mapStage(ghlStageId, ghlStageName, stageMappings = {}) {
     if (/(contact.*made|connected|spoke|reached|contacted)/.test(name)) return 'contact_made';
     // Contact attempted / follow-up
     if (/(attempt|contacting|no\s*answer|follow|prospect\s*add|registered|quiz|new\s*enquiry|new\s*lead)/.test(name)) return 'contact_attempted';
-    // Lost / not proceeding — includes "junk", "not now", "webinar no-show" etc.
-    if (/(lost|dead|not\s*proceed|unqualified|abandoned|junk|not\s*now|no.show|failed|not\s*interest|disqualif)/.test(name)) return 'not_proceeding';
-    if (/(no\s*show|missed|failed.*attend)/.test(name)) return 'failed_to_attend';
+    // Did not attend. MUST be tested before the lost/not-proceeding branch:
+    // that branch used to match "no.show" too and ran first, which made this
+    // one dead code and silently classified every no-show as not_proceeding.
+    // Hyphen/underscore variants ("no-show") aren't \s, hence the class.
+    if (/(no[\s\-_]*show|missed|failed.*attend|did\s*not\s*attend|\bdna\b)/.test(name)) return 'failed_to_attend';
+    // Lost / not proceeding — includes "junk", "not now" etc.
+    if (/(lost|dead|not\s*proceed|unqualified|abandoned|junk|not\s*now|failed|not\s*interest|disqualif)/.test(name)) return 'not_proceeding';
     return 'new';
 }
 

@@ -24,7 +24,7 @@ describe('chair history capture on change', () => {
         // the one carrying updateVals.
         if (q.updateVals) return { data: { id: 'cell-1', practice_id: 'prac-9' }, error: null };
         if (q.op === 'select') return { data: [
-          { chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180 },
+          { chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180, revenue_pence: 45000 },
         ], error: null };
       }
       return { data: [], error: null };
@@ -36,8 +36,10 @@ describe('chair history capture on change', () => {
     expect(snapWrites.length).toBe(1);
     expect(snapWrites[0].organisation_id).toBe(ORG);
     expect(snapWrites[0].practice_id).toBe('prac-9');
+    // revenue_pence carries into the snapshot — it drives yield/hr on the
+    // Chair Efficiency grid, so a snapshot without it replays a £0 past.
     expect(snapWrites[0].cells).toEqual([
-      { chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180 },
+      { chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180, revenue_pence: 45000 },
     ]);
   });
 });
