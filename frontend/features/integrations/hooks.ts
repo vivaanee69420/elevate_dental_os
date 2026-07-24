@@ -17,6 +17,7 @@ import {
   setStageMappings,
   listAdAccounts,
   setAdAccountSelection,
+  setAdAccountPractice,
   listGhlAccounts,
   addGhlAccount,
   updateGhlAccount,
@@ -204,6 +205,24 @@ export function useSetAdAccountSelection(provider: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['ad-accounts', provider] });
       // Marketing views read the selected accounts — refresh them.
+      qc.invalidateQueries({ queryKey: ['growth', 'marketing-roi'] });
+      qc.invalidateQueries({ queryKey: ['growth', 'ad-spend'] });
+      qc.invalidateQueries({ queryKey: ['marketing-roi'] });
+      qc.invalidateQueries({ queryKey: ['business-hub'] });
+    },
+  });
+}
+
+export function useSetAdAccountPractice(provider: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, practiceId }: { id: string; practiceId: string | null }) =>
+      setAdAccountPractice(id, practiceId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['ad-accounts', provider] });
+      // Per-practice spend/CPL reads ad_accounts.practice_id — refresh them all.
+      qc.invalidateQueries({ queryKey: ['ad-attribution-config'] });
+      qc.invalidateQueries({ queryKey: ['ad-performance'] });
       qc.invalidateQueries({ queryKey: ['growth', 'marketing-roi'] });
       qc.invalidateQueries({ queryKey: ['growth', 'ad-spend'] });
       qc.invalidateQueries({ queryKey: ['marketing-roi'] });
