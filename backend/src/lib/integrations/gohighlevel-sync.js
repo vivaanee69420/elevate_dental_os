@@ -34,6 +34,9 @@ import { decryptSecret } from '../crypto.js';
 import { GoHighLevelProvider } from './gohighlevel-provider.js';
 import { syncConversations } from './gohighlevel-conversations.js';
 import * as supabase_1 from '../supabase.js';
+// Capture is a no-op when Sentry was never init'd (no SENTRY_DSN, e.g. local
+// and tests), so this is safe to import unconditionally.
+import * as Sentry from '@sentry/node';
 
 const API_BASE = 'https://services.leadconnectorhq.com';
 const API_VERSION = '2021-07-28';
@@ -201,25 +204,53 @@ export function phasePct(idx, nPhases, page, totalPages) {
 
 // --- DB-bound sync -------------------------------------------------------
 
-// GHL GET by absolute URL with bounded 429 retries (retry-after, else
-// exponential backoff). Contacts + opportunities now paginate CONCURRENTLY, so
-// the request rate roughly doubles and GHL's burst limit (~100 req / 10s)
-// returns 429 in waves; a single retry isn't enough (the retry hits the still-
-// open window and the page is dropped, failing the whole pull). Up to 4 attempts
-// lets a page ride out a sustained burst.
+// Statuses worth retrying. 429 is GHL's documented rate-limit signal, but the
+// July 2026 incident (5 of 7 subaccounts stuck on "failed") was an intermittent
+// 400 from GET /contacts/ — every stored failing URL replayed 200 afterwards
+// with the same token and location, so those 400s were an upstream blip, not a
+// malformed request. A single one used to abort a whole subaccount sync.
+// Deliberately EXCLUDES 401/403/404: a revoked token or deleted location is
+// deterministic, and retrying it just burns four more requests.
+const RETRYABLE_STATUS = new Set([400, 408, 425, 429, 500, 502, 503, 504]);
+
+// GHL GET by absolute URL with bounded retries (retry-after, else exponential
+// backoff). Contacts + opportunities now paginate CONCURRENTLY, so the request
+// rate roughly doubles and GHL's burst limit (~100 req / 10s) returns 429 in
+// waves; a single retry isn't enough (the retry hits the still-open window and
+// the page is dropped, failing the whole pull). Up to 4 attempts lets a page
+// ride out a sustained burst or a transient upstream fault. Network-level
+// faults (ECONNRESET/timeouts) are retried too — they previously threw straight
+// out of the loop with no retry at all.
 async function ghlFetchUrl(url, accessToken, retries = 4) {
+    const baseMs = Number(process.env.GHL_RETRY_BASE_MS ?? 1000);
     const doFetch = () => fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}`, Version: API_VERSION, Accept: 'application/json' },
     });
-    let res;
+    const backoff = (attempt, retryAfterSec) => (retryAfterSec > 0 ? retryAfterSec * 1000 : baseMs * 2 ** attempt) + baseMs / 2;
+    let res = null;
+    let netErr = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
-        res = await doFetch();
-        if (res.status !== 429 || attempt === retries) break;
+        netErr = null;
+        try {
+            res = await doFetch();
+        } catch (err) {
+            netErr = err;
+            res = null;
+            if (attempt === retries) break;
+            await new Promise((r) => setTimeout(r, backoff(attempt, 0)));
+            continue;
+        }
+        if (res.ok || !RETRYABLE_STATUS.has(res.status) || attempt === retries) break;
         const ra = parseInt(res.headers.get('retry-after') ?? '0', 10);
-        const wait = (ra > 0 ? ra * 1000 : 1000 * 2 ** attempt) + 500;
-        await new Promise((r) => setTimeout(r, wait));
+        await new Promise((r) => setTimeout(r, backoff(attempt, ra)));
     }
-    if (!res.ok) throw new Error(`GHL ${url} → ${res.status}`);
+    if (netErr) throw new Error(`GHL ${url} → ${netErr.message}`);
+    if (!res.ok) {
+        // Carry GHL's own error body. Without it every failure persisted as a
+        // bare "→ 400", leaving nothing to diagnose from days later.
+        const body = await res.text().catch(() => '');
+        throw new Error(`GHL ${url} → ${res.status}${body ? ` ${body.slice(0, 300)}` : ''}`);
+    }
     return res.json();
 }
 
@@ -872,13 +903,31 @@ export async function detectPipelinesForToken(accessToken, locationId) {
 }
 
 export async function syncAllOrgs() {
-    const accounts = await integrationAccountRepository.listAllActive('gohighlevel');
+    const accounts = await integrationAccountRepository.listAllSyncable('gohighlevel');
     const results = [];
     for (const acc of accounts) {
         try {
             const r = await syncAccount(acc.organisation_id, acc.id);
             results.push({ orgId: acc.organisation_id, accountId: acc.id, ...r });
         } catch (err) {
+            // One subaccount must not abort the rest — but swallowing the error
+            // here is what made the July 2026 incident invisible: the cron job
+            // caught its own errors, so Sentry's monitor check-in stayed green
+            // while five subaccounts failed nightly for over a week. Report
+            // each failure explicitly, then carry on to the next account.
+            Sentry.withScope((scope) => {
+                scope.setTag('integration', 'gohighlevel');
+                scope.setTag('organisation_id', acc.organisation_id);
+                scope.setTag('ghl_account_id', acc.id);
+                scope.setContext('ghl_account', {
+                    label: acc.label ?? null,
+                    location_id: acc.external_account_id ?? null,
+                    previous_status: acc.status ?? null,
+                    last_sync_at: acc.last_sync_at ?? null,
+                });
+                Sentry.captureException(err);
+            });
+            console.error(`[gohighlevel] account ${acc.id} (${acc.label ?? 'unlabelled'}) sync failed: ${err.message}`);
             results.push({ orgId: acc.organisation_id, accountId: acc.id, error: err.message });
         }
     }
