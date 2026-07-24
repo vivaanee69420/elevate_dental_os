@@ -173,6 +173,18 @@ describe('parseDentallyEvent — resource classification (via webhookService)', 
     expect(r).toMatchObject({ resourceType: 'treatment_plan' });
   });
 
+  // An org is paused by flipping its integrations to 'revoked'. That must stop
+  // PUSHED deliveries too, not just the nightly pull — a correctly-signed event
+  // for a paused org has to be refused before any row is written.
+  it('refuses a correctly-signed event once the integration is revoked', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'integrations'
+        ? { data: { status: 'revoked', config: { webhook_secret: SECRET } }, error: null }
+        : { data: [], error: null };
+    await expect(fire('appointment.created', { id: 1, site_id: 5 }))
+      .rejects.toMatchObject({ statusCode: 404 });
+  });
+
   // --- payload-shape tolerance: Dentally's exact envelope is not contractually
   //     fixed, so the receiver must still create records whether the resource is
   //     under `data`, under its singular key, or the body IS the resource. -----

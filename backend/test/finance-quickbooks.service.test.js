@@ -4,6 +4,7 @@ vi.mock('../src/repositories/quickbooks-finance.repository.js', () => ({
   quickbooksFinanceRepository: {
     pnlRows: vi.fn(),
     bankRows: vi.fn(),
+    bankSnapshotRows: vi.fn(),
     receivableRows: vi.fn(),
     receiptRows: vi.fn(),
     accounts: vi.fn(),
@@ -20,6 +21,11 @@ describe('financeQuickbooksService.getOverview', () => {
     repo.receivableRows.mockReset();
     repo.receiptRows.mockReset();
     repo.accounts.mockReset();
+    // Cash is read as a month-end snapshot, falling back to the live
+    // bank_accounts rows when no history exists for that period. Default to no
+    // history so these cases exercise the fallback.
+    repo.bankSnapshotRows.mockReset();
+    repo.bankSnapshotRows.mockResolvedValue([]);
   });
 
   it('sums revenue/expenses/net and computes margin (summed view, per-company breakdown)', async () => {

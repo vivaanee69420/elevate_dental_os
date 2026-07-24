@@ -870,8 +870,16 @@ describe('businessHub — Takings, Treatments Completed value, Treatments Accept
         return { data: [{ practice_id: 'p1', pence: 100000 }, { practice_id: 'p2', pence: 50000 }], error: null };
       if (fn === 'settled_receipts_by_day')     // group takings (== Patient Payments "Received")
         return { data: [{ day: '2026-05-01', pence: 90000 }, { day: '2026-05-02', pence: 60000 }], error: null };
-      if (fn === 'treatments_rollup_by_org')    // completed count + value
+      if (fn === 'treatments_rollup_by_org')    // plan-header funnel -> Treatments STARTED only
         return { data: [{ started: 9, completed: 4, closed_value_pence: 720000 }], error: null };
+      // Treatments COMPLETED now comes from the per-practice Practitioner
+      // Activity feed (dentally_treatment_items, 000099) — NOT the org-wide
+      // plan-header count above. Group total = sum of these rows.
+      if (fn === 'treatments_completed_by_practice')
+        return { data: [
+          { practice_id: 'p1', completed_count: 3, value_pence: 500000 },
+          { practice_id: 'p2', completed_count: 1, value_pence: 220000 },
+        ], error: null };
       return { data: [], error: null };
     };
     supaRec.rpcCalls = [];
@@ -882,9 +890,12 @@ describe('businessHub — Takings, Treatments Completed value, Treatments Accept
     expect(res.practices.find((p) => p.name === 'Alpha').takingsPence).toBe(100000);
     expect(res.practices.find((p) => p.name === 'Beta').takingsPence).toBe(50000);
 
-    // Treatments Completed: count + private-treatment value (practitioner activity).
+    // Treatments Completed: count + private-treatment value (practitioner activity),
+    // summed from the per-practice feed and attributed back to each practice.
     expect(res.group.treatmentsCompleted).toBe(4);
     expect(res.group.treatmentsCompletedValuePence).toBe(720000);
+    expect(res.practices.find((p) => p.name === 'Alpha').treatmentsCompleted).toBe(3);
+    expect(res.practices.find((p) => p.name === 'Beta').treatmentsCompleted).toBe(1);
 
     // Treatments Accepted: emergent not connected → zeros, and the aggregate RPC
     // is NEVER called (so the still-blocked table/RPC isn't required on hosted).
