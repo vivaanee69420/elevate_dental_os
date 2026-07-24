@@ -41,6 +41,10 @@ export function ChannelScorecard({
   onDrill: (d: ScorecardDrill) => void;
 }) {
   const overlapUnknown = overlapLoading || overlapError;
+  // Per-channel spend for the Spend tile's subtitle, so the group figure names
+  // its sources ("Google £x · Facebook £y") instead of an unlabelled total.
+  const googleSpendPence = channels.find((c) => c.channel === 'google_ads')?.spendPence ?? null;
+  const metaSpendPence = channels.find((c) => c.channel === 'meta_ads')?.spendPence ?? null;
   return (
     <>
       <SectionCard>
@@ -97,13 +101,14 @@ export function ChannelScorecard({
             )}
           />
           <Kpi
-            label="Spend"
+            label="Ad spend (Google + Facebook)"
             value={money(totals.spendPence)}
+            note={`Google ${money(googleSpendPence)} · Facebook ${money(metaSpendPence)}`}
             info={(
               <Explainer
                 what="Advertising spend recorded against Google and Facebook in this window."
                 how="Summed from the ad spend feed. Unassigned contributes nothing — no spend feed maps to it."
-                now={money(totals.spendPence)}
+                now={`Google ${money(googleSpendPence)} + Facebook ${money(metaSpendPence)} = ${money(totals.spendPence)}.`}
               />
             )}
           />
