@@ -39,6 +39,12 @@ describe('messageRow', () => {
     it('returns null for an unmappable channel', () => {
         expect(messageRow('o', { id: 'm3', messageType: 'TYPE_WEBCHAT', body: 'x' }, 'c', 'cv')).toBeNull();
     });
+    it('stamps integration_account_id when the sync is account-scoped', () => {
+        const row = messageRow('org-1', {
+            id: 'm9', messageType: 'TYPE_SMS', direction: 'inbound', body: 'hi',
+        }, 'c-1', 'conv-1', 'acc-9');
+        expect(row.integration_account_id).toBe('acc-9');
+    });
 });
 
 describe('syncConversations pagination', () => {
@@ -91,6 +97,55 @@ describe('syncConversations pagination', () => {
         expect(res.conversations).toBe(3);
         expect(res.messages).toBe(3);                           // 3 threads x 1 message
         expect(upsertedRows).toBe(3);
+    });
+
+    // Incremental pull: threads are sorted newest-first, so once a page shows a
+    // thread older than `since` everything after it is older too — stop paging,
+    // skip its message fetch, and never touch the historical tail.
+    it('stops at `since`: only newer threads fetch messages, no further pages, rows stamped with the account', async () => {
+        const integration = {
+            secrets: encryptSecret(JSON.stringify({ access_token: 'tok' })),
+            config: { locationId: 'loc-1' },
+        };
+        let upserted = [];
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'communications' && q.upsertVals) {
+                upserted = upserted.concat(q.upsertVals);
+                return { data: q.upsertVals.map((_, i) => ({ id: `id-${i}` })), error: null };
+            }
+            return { data: [], error: null };
+        };
+        const searchCalls = [];
+        const messageCalls = [];
+        global.fetch = vi.fn(async (url) => {
+            const u = String(url);
+            if (u.includes('/conversations/search')) {
+                searchCalls.push(u);
+                return {
+                    ok: true, status: 200,
+                    json: async () => ({ conversations: [
+                        { id: 'c-new', contactId: 'g1', sort: [300] },
+                        { id: 'c-old', contactId: 'g2', sort: [100] },
+                    ] }),
+                };
+            }
+            const id = u.match(/conversations\/([^/]+)\/messages/)[1];
+            messageCalls.push(id);
+            return {
+                ok: true, status: 200,
+                json: async () => ({ messages: { messages: [{ id: `m-${id}`, messageType: 'TYPE_SMS', direction: 'inbound', body: 'hi' }] } }),
+            };
+        });
+
+        const res = await syncConversations('org-1', integration, {
+            pageSize: 2, since: 200, integrationAccountId: 'acc-9',
+        });
+
+        expect(searchCalls.length).toBe(1);      // full page, but stale tail -> no page 2
+        expect(messageCalls).toEqual(['c-new']); // stale thread's messages never fetched
+        expect(res.conversations).toBe(1);
+        expect(upserted.length).toBe(1);
+        expect(upserted[0].integration_account_id).toBe('acc-9');
     });
 
     it('returns zero without a locationId (cannot scope the GHL search)', async () => {

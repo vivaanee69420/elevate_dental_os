@@ -55,13 +55,15 @@ export function mapMessageChannel(ghlType) {
 
 // One GHL message -> a communications row. contactId is OUR contact uuid (already
 // resolved from the GHL contactId). Pure (no I/O). Returns null for unmappable
-// channels.
-export function messageRow(orgId, m, contactId, conversationId) {
+// channels. integrationAccountId scopes the row to its GHL subaccount so the
+// Inbox can filter per practice.
+export function messageRow(orgId, m, contactId, conversationId, integrationAccountId = null) {
     const channel = mapMessageChannel(m.messageType ?? m.type);
     if (!channel) return null;
     return {
         organisation_id: orgId,
         contact_id: contactId ?? null,
+        integration_account_id: integrationAccountId ?? null,
         channel,
         direction: m.direction === 'inbound' ? 'inbound' : 'outbound',
         subject: m.subject ?? null,
@@ -147,16 +149,32 @@ async function upsertMessages(rows) {
     return data?.length ?? 0;
 }
 
-// Pull ALL conversation threads + their recent messages into communications.
+// A conversation's last-activity timestamp in epoch ms. GHL carries it as the
+// search sort key (`sort: [lastMessageDate]`, epoch ms) with lastMessageDate as
+// fallback; tolerate numeric strings and ISO dates. null = unknown.
+function lastActivityMs(c) {
+    const v = c?.sort?.[0] ?? c?.lastMessageDate ?? null;
+    if (v == null) return null;
+    const n = typeof v === 'number' ? v : (Number(v) || Date.parse(v));
+    return Number.isFinite(n) ? n : null;
+}
+
+// Pull conversation threads + their recent messages into communications.
 // Paginates /conversations/search via the GHL cursor (each conversation carries
 // `sort: [lastMessageDate]`; the next page is startAfterDate=<last sort[0]>) until
-// the account is exhausted or maxConversations is reached. Inbound + outbound
+// the account is exhausted, maxConversations is reached, or — because threads
+// arrive newest-first — the page reaches threads with no activity since `since`
+// (incremental mode: only what changed is fetched). Inbound + outbound
 // (including replies we sent via GHL) both land here, so the Inbox is complete.
 // Idempotent — safe to re-run nightly; the upsert drops messages already stored.
-export async function syncConversations(orgId, integration, { maxConversations = 5000, perConv = 50, pageSize = 100, concurrency = 8, onProgress = null } = {}) {
+export async function syncConversations(orgId, integration, {
+    maxConversations = 5000, perConv = 50, pageSize = 100, concurrency = 8, onProgress = null,
+    since = null, integrationAccountId = null,
+} = {}) {
     const at = tokenOf(integration);
     const locationId = integration.config?.locationId;
     if (!at || !locationId) return { conversations: 0, messages: 0 };
+    const sinceMs = since == null ? null : (typeof since === 'number' ? since : Date.parse(since));
     const cmap = await ourContactMap(orgId);
     onProgress?.({ phase: 'conversations', pct: 99, count: 0, page: 0, totalPages: null });
     let cursor = null;
@@ -169,16 +187,23 @@ export async function syncConversations(orgId, integration, { maxConversations =
         const convRes = await ghl(q, at);
         const conversations = convRes.conversations ?? [];
         if (!conversations.length) break;
-        convCount += conversations.length;
+        // Incremental cut: threads are newest-first, so anything at/past the
+        // first stale thread is stale too. Unknown timestamps count as fresh.
+        const fresh = sinceMs == null ? conversations : conversations.filter((c) => {
+            const t = lastActivityMs(c);
+            return t == null || t >= sinceMs;
+        });
+        const hitStaleTail = fresh.length < conversations.length;
+        convCount += fresh.length;
         // Fetch each thread's messages concurrently, then upsert the page. Stream
         // the running thread count so the overlay shows live progress and `at`
         // stays fresh through a multi-thousand-thread backfill.
-        const perConvRows = await mapLimit(conversations, concurrency, async (c) => {
+        const perConvRows = await mapLimit(fresh, concurrency, async (c) => {
             const contactId = cmap.get(String(c.contactId)) ?? null;
             try {
                 const mRes = await ghl(`/conversations/${c.id}/messages?limit=${perConv}`, at);
                 const msgs = mRes.messages?.messages ?? mRes.messages ?? [];
-                return msgs.map((m) => messageRow(orgId, m, contactId, c.id)).filter(Boolean);
+                return msgs.map((m) => messageRow(orgId, m, contactId, c.id, integrationAccountId)).filter(Boolean);
             } catch (e) {
                 console.warn(`[gohighlevel] messages for conversation ${c.id} skipped: ${e.message}`);
                 return [];
@@ -186,6 +211,7 @@ export async function syncConversations(orgId, integration, { maxConversations =
         });
         inserted += await upsertMessages(perConvRows.flat());
         onProgress?.({ phase: 'conversations', pct: 99, count: convCount, page: convCount, totalPages: null });
+        if (hitStaleTail) break;
         // Advance the cursor to the oldest thread on this page. Stop on a short
         // page (account exhausted) or a missing cursor.
         const last = conversations[conversations.length - 1];

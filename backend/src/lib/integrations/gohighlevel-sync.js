@@ -534,9 +534,19 @@ async function loadContactDedupMaps(orgId) {
 // email/phone -> link the GHL id onto that row (dedup, no duplicate). This keeps
 // the same dedup guarantee as upsertContact but at a few dozen queries instead
 // of ~3 per contact — an 8k pull goes from ~an hour to seconds.
-async function pullContacts(orgId, accessToken, locationId, practiceId, onPage = () => {}, maxPages = MAX_PAGES, integrationAccountId = null) {
-    const remote = await ghlFetchAll('/contacts/', accessToken, locationId, {
+async function pullContacts(orgId, accessToken, locationId, practiceId, onPage = () => {}, maxPages = MAX_PAGES, integrationAccountId = null, since = null) {
+    const fetched = await ghlFetchAll('/contacts/', accessToken, locationId, {
         arrayKey: 'contacts', locationParam: 'locationId', maxPages, onPage,
+    });
+    // Incremental window: GHL's /contacts/ list cannot filter server-side, so
+    // the walk is unavoidable — but rows unchanged since `since` need no write.
+    // A contact with no update timestamp is kept (never silently dropped).
+    const sinceMs = since == null ? null : Date.parse(since);
+    const remote = sinceMs == null ? fetched : fetched.filter((rc) => {
+        const raw = rc?.dateUpdated ?? rc?.updatedAt ?? null;
+        if (raw == null) return true;
+        const t = Date.parse(raw);
+        return Number.isNaN(t) || t >= sinceMs;
     });
     const { byGhl, byEmail, byPhone } = await loadContactDedupMaps(orgId);
     const toUpsert = [];
@@ -836,11 +846,19 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
     if (!access_token || !locationId) return { synced: 0, skipped: 'no_location' };
     const stageMappings = account.config?.stage_mappings ?? {};
     const maxPages = (full || recent) ? BOOTSTRAP_MAX_PAGES : MAX_PAGES;
+    // Incremental window for routine runs: only rows changed since the last
+    // successful sync get written (and conversations paged). 24h margin absorbs
+    // clock skew and a partially-failed previous run; full/recent pulls and
+    // first-ever runs (no last_sync_at) take no window.
+    const SINCE_MARGIN_MS = 24 * 60 * 60 * 1000;
+    const since = (!full && !recent && account.last_sync_at)
+        ? new Date(new Date(account.last_sync_at).getTime() - SINCE_MARGIN_MS).toISOString()
+        : null;
     const nPhases = 2;
     try {
         const contactsSynced = await pullContacts(orgId, access_token, locationId, account.practice_id,
             (page, totalPages, count) => onProgress({ phase: 'contacts', pct: phasePct(0, nPhases, page, totalPages), page, totalPages, count }),
-            maxPages, accountId);
+            maxPages, accountId, since);
         const opportunities = await ghlFetchAll('/opportunities/search', access_token, locationId, {
             arrayKey: 'opportunities', locationParam: 'location_id', maxPages,
             onPage: (page, totalPages, count) => onProgress({ phase: 'opportunities', pct: phasePct(1, nPhases, page, totalPages), page, totalPages, count }),
@@ -866,8 +884,17 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
             console.warn(`[gohighlevel] account ${accountId} workflows skipped: ${err?.message || err}`);
         }
         const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
+        const sinceMs = since == null ? null : Date.parse(since);
         let synced = 0;
         for (const opp of opportunities) {
+            // Incremental window: an opportunity untouched since the last sync
+            // upserts to the identical row — skip the round trip. Missing
+            // timestamps are treated as fresh (never silently dropped).
+            if (sinceMs != null) {
+                const raw = opp?.updatedAt ?? opp?.dateUpdated ?? null;
+                const t = raw == null ? NaN : Date.parse(raw);
+                if (!Number.isNaN(t) && t < sinceMs) continue;
+            }
             const r = await upsertOpportunity(orgId, opp, account.practice_id, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap, accountId);
             if (r.ok) synced++;
         }
@@ -879,8 +906,25 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
         } catch (err) {
             console.warn(`[gohighlevel] account ${accountId} appointments phase skipped: ${err?.message || err}`);
         }
+        // Phase 4: conversations -> Inbox — DEFENSIVE like appointments (a PIT
+        // without conversations scopes must not fail the sync). Account-scoped
+        // replacement for the retired legacy org-level conversations pull;
+        // newest-first + `since` keeps routine runs to what actually changed.
+        let convResult = { conversations: 0, messages: 0 };
+        try {
+            convResult = await syncConversations(orgId, { secrets: account.secrets, config: { locationId } }, {
+                since, integrationAccountId: accountId, onProgress,
+                maxConversations: (full || recent) ? 5000 : 1000,
+            });
+        } catch (err) {
+            console.warn(`[gohighlevel] account ${accountId} conversations phase skipped: ${err?.message || err}`);
+        }
         await integrationAccountRepository.markSynced(orgId, accountId);
-        return { contacts: contactsSynced, opportunities: synced, total: opportunities.length, appointments: apptResult.appointments };
+        return {
+            contacts: contactsSynced, opportunities: synced, total: opportunities.length,
+            appointments: apptResult.appointments,
+            conversations: convResult.conversations, messages: convResult.messages,
+        };
     } catch (err) {
         // Don't let a markFailed failure mask the real sync error.
         try {
