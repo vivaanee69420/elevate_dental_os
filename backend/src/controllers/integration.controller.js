@@ -76,14 +76,23 @@ export const integrationController = {
         // `leadconnector`. Map it back to the internal provider key (which is
         // also what the signed OAuth state carries).
         const PROVIDER_ALIAS = { leadconnector: 'gohighlevel' };
-        const provider = PROVIDER_ALIAS[req.params.provider] || req.params.provider;
+        let provider = PROVIDER_ALIAS[req.params.provider] || req.params.provider;
         // QuickBooks returns the company id as `realmId` on the callback query;
         // other OAuth providers only carry code + state. Forward it through.
         const { code, state, realmId, error: oauthError } = req.query;
         const dest = new URL(`${frontendUrl()}/integrations`);
         try {
             if (oauthError) throw new Error(String(oauthError));
-            const { orgId } = verifyState(state, provider);
+            // The HMAC-signed state is the authority on which provider started
+            // this flow — the URL path is only a hint. Providers can share one
+            // registered redirect URI (google_sheets borrows the google_ads
+            // callback when it borrows that OAuth client), so route on the
+            // state's provider; a forged/mismatched state still fails the HMAC.
+            const { orgId, provider: signedProvider } = verifyState(state);
+            if (signedProvider !== provider) {
+                console.log(`[integrationController] oauthCallback: path=${provider} routed to state provider=${signedProvider}`);
+                provider = signedProvider;
+            }
             console.log(`[integrationController] oauthCallback success: orgId=${orgId}, provider=${provider}`);
             await integration_service_1.integrationService.finishConnect(orgId, provider, { code, realmId });
             dest.searchParams.set('connected', provider);

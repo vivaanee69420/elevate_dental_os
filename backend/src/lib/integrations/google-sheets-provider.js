@@ -34,8 +34,15 @@ function apiBase() {
 function backendUrl() {
     return process.env.BACKEND_PUBLIC_URL || 'http://localhost:8080';
 }
+// The redirect URI must be REGISTERED on the OAuth client in the Google Cloud
+// Console. When borrowing the Google Ads client (no dedicated
+// GOOGLE_SHEETS_CLIENT_ID), reuse its ALREADY-REGISTERED
+// /oauth/google_ads/callback path so no console change is needed — the signed
+// OAuth state carries provider=google_sheets and the public callback routes on
+// the state, not the URL path. A dedicated Sheets client uses its own path.
 function redirectUri() {
-    return `${backendUrl()}/oauth/${PROVIDER_ID}/callback`;
+    const path = process.env.GOOGLE_SHEETS_CLIENT_ID ? PROVIDER_ID : 'google_ads';
+    return `${backendUrl()}/oauth/${path}/callback`;
 }
 
 // Accepts a full Sheets URL or a bare spreadsheet id. Returns the id or null.
