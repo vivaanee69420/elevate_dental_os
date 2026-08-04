@@ -75,6 +75,7 @@ export const NAV: NavSection[] = [
     { id: 'contacts', label: 'Contacts' },
     { id: 'crm-reports', label: 'CRM Reports' },
     { id: 'ghl-dashboard', label: 'GHL Dashboard', isNew: true },
+    { id: 'call-reporting', label: 'Call Reporting', isNew: true },
     { id: 'workflows', label: 'Automations' },
   ]},
   { label: 'Wealth', items: [
