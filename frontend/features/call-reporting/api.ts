@@ -76,6 +76,20 @@ export function fetchSheetsStatus() {
   return api<SheetsStatus>('/api/integrations/google-sheets/status');
 }
 
+// Google Picker bootstrap (browse-and-pick instead of paste-URL). `enabled` is
+// false until the operator sets GOOGLE_PICKER_API_KEY on the backend. The
+// access token is short-lived — fetch fresh right before opening the picker.
+export interface SheetsPickerConfig {
+  enabled: boolean;
+  apiKey?: string;
+  appId?: string | null;
+  accessToken?: string;
+}
+
+export function fetchSheetsPickerConfig() {
+  return api<SheetsPickerConfig>('/api/integrations/google-sheets/picker-config');
+}
+
 export function addSheetSource(url: string) {
   return api<{ ok: boolean; title: string | null; tabs: string[] }>(
     '/api/integrations/google-sheets/source',

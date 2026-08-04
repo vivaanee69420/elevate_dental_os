@@ -11,6 +11,10 @@ export const sheetsController = {
         res.json(await sheetService.status(req.user.organisation_id));
     },
 
+    async pickerConfig(req, res) {
+        res.json(await sheetService.pickerConfig(req.user.organisation_id));
+    },
+
     async addSource(req, res) {
         const body = sheet_model_1.sheetSourceCreateSchema.parse(req.body);
         console.log(`[sheets] addSource: orgId=${req.user.organisation_id}`);

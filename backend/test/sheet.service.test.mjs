@@ -160,6 +160,42 @@ describe('syncNow / disconnect', () => {
   });
 });
 
+describe('pickerConfig', () => {
+  it('is disabled (and token-free) until GOOGLE_PICKER_API_KEY is set', async () => {
+    delete process.env.GOOGLE_PICKER_API_KEY;
+    const out = await sheetService.pickerConfig(ORG);
+    expect(out).toEqual({ enabled: false });
+  });
+  it('returns the browser key + a decrypted short-lived access token when configured', async () => {
+    process.env.GOOGLE_PICKER_API_KEY = 'browser-key';
+    process.env.GOOGLE_CLOUD_PROJECT_NUMBER = '43656323691';
+    try {
+      const { encryptSecret } = await import('../src/lib/crypto.js');
+      integrationRepoMock.getByProvider.mockResolvedValue({
+        status: 'active',
+        secrets: encryptSecret(JSON.stringify({ access_token: 'live-token', refresh_token: 'refresh' })),
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      });
+      const out = await sheetService.pickerConfig(ORG);
+      expect(out).toMatchObject({ enabled: true, apiKey: 'browser-key', appId: '43656323691', accessToken: 'live-token' });
+      // The refresh token must NEVER reach the browser.
+      expect(JSON.stringify(out)).not.toContain('refresh');
+    } finally {
+      delete process.env.GOOGLE_PICKER_API_KEY;
+      delete process.env.GOOGLE_CLOUD_PROJECT_NUMBER;
+    }
+  });
+  it('409s when Google is not connected even with the key set', async () => {
+    process.env.GOOGLE_PICKER_API_KEY = 'browser-key';
+    try {
+      integrationRepoMock.getByProvider.mockResolvedValue(null);
+      await expect(sheetService.pickerConfig(ORG)).rejects.toMatchObject({ statusCode: 409 });
+    } finally {
+      delete process.env.GOOGLE_PICKER_API_KEY;
+    }
+  });
+});
+
 describe('sheetMappingSchema', () => {
   it('rejects two fields mapped to the same column', async () => {
     const { sheetMappingSchema } = await import('../src/models/sheet.model.js');
