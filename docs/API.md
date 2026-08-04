@@ -695,6 +695,10 @@ the webhook upsert to the same row on `(organisation_id, source, external_id)`.
 ### Google Sheets (Call Reporting)
 One sheet per org, connected via Google OAuth with the read-only
 `spreadsheets.readonly` scope (no Drive scope — the owner pastes the sheet URL).
+When no dedicated `GOOGLE_SHEETS_CLIENT_ID` is set the flow borrows the Google
+Ads OAuth client AND its already-registered `/oauth/google_ads/callback`
+redirect URI (no Google Cloud Console change needed); the public OAuth callback
+routes on the HMAC-signed state's provider, not the URL path.
 Only the five mapped columns are ever read or stored (data minimisation: no
 names/phones/emails). Tokens are encrypted at rest and never surface in any
 response. Practice resolution is the explicit `sheet_practice_map` (never
