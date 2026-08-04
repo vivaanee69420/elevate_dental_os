@@ -12,6 +12,7 @@ import { useMemo, useState } from 'react';
 import { Chip } from '@/components/ui';
 import CollapsibleCard from './CollapsibleCard';
 import { useStartConnect } from '../hooks';
+import { fetchSheetsPickerConfig } from '@/features/call-reporting/api';
 import {
   useAddSheetSource,
   useSaveSheetMapping,
@@ -30,6 +31,39 @@ const FIELDS: { key: 'practice' | 'created_at' | 'first_call_at' | 'source' | 'p
   { key: 'source', label: 'Lead source', hint: 'e.g. Facebook Ads, Google Ads' },
   { key: 'pipeline_status', label: 'Pipeline status', hint: 'the lead’s pipeline stage' },
 ];
+
+// Load Google's picker script once and open a spreadsheet picker. Resolves
+// with the picked spreadsheet id, or null if the user cancelled.
+function openSheetPicker(cfg: { apiKey: string; appId: string | null; accessToken: string }): Promise<string | null> {
+  const w = window as any;
+  const loadScript = () =>
+    new Promise<void>((resolve, reject) => {
+      if (w.gapi) return resolve();
+      const s = document.createElement('script');
+      s.src = 'https://apis.google.com/js/api.js';
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Could not load the Google Picker'));
+      document.head.appendChild(s);
+    });
+  return loadScript()
+    .then(() => new Promise<void>((resolve) => w.gapi.load('picker', () => resolve())))
+    .then(
+      () =>
+        new Promise<string | null>((resolve) => {
+          const g = w.google.picker;
+          let builder = new g.PickerBuilder()
+            .addView(new g.DocsView(g.ViewId.SPREADSHEETS))
+            .setOAuthToken(cfg.accessToken)
+            .setDeveloperKey(cfg.apiKey)
+            .setCallback((data: any) => {
+              if (data.action === g.Action.PICKED) resolve(data.docs?.[0]?.id ?? null);
+              else if (data.action === g.Action.CANCEL) resolve(null);
+            });
+          if (cfg.appId) builder = builder.setAppId(cfg.appId);
+          builder.build().setVisible(true);
+        }),
+    );
+}
 
 function colLetter(idx: number) {
   let n = idx;
@@ -97,6 +131,29 @@ export default function GoogleSheetsPanel() {
     }
   }
 
+  const [pickerBusy, setPickerBusy] = useState(false);
+  async function handleBrowse() {
+    setErr(null);
+    setPickerBusy(true);
+    try {
+      const cfg = await fetchSheetsPickerConfig();
+      if (!cfg.enabled || !cfg.apiKey || !cfg.accessToken) {
+        setErr('Sheet browsing is not configured on the server yet — paste the sheet URL instead.');
+        return;
+      }
+      const pickedId = await openSheetPicker({
+        apiKey: cfg.apiKey,
+        appId: cfg.appId ?? null,
+        accessToken: cfg.accessToken,
+      });
+      if (pickedId) await handleAddSource(pickedId);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setPickerBusy(false);
+    }
+  }
+
   async function handleSaveMapping() {
     setErr(null);
     if (!tab) { setErr('Pick the tab that holds your lead rows.'); return; }
@@ -155,7 +212,13 @@ export default function GoogleSheetsPanel() {
           </>
         ) : !source ? (
           <>
-            <p>Paste the URL of the Google Sheet that holds your lead rows.</p>
+            <p>Pick the Google Sheet that holds your lead rows.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn-primary" onClick={handleBrowse} disabled={pickerBusy || addSource.isPending}>
+                {pickerBusy ? 'Opening…' : 'Browse my sheets'}
+              </button>
+              <span className="text-slate-400">or paste its URL:</span>
+            </div>
             <div className="flex gap-2">
               <input
                 className="input-base flex-1"
@@ -164,7 +227,7 @@ export default function GoogleSheetsPanel() {
                 onChange={(e) => setUrl(e.target.value)}
               />
               <button
-                className="btn-primary"
+                className="btn-ghost"
                 onClick={() => handleAddSource(url)}
                 disabled={addSource.isPending || url.trim().length < 10}
               >

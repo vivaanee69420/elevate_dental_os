@@ -19,7 +19,15 @@ import { encryptSecret, decryptSecret } from '../crypto.js';
 
 const AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly'];
+// spreadsheets.readonly = read the chosen sheet (sensitive scope, no Drive
+// browsing). drive.file = per-file access granted through the Google Picker —
+// non-sensitive, and what lets the owner browse-and-pick a sheet instead of
+// pasting a URL. Deliberately NOT drive.readonly (restricted scope, requires
+// Google's paid security audit).
+const SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets.readonly',
+    'https://www.googleapis.com/auth/drive.file',
+];
 export const PROVIDER_ID = 'google_sheets';
 
 function clientId() {

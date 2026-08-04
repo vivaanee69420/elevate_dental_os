@@ -31,6 +31,7 @@ router.delete('/emergent', (0, auth_1.requireRole)('owner'), (0, async_handler_1
 router.get('/emergent/practices', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentPractices));
 router.post('/emergent/practices', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSetPractice));
 router.get('/google-sheets/status', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetsController.status));
+router.get('/google-sheets/picker-config', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.pickerConfig));
 router.post('/google-sheets/source', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.addSource));
 router.get('/google-sheets/source/preview', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.preview));
 router.put('/google-sheets/source/mapping', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.saveMapping));

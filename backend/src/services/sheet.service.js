@@ -7,7 +7,7 @@
 import { AppError } from "../middleware/errors.js";
 import { sheetRepository } from "../repositories/sheet.repository.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
-import { parseSpreadsheetId, PROVIDER_ID } from "../lib/integrations/google-sheets-provider.js";
+import { parseSpreadsheetId, getAccessToken, PROVIDER_ID } from "../lib/integrations/google-sheets-provider.js";
 import { getMeta, getPreview, fullSync, topUp } from "../lib/integrations/google-sheets-sync.js";
 
 const LONDON_TZ = 'Europe/London';
@@ -59,6 +59,26 @@ export const sheetService = {
             connectionError: integration?.last_error ?? null,
             source: safeSource(source),
             mapped: !!source?.column_mapping,
+        };
+    },
+
+    // Google Picker bootstrap for the browse-and-pick flow. Owner-only: the
+    // short-lived OAuth access token is handed to the OWNER's browser so
+    // Google's picker can render their own Drive — it is their own account's
+    // token, scoped read-only (sheets + picked-files). Disabled until the
+    // operator sets GOOGLE_PICKER_API_KEY (a browser key for the Picker API).
+    async pickerConfig(orgId) {
+        const apiKey = (process.env.GOOGLE_PICKER_API_KEY || '').trim();
+        if (!apiKey) return { enabled: false };
+        await requireConnected(orgId);
+        const accessToken = await getAccessToken(orgId);
+        return {
+            enabled: true,
+            apiKey,
+            // The Google Cloud project NUMBER — required by the picker for
+            // drive.file grants to attach to this app.
+            appId: (process.env.GOOGLE_CLOUD_PROJECT_NUMBER || '').trim() || null,
+            accessToken,
         };
     },
 
