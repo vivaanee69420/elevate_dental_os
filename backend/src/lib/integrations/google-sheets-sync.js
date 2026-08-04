@@ -1,0 +1,325 @@
+// Google Sheets sync — Call Reporting lead rows.
+//
+// The connected sheet holds one row per lead. Only the FIVE mapped columns are
+// ever requested from the Sheets API (per-column batchGet ranges) and stored —
+// names/phones/emails in other columns never leave Google (data minimisation).
+//
+// Three paths:
+//   fullSync(orgId)  — paged re-read of the whole tab; rows diffed by sha256
+//                      row_hash so unchanged rows aren't rewritten; rows gone
+//                      from the sheet are deleted. Catches in-place edits
+//                      (e.g. first-call time filled in later).
+//   topUp(orgId)     — cheap append-only read of rows AFTER last_synced_row,
+//                      run on dashboard view (debounced 60s in-memory) so
+//                      "Today" is near-live regardless of sheet size.
+//   syncAllOrgs()    — nightly worker fan-out. Retries 'failed' sources too
+//                      (a transient error must never freeze a source — GHL
+//                      lesson) and isolates per-org failures.
+//
+// Values are requested UNFORMATTED (serial datetimes) and converted to UTC
+// using the sheet's own timezone. Row values are never logged — counts only.
+
+import crypto from 'node:crypto';
+import { sheetRepository } from '../../repositories/sheet.repository.js';
+import { sheetsFetch } from './google-sheets-provider.js';
+
+const PAGE_ROWS = 5000;
+const TOPUP_ROWS = 2000;
+const UPSERT_CHUNK = 500;
+const DEFAULT_TZ = 'Europe/London';
+export const MAPPED_FIELDS = ['practice', 'created_at', 'first_call_at', 'source', 'pipeline_status'];
+
+// ---------------------------------------------------------------------------
+// Pure helpers (exported for tests)
+// ---------------------------------------------------------------------------
+
+// 0-based column index -> A1 letter (0=A, 25=Z, 26=AA).
+export function colLetter(idx) {
+    let n = Math.floor(idx);
+    let s = '';
+    do {
+        s = String.fromCharCode(65 + (n % 26)) + s;
+        n = Math.floor(n / 26) - 1;
+    } while (n >= 0);
+    return s;
+}
+
+function quoteTab(tab) {
+    return `'${String(tab).replace(/'/g, "''")}'`;
+}
+
+// Offset (ms) of an IANA timezone at a given UTC instant, via Intl.
+function tzOffsetMs(tz, utcMs) {
+    const dtf = new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const p = Object.fromEntries(dtf.formatToParts(new Date(utcMs)).map((x) => [x.type, x.value]));
+    const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour === 24 ? 0 : +p.hour, +p.minute, +p.second);
+    return asUtc - utcMs;
+}
+
+// Sheets serial datetime (days since 1899-12-30, wall time in the sheet's
+// timezone) -> ISO UTC. 25569 = serial value of the Unix epoch.
+export function serialToIso(serial, tz = DEFAULT_TZ) {
+    if (typeof serial !== 'number' || !Number.isFinite(serial)) return null;
+    const wallMs = Math.round((serial - 25569) * 86400000);
+    const utcMs = wallMs - tzOffsetMs(tz, wallMs);
+    const d = new Date(utcMs);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+// Text fallback: British dd/mm/yyyy [hh:mm[:ss]] (also accepts ISO). Wall time
+// in the sheet's timezone.
+export function parseTextTimestamp(text, tz = DEFAULT_TZ) {
+    const s = String(text ?? '').trim();
+    if (!s) return null;
+    let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    let wallMs;
+    if (m) {
+        wallMs = Date.UTC(+m[3], +m[2] - 1, +m[1], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0));
+    } else {
+        m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+        if (!m) return null;
+        wallMs = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0));
+    }
+    if (Number.isNaN(wallMs)) return null;
+    return new Date(wallMs - tzOffsetMs(tz, wallMs)).toISOString();
+}
+
+export function parseTimestampValue(v, tz = DEFAULT_TZ) {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return serialToIso(v, tz);
+    return parseTextTimestamp(v, tz);
+}
+
+export function normalisePracticeValue(v) {
+    return String(v ?? '').trim();
+}
+export function practiceKey(v) {
+    return normalisePracticeValue(v).toLowerCase();
+}
+
+// Deterministic content hash of the five mapped values (change detection).
+export function hashRow(fields) {
+    return crypto.createHash('sha256')
+        .update(JSON.stringify([
+            fields.practice_value ?? null,
+            fields.created_at ?? null,
+            fields.first_call_at ?? null,
+            fields.lead_source ?? null,
+            fields.pipeline_status ?? null,
+        ]))
+        .digest('hex');
+}
+
+// Turn one page of per-column value arrays into parsed row objects.
+// columns = { practice: [], created_at: [], ... } (arrays of cell values),
+// startRow = 1-based sheet row of index 0. Returns { rows, skipped, lastDataRow }.
+export function parsePage(columns, startRow, tz = DEFAULT_TZ) {
+    const len = Math.max(...MAPPED_FIELDS.map((f) => columns[f]?.length ?? 0), 0);
+    const rows = [];
+    let skipped = 0;
+    let lastDataRow = 0;
+    for (let i = 0; i < len; i += 1) {
+        const raw = Object.fromEntries(MAPPED_FIELDS.map((f) => [f, columns[f]?.[i]]));
+        const empty = MAPPED_FIELDS.every((f) => raw[f] == null || String(raw[f]).trim() === '');
+        if (empty) continue;
+        lastDataRow = startRow + i;
+        const created = parseTimestampValue(raw.created_at, tz);
+        if (!created) { skipped += 1; continue; }
+        const fields = {
+            practice_value: normalisePracticeValue(raw.practice) || null,
+            created_at: created,
+            first_call_at: parseTimestampValue(raw.first_call_at, tz),
+            lead_source: String(raw.source ?? '').trim() || null,
+            pipeline_status: String(raw.pipeline_status ?? '').trim() || null,
+        };
+        rows.push({ sheet_row_index: startRow + i, ...fields, row_hash: hashRow(fields) });
+    }
+    return { rows, skipped, lastDataRow };
+}
+
+// ---------------------------------------------------------------------------
+// Sheets API reads
+// ---------------------------------------------------------------------------
+
+// Spreadsheet metadata: title, timezone, tab list. Also the reachability check
+// used before a source is persisted.
+export async function getMeta(orgId, spreadsheetId) {
+    const body = await sheetsFetch(orgId, `/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`, {
+        fields: 'properties(title,timeZone),sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))',
+    });
+    return {
+        title: body?.properties?.title ?? null,
+        timezone: body?.properties?.timeZone ?? null,
+        tabs: (body?.sheets ?? []).map((s) => ({
+            title: s?.properties?.title,
+            rowCount: s?.properties?.gridProperties?.rowCount ?? 0,
+            columnCount: s?.properties?.gridProperties?.columnCount ?? 0,
+        })),
+    };
+}
+
+// First rows of a tab, FORMATTED, for the one-time column-mapping UI. Shown to
+// the owner only and never stored.
+export async function getPreview(orgId, spreadsheetId, tabName, maxRows = 8) {
+    const range = `${quoteTab(tabName)}!A1:Z${maxRows}`;
+    const body = await sheetsFetch(orgId, `/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`, {
+        valueRenderOption: 'FORMATTED_VALUE',
+    });
+    return body?.values ?? [];
+}
+
+// One page of the five mapped columns, UNFORMATTED. Returns per-field arrays.
+async function fetchMappedPage(orgId, source, startRow, endRow) {
+    const tab = quoteTab(source.tab_name);
+    const mapping = source.column_mapping;
+    const ranges = MAPPED_FIELDS.map((f) => {
+        const col = colLetter(mapping[f]);
+        return `${tab}!${col}${startRow}:${col}${endRow}`;
+    });
+    const body = await sheetsFetch(orgId, `/v4/spreadsheets/${encodeURIComponent(source.spreadsheet_id)}/values:batchGet`, {
+        ranges,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+        dateTimeRenderOption: 'SERIAL_NUMBER',
+        majorDimension: 'COLUMNS',
+    });
+    const valueRanges = body?.valueRanges ?? [];
+    const columns = {};
+    MAPPED_FIELDS.forEach((f, i) => {
+        // majorDimension=COLUMNS => values = [ [cell, cell, ...] ] (one column).
+        columns[f] = valueRanges[i]?.values?.[0] ?? [];
+    });
+    return columns;
+}
+
+// ---------------------------------------------------------------------------
+// Sync paths
+// ---------------------------------------------------------------------------
+
+async function stampRows(orgId, rows) {
+    const values = [...new Set(rows.map((r) => r.practice_value).filter(Boolean))];
+    await sheetRepository.discoverPracticeValues(orgId, values);
+    const resolution = await sheetRepository.practiceResolutionMap(orgId);
+    return rows.map((r) => ({
+        ...r,
+        practice_id: r.practice_value != null
+            ? (resolution.get(practiceKey(r.practice_value)) ?? null)
+            : null,
+    }));
+}
+
+export async function fullSync(orgId) {
+    const source = await sheetRepository.getSource(orgId);
+    if (!source) return { skipped: 'no_source' };
+    if (!source.column_mapping || !source.tab_name) return { skipped: 'not_configured' };
+    const tz = source.sheet_timezone || DEFAULT_TZ;
+    try {
+        const meta = await getMeta(orgId, source.spreadsheet_id);
+        if (!meta.tabs.some((t) => t.title === source.tab_name)) {
+            throw new Error(`Tab "${source.tab_name}" no longer exists in the sheet`);
+        }
+        const existing = await sheetRepository.leadHashesBySource(orgId, source.id);
+
+        let start = source.header_row + 1;
+        let lastDataRow = source.header_row;
+        let skipped = 0;
+        let upserted = 0;
+        let seen = 0;
+        for (;;) {
+            const end = start + PAGE_ROWS - 1;
+            const columns = await fetchMappedPage(orgId, source, start, end);
+            const page = parsePage(columns, start, tz);
+            skipped += page.skipped;
+            if (page.lastDataRow > lastDataRow) lastDataRow = page.lastDataRow;
+            seen += page.rows.length;
+            const stamped = await stampRows(orgId, page.rows);
+            const changed = stamped.filter((r) => existing.get(r.sheet_row_index) !== r.row_hash);
+            for (let i = 0; i < changed.length; i += UPSERT_CHUNK) {
+                await sheetRepository.upsertLeads(orgId, source.id, changed.slice(i, i + UPSERT_CHUNK));
+            }
+            upserted += changed.length;
+            const pageLen = Math.max(...MAPPED_FIELDS.map((f) => columns[f]?.length ?? 0), 0);
+            if (pageLen < PAGE_ROWS) break;   // trailing page — no more data
+            start = end + 1;
+        }
+
+        // Rows that vanished from the sheet (tail truncation) — remove.
+        const deleted = await sheetRepository.deleteLeadsBeyondRow(orgId, source.id, lastDataRow);
+        await sheetRepository.updateSource(orgId, {
+            title: meta.title ?? source.title,
+            sheet_timezone: meta.timezone ?? source.sheet_timezone,
+            status: 'active',
+            last_error: null,
+            last_synced_row: lastDataRow,
+            row_count: seen,
+            skipped_rows: skipped,
+            last_synced_at: new Date().toISOString(),
+        });
+        console.log(`[sheets-sync] org=${orgId} full sync ok: rows=${seen} changed=${upserted} deleted=${deleted} skipped=${skipped}`);
+        return { ok: true, rows: seen, changed: upserted, deleted, skipped };
+    } catch (err) {
+        await sheetRepository.updateSource(orgId, {
+            status: 'failed',
+            last_error: String(err.message ?? err).slice(0, 500),
+        }).catch(() => {});
+        throw err;
+    }
+}
+
+// In-memory debounce for the on-view top-up (per process, per org).
+const lastTopUp = new Map();
+
+// Append-only read of rows after last_synced_row. Cheap regardless of sheet
+// size; failures degrade gracefully (dashboard renders cached data).
+export async function topUp(orgId) {
+    const source = await sheetRepository.getSource(orgId);
+    if (!source?.column_mapping || !source.tab_name || source.status === 'pending') {
+        return { skipped: 'not_configured' };
+    }
+    const last = lastTopUp.get(orgId) ?? 0;
+    if (Date.now() - last < 60_000) return { skipped: 'debounced' };
+    lastTopUp.set(orgId, Date.now());
+    try {
+        const tz = source.sheet_timezone || DEFAULT_TZ;
+        const start = Math.max(source.last_synced_row, source.header_row) + 1;
+        const columns = await fetchMappedPage(orgId, source, start, start + TOPUP_ROWS - 1);
+        const page = parsePage(columns, start, tz);
+        if (page.rows.length === 0 && page.skipped === 0) return { ok: true, added: 0 };
+        const stamped = await stampRows(orgId, page.rows);
+        for (let i = 0; i < stamped.length; i += UPSERT_CHUNK) {
+            await sheetRepository.upsertLeads(orgId, source.id, stamped.slice(i, i + UPSERT_CHUNK));
+        }
+        const lastDataRow = Math.max(page.lastDataRow, source.last_synced_row);
+        await sheetRepository.updateSource(orgId, {
+            last_synced_row: lastDataRow,
+            row_count: source.row_count + page.rows.length,
+            skipped_rows: source.skipped_rows + page.skipped,
+            last_synced_at: new Date().toISOString(),
+        });
+        return { ok: true, added: page.rows.length };
+    } catch (err) {
+        // Never block the dashboard on a top-up failure — log count-free.
+        console.error(`[sheets-sync] org=${orgId} top-up failed: ${err.message}`);
+        return { ok: false, error: err.message };
+    }
+}
+
+// Nightly worker fan-out. Includes 'failed' sources (self-heal) and isolates
+// per-org errors so one bad sheet never freezes the rest.
+export async function syncAllOrgs() {
+    const sources = await sheetRepository.listConfiguredSources();
+    const results = [];
+    for (const s of sources) {
+        try {
+            const r = await fullSync(s.organisation_id);
+            results.push({ orgId: s.organisation_id, ...r });
+        } catch (err) {
+            console.error(`[sheets-sync] org=${s.organisation_id} nightly sync failed: ${err.message}`);
+            results.push({ orgId: s.organisation_id, error: err.message });
+        }
+    }
+    return results;
+}

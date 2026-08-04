@@ -24,6 +24,7 @@ import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 import * as reviews_sync_1 from "../lib/integrations/reviews-sync.js";
 import * as emergent_sync_1 from "../lib/integrations/emergent-sync.js";
+import * as google_sheets_sync_1 from "../lib/integrations/google-sheets-sync.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import * as aws_sns_1 from "../lib/aws-sns.js";
 import { notificationService } from "../services/notification.service.js";
@@ -326,6 +327,18 @@ scheduleMonitored('emergent-sync', '20 3 * * *', async () => {
         if (results.length > 0) console.log(`[worker] Emergent sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] Emergent sync failed', err);
+    }
+}, { maxRuntime: 30 });
+// Google Sheets (Call Reporting) sync — daily 03:40, full re-read of every
+// configured sheet source. Catches in-place row EDITS (e.g. first-call time
+// filled in later) that the on-view append-only top-up cannot see. Per-org
+// failures are isolated inside syncAllOrgs and failed sources are retried.
+scheduleMonitored('google-sheets-sync', '40 3 * * *', async () => {
+    try {
+        const results = await google_sheets_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] Sheets sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] Sheets sync failed', err);
     }
 }, { maxRuntime: 30 });
 // --------------------------------------------------------------------------

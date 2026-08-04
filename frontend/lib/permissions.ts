@@ -81,6 +81,10 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   'ad-performance': 'growth.view',
 
   // Elevate CRM
+  // Call Reporting is a lead-response analytics surface, not a CRM tool —
+  // gated on growth.view so Reception (crm.view only, rule 5) never sees it.
+  'call-reporting': 'growth.view',
+
   'crm-today': 'crm.view',
   inbox: 'crm.view',
   pipeline: 'crm.view',
