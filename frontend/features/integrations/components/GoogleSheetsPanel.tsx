@@ -91,6 +91,7 @@ export default function GoogleSheetsPanel() {
     practice: '', created_at: '', first_call_at: '', source: '', pipeline_status: '',
   });
   const [err, setErr] = useState<string | null>(null);
+  const [pickerBusy, setPickerBusy] = useState(false);
 
   const source = status?.source ?? null;
   const connected = !!status?.connected;
@@ -131,7 +132,6 @@ export default function GoogleSheetsPanel() {
     }
   }
 
-  const [pickerBusy, setPickerBusy] = useState(false);
   async function handleBrowse() {
     setErr(null);
     setPickerBusy(true);
