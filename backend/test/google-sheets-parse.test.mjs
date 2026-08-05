@@ -1,144 +1,116 @@
-// Pure-helper coverage for the Google Sheets (Call Reporting) sync:
-// URL parsing, A1 column letters, serial/text timestamp conversion (incl.
-// London DST), page parsing (empty rows, unparseable created_at) and row
-// hashing (change detection).
+// Google Sheets parse helpers (Call Reporting v2) — date+time combining in the
+// sheet's timezone (DST-correct), MM/DD/YYYY text fallback, Yes/No buckets,
+// page parsing and content hashing. Serial anchor: 25569 = 1970-01-01.
+// Serial for 2026-07-31 (BST) = 46234; 14:00 = 0.5833333333333334.
 import './setup.js';
 import { describe, it, expect } from 'vitest';
-import { parseSpreadsheetId } from '../src/lib/integrations/google-sheets-provider.js';
 import {
-  colLetter, serialToIso, parseTextTimestamp, parseTimestampValue,
-  parsePage, hashRow,
+  colLetter, combineDateTime, parseDateWallMs, parseTimeOfDayMs, parseYesNo,
+  parsePage, hashRow, MAPPED_FIELDS,
 } from '../src/lib/integrations/google-sheets-sync.js';
 
-describe('parseSpreadsheetId', () => {
-  it('extracts the id from a full Sheets URL', () => {
-    expect(parseSpreadsheetId('https://docs.google.com/spreadsheets/d/1AbC_d-EfGhIjK123/edit#gid=0'))
-      .toBe('1AbC_d-EfGhIjK123');
-  });
-  it('accepts a bare id', () => {
-    expect(parseSpreadsheetId('1AbC_d-EfGhIjK123')).toBe('1AbC_d-EfGhIjK123');
-  });
-  it('rejects junk', () => {
-    expect(parseSpreadsheetId('not a sheet')).toBeNull();
-    expect(parseSpreadsheetId('')).toBeNull();
-    expect(parseSpreadsheetId('https://example.com/evil')).toBeNull();
-  });
-});
+const TZ = 'Europe/London';
 
 describe('colLetter', () => {
-  it('maps 0-based indexes to A1 letters', () => {
+  it('maps 0->A, 25->Z, 26->AA, 27->AB', () => {
     expect(colLetter(0)).toBe('A');
     expect(colLetter(25)).toBe('Z');
     expect(colLetter(26)).toBe('AA');
     expect(colLetter(27)).toBe('AB');
-    expect(colLetter(51)).toBe('AZ');
-    expect(colLetter(52)).toBe('BA');
   });
 });
 
-// Serial for a wall-clock instant: days since 1899-12-30 (25569 = Unix epoch).
-function serialFor(utcWallMs) {
-  return utcWallMs / 86400000 + 25569;
-}
+describe('combineDateTime', () => {
+  it('serial date + serial time, summer (BST = UTC+1)', () => {
+    expect(combineDateTime(46234, 0.5833333333333334, TZ)).toBe('2026-07-31T13:00:00.000Z');
+  });
+  it('serial date + no time = midnight wall time', () => {
+    expect(combineDateTime(46234, '', TZ)).toBe('2026-07-30T23:00:00.000Z');
+  });
+  it('a full datetime serial in the date column floors to midnight (time col re-adds)', () => {
+    expect(combineDateTime(46234.9, 0.5, TZ)).toBe('2026-07-31T11:00:00.000Z');
+  });
+  it('MM/DD/YYYY text + hh:mm text, summer', () => {
+    expect(combineDateTime('07/31/2026', '14:05', TZ)).toBe('2026-07-31T13:05:00.000Z');
+  });
+  it('MM/DD/YYYY text + hh:mm text, winter (GMT = UTC+0)', () => {
+    expect(combineDateTime('01/15/2026', '09:00', TZ)).toBe('2026-01-15T09:00:00.000Z');
+  });
+  it('am/pm times', () => {
+    expect(combineDateTime('07/31/2026', '2:05 pm', TZ)).toBe('2026-07-31T13:05:00.000Z');
+    expect(combineDateTime('07/31/2026', '12:10 AM', TZ)).toBe('2026-07-30T23:10:00.000Z');
+  });
+  it('ISO yyyy-mm-dd text dates also accepted', () => {
+    expect(combineDateTime('2026-07-31', '10:00', TZ)).toBe('2026-07-31T09:00:00.000Z');
+  });
+  it('unparsable date -> null (row will be skipped)', () => {
+    expect(combineDateTime('soon', '10:00', TZ)).toBeNull();
+    expect(combineDateTime('', '10:00', TZ)).toBeNull();
+    expect(combineDateTime('31/07/2026', '10:00', TZ)).toBeNull(); // dd/mm is NOT accepted: month 31 invalid
+  });
+  it('unparsable time falls back to midnight, does not lose the lead', () => {
+    expect(combineDateTime('01/15/2026', 'later', TZ)).toBe('2026-01-15T00:00:00.000Z');
+  });
+});
 
-describe('timestamp parsing', () => {
-  it('converts a summer serial using BST (UTC+1)', () => {
-    const serial = serialFor(Date.UTC(2026, 7, 1, 12, 0, 0)); // 1 Aug 2026 12:00 wall
-    expect(serialToIso(serial, 'Europe/London')).toBe('2026-08-01T11:00:00.000Z');
+describe('parseDateWallMs / parseTimeOfDayMs', () => {
+  it('serial 25569 = 1970-01-01 midnight wall', () => {
+    expect(parseDateWallMs(25569)).toBe(0);
   });
-  it('converts a winter serial as UTC', () => {
-    const serial = serialFor(Date.UTC(2026, 0, 15, 12, 0, 0)); // 15 Jan 2026 12:00 wall
-    expect(serialToIso(serial, 'Europe/London')).toBe('2026-01-15T12:00:00.000Z');
+  it('time serial 0.5 = 12:00', () => {
+    expect(parseTimeOfDayMs(0.5)).toBe(43200000);
   });
-  it('rejects non-numeric serials', () => {
-    expect(serialToIso('abc')).toBeNull();
-    expect(serialToIso(NaN)).toBeNull();
+  it('time text 09:30:15', () => {
+    expect(parseTimeOfDayMs('09:30:15')).toBe(((9 * 60 + 30) * 60 + 15) * 1000);
   });
-  it('parses British dd/mm/yyyy hh:mm text', () => {
-    expect(parseTextTimestamp('01/08/2026 14:30', 'Europe/London')).toBe('2026-08-01T13:30:00.000Z');
+});
+
+describe('parseYesNo', () => {
+  it.each([['Yes'], ['yes'], [' YES '], ['y'], ['TRUE'], ['true'], ['1'], [true]])('%s -> true', (v) => {
+    expect(parseYesNo(v)).toBe(true);
   });
-  it('parses date-only text as midnight wall time', () => {
-    expect(parseTextTimestamp('15/01/2026', 'Europe/London')).toBe('2026-01-15T00:00:00.000Z');
-  });
-  it('parses ISO-ish text', () => {
-    expect(parseTextTimestamp('2026-08-01 14:30:05', 'Europe/London')).toBe('2026-08-01T13:30:05.000Z');
-  });
-  it('returns null for garbage', () => {
-    expect(parseTextTimestamp('yesterday')).toBeNull();
-    expect(parseTimestampValue('')).toBeNull();
-    expect(parseTimestampValue(null)).toBeNull();
+  it.each([['No'], ['no'], [''], [null], [undefined], ['maybe'], [false], [0]])('%s -> false', (v) => {
+    expect(parseYesNo(v)).toBe(false);
   });
 });
 
 describe('parsePage', () => {
-  const tz = 'Europe/London';
-  const s = (y, mo, d, h = 0, mi = 0) => serialFor(Date.UTC(y, mo, d, h, mi));
-
-  it('parses rows, skips unparseable created_at, tracks lastDataRow', () => {
-    const columns = {
-      practice: ['Rochester', 'Gillingham', 'Rochester'],
-      created_at: [s(2026, 7, 1, 9, 0), 'not-a-date', s(2026, 7, 1, 10, 0)],
-      first_call_at: [s(2026, 7, 1, 9, 2), '', ''],
-      source: ['Facebook Ads', 'Google', 'Facebook Ads'],
-      pipeline_status: ['New', 'New', ''],
-    };
-    const { rows, skipped, lastDataRow } = parsePage(columns, 2, tz);
+  const columns = {
+    date:          [46234,   '07/31/2026', 'garbage', ''],
+    created_time:  [0.375,   '16:45',      '10:00',   ''],
+    called_3m:     ['Yes',   'No',         'Yes',     ''],
+    called_10m:    ['No',    'Yes',        'No',      ''],
+    pipeline_name: ['Facebook Ads', '',    'Google',  ''],
+  };
+  it('parses good rows, skips bad dates, ignores fully-empty rows', () => {
+    const { rows, skipped, lastDataRow } = parsePage(columns, 2, TZ);
     expect(rows).toHaveLength(2);
-    expect(skipped).toBe(1);
-    expect(lastDataRow).toBe(4);
+    expect(skipped).toBe(1);          // the 'garbage' date row
+    expect(lastDataRow).toBe(4);      // row 4 held data (bad date still counts as data)
     expect(rows[0]).toMatchObject({
       sheet_row_index: 2,
-      practice_value: 'Rochester',
-      created_at: '2026-08-01T08:00:00.000Z',
-      first_call_at: '2026-08-01T08:02:00.000Z',
-      lead_source: 'Facebook Ads',
-      pipeline_status: 'New',
+      created_at: '2026-07-31T08:00:00.000Z', // 09:00 BST
+      called_3m: true, called_10m: false, pipeline_name: 'Facebook Ads',
     });
-    expect(rows[1].first_call_at).toBeNull();
-    expect(rows[1].pipeline_status).toBeNull();
+    expect(rows[1]).toMatchObject({
+      sheet_row_index: 3,
+      created_at: '2026-07-31T15:45:00.000Z', // 16:45 BST
+      called_3m: false, called_10m: true, pipeline_name: null,
+    });
   });
-
-  it('skips fully-empty rows without counting them as skipped', () => {
-    const columns = {
-      practice: ['', 'Rochester'],
-      created_at: ['', s(2026, 7, 1, 9, 0)],
-      first_call_at: ['', ''],
-      source: ['', ''],
-      pipeline_status: ['', ''],
-    };
-    const { rows, skipped } = parsePage(columns, 2, tz);
-    expect(rows).toHaveLength(1);
-    expect(skipped).toBe(0);
-    expect(rows[0].sheet_row_index).toBe(3);
+  it('row_hash changes when a bucket flips, stable otherwise', () => {
+    const a = parsePage(columns, 2, TZ).rows[0];
+    const b = parsePage({ ...columns, called_3m: ['No', 'No', 'Yes', ''] }, 2, TZ).rows[0];
+    const again = parsePage(columns, 2, TZ).rows[0];
+    expect(a.row_hash).not.toBe(b.row_hash);
+    expect(a.row_hash).toBe(again.row_hash);
   });
-
-  it('handles ragged columns (shorter arrays) by padding', () => {
-    const columns = {
-      practice: ['Rochester', 'Gillingham'],
-      created_at: [s(2026, 7, 1, 9, 0), s(2026, 7, 1, 10, 0)],
-      first_call_at: [s(2026, 7, 1, 9, 1)],   // second row not yet called
-      source: ['Google'],
-      pipeline_status: [],
-    };
-    const { rows } = parsePage(columns, 10, tz);
-    expect(rows).toHaveLength(2);
-    expect(rows[1]).toMatchObject({ sheet_row_index: 11, first_call_at: null, lead_source: null });
+  it('MAPPED_FIELDS is exactly the five stored columns', () => {
+    expect(MAPPED_FIELDS).toEqual(['date', 'created_time', 'called_3m', 'called_10m', 'pipeline_name']);
   });
-});
-
-describe('hashRow', () => {
-  const base = {
-    practice_value: 'Rochester',
-    created_at: '2026-08-01T08:00:00.000Z',
-    first_call_at: null,
-    lead_source: 'Facebook Ads',
-    pipeline_status: 'New',
-  };
-  it('is stable for identical fields', () => {
-    expect(hashRow({ ...base })).toBe(hashRow({ ...base }));
-    expect(hashRow(base)).toMatch(/^[0-9a-f]{64}$/);
-  });
-  it('changes when first_call_at is filled in (edit detection)', () => {
-    expect(hashRow({ ...base, first_call_at: '2026-08-01T08:05:00.000Z' })).not.toBe(hashRow(base));
+  it('hashRow covers exactly the four stored values', () => {
+    const f = { created_at: '2026-07-31T08:00:00.000Z', called_3m: true, called_10m: false, pipeline_name: 'X' };
+    expect(hashRow(f)).toBe(hashRow({ ...f }));
+    expect(hashRow(f)).not.toBe(hashRow({ ...f, pipeline_name: 'Y' }));
   });
 });

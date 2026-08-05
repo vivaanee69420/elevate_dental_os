@@ -1,7 +1,8 @@
 // Google Sheets sync — Call Reporting lead rows.
 //
-// The connected sheet holds one row per lead. Only the FIVE mapped columns are
-// ever requested from the Sheets API (per-column batchGet ranges) and stored —
+// The connected sheet holds one row per lead. Only the FIVE mapped columns —
+// Date, Created Time, Called <3m, Called <10m, Pipeline name — are ever
+// requested from the Sheets API (per-column batchGet ranges) and stored;
 // names/phones/emails in other columns never leave Google (data minimisation).
 //
 // Three paths:
@@ -27,7 +28,7 @@ const PAGE_ROWS = 5000;
 const TOPUP_ROWS = 2000;
 const UPSERT_CHUNK = 500;
 const DEFAULT_TZ = 'Europe/London';
-export const MAPPED_FIELDS = ['practice', 'created_at', 'first_call_at', 'source', 'pipeline_status'];
+export const MAPPED_FIELDS = ['date', 'created_time', 'called_3m', 'called_10m', 'pipeline_name'];
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for tests)
@@ -60,56 +61,66 @@ function tzOffsetMs(tz, utcMs) {
     return asUtc - utcMs;
 }
 
-// Sheets serial datetime (days since 1899-12-30, wall time in the sheet's
-// timezone) -> ISO UTC. 25569 = serial value of the Unix epoch.
-export function serialToIso(serial, tz = DEFAULT_TZ) {
-    if (typeof serial !== 'number' || !Number.isFinite(serial)) return null;
-    const wallMs = Math.round((serial - 25569) * 86400000);
-    const utcMs = wallMs - tzOffsetMs(tz, wallMs);
-    const d = new Date(utcMs);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+// Date cell -> wall-clock ms at midnight. Serial numbers floor to whole days
+// (25569 = 1970-01-01); text accepts ISO yyyy-mm-dd, else MM/DD/YYYY — the
+// sheet's stated format, deliberately NOT British dd/mm.
+export function parseDateWallMs(v) {
+    if (typeof v === 'number' && Number.isFinite(v)) {
+        return (Math.floor(v) - 25569) * 86400000;
+    }
+    const s = String(v ?? '').trim();
+    if (!s) return null;
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) {
+        const mo = +m[1];
+        const d = +m[2];
+        if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+        return Date.UTC(+m[3], mo - 1, d);
+    }
+    return null;
 }
 
-// Text fallback: British dd/mm/yyyy [hh:mm[:ss]] (also accepts ISO). Wall time
-// in the sheet's timezone.
-export function parseTextTimestamp(text, tz = DEFAULT_TZ) {
-    const s = String(text ?? '').trim();
-    if (!s) return null;
-    let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-    let wallMs;
-    if (m) {
-        wallMs = Date.UTC(+m[3], +m[2] - 1, +m[1], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0));
-    } else {
-        m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
-        if (!m) return null;
-        wallMs = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0), +(m[6] ?? 0));
+// Time cell -> ms into the day. Serial values use their fractional part (works
+// for bare times and full datetimes alike); text accepts hh:mm[:ss] + am/pm.
+// Blank or unparsable -> midnight — a missing time must not lose the lead.
+export function parseTimeOfDayMs(v) {
+    if (typeof v === 'number' && Number.isFinite(v)) {
+        return Math.round((v - Math.floor(v)) * 86400000);
     }
-    if (Number.isNaN(wallMs)) return null;
+    const m = String(v ?? '').trim().toLowerCase().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/);
+    if (!m) return 0;
+    let h = +m[1];
+    if (m[4] === 'pm' && h < 12) h += 12;
+    if (m[4] === 'am' && h === 12) h = 0;
+    return ((h * 60 + +m[2]) * 60 + +(m[3] ?? 0)) * 1000;
+}
+
+// Date + time cells -> ISO UTC (wall time in the sheet's timezone).
+export function combineDateTime(dateVal, timeVal, tz = DEFAULT_TZ) {
+    const dayMs = parseDateWallMs(dateVal);
+    if (dayMs == null) return null;
+    const wallMs = dayMs + parseTimeOfDayMs(timeVal);
     return new Date(wallMs - tzOffsetMs(tz, wallMs)).toISOString();
 }
 
-export function parseTimestampValue(v, tz = DEFAULT_TZ) {
-    if (v == null || v === '') return null;
-    if (typeof v === 'number') return serialToIso(v, tz);
-    return parseTextTimestamp(v, tz);
+// Yes/No call columns. Checkbox TRUE or yes/y/true/1 text (any case) -> true;
+// everything else — including blank — false.
+export function parseYesNo(v) {
+    if (v === true) return true;
+    const s = String(v ?? '').trim().toLowerCase();
+    return s === 'yes' || s === 'y' || s === 'true' || s === '1';
 }
 
-export function normalisePracticeValue(v) {
-    return String(v ?? '').trim();
-}
-export function practiceKey(v) {
-    return normalisePracticeValue(v).toLowerCase();
-}
-
-// Deterministic content hash of the five mapped values (change detection).
+// Deterministic content hash of the four stored values (change detection).
 export function hashRow(fields) {
     return crypto.createHash('sha256')
         .update(JSON.stringify([
-            fields.practice_value ?? null,
             fields.created_at ?? null,
-            fields.first_call_at ?? null,
-            fields.lead_source ?? null,
-            fields.pipeline_status ?? null,
+            fields.called_3m ?? false,
+            fields.called_10m ?? false,
+            fields.pipeline_name ?? null,
         ]))
         .digest('hex');
 }
@@ -127,14 +138,13 @@ export function parsePage(columns, startRow, tz = DEFAULT_TZ) {
         const empty = MAPPED_FIELDS.every((f) => raw[f] == null || String(raw[f]).trim() === '');
         if (empty) continue;
         lastDataRow = startRow + i;
-        const created = parseTimestampValue(raw.created_at, tz);
+        const created = combineDateTime(raw.date, raw.created_time, tz);
         if (!created) { skipped += 1; continue; }
         const fields = {
-            practice_value: normalisePracticeValue(raw.practice) || null,
             created_at: created,
-            first_call_at: parseTimestampValue(raw.first_call_at, tz),
-            lead_source: String(raw.source ?? '').trim() || null,
-            pipeline_status: String(raw.pipeline_status ?? '').trim() || null,
+            called_3m: parseYesNo(raw.called_3m),
+            called_10m: parseYesNo(raw.called_10m),
+            pipeline_name: String(raw.pipeline_name ?? '').trim() || null,
         };
         rows.push({ sheet_row_index: startRow + i, ...fields, row_hash: hashRow(fields) });
     }
