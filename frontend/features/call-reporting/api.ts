@@ -2,20 +2,30 @@ import { api } from '@/lib/api';
 
 // ---- Call Reporting dashboard ----------------------------------------------
 
+export interface DashboardSourceInfo {
+  id: string;
+  practice_label: string | null;
+  status: 'pending' | 'active' | 'failed';
+  last_synced_at: string | null;
+  mapped: boolean;
+}
+
 export interface CallReportingDashboard {
   configured: boolean;
   date: string;
-  practiceId: string | null;
+  sourceId: string | null;
   totalLeads: number;
   calledWithin3m: number;
   calledWithin10m: number;
   efficiencyPct: number;
   leadsInPipeline: number;
   notCalled: number;
+  officeTimeLeads: number;
+  outsideOfficeTime: number;
   facebookLeads: number;
   googleLeads: number;
-  unmapped: number;
-  sourceStatus: string | null;
+  sources: DashboardSourceInfo[];
+  syncFailed: boolean;
   lastSyncedAt: string | null;
   topUpOk: boolean;
 }
@@ -23,25 +33,27 @@ export interface CallReportingDashboard {
 const EMPTY: CallReportingDashboard = {
   configured: false,
   date: '',
-  practiceId: null,
+  sourceId: null,
   totalLeads: 0,
   calledWithin3m: 0,
   calledWithin10m: 0,
   efficiencyPct: 0,
   leadsInPipeline: 0,
   notCalled: 0,
+  officeTimeLeads: 0,
+  outsideOfficeTime: 0,
   facebookLeads: 0,
   googleLeads: 0,
-  unmapped: 0,
-  sourceStatus: null,
+  sources: [],
+  syncFailed: false,
   lastSyncedAt: null,
   topUpOk: true,
 };
 
-export function fetchCallReportingDashboard(date: string, practiceId?: string): Promise<CallReportingDashboard> {
+export function fetchCallReportingDashboard(date: string, sourceId?: string): Promise<CallReportingDashboard> {
   const qs = new URLSearchParams();
   if (date) qs.set('date', date);
-  if (practiceId) qs.set('practice_id', practiceId);
+  if (sourceId) qs.set('source', sourceId);
   const q = qs.toString();
   return api<CallReportingDashboard>(`/api/call-reporting/dashboard${q ? `?${q}` : ''}`)
     .then((r) => ({ ...EMPTY, ...r }));
@@ -50,6 +62,8 @@ export function fetchCallReportingDashboard(date: string, practiceId?: string): 
 // ---- Google Sheets connection / setup --------------------------------------
 
 export interface SheetSourceInfo {
+  id: string;
+  practice_label: string | null;
   spreadsheet_id: string;
   spreadsheet_url: string | null;
   title: string | null;
@@ -62,14 +76,14 @@ export interface SheetSourceInfo {
   status: 'pending' | 'active' | 'failed';
   last_error: string | null;
   last_synced_at: string | null;
+  mapped: boolean;
 }
 
 export interface SheetsStatus {
   connected: boolean;
   connectionStatus: string | null;
   connectionError: string | null;
-  source: SheetSourceInfo | null;
-  mapped: boolean;
+  sources: SheetSourceInfo[];
 }
 
 export function fetchSheetsStatus() {
@@ -90,16 +104,16 @@ export function fetchSheetsPickerConfig() {
   return api<SheetsPickerConfig>('/api/integrations/google-sheets/picker-config');
 }
 
-export function addSheetSource(url: string) {
-  return api<{ ok: boolean; title: string | null; tabs: string[] }>(
-    '/api/integrations/google-sheets/source',
-    { method: 'POST', body: JSON.stringify({ url }) },
+export function addSheetSource({ url, practiceLabel }: { url: string; practiceLabel: string }) {
+  return api<{ ok: boolean; id: string; title: string | null; tabs: string[] }>(
+    '/api/integrations/google-sheets/sources',
+    { method: 'POST', body: JSON.stringify({ url, practice_label: practiceLabel }) },
   );
 }
 
-export function fetchSheetPreview(tab: string) {
+export function fetchSheetPreview(sourceId: string, tab: string) {
   return api<{ tab: string; rows: string[][] }>(
-    `/api/integrations/google-sheets/source/preview?tab=${encodeURIComponent(tab)}`,
+    `/api/integrations/google-sheets/sources/${sourceId}/preview?tab=${encodeURIComponent(tab)}`,
   );
 }
 
@@ -107,42 +121,33 @@ export interface SheetMappingInput {
   tab_name: string;
   header_row: number;
   columns: {
-    practice: number;
-    created_at: number;
-    first_call_at: number;
-    source: number;
-    pipeline_status: number;
+    date: number;
+    created_time: number;
+    called_3m: number;
+    called_10m: number;
+    pipeline_name: number;
   };
 }
 
-export function saveSheetMapping(mapping: SheetMappingInput) {
+export function saveSheetMapping(sourceId: string, mapping: SheetMappingInput) {
   return api<{ ok: boolean; syncStarted: boolean }>(
-    '/api/integrations/google-sheets/source/mapping',
+    `/api/integrations/google-sheets/sources/${sourceId}/mapping`,
     { method: 'PUT', body: JSON.stringify(mapping) },
   );
 }
 
-export interface SheetPracticeMapEntry {
-  sheet_value: string;
-  practice_id: string | null;
-  practice_name: string | null;
-}
-
-export function fetchSheetPracticeMap() {
-  return api<{ configured: boolean; values: SheetPracticeMapEntry[]; practices: { id: string; name: string }[] }>(
-    '/api/integrations/google-sheets/practice-map',
+export function syncSheetSource(sourceId: string) {
+  return api<{ started: boolean }>(
+    `/api/integrations/google-sheets/sources/${sourceId}/sync`,
+    { method: 'POST' },
   );
 }
 
-export function setSheetPracticeMapping(sheetValue: string, practiceId: string | null) {
-  return api<{ ok: boolean; restamped: number }>(
-    '/api/integrations/google-sheets/practice-map',
-    { method: 'PUT', body: JSON.stringify({ sheet_value: sheetValue, practice_id: practiceId }) },
+export function removeSheetSource(sourceId: string) {
+  return api<{ ok: boolean }>(
+    `/api/integrations/google-sheets/sources/${sourceId}`,
+    { method: 'DELETE' },
   );
-}
-
-export function syncSheetsNow() {
-  return api<{ started: boolean }>('/api/integrations/google-sheets/sync', { method: 'POST' });
 }
 
 export function disconnectSheets() {
