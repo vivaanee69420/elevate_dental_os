@@ -693,36 +693,44 @@ from immutable fields (business/date/patient/treatment/amount), so the pull and
 the webhook upsert to the same row on `(organisation_id, source, external_id)`.
 
 ### Google Sheets (Call Reporting)
-One sheet per org, connected via Google OAuth with the read-only
-`spreadsheets.readonly` scope (no Drive scope — the owner pastes the sheet URL).
-When no dedicated `GOOGLE_SHEETS_CLIENT_ID` is set the flow borrows the Google
-Ads OAuth client AND its already-registered `/oauth/google_ads/callback`
-redirect URI (no Google Cloud Console change needed); the public OAuth callback
-routes on the HMAC-signed state's provider, not the URL path.
+Multiple sheets per org (one per practice), connected via one org-level Google
+OAuth grant with the read-only `spreadsheets.readonly` scope (no Drive scope —
+the owner pastes each sheet URL). When no dedicated `GOOGLE_SHEETS_CLIENT_ID`
+is set the flow borrows the Google Ads OAuth client AND its already-registered
+`/oauth/google_ads/callback` redirect URI (no Google Cloud Console change
+needed); the public OAuth callback routes on the HMAC-signed state's provider,
+not the URL path.
 Only the five mapped columns are ever read or stored (data minimisation: no
 names/phones/emails). Tokens are encrypted at rest and never surface in any
-response. Practice resolution is the explicit `sheet_practice_map` (never
-name-matching). Migration `000118`.
-- `GET /api/integrations/google-sheets/status` (owner | practice_manager) → `{ connected, connectionStatus, connectionError, source, mapped }`. `source` = safe fields only (`spreadsheet_id/url, title, tab_name, column_mapping, header_row, row_count, skipped_rows, status, last_error, last_synced_at`).
+response. Each sheet is registered with a free-text `practice_label`
+(self-contained — deliberately NOT linked to the `practices` table; there is
+no practice-map endpoint). Migration `000118` + the v2 multi-sheet migration.
+- `GET /api/integrations/google-sheets/status` (owner | practice_manager) → `{ connected, connectionStatus, connectionError, sources }`. `sources` = one entry per connected sheet, safe fields only (`id, practice_label, spreadsheet_id/url, title, tab_name, sheet_timezone, column_mapping, header_row, row_count, skipped_rows, status, last_error, last_synced_at, mapped`).
 - `GET /api/integrations/google-sheets/picker-config` (owner) → `{ enabled }` or `{ enabled: true, apiKey, appId, accessToken }` — Google Picker bootstrap for the browse-and-pick flow (scope `drive.file`). Disabled until `GOOGLE_PICKER_API_KEY` is set (browser key, Picker API enabled on the Google project; `GOOGLE_CLOUD_PROJECT_NUMBER` = appId). The short-lived access token is deliberately handed to the OWNER's browser (their own account's read-only token) so Google's picker can render their Drive; the refresh token never leaves the server.
-- `POST /api/integrations/google-sheets/source` (owner) — body `{ url }` (full URL or bare spreadsheet id). Validates reachability with a metadata read before persisting; returns `{ ok, title, tabs }`.
-- `GET /api/integrations/google-sheets/source/preview?tab=` (owner) → `{ tab, rows }` — first rows, formatted, for the mapping UI; ephemeral, never stored.
-- `PUT /api/integrations/google-sheets/source/mapping` (owner) — body `{ tab_name, header_row, columns: { practice, created_at, first_call_at, source, pipeline_status } }` (0-based column indexes, distinct). Saves the mapping, resets the sync cursor and fires a full sync (fire-and-forget → poll status).
-- `GET /api/integrations/google-sheets/practice-map` (owner | practice_manager) → `{ configured, values: [{ sheet_value, practice_id, practice_name }], practices }`.
-- `PUT /api/integrations/google-sheets/practice-map` (owner) — body `{ sheet_value, practice_id|null }`. Upserts the mapping then restamps existing `sheet_leads` in place via `restamp_sheet_lead_practices` (instant, no re-sync).
-- `POST /api/integrations/google-sheets/sync` (owner) — manual full re-sync (fire-and-forget). 409 before the mapping is saved.
-- `DELETE /api/integrations/google-sheets` (owner) — clean exit: purges all `sheet_leads`, the practice map and the source, then revokes the integration (secrets nulled).
+- `POST /api/integrations/google-sheets/sources` (owner) — body `{ url, practice_label }` (full URL or bare spreadsheet id; `practice_label` is a free-text label for the sheet, one sheet per practice). Validates reachability with a metadata read before persisting; returns `{ ok, id, title, tabs }`.
+- `GET /api/integrations/google-sheets/sources/:id/preview?tab=` (owner) → `{ tab, rows }` — first rows, formatted, for the mapping UI; ephemeral, never stored.
+- `PUT /api/integrations/google-sheets/sources/:id/mapping` (owner) — body `{ tab_name, header_row, columns: { date, created_time, called_3m, called_10m, pipeline_name } }` (0-based column indexes, distinct). Saves the mapping, resets that source's sync cursor and fires a full sync (fire-and-forget → poll status).
+- `POST /api/integrations/google-sheets/sources/:id/sync` (owner) — manual full re-sync of one sheet (fire-and-forget). 409 before that sheet's mapping is saved.
+- `DELETE /api/integrations/google-sheets/sources/:id` (owner) — removes one sheet: purges its `sheet_leads` then the source row. The other sheets stay connected.
+- `DELETE /api/integrations/google-sheets` (owner) — full disconnect: purges all `sheet_leads` and every source, then revokes the integration (secrets nulled).
+
+Practice-map endpoints (`GET`/`PUT /api/integrations/google-sheets/practice-map`) are REMOVED — practice is now the `practice_label` set at source creation, not a mapped sheet value.
 
 ### `GET /api/call-reporting/dashboard`
 (owner | practice_manager) Query `?date=YYYY-MM-DD` (default today,
-Europe/London) `&practice_id=<uuid>` (optional; omitted = all practices).
-Runs a cheap append-only top-up of new sheet rows first (60s-debounced;
-failure degrades to cached data), then ONE aggregate RPC
-(`sheet_leads_dashboard`). Returns `{ configured, date, practiceId, totalLeads,
-calledWithin3m, calledWithin10m, efficiencyPct, leadsInPipeline, notCalled,
-facebookLeads, googleLeads, unmapped, sourceStatus, lastSyncedAt, topUpOk }`.
-`{ configured: false }` before the column mapping is saved. Nightly full
-re-sync (worker `google-sheets-sync`, 03:40) catches in-place row edits.
+Europe/London) `&source=<sourceId>` (optional; omitted = all connected
+sheets). Runs a cheap append-only top-up of new rows on every configured
+sheet first (60s-debounced per source; failure degrades to cached data), then
+ONE aggregate RPC (`sheet_leads_dashboard`). Returns `{ configured, date,
+sourceId, totalLeads, calledWithin3m, calledWithin10m, efficiencyPct,
+leadsInPipeline, notCalled, officeTimeLeads, outsideOfficeTime, facebookLeads,
+googleLeads, sources, syncFailed, lastSyncedAt, topUpOk }`. `officeTimeLeads`/
+`outsideOfficeTime` split leads by UK office hours (Mon–Fri 09:00–17:00,
+Europe/London). `sources` lists every connected sheet
+(`id, practice_label, status, last_synced_at, mapped`); `syncFailed` is true
+if any source is in a failed state. `{ configured: false }` until at least one
+sheet has a saved column mapping. Nightly full re-sync (worker
+`google-sheets-sync`, 03:40) catches in-place row edits on every source.
 
 ### `POST /api/integrations/:provider/refresh`
 Forces an OAuth token refresh. For `gohighlevel`, guarded against concurrent
