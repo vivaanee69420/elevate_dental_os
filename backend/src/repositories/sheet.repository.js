@@ -46,7 +46,7 @@ export const sheetRepository = {
                 practice_label: practice_label ?? null,
                 status: 'pending',
                 updated_at: new Date().toISOString(),
-            }, { onConflict: 'organisation_id,spreadsheet_id' })
+            }, { onConflict: 'organisation_id,practice_label' })
             .select()
             .single();
         if (error) throw new Error(error.message);
