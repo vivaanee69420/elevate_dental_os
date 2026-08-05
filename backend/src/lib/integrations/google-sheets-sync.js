@@ -5,17 +5,20 @@
 // requested from the Sheets API (per-column batchGet ranges) and stored;
 // names/phones/emails in other columns never leave Google (data minimisation).
 //
-// Three paths:
-//   fullSync(orgId)  — paged re-read of the whole tab; rows diffed by sha256
-//                      row_hash so unchanged rows aren't rewritten; rows gone
-//                      from the sheet are deleted. Catches in-place edits
+// Three paths (fullSync/topUp are per-source now — one org can have several
+// connected sheets):
+//   fullSync(orgId, sourceId) — paged re-read of the whole tab; rows diffed by
+//                      sha256 row_hash so unchanged rows aren't rewritten; rows
+//                      gone from the sheet are deleted. Catches in-place edits
 //                      (e.g. first-call time filled in later).
-//   topUp(orgId)     — cheap append-only read of rows AFTER last_synced_row,
-//                      run on dashboard view (debounced 60s in-memory) so
-//                      "Today" is near-live regardless of sheet size.
-//   syncAllOrgs()    — nightly worker fan-out. Retries 'failed' sources too
-//                      (a transient error must never freeze a source — GHL
-//                      lesson) and isolates per-org failures.
+//   topUp(orgId, source) — cheap append-only read of rows AFTER
+//                      last_synced_row, run on dashboard view (debounced 60s
+//                      in-memory, keyed per org+source) so "Today" is
+//                      near-live regardless of sheet size.
+//   syncAllOrgs()    — nightly worker fan-out over every configured source.
+//                      Retries 'failed' sources too (a transient error must
+//                      never freeze a source — GHL lesson) and isolates
+//                      per-source failures.
 //
 // Values are requested UNFORMATTED (serial datetimes) and converted to UTC
 // using the sheet's own timezone. Row values are never logged — counts only.
@@ -126,7 +129,7 @@ export function hashRow(fields) {
 }
 
 // Turn one page of per-column value arrays into parsed row objects.
-// columns = { practice: [], created_at: [], ... } (arrays of cell values),
+// columns = { date: [], created_time: [], ... } (arrays of cell values),
 // startRow = 1-based sheet row of index 0. Returns { rows, skipped, lastDataRow }.
 export function parsePage(columns, startRow, tz = DEFAULT_TZ) {
     const len = Math.max(...MAPPED_FIELDS.map((f) => columns[f]?.length ?? 0), 0);
@@ -209,20 +212,8 @@ async function fetchMappedPage(orgId, source, startRow, endRow) {
 // Sync paths
 // ---------------------------------------------------------------------------
 
-async function stampRows(orgId, rows) {
-    const values = [...new Set(rows.map((r) => r.practice_value).filter(Boolean))];
-    await sheetRepository.discoverPracticeValues(orgId, values);
-    const resolution = await sheetRepository.practiceResolutionMap(orgId);
-    return rows.map((r) => ({
-        ...r,
-        practice_id: r.practice_value != null
-            ? (resolution.get(practiceKey(r.practice_value)) ?? null)
-            : null,
-    }));
-}
-
-export async function fullSync(orgId) {
-    const source = await sheetRepository.getSource(orgId);
+export async function fullSync(orgId, sourceId) {
+    const source = await sheetRepository.getSourceById(orgId, sourceId);
     if (!source) return { skipped: 'no_source' };
     if (!source.column_mapping || !source.tab_name) return { skipped: 'not_configured' };
     const tz = source.sheet_timezone || DEFAULT_TZ;
@@ -245,8 +236,7 @@ export async function fullSync(orgId) {
             skipped += page.skipped;
             if (page.lastDataRow > lastDataRow) lastDataRow = page.lastDataRow;
             seen += page.rows.length;
-            const stamped = await stampRows(orgId, page.rows);
-            const changed = stamped.filter((r) => existing.get(r.sheet_row_index) !== r.row_hash);
+            const changed = page.rows.filter((r) => existing.get(r.sheet_row_index) !== r.row_hash);
             for (let i = 0; i < changed.length; i += UPSERT_CHUNK) {
                 await sheetRepository.upsertLeads(orgId, source.id, changed.slice(i, i + UPSERT_CHUNK));
             }
@@ -258,7 +248,7 @@ export async function fullSync(orgId) {
 
         // Rows that vanished from the sheet (tail truncation) — remove.
         const deleted = await sheetRepository.deleteLeadsBeyondRow(orgId, source.id, lastDataRow);
-        await sheetRepository.updateSource(orgId, {
+        await sheetRepository.updateSource(orgId, source.id, {
             title: meta.title ?? source.title,
             sheet_timezone: meta.timezone ?? source.sheet_timezone,
             status: 'active',
@@ -268,10 +258,10 @@ export async function fullSync(orgId) {
             skipped_rows: skipped,
             last_synced_at: new Date().toISOString(),
         });
-        console.log(`[sheets-sync] org=${orgId} full sync ok: rows=${seen} changed=${upserted} deleted=${deleted} skipped=${skipped}`);
+        console.log(`[sheets-sync] org=${orgId} source=${source.id} full sync ok: rows=${seen} changed=${upserted} deleted=${deleted} skipped=${skipped}`);
         return { ok: true, rows: seen, changed: upserted, deleted, skipped };
     } catch (err) {
-        await sheetRepository.updateSource(orgId, {
+        await sheetRepository.updateSource(orgId, source.id, {
             status: 'failed',
             last_error: String(err.message ?? err).slice(0, 500),
         }).catch(() => {});
@@ -279,31 +269,30 @@ export async function fullSync(orgId) {
     }
 }
 
-// In-memory debounce for the on-view top-up (per process, per org).
+// In-memory debounce for the on-view top-up (per process, per org+source).
 const lastTopUp = new Map();
 
-// Append-only read of rows after last_synced_row. Cheap regardless of sheet
-// size; failures degrade gracefully (dashboard renders cached data).
-export async function topUp(orgId) {
-    const source = await sheetRepository.getSource(orgId);
+// Append-only read of rows after last_synced_row for ONE source. Cheap
+// regardless of sheet size; failures degrade gracefully (cached data renders).
+export async function topUp(orgId, source) {
     if (!source?.column_mapping || !source.tab_name || source.status === 'pending') {
         return { skipped: 'not_configured' };
     }
-    const last = lastTopUp.get(orgId) ?? 0;
+    const key = `${orgId}:${source.id}`;
+    const last = lastTopUp.get(key) ?? 0;
     if (Date.now() - last < 60_000) return { skipped: 'debounced' };
-    lastTopUp.set(orgId, Date.now());
+    lastTopUp.set(key, Date.now());
     try {
         const tz = source.sheet_timezone || DEFAULT_TZ;
         const start = Math.max(source.last_synced_row, source.header_row) + 1;
         const columns = await fetchMappedPage(orgId, source, start, start + TOPUP_ROWS - 1);
         const page = parsePage(columns, start, tz);
         if (page.rows.length === 0 && page.skipped === 0) return { ok: true, added: 0 };
-        const stamped = await stampRows(orgId, page.rows);
-        for (let i = 0; i < stamped.length; i += UPSERT_CHUNK) {
-            await sheetRepository.upsertLeads(orgId, source.id, stamped.slice(i, i + UPSERT_CHUNK));
+        for (let i = 0; i < page.rows.length; i += UPSERT_CHUNK) {
+            await sheetRepository.upsertLeads(orgId, source.id, page.rows.slice(i, i + UPSERT_CHUNK));
         }
         const lastDataRow = Math.max(page.lastDataRow, source.last_synced_row);
-        await sheetRepository.updateSource(orgId, {
+        await sheetRepository.updateSource(orgId, source.id, {
             last_synced_row: lastDataRow,
             row_count: source.row_count + page.rows.length,
             skipped_rows: source.skipped_rows + page.skipped,
@@ -312,23 +301,34 @@ export async function topUp(orgId) {
         return { ok: true, added: page.rows.length };
     } catch (err) {
         // Never block the dashboard on a top-up failure — log count-free.
-        console.error(`[sheets-sync] org=${orgId} top-up failed: ${err.message}`);
+        console.error(`[sheets-sync] org=${orgId} source=${source.id} top-up failed: ${err.message}`);
         return { ok: false, error: err.message };
     }
 }
 
+// Dashboard freshness: top-up every configured source. Never throws.
+export async function topUpAll(orgId) {
+    const sources = await sheetRepository.listSources(orgId);
+    let ok = true;
+    for (const s of sources) {
+        const r = await topUp(orgId, s);
+        if (r?.ok === false) ok = false;
+    }
+    return { ok };
+}
+
 // Nightly worker fan-out. Includes 'failed' sources (self-heal) and isolates
-// per-org errors so one bad sheet never freezes the rest.
+// per-source errors so one bad sheet never freezes the rest.
 export async function syncAllOrgs() {
     const sources = await sheetRepository.listConfiguredSources();
     const results = [];
     for (const s of sources) {
         try {
-            const r = await fullSync(s.organisation_id);
-            results.push({ orgId: s.organisation_id, ...r });
+            const r = await fullSync(s.organisation_id, s.id);
+            results.push({ orgId: s.organisation_id, sourceId: s.id, ...r });
         } catch (err) {
-            console.error(`[sheets-sync] org=${s.organisation_id} nightly sync failed: ${err.message}`);
-            results.push({ orgId: s.organisation_id, error: err.message });
+            console.error(`[sheets-sync] org=${s.organisation_id} source=${s.id} nightly sync failed: ${err.message}`);
+            results.push({ orgId: s.organisation_id, sourceId: s.id, error: err.message });
         }
     }
     return results;
