@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import PracticeTabs from '@/features/practices/PracticeTabs';
 import { useCallReportingDashboard } from '../hooks';
 
 function todayISO() {
@@ -20,24 +19,34 @@ function Card({ label, value, sub }: { label: string; value: string; sub?: strin
 }
 
 export default function CallReportingScreen() {
-  const [practiceId, setPracticeId] = useState<string | null>(null);
+  const [sourceId, setSourceId] = useState<string | null>(null);
   const [date, setDate] = useState(todayISO());
-  const { data, isLoading, isError } = useCallReportingDashboard(date, practiceId ?? undefined);
+  const { data, isLoading, isError } = useCallReportingDashboard(date, sourceId ?? undefined);
 
   const fieldCls =
     'text-[13px] border border-slate-200 bg-white text-slate-900 px-3 py-2 rounded-xl shadow-sm cursor-pointer';
+  const sources = (data?.sources ?? []).filter((s) => s.mapped);
 
   return (
     <div className="space-y-4 p-4">
       <div>
         <h1 className="text-lg font-semibold text-slate-900">Call Reporting</h1>
         <p className="text-[13px] text-slate-500">
-          Lead response speed by practice, synced from your Google Sheet.
+          Lead response speed by practice, synced from your Google Sheets.
         </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <PracticeTabs value={practiceId} onChange={setPracticeId} />
+        <select
+          className={fieldCls}
+          value={sourceId ?? ''}
+          onChange={(e) => setSourceId(e.target.value || null)}
+        >
+          <option value="">All practices</option>
+          {sources.map((s) => (
+            <option key={s.id} value={s.id}>{s.practice_label ?? 'Unnamed sheet'}</option>
+          ))}
+        </select>
         <input
           type="date"
           className={fieldCls}
@@ -67,7 +76,7 @@ export default function CallReportingScreen() {
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-600">
           <div className="font-medium text-slate-900">Not set up yet</div>
           <p className="mt-1 text-[13px]">
-            Connect Google Sheets and map your lead sheet columns to power this dashboard.
+            Connect Google Sheets and add each practice&apos;s lead sheet to power this dashboard.
           </p>
           <Link
             href="/integrations"
@@ -78,29 +87,22 @@ export default function CallReportingScreen() {
         </div>
       ) : (
         <>
-          {data.sourceStatus === 'failed' && (
+          {data.syncFailed && (
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-800">
-              The last sheet sync failed — figures below are from the last successful sync.
+              A sheet&apos;s last sync failed — figures below are from the last successful sync.
               Check the Google Sheets panel on the Integrations page.
-            </div>
-          )}
-          {data.unmapped > 0 && !practiceId && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-800">
-              {data.unmapped} lead{data.unmapped === 1 ? '' : 's'} today {data.unmapped === 1 ? 'is' : 'are'} not
-              mapped to a practice.{' '}
-              <Link href="/integrations" className="font-medium underline underline-offset-2">
-                Map sheet practices
-              </Link>
             </div>
           )}
 
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Card label="Total Leads" value={String(data.totalLeads)} sub={data.date} />
+            <Card label="Total Leads Today" value={String(data.totalLeads)} sub={data.date} />
             <Card label="Called Within 3 Min" value={String(data.calledWithin3m)} />
             <Card label="Called Within 10 Min" value={String(data.calledWithin10m)} />
             <Card label="Efficiency % (Called < 3m)" value={`${data.efficiencyPct}%`} />
             <Card label="Leads in Pipeline" value={String(data.leadsInPipeline)} />
             <Card label="Not Called" value={String(data.notCalled)} />
+            <Card label="Office Time Leads" value={String(data.officeTimeLeads)} sub="Mon–Fri 9am–5pm" />
+            <Card label="Outside Office Time" value={String(data.outsideOfficeTime)} />
             <Card label="Facebook Ads Leads" value={String(data.facebookLeads)} />
             <Card label="Google Ads Leads" value={String(data.googleLeads)} />
           </div>
