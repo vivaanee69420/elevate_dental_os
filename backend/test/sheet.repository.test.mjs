@@ -27,10 +27,10 @@ describe('sheet_sources', () => {
     expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
     expect(supaRec.last.eqs).toContainEqual({ col: 'id', val: SOURCE });
   });
-  it('createSource upserts on (organisation_id, spreadsheet_id) with the label', async () => {
+  it('createSource upserts on (organisation_id, practice_label) — same spreadsheet, N practices', async () => {
     supaRec.resultProvider = () => ({ data: { id: SOURCE }, error: null });
     await repo.createSource(ORG, { spreadsheet_id: 'abc123', title: 'T', practice_label: 'Barnet' });
-    expect(supaRec.last.upsertOpts.onConflict).toBe('organisation_id,spreadsheet_id');
+    expect(supaRec.last.upsertOpts.onConflict).toBe('organisation_id,practice_label');
     expect(supaRec.last.upsertVals.organisation_id).toBe(ORG);
     expect(supaRec.last.upsertVals.practice_label).toBe('Barnet');
     expect(supaRec.last.upsertVals.status).toBe('pending');
