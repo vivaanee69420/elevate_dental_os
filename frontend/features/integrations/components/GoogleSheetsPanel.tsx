@@ -1,35 +1,36 @@
 'use client';
 
-// Google Sheets — Call Reporting setup panel. Four states in one card:
-//   1. not connected  -> Connect Google (OAuth, read-only Sheets scope)
-//   2. no source      -> paste the sheet URL
-//   3. no mapping     -> pick tab, map the five columns against a preview
-//   4. active         -> status, practice mapping table, refresh, disconnect
-// Only the five mapped columns are ever synced — names/phones/emails in other
-// columns never leave Google.
+// Google Sheets — Call Reporting setup panel. One connection, many sheets
+// (one per practice). States in one card:
+//   1. not connected -> Connect Google (OAuth, read-only Sheets scope)
+//   2. connected      -> table of connected sheets (one row per source) +
+//                        an "Add sheet" wizard: paste/browse -> pick tab ->
+//                        map the five columns against a preview -> save
+// Sources whose setup was left unfinished show "Continue setup" to resume
+// the wizard. Only the five mapped columns are ever synced — names/phones/
+// emails in other columns never leave Google.
 
 import { useMemo, useState } from 'react';
 import { Chip } from '@/components/ui';
 import CollapsibleCard from './CollapsibleCard';
 import { useStartConnect } from '../hooks';
-import { fetchSheetsPickerConfig } from '@/features/call-reporting/api';
+import { fetchSheetsPickerConfig, type SheetSourceInfo } from '@/features/call-reporting/api';
 import {
   useAddSheetSource,
+  useRemoveSheetSource,
   useSaveSheetMapping,
-  useSetSheetPractice,
-  useSheetPracticeMap,
   useSheetPreview,
+  useSheetSourceSync,
   useSheetsDisconnect,
   useSheetsStatus,
-  useSheetsSync,
 } from '@/features/call-reporting/hooks';
 
-const FIELDS: { key: 'practice' | 'created_at' | 'first_call_at' | 'source' | 'pipeline_status'; label: string; hint: string }[] = [
-  { key: 'practice', label: 'Practice', hint: 'the practice/site name column' },
-  { key: 'created_at', label: 'Lead created', hint: 'date & time the lead came in' },
-  { key: 'first_call_at', label: 'First call', hint: 'date & time of the first call (blank = not called)' },
-  { key: 'source', label: 'Lead source', hint: 'e.g. Facebook Ads, Google Ads' },
-  { key: 'pipeline_status', label: 'Pipeline status', hint: 'the lead’s pipeline stage' },
+const FIELDS: { key: 'date' | 'created_time' | 'called_3m' | 'called_10m' | 'pipeline_name'; label: string; hint: string }[] = [
+  { key: 'date', label: 'Date', hint: 'the lead’s date column (MM/DD/YYYY)' },
+  { key: 'created_time', label: 'Created time', hint: 'time the lead came in (e.g. Created Time (BST))' },
+  { key: 'called_3m', label: 'Called within 3 min', hint: 'Yes/No column' },
+  { key: 'called_10m', label: 'Called within 10 min', hint: 'Yes/No column' },
+  { key: 'pipeline_name', label: 'Pipeline name', hint: 'also identifies Facebook/Google Ads leads' },
 ];
 
 // Load Google's picker script once and open a spreadsheet picker. Resolves
@@ -80,25 +81,28 @@ export default function GoogleSheetsPanel() {
   const startConnect = useStartConnect();
   const addSource = useAddSheetSource();
   const saveMapping = useSaveSheetMapping();
-  const syncNow = useSheetsSync();
+  const syncSource = useSheetSourceSync();
+  const removeSource = useRemoveSheetSource();
   const disconnect = useSheetsDisconnect();
 
-  const [url, setUrl] = useState('');
-  const [tabs, setTabs] = useState<string[]>([]);
-  const [tab, setTab] = useState<string | null>(null);
+  // Add-sheet wizard state. null = wizard closed.
+  const [wizard, setWizard] = useState<{
+    url: string;
+    practiceLabel: string;
+    sourceId: string | null;
+    tabs: string[];
+    tab: string | null;
+  } | null>(null);
   const [headerRow, setHeaderRow] = useState(1);
   const [columns, setColumns] = useState<Record<string, number | ''>>({
-    practice: '', created_at: '', first_call_at: '', source: '', pipeline_status: '',
+    date: '', created_time: '', called_3m: '', called_10m: '', pipeline_name: '',
   });
   const [err, setErr] = useState<string | null>(null);
   const [pickerBusy, setPickerBusy] = useState(false);
 
-  const source = status?.source ?? null;
   const connected = !!status?.connected;
-  const mapped = !!status?.mapped;
-  const { data: preview } = useSheetPreview(connected && source && !mapped ? tab : null);
-  const { data: practiceMap } = useSheetPracticeMap(mapped);
-  const setPractice = useSetSheetPractice();
+  const sources = status?.sources ?? [];
+  const { data: preview } = useSheetPreview(wizard?.sourceId ?? null, wizard?.tab ?? null);
 
   const headers = useMemo(() => {
     const row = preview?.rows?.[headerRow - 1] ?? [];
@@ -111,6 +115,12 @@ export default function GoogleSheetsPanel() {
 
   if (isLoading || !status) return null;
 
+  function resetWizard() {
+    setWizard(null);
+    setHeaderRow(1);
+    setColumns({ date: '', created_time: '', called_3m: '', called_10m: '', pipeline_name: '' });
+  }
+
   async function handleConnect() {
     setErr(null);
     try {
@@ -121,18 +131,25 @@ export default function GoogleSheetsPanel() {
     }
   }
 
-  async function handleAddSource(sourceUrl: string) {
+  async function handleAddSource(sourceUrl: string, practiceLabel: string) {
     setErr(null);
+    if (!practiceLabel.trim()) { setErr('Give this sheet a practice name first (e.g. Barnet).'); return; }
     try {
-      const res = await addSource.mutateAsync(sourceUrl);
-      setTabs(res.tabs);
-      if (res.tabs.length === 1) setTab(res.tabs[0]);
+      const res = await addSource.mutateAsync({ url: sourceUrl, practiceLabel: practiceLabel.trim() });
+      setWizard((w) => ({
+        url: sourceUrl,
+        practiceLabel: practiceLabel.trim(),
+        sourceId: res.id,
+        tabs: res.tabs,
+        tab: res.tabs.length === 1 ? res.tabs[0] : (w?.tab ?? null),
+      }));
     } catch (e) {
       setErr((e as Error).message);
     }
   }
 
   async function handleBrowse() {
+    if (!wizard) return;
     setErr(null);
     setPickerBusy(true);
     try {
@@ -146,7 +163,7 @@ export default function GoogleSheetsPanel() {
         appId: cfg.appId ?? null,
         accessToken: cfg.accessToken,
       });
-      if (pickedId) await handleAddSource(pickedId);
+      if (pickedId) await handleAddSource(pickedId, wizard.practiceLabel);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -156,41 +173,65 @@ export default function GoogleSheetsPanel() {
 
   async function handleSaveMapping() {
     setErr(null);
-    if (!tab) { setErr('Pick the tab that holds your lead rows.'); return; }
+    if (!wizard?.sourceId || !wizard.tab) { setErr('Pick the tab that holds your lead rows.'); return; }
     const missing = FIELDS.filter((f) => columns[f.key] === '');
     if (missing.length) { setErr(`Map every column: ${missing.map((f) => f.label).join(', ')} still unset.`); return; }
     const vals = FIELDS.map((f) => columns[f.key]);
     if (new Set(vals).size !== vals.length) { setErr('Each field must use a different column.'); return; }
     try {
       await saveMapping.mutateAsync({
-        tab_name: tab,
-        header_row: headerRow,
-        columns: {
-          practice: columns.practice as number,
-          created_at: columns.created_at as number,
-          first_call_at: columns.first_call_at as number,
-          source: columns.source as number,
-          pipeline_status: columns.pipeline_status as number,
+        sourceId: wizard.sourceId,
+        mapping: {
+          tab_name: wizard.tab,
+          header_row: headerRow,
+          columns: {
+            date: columns.date as number,
+            created_time: columns.created_time as number,
+            called_3m: columns.called_3m as number,
+            called_10m: columns.called_10m as number,
+            pipeline_name: columns.pipeline_name as number,
+          },
         },
       });
+      resetWizard();
     } catch (e) {
       setErr((e as Error).message);
     }
   }
 
+  // Resume setup on a source added earlier but never mapped: re-register the
+  // same spreadsheet (idempotent upsert) to fetch its tab list again.
+  function resumeSetup(s: SheetSourceInfo) {
+    setWizard({
+      url: s.spreadsheet_url ?? s.spreadsheet_id,
+      practiceLabel: s.practice_label ?? '',
+      sourceId: null,
+      tabs: [],
+      tab: null,
+    });
+    void handleAddSource(s.spreadsheet_url ?? s.spreadsheet_id, s.practice_label ?? '');
+  }
+
+  async function handleRemove(s: SheetSourceInfo) {
+    if (!window.confirm(`Remove the ${s.practice_label ?? 'unnamed'} sheet? Its synced lead rows will be deleted from the app.`)) return;
+    setErr(null);
+    try { await removeSource.mutateAsync(s.id); } catch (e) { setErr((e as Error).message); }
+  }
+
   async function handleDisconnect() {
-    if (!window.confirm('Disconnect Google Sheets? All synced lead rows will be deleted from the app.')) return;
+    if (!window.confirm('Disconnect Google Sheets? Every connected sheet and all synced lead rows will be deleted from the app.')) return;
     setErr(null);
     try { await disconnect.mutateAsync(); } catch (e) { setErr((e as Error).message); }
   }
 
-  const badge = mapped && source?.status === 'active'
-    ? <Chip colour="emerald">Connected</Chip>
-    : source?.status === 'failed'
+  const anyFailed = sources.some((s) => s.status === 'failed');
+  const badge = !connected
+    ? <Chip colour="amber">Not connected</Chip>
+    : anyFailed
       ? <Chip colour="rose">Sync failed</Chip>
-      : connected
-        ? <Chip colour="amber">Setup incomplete</Chip>
-        : <Chip colour="amber">Not connected</Chip>;
+      : sources.some((s) => s.mapped)
+        ? <Chip colour="emerald">Connected</Chip>
+        : <Chip colour="amber">Setup incomplete</Chip>;
 
   return (
     <CollapsibleCard title="Google Sheets — Call Reporting" style={{ marginBottom: 12 }} actions={badge}>
@@ -202,151 +243,70 @@ export default function GoogleSheetsPanel() {
         {!connected ? (
           <>
             <p>
-              Connect the Google account that can view your lead sheet. Access is read-only —
-              the app can never edit or share the sheet — and only the five mapped columns are
-              ever synced.
+              Connect the Google account that can view your lead sheets. Access is read-only —
+              the app can never edit or share a sheet — and only the five mapped columns are
+              ever synced. Connect one sheet per practice.
             </p>
             <button className="btn-primary" onClick={handleConnect} disabled={startConnect.isPending}>
               {startConnect.isPending ? 'Opening Google…' : 'Connect Google'}
             </button>
           </>
-        ) : !source ? (
-          <>
-            <p>Pick the Google Sheet that holds your lead rows.</p>
-            <div className="flex flex-wrap items-center gap-2">
-              <button className="btn-primary" onClick={handleBrowse} disabled={pickerBusy || addSource.isPending}>
-                {pickerBusy ? 'Opening…' : 'Browse my sheets'}
-              </button>
-              <span className="text-slate-400">or paste its URL:</span>
-            </div>
-            <div className="flex gap-2">
-              <input
-                className="input-base flex-1"
-                placeholder="https://docs.google.com/spreadsheets/d/…"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-              />
-              <button
-                className="btn-ghost"
-                onClick={() => handleAddSource(url)}
-                disabled={addSource.isPending || url.trim().length < 10}
-              >
-                {addSource.isPending ? 'Checking…' : 'Add sheet'}
-              </button>
-            </div>
-          </>
-        ) : !mapped ? (
-          <>
-            <p>
-              <span className="font-medium text-slate-900">{source.title ?? 'Sheet added'}.</span>{' '}
-              Now tell us which tab and columns hold the lead data.
-            </p>
-            {tabs.length === 0 ? (
-              <button
-                className="btn-ghost"
-                onClick={() => handleAddSource(source.spreadsheet_url ?? source.spreadsheet_id)}
-                disabled={addSource.isPending}
-              >
-                {addSource.isPending ? 'Loading tabs…' : 'Load tabs'}
-              </button>
-            ) : (
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="text-slate-500">Tab</label>
-                <select className="input-base" value={tab ?? ''} onChange={(e) => setTab(e.target.value || null)}>
-                  <option value="">— pick a tab —</option>
-                  {tabs.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
-                <label className="text-slate-500">Header row</label>
-                <input
-                  type="number" min={1} max={1000} className="input-base w-20"
-                  value={headerRow}
-                  onChange={(e) => setHeaderRow(Math.max(1, Number(e.target.value) || 1))}
-                />
-              </div>
-            )}
-            {tab && preview && (
-              <>
-                <div className="overflow-x-auto rounded-lg border border-slate-200">
-                  <table className="min-w-full text-[12px]">
-                    <tbody>
-                      {preview.rows.slice(0, 5).map((row, ri) => (
-                        <tr key={ri} className={ri === headerRow - 1 ? 'bg-slate-50 font-medium' : ''}>
-                          {headers.map((h) => (
-                            <td key={h.idx} className="whitespace-nowrap border-b border-slate-100 px-2 py-1">
-                              {row[h.idx] ?? ''}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {FIELDS.map((f) => (
-                    <label key={f.key} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2">
-                      <span>
-                        <span className="font-medium text-slate-900">{f.label}</span>
-                        <span className="block text-[12px] text-slate-400">{f.hint}</span>
-                      </span>
-                      <select
-                        className="input-base"
-                        value={columns[f.key]}
-                        onChange={(e) => setColumns((c) => ({ ...c, [f.key]: e.target.value === '' ? '' : Number(e.target.value) }))}
-                      >
-                        <option value="">—</option>
-                        {headers.map((h) => <option key={h.idx} value={h.idx}>{h.label}</option>)}
-                      </select>
-                    </label>
-                  ))}
-                </div>
-                <button className="btn-primary" onClick={handleSaveMapping} disabled={saveMapping.isPending}>
-                  {saveMapping.isPending ? 'Saving…' : 'Save mapping & sync'}
-                </button>
-              </>
-            )}
-          </>
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span className="font-medium text-slate-900">{source.title ?? source.spreadsheet_id}</span>
-              <span>Tab: {source.tab_name}</span>
-              <span>{source.row_count.toLocaleString('en-GB')} rows</span>
-              {source.skipped_rows > 0 && <span className="text-amber-600">{source.skipped_rows} rows skipped (bad dates)</span>}
-              <span>
-                {source.last_synced_at
-                  ? `Last synced ${new Date(source.last_synced_at).toLocaleString('en-GB', { timeZone: 'Europe/London' })}`
-                  : 'Not synced yet'}
-              </span>
-            </div>
-            {source.status === 'failed' && source.last_error && (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-rose-700">
-                Last sync failed: {source.last_error}
-              </div>
-            )}
-
-            {practiceMap && practiceMap.values.length > 0 && (
-              <div>
-                <div className="mb-1 font-medium text-slate-900">Practice mapping</div>
-                <p className="mb-2 text-[12px] text-slate-400">
-                  Match each practice name found in the sheet to a practice. Changes apply instantly — no re-sync.
-                </p>
-                <table className="min-w-[320px] text-[13px]">
+            {sources.length > 0 && (
+              <div className="overflow-x-auto rounded-lg border border-slate-200">
+                <table className="min-w-full text-[13px]">
+                  <thead>
+                    <tr className="bg-slate-50 text-left text-[12px] uppercase tracking-wide text-slate-500">
+                      <th className="px-3 py-2">Practice</th>
+                      <th className="px-3 py-2">Sheet</th>
+                      <th className="px-3 py-2">Rows</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Last synced</th>
+                      <th className="px-3 py-2" />
+                    </tr>
+                  </thead>
                   <tbody>
-                    {practiceMap.values.map((v) => (
-                      <tr key={v.sheet_value}>
-                        <td className="py-1 pr-4 text-slate-900">{v.sheet_value}</td>
-                        <td className="py-1">
-                          <select
-                            className="input-base"
-                            value={v.practice_id ?? ''}
-                            disabled={setPractice.isPending}
-                            onChange={(e) => setPractice.mutate({ sheetValue: v.sheet_value, practiceId: e.target.value || null })}
-                          >
-                            <option value="">— Do not map —</option>
-                            {practiceMap.practices.map((p) => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
-                          </select>
+                    {sources.map((s) => (
+                      <tr key={s.id} className="border-t border-slate-100">
+                        <td className="px-3 py-2 font-medium text-slate-900">{s.practice_label ?? '—'}</td>
+                        <td className="px-3 py-2">
+                          {s.title ?? s.spreadsheet_id}
+                          {s.tab_name ? <span className="text-slate-400"> · {s.tab_name}</span> : null}
+                        </td>
+                        <td className="px-3 py-2">
+                          {s.row_count.toLocaleString('en-GB')}
+                          {s.skipped_rows > 0 && <span className="text-amber-600"> ({s.skipped_rows} skipped)</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {!s.mapped
+                            ? <Chip colour="amber">Setup incomplete</Chip>
+                            : s.status === 'failed'
+                              ? <Chip colour="rose">Failed</Chip>
+                              : s.status === 'pending'
+                                ? <Chip colour="amber">Syncing…</Chip>
+                                : <Chip colour="emerald">Active</Chip>}
+                        </td>
+                        <td className="px-3 py-2 text-slate-500">
+                          {s.last_synced_at
+                            ? new Date(s.last_synced_at).toLocaleString('en-GB', { timeZone: 'Europe/London' })
+                            : '—'}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex justify-end gap-2">
+                            {!s.mapped ? (
+                              <button className="btn-ghost" onClick={() => resumeSetup(s)} disabled={addSource.isPending}>
+                                Continue setup
+                              </button>
+                            ) : (
+                              <button className="btn-ghost" onClick={() => syncSource.mutate(s.id)} disabled={syncSource.isPending}>
+                                Refresh
+                              </button>
+                            )}
+                            <button className="btn-ghost text-rose-600" onClick={() => handleRemove(s)} disabled={removeSource.isPending}>
+                              Remove
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -354,15 +314,128 @@ export default function GoogleSheetsPanel() {
                 </table>
               </div>
             )}
+            {sources.some((s) => s.status === 'failed' && s.last_error) && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-rose-700">
+                {sources.filter((s) => s.status === 'failed' && s.last_error)
+                  .map((s) => `${s.practice_label ?? s.spreadsheet_id}: ${s.last_error}`)
+                  .join(' · ')}
+              </div>
+            )}
 
-            <div className="flex gap-2 pt-1">
-              <button className="btn-ghost" onClick={() => syncNow.mutate()} disabled={syncNow.isPending}>
-                {syncNow.isPending ? 'Starting…' : 'Refresh now'}
-              </button>
-              <button className="btn-ghost text-rose-600" onClick={handleDisconnect} disabled={disconnect.isPending}>
-                {disconnect.isPending ? 'Removing…' : 'Disconnect'}
-              </button>
-            </div>
+            {!wizard ? (
+              <div className="flex gap-2 pt-1">
+                <button
+                  className="btn-primary"
+                  onClick={() => setWizard({ url: '', practiceLabel: '', sourceId: null, tabs: [], tab: null })}
+                >
+                  Add sheet
+                </button>
+                <button className="btn-ghost text-rose-600" onClick={handleDisconnect} disabled={disconnect.isPending}>
+                  {disconnect.isPending ? 'Removing…' : 'Disconnect Google'}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3 rounded-lg border border-slate-200 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-slate-900">Add a practice&apos;s sheet</span>
+                  <button className="btn-ghost" onClick={resetWizard}>Cancel</button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-slate-500">Practice name</label>
+                  <input
+                    className="input-base w-44"
+                    placeholder="e.g. Barnet"
+                    value={wizard.practiceLabel}
+                    onChange={(e) => setWizard((w) => (w ? { ...w, practiceLabel: e.target.value } : w))}
+                  />
+                </div>
+                {!wizard.sourceId ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button className="btn-primary" onClick={handleBrowse} disabled={pickerBusy || addSource.isPending}>
+                        {pickerBusy ? 'Opening…' : 'Browse my sheets'}
+                      </button>
+                      <span className="text-slate-400">or paste its URL:</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        className="input-base flex-1"
+                        placeholder="https://docs.google.com/spreadsheets/d/…"
+                        value={wizard.url}
+                        onChange={(e) => setWizard((w) => (w ? { ...w, url: e.target.value } : w))}
+                      />
+                      <button
+                        className="btn-ghost"
+                        onClick={() => handleAddSource(wizard.url, wizard.practiceLabel)}
+                        disabled={addSource.isPending || wizard.url.trim().length < 10}
+                      >
+                        {addSource.isPending ? 'Checking…' : 'Add sheet'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="text-slate-500">Tab</label>
+                      <select
+                        className="input-base"
+                        value={wizard.tab ?? ''}
+                        onChange={(e) => setWizard((w) => (w ? { ...w, tab: e.target.value || null } : w))}
+                      >
+                        <option value="">— pick a tab —</option>
+                        {wizard.tabs.map((t) => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <label className="text-slate-500">Header row</label>
+                      <input
+                        type="number" min={1} max={1000} className="input-base w-20"
+                        value={headerRow}
+                        onChange={(e) => setHeaderRow(Math.max(1, Number(e.target.value) || 1))}
+                      />
+                    </div>
+                    {wizard.tab && preview && (
+                      <>
+                        <div className="overflow-x-auto rounded-lg border border-slate-200">
+                          <table className="min-w-full text-[12px]">
+                            <tbody>
+                              {preview.rows.slice(0, 5).map((row, ri) => (
+                                <tr key={ri} className={ri === headerRow - 1 ? 'bg-slate-50 font-medium' : ''}>
+                                  {headers.map((h) => (
+                                    <td key={h.idx} className="whitespace-nowrap border-b border-slate-100 px-2 py-1">
+                                      {row[h.idx] ?? ''}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {FIELDS.map((f) => (
+                            <label key={f.key} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2">
+                              <span>
+                                <span className="font-medium text-slate-900">{f.label}</span>
+                                <span className="block text-[12px] text-slate-400">{f.hint}</span>
+                              </span>
+                              <select
+                                className="input-base"
+                                value={columns[f.key]}
+                                onChange={(e) => setColumns((c) => ({ ...c, [f.key]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                              >
+                                <option value="">—</option>
+                                {headers.map((h) => <option key={h.idx} value={h.idx}>{h.label}</option>)}
+                              </select>
+                            </label>
+                          ))}
+                        </div>
+                        <button className="btn-primary" onClick={handleSaveMapping} disabled={saveMapping.isPending}>
+                          {saveMapping.isPending ? 'Saving…' : 'Save mapping & sync'}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
