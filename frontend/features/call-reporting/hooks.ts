@@ -5,19 +5,18 @@ import {
   addSheetSource,
   disconnectSheets,
   fetchCallReportingDashboard,
-  fetchSheetPracticeMap,
   fetchSheetPreview,
   fetchSheetsStatus,
+  removeSheetSource,
   saveSheetMapping,
-  setSheetPracticeMapping,
-  syncSheetsNow,
+  syncSheetSource,
   type SheetMappingInput,
 } from './api';
 
-export function useCallReportingDashboard(date: string, practiceId?: string) {
+export function useCallReportingDashboard(date: string, sourceId?: string) {
   return useQuery({
-    queryKey: ['call-reporting-dashboard', date || 'today', practiceId ?? 'all'],
-    queryFn: () => fetchCallReportingDashboard(date, practiceId),
+    queryKey: ['call-reporting-dashboard', date || 'today', sourceId ?? 'all'],
+    queryFn: () => fetchCallReportingDashboard(date, sourceId),
     staleTime: 30_000,
   });
 }
@@ -30,21 +29,12 @@ export function useSheetsStatus() {
   });
 }
 
-export function useSheetPreview(tab: string | null) {
+export function useSheetPreview(sourceId: string | null, tab: string | null) {
   return useQuery({
-    queryKey: ['sheets-preview', tab ?? ''],
-    queryFn: () => fetchSheetPreview(tab as string),
-    enabled: !!tab,
+    queryKey: ['sheets-preview', sourceId ?? '', tab ?? ''],
+    queryFn: () => fetchSheetPreview(sourceId as string, tab as string),
+    enabled: !!sourceId && !!tab,
     staleTime: 60_000,
-  });
-}
-
-export function useSheetPracticeMap(enabled = true) {
-  return useQuery({
-    queryKey: ['sheets-practice-map'],
-    queryFn: fetchSheetPracticeMap,
-    enabled,
-    staleTime: 30_000,
   });
 }
 
@@ -52,7 +42,6 @@ function useInvalidateSheets() {
   const qc = useQueryClient();
   return () => {
     qc.invalidateQueries({ queryKey: ['sheets-status'] });
-    qc.invalidateQueries({ queryKey: ['sheets-practice-map'] });
     qc.invalidateQueries({ queryKey: ['call-reporting-dashboard'] });
   };
 }
@@ -65,23 +54,20 @@ export function useAddSheetSource() {
 export function useSaveSheetMapping() {
   const invalidate = useInvalidateSheets();
   return useMutation({
-    mutationFn: (mapping: SheetMappingInput) => saveSheetMapping(mapping),
+    mutationFn: ({ sourceId, mapping }: { sourceId: string; mapping: SheetMappingInput }) =>
+      saveSheetMapping(sourceId, mapping),
     onSuccess: invalidate,
   });
 }
 
-export function useSetSheetPractice() {
+export function useSheetSourceSync() {
   const invalidate = useInvalidateSheets();
-  return useMutation({
-    mutationFn: ({ sheetValue, practiceId }: { sheetValue: string; practiceId: string | null }) =>
-      setSheetPracticeMapping(sheetValue, practiceId),
-    onSuccess: invalidate,
-  });
+  return useMutation({ mutationFn: syncSheetSource, onSuccess: invalidate });
 }
 
-export function useSheetsSync() {
+export function useRemoveSheetSource() {
   const invalidate = useInvalidateSheets();
-  return useMutation({ mutationFn: syncSheetsNow, onSuccess: invalidate });
+  return useMutation({ mutationFn: removeSheetSource, onSuccess: invalidate });
 }
 
 export function useSheetsDisconnect() {
