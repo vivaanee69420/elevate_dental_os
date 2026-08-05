@@ -33,6 +33,13 @@ const UPSERT_CHUNK = 500;
 const DEFAULT_TZ = 'Europe/London';
 export const MAPPED_FIELDS = ['date', 'created_time', 'called_3m', 'called_10m', 'pipeline_name'];
 
+// A usable mapping has every one of the five fields as a column index. A
+// stale/foreign shape (e.g. a surviving v1 row) must read as unconfigured —
+// never as colLetter(undefined) emitting a garbage A1 range.
+export function isValidMapping(mapping) {
+    return !!mapping && MAPPED_FIELDS.every((f) => Number.isInteger(mapping?.[f]));
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for tests)
 // ---------------------------------------------------------------------------
@@ -80,7 +87,11 @@ export function parseDateWallMs(v) {
         const mo = +m[1];
         const d = +m[2];
         if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
-        return Date.UTC(+m[3], mo - 1, d);
+        const ms = Date.UTC(+m[3], mo - 1, d);
+        const dt = new Date(ms);
+        // Reject impossible dates (e.g. 02/31) instead of letting UTC roll over.
+        if (dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+        return ms;
     }
     return null;
 }
@@ -215,7 +226,7 @@ async function fetchMappedPage(orgId, source, startRow, endRow) {
 export async function fullSync(orgId, sourceId) {
     const source = await sheetRepository.getSourceById(orgId, sourceId);
     if (!source) return { skipped: 'no_source' };
-    if (!source.column_mapping || !source.tab_name) return { skipped: 'not_configured' };
+    if (!isValidMapping(source.column_mapping) || !source.tab_name) return { skipped: 'not_configured' };
     const tz = source.sheet_timezone || DEFAULT_TZ;
     try {
         const meta = await getMeta(orgId, source.spreadsheet_id);
@@ -275,7 +286,7 @@ const lastTopUp = new Map();
 // Append-only read of rows after last_synced_row for ONE source. Cheap
 // regardless of sheet size; failures degrade gracefully (cached data renders).
 export async function topUp(orgId, source) {
-    if (!source?.column_mapping || !source.tab_name || source.status === 'pending') {
+    if (!isValidMapping(source?.column_mapping) || !source.tab_name || source.status === 'pending') {
         return { skipped: 'not_configured' };
     }
     const key = `${orgId}:${source.id}`;

@@ -1,7 +1,7 @@
 // ============================================================================
 // Sheet service — Call Reporting (Google Sheets) business logic.
 // Connection state lives on the integrations row (encrypted tokens, never
-// exposed); the source/mapping/practice-map live in sheet_* tables. Row values
+// exposed); the sources/mappings live in sheet_sources. Row values
 // are never logged and never leave this domain (excluded from AI context).
 // ============================================================================
 import { AppError } from "../middleware/errors.js";

@@ -6,7 +6,7 @@ import './setup.js';
 import { describe, it, expect } from 'vitest';
 import {
   colLetter, combineDateTime, parseDateWallMs, parseTimeOfDayMs, parseYesNo,
-  parsePage, hashRow, MAPPED_FIELDS,
+  parsePage, hashRow, MAPPED_FIELDS, isValidMapping,
 } from '../src/lib/integrations/google-sheets-sync.js';
 
 const TZ = 'Europe/London';
@@ -47,6 +47,7 @@ describe('combineDateTime', () => {
     expect(combineDateTime('soon', '10:00', TZ)).toBeNull();
     expect(combineDateTime('', '10:00', TZ)).toBeNull();
     expect(combineDateTime('31/07/2026', '10:00', TZ)).toBeNull(); // dd/mm is NOT accepted: month 31 invalid
+    expect(combineDateTime('02/31/2026', '10:00', TZ)).toBeNull(); // impossible date (Feb 31) rejected, not rolled over
   });
   it('unparsable time falls back to midnight, does not lose the lead', () => {
     expect(combineDateTime('01/15/2026', 'later', TZ)).toBe('2026-01-15T00:00:00.000Z');
@@ -112,5 +113,28 @@ describe('parsePage', () => {
     const f = { created_at: '2026-07-31T08:00:00.000Z', called_3m: true, called_10m: false, pipeline_name: 'X' };
     expect(hashRow(f)).toBe(hashRow({ ...f }));
     expect(hashRow(f)).not.toBe(hashRow({ ...f, pipeline_name: 'Y' }));
+  });
+});
+
+describe('isValidMapping', () => {
+  it('accepts a mapping with all five fields as column indices', () => {
+    expect(isValidMapping({
+      date: 0, created_time: 4, called_3m: 5, called_10m: 6, pipeline_name: 7,
+    })).toBe(true);
+  });
+  it('rejects a stale v1-shaped mapping (five different keys)', () => {
+    expect(isValidMapping({
+      practice: 0, created_at: 1, first_call_at: 2, source: 3, pipeline_status: 4,
+    })).toBe(false);
+  });
+  it('rejects null/undefined/empty-object mappings', () => {
+    expect(isValidMapping(null)).toBe(false);
+    expect(isValidMapping(undefined)).toBe(false);
+    expect(isValidMapping({})).toBe(false);
+  });
+  it('rejects a mapping with a non-integer (string) column index', () => {
+    expect(isValidMapping({
+      date: '0', created_time: 4, called_3m: 5, called_10m: 6, pipeline_name: 7,
+    })).toBe(false);
   });
 });
