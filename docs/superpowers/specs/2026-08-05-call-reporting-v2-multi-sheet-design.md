@@ -103,11 +103,11 @@ New pure helpers (exported for tests):
 `parsePage` builds `{created_at, called_3m, called_10m, pipeline_name}`;
 `hashRow` hashes those four. `stampRows`/practice discovery is deleted.
 
-`fullSync(orgId, sourceId)` and `topUp(orgId, sourceId)` operate on ONE
-source (debounce key `orgId:sourceId`); `fullSyncAll(orgId)` and the
-dashboard top-up iterate the org's configured sources, isolating per-source
-failures. `syncAllOrgs()` (nightly worker) fans out per source, still
-retrying `failed` ones.
+`fullSync(orgId, sourceId)` and `topUp(orgId, source)` operate on ONE
+source (debounce key `orgId:sourceId`); the nightly worker (`syncAllOrgs()`)
+and the dashboard top-up (`topUpAll(orgId)`) iterate the org's configured
+sources individually, isolating per-source failures. `syncAllOrgs()` still
+retries `failed` ones.
 
 ## Backend service / routes
 

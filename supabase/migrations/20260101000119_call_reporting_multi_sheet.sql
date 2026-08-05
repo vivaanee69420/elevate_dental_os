@@ -13,6 +13,12 @@ alter table public.sheet_sources drop constraint if exists sheet_sources_organis
 create unique index if not exists sheet_sources_org_spreadsheet_key
   on public.sheet_sources (organisation_id, spreadsheet_id);
 
+-- v1 rows keep their old five-key mapping shape — force them back through
+-- the mapping wizard rather than let the sync read undefined columns.
+update public.sheet_sources
+  set column_mapping = null, status = 'pending', last_synced_row = 0
+  where column_mapping ? 'practice';
+
 -- 2) sheet_leads: v2 shape. v1 rows are wiped (feature shipped yesterday,
 --    a re-sync fully repopulates) — the old columns don't map to the new.
 delete from public.sheet_leads;
