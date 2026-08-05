@@ -8,7 +8,7 @@ import { AppError } from "../middleware/errors.js";
 import { sheetRepository } from "../repositories/sheet.repository.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { parseSpreadsheetId, getAccessToken, PROVIDER_ID } from "../lib/integrations/google-sheets-provider.js";
-import { getMeta, getPreview, fullSync, topUp } from "../lib/integrations/google-sheets-sync.js";
+import { getMeta, getPreview, fullSync, topUpAll } from "../lib/integrations/google-sheets-sync.js";
 
 const LONDON_TZ = 'Europe/London';
 
@@ -22,6 +22,8 @@ function todayLondon() {
 function safeSource(source) {
     if (!source) return null;
     return {
+        id: source.id,
+        practice_label: source.practice_label,
         spreadsheet_id: source.spreadsheet_id,
         spreadsheet_url: source.spreadsheet_url,
         title: source.title,
@@ -34,6 +36,7 @@ function safeSource(source) {
         status: source.status,
         last_error: source.last_error,
         last_synced_at: source.last_synced_at,
+        mapped: !!source.column_mapping,
     };
 }
 
@@ -46,19 +49,18 @@ async function requireConnected(orgId) {
 }
 
 export const sheetService = {
-    // Panel state: connection + source + mapping in one call.
+    // Panel state: connection + every connected sheet in one call.
     async status(orgId) {
-        const [integration, source] = await Promise.all([
+        const [integration, sources] = await Promise.all([
             integrationRepository.getByProvider(orgId, PROVIDER_ID),
-            sheetRepository.getSource(orgId),
+            sheetRepository.listSources(orgId),
         ]);
         const connected = !!integration && integration.status !== 'revoked' && !!integration.secrets;
         return {
             connected,
             connectionStatus: integration?.status ?? null,
             connectionError: integration?.last_error ?? null,
-            source: safeSource(source),
-            mapped: !!source?.column_mapping,
+            sources: sources.map(safeSource),
         };
     },
 
@@ -82,10 +84,9 @@ export const sheetService = {
         };
     },
 
-    // Register the sheet by pasted URL. Validates reachability with a metadata
-    // read BEFORE persisting (GHL PIT-check pattern) and returns the tab list
-    // for the mapping step.
-    async addSource(orgId, { url }) {
+    // Register one practice's sheet. Validates reachability with a metadata
+    // read BEFORE persisting and returns the tab list for the mapping step.
+    async addSource(orgId, { url, practice_label }) {
         await requireConnected(orgId);
         const spreadsheetId = parseSpreadsheetId(url);
         if (!spreadsheetId) throw new AppError('That does not look like a Google Sheets URL', 400);
@@ -95,31 +96,32 @@ export const sheetService = {
         } catch (err) {
             throw new AppError(`Could not open that sheet: ${err.message}`, 400);
         }
-        await sheetRepository.createSource(orgId, {
+        const row = await sheetRepository.createSource(orgId, {
             spreadsheet_id: spreadsheetId,
             spreadsheet_url: url.startsWith('http') ? url : null,
             title: meta.title,
             sheet_timezone: meta.timezone,
+            practice_label,
         });
-        return { ok: true, title: meta.title, tabs: meta.tabs.map((t) => t.title) };
+        return { ok: true, id: row.id, title: meta.title, tabs: meta.tabs.map((t) => t.title) };
     },
 
     // First rows of a tab for the mapping UI. Ephemeral — never stored.
-    async preview(orgId, { tab }) {
+    async preview(orgId, { sourceId, tab }) {
         await requireConnected(orgId);
-        const source = await sheetRepository.getSource(orgId);
-        if (!source) throw new AppError('Add the sheet URL first', 409);
+        const source = await sheetRepository.getSourceById(orgId, sourceId);
+        if (!source) throw new AppError('Sheet not found', 404);
         const rows = await getPreview(orgId, source.spreadsheet_id, tab);
         return { tab, rows };
     },
 
-    // Save the one-time column mapping, then kick a full sync (fire-and-forget
-    // — the panel polls status for progress; last_error lands on the source).
-    async saveMapping(orgId, { tab_name, header_row, columns }) {
+    // Save the one-time column mapping for one sheet, then kick its full sync
+    // (fire-and-forget — the panel polls status; last_error lands on the source).
+    async saveMapping(orgId, { sourceId, tab_name, header_row, columns }) {
         await requireConnected(orgId);
-        const source = await sheetRepository.getSource(orgId);
-        if (!source) throw new AppError('Add the sheet URL first', 409);
-        await sheetRepository.updateSource(orgId, {
+        const source = await sheetRepository.getSourceById(orgId, sourceId);
+        if (!source) throw new AppError('Sheet not found', 404);
+        await sheetRepository.updateSource(orgId, sourceId, {
             tab_name,
             header_row,
             column_mapping: columns,
@@ -127,63 +129,53 @@ export const sheetService = {
             last_error: null,
             last_synced_row: 0,
         });
-        fullSync(orgId).catch((err) => {
-            console.error(`[sheets] org=${orgId} post-mapping sync failed: ${err.message}`);
+        fullSync(orgId, sourceId).catch((err) => {
+            console.error(`[sheets] org=${orgId} source=${sourceId} post-mapping sync failed: ${err.message}`);
         });
         return { ok: true, syncStarted: true };
     },
 
-    // Discovered sheet practice values + org practices for the mapping table.
-    async listPracticeMap(orgId) {
-        const [values, practices, source] = await Promise.all([
-            sheetRepository.listPracticeMap(orgId),
-            sheetRepository.practiceOptions(orgId),
-            sheetRepository.getSource(orgId),
-        ]);
-        return { configured: !!source?.column_mapping, values, practices };
-    },
-
-    // Set/clear one value's practice, then restamp existing rows in place —
-    // instant, no re-sync (Emergent pattern).
-    async setPracticeMapping(orgId, { sheet_value, practice_id }) {
-        await sheetRepository.setPracticeMapping(orgId, sheet_value, practice_id);
-        const restamped = await sheetRepository.restampPractices(orgId);
-        return { ok: true, restamped };
-    },
-
-    // Manual "Refresh now" — full re-sync, fire-and-forget.
-    async syncNow(orgId) {
+    // Manual "Refresh now" for one sheet — full re-sync, fire-and-forget.
+    async syncNow(orgId, sourceId) {
         await requireConnected(orgId);
-        const source = await sheetRepository.getSource(orgId);
-        if (!source?.column_mapping) throw new AppError('Finish the column mapping first', 409);
-        fullSync(orgId).catch((err) => {
-            console.error(`[sheets] org=${orgId} manual sync failed: ${err.message}`);
+        const source = await sheetRepository.getSourceById(orgId, sourceId);
+        if (!source) throw new AppError('Sheet not found', 404);
+        if (!source.column_mapping) throw new AppError('Finish the column mapping first', 409);
+        fullSync(orgId, sourceId).catch((err) => {
+            console.error(`[sheets] org=${orgId} source=${sourceId} manual sync failed: ${err.message}`);
         });
         return { started: true };
     },
 
-    // Disconnect = clean exit: purge every synced row, the practice map and the
-    // source, then revoke the integration (markRevoked nulls the secrets).
+    // Remove ONE practice's sheet: its synced rows, then the source row.
+    async removeSource(orgId, sourceId) {
+        await sheetRepository.deleteLeadsBySource(orgId, sourceId);
+        await sheetRepository.deleteSource(orgId, sourceId);
+        return { ok: true };
+    },
+
+    // Disconnect = clean exit: purge every synced row and every source, then
+    // revoke the integration (markRevoked nulls the secrets).
     async disconnect(orgId) {
         await sheetRepository.deleteAllLeads(orgId);
-        await sheetRepository.deletePracticeMap(orgId);
-        await sheetRepository.deleteSource(orgId);
+        await sheetRepository.deleteAllSources(orgId);
         await integrationRepository.markRevoked(orgId, PROVIDER_ID);
         return { ok: true };
     },
 
-    // The eight cards. Runs the cheap append-only top-up first (debounced;
-    // failure degrades to cached data) then one aggregate RPC round trip.
-    async dashboard(orgId, { date, practiceId }) {
-        const source = await sheetRepository.getSource(orgId);
-        if (!source?.column_mapping) {
-            return { configured: false, sourceStatus: source?.status ?? null };
+    // The ten cards. Runs the cheap append-only top-up on every configured
+    // sheet first (debounced; failure degrades to cached data) then ONE
+    // aggregate RPC round trip. sourceId null = all practices.
+    async dashboard(orgId, { date, sourceId }) {
+        const sources = await sheetRepository.listSources(orgId);
+        if (!sources.some((s) => s.column_mapping)) {
+            return { configured: false };
         }
-        const freshness = await topUp(orgId);
+        const freshness = await topUpAll(orgId);
         const day = date ?? todayLondon();
         const row = await sheetRepository.dashboard(orgId, {
             date: day,
-            practiceId: practiceId ?? null,
+            sourceId: sourceId ?? null,
             tz: LONDON_TZ,
         });
         const total = Number(row?.total ?? 0);
@@ -191,18 +183,26 @@ export const sheetService = {
         return {
             configured: true,
             date: day,
-            practiceId: practiceId ?? null,
+            sourceId: sourceId ?? null,
             totalLeads: total,
             calledWithin3m: called3m,
             calledWithin10m: Number(row?.called_10m ?? 0),
             efficiencyPct: total > 0 ? Math.round((called3m / total) * 1000) / 10 : 0,
             leadsInPipeline: Number(row?.in_pipeline ?? 0),
             notCalled: Number(row?.not_called ?? 0),
+            officeTimeLeads: Number(row?.office_time ?? 0),
+            outsideOfficeTime: Number(row?.outside_office ?? 0),
             facebookLeads: Number(row?.facebook ?? 0),
             googleLeads: Number(row?.google ?? 0),
-            unmapped: Number(row?.unmapped ?? 0),
-            sourceStatus: source.status,
-            lastSyncedAt: source.last_synced_at,
+            sources: sources.map((s) => ({
+                id: s.id,
+                practice_label: s.practice_label,
+                status: s.status,
+                last_synced_at: s.last_synced_at,
+                mapped: !!s.column_mapping,
+            })),
+            syncFailed: sources.some((s) => s.status === 'failed'),
+            lastSyncedAt: sources.map((s) => s.last_synced_at).filter(Boolean).sort().at(-1) ?? null,
             topUpOk: freshness?.ok !== false,
         };
     },

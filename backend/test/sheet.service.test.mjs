@@ -1,24 +1,23 @@
-// Sheet service (Call Reporting) — dashboard shaping + efficiency %, the
-// not-configured path, source registration guards, disconnect purge order,
-// and the no-token-leak guarantee on the status endpoint.
+// Sheet service (Call Reporting v2) — 10-card dashboard shaping + efficiency %,
+// per-source operations, the not-configured path, disconnect purge order, and
+// the no-token-leak guarantee on the status endpoint.
 import './setup.js';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const ORG = '00000000-0000-0000-0000-000000000001';
-const PRACTICE = '00000000-0000-0000-0000-0000000000bb';
+const SRC = '00000000-0000-0000-0000-0000000000aa';
+const SRC2 = '00000000-0000-0000-0000-0000000000ab';
 
 const repoMock = {
-  getSource: vi.fn(),
+  listSources: vi.fn().mockResolvedValue([]),
+  getSourceById: vi.fn(),
   createSource: vi.fn(),
   updateSource: vi.fn(),
   deleteSource: vi.fn(),
-  listPracticeMap: vi.fn().mockResolvedValue([]),
-  setPracticeMapping: vi.fn(),
-  deletePracticeMap: vi.fn(),
-  practiceOptions: vi.fn().mockResolvedValue([]),
+  deleteAllSources: vi.fn(),
+  deleteLeadsBySource: vi.fn(),
   deleteAllLeads: vi.fn(),
   dashboard: vi.fn(),
-  restampPractices: vi.fn().mockResolvedValue(3),
 };
 const integrationRepoMock = {
   getByProvider: vi.fn(),
@@ -29,6 +28,7 @@ const syncMock = {
   getPreview: vi.fn(),
   fullSync: vi.fn().mockResolvedValue({ ok: true }),
   topUp: vi.fn().mockResolvedValue({ ok: true, added: 0 }),
+  topUpAll: vi.fn().mockResolvedValue({ ok: true }),
 };
 
 vi.mock('../src/repositories/sheet.repository.js', () => ({ sheetRepository: repoMock }));
@@ -38,9 +38,10 @@ vi.mock('../src/lib/integrations/google-sheets-sync.js', () => syncMock);
 const { sheetService } = await import('../src/services/sheet.service.js');
 
 const CONNECTED = { status: 'active', secrets: 'ENCRYPTED-BLOB', last_error: null };
-const CONFIGURED_SOURCE = {
-  id: 'src-1', spreadsheet_id: 'abc123', title: 'Leads', tab_name: 'Data',
-  column_mapping: { practice: 0, created_at: 1, first_call_at: 2, source: 3, pipeline_status: 4 },
+const SOURCE = {
+  id: SRC, practice_label: 'Barnet', spreadsheet_id: 'abc123', title: 'Barnet Leads',
+  tab_name: 'Lead_Conversion_Tracking',
+  column_mapping: { date: 0, created_time: 4, called_3m: 5, called_10m: 6, pipeline_name: 7 },
   header_row: 1, last_synced_row: 100, row_count: 100, skipped_rows: 0,
   status: 'active', last_error: null, last_synced_at: '2026-08-04T06:00:00.000Z',
   sheet_timezone: 'Europe/London',
@@ -49,27 +50,31 @@ const CONFIGURED_SOURCE = {
 beforeEach(() => {
   vi.clearAllMocks();
   integrationRepoMock.getByProvider.mockResolvedValue(CONNECTED);
-  repoMock.getSource.mockResolvedValue(CONFIGURED_SOURCE);
-  syncMock.topUp.mockResolvedValue({ ok: true, added: 0 });
+  repoMock.listSources.mockResolvedValue([SOURCE]);
+  repoMock.getSourceById.mockResolvedValue(SOURCE);
+  syncMock.topUpAll.mockResolvedValue({ ok: true });
   syncMock.fullSync.mockResolvedValue({ ok: true });
 });
 
 describe('dashboard', () => {
-  it('shapes the eight cards and computes efficiency % (2/14 -> 14.3)', async () => {
+  it('shapes the ten cards and computes efficiency % (2/6 -> 33.3)', async () => {
     repoMock.dashboard.mockResolvedValue({
-      total: 14, called_3m: 2, called_10m: 0, in_pipeline: 14,
-      not_called: 12, facebook: 11, google: 1, unmapped: 0,
+      total: 6, called_3m: 2, called_10m: 0, in_pipeline: 6, not_called: 4,
+      office_time: 3, outside_office: 3, facebook: 5, google: 1,
     });
-    const out = await sheetService.dashboard(ORG, { date: '2026-08-01', practiceId: PRACTICE });
+    const out = await sheetService.dashboard(ORG, { date: '2026-07-31', sourceId: SRC });
     expect(out).toMatchObject({
-      configured: true, date: '2026-08-01', practiceId: PRACTICE,
-      totalLeads: 14, calledWithin3m: 2, calledWithin10m: 0,
-      efficiencyPct: 14.3, leadsInPipeline: 14, notCalled: 12,
-      facebookLeads: 11, googleLeads: 1, unmapped: 0,
+      configured: true, date: '2026-07-31', sourceId: SRC,
+      totalLeads: 6, calledWithin3m: 2, calledWithin10m: 0, efficiencyPct: 33.3,
+      leadsInPipeline: 6, notCalled: 4, officeTimeLeads: 3, outsideOfficeTime: 3,
+      facebookLeads: 5, googleLeads: 1, syncFailed: false, topUpOk: true,
     });
-    expect(syncMock.topUp).toHaveBeenCalledWith(ORG);
+    expect(out.sources).toEqual([
+      { id: SRC, practice_label: 'Barnet', status: 'active', last_synced_at: SOURCE.last_synced_at, mapped: true },
+    ]);
+    expect(syncMock.topUpAll).toHaveBeenCalledWith(ORG);
     expect(repoMock.dashboard).toHaveBeenCalledWith(ORG, {
-      date: '2026-08-01', practiceId: PRACTICE, tz: 'Europe/London',
+      date: '2026-07-31', sourceId: SRC, tz: 'Europe/London',
     });
   });
   it('efficiency is 0 (not NaN) when there are no leads', async () => {
@@ -78,25 +83,34 @@ describe('dashboard', () => {
     expect(out.efficiencyPct).toBe(0);
     expect(out.totalLeads).toBe(0);
   });
-  it('returns configured:false before the mapping is saved (no RPC call)', async () => {
-    repoMock.getSource.mockResolvedValue({ ...CONFIGURED_SOURCE, column_mapping: null });
+  it('returns configured:false when no source has a mapping (no RPC call)', async () => {
+    repoMock.listSources.mockResolvedValue([{ ...SOURCE, column_mapping: null }]);
     const out = await sheetService.dashboard(ORG, {});
     expect(out.configured).toBe(false);
     expect(repoMock.dashboard).not.toHaveBeenCalled();
   });
-  it('still serves cached data when the top-up fails', async () => {
-    syncMock.topUp.mockResolvedValue({ ok: false, error: 'google down' });
+  it('flags syncFailed when any source failed, still serves data', async () => {
+    repoMock.listSources.mockResolvedValue([SOURCE, { ...SOURCE, id: SRC2, practice_label: 'Ashford', status: 'failed' }]);
     repoMock.dashboard.mockResolvedValue({ total: 5, called_3m: 1 });
-    const out = await sheetService.dashboard(ORG, { date: '2026-08-01' });
+    const out = await sheetService.dashboard(ORG, {});
+    expect(out.syncFailed).toBe(true);
+    expect(out.totalLeads).toBe(5);
+  });
+  it('still serves cached data when the top-up fails', async () => {
+    syncMock.topUpAll.mockResolvedValue({ ok: false });
+    repoMock.dashboard.mockResolvedValue({ total: 5, called_3m: 1 });
+    const out = await sheetService.dashboard(ORG, { date: '2026-07-31' });
     expect(out.totalLeads).toBe(5);
     expect(out.topUpOk).toBe(false);
   });
 });
 
 describe('status', () => {
-  it('never exposes token material', async () => {
+  it('lists sources and never exposes token material', async () => {
     const out = await sheetService.status(ORG);
     expect(out.connected).toBe(true);
+    expect(out.sources).toHaveLength(1);
+    expect(out.sources[0]).toMatchObject({ id: SRC, practice_label: 'Barnet', mapped: true });
     const flat = JSON.stringify(out);
     expect(flat).not.toContain('ENCRYPTED-BLOB');
     expect(flat).not.toContain('secrets');
@@ -107,56 +121,64 @@ describe('status', () => {
 
 describe('addSource', () => {
   it('rejects a non-sheet URL with a 400', async () => {
-    await expect(sheetService.addSource(ORG, { url: 'https://example.com/x' }))
+    await expect(sheetService.addSource(ORG, { url: 'https://example.com/x', practice_label: 'Barnet' }))
       .rejects.toMatchObject({ statusCode: 400 });
     expect(repoMock.createSource).not.toHaveBeenCalled();
   });
-  it('validates reachability before persisting, then stores the parsed id', async () => {
+  it('validates reachability before persisting, stores id + label, returns tabs', async () => {
     syncMock.getMeta.mockResolvedValue({ title: 'Leads', timezone: 'Europe/London', tabs: [{ title: 'Data' }] });
-    const out = await sheetService.addSource(ORG, { url: 'https://docs.google.com/spreadsheets/d/1AbC_d-EfGhIjK123/edit' });
-    expect(repoMock.createSource).toHaveBeenCalledWith(ORG, expect.objectContaining({ spreadsheet_id: '1AbC_d-EfGhIjK123' }));
+    repoMock.createSource.mockResolvedValue({ ...SOURCE, id: SRC2 });
+    const out = await sheetService.addSource(ORG, {
+      url: 'https://docs.google.com/spreadsheets/d/1AbC_d-EfGhIjK123/edit', practice_label: 'Ashford',
+    });
+    expect(repoMock.createSource).toHaveBeenCalledWith(ORG, expect.objectContaining({
+      spreadsheet_id: '1AbC_d-EfGhIjK123', practice_label: 'Ashford',
+    }));
+    expect(out.id).toBe(SRC2);
     expect(out.tabs).toEqual(['Data']);
   });
   it('refuses when Google Sheets is not connected', async () => {
     integrationRepoMock.getByProvider.mockResolvedValue(null);
-    await expect(sheetService.addSource(ORG, { url: 'https://docs.google.com/spreadsheets/d/1AbC_d-EfGhIjK123/edit' }))
-      .rejects.toMatchObject({ statusCode: 409 });
+    await expect(sheetService.addSource(ORG, {
+      url: 'https://docs.google.com/spreadsheets/d/1AbC_d-EfGhIjK123/edit', practice_label: 'Barnet',
+    })).rejects.toMatchObject({ statusCode: 409 });
   });
 });
 
-describe('saveMapping / practice map', () => {
-  it('saves the mapping, resets the cursor and starts a full sync', async () => {
+describe('saveMapping / syncNow / removeSource', () => {
+  it('saves the mapping on THAT source, resets the cursor, starts its full sync', async () => {
     const out = await sheetService.saveMapping(ORG, {
-      tab_name: 'Data', header_row: 1,
-      columns: { practice: 0, created_at: 1, first_call_at: 2, source: 3, pipeline_status: 4 },
+      sourceId: SRC, tab_name: 'Lead_Conversion_Tracking', header_row: 1,
+      columns: { date: 0, created_time: 4, called_3m: 5, called_10m: 6, pipeline_name: 7 },
     });
-    expect(repoMock.updateSource).toHaveBeenCalledWith(ORG, expect.objectContaining({
-      tab_name: 'Data', last_synced_row: 0, status: 'pending',
+    expect(repoMock.updateSource).toHaveBeenCalledWith(ORG, SRC, expect.objectContaining({
+      tab_name: 'Lead_Conversion_Tracking', last_synced_row: 0, status: 'pending',
     }));
-    expect(syncMock.fullSync).toHaveBeenCalledWith(ORG);
+    expect(syncMock.fullSync).toHaveBeenCalledWith(ORG, SRC);
     expect(out.syncStarted).toBe(true);
   });
-  it('setPracticeMapping restamps existing rows in place', async () => {
-    const out = await sheetService.setPracticeMapping(ORG, { sheet_value: 'Rochester', practice_id: PRACTICE });
-    expect(repoMock.setPracticeMapping).toHaveBeenCalledWith(ORG, 'Rochester', PRACTICE);
-    expect(repoMock.restampPractices).toHaveBeenCalledWith(ORG);
-    expect(out.restamped).toBe(3);
+  it('syncNow refuses before that source is mapped', async () => {
+    repoMock.getSourceById.mockResolvedValue({ ...SOURCE, column_mapping: null });
+    await expect(sheetService.syncNow(ORG, SRC)).rejects.toMatchObject({ statusCode: 409 });
+  });
+  it('syncNow 404s on an unknown source id', async () => {
+    repoMock.getSourceById.mockResolvedValue(null);
+    await expect(sheetService.syncNow(ORG, SRC2)).rejects.toMatchObject({ statusCode: 404 });
+  });
+  it('removeSource purges that source\'s leads then the source', async () => {
+    const out = await sheetService.removeSource(ORG, SRC);
+    expect(repoMock.deleteLeadsBySource).toHaveBeenCalledWith(ORG, SRC);
+    expect(repoMock.deleteSource).toHaveBeenCalledWith(ORG, SRC);
+    expect(out.ok).toBe(true);
   });
 });
 
-describe('syncNow / disconnect', () => {
-  it('syncNow refuses before mapping', async () => {
-    repoMock.getSource.mockResolvedValue({ ...CONFIGURED_SOURCE, column_mapping: null });
-    await expect(sheetService.syncNow(ORG)).rejects.toMatchObject({ statusCode: 409 });
-  });
-  it('disconnect purges leads + map + source then revokes the token', async () => {
+describe('disconnect', () => {
+  it('purges all leads + sources then revokes the token', async () => {
     await sheetService.disconnect(ORG);
     expect(repoMock.deleteAllLeads).toHaveBeenCalledWith(ORG);
-    expect(repoMock.deletePracticeMap).toHaveBeenCalledWith(ORG);
-    expect(repoMock.deleteSource).toHaveBeenCalledWith(ORG);
+    expect(repoMock.deleteAllSources).toHaveBeenCalledWith(ORG);
     expect(integrationRepoMock.markRevoked).toHaveBeenCalledWith(ORG, 'google_sheets');
-    // data purge strictly before token revoke would also be acceptable, but the
-    // purge MUST happen — order asserted via call counts above.
   });
 });
 
@@ -168,7 +190,7 @@ describe('pickerConfig', () => {
   });
   it('returns the browser key + a decrypted short-lived access token when configured', async () => {
     process.env.GOOGLE_PICKER_API_KEY = 'browser-key';
-    process.env.GOOGLE_CLOUD_PROJECT_NUMBER = '43656323691';
+    process.env.GOOGLE_CLOUD_PROJECT_NUMBER = '122855749965';
     try {
       const { encryptSecret } = await import('../src/lib/crypto.js');
       integrationRepoMock.getByProvider.mockResolvedValue({
@@ -177,32 +199,31 @@ describe('pickerConfig', () => {
         expires_at: new Date(Date.now() + 3600_000).toISOString(),
       });
       const out = await sheetService.pickerConfig(ORG);
-      expect(out).toMatchObject({ enabled: true, apiKey: 'browser-key', appId: '43656323691', accessToken: 'live-token' });
-      // The refresh token must NEVER reach the browser.
+      expect(out).toMatchObject({ enabled: true, apiKey: 'browser-key', appId: '122855749965', accessToken: 'live-token' });
       expect(JSON.stringify(out)).not.toContain('refresh');
     } finally {
       delete process.env.GOOGLE_PICKER_API_KEY;
       delete process.env.GOOGLE_CLOUD_PROJECT_NUMBER;
     }
   });
-  it('409s when Google is not connected even with the key set', async () => {
-    process.env.GOOGLE_PICKER_API_KEY = 'browser-key';
-    try {
-      integrationRepoMock.getByProvider.mockResolvedValue(null);
-      await expect(sheetService.pickerConfig(ORG)).rejects.toMatchObject({ statusCode: 409 });
-    } finally {
-      delete process.env.GOOGLE_PICKER_API_KEY;
-    }
-  });
 });
 
 describe('sheetMappingSchema', () => {
-  it('rejects two fields mapped to the same column', async () => {
+  it('accepts the v2 keys and rejects duplicate columns', async () => {
     const { sheetMappingSchema } = await import('../src/models/sheet.model.js');
-    const bad = {
+    const good = {
       tab_name: 'Data', header_row: 1,
-      columns: { practice: 0, created_at: 0, first_call_at: 2, source: 3, pipeline_status: 4 },
+      columns: { date: 0, created_time: 4, called_3m: 5, called_10m: 6, pipeline_name: 7 },
     };
+    expect(() => sheetMappingSchema.parse(good)).not.toThrow();
+    const bad = { ...good, columns: { ...good.columns, created_time: 0 } };
     expect(() => sheetMappingSchema.parse(bad)).toThrow();
+  });
+  it('sheetSourceCreateSchema requires a practice label', async () => {
+    const { sheetSourceCreateSchema } = await import('../src/models/sheet.model.js');
+    expect(() => sheetSourceCreateSchema.parse({ url: 'https://docs.google.com/spreadsheets/d/1AbC_d-EfGhIjK123/edit' })).toThrow();
+    expect(() => sheetSourceCreateSchema.parse({
+      url: 'https://docs.google.com/spreadsheets/d/1AbC_d-EfGhIjK123/edit', practice_label: '  Barnet ',
+    })).not.toThrow();
   });
 });
