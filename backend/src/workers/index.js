@@ -259,6 +259,18 @@ scheduleMonitored('gohighlevel-sync', '0 22 * * *', async () => {
         console.error('[worker] GoHighLevel sync failed', err);
     }
 }, { timezone: 'Europe/London', maxRuntime: 55 });
+// Second daily GHL pull at 18:00 UK — same incremental syncAllOrgs, so leads
+// created during the working day land before end of day instead of waiting
+// for the 22:00 run (feeds the CRM screens and the sheet conversion export,
+// whose 15-min sweep re-checks no_match patients right after).
+scheduleMonitored('gohighlevel-sync-evening', '0 18 * * *', async () => {
+    try {
+        const results = await gohighlevel_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] GoHighLevel evening sync: ${results.length} orgs`);
+    } catch (err) {
+        console.error('[worker] GoHighLevel evening sync failed', err);
+    }
+}, { timezone: 'Europe/London', maxRuntime: 55 });
 // --------------------------------------------------------------------------
 // Xero P&L sync — daily 02:15, pull the month's Profit & Loss into
 // monthly_financials for orgs with an active xero integration.
