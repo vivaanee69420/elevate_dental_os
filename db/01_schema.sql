@@ -1064,8 +1064,7 @@ CREATE TABLE IF NOT EXISTS sheet_export_queue (
   claimed_at              TIMESTAMPTZ,
   exported_at             TIMESTAMPTZ,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (organisation_id, contact_id)
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE UNIQUE INDEX IF NOT EXISTS sheet_export_queue_org_contact
   ON sheet_export_queue (organisation_id, contact_id);
