@@ -65,6 +65,8 @@ vi.mock('../src/lib/integrations/google-sheets-writer.js', () => ({
   rangeFor: vi.fn((t, r, a, b) => `'${t}'!${String.fromCharCode(64 + a)}${r}:${String.fromCharCode(64 + b)}${r}`),
   readExportIds: vi.fn(),
   formatLondonDate: vi.fn((iso) => (iso ? `formatted:${iso}` : '')),
+  londonDateSerial: vi.fn((iso) => (iso ? `serial:${iso}` : '')),
+  sortMappedTabsByLeadDate: vi.fn(async () => ({ sorted: 0 })),
 }));
 
 import { sheetExportRepository } from '../src/repositories/sheet-export.repository.js';
@@ -72,7 +74,7 @@ import { integrationRepository } from '../src/repositories/integration.repositor
 import { findMatch } from '../src/services/sheet-export-match.service.js';
 import { writerFetch } from '../src/lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../src/lib/integrations/google-sheets-provider.js';
-import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate, listMappedTabs, readTabGrid, batchUpdateCells }
+import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, londonDateSerial, listMappedTabs, readTabGrid, batchUpdateCells, sortMappedTabsByLeadDate }
   from '../src/lib/integrations/google-sheets-writer.js';
 import { sheetExportService } from '../src/services/sheet-export.service.js';
 
@@ -193,12 +195,13 @@ describe('drainOrg', () => {
     // Lead Incoming Date leads the row; Treatment precedes the hidden Export ID.
     expect(sheetExportRepository.appointmentType).toHaveBeenCalledWith(ORG, 'appt-1');
     expect(rows).toEqual([
-      ['formatted:2026-01-15T00:00:00.000Z', 'Jane Doe', 'jane@x.com',
-        '+447123456789', 'New Patient', 'formatted:2026-02-01T10:00:00.000Z',
+      ['serial:2026-01-15T00:00:00.000Z', 'Jane Doe', 'jane@x.com',
+        '+447123456789', 'New Patient', 'serial:2026-02-01T10:00:00.000Z',
         'Cosmetic Consultation', 'Booked', 125, 50, row.id],
     ]);
-    expect(formatLondonDate).toHaveBeenCalledWith('2026-02-01T10:00:00.000Z');
-    expect(formatLondonDate).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');
+    expect(londonDateSerial).toHaveBeenCalledWith('2026-02-01T10:00:00.000Z');
+    expect(londonDateSerial).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');
+    expect(sortMappedTabsByLeadDate).toHaveBeenCalledWith(ORG, 'sheet-1');
     expect(sheetExportRepository.markExported).toHaveBeenCalledWith(ORG, [row.id]);
     expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0, excluded: 0, skippedDuplicates: 0 });
   });

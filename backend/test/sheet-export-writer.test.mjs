@@ -284,3 +284,44 @@ describe('google-sheets-writer', () => {
     });
   });
 });
+
+describe('londonDateSerial + sortMappedTabsByLeadDate', () => {
+  it('converts an ISO timestamp to the Sheets serial of its London day', async () => {
+    const { londonDateSerial } = await import('../src/lib/integrations/google-sheets-writer.js');
+    // 2026-08-06 -> days since 1899-12-30
+    expect(londonDateSerial('2026-08-06T12:00:00Z')).toBe(46240);
+    // BST boundary: 23:30 UTC on 30 June is 1 July in London.
+    expect(londonDateSerial('2026-06-30T23:30:00Z')).toBe(46204);
+    expect(londonDateSerial(null)).toBe('');
+  });
+
+  it('sorts every mapped tab by column A ascending in one batchUpdate', async () => {
+    const { sortMappedTabsByLeadDate } = await import('../src/lib/integrations/google-sheets-writer.js');
+    writerFetch
+      .mockResolvedValueOnce({
+        sheets: [
+          { properties: { sheetId: 1, title: 'Rochester' } },
+          { properties: { sheetId: 2, title: 'Open Days' } },
+          { properties: { sheetId: 3, title: 'Unrelated Tab' } },
+        ],
+        developerMetadata: [
+          { metadataKey: 'practice:p1', metadataValue: '1' },
+          { metadataKey: 'openday:tab', metadataValue: '2' },
+        ],
+      })
+      .mockResolvedValueOnce({});
+
+    const result = await sortMappedTabsByLeadDate('org-1', 'sheet-1');
+
+    const [, path, opts] = writerFetch.mock.calls[1];
+    expect(path).toBe('/v4/spreadsheets/sheet-1:batchUpdate');
+    // Only the two MAPPED tabs get sorted; the unrelated tab is untouched.
+    expect(opts.body.requests).toEqual([
+      { sortRange: { range: { sheetId: 1, startRowIndex: 1 },
+        sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }] } },
+      { sortRange: { range: { sheetId: 2, startRowIndex: 1 },
+        sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }] } },
+    ]);
+    expect(result).toEqual({ sorted: 2 });
+  });
+});
