@@ -8,6 +8,7 @@ import * as auth_1 from "../middleware/auth.js";
 import * as integration_controller_1 from "../controllers/integration.controller.js";
 import * as daily_report_controller_1 from "../controllers/daily-report.controller.js";
 import { sheetsController } from "../controllers/sheets.controller.js";
+import { sheetExportController } from "../controllers/sheet-export.controller.js";
 const router = (0, express_1.Router)();
 router.get('/', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.list));
 router.post('/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.connect));
@@ -38,6 +39,10 @@ router.put('/google-sheets/sources/:id/mapping', (0, auth_1.requireRole)('owner'
 router.post('/google-sheets/sources/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.sync));
 router.delete('/google-sheets/sources/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.removeSource));
 router.delete('/google-sheets', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.disconnect));
+router.get('/google-sheets-writer/status', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetExportController.status));
+router.post('/google-sheets-writer/destination', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.setDestination));
+router.post('/google-sheets-writer/drain', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.drain));
+router.delete('/google-sheets-writer', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.disconnect));
 router.get('/quickbooks/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountsList));
 router.post('/quickbooks/accounts/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountConnect));
 router.post('/quickbooks/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountSync));
