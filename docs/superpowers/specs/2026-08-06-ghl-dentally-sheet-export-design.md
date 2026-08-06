@@ -1,7 +1,7 @@
 # GHL → Dentally conversion export to Google Sheets — Design
 
 **Date:** 2026-08-06
-**Status:** Approved (brainstormed with owner)
+**Status:** Implemented (branch `feat/sheet-export`, migration `000121` pending hosted apply)
 **Migration:** `20260101000121_sheet_export_queue.sql`
 
 ## What this is
