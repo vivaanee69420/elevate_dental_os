@@ -104,6 +104,8 @@ beforeEach(() => {
   sheetExportRepository.enqueue.mockResolvedValue(0);
   sheetExportRepository.claim.mockResolvedValue([]);
   sheetExportRepository.practices.mockResolvedValue([{ id: 'practice-1', name: 'Bexleyheath' }]);
+  sheetExportRepository.markRetry.mockResolvedValue(undefined);
+  sheetExportRepository.markNoMatch.mockResolvedValue(undefined);
   integrationRepository.setSyncTime.mockResolvedValue(undefined);
   integrationRepository.markFailed.mockResolvedValue(undefined);
   ensurePracticeTab.mockResolvedValue('Bexleyheath');
@@ -272,6 +274,34 @@ describe('drainOrg', () => {
     const call = sheetExportRepository.markRetry.mock.calls.find((c) => c[1] === row.id);
     expect(call[2]).toBe('sheets append boom');
     expect(call[2]).not.toContain('super-secret-token-should-never-leak');
+  });
+
+  it('11. recovery-write failure (markRetry rejects) never escapes drainOrg — remaining rows/batches still process', async () => {
+    integrationRepository.getByProvider.mockResolvedValue(integ());
+    const rowA = queueRow({ id: 'row-a', contact_id: 'contact-a', practice_id: 'practice-1' });
+    const rowB = queueRow({ id: 'row-b', contact_id: 'contact-b', practice_id: 'practice-2' });
+    sheetExportRepository.claim.mockResolvedValue([rowA, rowB]);
+    sheetExportRepository.practices.mockResolvedValue([
+      { id: 'practice-1', name: 'Bexleyheath' },
+      { id: 'practice-2', name: 'Barnet' },
+    ]);
+    // rowA's match throws (goes through the catch -> markRetry recovery path);
+    // markRetry ITSELF rejects (e.g. a transient Supabase blip during recovery).
+    sheetExportRepository.getContact.mockImplementation(async (org, contactId) => {
+      if (contactId === 'contact-a') throw new Error('lookup boom');
+      return contact({ id: contactId });
+    });
+    sheetExportRepository.markRetry.mockRejectedValue(new Error('supabase write boom'));
+    findMatch.mockResolvedValue(matchResult());
+    ensurePracticeTab.mockImplementation(async (org, sheetId, practiceId, name) => name);
+
+    const result = await sheetExportService.drainOrg(ORG);
+
+    // Did not throw, and rowB (the remaining row) still got matched + appended
+    // + exported — the failed recovery write for rowA did not abort the loop.
+    expect(result.retried).toBe(1);
+    expect(appendRows).toHaveBeenCalledWith(ORG, 'sheet-1', 'Barnet', [expect.any(Array)]);
+    expect(sheetExportRepository.markExported).toHaveBeenCalledWith(ORG, [rowB.id]);
   });
 
   it('10. appendRows throws 404 -> integrationRepository.markFailed called + rows get markRetry (stay pending)', async () => {

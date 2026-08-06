@@ -10,8 +10,22 @@ import { WRITER_PROVIDER_ID } from '../lib/integrations/google-sheets-writer-pro
 import { parseSpreadsheetId } from '../lib/integrations/google-sheets-provider.js';
 import { ensurePracticeTab, appendRows, readExportIds, formatLondonDate }
     from '../lib/integrations/google-sheets-writer.js';
+import { writerFetch } from '../lib/integrations/google-sheets-writer-provider.js';
 
 const lastKick = new Map(); // orgId -> ms; 60s debounce, in-process only
+
+// Recovery writes (markRetry/markNoMatch) run inside catch blocks whose whole
+// purpose is to keep the row/batch loops alive on failure. If the recovery
+// write itself throws (e.g. a transient Supabase blip), that must NEVER
+// escape and abort the remaining rows/batches — log and move on; the row
+// stays in its previous status and gets picked up by the next drain/claim.
+async function safeMark(fn, label, orgId) {
+    try {
+        await fn();
+    } catch (err) {
+        console.warn(`[sheet-export] ${label} failed`, { orgId, err: err?.message || String(err) });
+    }
+}
 
 export const sheetExportService = {
     async status(orgId) {
@@ -33,7 +47,6 @@ export const sheetExportService = {
         const integ = await integrationRepository.getByProvider(orgId, WRITER_PROVIDER_ID);
         if (!integ || !integ.secrets) throw Object.assign(new Error('Connect Google Sheets export first'), { status: 409 });
         // Verify we can actually reach the sheet with the write-scoped token.
-        const { writerFetch } = await import('../lib/integrations/google-sheets-writer-provider.js');
         await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}`, {
             params: { fields: 'spreadsheetId' },
         });
@@ -55,7 +68,7 @@ export const sheetExportService = {
         // Fire-and-forget AFTER the webhook 200 — a Google outage must never
         // block appointment ingestion or trigger Dentally webhook retries.
         setImmediate(() => {
-            this.drainOrg(orgId).catch((err) => {
+            sheetExportService.drainOrg(orgId).catch((err) => {
                 console.warn('[sheet-export] kicked drain failed', { orgId, err: err?.message || String(err) });
             });
         });
@@ -81,8 +94,8 @@ export const sheetExportService = {
                 const contact = await sheetExportRepository.getContact(orgId, row.contact_id);
                 const match = contact ? await findMatch(orgId, contact) : null;
                 if (!match) {
-                    await sheetExportRepository.markNoMatch(orgId, row.id,
-                        contact ? 'no GHL pipeline lead matched' : 'contact missing');
+                    await safeMark(() => sheetExportRepository.markNoMatch(orgId, row.id,
+                        contact ? 'no GHL pipeline lead matched' : 'contact missing'), 'markNoMatch', orgId);
                     noMatch += 1;
                     continue;
                 }
@@ -95,7 +108,8 @@ export const sheetExportService = {
                 if (!perPractice.has(key)) perPractice.set(key, []);
                 perPractice.get(key).push({ queueRow: row, values });
             } catch (err) {
-                await sheetExportRepository.markRetry(orgId, row.id, err?.message || 'match failed');
+                await safeMark(() => sheetExportRepository.markRetry(orgId, row.id, err?.message || 'match failed'),
+                    'markRetry', orgId);
                 retried += 1;
             }
         }
@@ -115,11 +129,12 @@ export const sheetExportService = {
                 // Integrations panel shows "sheet not accessible" + Reconnect
                 // instead of rows silently retrying forever. Rows stay pending.
                 if (err?.status === 403 || err?.status === 404) {
-                    await integrationRepository.markFailed(orgId, WRITER_PROVIDER_ID,
-                        'destination sheet not accessible').catch(() => {});
+                    await safeMark(() => integrationRepository.markFailed(orgId, WRITER_PROVIDER_ID,
+                        'destination sheet not accessible'), 'markFailed', orgId);
                 }
                 for (const b of batch) {
-                    await sheetExportRepository.markRetry(orgId, b.queueRow.id, err?.message || 'append failed');
+                    await safeMark(() => sheetExportRepository.markRetry(orgId, b.queueRow.id, err?.message || 'append failed'),
+                        'markRetry', orgId);
                     retried += 1;
                 }
             }
@@ -134,7 +149,7 @@ export const sheetExportService = {
         const results = [];
         for (const orgId of orgs) {
             try {
-                results.push({ orgId, ...(await this.drainOrg(orgId, { includeNoMatch: true })) });
+                results.push({ orgId, ...(await sheetExportService.drainOrg(orgId, { includeNoMatch: true })) });
             } catch (err) {
                 console.error('[sheet-export] drain failed', { orgId, err: err?.message || String(err) });
                 results.push({ orgId, error: err?.message || 'drain failed' });
