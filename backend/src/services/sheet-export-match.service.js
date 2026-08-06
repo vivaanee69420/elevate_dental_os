@@ -85,28 +85,35 @@ export async function findMatch(orgId, dentallyContact) {
     }
     if (!picked) return null;
 
-    // Source column = the pipeline NAME as it reads in GHL today. Prefer the
-    // EARLIEST lead whose pipeline still resolves to a cached name; a lead in
-    // a deleted/archived pipeline has no name anywhere. If nothing resolves,
-    // the cache may just be stale — live-refresh the owning subaccount's
-    // pipelines once, then retry. Only after that do we fall back to the
-    // earliest lead with 'Unknown pipeline' (never a raw GHL id in the sheet).
+    // Source column = the FULL enquiry journey: every pipeline the contact's
+    // leads sit in, oldest -> newest (a person often enquires more than once —
+    // e.g. Facebook first, Google later — and hiding either would mis-credit
+    // a channel). Names resolve from the cached pipeline definitions; leads in
+    // deleted/archived pipelines have no name anywhere and are omitted from
+    // the journey. If NOTHING resolves, the cache may just be stale —
+    // live-refresh the owning subaccount's pipelines once, then retry; only
+    // after that fall back to 'Unknown pipeline' (never a raw GHL id).
+    // Lead Incoming Date = the FIRST enquiry, regardless of resolvability.
     const names = await pipelineNameMap(orgId);
     const resolves = (l) => names.has(String(l.ghl_pipeline_id));
-    let lead = picked.leads.find(resolves);
-    if (!lead) {
+    if (!picked.leads.some(resolves)) {
         const accountId = picked.leads.find((l) => l.integration_account_id)?.integration_account_id;
         if (accountId) {
             const refreshed = await refreshAccountPipelines(orgId, accountId);
             for (const [k, v] of refreshed) if (!names.has(k)) names.set(k, v);
-            lead = picked.leads.find(resolves);
         }
     }
-    lead = lead ?? picked.leads[0];
+    const seen = new Set();
+    const journey = [];
+    for (const l of picked.leads) {
+        const n = names.get(String(l.ghl_pipeline_id));
+        if (n && !seen.has(n)) { seen.add(n); journey.push(n); }
+    }
+    const lead = picked.leads[0]; // earliest enquiry = the incoming date
     return {
         matchedContact: picked.contact,
         lead,
-        pipelineName: names.get(String(lead.ghl_pipeline_id)) ?? 'Unknown pipeline',
+        pipelineName: journey.length ? journey.join(' → ') : 'Unknown pipeline',
         leadCreatedAt: lead.created_at,
     };
 }

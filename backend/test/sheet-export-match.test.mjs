@@ -153,7 +153,7 @@ describe('findMatch', () => {
     expect(result).toBeNull();
   });
 
-  it('5. earliest lead selection: leadCreatedAt + pipelineName come from the earliest lead', async () => {
+  it('5. multi-enquiry journey: Source lists every pipeline oldest -> newest; Lead Incoming Date = first enquiry', async () => {
     const c = contact({ id: 'ghl-1' });
     sheetExportRepository.ghlCandidatesByEmail.mockResolvedValue([c]);
     sheetExportRepository.pipelineLeads.mockResolvedValue([
@@ -161,13 +161,13 @@ describe('findMatch', () => {
       lead({ id: 'lead-jan', contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-jan', created_at: '2026-01-15T00:00:00.000Z' }),
     ]);
     integrationAccountRepository.list.mockResolvedValue([
-      { config: { pipelines: [{ id: 'pipe-jan', name: 'January Pipeline' }, { id: 'pipe-march', name: 'March Pipeline' }] } },
+      { config: { pipelines: [{ id: 'pipe-jan', name: 'FB Implants' }, { id: 'pipe-march', name: 'Google PPC' }] } },
     ]);
 
     const result = await findMatch(ORG, { id: 'd-1', email: c.email, phone: null });
 
     expect(result.leadCreatedAt).toBe('2026-01-15T00:00:00.000Z');
-    expect(result.pipelineName).toBe('January Pipeline');
+    expect(result.pipelineName).toBe('FB Implants → Google PPC');
   });
 
   it('6. unresolvable pipeline id falls back to "Unknown pipeline", never a raw id or blank', async () => {
@@ -184,7 +184,7 @@ describe('findMatch', () => {
     expect(integrationAccountRepository.getByIdWithSecrets).not.toHaveBeenCalled();
   });
 
-  it('6b. prefers the EARLIEST lead whose pipeline resolves over an earlier unresolvable one', async () => {
+  it('6b. archived pipelines are omitted from the journey; the incoming date stays the FIRST enquiry', async () => {
     const c = contact({ id: 'ghl-1' });
     sheetExportRepository.ghlCandidatesByEmail.mockResolvedValue([c]);
     sheetExportRepository.pipelineLeads.mockResolvedValue([
@@ -198,8 +198,8 @@ describe('findMatch', () => {
     const result = await findMatch(ORG, { id: 'd-1', email: c.email, phone: null });
 
     expect(result.pipelineName).toBe('Implants');
-    expect(result.lead.id).toBe('lead-live');
-    expect(result.leadCreatedAt).toBe('2026-03-29T00:00:00.000Z');
+    expect(result.lead.id).toBe('lead-old');
+    expect(result.leadCreatedAt).toBe('2024-11-04T00:00:00.000Z');
   });
 
   it('6c. live-refreshes the owning subaccount pipelines when nothing resolves, then resolves', async () => {
