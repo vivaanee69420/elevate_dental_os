@@ -419,3 +419,52 @@ export function sendDailyReport() {
     { method: 'POST' },
   );
 }
+
+// --- GHL -> Dentally conversion export (Google Sheets writer) --------------
+// Records each new patient's first appointment in a Google Sheet when it
+// matches a GoHighLevel pipeline lead. One connection, one destination sheet
+// (one tab per practice). Owner-only.
+export interface SheetsWriterCounts {
+  pending: number;
+  processing: number;
+  exported: number;
+  no_match: number;
+  failed: number;
+}
+
+export interface SheetsWriterStatus {
+  connected: boolean;
+  status: IntegrationStatus | null;
+  spreadsheetId: string | null;
+  exportSince: string | null;
+  lastError: string | null;
+  counts: SheetsWriterCounts | null;
+}
+
+export function getSheetsWriterStatus() {
+  return api<SheetsWriterStatus>('/api/integrations/google-sheets-writer/status');
+}
+
+export function setSheetsWriterDestination(url: string) {
+  return api<{ spreadsheetId: string; exportSince: string | null }>(
+    '/api/integrations/google-sheets-writer/destination',
+    { method: 'POST', body: JSON.stringify({ url }) },
+  );
+}
+
+export interface SheetsWriterDrainResult {
+  exported?: number;
+  noMatch?: number;
+  retried?: number;
+  skipped?: boolean;
+}
+
+export function drainSheetsWriter() {
+  return api<SheetsWriterDrainResult>('/api/integrations/google-sheets-writer/drain', {
+    method: 'POST',
+  });
+}
+
+export function disconnectSheetsWriter() {
+  return api<{ ok: boolean }>('/api/integrations/google-sheets-writer', { method: 'DELETE' });
+}

@@ -29,6 +29,7 @@ import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPane
 import QuickBooksPanel from '@/features/integrations/components/QuickBooksPanel';
 import EmergentPanel from '@/features/integrations/components/EmergentPanel';
 import GoogleSheetsPanel from '@/features/integrations/components/GoogleSheetsPanel';
+import GoogleSheetsWriterPanel from '@/features/integrations/components/GoogleSheetsWriterPanel';
 import EmergentPracticeMapping from '@/features/integrations/components/EmergentPracticeMapping';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
 import { useSyncToast } from '@/features/integrations/sync-toast';
@@ -215,6 +216,7 @@ export default function IntegrationsScreen() {
       <EmergentPracticeMapping />
       <EmergentPanel />
       <GoogleSheetsPanel />
+      <GoogleSheetsWriterPanel />
       {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
       {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
 

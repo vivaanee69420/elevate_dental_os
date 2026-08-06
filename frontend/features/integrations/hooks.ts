@@ -29,6 +29,10 @@ import {
   saveDailyReportSettings,
   previewDailyReport,
   sendDailyReport,
+  getSheetsWriterStatus,
+  setSheetsWriterDestination,
+  drainSheetsWriter,
+  disconnectSheetsWriter,
   type ConnectInput,
   type DentallySyncResource,
 } from './api';
@@ -322,5 +326,38 @@ export function useSendDailyReport() {
   return useMutation({
     mutationFn: sendDailyReport,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['daily-report-settings'] }),
+  });
+}
+
+// --- GHL -> Dentally conversion export (Google Sheets writer) --------------
+export function useSheetsWriterStatus() {
+  return useQuery({
+    queryKey: ['sheets-writer-status'],
+    queryFn: getSheetsWriterStatus,
+    staleTime: 15_000,
+  });
+}
+
+export function useSetSheetsWriterDestination() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (url: string) => setSheetsWriterDestination(url),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sheets-writer-status'] }),
+  });
+}
+
+export function useDrainSheetsWriter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => drainSheetsWriter(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sheets-writer-status'] }),
+  });
+}
+
+export function useDisconnectSheetsWriter() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => disconnectSheetsWriter(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sheets-writer-status'] }),
   });
 }
