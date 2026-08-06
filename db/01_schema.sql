@@ -1040,3 +1040,36 @@ CREATE TABLE IF NOT EXISTS practice_cost_model (
 CREATE INDEX IF NOT EXISTS practice_cost_model_org_practice_from_idx
   ON practice_cost_model (organisation_id, practice_id, effective_from DESC);
 CREATE TRIGGER practice_cost_model_updated_at BEFORE UPDATE ON practice_cost_model FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ============================================================================
+-- sheet_export_queue — outbox for GHL→Dentally conversion export. One row
+-- per Dentally patient whose FIRST appointment was created after the
+-- google_sheets_writer connection was set up. Status: pending|processing|
+-- exported|no_match|failed. Atomic claim supports concurrent webhook + cron
+-- drains via SKIP LOCKED + exponential backoff (migration 20260101000121).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS sheet_export_queue (
+  id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organisation_id         UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  practice_id             UUID REFERENCES practices(id) ON DELETE SET NULL,
+  contact_id              UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  appointment_id          UUID REFERENCES appointments(id) ON DELETE SET NULL,
+  appointment_starts_at   TIMESTAMPTZ,
+  status                  TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending','processing','exported','no_match','failed')),
+  matched_contact_id      UUID REFERENCES contacts(id) ON DELETE SET NULL,
+  matched_lead_id         UUID REFERENCES leads(id) ON DELETE SET NULL,
+  attempts                INT NOT NULL DEFAULT 0,
+  last_error              TEXT,
+  claimed_at              TIMESTAMPTZ,
+  exported_at             TIMESTAMPTZ,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (organisation_id, contact_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS sheet_export_queue_org_contact
+  ON sheet_export_queue (organisation_id, contact_id);
+CREATE INDEX IF NOT EXISTS idx_sheet_export_queue_org_status
+  ON sheet_export_queue (organisation_id, status);
+CREATE INDEX IF NOT EXISTS idx_appointments_org_contact_created
+  ON appointments (organisation_id, contact_id, created_at);
