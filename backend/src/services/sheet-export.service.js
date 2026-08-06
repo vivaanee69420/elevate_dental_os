@@ -6,7 +6,7 @@
 import { sheetExportRepository } from '../repositories/sheet-export.repository.js';
 import { integrationRepository } from '../repositories/integration.repository.js';
 import { AppError } from '../middleware/errors.js';
-import { findMatch } from './sheet-export-match.service.js';
+import { findMatch, pipelineNameMap, journeyFromLeads } from './sheet-export-match.service.js';
 import { WRITER_PROVIDER_ID } from '../lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../lib/integrations/google-sheets-provider.js';
 import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate,
@@ -243,6 +243,21 @@ export const sheetExportService = {
         if (exported.length === 0) return { refreshed: 0 };
         const byId = new Map(exported.map((r) => [r.id, r]));
 
+        // Source refresh inputs: current leads of every matched GHL contact
+        // (a pipeline MOVE in GHL changes the lead's pipeline id) + the name
+        // map. Fetched once per org. Identity is never re-matched here — only
+        // the already-matched contact's journey is recomputed.
+        const names = await pipelineNameMap(orgId).catch(() => new Map());
+        const matchedIds = [...new Set(exported.map((r) => r.matched_contact_id).filter(Boolean))];
+        const leadsByContact = new Map();
+        if (matchedIds.length) {
+            const leads = await sheetExportRepository.pipelineLeads(orgId, matchedIds).catch(() => []);
+            for (const l of leads) {
+                if (!leadsByContact.has(l.contact_id)) leadsByContact.set(l.contact_id, []);
+                leadsByContact.get(l.contact_id).push(l);
+            }
+        }
+
         let refreshed = 0;
         const tabs = await listMappedTabs(orgId, spreadsheetId);
         for (const tab of tabs) {
@@ -251,6 +266,7 @@ export const sheetExportService = {
                 if (!grid.length) continue;
                 const header = grid[0].map((h) => String(h ?? ''));
                 const statusCol = header.indexOf('Status');
+                const sourceCol = header.indexOf('Source (Pipeline)');
                 const exportCol = header.indexOf('Export ID');
                 if (statusCol === -1 || exportCol === -1) continue; // pre-Status layout
                 const updates = [];
@@ -268,11 +284,32 @@ export const sheetExportService = {
                         pounds(rev?.invoicedPence), pounds(rev?.collectedPence)];
                     const current = [String(grid[i][statusCol] ?? ''),
                         Number(grid[i][statusCol + 1] ?? 0), Number(grid[i][statusCol + 2] ?? 0)];
-                    if (fresh[0] === current[0] && fresh[1] === current[1] && fresh[2] === current[2]) continue;
-                    updates.push({
-                        range: rangeFor(tab.title, i + 1, statusCol + 1, statusCol + 3),
-                        values: [fresh],
-                    });
+                    if (fresh[0] !== current[0] || fresh[1] !== current[1] || fresh[2] !== current[2]) {
+                        updates.push({
+                            range: rangeFor(tab.title, i + 1, statusCol + 1, statusCol + 3),
+                            values: [fresh],
+                        });
+                    }
+                    // Source: recompute the journey from the matched contact's
+                    // CURRENT leads (episode rows scope to their own enquiry
+                    // window). Skip when we hold no leads for the contact —
+                    // never blank a cell on missing data.
+                    if (sourceCol !== -1 && q.matched_contact_id) {
+                        let contactLeads = leadsByContact.get(q.matched_contact_id) ?? [];
+                        if (q.episode_lead_at) {
+                            contactLeads = contactLeads
+                                .filter((l) => new Date(l.created_at) >= new Date(q.episode_lead_at));
+                        }
+                        if (contactLeads.length) {
+                            const freshSource = journeyFromLeads(contactLeads, names);
+                            if (freshSource !== String(grid[i][sourceCol] ?? '')) {
+                                updates.push({
+                                    range: rangeFor(tab.title, i + 1, sourceCol + 1, sourceCol + 1),
+                                    values: [[freshSource]],
+                                });
+                            }
+                        }
+                    }
                 }
                 await batchUpdateCells(orgId, spreadsheetId, updates);
                 refreshed += updates.length;

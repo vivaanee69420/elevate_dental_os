@@ -185,7 +185,7 @@ export const sheetExportRepository = {
     async exportedRows(orgId) {
         const { data, error } = await supabase_1.serviceClient
             .from('sheet_export_queue')
-            .select('id, contact_id, appointment_id, appointment_starts_at, episode, episode_lead_at')
+            .select('id, contact_id, matched_contact_id, appointment_id, appointment_starts_at, episode, episode_lead_at')
             .eq('organisation_id', orgId)
             .eq('status', 'exported');
         if (error) throw new Error(error.message);
