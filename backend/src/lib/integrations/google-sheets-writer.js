@@ -19,6 +19,30 @@ export function formatLondonDate(iso) {
     }).format(new Date(iso));
 }
 
+// Date cells are written as Sheets SERIAL numbers (days since 1899-12-30) so
+// the tab can be genuinely sorted by date — text "06/08/2026" sorts before
+// "28/07/2026" alphabetically. Display stays dd/mm/yyyy via the column number
+// format applied at tab creation/self-heal. Timezone: the London calendar day.
+export function londonDateSerial(iso) {
+    if (!iso) return '';
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London', day: '2-digit', month: '2-digit', year: 'numeric',
+    }).formatToParts(new Date(iso));
+    const get = (t) => Number(parts.find((p) => p.type === t)?.value);
+    return Date.UTC(get('year'), get('month') - 1, get('day')) / 86400000 + 25569;
+}
+
+// Lead Incoming Date (A) and Appointment Date (F) — same positions on both
+// tab layouts.
+const DATE_COLUMN_INDEXES = [0, 5];
+const dateFormatRequests = (sheetId) => DATE_COLUMN_INDEXES.map((col) => ({
+    repeatCell: {
+        range: { sheetId, startRowIndex: 1, startColumnIndex: col, endColumnIndex: col + 1 },
+        cell: { userEnteredFormat: { numberFormat: { type: 'DATE', pattern: 'dd/mm/yyyy' } } },
+        fields: 'userEnteredFormat.numberFormat',
+    },
+}));
+
 const metaKey = (practiceId) => `practice:${practiceId}`;
 const OPEN_DAY_KEY = 'openday:tab';
 
@@ -70,6 +94,7 @@ async function ensureHeader(orgId, spreadsheetId, sheetId, title, header) {
         body: { requests: [
             { insertDimension: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 } } },
             hideExportIdRequest(sheetId, header),
+            ...dateFormatRequests(sheetId),
         ] },
     });
     const writeRange = encodeURIComponent(`${quoteTab(title)}!A1`);
@@ -118,6 +143,7 @@ async function ensureTab(orgId, spreadsheetId, key, desiredTitle, header) {
         location: { spreadsheet: true }, visibility: 'DOCUMENT',
     } } });
     requests.push(hideExportIdRequest(sheetId, header));
+    requests.push(...dateFormatRequests(sheetId));
     await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
         method: 'POST',
         body: { requests },
@@ -206,4 +232,29 @@ export async function batchUpdateCells(orgId, spreadsheetId, data) {
 // A1 range for a contiguous cell run on one row: cols are 1-based indexes.
 export function rangeFor(tabTitle, rowNumber, colStart, colEnd) {
     return `${quoteTab(tabTitle)}!${colLetter(colStart)}${rowNumber}:${colLetter(colEnd)}${rowNumber}`;
+}
+
+// Sort every mapped tab's data rows (row 2+) by Lead Incoming Date ascending
+// (oldest first). Sorting rearranges whole rows, so the hidden Export IDs
+// travel with their rows — dedup and refresh both re-read the grid each run
+// and are unaffected. One batchUpdate for all tabs.
+export async function sortMappedTabsByLeadDate(orgId, spreadsheetId) {
+    const meta = await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}`, {
+        params: { fields: 'sheets(properties(sheetId,title)),developerMetadata(metadataKey,metadataValue)' },
+    });
+    const mappedIds = new Set((meta.developerMetadata ?? [])
+        .filter((m) => m.metadataKey?.startsWith('practice:') || m.metadataKey === OPEN_DAY_KEY)
+        .map((m) => String(m.metadataValue)));
+    const requests = (meta.sheets ?? [])
+        .filter((s) => mappedIds.has(String(s.properties?.sheetId)))
+        .map((s) => ({ sortRange: {
+            range: { sheetId: s.properties.sheetId, startRowIndex: 1 },
+            sortSpecs: [{ dimensionIndex: 0, sortOrder: 'ASCENDING' }],
+        } }));
+    if (!requests.length) return { sorted: 0 };
+    await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+        method: 'POST',
+        body: { requests },
+    });
+    return { sorted: requests.length };
 }

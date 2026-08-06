@@ -9,8 +9,8 @@ import { AppError } from '../middleware/errors.js';
 import { findMatch, pipelineNameMap, journeyFromLeads } from './sheet-export-match.service.js';
 import { WRITER_PROVIDER_ID } from '../lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../lib/integrations/google-sheets-provider.js';
-import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate,
-    listMappedTabs, readTabGrid, batchUpdateCells, rangeFor }
+import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, londonDateSerial,
+    listMappedTabs, readTabGrid, batchUpdateCells, rangeFor, sortMappedTabsByLeadDate }
     from '../lib/integrations/google-sheets-writer.js';
 
 // Sentinel group key routing open-day conversions to the org-wide tab.
@@ -170,9 +170,11 @@ export const sheetExportService = {
                 const rev = await sheetExportRepository
                     .revenue(orgId, row.contact_id, row.appointment_starts_at)
                     .catch(() => ({ invoicedPence: 0, collectedPence: 0 }));
-                const display = [formatLondonDate(match.leadCreatedAt), name,
+                // Date cells are Sheets serials (real dates, dd/mm/yyyy via the
+                // column format) so the tab sorts chronologically.
+                const display = [londonDateSerial(match.leadCreatedAt), name,
                     email, phoneOut, match.pipelineName,
-                    formatLondonDate(row.appointment_starts_at), treatment ?? ''];
+                    londonDateSerial(row.appointment_starts_at), treatment ?? ''];
                 const tail = [statusLabel(apptStatus), pounds(rev.invoicedPence), pounds(rev.collectedPence)];
                 // Owner rule: open-day pipeline conversions collect on ONE
                 // org-wide tab (with a Practice column) instead of their
@@ -222,6 +224,10 @@ export const sheetExportService = {
                     retried += 1;
                 }
             }
+        }
+        if (exported > 0) {
+            // Keep every tab in Lead Incoming Date order (oldest first).
+            await sortMappedTabsByLeadDate(orgId, spreadsheetId).catch(() => {});
         }
         await integrationRepository.setSyncTime(orgId, WRITER_PROVIDER_ID).catch(() => {});
         return { exported, noMatch, retried, excluded, skippedDuplicates };
@@ -319,6 +325,7 @@ export const sheetExportService = {
                 });
             }
         }
+        await sortMappedTabsByLeadDate(orgId, spreadsheetId).catch(() => {});
         return { refreshed };
     },
 
