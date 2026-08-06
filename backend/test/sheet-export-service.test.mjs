@@ -11,6 +11,7 @@ vi.mock('../src/repositories/sheet-export.repository.js', () => ({
     markRetry: vi.fn(),
     counts: vi.fn(),
     getContact: vi.fn(),
+    appointmentType: vi.fn(),
     practices: vi.fn(),
     recordMatch: vi.fn(),
     orgsWithWriter: vi.fn(),
@@ -84,6 +85,7 @@ function queueRow(overrides = {}) {
     id: 'row-1',
     contact_id: 'contact-1',
     practice_id: 'practice-1',
+    appointment_id: 'appt-1',
     appointment_starts_at: '2026-02-01T10:00:00.000Z',
     ...overrides,
   };
@@ -106,6 +108,7 @@ beforeEach(() => {
   sheetExportRepository.practices.mockResolvedValue([{ id: 'practice-1', name: 'Bexleyheath' }]);
   sheetExportRepository.markRetry.mockResolvedValue(undefined);
   sheetExportRepository.markNoMatch.mockResolvedValue(undefined);
+  sheetExportRepository.appointmentType.mockResolvedValue('Cosmetic Consultation');
   integrationRepository.setSyncTime.mockResolvedValue(undefined);
   integrationRepository.markFailed.mockResolvedValue(undefined);
   ensurePracticeTab.mockResolvedValue('Bexleyheath');
@@ -159,10 +162,12 @@ describe('drainOrg', () => {
     expect(ensurePracticeTab).toHaveBeenCalledWith(ORG, 'sheet-1', 'practice-1', 'Bexleyheath');
     expect(appendRows).toHaveBeenCalledTimes(1);
     const [, , , rows] = appendRows.mock.calls[0];
-    // Lead Incoming Date leads the row; Export ID trails (hidden column G).
+    // Lead Incoming Date leads the row; Treatment precedes the hidden Export ID.
+    expect(sheetExportRepository.appointmentType).toHaveBeenCalledWith(ORG, 'appt-1');
     expect(rows).toEqual([
       ['formatted:2026-01-15T00:00:00.000Z', 'Jane Doe', 'jane@x.com',
-        '+447123456789', 'New Patient', 'formatted:2026-02-01T10:00:00.000Z', row.id],
+        '+447123456789', 'New Patient', 'formatted:2026-02-01T10:00:00.000Z',
+        'Cosmetic Consultation', row.id],
     ]);
     expect(formatLondonDate).toHaveBeenCalledWith('2026-02-01T10:00:00.000Z');
     expect(formatLondonDate).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');

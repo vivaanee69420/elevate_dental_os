@@ -109,6 +109,20 @@ export const sheetExportRepository = {
         return data ?? null;
     },
 
+    // Treatment for the sheet's Treatment column — the Dentally appointment's
+    // type/reason free text. Null-safe: a missing appointment reads as null.
+    async appointmentType(orgId, appointmentId) {
+        if (!appointmentId) return null;
+        const { data, error } = await supabase_1.serviceClient
+            .from('appointments')
+            .select('appointment_type')
+            .eq('organisation_id', orgId)
+            .eq('id', appointmentId)
+            .maybeSingle();
+        if (error) throw new Error(error.message);
+        return data?.appointment_type ?? null;
+    },
+
     async ghlCandidatesByEmail(orgId, email) {
         const { data, error } = await supabase_1.serviceClient
             .from('contacts')
