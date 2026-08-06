@@ -66,7 +66,10 @@ async function refreshAccountPipelines(orgId, accountId) {
     return out;
 }
 
-export async function findMatch(orgId, dentallyContact) {
+// opts.leadsAfter: re-enquiry episodes scope the journey/incoming-date to
+// leads created at/after the episode's triggering lead (queue.episode_lead_at)
+// — the second conversion's row reports the NEW enquiry, not the original one.
+export async function findMatch(orgId, dentallyContact, opts = {}) {
     const email = normaliseEmail(dentallyContact?.email);
     const phone = normalisePhone(dentallyContact?.phone);
     if (!email && !phone) return null;
@@ -84,6 +87,10 @@ export async function findMatch(orgId, dentallyContact) {
         picked = await pickCandidate(orgId, candidates);
     }
     if (!picked) return null;
+    if (opts.leadsAfter) {
+        picked.leads = picked.leads.filter((l) => new Date(l.created_at) >= new Date(opts.leadsAfter));
+        if (picked.leads.length === 0) return null; // no lead in this episode's window
+    }
 
     // Source column = the FULL enquiry journey: every pipeline the contact's
     // leads sit in, oldest -> newest (a person often enquires more than once —
