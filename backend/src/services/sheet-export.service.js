@@ -5,6 +5,7 @@
 // column dedup. Spec: docs/superpowers/specs/2026-08-06-ghl-dentally-sheet-export-design.md
 import { sheetExportRepository } from '../repositories/sheet-export.repository.js';
 import { integrationRepository } from '../repositories/integration.repository.js';
+import { AppError } from '../middleware/errors.js';
 import { findMatch } from './sheet-export-match.service.js';
 import { WRITER_PROVIDER_ID } from '../lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../lib/integrations/google-sheets-provider.js';
@@ -43,9 +44,9 @@ export const sheetExportService = {
 
     async setDestination(orgId, url) {
         const spreadsheetId = parseSpreadsheetId(url);
-        if (!spreadsheetId) throw Object.assign(new Error('Not a valid Google Sheets URL'), { status: 400 });
+        if (!spreadsheetId) throw new AppError('Not a valid Google Sheets URL', 400);
         const integ = await integrationRepository.getByProvider(orgId, WRITER_PROVIDER_ID);
-        if (!integ || !integ.secrets) throw Object.assign(new Error('Connect Google Sheets export first'), { status: 409 });
+        if (!integ || !integ.secrets) throw new AppError('Connect Google Sheets export first', 409);
         // Verify we can actually reach the sheet with the write-scoped token.
         await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}`, {
             params: { fields: 'spreadsheetId' },

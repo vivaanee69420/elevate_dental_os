@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
 import express from 'express';
+import { AppError } from '../src/middleware/errors.js';
 
 vi.mock('../src/services/sheet-export.service.js', () => ({
   sheetExportService: {
@@ -21,7 +22,9 @@ vi.mock('../src/services/sheet-export.service.js', () => ({
     })),
     setDestination: vi.fn(async (orgId, url) => {
       if (!url.includes('docs.google.com')) {
-        throw Object.assign(new Error('Not a valid Google Sheets URL'), { status: 400 });
+        // Mirrors the real sheetExportService.setDestination shape (Task 7 as
+        // fixed in review): AppError, not a plain Error+status.
+        throw new AppError('Not a valid Google Sheets URL', 400);
       }
       return { spreadsheetId: 'sheet-123', exportSince: '2026-01-01T00:00:00.000Z' };
     }),
