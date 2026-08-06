@@ -30,6 +30,7 @@ vi.mock('../src/services/sheet-export.service.js', () => ({
     }),
     drainOrg: vi.fn(async () => ({ processed: 3, exported: 2, no_match: 1, failed: 0 })),
     disconnect: vi.fn(async () => ({ disconnected: true })),
+    activity: vi.fn(async () => ({ entries: [] })),
   },
 }));
 
@@ -79,39 +80,47 @@ async function call(method, path, { role, body } = {}) {
   return { status: res.status, json };
 }
 
+// status + activity are owner+PM reads; the rest are owner-only mutations.
+const READ_PATHS = [
+  '/api/integrations/google-sheets-writer/status',
+  '/api/integrations/google-sheets-writer/activity',
+];
 const ENDPOINTS = [
   { method: 'GET', path: '/api/integrations/google-sheets-writer/status' },
+  { method: 'GET', path: '/api/integrations/google-sheets-writer/activity' },
   { method: 'POST', path: '/api/integrations/google-sheets-writer/destination', body: { url: 'https://docs.google.com/spreadsheets/d/abc123/edit' } },
   { method: 'POST', path: '/api/integrations/google-sheets-writer/drain' },
   { method: 'DELETE', path: '/api/integrations/google-sheets-writer' },
 ];
 
 describe('sheet-export routes — role gating', () => {
-  it('owner can hit all four endpoints (200)', async () => {
+  it('owner can hit all endpoints (200)', async () => {
     for (const ep of ENDPOINTS) {
       const { status } = await call(ep.method, ep.path, { role: 'owner', body: ep.body });
       expect(status, `${ep.method} ${ep.path}`).toBe(200);
     }
   });
 
-  it('practice_manager gets status 200 but 403 on destination/drain/delete', async () => {
-    const status = await call('GET', '/api/integrations/google-sheets-writer/status', { role: 'practice_manager' });
-    expect(status.status).toBe(200);
+  it('practice_manager gets status + activity 200 but 403 on destination/drain/delete', async () => {
+    for (const path of READ_PATHS) {
+      const { status } = await call('GET', path, { role: 'practice_manager' });
+      expect(status, `GET ${path}`).toBe(200);
+    }
 
-    for (const ep of ENDPOINTS.filter((e) => e.path !== '/api/integrations/google-sheets-writer/status')) {
+    for (const ep of ENDPOINTS.filter((e) => !READ_PATHS.includes(e.path))) {
       const { status: code } = await call(ep.method, ep.path, { role: 'practice_manager', body: ep.body });
       expect(code, `${ep.method} ${ep.path}`).toBe(403);
     }
   });
 
-  it('reception is 403 on all four', async () => {
+  it('reception is 403 on all endpoints', async () => {
     for (const ep of ENDPOINTS) {
       const { status } = await call(ep.method, ep.path, { role: 'reception', body: ep.body });
       expect(status, `${ep.method} ${ep.path}`).toBe(403);
     }
   });
 
-  it('unauthenticated is 403 on all four', async () => {
+  it('unauthenticated is 403 on all endpoints', async () => {
     for (const ep of ENDPOINTS) {
       const { status } = await call(ep.method, ep.path, { body: ep.body });
       expect(status, `${ep.method} ${ep.path}`).toBe(403);

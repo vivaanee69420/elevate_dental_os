@@ -109,6 +109,21 @@ export const sheetExportRepository = {
         return data ?? null;
     },
 
+    // Last-24h queue activity for the panel's "View activity" modal. Patient
+    // name + practice resolved via PostgREST FK embedding; no PII beyond what
+    // the owner/PM already sees on every CRM screen, and never any secrets.
+    async recentActivity(orgId, sinceIso, limit = 100) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('sheet_export_queue')
+            .select('id, status, last_error, appointment_starts_at, updated_at, created_at, contacts:contact_id(first_name, last_name), practices:practice_id(name)')
+            .eq('organisation_id', orgId)
+            .gte('updated_at', sinceIso)
+            .order('updated_at', { ascending: false })
+            .limit(limit);
+        if (error) throw new Error(error.message);
+        return data ?? [];
+    },
+
     // Treatment for the sheet's Treatment column — the Dentally appointment's
     // type/reason free text. Null-safe: a missing appointment reads as null.
     async appointmentType(orgId, appointmentId) {

@@ -40,6 +40,7 @@ router.post('/google-sheets/sources/:id/sync', (0, auth_1.requireRole)('owner'),
 router.delete('/google-sheets/sources/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.removeSource));
 router.delete('/google-sheets', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.disconnect));
 router.get('/google-sheets-writer/status', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetExportController.status));
+router.get('/google-sheets-writer/activity', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetExportController.activity));
 router.post('/google-sheets-writer/destination', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.setDestination));
 router.post('/google-sheets-writer/drain', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.drain));
 router.delete('/google-sheets-writer', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.disconnect));

@@ -17,7 +17,16 @@ import {
   useDrainSheetsWriter,
   useSetSheetsWriterDestination,
   useSheetsWriterStatus,
+  useSheetsWriterActivity,
 } from '../hooks';
+
+const ACTIVITY_STATUS_LABEL: Record<string, { label: string; className: string }> = {
+  exported: { label: 'Exported', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  no_match: { label: 'No match', className: 'bg-slate-50 text-slate-600 border-slate-200' },
+  pending: { label: 'Waiting', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  processing: { label: 'Exporting', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  failed: { label: 'Failed', className: 'bg-rose-50 text-rose-700 border-rose-200' },
+};
 
 export default function GoogleSheetsWriterPanel() {
   const { data: status, isLoading } = useSheetsWriterStatus();
@@ -29,6 +38,9 @@ export default function GoogleSheetsWriterPanel() {
   const [url, setUrl] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [changingDestination, setChangingDestination] = useState(false);
+  const [showActivity, setShowActivity] = useState(false);
+  // Fetched only while the modal is open — a rolling last-24h window.
+  const activity = useSheetsWriterActivity(showActivity);
 
   if (isLoading || !status) return null;
 
@@ -168,11 +180,17 @@ export default function GoogleSheetsWriterPanel() {
                 </span>
               </div>
               {counts && (
-                <div className="flex flex-wrap gap-4 pt-1 text-[12px]">
+                <div className="flex flex-wrap items-center gap-4 pt-1 text-[12px]">
                   <span><span className="font-medium text-slate-900">{counts.pending}</span> Pending</span>
                   <span><span className="font-medium text-slate-900">{counts.exported}</span> Exported</span>
                   <span><span className="font-medium text-slate-900">{counts.no_match}</span> No match</span>
                   <span><span className="font-medium text-slate-900">{counts.failed}</span> Failed</span>
+                  <button
+                    className="text-indigo-600 underline"
+                    onClick={() => setShowActivity(true)}
+                  >
+                    View last 24 hours
+                  </button>
                 </div>
               )}
             </div>
@@ -208,6 +226,61 @@ export default function GoogleSheetsWriterPanel() {
               </div>
             )}
           </>
+        )}
+
+        {showActivity && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+            onClick={() => setShowActivity(false)}
+          >
+            <div
+              className="max-h-[70vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-4 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-[14px] font-semibold text-slate-900">Export activity</div>
+                  <div className="text-[12px] text-slate-500">Patients checked in the last 24 hours</div>
+                </div>
+                <button className="btn-ghost" onClick={() => setShowActivity(false)}>Close</button>
+              </div>
+              {activity.isLoading ? (
+                <div className="py-6 text-center text-slate-500">Loading…</div>
+              ) : (activity.data?.entries?.length ?? 0) === 0 ? (
+                <div className="py-6 text-center text-slate-500">
+                  No activity in the last 24 hours.
+                </div>
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {activity.data!.entries.map((entry) => {
+                    const s = ACTIVITY_STATUS_LABEL[entry.status]
+                      ?? { label: entry.status, className: 'bg-slate-50 text-slate-600 border-slate-200' };
+                    return (
+                      <li key={entry.id} className="flex items-center justify-between gap-3 py-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-slate-900">{entry.name}</div>
+                          <div className="text-[12px] text-slate-500">
+                            {entry.practice}
+                            {entry.appointmentAt
+                              ? ` — appointment ${new Date(entry.appointmentAt).toLocaleDateString('en-GB')}`
+                              : ''}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] ${s.className}`}>
+                            {s.label}
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            {new Date(entry.at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </CollapsibleCard>

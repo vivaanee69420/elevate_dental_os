@@ -42,6 +42,25 @@ export const sheetExportService = {
         };
     },
 
+    // Rolling last-24h view of what the export checked — feeds the panel's
+    // on-demand activity modal. Older entries drop out of the window; the
+    // queue rows themselves are kept (they are the dedup record).
+    async activity(orgId) {
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const rows = await sheetExportRepository.recentActivity(orgId, since);
+        return {
+            entries: rows.map((r) => ({
+                id: r.id,
+                name: [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(' ') || 'Unknown patient',
+                practice: r.practices?.name ?? 'Unassigned',
+                status: r.status,
+                reason: r.status === 'no_match' ? (r.last_error ?? null) : null,
+                appointmentAt: r.appointment_starts_at,
+                at: r.updated_at ?? r.created_at,
+            })),
+        };
+    },
+
     async setDestination(orgId, url) {
         const spreadsheetId = parseSpreadsheetId(url);
         if (!spreadsheetId) throw new AppError('Not a valid Google Sheets URL', 400);
