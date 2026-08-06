@@ -49,6 +49,21 @@ export const sheetExportRepository = {
         if (error) throw new Error(error.message);
     },
 
+    // Terminal exclusion (e.g. telephone consultations): never written to the
+    // sheet, never revisited — distinct from no_match's 30-day retry window.
+    async markSkipped(orgId, id, reason) {
+        const { error } = await supabase_1.serviceClient
+            .from('sheet_export_queue')
+            .update({
+                status: 'skipped',
+                last_error: reason ?? null,
+                updated_at: new Date().toISOString(),
+            })
+            .eq('organisation_id', orgId)
+            .eq('id', id);
+        if (error) throw new Error(error.message);
+    },
+
     async markNoMatch(orgId, id, reason) {
         const { error } = await supabase_1.serviceClient
             .from('sheet_export_queue')
@@ -85,7 +100,7 @@ export const sheetExportRepository = {
     },
 
     async counts(orgId) {
-        const statuses = ['pending', 'processing', 'exported', 'no_match', 'failed'];
+        const statuses = ['pending', 'processing', 'exported', 'no_match', 'failed', 'skipped'];
         const result = {};
         for (const status of statuses) {
             const { count, error } = await supabase_1.serviceClient

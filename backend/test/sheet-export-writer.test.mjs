@@ -262,17 +262,17 @@ describe('google-sheets-writer', () => {
       expect(ids.has('old-tab-id')).toBe(true);
       expect(ids.has('')).toBe(false);
       const [, path] = writerFetch.mock.calls[0];
-      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'Bexleyheath'!G2:H")}`);
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'Bexleyheath'!G2:I")}`);
     });
 
-    it('quotes a tab title with an apostrophe for the G2:H range', async () => {
+    it('quotes a tab title with an apostrophe for the G2:I range', async () => {
       const { readExportIds } = await import('../src/lib/integrations/google-sheets-writer.js');
       writerFetch.mockResolvedValueOnce({ values: [] });
 
       await readExportIds('org-1', 'sheet-1', "St Mary's");
 
       const [, path] = writerFetch.mock.calls[0];
-      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'St Mary''s'!G2:H")}`);
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'St Mary''s'!G2:I")}`);
     });
 
     it('returns an empty Set when the range has no values', async () => {

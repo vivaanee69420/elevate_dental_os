@@ -154,16 +154,16 @@ describe('markRetry — backoff/failure branch', () => {
 });
 
 describe('counts', () => {
-  it('returns pending/processing/exported/no_match/failed counts, each scoped to org', async () => {
+  it('returns pending/processing/exported/no_match/failed/skipped counts, each scoped to org', async () => {
     const seen = [];
     supaRec.resultProvider = (q) => {
       seen.push(q.eqs);
       const status = q.eqs.find((e) => e.col === 'status')?.val;
-      const map = { pending: 4, processing: 1, exported: 10, no_match: 2, failed: 0 };
+      const map = { pending: 4, processing: 1, exported: 10, no_match: 2, failed: 0, skipped: 3 };
       return { data: null, count: map[status] ?? 0, error: null };
     };
     const counts = await repo.counts(ORG);
-    expect(counts).toEqual({ pending: 4, processing: 1, exported: 10, no_match: 2, failed: 0 });
+    expect(counts).toEqual({ pending: 4, processing: 1, exported: 10, no_match: 2, failed: 0, skipped: 3 });
     for (const eqs of seen) {
       expect(eqs).toContainEqual({ col: 'organisation_id', val: ORG });
     }

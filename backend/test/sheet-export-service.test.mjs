@@ -8,6 +8,7 @@ vi.mock('../src/repositories/sheet-export.repository.js', () => ({
     claim: vi.fn(),
     markExported: vi.fn(),
     markNoMatch: vi.fn(),
+    markSkipped: vi.fn(),
     markRetry: vi.fn(),
     counts: vi.fn(),
     getContact: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('../src/lib/integrations/google-sheets-provider.js', () => ({
 
 vi.mock('../src/lib/integrations/google-sheets-writer.js', () => ({
   ensurePracticeTab: vi.fn(),
+  ensureOpenDayTab: vi.fn(),
   appendRows: vi.fn(),
   readExportIds: vi.fn(),
   formatLondonDate: vi.fn((iso) => (iso ? `formatted:${iso}` : '')),
@@ -53,7 +55,7 @@ import { integrationRepository } from '../src/repositories/integration.repositor
 import { findMatch } from '../src/services/sheet-export-match.service.js';
 import { writerFetch } from '../src/lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../src/lib/integrations/google-sheets-provider.js';
-import { ensurePracticeTab, appendRows, readExportIds, formatLondonDate }
+import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate }
   from '../src/lib/integrations/google-sheets-writer.js';
 import { sheetExportService } from '../src/services/sheet-export.service.js';
 
@@ -112,6 +114,8 @@ beforeEach(() => {
   integrationRepository.setSyncTime.mockResolvedValue(undefined);
   integrationRepository.markFailed.mockResolvedValue(undefined);
   ensurePracticeTab.mockResolvedValue('Bexleyheath');
+  ensureOpenDayTab.mockResolvedValue('Open Days');
+  sheetExportRepository.markSkipped.mockResolvedValue(undefined);
   readExportIds.mockResolvedValue(new Set());
   appendRows.mockResolvedValue({ appended: 0 });
 });
@@ -172,7 +176,7 @@ describe('drainOrg', () => {
     expect(formatLondonDate).toHaveBeenCalledWith('2026-02-01T10:00:00.000Z');
     expect(formatLondonDate).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');
     expect(sheetExportRepository.markExported).toHaveBeenCalledWith(ORG, [row.id]);
-    expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0, skippedDuplicates: 0 });
+    expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0, excluded: 0, skippedDuplicates: 0 });
   });
 
   it('2b. blank Dentally email/phone fall back to the matched GHL contact details', async () => {
@@ -189,6 +193,43 @@ describe('drainOrg', () => {
     expect(rows[0][3]).toBe('+447000000000');
   });
 
+  it('2c. telephone consultation -> markSkipped (excluded), nothing appended, terminal', async () => {
+    integrationRepository.getByProvider.mockResolvedValue(integ());
+    const row = queueRow();
+    sheetExportRepository.claim.mockResolvedValue([row]);
+    sheetExportRepository.getContact.mockResolvedValue(contact());
+    findMatch.mockResolvedValue(matchResult());
+    // Live Dentally value carries a trailing space — matching must be trimmed
+    // + case-insensitive.
+    sheetExportRepository.appointmentType.mockResolvedValue('Telephone consultation ');
+
+    const result = await sheetExportService.drainOrg(ORG);
+
+    expect(sheetExportRepository.markSkipped).toHaveBeenCalledWith(ORG, row.id, 'excluded: telephone consultation');
+    expect(appendRows).not.toHaveBeenCalled();
+    expect(sheetExportRepository.markExported).not.toHaveBeenCalled();
+    expect(result).toEqual({ exported: 0, noMatch: 0, retried: 0, excluded: 1, skippedDuplicates: 0 });
+  });
+
+  it('2d. open-day pipeline -> routed to the Open Days tab with a Practice column, not the practice tab', async () => {
+    integrationRepository.getByProvider.mockResolvedValue(integ());
+    const row = queueRow();
+    sheetExportRepository.claim.mockResolvedValue([row]);
+    sheetExportRepository.getContact.mockResolvedValue(contact());
+    findMatch.mockResolvedValue(matchResult({ pipelineName: '3. Cosmetic Dental Open Day (8th July 2026)' }));
+
+    const result = await sheetExportService.drainOrg(ORG);
+
+    expect(ensureOpenDayTab).toHaveBeenCalledWith(ORG, 'sheet-1');
+    expect(ensurePracticeTab).not.toHaveBeenCalled();
+    const [, , tab, rows] = appendRows.mock.calls[0];
+    expect(tab).toBe('Open Days');
+    // Practice column precedes the hidden Export ID.
+    expect(rows[0][7]).toBe('Bexleyheath');
+    expect(rows[0][8]).toBe(row.id);
+    expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0, excluded: 0, skippedDuplicates: 0 });
+  });
+
   it('3. matcher returns null -> markNoMatch, nothing appended', async () => {
     integrationRepository.getByProvider.mockResolvedValue(integ());
     const row = queueRow();
@@ -201,7 +242,7 @@ describe('drainOrg', () => {
     expect(sheetExportRepository.markNoMatch).toHaveBeenCalledWith(ORG, row.id, 'no GHL pipeline lead matched');
     expect(appendRows).not.toHaveBeenCalled();
     expect(sheetExportRepository.markExported).not.toHaveBeenCalled();
-    expect(result).toEqual({ exported: 0, noMatch: 1, retried: 0, skippedDuplicates: 0 });
+    expect(result).toEqual({ exported: 0, noMatch: 1, retried: 0, excluded: 0, skippedDuplicates: 0 });
   });
 
   it('4. appendRows throws -> markRetry with error message, no markExported, error does not propagate', async () => {
@@ -213,7 +254,7 @@ describe('drainOrg', () => {
     appendRows.mockRejectedValue(new Error('sheets append boom'));
 
     const result = await expect(sheetExportService.drainOrg(ORG)).resolves.toEqual({
-      exported: 0, noMatch: 0, retried: 1, skippedDuplicates: 0,
+      exported: 0, noMatch: 0, retried: 1, excluded: 0, skippedDuplicates: 0,
     });
 
     expect(sheetExportRepository.markRetry).toHaveBeenCalledWith(ORG, row.id, 'sheets append boom');
@@ -235,7 +276,7 @@ describe('drainOrg', () => {
     // The row was already in the sheet (dedup via Export ID column) — it
     // still gets markExported (crash recovery), but it does NOT count as a
     // fresh export; it's reported as a skipped duplicate instead.
-    expect(result).toEqual({ exported: 0, noMatch: 0, retried: 0, skippedDuplicates: 1 });
+    expect(result).toEqual({ exported: 0, noMatch: 0, retried: 0, excluded: 0, skippedDuplicates: 1 });
   });
 
   it('6. two claimed rows, same practice -> ONE appendRows call with two value rows', async () => {
