@@ -126,11 +126,17 @@ export const sheetExportService = {
                     continue;
                 }
                 const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ');
+                // Same person, two records: a phone-matched patient often has no
+                // email in Dentally while their GHL contact does (and vice
+                // versa). Prefer Dentally, fall back to the matched GHL contact
+                // so the sheet carries the fullest contact details available.
+                const email = contact.email || match.matchedContact?.email || '';
+                const phoneOut = contact.phone || match.matchedContact?.phone || '';
                 // Order must mirror the writer's HEADER exactly (Export ID last, hidden).
                 const treatment = await sheetExportRepository
                     .appointmentType(orgId, row.appointment_id).catch(() => null);
                 const values = [formatLondonDate(match.leadCreatedAt), name,
-                    contact.email ?? '', contact.phone ?? '', match.pipelineName,
+                    email, phoneOut, match.pipelineName,
                     formatLondonDate(row.appointment_starts_at), treatment ?? '', row.id];
                 await sheetExportRepository.recordMatch(orgId, row.id, match.matchedContact.id, match.lead.id);
                 const key = row.practice_id ?? 'unassigned';

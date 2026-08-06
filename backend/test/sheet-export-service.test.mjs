@@ -93,7 +93,7 @@ function queueRow(overrides = {}) {
 
 function matchResult(overrides = {}) {
   return {
-    matchedContact: { id: 'ghl-1' },
+    matchedContact: { id: 'ghl-1', email: 'ghl-jane@x.com', phone: '+447000000000' },
     lead: { id: 'lead-1' },
     pipelineName: 'New Patient',
     leadCreatedAt: '2026-01-15T00:00:00.000Z',
@@ -173,6 +173,20 @@ describe('drainOrg', () => {
     expect(formatLondonDate).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');
     expect(sheetExportRepository.markExported).toHaveBeenCalledWith(ORG, [row.id]);
     expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0, skippedDuplicates: 0 });
+  });
+
+  it('2b. blank Dentally email/phone fall back to the matched GHL contact details', async () => {
+    integrationRepository.getByProvider.mockResolvedValue(integ());
+    const row = queueRow();
+    sheetExportRepository.claim.mockResolvedValue([row]);
+    sheetExportRepository.getContact.mockResolvedValue(contact({ email: null, phone: '' }));
+    findMatch.mockResolvedValue(matchResult());
+
+    await sheetExportService.drainOrg(ORG);
+
+    const [, , , rows] = appendRows.mock.calls[0];
+    expect(rows[0][2]).toBe('ghl-jane@x.com');
+    expect(rows[0][3]).toBe('+447000000000');
   });
 
   it('3. matcher returns null -> markNoMatch, nothing appended', async () => {
