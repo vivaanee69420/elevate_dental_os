@@ -36,23 +36,56 @@ describe('google-sheets-writer', () => {
 
   describe('ensurePracticeTab', () => {
     it('returns the CURRENT title of the mapped sheetId when metadata already maps the practice, performing no batchUpdate', async () => {
-      const { ensurePracticeTab } = await import('../src/lib/integrations/google-sheets-writer.js');
-      writerFetch.mockResolvedValueOnce({
-        sheets: [
-          { properties: { sheetId: 111, title: 'Old Name' } },
-          { properties: { sheetId: 222, title: 'Bexleyheath' } },
-        ],
-        developerMetadata: [
-          { metadataKey: 'practice:practice-uuid-1', metadataValue: '222' },
-        ],
-      });
+      const { ensurePracticeTab, HEADER } = await import('../src/lib/integrations/google-sheets-writer.js');
+      writerFetch
+        .mockResolvedValueOnce({
+          sheets: [
+            { properties: { sheetId: 111, title: 'Old Name' } },
+            { properties: { sheetId: 222, title: 'Bexleyheath' } },
+          ],
+          developerMetadata: [
+            { metadataKey: 'practice:practice-uuid-1', metadataValue: '222' },
+          ],
+        })
+        // 2. header check — header intact, no repair needed
+        .mockResolvedValueOnce({ values: [HEADER] });
 
       const title = await ensurePracticeTab('org-1', 'sheet-1', 'practice-uuid-1', 'Bexleyheath Renamed');
 
       expect(title).toBe('Bexleyheath');
-      expect(writerFetch).toHaveBeenCalledTimes(1);
+      expect(writerFetch).toHaveBeenCalledTimes(2);
       const batchUpdateCalls = writerFetch.mock.calls.filter(([path]) => path.includes(':batchUpdate'));
       expect(batchUpdateCalls).toHaveLength(0);
+    });
+
+    it('self-heals a mapped tab whose contents were cleared: re-inserts the header row and re-hides column H', async () => {
+      const { ensurePracticeTab, HEADER } = await import('../src/lib/integrations/google-sheets-writer.js');
+      writerFetch
+        .mockResolvedValueOnce({
+          sheets: [{ properties: { sheetId: 222, title: 'Rochester' } }],
+          developerMetadata: [{ metadataKey: 'practice:practice-uuid-1', metadataValue: '222' }],
+        })
+        // 2. header check — row 1 holds DATA, not the header (tab was cleared then re-appended)
+        .mockResolvedValueOnce({ values: [['04/11/2024', 'Anthony Rose']] })
+        // 3. batchUpdate insertDimension + hide column H
+        .mockResolvedValueOnce({})
+        // 4. values.update header into the new row 1
+        .mockResolvedValueOnce({});
+
+      const title = await ensurePracticeTab('org-1', 'sheet-1', 'practice-uuid-1', 'Rochester');
+
+      expect(title).toBe('Rochester');
+      const [, repairPath, repairOpts] = writerFetch.mock.calls[2];
+      expect(repairPath).toBe('/v4/spreadsheets/sheet-1:batchUpdate');
+      expect(repairOpts.body.requests[0].insertDimension.range).toEqual(
+        { sheetId: 222, dimension: 'ROWS', startIndex: 0, endIndex: 1 });
+      expect(repairOpts.body.requests[1].updateDimensionProperties.range).toEqual(
+        { sheetId: 222, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 });
+
+      const [, writePath, writeOpts] = writerFetch.mock.calls[3];
+      expect(writePath).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'Rochester'!A1")}`);
+      expect(writeOpts.method).toBe('PUT');
+      expect(writeOpts.body.values).toEqual([HEADER]);
     });
 
     it('creates a tab + stamps metadata + appends HEADER when absent', async () => {
@@ -101,22 +134,25 @@ describe('google-sheets-writer', () => {
 
     it('metadata points at a deleted sheetId + a second valid entry -> uses the valid one, no batchUpdate', async () => {
       const { ensurePracticeTab } = await import('../src/lib/integrations/google-sheets-writer.js');
-      writerFetch.mockResolvedValueOnce({
-        sheets: [
-          { properties: { sheetId: 222, title: 'Bexleyheath' } },
-        ],
-        developerMetadata: [
-          // Stale — pointed at a sheetId that no longer exists.
-          { metadataKey: 'practice:practice-uuid-1', metadataValue: '111' },
-          // Valid — still resolves.
-          { metadataKey: 'practice:practice-uuid-1', metadataValue: '222' },
-        ],
-      });
+      writerFetch
+        .mockResolvedValueOnce({
+          sheets: [
+            { properties: { sheetId: 222, title: 'Bexleyheath' } },
+          ],
+          developerMetadata: [
+            // Stale — pointed at a sheetId that no longer exists.
+            { metadataKey: 'practice:practice-uuid-1', metadataValue: '111' },
+            // Valid — still resolves.
+            { metadataKey: 'practice:practice-uuid-1', metadataValue: '222' },
+          ],
+        })
+        // 2. header check — intact
+        .mockResolvedValueOnce({ values: [['Lead Incoming Date']] });
 
       const title = await ensurePracticeTab('org-1', 'sheet-1', 'practice-uuid-1', 'Bexleyheath');
 
       expect(title).toBe('Bexleyheath');
-      expect(writerFetch).toHaveBeenCalledTimes(1);
+      expect(writerFetch).toHaveBeenCalledTimes(2);
       const batchUpdateCalls = writerFetch.mock.calls.filter(([path]) => path.includes(':batchUpdate'));
       expect(batchUpdateCalls).toHaveLength(0);
     });

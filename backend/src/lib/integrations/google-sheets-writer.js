@@ -39,6 +39,32 @@ async function addSheetTab(orgId, spreadsheetId, title) {
     }
 }
 
+// Repair a mapped tab whose header row is missing (owner cleared the tab's
+// contents, or the tab predates the current column set): insert a fresh row 1,
+// write HEADER into it, and (idempotently) hide the Export ID column.
+async function ensureHeader(orgId, spreadsheetId, sheetId, title) {
+    const checkRange = encodeURIComponent(`${quoteTab(title)}!A1:H1`);
+    const res = await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}/values/${checkRange}`);
+    if (res.values?.[0]?.[0] === HEADER[0]) return;
+    await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+        method: 'POST',
+        body: { requests: [
+            { insertDimension: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: 1 } } },
+            { updateDimensionProperties: {
+                range: { sheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 },
+                properties: { hiddenByUser: true },
+                fields: 'hiddenByUser',
+            } },
+        ] },
+    });
+    const writeRange = encodeURIComponent(`${quoteTab(title)}!A1`);
+    await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}/values/${writeRange}`, {
+        method: 'PUT',
+        params: { valueInputOption: 'RAW' },
+        body: { values: [HEADER] },
+    });
+}
+
 export async function ensurePracticeTab(orgId, spreadsheetId, practiceId, practiceName) {
     const meta = await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}`, {
         params: { fields: 'sheets(properties(sheetId,title)),developerMetadata(metadataKey,metadataValue)' },
@@ -51,7 +77,13 @@ export async function ensurePracticeTab(orgId, spreadsheetId, practiceId, practi
     for (const mapped of candidates) {
         const sheet = (meta.sheets ?? [])
             .find((s) => String(s.properties?.sheetId) === String(mapped.metadataValue));
-        if (sheet) return sheet.properties.title;
+        if (sheet) {
+            // Self-heal: an owner clearing the tab's contents (rather than
+            // deleting it) leaves a live mapping with no header row — repair it
+            // (and re-hide the Export ID column) before any append.
+            await ensureHeader(orgId, spreadsheetId, sheet.properties.sheetId, sheet.properties.title);
+            return sheet.properties.title;
+        }
     }
     // No live mapping. Create the tab + stamp the practice UUID as
     // spreadsheet-level metadata, clearing out any stale entries for this
