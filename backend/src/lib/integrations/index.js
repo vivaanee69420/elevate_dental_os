@@ -8,4 +8,5 @@ import './xero-provider.js';
 import './quickbooks-provider.js';
 import './google-ads-provider.js';
 import './google-sheets-provider.js';
+import './google-sheets-writer-provider.js';
 import './meta-ads-provider.js';
