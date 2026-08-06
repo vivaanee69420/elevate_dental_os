@@ -3,8 +3,8 @@
 // name — so renaming a practice in the app never forks a new tab.
 import { writerFetch } from './google-sheets-writer-provider.js';
 
-export const HEADER = ['Name', 'Email', 'Phone', 'Source (Pipeline)',
-    'Appointment Date', 'Lead Incoming Date', 'Export ID'];
+export const HEADER = ['Lead Incoming Date', 'Name', 'Email', 'Phone',
+    'Source (Pipeline)', 'Appointment Date', 'Export ID'];
 
 export function formatLondonDate(iso) {
     if (!iso) return '';
@@ -71,6 +71,15 @@ export async function ensurePracticeTab(orgId, spreadsheetId, practiceId, practi
         metadataKey: key, metadataValue: String(sheetId),
         location: { spreadsheet: true }, visibility: 'DOCUMENT',
     } } });
+    // Export ID (column G) is bookkeeping, not report content — hide it so the
+    // owner sees only the six display columns. It must still EXIST: it is the
+    // idempotency key that stops a crash between append and mark-exported from
+    // ever double-writing a conversion.
+    requests.push({ updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 },
+        properties: { hiddenByUser: true },
+        fields: 'hiddenByUser',
+    } });
     await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
         method: 'POST',
         body: { requests },

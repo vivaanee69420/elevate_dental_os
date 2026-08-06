@@ -82,10 +82,21 @@ describe('google-sheets-writer', () => {
       const metaReq = metaOpts.body.requests[0].createDeveloperMetadata.developerMetadata;
       expect(metaReq.metadataKey).toBe('practice:practice-uuid-2');
       expect(metaReq.metadataValue).toBe('999');
+      // Export ID (column G) hidden on creation — bookkeeping, not report content.
+      const hideReq = metaOpts.body.requests.find((r) => r.updateDimensionProperties);
+      expect(hideReq.updateDimensionProperties.range).toEqual(
+        { sheetId: 999, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 });
+      expect(hideReq.updateDimensionProperties.properties.hiddenByUser).toBe(true);
 
       const [, appendPath, appendOpts] = writerFetch.mock.calls[3];
       expect(appendPath).toContain(`/values/${encodeURIComponent("'Ashford'!A1")}:append`);
       expect(appendOpts.body.values).toEqual([HEADER]);
+    });
+
+    it('HEADER puts Lead Incoming Date first and Export ID last (hidden column G)', async () => {
+      const { HEADER } = await import('../src/lib/integrations/google-sheets-writer.js');
+      expect(HEADER).toEqual(['Lead Incoming Date', 'Name', 'Email', 'Phone',
+        'Source (Pipeline)', 'Appointment Date', 'Export ID']);
     });
 
     it('metadata points at a deleted sheetId + a second valid entry -> uses the valid one, no batchUpdate', async () => {

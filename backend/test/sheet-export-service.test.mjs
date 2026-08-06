@@ -159,9 +159,10 @@ describe('drainOrg', () => {
     expect(ensurePracticeTab).toHaveBeenCalledWith(ORG, 'sheet-1', 'practice-1', 'Bexleyheath');
     expect(appendRows).toHaveBeenCalledTimes(1);
     const [, , , rows] = appendRows.mock.calls[0];
+    // Lead Incoming Date leads the row; Export ID trails (hidden column G).
     expect(rows).toEqual([
-      ['Jane Doe', 'jane@x.com', '+447123456789', 'New Patient',
-        'formatted:2026-02-01T10:00:00.000Z', 'formatted:2026-01-15T00:00:00.000Z', row.id],
+      ['formatted:2026-01-15T00:00:00.000Z', 'Jane Doe', 'jane@x.com',
+        '+447123456789', 'New Patient', 'formatted:2026-02-01T10:00:00.000Z', row.id],
     ]);
     expect(formatLondonDate).toHaveBeenCalledWith('2026-02-01T10:00:00.000Z');
     expect(formatLondonDate).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');
