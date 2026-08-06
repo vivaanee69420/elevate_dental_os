@@ -25,11 +25,12 @@ export const sheetExportRepository = {
         return data ?? 0;
     },
 
-    async claim(orgId, { limit = 50, includeNoMatch = false } = {}) {
+    async claim(orgId, { limit = 50, includeNoMatch = false, ignoreBackoff = false } = {}) {
         const { data, error } = await supabase_1.serviceClient.rpc('sheet_export_claim', {
             p_org: orgId,
             p_limit: limit,
             p_include_no_match: includeNoMatch,
+            p_ignore_backoff: ignoreBackoff,
         });
         if (error) throw new Error(error.message);
         return data ?? [];

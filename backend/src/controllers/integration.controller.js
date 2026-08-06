@@ -201,6 +201,16 @@ export const integrationController = {
         const orgId = req.user.organisation_id;
         const full = req.query.full === 'true';
         syncAccount(orgId, id, () => {}, { full })
+            .then(async () => {
+                // Freshly-synced leads may complete a lead↔appointment match —
+                // re-run the sheet conversion export immediately (no_match rows
+                // included, backoff gates ignored). Best-effort, never blocks
+                // or fails the sync response.
+                try {
+                    const { sheetExportService } = await import('../services/sheet-export.service.js');
+                    await sheetExportService.drainOrg(orgId, { includeNoMatch: true, ignoreBackoff: true });
+                } catch { /* export re-check is best-effort */ }
+            })
             .catch((err) => console.error('[ghl-account] sync failed:', err?.message || err));
         res.json({ started: true, accountId: id, full });
     },

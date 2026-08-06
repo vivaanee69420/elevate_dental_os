@@ -37,19 +37,19 @@ describe('enqueue / claim (RPC param pass-through)', () => {
     expect(supaRec.rpcCalls.at(-1).params.p_org).toBe(OTHER_ORG);
   });
 
-  it('claim passes limit/includeNoMatch through as p_limit/p_include_no_match', async () => {
+  it('claim passes limit/includeNoMatch/ignoreBackoff through as RPC params', async () => {
     supaRec.rpcProvider = () => ({ data: [{ id: ID }], error: null });
-    const rows = await repo.claim(ORG, { limit: 25, includeNoMatch: true });
+    const rows = await repo.claim(ORG, { limit: 25, includeNoMatch: true, ignoreBackoff: true });
     const call = supaRec.rpcCalls.at(-1);
     expect(call.fn).toBe('sheet_export_claim');
-    expect(call.params).toEqual({ p_org: ORG, p_limit: 25, p_include_no_match: true });
+    expect(call.params).toEqual({ p_org: ORG, p_limit: 25, p_include_no_match: true, p_ignore_backoff: true });
     expect(rows).toEqual([{ id: ID }]);
   });
 
-  it('claim defaults limit=50 includeNoMatch=false', async () => {
+  it('claim defaults limit=50 includeNoMatch=false ignoreBackoff=false', async () => {
     supaRec.rpcProvider = () => ({ data: null, error: null });
     const rows = await repo.claim(ORG, {});
-    expect(supaRec.rpcCalls.at(-1).params).toEqual({ p_org: ORG, p_limit: 50, p_include_no_match: false });
+    expect(supaRec.rpcCalls.at(-1).params).toEqual({ p_org: ORG, p_limit: 50, p_include_no_match: false, p_ignore_backoff: false });
     expect(rows).toEqual([]);
   });
 

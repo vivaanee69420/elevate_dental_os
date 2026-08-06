@@ -21,7 +21,10 @@ export const sheetExportController = {
         res.json(await sheetExportService.setDestination(req.user.organisation_id, url));
     },
     async drain(req, res) {
-        res.json(await sheetExportService.drainOrg(req.user.organisation_id, { includeNoMatch: true }));
+        // Manual "Export now": re-check EVERYTHING immediately — pending rows
+        // regardless of retry backoff, no_match rows regardless of the 4h gate.
+        res.json(await sheetExportService.drainOrg(req.user.organisation_id,
+            { includeNoMatch: true, ignoreBackoff: true }));
     },
     async disconnect(req, res) {
         res.json(await sheetExportService.disconnect(req.user.organisation_id));

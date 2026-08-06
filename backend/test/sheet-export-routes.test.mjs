@@ -158,8 +158,8 @@ describe('sheet-export routes — no secrets leak', () => {
 });
 
 describe('sheet-export routes — service wiring sanity', () => {
-  it('drain calls drainOrg with includeNoMatch: true', async () => {
+  it('drain calls drainOrg with includeNoMatch + ignoreBackoff (manual re-check is immediate)', async () => {
     await call('POST', '/api/integrations/google-sheets-writer/drain', { role: 'owner' });
-    expect(sheetExportService.drainOrg).toHaveBeenCalledWith('org-1', { includeNoMatch: true });
+    expect(sheetExportService.drainOrg).toHaveBeenCalledWith('org-1', { includeNoMatch: true, ignoreBackoff: true });
   });
 });

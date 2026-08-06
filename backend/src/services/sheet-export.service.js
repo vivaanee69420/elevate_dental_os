@@ -94,7 +94,7 @@ export const sheetExportService = {
         });
     },
 
-    async drainOrg(orgId, { includeNoMatch = false } = {}) {
+    async drainOrg(orgId, { includeNoMatch = false, ignoreBackoff = false } = {}) {
         const integ = await integrationRepository.getByProvider(orgId, WRITER_PROVIDER_ID);
         if (!integ || integ.status === 'revoked' || !integ.secrets) return { skipped: 'not_connected' };
         const spreadsheetId = integ.config?.spreadsheet_id;
@@ -108,7 +108,7 @@ export const sheetExportService = {
         if (integ.status === 'failed') return { skipped: 'integration_failed' };
 
         await sheetExportRepository.enqueue(orgId, since);
-        const rows = await sheetExportRepository.claim(orgId, { limit: 50, includeNoMatch });
+        const rows = await sheetExportRepository.claim(orgId, { limit: 50, includeNoMatch, ignoreBackoff });
         if (rows.length === 0) return { exported: 0, noMatch: 0, retried: 0, skippedDuplicates: 0 };
 
         const practiceName = new Map((await sheetExportRepository.practices(orgId)).map((p) => [p.id, p.name]));
