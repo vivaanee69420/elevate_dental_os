@@ -716,6 +716,36 @@ no practice-map endpoint). Migration `000118` + the v2 multi-sheet migration.
 
 Practice-map endpoints (`GET`/`PUT /api/integrations/google-sheets/practice-map`) are REMOVED — practice is now the `practice_label` set at source creation, not a mapped sheet value.
 
+### Google Sheets (Conversion Export, GHL → Dentally)
+A SEPARATE connection from Call Reporting's `google_sheets` provider above —
+provider id `google_sheets_writer`, full `https://www.googleapis.com/auth/spreadsheets`
+scope (read/write), one destination spreadsheet with a tab auto-created per
+practice. When a patient's **first-ever** Dentally appointment lands (webhook
+or nightly sync) and they also exist as a GoHighLevel contact with a lead in a
+pipeline (matched by normalised email or UK phone, exact equality), one row is
+appended recording the conversion. Connect via the generic
+`POST /api/integrations/connect` with `{ provider: 'google_sheets_writer' }`
+(same OAuth dance as any other Google provider — reuses `GOOGLE_SHEETS_CLIENT_ID`/
+`SECRET`, falling back to the Google Ads pair; requires the
+`https://www.googleapis.com/auth/spreadsheets` scope to be enabled on that
+OAuth client's Google Cloud consent screen). Migration `000121`
+(`sheet_export_queue` outbox table + enqueue/claim/phone-candidate RPCs).
+- `GET /api/integrations/google-sheets-writer/status` (owner | practice_manager) → `{ connected, status, spreadsheetId, exportSince, lastError, counts }`. `status` mirrors the integration row (`not_connected|active|failed|revoked`); `counts` is `null` until connected (per-status queue row counts once available). `exportSince` is the go-forward-only cutoff ISO timestamp (see below), `null` before a destination is set.
+- `POST /api/integrations/google-sheets-writer/destination` (owner) — body `{ url }` (full Google Sheets URL or bare spreadsheet id). 409 if `google_sheets_writer` hasn't been connected (OAuth) yet. Verifies the write-scoped token can reach the sheet before persisting. **`export_since` is stamped ONCE**, on the first successful call, to "now" — go-forward only, no backfill of pre-existing appointments; re-posting a new URL later does not re-stamp it. Returns `{ spreadsheetId, exportSince }`.
+- `POST /api/integrations/google-sheets-writer/drain` (owner) — manually runs one drain pass for the org (enqueue due rows since `export_since`, claim up to 50, match, append, mark exported/no-match/retry). Same logic the webhook kick and the `*/15` worker sweep run automatically; useful to force an export without waiting. Returns `{ exported, noMatch, retried }` or `{ skipped: 'not_connected' | 'no_destination' }`.
+- `DELETE /api/integrations/google-sheets-writer` (owner) — revokes the connection (`status: 'revoked'`, secrets cleared). Queued rows and already-exported sheet rows are left as-is.
+
+Outbox mechanics (not separately routed): a Dentally webhook or the nightly
+sync inserts a `sheet_export_queue` row per first-ever appointment
+(`ON CONFLICT DO NOTHING`, idempotent); the webhook path fire-and-forget kicks
+a drain after responding 200 (60s in-process debounce per org) and a `*/15`
+cron sweep (`workers/index.js`, job `sheet-export-drain`) retries
+pending/retry rows and catches sync-path inserts. No pipeline lead found → row marked `no_match`, revisited for 30
+days. A destination sheet that goes 403/404 (deleted, access revoked) flips
+the whole integration to `failed` with a specific `lastError` instead of
+retrying forever. Export-id dedup on the sheet itself (hidden last column)
+makes the sheet append idempotent even across overlapping drains.
+
 ### `GET /api/call-reporting/dashboard`
 (owner | practice_manager) Query `?date=YYYY-MM-DD` (default today,
 Europe/London) `&source=<sourceId>` (optional; omitted = all connected
