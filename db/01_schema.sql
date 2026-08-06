@@ -1072,3 +1072,5 @@ CREATE INDEX IF NOT EXISTS idx_sheet_export_queue_org_status
   ON sheet_export_queue (organisation_id, status);
 CREATE INDEX IF NOT EXISTS idx_appointments_org_contact_created
   ON appointments (organisation_id, contact_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_appointments_org_created
+  ON appointments (organisation_id, created_at);

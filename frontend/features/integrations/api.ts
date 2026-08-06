@@ -456,7 +456,8 @@ export interface SheetsWriterDrainResult {
   exported?: number;
   noMatch?: number;
   retried?: number;
-  skipped?: boolean;
+  skippedDuplicates?: number;
+  skipped?: 'not_connected' | 'no_destination' | 'integration_failed';
 }
 
 export function drainSheetsWriter() {

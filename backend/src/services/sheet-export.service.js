@@ -81,14 +81,20 @@ export const sheetExportService = {
         const spreadsheetId = integ.config?.spreadsheet_id;
         const since = integ.config?.export_since;
         if (!spreadsheetId || !since) return { skipped: 'no_destination' };
+        // An outage (Google-side or destination sheet gone) flips the
+        // integration to 'failed'. Pause draining entirely rather than
+        // keep claiming + failing rows into terminal state — enqueue is a
+        // full rescan from export_since, so nothing is lost by pausing;
+        // reconnect resumes and the next drain catches the backlog.
+        if (integ.status === 'failed') return { skipped: 'integration_failed' };
 
         await sheetExportRepository.enqueue(orgId, since);
         const rows = await sheetExportRepository.claim(orgId, { limit: 50, includeNoMatch });
-        if (rows.length === 0) return { exported: 0, noMatch: 0, retried: 0 };
+        if (rows.length === 0) return { exported: 0, noMatch: 0, retried: 0, skippedDuplicates: 0 };
 
         const practiceName = new Map((await sheetExportRepository.practices(orgId)).map((p) => [p.id, p.name]));
         const perPractice = new Map(); // practiceId -> [{ queueRow, values }]
-        let exported = 0, noMatch = 0, retried = 0;
+        let exported = 0, noMatch = 0, retried = 0, skippedDuplicates = 0;
 
         for (const row of rows) {
             try {
@@ -123,7 +129,8 @@ export const sheetExportService = {
                 const fresh = batch.filter((b) => !already.has(b.queueRow.id));
                 await appendRows(orgId, spreadsheetId, title, fresh.map((b) => b.values));
                 await sheetExportRepository.markExported(orgId, batch.map((b) => b.queueRow.id));
-                exported += batch.length;
+                exported += fresh.length;
+                skippedDuplicates += batch.length - fresh.length;
             } catch (err) {
                 // Distinct handling (spec): sheet deleted or access revoked → the
                 // whole integration flips to failed with a specific reason, so the
@@ -141,7 +148,7 @@ export const sheetExportService = {
             }
         }
         await integrationRepository.setSyncTime(orgId, WRITER_PROVIDER_ID).catch(() => {});
-        return { exported, noMatch, retried };
+        return { exported, noMatch, retried, skippedDuplicates };
     },
 
     async drainAllOrgs() {
