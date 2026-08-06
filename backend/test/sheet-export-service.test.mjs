@@ -135,6 +135,16 @@ describe('drainOrg', () => {
     expect(sheetExportRepository.claim).not.toHaveBeenCalled();
   });
 
+  it("1b. integration status 'failed' -> skipped: 'integration_failed', no enqueue/claim (outage pause, no lost rows)", async () => {
+    integrationRepository.getByProvider.mockResolvedValue(integ({ status: 'failed' }));
+
+    const result = await sheetExportService.drainOrg(ORG);
+
+    expect(result).toEqual({ skipped: 'integration_failed' });
+    expect(sheetExportRepository.enqueue).not.toHaveBeenCalled();
+    expect(sheetExportRepository.claim).not.toHaveBeenCalled();
+  });
+
   it('2. happy path: enqueue with export_since, claim, match, ensurePracticeTab + appendRows with 6 display fields + uuid, markExported, formatLondonDate used', async () => {
     integrationRepository.getByProvider.mockResolvedValue(integ());
     const row = queueRow();
@@ -156,7 +166,7 @@ describe('drainOrg', () => {
     expect(formatLondonDate).toHaveBeenCalledWith('2026-02-01T10:00:00.000Z');
     expect(formatLondonDate).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');
     expect(sheetExportRepository.markExported).toHaveBeenCalledWith(ORG, [row.id]);
-    expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0 });
+    expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0, skippedDuplicates: 0 });
   });
 
   it('3. matcher returns null -> markNoMatch, nothing appended', async () => {
@@ -171,7 +181,7 @@ describe('drainOrg', () => {
     expect(sheetExportRepository.markNoMatch).toHaveBeenCalledWith(ORG, row.id, 'no GHL pipeline lead matched');
     expect(appendRows).not.toHaveBeenCalled();
     expect(sheetExportRepository.markExported).not.toHaveBeenCalled();
-    expect(result).toEqual({ exported: 0, noMatch: 1, retried: 0 });
+    expect(result).toEqual({ exported: 0, noMatch: 1, retried: 0, skippedDuplicates: 0 });
   });
 
   it('4. appendRows throws -> markRetry with error message, no markExported, error does not propagate', async () => {
@@ -183,7 +193,7 @@ describe('drainOrg', () => {
     appendRows.mockRejectedValue(new Error('sheets append boom'));
 
     const result = await expect(sheetExportService.drainOrg(ORG)).resolves.toEqual({
-      exported: 0, noMatch: 0, retried: 1,
+      exported: 0, noMatch: 0, retried: 1, skippedDuplicates: 0,
     });
 
     expect(sheetExportRepository.markRetry).toHaveBeenCalledWith(ORG, row.id, 'sheets append boom');
@@ -202,7 +212,10 @@ describe('drainOrg', () => {
 
     expect(appendRows).toHaveBeenCalledWith(ORG, 'sheet-1', 'Bexleyheath', []);
     expect(sheetExportRepository.markExported).toHaveBeenCalledWith(ORG, [row.id]);
-    expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0 });
+    // The row was already in the sheet (dedup via Export ID column) — it
+    // still gets markExported (crash recovery), but it does NOT count as a
+    // fresh export; it's reported as a skipped duplicate instead.
+    expect(result).toEqual({ exported: 0, noMatch: 0, retried: 0, skippedDuplicates: 1 });
   });
 
   it('6. two claimed rows, same practice -> ONE appendRows call with two value rows', async () => {

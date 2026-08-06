@@ -28,6 +28,7 @@ export default function GoogleSheetsWriterPanel() {
 
   const [url, setUrl] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  const [changingDestination, setChangingDestination] = useState(false);
 
   if (isLoading || !status) return null;
 
@@ -52,6 +53,7 @@ export default function GoogleSheetsWriterPanel() {
     try {
       await setDestination.mutateAsync(url.trim());
       setUrl('');
+      setChangingDestination(false);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -106,6 +108,25 @@ export default function GoogleSheetsWriterPanel() {
             <button className="btn-primary" onClick={handleConnect} disabled={startConnect.isPending}>
               {startConnect.isPending ? 'Opening Google…' : 'Reconnect'}
             </button>
+            <p className="pt-1">
+              If the destination sheet was deleted, reconnecting alone will not fix it —
+              paste a new destination below.
+            </p>
+            <div className="flex gap-2">
+              <input
+                className="input-base flex-1"
+                placeholder="https://docs.google.com/spreadsheets/d/…"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+              />
+              <button
+                className="btn-ghost"
+                onClick={handleSaveDestination}
+                disabled={setDestination.isPending || url.trim().length < 10}
+              >
+                {setDestination.isPending ? 'Saving…' : 'Save destination'}
+              </button>
+            </div>
           </>
         ) : !status.spreadsheetId ? (
           <>
@@ -159,10 +180,33 @@ export default function GoogleSheetsWriterPanel() {
               <button className="btn-primary" onClick={handleExportNow} disabled={drain.isPending}>
                 {drain.isPending ? 'Exporting…' : 'Export now'}
               </button>
+              <button
+                className="btn-ghost"
+                onClick={() => { setErr(null); setChangingDestination((v) => !v); }}
+              >
+                {changingDestination ? 'Cancel' : 'Change destination'}
+              </button>
               <button className="btn-ghost text-rose-600" onClick={handleDisconnect} disabled={disconnect.isPending}>
                 {disconnect.isPending ? 'Disconnecting…' : 'Disconnect'}
               </button>
             </div>
+            {changingDestination && (
+              <div className="flex gap-2 pt-1">
+                <input
+                  className="input-base flex-1"
+                  placeholder="https://docs.google.com/spreadsheets/d/…"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                />
+                <button
+                  className="btn-primary"
+                  onClick={handleSaveDestination}
+                  disabled={setDestination.isPending || url.trim().length < 10}
+                >
+                  {setDestination.isPending ? 'Saving…' : 'Save destination'}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

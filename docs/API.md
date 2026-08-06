@@ -743,8 +743,8 @@ cron sweep (`workers/index.js`, job `sheet-export-drain`) retries
 pending/retry rows and catches sync-path inserts. No pipeline lead found → row marked `no_match`, revisited for 30
 days. A destination sheet that goes 403/404 (deleted, access revoked) flips
 the whole integration to `failed` with a specific `lastError` instead of
-retrying forever. Export-id dedup on the sheet itself (hidden last column)
-makes the sheet append idempotent even across overlapping drains.
+retrying forever. Export-id dedup on the sheet itself (a trailing Export ID
+column) makes the sheet append idempotent even across overlapping drains.
 
 ### `GET /api/call-reporting/dashboard`
 (owner | practice_manager) Query `?date=YYYY-MM-DD` (default today,

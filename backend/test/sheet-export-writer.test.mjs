@@ -84,8 +84,59 @@ describe('google-sheets-writer', () => {
       expect(metaReq.metadataValue).toBe('999');
 
       const [, appendPath, appendOpts] = writerFetch.mock.calls[3];
-      expect(appendPath).toContain('/values/Ashford!A1:append');
+      expect(appendPath).toContain(`/values/${encodeURIComponent("'Ashford'!A1")}:append`);
       expect(appendOpts.body.values).toEqual([HEADER]);
+    });
+
+    it('metadata points at a deleted sheetId + a second valid entry -> uses the valid one, no batchUpdate', async () => {
+      const { ensurePracticeTab } = await import('../src/lib/integrations/google-sheets-writer.js');
+      writerFetch.mockResolvedValueOnce({
+        sheets: [
+          { properties: { sheetId: 222, title: 'Bexleyheath' } },
+        ],
+        developerMetadata: [
+          // Stale — pointed at a sheetId that no longer exists.
+          { metadataKey: 'practice:practice-uuid-1', metadataValue: '111' },
+          // Valid — still resolves.
+          { metadataKey: 'practice:practice-uuid-1', metadataValue: '222' },
+        ],
+      });
+
+      const title = await ensurePracticeTab('org-1', 'sheet-1', 'practice-uuid-1', 'Bexleyheath');
+
+      expect(title).toBe('Bexleyheath');
+      expect(writerFetch).toHaveBeenCalledTimes(1);
+      const batchUpdateCalls = writerFetch.mock.calls.filter(([path]) => path.includes(':batchUpdate'));
+      expect(batchUpdateCalls).toHaveLength(0);
+    });
+
+    it('metadata points ONLY at a deleted sheetId -> creates a tab, deletes stale metadata, stamps fresh metadata', async () => {
+      const { ensurePracticeTab } = await import('../src/lib/integrations/google-sheets-writer.js');
+      writerFetch
+        // 1. spreadsheet metadata fetch — only a stale mapping (sheetId 111 no longer in sheets)
+        .mockResolvedValueOnce({
+          sheets: [{ properties: { sheetId: 222, title: 'Other Tab' } }],
+          developerMetadata: [{ metadataKey: 'practice:practice-uuid-1', metadataValue: '111' }],
+        })
+        // 2. batchUpdate addSheet
+        .mockResolvedValueOnce({ replies: [{ addSheet: { properties: { sheetId: 333, title: 'Bexleyheath' } } }] })
+        // 3. batchUpdate delete-stale + createDeveloperMetadata
+        .mockResolvedValueOnce({})
+        // 4. appendRows HEADER
+        .mockResolvedValueOnce({});
+
+      const title = await ensurePracticeTab('org-1', 'sheet-1', 'practice-uuid-1', 'Bexleyheath');
+
+      expect(title).toBe('Bexleyheath');
+      expect(writerFetch).toHaveBeenCalledTimes(4);
+
+      const [, metaPath, metaOpts] = writerFetch.mock.calls[2];
+      expect(metaPath).toBe('/v4/spreadsheets/sheet-1:batchUpdate');
+      const requests = metaOpts.body.requests;
+      expect(requests[0].deleteDeveloperMetadata.dataFilter.developerMetadataLookup.metadataKey)
+        .toBe('practice:practice-uuid-1');
+      expect(requests[1].createDeveloperMetadata.developerMetadata.metadataKey).toBe('practice:practice-uuid-1');
+      expect(requests[1].createDeveloperMetadata.developerMetadata.metadataValue).toBe('333');
     });
 
     it('retries once with a " (2)" suffix when addSheet 400s on a duplicate title', async () => {
@@ -124,7 +175,7 @@ describe('google-sheets-writer', () => {
       expect(result).toEqual({ appended: 1 });
       expect(writerFetch).toHaveBeenCalledTimes(1);
       const [, path, opts] = writerFetch.mock.calls[0];
-      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent('Bexleyheath!A1')}:append`);
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'Bexleyheath'!A1")}:append`);
       expect(opts.method).toBe('POST');
       expect(opts.params).toEqual({ valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS' });
       expect(opts.body.values).toEqual(rows);
@@ -135,6 +186,16 @@ describe('google-sheets-writer', () => {
       const result = await appendRows('org-1', 'sheet-1', 'Bexleyheath', []);
       expect(result).toEqual({ appended: 0 });
       expect(writerFetch).not.toHaveBeenCalled();
+    });
+
+    it('quotes a tab title, doubling internal apostrophes ("St Mary\'s")', async () => {
+      const { appendRows } = await import('../src/lib/integrations/google-sheets-writer.js');
+      writerFetch.mockResolvedValueOnce({});
+
+      await appendRows('org-1', 'sheet-1', "St Mary's", [['Jane Doe']]);
+
+      const [, path] = writerFetch.mock.calls[0];
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'St Mary''s'!A1")}:append`);
     });
   });
 
@@ -150,7 +211,17 @@ describe('google-sheets-writer', () => {
       expect(ids).toBeInstanceOf(Set);
       expect(ids).toEqual(new Set(['export-id-1', 'export-id-2']));
       const [, path] = writerFetch.mock.calls[0];
-      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent('Bexleyheath!G2:G')}`);
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'Bexleyheath'!G2:G")}`);
+    });
+
+    it('quotes a tab title with an apostrophe for the G2:G range', async () => {
+      const { readExportIds } = await import('../src/lib/integrations/google-sheets-writer.js');
+      writerFetch.mockResolvedValueOnce({ values: [] });
+
+      await readExportIds('org-1', 'sheet-1', "St Mary's");
+
+      const [, path] = writerFetch.mock.calls[0];
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'St Mary''s'!G2:G")}`);
     });
 
     it('returns an empty Set when the range has no values', async () => {

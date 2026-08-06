@@ -29,6 +29,9 @@ create index if not exists idx_sheet_export_queue_org_status
 -- Supports the enqueue RPC's first-appointment scan.
 create index if not exists idx_appointments_org_contact_created
   on public.appointments(organisation_id, contact_id, created_at);
+-- Supports the enqueue RPC's created_at >= p_since filter.
+create index if not exists idx_appointments_org_created
+  on public.appointments(organisation_id, created_at);
 
 alter table public.sheet_export_queue enable row level security;
 -- Worker/webhook-only table: RLS enabled with NO tenant policy — identical to
@@ -73,8 +76,11 @@ set search_path = public as $$
 $$;
 
 -- Atomic claim: pending (respecting exponential backoff), stale processing
--- (crashed drainer >10 min), and optionally young no_match rows. SKIP LOCKED
--- keeps concurrent drains (webhook kick vs cron sweep) on disjoint sets.
+-- (crashed drainer >10 min), and optionally young no_match rows (gated by a
+-- 4h backoff so they don't get re-claimed every 15-min sweep and starve
+-- pending rows). SKIP LOCKED keeps concurrent drains (webhook kick vs cron
+-- sweep) on disjoint sets. Pending rows are prioritised ahead of no_match
+-- retries in the ordering.
 create or replace function public.sheet_export_claim(
   p_org UUID, p_limit INT default 50, p_include_no_match BOOLEAN default false)
 returns setof public.sheet_export_queue
@@ -93,8 +99,9 @@ set search_path = public as $$
             least(power(2, least(attempts, 10)), 1440)::int)))
         or (status = 'processing' and claimed_at < now() - interval '10 minutes')
         or (p_include_no_match and status = 'no_match'
-            and created_at > now() - interval '30 days'))
-    order by created_at asc
+            and created_at > now() - interval '30 days'
+            and updated_at < now() - interval '4 hours'))
+    order by (status = 'pending') desc, created_at asc
     limit p_limit
     for update skip locked)
   returning q.*;
@@ -114,12 +121,21 @@ set search_path = public as $$
   from public.contacts c
   where c.organisation_id = p_org
     and c.ghl_contact_id is not null
-    and length(p_digits) >= 9
-    and regexp_replace(coalesce(c.phone, ''), '\D', '', 'g') like '%' || p_digits;
+    and length(regexp_replace(coalesce(p_digits, ''), '\D', '', 'g')) >= 9
+    and regexp_replace(coalesce(c.phone, ''), '\D', '', 'g')
+        like '%' || regexp_replace(coalesce(p_digits, ''), '\D', '', 'g');
 $$;
 
 grant execute on function public.sheet_export_enqueue(UUID, TIMESTAMPTZ) to service_role;
 grant execute on function public.sheet_export_claim(UUID, INT, BOOLEAN) to service_role;
 grant execute on function public.sheet_export_phone_candidates(UUID, TEXT) to service_role;
+
+-- House idiom (see 000010/000021): these are SECURITY DEFINER RPCs exposed at
+-- /rest/v1/rpc/* — without an explicit revoke, PostgREST grants EXECUTE to
+-- PUBLIC by default, letting an anon-key holder pass an arbitrary org UUID
+-- and read contact PII / write cross-org queue rows.
+revoke all on function public.sheet_export_enqueue(UUID, TIMESTAMPTZ) from public, anon, authenticated;
+revoke all on function public.sheet_export_claim(UUID, INT, BOOLEAN) from public, anon, authenticated;
+revoke all on function public.sheet_export_phone_candidates(UUID, TEXT) from public, anon, authenticated;
 
 notify pgrst, 'reload schema';
