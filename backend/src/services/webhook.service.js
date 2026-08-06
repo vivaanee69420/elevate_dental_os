@@ -219,6 +219,15 @@ export const webhookService = {
                 results.push({ error: true, recordId: rec?.id ?? null, reason: err?.message || 'apply_failed' });
             }
         }
+        // Conversion export: a new/relinked appointment or patient may complete
+        // a first-appointment condition — kick the (debounced, fire-and-forget)
+        // sheet-export drain. Never awaited: Google must not slow this path.
+        if (resourceType === 'appointment' || resourceType === 'patient') {
+            try {
+                const { sheetExportService } = await import('./sheet-export.service.js');
+                sheetExportService.kickDrain(orgId);
+            } catch { /* export is best-effort; the worker sweep is the backstop */ }
+        }
         return { received: true, resourceType, action, count: results.length, results };
     },
 

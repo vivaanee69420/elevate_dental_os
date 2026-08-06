@@ -341,6 +341,20 @@ scheduleMonitored('google-sheets-sync', '40 3 * * *', async () => {
         console.error('[worker] Sheets sync failed', err);
     }
 }, { maxRuntime: 30 });
+// Sheet-export drain — every 15 min: enqueue+match+append for every org with
+// a google_sheets_writer connection. Catches sync-path appointments, retries
+// transient Google failures (backoff lives in the claim RPC), and nightly-ish
+// revisits young no_match rows. Real-time comes from the Dentally webhook kick.
+scheduleMonitored('sheet-export-drain', '*/15 * * * *', async () => {
+    try {
+        const { sheetExportService } = await import('../services/sheet-export.service.js');
+        const results = await sheetExportService.drainAllOrgs();
+        const active = results.filter((r) => (r.exported ?? 0) + (r.retried ?? 0) + (r.noMatch ?? 0) > 0);
+        if (active.length > 0) console.log(`[worker] Sheet export: ${JSON.stringify(active)}`);
+    } catch (err) {
+        console.error('[worker] Sheet export drain failed', err);
+    }
+}, { maxRuntime: 10 });
 // --------------------------------------------------------------------------
 // Task overdue auto-reminders — daily 08:00 UK time. Email the assignee of
 // every open/in-progress task whose due_date has passed, throttled to once a
