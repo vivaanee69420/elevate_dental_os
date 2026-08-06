@@ -31,6 +31,7 @@ vi.mock('../src/services/sheet-export.service.js', () => ({
     drainOrg: vi.fn(async () => ({ processed: 3, exported: 2, no_match: 1, failed: 0 })),
     disconnect: vi.fn(async () => ({ disconnected: true })),
     activity: vi.fn(async () => ({ entries: [] })),
+    refreshOrg: vi.fn(async () => ({ refreshed: 0 })),
   },
 }));
 

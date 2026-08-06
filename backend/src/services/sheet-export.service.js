@@ -9,11 +9,26 @@ import { AppError } from '../middleware/errors.js';
 import { findMatch } from './sheet-export-match.service.js';
 import { WRITER_PROVIDER_ID } from '../lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../lib/integrations/google-sheets-provider.js';
-import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate }
+import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate,
+    listMappedTabs, readTabGrid, batchUpdateCells, rangeFor }
     from '../lib/integrations/google-sheets-writer.js';
 
 // Sentinel group key routing open-day conversions to the org-wide tab.
 const OPEN_DAY_GROUP = '__open_day__';
+
+// Dentally appointment status -> sheet display label.
+const STATUS_LABEL = {
+    scheduled: 'Booked',
+    confirmed: 'Confirmed',
+    in_progress: 'In progress',
+    completed: 'Completed',
+    cancelled: 'Cancelled',
+    no_show: 'Did not attend',
+};
+const statusLabel = (s) => STATUS_LABEL[s] ?? (s || '');
+
+// Sheet money cells are plain pounds numbers (2 dp) so owners can SUM them.
+const pounds = (pence) => Math.round(Number(pence || 0)) / 100;
 import { writerFetch } from '../lib/integrations/google-sheets-writer-provider.js';
 
 const lastKick = new Map(); // orgId -> ms; 60s debounce, in-process only
@@ -121,7 +136,10 @@ export const sheetExportService = {
         for (const row of rows) {
             try {
                 const contact = await sheetExportRepository.getContact(orgId, row.contact_id);
-                const match = contact ? await findMatch(orgId, contact) : null;
+                const match = contact
+                    ? await findMatch(orgId, contact,
+                        row.episode_lead_at ? { leadsAfter: row.episode_lead_at } : {})
+                    : null;
                 if (!match) {
                     await safeMark(() => sheetExportRepository.markNoMatch(orgId, row.id,
                         contact ? 'no GHL pipeline lead matched' : 'contact missing'), 'markNoMatch', orgId);
@@ -147,19 +165,25 @@ export const sheetExportService = {
                 const phoneOut = contact.phone || match.matchedContact?.phone || '';
                 await sheetExportRepository.recordMatch(orgId, row.id, match.matchedContact.id, match.lead.id);
                 const rowPractice = practiceName.get(row.practice_id) ?? 'Unassigned';
+                const apptStatus = await sheetExportRepository
+                    .appointmentStatus(orgId, row.appointment_id).catch(() => null);
+                const rev = await sheetExportRepository
+                    .revenue(orgId, row.contact_id, row.appointment_starts_at)
+                    .catch(() => ({ invoicedPence: 0, collectedPence: 0 }));
                 const display = [formatLondonDate(match.leadCreatedAt), name,
                     email, phoneOut, match.pipelineName,
                     formatLondonDate(row.appointment_starts_at), treatment ?? ''];
+                const tail = [statusLabel(apptStatus), pounds(rev.invoicedPence), pounds(rev.collectedPence)];
                 // Owner rule: open-day pipeline conversions collect on ONE
                 // org-wide tab (with a Practice column) instead of their
                 // practice tab. Order must mirror the writer's headers exactly
                 // (Export ID last, hidden).
                 if (/open day/i.test(match.pipelineName)) {
-                    const values = [...display, rowPractice, row.id];
+                    const values = [...display, rowPractice, ...tail, row.id];
                     if (!perPractice.has(OPEN_DAY_GROUP)) perPractice.set(OPEN_DAY_GROUP, []);
                     perPractice.get(OPEN_DAY_GROUP).push({ queueRow: row, values });
                 } else {
-                    const values = [...display, row.id];
+                    const values = [...display, ...tail, row.id];
                     const key = row.practice_id ?? 'unassigned';
                     if (!perPractice.has(key)) perPractice.set(key, []);
                     perPractice.get(key).push({ queueRow: row, values });
@@ -201,6 +225,78 @@ export const sheetExportService = {
         }
         await integrationRepository.setSyncTime(orgId, WRITER_PROVIDER_ID).catch(() => {});
         return { exported, noMatch, retried, excluded, skippedDuplicates };
+    },
+
+    // Nightly in-place refresh: for every tab this export owns, re-derive the
+    // Status / Invoiced / Collected cells of each exported row (found via its
+    // hidden Export ID) from the live Dentally data, and update them where
+    // they changed. Never appends, never touches other columns, skips tabs
+    // whose header predates the Status column.
+    async refreshOrg(orgId) {
+        const integ = await integrationRepository.getByProvider(orgId, WRITER_PROVIDER_ID);
+        if (!integ || integ.status === 'revoked' || !integ.secrets) return { skipped: 'not_connected' };
+        if (integ.status === 'failed') return { skipped: 'integration_failed' };
+        const spreadsheetId = integ.config?.spreadsheet_id;
+        if (!spreadsheetId) return { skipped: 'no_destination' };
+
+        const exported = await sheetExportRepository.exportedRows(orgId);
+        if (exported.length === 0) return { refreshed: 0 };
+        const byId = new Map(exported.map((r) => [r.id, r]));
+
+        let refreshed = 0;
+        const tabs = await listMappedTabs(orgId, spreadsheetId);
+        for (const tab of tabs) {
+            try {
+                const grid = await readTabGrid(orgId, spreadsheetId, tab.title);
+                if (!grid.length) continue;
+                const header = grid[0].map((h) => String(h ?? ''));
+                const statusCol = header.indexOf('Status');
+                const exportCol = header.indexOf('Export ID');
+                if (statusCol === -1 || exportCol === -1) continue; // pre-Status layout
+                const updates = [];
+                for (let i = 1; i < grid.length; i += 1) {
+                    const rowId = String(grid[i][exportCol] ?? '');
+                    const q = byId.get(rowId);
+                    if (!q) continue;
+                    const apptStatus = await sheetExportRepository
+                        .appointmentStatus(orgId, q.appointment_id).catch(() => null);
+                    const rev = await sheetExportRepository
+                        .revenue(orgId, q.contact_id, q.appointment_starts_at)
+                        .catch(() => null);
+                    if (rev === null && apptStatus === null) continue;
+                    const fresh = [statusLabel(apptStatus),
+                        pounds(rev?.invoicedPence), pounds(rev?.collectedPence)];
+                    const current = [String(grid[i][statusCol] ?? ''),
+                        Number(grid[i][statusCol + 1] ?? 0), Number(grid[i][statusCol + 2] ?? 0)];
+                    if (fresh[0] === current[0] && fresh[1] === current[1] && fresh[2] === current[2]) continue;
+                    updates.push({
+                        range: rangeFor(tab.title, i + 1, statusCol + 1, statusCol + 3),
+                        values: [fresh],
+                    });
+                }
+                await batchUpdateCells(orgId, spreadsheetId, updates);
+                refreshed += updates.length;
+            } catch (err) {
+                console.warn('[sheet-export] refresh tab failed', {
+                    orgId, tab: tab.title, err: err?.message || String(err),
+                });
+            }
+        }
+        return { refreshed };
+    },
+
+    async refreshAllOrgs() {
+        const orgs = await sheetExportRepository.orgsWithWriter();
+        const results = [];
+        for (const orgId of orgs) {
+            try {
+                results.push({ orgId, ...(await sheetExportService.refreshOrg(orgId)) });
+            } catch (err) {
+                console.error('[sheet-export] refresh failed', { orgId, err: err?.message || String(err) });
+                results.push({ orgId, error: err?.message || 'refresh failed' });
+            }
+        }
+        return results;
     },
 
     async drainAllOrgs() {

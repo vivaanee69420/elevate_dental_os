@@ -1043,10 +1043,12 @@ CREATE TRIGGER practice_cost_model_updated_at BEFORE UPDATE ON practice_cost_mod
 
 -- ============================================================================
 -- sheet_export_queue — outbox for GHL→Dentally conversion export. One row
--- per Dentally patient whose FIRST appointment was created after the
--- google_sheets_writer connection was set up. Status: pending|processing|
--- exported|no_match|failed. Atomic claim supports concurrent webhook + cron
--- drains via SKIP LOCKED + exponential backoff (migration 20260101000121).
+-- per Dentally patient conversion EPISODE: episode 1 = first appointment
+-- created after the google_sheets_writer connection was set up; episode N+1 =
+-- re-enquiry (new GHL lead after the last exported conversion) followed by a
+-- new booking. Status: pending|processing|exported|no_match|failed|skipped.
+-- Atomic claim supports concurrent webhook + cron drains via SKIP LOCKED +
+-- exponential backoff (migrations 20260101000121-000124).
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS sheet_export_queue (
   id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1056,9 +1058,11 @@ CREATE TABLE IF NOT EXISTS sheet_export_queue (
   appointment_id          UUID REFERENCES appointments(id) ON DELETE SET NULL,
   appointment_starts_at   TIMESTAMPTZ,
   status                  TEXT NOT NULL DEFAULT 'pending'
-                          CHECK (status IN ('pending','processing','exported','no_match','failed')),
+                          CHECK (status IN ('pending','processing','exported','no_match','failed','skipped')),
   matched_contact_id      UUID REFERENCES contacts(id) ON DELETE SET NULL,
   matched_lead_id         UUID REFERENCES leads(id) ON DELETE SET NULL,
+  episode                 INT NOT NULL DEFAULT 1,
+  episode_lead_at         TIMESTAMPTZ,
   attempts                INT NOT NULL DEFAULT 0,
   last_error              TEXT,
   claimed_at              TIMESTAMPTZ,
@@ -1066,8 +1070,8 @@ CREATE TABLE IF NOT EXISTS sheet_export_queue (
   created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS sheet_export_queue_org_contact
-  ON sheet_export_queue (organisation_id, contact_id);
+CREATE UNIQUE INDEX IF NOT EXISTS sheet_export_queue_org_contact_episode
+  ON sheet_export_queue (organisation_id, contact_id, episode);
 CREATE INDEX IF NOT EXISTS idx_sheet_export_queue_org_status
   ON sheet_export_queue (organisation_id, status);
 CREATE INDEX IF NOT EXISTS idx_appointments_org_contact_created

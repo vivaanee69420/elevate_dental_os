@@ -13,6 +13,9 @@ vi.mock('../src/repositories/sheet-export.repository.js', () => ({
     counts: vi.fn(),
     getContact: vi.fn(),
     appointmentType: vi.fn(),
+    appointmentStatus: vi.fn(),
+    revenue: vi.fn(),
+    exportedRows: vi.fn(),
     practices: vi.fn(),
     recordMatch: vi.fn(),
     orgsWithWriter: vi.fn(),
@@ -46,6 +49,10 @@ vi.mock('../src/lib/integrations/google-sheets-writer.js', () => ({
   ensurePracticeTab: vi.fn(),
   ensureOpenDayTab: vi.fn(),
   appendRows: vi.fn(),
+  listMappedTabs: vi.fn(),
+  readTabGrid: vi.fn(),
+  batchUpdateCells: vi.fn(),
+  rangeFor: vi.fn((t, r, a, b) => `'${t}'!${String.fromCharCode(64 + a)}${r}:${String.fromCharCode(64 + b)}${r}`),
   readExportIds: vi.fn(),
   formatLondonDate: vi.fn((iso) => (iso ? `formatted:${iso}` : '')),
 }));
@@ -55,7 +62,7 @@ import { integrationRepository } from '../src/repositories/integration.repositor
 import { findMatch } from '../src/services/sheet-export-match.service.js';
 import { writerFetch } from '../src/lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../src/lib/integrations/google-sheets-provider.js';
-import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate }
+import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate, listMappedTabs, readTabGrid, batchUpdateCells }
   from '../src/lib/integrations/google-sheets-writer.js';
 import { sheetExportService } from '../src/services/sheet-export.service.js';
 
@@ -111,6 +118,12 @@ beforeEach(() => {
   sheetExportRepository.markRetry.mockResolvedValue(undefined);
   sheetExportRepository.markNoMatch.mockResolvedValue(undefined);
   sheetExportRepository.appointmentType.mockResolvedValue('Cosmetic Consultation');
+  sheetExportRepository.appointmentStatus.mockResolvedValue('scheduled');
+  sheetExportRepository.revenue.mockResolvedValue({ invoicedPence: 12500, collectedPence: 5000 });
+  sheetExportRepository.exportedRows.mockResolvedValue([]);
+  listMappedTabs.mockResolvedValue([]);
+  readTabGrid.mockResolvedValue([]);
+  batchUpdateCells.mockResolvedValue({ updated: 0 });
   integrationRepository.setSyncTime.mockResolvedValue(undefined);
   integrationRepository.markFailed.mockResolvedValue(undefined);
   ensurePracticeTab.mockResolvedValue('Bexleyheath');
@@ -171,7 +184,7 @@ describe('drainOrg', () => {
     expect(rows).toEqual([
       ['formatted:2026-01-15T00:00:00.000Z', 'Jane Doe', 'jane@x.com',
         '+447123456789', 'New Patient', 'formatted:2026-02-01T10:00:00.000Z',
-        'Cosmetic Consultation', row.id],
+        'Cosmetic Consultation', 'Booked', 125, 50, row.id],
     ]);
     expect(formatLondonDate).toHaveBeenCalledWith('2026-02-01T10:00:00.000Z');
     expect(formatLondonDate).toHaveBeenCalledWith('2026-01-15T00:00:00.000Z');
@@ -224,9 +237,10 @@ describe('drainOrg', () => {
     expect(ensurePracticeTab).not.toHaveBeenCalled();
     const [, , tab, rows] = appendRows.mock.calls[0];
     expect(tab).toBe('Open Days');
-    // Practice column precedes the hidden Export ID.
+    // Practice column precedes Status/Invoiced/Collected + hidden Export ID.
     expect(rows[0][7]).toBe('Bexleyheath');
-    expect(rows[0][8]).toBe(row.id);
+    expect(rows[0][8]).toBe('Booked');
+    expect(rows[0][11]).toBe(row.id);
     expect(result).toEqual({ exported: 1, noMatch: 0, retried: 0, excluded: 0, skippedDuplicates: 0 });
   });
 
@@ -395,5 +409,71 @@ describe('drainOrg', () => {
     );
     expect(sheetExportRepository.markRetry).toHaveBeenCalledWith(ORG, row.id, 'Sheets API HTTP 404');
     expect(result.retried).toBe(1);
+  });
+});
+
+describe('refreshOrg', () => {
+  it('updates Status/Invoiced/Collected in place for changed rows only, found via Export ID', async () => {
+    integrationRepository.getByProvider.mockResolvedValue(integ());
+    sheetExportRepository.exportedRows.mockResolvedValue([
+      { id: 'row-1', contact_id: 'contact-1', appointment_id: 'appt-1',
+        appointment_starts_at: '2026-02-01T10:00:00.000Z', episode: 1, episode_lead_at: null },
+    ]);
+    listMappedTabs.mockResolvedValue([{ key: 'practice:practice-1', title: 'Bexleyheath' }]);
+    readTabGrid.mockResolvedValue([
+      ['Lead Incoming Date', 'Name', 'Email', 'Phone', 'Source (Pipeline)',
+        'Appointment Date', 'Treatment', 'Status', 'Invoiced', 'Collected', 'Export ID'],
+      // Stale row: was Booked/125/50 — appointment now completed with more revenue.
+      ['15/01/2026', 'Jane Doe', 'jane@x.com', '+447123456789', 'New Patient',
+        '01/02/2026', 'Cosmetic Consultation', 'Booked', 125, 50, 'row-1'],
+      // A row whose Export ID we do not know — must be left alone.
+      ['16/01/2026', 'Someone Else', '', '', 'Other', '02/02/2026', 'Implant',
+        'Booked', 0, 0, 'unknown-id'],
+    ]);
+    sheetExportRepository.appointmentStatus.mockResolvedValue('completed');
+    sheetExportRepository.revenue.mockResolvedValue({ invoicedPence: 250000, collectedPence: 100000 });
+
+    const result = await sheetExportService.refreshOrg(ORG);
+
+    expect(batchUpdateCells).toHaveBeenCalledTimes(1);
+    const [, , data] = batchUpdateCells.mock.calls[0];
+    expect(data).toEqual([
+      { range: "'Bexleyheath'!H2:J2", values: [['Completed', 2500, 1000]] },
+    ]);
+    expect(result).toEqual({ refreshed: 1 });
+  });
+
+  it('unchanged rows produce no updates; pre-Status tabs are skipped', async () => {
+    integrationRepository.getByProvider.mockResolvedValue(integ());
+    sheetExportRepository.exportedRows.mockResolvedValue([
+      { id: 'row-1', contact_id: 'contact-1', appointment_id: 'appt-1',
+        appointment_starts_at: '2026-02-01T10:00:00.000Z', episode: 1, episode_lead_at: null },
+    ]);
+    listMappedTabs.mockResolvedValue([
+      { key: 'practice:practice-1', title: 'Bexleyheath' },
+      { key: 'practice:practice-2', title: 'OldLayout' },
+    ]);
+    readTabGrid
+      .mockResolvedValueOnce([
+        ['Lead Incoming Date', 'Name', 'Email', 'Phone', 'Source (Pipeline)',
+          'Appointment Date', 'Treatment', 'Status', 'Invoiced', 'Collected', 'Export ID'],
+        ['15/01/2026', 'Jane Doe', 'jane@x.com', '+447123456789', 'New Patient',
+          '01/02/2026', 'Cosmetic Consultation', 'Booked', 125, 50, 'row-1'],
+      ])
+      // Old layout without a Status column — skipped entirely.
+      .mockResolvedValueOnce([
+        ['Lead Incoming Date', 'Name', 'Email', 'Phone', 'Source (Pipeline)',
+          'Appointment Date', 'Treatment', 'Export ID'],
+      ]);
+    sheetExportRepository.appointmentStatus.mockResolvedValue('scheduled');
+    sheetExportRepository.revenue.mockResolvedValue({ invoicedPence: 12500, collectedPence: 5000 });
+
+    const result = await sheetExportService.refreshOrg(ORG);
+
+    // Nothing changed -> one batchUpdateCells call with an empty payload for
+    // the current-layout tab, none for the old-layout tab.
+    const payloads = batchUpdateCells.mock.calls.map((c) => c[2]);
+    expect(payloads.every((p) => p.length === 0)).toBe(true);
+    expect(result).toEqual({ refreshed: 0 });
   });
 });

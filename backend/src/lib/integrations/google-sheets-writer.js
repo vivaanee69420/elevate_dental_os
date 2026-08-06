@@ -4,11 +4,13 @@
 import { writerFetch } from './google-sheets-writer-provider.js';
 
 export const HEADER = ['Lead Incoming Date', 'Name', 'Email', 'Phone',
-    'Source (Pipeline)', 'Appointment Date', 'Treatment', 'Export ID'];
+    'Source (Pipeline)', 'Appointment Date', 'Treatment',
+    'Status', 'Invoiced', 'Collected', 'Export ID'];
 // Open-day conversions from every practice collect on ONE tab, so it carries
 // an extra Practice column. Export ID stays last (hidden).
 export const OPEN_DAY_HEADER = ['Lead Incoming Date', 'Name', 'Email', 'Phone',
-    'Source (Pipeline)', 'Appointment Date', 'Treatment', 'Practice', 'Export ID'];
+    'Source (Pipeline)', 'Appointment Date', 'Treatment', 'Practice',
+    'Status', 'Invoiced', 'Collected', 'Export ID'];
 
 export function formatLondonDate(iso) {
     if (!iso) return '';
@@ -146,18 +148,62 @@ export async function appendRows(orgId, spreadsheetId, tabTitle, rows) {
     return { appended: rows.length };
 }
 
-// Export ID = queue row uuid, in the header's LAST column: I on the Open Days
-// tab, H on practice tabs, G on tabs created before the Treatment column
-// existed. Read G:I and union every non-empty cell — only uuid equality is
-// ever tested against the set, so neighbouring display values are harmless.
-// Read on retry so a crash between append and mark-exported can never
-// double-write a conversion.
+// Export ID = queue row uuid, in the header's LAST column (position varies by
+// tab generation as columns were added). Read G:L and union every non-empty
+// cell — only uuid equality is ever tested against the set, so neighbouring
+// display values are harmless. Read on retry so a crash between append and
+// mark-exported can never double-write a conversion.
 export async function readExportIds(orgId, spreadsheetId, tabTitle) {
-    const range = encodeURIComponent(`${quoteTab(tabTitle)}!G2:I`);
+    const range = encodeURIComponent(`${quoteTab(tabTitle)}!G2:L`);
     const res = await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}/values/${range}`);
     const ids = new Set();
     for (const row of res.values ?? []) {
         for (const cell of row) if (cell) ids.add(String(cell));
     }
     return ids;
+}
+
+// --- Refresh support (nightly Status/Invoiced/Collected updates) -----------
+
+// Every tab this export owns (developer-metadata mapped), resolved to its
+// CURRENT title. Never creates anything.
+export async function listMappedTabs(orgId, spreadsheetId) {
+    const meta = await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}`, {
+        params: { fields: 'sheets(properties(sheetId,title)),developerMetadata(metadataKey,metadataValue)' },
+    });
+    const out = [];
+    const seen = new Set();
+    for (const m of meta.developerMetadata ?? []) {
+        if (!m.metadataKey?.startsWith('practice:') && m.metadataKey !== OPEN_DAY_KEY) continue;
+        const sheet = (meta.sheets ?? [])
+            .find((s) => String(s.properties?.sheetId) === String(m.metadataValue));
+        if (sheet && !seen.has(sheet.properties.sheetId)) {
+            seen.add(sheet.properties.sheetId);
+            out.push({ key: m.metadataKey, title: sheet.properties.title });
+        }
+    }
+    return out;
+}
+
+// Full grid of a tab (A:L covers every layout generation), values-only.
+export async function readTabGrid(orgId, spreadsheetId, tabTitle) {
+    const range = encodeURIComponent(`${quoteTab(tabTitle)}!A1:L`);
+    const res = await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}/values/${range}`);
+    return res.values ?? [];
+}
+
+// In-place cell updates: data = [{ range: "'Tab'!H5:J5", values: [[...]] }].
+// Ranges must already be A1-quoted via rangeFor / quoteTab.
+export async function batchUpdateCells(orgId, spreadsheetId, data) {
+    if (!data.length) return { updated: 0 };
+    await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
+        method: 'POST',
+        body: { valueInputOption: 'RAW', data },
+    });
+    return { updated: data.length };
+}
+
+// A1 range for a contiguous cell run on one row: cols are 1-based indexes.
+export function rangeFor(tabTitle, rowNumber, colStart, colEnd) {
+    return `${quoteTab(tabTitle)}!${colLetter(colStart)}${rowNumber}:${colLetter(colEnd)}${rowNumber}`;
 }

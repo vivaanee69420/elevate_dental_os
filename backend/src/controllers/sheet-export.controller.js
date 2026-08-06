@@ -22,9 +22,14 @@ export const sheetExportController = {
     },
     async drain(req, res) {
         // Manual "Export now": re-check EVERYTHING immediately — pending rows
-        // regardless of retry backoff, no_match rows regardless of the 4h gate.
-        res.json(await sheetExportService.drainOrg(req.user.organisation_id,
-            { includeNoMatch: true, ignoreBackoff: true }));
+        // regardless of retry backoff, no_match rows regardless of the 4h gate
+        // — then refresh the Status/Invoiced/Collected cells of existing rows.
+        const orgId = req.user.organisation_id;
+        const result = await sheetExportService.drainOrg(orgId,
+            { includeNoMatch: true, ignoreBackoff: true });
+        let refresh = null;
+        try { refresh = await sheetExportService.refreshOrg(orgId); } catch { /* best-effort */ }
+        res.json({ ...result, refreshed: refresh?.refreshed ?? 0 });
     },
     async disconnect(req, res) {
         res.json(await sheetExportService.disconnect(req.user.organisation_id));

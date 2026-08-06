@@ -154,6 +154,44 @@ export const sheetExportRepository = {
         return data?.appointment_type ?? null;
     },
 
+    // Live Dentally status for the sheet's Status column.
+    async appointmentStatus(orgId, appointmentId) {
+        if (!appointmentId) return null;
+        const { data, error } = await supabase_1.serviceClient
+            .from('appointments')
+            .select('status')
+            .eq('organisation_id', orgId)
+            .eq('id', appointmentId)
+            .maybeSingle();
+        if (error) throw new Error(error.message);
+        return data?.status ?? null;
+    },
+
+    // Both revenue views (invoiced + settled-collected pence) for one contact
+    // since a moment — one SECURITY DEFINER round trip (RPC, migration 000124).
+    async revenue(orgId, contactId, sinceIso) {
+        const { data, error } = await supabase_1.serviceClient.rpc('sheet_export_revenue', {
+            p_org: orgId, p_contact: contactId, p_since: sinceIso,
+        });
+        if (error) throw new Error(error.message);
+        const row = Array.isArray(data) ? data[0] : data;
+        return {
+            invoicedPence: Number(row?.invoiced_pence ?? 0),
+            collectedPence: Number(row?.collected_pence ?? 0),
+        };
+    },
+
+    // All exported rows for the nightly in-place refresh.
+    async exportedRows(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('sheet_export_queue')
+            .select('id, contact_id, appointment_id, appointment_starts_at, episode, episode_lead_at')
+            .eq('organisation_id', orgId)
+            .eq('status', 'exported');
+        if (error) throw new Error(error.message);
+        return data ?? [];
+    },
+
     async ghlCandidatesByEmail(orgId, email) {
         const { data, error } = await supabase_1.serviceClient
             .from('contacts')

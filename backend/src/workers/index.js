@@ -357,6 +357,20 @@ scheduleMonitored('google-sheets-sync', '40 3 * * *', async () => {
 // a google_sheets_writer connection. Catches sync-path appointments, retries
 // transient Google failures (backoff lives in the claim RPC), and nightly-ish
 // revisits young no_match rows. Real-time comes from the Dentally webhook kick.
+// Sheet-export refresh — nightly 04:30 UK: re-derive each exported row's
+// Status/Invoiced/Collected cells from live Dentally data and update them in
+// place (rows found via the hidden Export ID column). Runs after the 22:00
+// GHL sync and the overnight Dentally pulls so the numbers reflect yesterday.
+scheduleMonitored('sheet-export-refresh', '30 4 * * *', async () => {
+    try {
+        const { sheetExportService } = await import('../services/sheet-export.service.js');
+        const results = await sheetExportService.refreshAllOrgs();
+        const active = results.filter((r) => (r.refreshed ?? 0) > 0);
+        if (active.length > 0) console.log(`[worker] Sheet refresh: ${JSON.stringify(active)}`);
+    } catch (err) {
+        console.error('[worker] Sheet export refresh failed', err);
+    }
+}, { timezone: 'Europe/London', maxRuntime: 30 });
 scheduleMonitored('sheet-export-drain', '*/15 * * * *', async () => {
     try {
         const { sheetExportService } = await import('../services/sheet-export.service.js');
