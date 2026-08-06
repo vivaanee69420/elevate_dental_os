@@ -4,7 +4,7 @@
 import { writerFetch } from './google-sheets-writer-provider.js';
 
 export const HEADER = ['Lead Incoming Date', 'Name', 'Email', 'Phone',
-    'Source (Pipeline)', 'Appointment Date', 'Export ID'];
+    'Source (Pipeline)', 'Appointment Date', 'Treatment', 'Export ID'];
 
 export function formatLondonDate(iso) {
     if (!iso) return '';
@@ -71,12 +71,12 @@ export async function ensurePracticeTab(orgId, spreadsheetId, practiceId, practi
         metadataKey: key, metadataValue: String(sheetId),
         location: { spreadsheet: true }, visibility: 'DOCUMENT',
     } } });
-    // Export ID (column G) is bookkeeping, not report content — hide it so the
-    // owner sees only the six display columns. It must still EXIST: it is the
+    // Export ID (column H) is bookkeeping, not report content — hide it so the
+    // owner sees only the display columns. It must still EXIST: it is the
     // idempotency key that stops a crash between append and mark-exported from
     // ever double-writing a conversion.
     requests.push({ updateDimensionProperties: {
-        range: { sheetId, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 },
+        range: { sheetId, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 },
         properties: { hiddenByUser: true },
         fields: 'hiddenByUser',
     } });
@@ -99,10 +99,16 @@ export async function appendRows(orgId, spreadsheetId, tabTitle, rows) {
     return { appended: rows.length };
 }
 
-// Column G = Export ID (queue row uuid). Read on retry so a crash between
-// append and mark-exported can never double-write a conversion.
+// Export ID = queue row uuid, column H (column G on tabs created before the
+// Treatment column existed — read both and union, so old tabs keep deduping).
+// Read on retry so a crash between append and mark-exported can never
+// double-write a conversion.
 export async function readExportIds(orgId, spreadsheetId, tabTitle) {
-    const range = encodeURIComponent(`${quoteTab(tabTitle)}!G2:G`);
+    const range = encodeURIComponent(`${quoteTab(tabTitle)}!G2:H`);
     const res = await writerFetch(orgId, `/v4/spreadsheets/${spreadsheetId}/values/${range}`);
-    return new Set((res.values ?? []).map((r) => String(r[0] ?? '')).filter(Boolean));
+    const ids = new Set();
+    for (const row of res.values ?? []) {
+        for (const cell of row) if (cell) ids.add(String(cell));
+    }
+    return ids;
 }

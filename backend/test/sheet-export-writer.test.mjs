@@ -82,10 +82,10 @@ describe('google-sheets-writer', () => {
       const metaReq = metaOpts.body.requests[0].createDeveloperMetadata.developerMetadata;
       expect(metaReq.metadataKey).toBe('practice:practice-uuid-2');
       expect(metaReq.metadataValue).toBe('999');
-      // Export ID (column G) hidden on creation — bookkeeping, not report content.
+      // Export ID (column H) hidden on creation — bookkeeping, not report content.
       const hideReq = metaOpts.body.requests.find((r) => r.updateDimensionProperties);
       expect(hideReq.updateDimensionProperties.range).toEqual(
-        { sheetId: 999, dimension: 'COLUMNS', startIndex: 6, endIndex: 7 });
+        { sheetId: 999, dimension: 'COLUMNS', startIndex: 7, endIndex: 8 });
       expect(hideReq.updateDimensionProperties.properties.hiddenByUser).toBe(true);
 
       const [, appendPath, appendOpts] = writerFetch.mock.calls[3];
@@ -93,10 +93,10 @@ describe('google-sheets-writer', () => {
       expect(appendOpts.body.values).toEqual([HEADER]);
     });
 
-    it('HEADER puts Lead Incoming Date first and Export ID last (hidden column G)', async () => {
+    it('HEADER puts Lead Incoming Date first and Export ID last (hidden column H)', async () => {
       const { HEADER } = await import('../src/lib/integrations/google-sheets-writer.js');
       expect(HEADER).toEqual(['Lead Incoming Date', 'Name', 'Email', 'Phone',
-        'Source (Pipeline)', 'Appointment Date', 'Export ID']);
+        'Source (Pipeline)', 'Appointment Date', 'Treatment', 'Export ID']);
     });
 
     it('metadata points at a deleted sheetId + a second valid entry -> uses the valid one, no batchUpdate', async () => {
@@ -211,28 +211,32 @@ describe('google-sheets-writer', () => {
   });
 
   describe('readExportIds', () => {
-    it('parses a values.get response of column G into a Set, skipping the header cell via the range', async () => {
+    it('unions columns G and H into a Set (H = current tabs, G = pre-Treatment tabs), skipping the header via the range', async () => {
       const { readExportIds } = await import('../src/lib/integrations/google-sheets-writer.js');
       writerFetch.mockResolvedValueOnce({
-        values: [['export-id-1'], ['export-id-2'], [''], ['export-id-1']],
+        // Current tab shape: [treatment, export id]; old tab rows carry the id in G.
+        values: [['Cosmetic Consultation', 'export-id-1'], ['', 'export-id-2'], ['old-tab-id'], ['', '']],
       });
 
       const ids = await readExportIds('org-1', 'sheet-1', 'Bexleyheath');
 
       expect(ids).toBeInstanceOf(Set);
-      expect(ids).toEqual(new Set(['export-id-1', 'export-id-2']));
+      expect(ids.has('export-id-1')).toBe(true);
+      expect(ids.has('export-id-2')).toBe(true);
+      expect(ids.has('old-tab-id')).toBe(true);
+      expect(ids.has('')).toBe(false);
       const [, path] = writerFetch.mock.calls[0];
-      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'Bexleyheath'!G2:G")}`);
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'Bexleyheath'!G2:H")}`);
     });
 
-    it('quotes a tab title with an apostrophe for the G2:G range', async () => {
+    it('quotes a tab title with an apostrophe for the G2:H range', async () => {
       const { readExportIds } = await import('../src/lib/integrations/google-sheets-writer.js');
       writerFetch.mockResolvedValueOnce({ values: [] });
 
       await readExportIds('org-1', 'sheet-1', "St Mary's");
 
       const [, path] = writerFetch.mock.calls[0];
-      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'St Mary''s'!G2:G")}`);
+      expect(path).toBe(`/v4/spreadsheets/sheet-1/values/${encodeURIComponent("'St Mary''s'!G2:H")}`);
     });
 
     it('returns an empty Set when the range has no values', async () => {
