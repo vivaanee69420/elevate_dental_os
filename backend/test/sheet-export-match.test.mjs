@@ -14,7 +14,19 @@ vi.mock('../src/repositories/sheet-export.repository.js', () => ({
 vi.mock('../src/repositories/integration-account.repository.js', () => ({
   integrationAccountRepository: {
     list: vi.fn(),
+    getByIdWithSecrets: vi.fn(),
+    mergeConfig: vi.fn(),
   },
+}));
+
+// The live pipeline-refresh path (dynamic imports in the service) — mocked so
+// no real crypto env or GHL client is needed.
+vi.mock('../src/lib/crypto.js', () => ({
+  decryptSecret: vi.fn(() => JSON.stringify({ access_token: 'tok' })),
+  encryptSecret: vi.fn((s) => s),
+}));
+vi.mock('../src/lib/integrations/gohighlevel-sync.js', () => ({
+  detectPipelinesForToken: vi.fn(async () => ({ pipelines: [] })),
 }));
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
@@ -26,6 +38,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
 import { sheetExportRepository } from '../src/repositories/sheet-export.repository.js';
 import { integrationAccountRepository } from '../src/repositories/integration-account.repository.js';
 import { integrationRepository } from '../src/repositories/integration.repository.js';
+import { detectPipelinesForToken } from '../src/lib/integrations/gohighlevel-sync.js';
 import { findMatch, pipelineNameMap } from '../src/services/sheet-export-match.service.js';
 
 const ORG = '00000000-0000-0000-0000-000000000001';
@@ -157,7 +170,7 @@ describe('findMatch', () => {
     expect(result.pipelineName).toBe('January Pipeline');
   });
 
-  it('6. unresolvable pipeline id falls back to the raw id, never blank', async () => {
+  it('6. unresolvable pipeline id falls back to "Unknown pipeline", never a raw id or blank', async () => {
     const c = contact({ id: 'ghl-1' });
     sheetExportRepository.ghlCandidatesByEmail.mockResolvedValue([c]);
     sheetExportRepository.pipelineLeads.mockResolvedValue([lead({ contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-unknown' })]);
@@ -166,7 +179,48 @@ describe('findMatch', () => {
 
     const result = await findMatch(ORG, { id: 'd-1', email: c.email, phone: null });
 
-    expect(result.pipelineName).toBe('pipe-unknown');
+    expect(result.pipelineName).toBe('Unknown pipeline');
+    // No integration_account_id on the lead -> no live refresh attempted.
+    expect(integrationAccountRepository.getByIdWithSecrets).not.toHaveBeenCalled();
+  });
+
+  it('6b. prefers the EARLIEST lead whose pipeline resolves over an earlier unresolvable one', async () => {
+    const c = contact({ id: 'ghl-1' });
+    sheetExportRepository.ghlCandidatesByEmail.mockResolvedValue([c]);
+    sheetExportRepository.pipelineLeads.mockResolvedValue([
+      lead({ id: 'lead-old', contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-archived', created_at: '2024-11-04T00:00:00.000Z' }),
+      lead({ id: 'lead-live', contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-live', created_at: '2026-03-29T00:00:00.000Z' }),
+    ]);
+    integrationAccountRepository.list.mockResolvedValue([
+      { config: { pipelines: [{ id: 'pipe-live', name: 'Implants' }] } },
+    ]);
+
+    const result = await findMatch(ORG, { id: 'd-1', email: c.email, phone: null });
+
+    expect(result.pipelineName).toBe('Implants');
+    expect(result.lead.id).toBe('lead-live');
+    expect(result.leadCreatedAt).toBe('2026-03-29T00:00:00.000Z');
+  });
+
+  it('6c. live-refreshes the owning subaccount pipelines when nothing resolves, then resolves', async () => {
+    const c = contact({ id: 'ghl-1' });
+    sheetExportRepository.ghlCandidatesByEmail.mockResolvedValue([c]);
+    sheetExportRepository.pipelineLeads.mockResolvedValue([
+      lead({ contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-stale', integration_account_id: 'acc-1' }),
+    ]);
+    integrationAccountRepository.list.mockResolvedValue([{ config: { pipelines: [] } }]);
+    integrationAccountRepository.getByIdWithSecrets.mockResolvedValue({
+      id: 'acc-1', secrets: 'enc', external_account_id: 'loc-1',
+    });
+    detectPipelinesForToken.mockResolvedValue({ pipelines: [{ id: 'pipe-stale', name: 'Dentures' }] });
+
+    const result = await findMatch(ORG, { id: 'd-1', email: c.email, phone: null });
+
+    expect(integrationAccountRepository.getByIdWithSecrets).toHaveBeenCalledWith(ORG, 'acc-1');
+    expect(result.pipelineName).toBe('Dentures');
+    // Refreshed definitions are persisted back to the account cache.
+    expect(integrationAccountRepository.mergeConfig).toHaveBeenCalledWith(ORG, 'acc-1',
+      { pipelines: [{ id: 'pipe-stale', name: 'Dentures' }] });
   });
 
   it('7. no email and no phone -> null with zero repo calls', async () => {

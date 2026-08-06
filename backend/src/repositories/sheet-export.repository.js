@@ -132,7 +132,7 @@ export const sheetExportRepository = {
     async pipelineLeads(orgId, contactIds) {
         const { data, error } = await supabase_1.serviceClient
             .from('leads')
-            .select('id, contact_id, ghl_pipeline_id, created_at')
+            .select('id, contact_id, ghl_pipeline_id, integration_account_id, created_at')
             .eq('organisation_id', orgId)
             .not('ghl_pipeline_id', 'is', null)
             .in('contact_id', contactIds)

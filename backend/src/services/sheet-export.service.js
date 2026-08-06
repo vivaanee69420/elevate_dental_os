@@ -107,9 +107,10 @@ export const sheetExportService = {
                     continue;
                 }
                 const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ');
-                const values = [name, contact.email ?? '', contact.phone ?? '',
-                    match.pipelineName, formatLondonDate(row.appointment_starts_at),
-                    formatLondonDate(match.leadCreatedAt), row.id];
+                // Order must mirror the writer's HEADER exactly (Export ID last, hidden).
+                const values = [formatLondonDate(match.leadCreatedAt), name,
+                    contact.email ?? '', contact.phone ?? '', match.pipelineName,
+                    formatLondonDate(row.appointment_starts_at), row.id];
                 await sheetExportRepository.recordMatch(orgId, row.id, match.matchedContact.id, match.lead.id);
                 const key = row.practice_id ?? 'unassigned';
                 if (!perPractice.has(key)) perPractice.set(key, []);
