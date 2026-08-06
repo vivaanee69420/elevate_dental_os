@@ -19,7 +19,12 @@ export function errorHandler(err, req, res, _next) {
     }
     req.log?.error({ err }, 'Request error');
     const isApp = err instanceof AppError;
-    const status = isApp ? err.statusCode : 500;
+    // Some services throw a plain Error decorated with a numeric `.status`
+    // (Object.assign(new Error(...), { status })) rather than AppError —
+    // treat that the same as AppError for status-code purposes so those
+    // operator-authored 4xx messages surface instead of collapsing to 500.
+    const hasPlainStatus = !isApp && Number.isInteger(err?.status) && err.status >= 400 && err.status < 600;
+    const status = isApp ? err.statusCode : (hasPlainStatus ? err.status : 500);
     // Always surface unexpected 5xx to the server console — req.log may not be
     // wired in every context, and a masked generic 500 is undebuggable otherwise.
     if (!isApp && status >= 500) {
