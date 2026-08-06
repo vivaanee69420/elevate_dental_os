@@ -33,6 +33,7 @@ import {
   setSheetsWriterDestination,
   drainSheetsWriter,
   disconnectSheetsWriter,
+  getSheetsWriterActivity,
   type ConnectInput,
   type DentallySyncResource,
 } from './api';
@@ -359,5 +360,16 @@ export function useDisconnectSheetsWriter() {
   return useMutation({
     mutationFn: () => disconnectSheetsWriter(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['sheets-writer-status'] }),
+  });
+}
+
+// Fetched only while the activity modal is open (enabled flag) — a rolling
+// last-24h window of what the export checked.
+export function useSheetsWriterActivity(enabled: boolean) {
+  return useQuery({
+    queryKey: ['sheets-writer-activity'],
+    queryFn: getSheetsWriterActivity,
+    enabled,
+    staleTime: 15_000,
   });
 }

@@ -469,3 +469,19 @@ export function drainSheetsWriter() {
 export function disconnectSheetsWriter() {
   return api<{ ok: boolean }>('/api/integrations/google-sheets-writer', { method: 'DELETE' });
 }
+
+export interface SheetsWriterActivityEntry {
+  id: string;
+  name: string;
+  practice: string;
+  status: 'pending' | 'processing' | 'exported' | 'no_match' | 'failed';
+  reason: string | null;
+  appointmentAt: string | null;
+  at: string;
+}
+
+export function getSheetsWriterActivity() {
+  return api<{ entries: SheetsWriterActivityEntry[] }>(
+    '/api/integrations/google-sheets-writer/activity',
+  );
+}

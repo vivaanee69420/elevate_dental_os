@@ -13,6 +13,9 @@ export const sheetExportController = {
     async status(req, res) {
         res.json(await sheetExportService.status(req.user.organisation_id));
     },
+    async activity(req, res) {
+        res.json(await sheetExportService.activity(req.user.organisation_id));
+    },
     async setDestination(req, res) {
         const { url } = destinationSchema.parse(req.body);
         res.json(await sheetExportService.setDestination(req.user.organisation_id, url));
