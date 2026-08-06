@@ -26,6 +26,7 @@ const ACTIVITY_STATUS_LABEL: Record<string, { label: string; className: string }
   pending: { label: 'Waiting', className: 'bg-amber-50 text-amber-700 border-amber-200' },
   processing: { label: 'Exporting', className: 'bg-amber-50 text-amber-700 border-amber-200' },
   failed: { label: 'Failed', className: 'bg-rose-50 text-rose-700 border-rose-200' },
+  skipped: { label: 'Excluded', className: 'bg-slate-50 text-slate-500 border-slate-200' },
 };
 
 export default function GoogleSheetsWriterPanel() {
@@ -185,6 +186,9 @@ export default function GoogleSheetsWriterPanel() {
                   <span><span className="font-medium text-slate-900">{counts.exported}</span> Exported</span>
                   <span><span className="font-medium text-slate-900">{counts.no_match}</span> No match</span>
                   <span><span className="font-medium text-slate-900">{counts.failed}</span> Failed</span>
+                  {counts.skipped > 0 && (
+                    <span><span className="font-medium text-slate-900">{counts.skipped}</span> Excluded</span>
+                  )}
                   <button
                     className="text-indigo-600 underline"
                     onClick={() => setShowActivity(true)}

@@ -430,6 +430,7 @@ export interface SheetsWriterCounts {
   exported: number;
   no_match: number;
   failed: number;
+  skipped: number;
 }
 
 export interface SheetsWriterStatus {
@@ -456,6 +457,7 @@ export interface SheetsWriterDrainResult {
   exported?: number;
   noMatch?: number;
   retried?: number;
+  excluded?: number;
   skippedDuplicates?: number;
   skipped?: 'not_connected' | 'no_destination' | 'integration_failed';
 }
@@ -474,7 +476,7 @@ export interface SheetsWriterActivityEntry {
   id: string;
   name: string;
   practice: string;
-  status: 'pending' | 'processing' | 'exported' | 'no_match' | 'failed';
+  status: 'pending' | 'processing' | 'exported' | 'no_match' | 'failed' | 'skipped';
   reason: string | null;
   appointmentAt: string | null;
   at: string;

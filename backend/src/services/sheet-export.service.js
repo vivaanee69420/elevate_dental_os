@@ -9,8 +9,11 @@ import { AppError } from '../middleware/errors.js';
 import { findMatch } from './sheet-export-match.service.js';
 import { WRITER_PROVIDER_ID } from '../lib/integrations/google-sheets-writer-provider.js';
 import { parseSpreadsheetId } from '../lib/integrations/google-sheets-provider.js';
-import { ensurePracticeTab, appendRows, readExportIds, formatLondonDate }
+import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, formatLondonDate }
     from '../lib/integrations/google-sheets-writer.js';
+
+// Sentinel group key routing open-day conversions to the org-wide tab.
+const OPEN_DAY_GROUP = '__open_day__';
 import { writerFetch } from '../lib/integrations/google-sheets-writer-provider.js';
 
 const lastKick = new Map(); // orgId -> ms; 60s debounce, in-process only
@@ -109,11 +112,11 @@ export const sheetExportService = {
 
         await sheetExportRepository.enqueue(orgId, since);
         const rows = await sheetExportRepository.claim(orgId, { limit: 50, includeNoMatch, ignoreBackoff });
-        if (rows.length === 0) return { exported: 0, noMatch: 0, retried: 0, skippedDuplicates: 0 };
+        if (rows.length === 0) return { exported: 0, noMatch: 0, retried: 0, excluded: 0, skippedDuplicates: 0 };
 
         const practiceName = new Map((await sheetExportRepository.practices(orgId)).map((p) => [p.id, p.name]));
-        const perPractice = new Map(); // practiceId -> [{ queueRow, values }]
-        let exported = 0, noMatch = 0, retried = 0, skippedDuplicates = 0;
+        const perPractice = new Map(); // practiceId (or OPEN_DAY_GROUP) -> [{ queueRow, values }]
+        let exported = 0, noMatch = 0, retried = 0, excluded = 0, skippedDuplicates = 0;
 
         for (const row of rows) {
             try {
@@ -125,6 +128,16 @@ export const sheetExportService = {
                     noMatch += 1;
                     continue;
                 }
+                const treatment = await sheetExportRepository
+                    .appointmentType(orgId, row.appointment_id).catch(() => null);
+                // Owner rule: telephone consultations are not conversions worth
+                // reporting — excluded permanently, never written to the sheet.
+                if (String(treatment ?? '').trim().toLowerCase() === 'telephone consultation') {
+                    await safeMark(() => sheetExportRepository.markSkipped(orgId, row.id,
+                        'excluded: telephone consultation'), 'markSkipped', orgId);
+                    excluded += 1;
+                    continue;
+                }
                 const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ');
                 // Same person, two records: a phone-matched patient often has no
                 // email in Dentally while their GHL contact does (and vice
@@ -132,16 +145,25 @@ export const sheetExportService = {
                 // so the sheet carries the fullest contact details available.
                 const email = contact.email || match.matchedContact?.email || '';
                 const phoneOut = contact.phone || match.matchedContact?.phone || '';
-                // Order must mirror the writer's HEADER exactly (Export ID last, hidden).
-                const treatment = await sheetExportRepository
-                    .appointmentType(orgId, row.appointment_id).catch(() => null);
-                const values = [formatLondonDate(match.leadCreatedAt), name,
-                    email, phoneOut, match.pipelineName,
-                    formatLondonDate(row.appointment_starts_at), treatment ?? '', row.id];
                 await sheetExportRepository.recordMatch(orgId, row.id, match.matchedContact.id, match.lead.id);
-                const key = row.practice_id ?? 'unassigned';
-                if (!perPractice.has(key)) perPractice.set(key, []);
-                perPractice.get(key).push({ queueRow: row, values });
+                const rowPractice = practiceName.get(row.practice_id) ?? 'Unassigned';
+                const display = [formatLondonDate(match.leadCreatedAt), name,
+                    email, phoneOut, match.pipelineName,
+                    formatLondonDate(row.appointment_starts_at), treatment ?? ''];
+                // Owner rule: open-day pipeline conversions collect on ONE
+                // org-wide tab (with a Practice column) instead of their
+                // practice tab. Order must mirror the writer's headers exactly
+                // (Export ID last, hidden).
+                if (/open day/i.test(match.pipelineName)) {
+                    const values = [...display, rowPractice, row.id];
+                    if (!perPractice.has(OPEN_DAY_GROUP)) perPractice.set(OPEN_DAY_GROUP, []);
+                    perPractice.get(OPEN_DAY_GROUP).push({ queueRow: row, values });
+                } else {
+                    const values = [...display, row.id];
+                    const key = row.practice_id ?? 'unassigned';
+                    if (!perPractice.has(key)) perPractice.set(key, []);
+                    perPractice.get(key).push({ queueRow: row, values });
+                }
             } catch (err) {
                 await safeMark(() => sheetExportRepository.markRetry(orgId, row.id, err?.message || 'match failed'),
                     'markRetry', orgId);
@@ -151,8 +173,10 @@ export const sheetExportService = {
 
         for (const [practiceId, batch] of perPractice) {
             try {
-                const title = await ensurePracticeTab(orgId, spreadsheetId, practiceId,
-                    practiceName.get(practiceId) ?? 'Unassigned');
+                const title = practiceId === OPEN_DAY_GROUP
+                    ? await ensureOpenDayTab(orgId, spreadsheetId)
+                    : await ensurePracticeTab(orgId, spreadsheetId, practiceId,
+                        practiceName.get(practiceId) ?? 'Unassigned');
                 const already = await readExportIds(orgId, spreadsheetId, title);
                 const fresh = batch.filter((b) => !already.has(b.queueRow.id));
                 await appendRows(orgId, spreadsheetId, title, fresh.map((b) => b.values));
@@ -176,7 +200,7 @@ export const sheetExportService = {
             }
         }
         await integrationRepository.setSyncTime(orgId, WRITER_PROVIDER_ID).catch(() => {});
-        return { exported, noMatch, retried, skippedDuplicates };
+        return { exported, noMatch, retried, excluded, skippedDuplicates };
     },
 
     async drainAllOrgs() {
