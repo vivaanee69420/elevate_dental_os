@@ -52,7 +52,8 @@ request path.
 | `contact_id` | uuid NOT NULL → contacts | the Dentally patient contact |
 | `appointment_id` | uuid → appointments | the triggering first appointment |
 | `appointment_starts_at` | timestamptz | denormalised for the sheet row |
-| `status` | text | `pending` \| `exported` \| `no_match` \| `failed` (CHECK) |
+| `status` | text | `pending` \| `processing` \| `exported` \| `no_match` \| `failed` (CHECK) |
+| `claimed_at` | timestamptz | set when a drainer claims the row; stale (>10 min) claims are reclaimable |
 | `matched_contact_id` | uuid → contacts | audit: which GHL contact matched |
 | `matched_lead_id` | uuid → leads | audit: which lead supplied pipeline + date |
 | `attempts` | int default 0 | retry bookkeeping |
@@ -81,15 +82,24 @@ New `integrations` provider row: **`google_sheets_writer`**.
 - Refresh flow with claim guard (Dentally OAuth pattern). Revoked grant →
   integration status `failed` + "reconnect" banner; queue rows stay `pending`.
 
-### Enqueue rule (both ingest paths)
+### Enqueue rule (one SQL source of truth)
 
-On upserting an appointment that is **not cancelled** and has a `contact_id`:
-insert into `sheet_export_queue` with `ON CONFLICT DO NOTHING`. Applied in the
-Dentally webhook handler and in `dentally-sync.js`'s appointment phase. Only
-enqueue when the org has a `google_sheets_writer` integration row in ANY
-non-disconnected state — including `failed` (so outage windows keep queueing,
-per error handling below). No row at all (never connected, or explicitly
-disconnected) → no enqueue: that is what makes the feature go-forward-only.
+The enqueue rule lives in ONE place: RPC `sheet_export_enqueue(p_org, p_since)`
+— an `INSERT … SELECT … ON CONFLICT DO NOTHING` that finds Dentally patients
+(`contacts.pms_external_id IS NOT NULL`) whose **first-ever non-cancelled
+appointment** was created at/after `p_since` (the writer connection's
+`config.export_since`, stamped when the destination is set), and inserts one
+queue row per patient pointing at that earliest appointment. Patients with any
+appointment created before `p_since` never enqueue (go-forward-only); the
+unique `(organisation_id, contact_id)` constraint makes re-runs no-ops.
+
+Both paths invoke it: the Dentally webhook kicks a debounced fire-and-forget
+drain (which starts with the enqueue RPC) after appointment/patient events, and
+the periodic worker sweep runs enqueue+drain for every org with a writer row.
+This also catches appointments whose `contact_id` was null at ingest and
+relinked later — a per-row ingest hook would miss those. Runs only when the org
+has a `google_sheets_writer` integration row in ANY non-disconnected state —
+including `failed` (outage windows keep queueing). No row at all → no enqueue.
 
 ## The matcher (drainer, per queue row, pure read)
 
@@ -147,13 +157,18 @@ leave the app.
 - Lives in `workers/`; also exported as a function the webhook kicks
   fire-and-forget AFTER responding 200 to Dentally. Periodic sweep (cron)
   retries failures and catches sync-path inserts.
-- Claims `pending` (and revisitable `no_match`) rows per org, oldest first;
-  batches appends into one `values.append` per practice tab per run.
+- Claims rows via RPC `sheet_export_claim(p_org, p_limit, p_include_no_match)`:
+  an atomic `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING *`
+  flipping `pending` → `processing`. Concurrent drains (webhook-kick vs cron
+  sweep, separate processes) get disjoint row sets — no advisory locks, which
+  are unreliable across pooled PostgREST connections when the work spans an
+  external HTTP call. Stale `processing` rows (`claimed_at` > 10 min old, a
+  crashed drainer) are reclaimable. The sweep passes `p_include_no_match=true`
+  to revisit young `no_match` rows.
+- Batches appends into one `values.append` per practice tab per run.
 - **Exactly-once:** `exported` is set only after Google confirms. On retry after
-  a crash between append and mark, the drainer re-reads the tab tail and skips
-  queue-row UUIDs already present.
-- Advisory lock per org (the `ad_metrics_replace_window` pattern) so the
-  webhook-kicked drain and the cron sweep never interleave on one org.
+  a crash between append and mark, the drainer re-reads the tab's UUID column
+  and skips queue-row UUIDs already present.
 
 ## Routes & permissions
 
