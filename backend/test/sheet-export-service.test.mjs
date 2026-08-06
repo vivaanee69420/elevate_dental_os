@@ -18,6 +18,7 @@ vi.mock('../src/repositories/sheet-export.repository.js', () => ({
     exportedRows: vi.fn(),
     practices: vi.fn(),
     recordMatch: vi.fn(),
+    pipelineLeads: vi.fn(),
     orgsWithWriter: vi.fn(),
   },
 }));
@@ -34,6 +35,15 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
 
 vi.mock('../src/services/sheet-export-match.service.js', () => ({
   findMatch: vi.fn(),
+  pipelineNameMap: vi.fn(async () => new Map([['pipe-1', 'New Patient'], ['pipe-2', 'Google PPC']])),
+  journeyFromLeads: vi.fn((leads, names) => {
+    const seen = new Set(); const out = [];
+    for (const l of [...leads].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))) {
+      const n = names.get(String(l.ghl_pipeline_id));
+      if (n && !seen.has(n)) { seen.add(n); out.push(n); }
+    }
+    return out.length ? out.join(' → ') : 'Unknown pipeline';
+  }),
 }));
 
 vi.mock('../src/lib/integrations/google-sheets-writer-provider.js', () => ({
@@ -121,6 +131,7 @@ beforeEach(() => {
   sheetExportRepository.appointmentStatus.mockResolvedValue('scheduled');
   sheetExportRepository.revenue.mockResolvedValue({ invoicedPence: 12500, collectedPence: 5000 });
   sheetExportRepository.exportedRows.mockResolvedValue([]);
+  sheetExportRepository.pipelineLeads.mockResolvedValue([]);
   listMappedTabs.mockResolvedValue([]);
   readTabGrid.mockResolvedValue([]);
   batchUpdateCells.mockResolvedValue({ updated: 0 });
@@ -416,8 +427,13 @@ describe('refreshOrg', () => {
   it('updates Status/Invoiced/Collected in place for changed rows only, found via Export ID', async () => {
     integrationRepository.getByProvider.mockResolvedValue(integ());
     sheetExportRepository.exportedRows.mockResolvedValue([
-      { id: 'row-1', contact_id: 'contact-1', appointment_id: 'appt-1',
+      { id: 'row-1', contact_id: 'contact-1', matched_contact_id: 'ghl-1', appointment_id: 'appt-1',
         appointment_starts_at: '2026-02-01T10:00:00.000Z', episode: 1, episode_lead_at: null },
+    ]);
+    sheetExportRepository.pipelineLeads.mockResolvedValue([
+      { id: 'l1', contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-1', created_at: '2026-01-15T00:00:00.000Z' },
+      // Moved/added in GHL after export — journey must gain Google PPC.
+      { id: 'l2', contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-2', created_at: '2026-01-20T00:00:00.000Z' },
     ]);
     listMappedTabs.mockResolvedValue([{ key: 'practice:practice-1', title: 'Bexleyheath' }]);
     readTabGrid.mockResolvedValue([
@@ -439,15 +455,20 @@ describe('refreshOrg', () => {
     const [, , data] = batchUpdateCells.mock.calls[0];
     expect(data).toEqual([
       { range: "'Bexleyheath'!H2:J2", values: [['Completed', 2500, 1000]] },
+      // Source recomputed from the matched contact's CURRENT leads.
+      { range: "'Bexleyheath'!E2:E2", values: [['New Patient → Google PPC']] },
     ]);
-    expect(result).toEqual({ refreshed: 1 });
+    expect(result).toEqual({ refreshed: 2 });
   });
 
   it('unchanged rows produce no updates; pre-Status tabs are skipped', async () => {
     integrationRepository.getByProvider.mockResolvedValue(integ());
     sheetExportRepository.exportedRows.mockResolvedValue([
-      { id: 'row-1', contact_id: 'contact-1', appointment_id: 'appt-1',
+      { id: 'row-1', contact_id: 'contact-1', matched_contact_id: 'ghl-1', appointment_id: 'appt-1',
         appointment_starts_at: '2026-02-01T10:00:00.000Z', episode: 1, episode_lead_at: null },
+    ]);
+    sheetExportRepository.pipelineLeads.mockResolvedValue([
+      { id: 'l1', contact_id: 'ghl-1', ghl_pipeline_id: 'pipe-1', created_at: '2026-01-15T00:00:00.000Z' },
     ]);
     listMappedTabs.mockResolvedValue([
       { key: 'practice:practice-1', title: 'Bexleyheath' },

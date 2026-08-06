@@ -110,17 +110,25 @@ export async function findMatch(orgId, dentallyContact, opts = {}) {
             for (const [k, v] of refreshed) if (!names.has(k)) names.set(k, v);
         }
     }
-    const seen = new Set();
-    const journey = [];
-    for (const l of picked.leads) {
-        const n = names.get(String(l.ghl_pipeline_id));
-        if (n && !seen.has(n)) { seen.add(n); journey.push(n); }
-    }
     const lead = picked.leads[0]; // earliest enquiry = the incoming date
     return {
         matchedContact: picked.contact,
         lead,
-        pipelineName: journey.length ? journey.join(' → ') : 'Unknown pipeline',
+        pipelineName: journeyFromLeads(picked.leads, names),
         leadCreatedAt: lead.created_at,
     };
+}
+
+// The Source cell: every distinct resolvable pipeline name across the given
+// leads, oldest -> newest. Shared by export-time matching and the nightly
+// refresh (which recomputes it so pipeline MOVES in GHL update the sheet).
+export function journeyFromLeads(leads, names) {
+    const seen = new Set();
+    const journey = [];
+    const sorted = [...leads].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    for (const l of sorted) {
+        const n = names.get(String(l.ghl_pipeline_id));
+        if (n && !seen.has(n)) { seen.add(n); journey.push(n); }
+    }
+    return journey.length ? journey.join(' → ') : 'Unknown pipeline';
 }
