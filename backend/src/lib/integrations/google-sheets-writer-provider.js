@@ -49,7 +49,11 @@ function redirectUri() {
 
 async function persistTokenResponse(orgId, body, prevRefreshToken) {
     return integrationsRepository.upsertSecrets(orgId, WRITER_PROVIDER_ID, {
-        config: { token_type: body.token_type, scope: body.scope },
+        // oauth_client_id records which Google client ISSUED this token, so a
+        // process running with a different GOOGLE_SHEETS_CLIENT_* env (e.g. the
+        // worker service missing the vars and falling back to the Ads pair)
+        // fails fast with a config error instead of burning the integration.
+        config: { token_type: body.token_type, scope: body.scope, oauth_client_id: clientId() },
         secrets: encryptSecret(JSON.stringify({
             access_token: body.access_token,
             // Google omits refresh_token on a token *refresh* — keep the old one.
@@ -170,6 +174,13 @@ export const GoogleSheetsWriterProvider = {
         try {
             const integration = await integrationsRepository.getByProvider(orgId, WRITER_PROVIDER_ID);
             if (!integration?.secrets) throw new Error('No stored credentials to refresh');
+            // Env-drift guard: refuse to present a token to a client that did
+            // not issue it (Google answers 401 unauthorized_client, which used
+            // to burn the row to 'failed' even though the token was fine).
+            const issuedTo = integration.config?.oauth_client_id;
+            if (issuedTo && issuedTo !== clientId()) {
+                throw new Error(`Google Sheets OAuth env mismatch on this service: token was issued by client ${issuedTo.slice(0, 12)}… but this process is configured with ${clientId().slice(0, 12)}… — fix GOOGLE_SHEETS_CLIENT_ID/SECRET here`);
+            }
             const { refresh_token } = JSON.parse(decryptSecret(integration.secrets));
             if (!refresh_token) throw new Error('No refresh_token stored');
             const res = await fetch(TOKEN_URL, {
@@ -184,8 +195,20 @@ export const GoogleSheetsWriterProvider = {
             });
             const body = await res.json();
             if (!res.ok) {
-                await integrationsRepository.markFailed(orgId, WRITER_PROVIDER_ID, body.error_description ?? body.error ?? 'refresh_failed');
-                throw new Error(body.error_description ?? 'Google Sheets token refresh failed');
+                // Only invalid_grant means the refresh token itself is dead
+                // (revoked/expired) — that needs the owner to reconnect, so
+                // mark failed. invalid_client/unauthorized_client mean THIS
+                // process has the wrong client env, and anything else is a
+                // transient Google-side error: leave status untouched so a
+                // correctly-configured process keeps the integration alive
+                // (the drainer treats 'failed' as terminal).
+                if (body.error === 'invalid_grant') {
+                    await integrationsRepository.markFailed(orgId, WRITER_PROVIDER_ID, body.error_description ?? body.error);
+                }
+                const msg = (body.error === 'invalid_client' || body.error === 'unauthorized_client')
+                    ? `Google Sheets OAuth client rejected (${body.error}) — GOOGLE_SHEETS_CLIENT_ID/SECRET on this service do not match the client that issued the stored token`
+                    : (body.error_description ?? body.error ?? 'Google Sheets token refresh failed');
+                throw new Error(msg);
             }
             await persistTokenResponse(orgId, body, refresh_token);
             return { ok: true };
