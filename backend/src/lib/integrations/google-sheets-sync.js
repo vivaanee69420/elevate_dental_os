@@ -297,6 +297,12 @@ export async function topUp(orgId, source) {
         const tz = source.sheet_timezone || DEFAULT_TZ;
         const start = Math.max(source.last_synced_row, source.header_row) + 1;
         const columns = await fetchMappedPage(orgId, source, start, start + TOPUP_ROWS - 1);
+        // A successful read proves token + sheet are healthy — clear a stale
+        // 'failed' stamped by an earlier sync so the panel doesn't keep showing
+        // an error while data is in fact flowing.
+        if (source.status === 'failed') {
+            await sheetRepository.updateSource(orgId, source.id, { status: 'active', last_error: null });
+        }
         const page = parsePage(columns, start, tz);
         if (page.rows.length === 0 && page.skipped === 0) return { ok: true, added: 0 };
         for (let i = 0; i < page.rows.length; i += UPSERT_CHUNK) {
