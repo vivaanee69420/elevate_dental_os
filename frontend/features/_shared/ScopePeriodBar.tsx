@@ -47,8 +47,9 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
 
 export function ScopePeriodBar({
   hideScope = false,
+  hidePeriod = false,
   dentallyOnly = false,
-}: { hideScope?: boolean; dentallyOnly?: boolean } = {}) {
+}: { hideScope?: boolean; hidePeriod?: boolean; dentallyOnly?: boolean } = {}) {
   const {
     scope, mode, monthKey, customSince, customUntil,
     setScope, setMonthKey, setYearKey, setCustom,
@@ -84,6 +85,7 @@ export function ScopePeriodBar({
       )}
 
       {/* Period pills. */}
+      {!hidePeriod && (
       <div className="flex gap-2 flex-wrap items-center">
         <Pill active={mode === 'month' && monthKey === curMonth} onClick={() => setMonthKey(curMonth)}>
           This month
@@ -129,6 +131,7 @@ export function ScopePeriodBar({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
