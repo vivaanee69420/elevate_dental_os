@@ -14,6 +14,7 @@ import * as pino_http_1 from "pino-http";
 import * as auth_1 from "./middleware/auth.js";
 import * as audit_1 from "./middleware/audit.js";
 import * as errors_1 from "./middleware/errors.js";
+import { analystLock } from "./middleware/analyst-lock.js";
 import * as Sentry from "@sentry/node";
 // Route modules (each default-exports an express.Router)
 import * as health_routes_1 from "./routes/health.routes.js";
@@ -210,6 +211,10 @@ export function buildApp() {
     // ---- Authenticated routes ----
     const api = express_1.default.Router();
     api.use(auth_1.authenticate);
+    // Confines the `analyst` role (data.export only) to the Data Room
+    // server-side — several legacy feature routers below carry no
+    // requirePermission gate, so nav hiding alone is not a boundary.
+    api.use(analystLock);
     // Per-user API rate limit: 300 requests / minute, keyed by the VERIFIED
     // user id (authenticate ran above, so req.user is trusted — unlike the
     // coarse global limiter keyed by a spoofable header). Falls back to IP if

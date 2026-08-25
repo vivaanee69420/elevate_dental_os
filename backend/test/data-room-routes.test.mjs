@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import http from 'node:http';
 import express from 'express';
 import { AppError } from '../src/middleware/errors.js';
+import { analystLock } from '../src/middleware/analyst-lock.js';
 
 vi.mock('../src/services/data-room.service.js', () => ({
   dataRoomService: {
@@ -48,6 +49,11 @@ function buildApp() {
     req.user = role ? { id: `u-${role}`, organisation_id: 'org-1', role, permissions: PERMS[role] } : null;
     next();
   });
+  // NOTE: in production the lock is mounted on the shared /api router (so
+  // req.path inside it is relative to /api, e.g. /data-room/...). Mount it
+  // the same way here rather than under /api/data-room directly, so the
+  // lock sees the same relative path it will see in app.js.
+  app.use('/api', analystLock);
   app.use('/api/data-room', router);
   app.use(errorHandler);
   return app;
