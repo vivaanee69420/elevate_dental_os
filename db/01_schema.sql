@@ -65,7 +65,7 @@ CREATE TABLE users (
   organisation_id UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
   email TEXT NOT NULL,
   full_name TEXT,
-  role TEXT NOT NULL DEFAULT 'reception' CHECK (role IN ('owner', 'practice_manager', 'reception')),
+  role TEXT NOT NULL DEFAULT 'reception' CHECK (role IN ('owner', 'practice_manager', 'reception', 'analyst')),
   permissions JSONB DEFAULT '{}', -- granular overrides set by owner
   avatar_url TEXT,
   phone TEXT,
