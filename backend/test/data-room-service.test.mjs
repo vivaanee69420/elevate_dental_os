@@ -212,3 +212,42 @@ describe('exportFilename()', () => {
     expect(dataRoomService.exportFilename({ source: 'dentally', key: 'staff', dateCol: null }, WIN)).toBe(`dentally-staff_${today}.csv`);
   });
 });
+
+describe('page() — numbered pages (offset mode)', () => {
+  const PIPES = [
+    { integration_account_id: 'a', practice_id: null, pipeline_id: 'p1', pipeline_name: 'Implants', stage_id: 's1', stage_name: 'New' },
+    { integration_account_id: 'a', practice_id: null, pipeline_id: 'p1', pipeline_name: 'Implants', stage_id: 's2', stage_name: 'Booked' },
+    { integration_account_id: 'a', practice_id: null, pipeline_id: 'p2', pipeline_name: 'Ortho', stage_id: null, stage_name: null },
+  ];
+  it('page=N hands offset=(N-1)*limit to the repository and no cursor', async () => {
+    await dataRoomService.page(owner, 'dentally', 'appointments', { ...WIN, page: 3, limit: 50 });
+    expect(repo.page.mock.calls[0][3]).toMatchObject({ offset: 100, limit: 50, after: null });
+  });
+  it('page=1 is offset 0 and still reports the exact total', async () => {
+    repo.page.mockResolvedValue([{ id: 'a', starts_at: '2026-08-01T09:00:00.000Z' }]);
+    repo.count.mockResolvedValue(7);
+    const out = await dataRoomService.page(owner, 'dentally', 'appointments', { ...WIN, page: 1, limit: 50 });
+    expect(repo.page.mock.calls[0][3].offset).toBe(0);
+    expect(out.total).toBe(7);
+    expect(out.rows).toEqual([{ id: 'a', starts_at: '2026-08-01T09:00:00.000Z' }]);
+  });
+  it('without page the keyset path is unchanged (no offset passed)', async () => {
+    await dataRoomService.page(owner, 'dentally', 'appointments', WIN);
+    expect(repo.page.mock.calls[0][3].offset).toBeUndefined();
+  });
+  it('the derived pipelines dataset pages by page number too, and a page past the end is empty', async () => {
+    repo.pipelineRows.mockResolvedValue(PIPES);
+    const p2 = await dataRoomService.page(owner, 'gohighlevel', 'pipelines', { ...WIN, limit: 2, page: 2 });
+    expect(p2.rows.map((r) => r.pipeline_id)).toEqual(['p2']);
+    expect(p2.total).toBe(3);
+    const p9 = await dataRoomService.page(owner, 'gohighlevel', 'pipelines', { ...WIN, limit: 2, page: 9 });
+    expect(p9).toEqual({ rows: [], next_cursor: null, total: 3 });
+    expect(repo.page).not.toHaveBeenCalled();
+  });
+  it('patients is a dated dataset: the window applies (created_at) and is required', async () => {
+    await dataRoomService.page(owner, 'dentally', 'patients', WIN);
+    expect(repo.page.mock.calls[0][2]).toMatchObject({ since: WIN.since, until: WIN.until });
+    await expect(dataRoomService.page(owner, 'dentally', 'patients', { ...WIN, since: undefined, until: undefined }))
+      .rejects.toMatchObject({ statusCode: 400 });
+  });
+});

@@ -9,8 +9,9 @@
 //     query.pii === true; anyone else asking for PII gets a 403
 //   - practice scope: direct column, or `via` parent-key resolution (an empty
 //     key list short-circuits to zero rows — no query)
-//   - keyset pagination via opaque cursors; derived (in-memory) datasets page
-//     by offset
+//   - pagination: keyset via opaque cursors (export batching, default), or
+//     numbered pages (`page=N` -> offset mode) for the UI; derived (in-memory)
+//     datasets slice by offset either way
 //   - CSV streaming in 1000-row batches through a sink (Express res in prod,
 //     a recorder in tests); every export is audited (rows, aborted flag)
 //
@@ -98,11 +99,13 @@ export const dataRoomService = {
         const includePii = assertPii(user, query.pii);
         const cols = columnNames(ds, includePii);
         const orgId = user.organisation_id;
-        const after = query.cursor ? decodeCursor(query.cursor) : null;
+        // page=N (numbered pages) -> offset mode; otherwise keyset via cursor.
+        const offset = query.page ? (query.page - 1) * query.limit : undefined;
+        const after = offset == null && query.cursor ? decodeCursor(query.cursor) : null;
 
         if (ds.derived) {
             const all = await derivedRows(orgId, ds, query);
-            const start = after ? Number(after.id) : 0;
+            const start = offset ?? (after ? Number(after.id) : 0);
             const rows = all.slice(start, start + query.limit);
             const next = start + rows.length < all.length ? encodeCursor({ d: null, id: start + rows.length }) : null;
             return { rows: project(rows, cols), next_cursor: next, total: all.length };
@@ -111,7 +114,7 @@ export const dataRoomService = {
         const { filters, empty } = await buildFilters(orgId, ds, query);
         if (empty) return { rows: [], next_cursor: null, total: 0 };
         const [rows, total] = await Promise.all([
-            dataRoomRepository.page(orgId, ds, filters, { after, limit: query.limit, columns: cols }),
+            dataRoomRepository.page(orgId, ds, filters, { after, offset, limit: query.limit, columns: cols }),
             dataRoomRepository.count(orgId, ds, filters),
         ]);
         const next = rows.length === query.limit ? lastCursor(ds, rows) : null;

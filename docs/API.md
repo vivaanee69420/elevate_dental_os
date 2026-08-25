@@ -1395,15 +1395,16 @@ Registry: `backend/src/lib/data-room/registry.js`. Spec:
 Registry for the UI. `{ sources: [{ key, label, description, datasets: [{ key, label, roster, columns: [{ col, pii }] }] }] }`.
 Sources: `dentally`, `google-ads`, `meta-ads`, `gohighlevel`, `emergent`.
 
-### `GET /api/data-room/:source/:dataset?scope&since&until&cursor&limit&pii`
+### `GET /api/data-room/:source/:dataset?scope&since&until&page&cursor&limit&pii`
 
 - `scope` — `all` (default) or a practice UUID.
-- `since`, `until` — ISO instants, `[since, until)`. Required unless the dataset is `roster` (ignored then).
-- `cursor` — opaque, from the previous page's `next_cursor`.
+- `since`, `until` — ISO instants, `[since, until)`. Required unless the dataset is `roster` (ignored then). Dentally `patients` is dated on `created_at`.
+- `page` — integer ≥ 1. **Numbered-page (offset) mode**: returns rows `(page-1)*limit … page*limit-1` of the filtered, ordered set; `cursor` is ignored. What the Data Room UI uses.
+- `cursor` — opaque, from the previous page's `next_cursor` (keyset mode; used when `page` is absent — O(page) on any table size, how the CSV export batches).
 - `limit` — 1–500, default 100.
 - `pii` — `1` includes patient-identifying columns. **Owner only**; anyone else gets `403 { error: "PII export is owner-only" }`.
 
-Response `{ rows, next_cursor, total }`. Rows carry only registry columns; PII-flagged columns are absent unless `pii=1` by an owner. Ordering `(dateCol, id)` for event datasets, `id` for roster. Money is integer pence.
+Response `{ rows, next_cursor, total }` in both modes (`total` is the exact filtered count, so the client derives `ceil(total / limit)` pages). Rows carry only registry columns; PII-flagged columns are absent unless `pii=1` by an owner. Ordering `(dateCol, id)` for event datasets, `id` for roster. Money is integer pence.
 
 ### `GET /api/data-room/:source/:dataset/export.csv?scope&since&until&pii`
 
