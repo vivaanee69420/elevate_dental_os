@@ -51,8 +51,11 @@ const cols = (...names) => names.map((n) => (typeof n === 'string' ? c(n) : n));
 export const DATASETS = [
     // ---------------------------------------------------------------- Dentally
     {
+        // Dated on created_at (when the patient record landed in Elevate) so the
+        // Data Room's universal date filter applies; the initial Dentally backfill
+        // stamps the whole historic roster on the connect day.
         source: 'dentally', key: 'patients', label: 'Patients', table: 'contacts',
-        where: { source: 'dentally' }, practice: { col: 'practice_id' }, dateCol: null,
+        where: { source: 'dentally' }, practice: { col: 'practice_id' }, dateCol: 'created_at',
         columns: cols('id', 'practice_id', 'pms_external_id', pii('first_name'), pii('last_name'),
             pii('email'), pii('phone'), pii('date_of_birth'), pii('address'), pii('postcode'),
             'marketing_consent', 'sms_consent', 'next_recall_date', 'last_visit_date',

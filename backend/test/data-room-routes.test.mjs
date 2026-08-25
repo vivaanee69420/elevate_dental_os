@@ -96,6 +96,12 @@ describe('GET /:source/:dataset', () => {
     expect(dataset).toBe('appointments');
     expect(query).toMatchObject({ scope: 'all', limit: 50, pii: false });
   });
+  it('passes page through as an integer and 400s on page=0', async () => {
+    const res = await get(`/api/data-room/dentally/appointments?${WIN}&page=4&limit=25`, 'owner');
+    expect(res.status).toBe(200);
+    expect(dataRoomService.page.mock.calls.at(-1)[3]).toMatchObject({ page: 4, limit: 25 });
+    expect((await get(`/api/data-room/dentally/appointments?${WIN}&page=0`, 'owner')).status).toBe(400);
+  });
   it('400s on a bad query (limit=0) and 404s on an unknown dataset', async () => {
     expect((await get(`/api/data-room/dentally/appointments?${WIN}&limit=0`, 'owner')).status).toBe(400);
     expect((await get(`/api/data-room/dentally/nope?${WIN}`, 'owner')).status).toBe(404);

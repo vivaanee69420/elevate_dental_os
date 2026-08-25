@@ -46,24 +46,29 @@ const quoted = (v) => `"${String(v).replace(/"/g, '')}"`;
 
 export const dataRoomRepository = {
     /**
-     * One keyset page. `after` = { d, id } from the previous page's last row
-     * (null for the first page). Rows carry only `columns` (default: every
-     * registry column — the service narrows for PII).
+     * One page. Two modes over the same filters + (dateCol, id) ordering:
+     *   keyset — `after` = { d, id } from the previous page's last row (null
+     *            for the first page); O(page) on any table size (CSV export).
+     *   offset — `offset` (numbered pages in the UI): `.range(offset,
+     *            offset+limit-1)`; `after` is ignored.
+     * Rows carry only `columns` (default: every registry column — the
+     * service narrows for PII).
      */
-    async page(orgId, ds, filters, { after, limit, columns }) {
+    async page(orgId, ds, filters, { after, offset, limit, columns }) {
         const select = (columns || columnNames(ds, true)).join(',');
+        const byOffset = offset != null;
         let q = supabase_1.serviceClient.from(ds.table).select(select);
         q = applyFilters(q, orgId, ds, filters);
         if (ds.dateCol) {
-            if (after) {
+            if (after && !byOffset) {
                 q = q.or(`${ds.dateCol}.gt.${quoted(after.d)},and(${ds.dateCol}.eq.${quoted(after.d)},id.gt.${quoted(after.id)})`);
             }
             q = q.order(ds.dateCol, { ascending: true }).order('id', { ascending: true });
         } else {
-            if (after) q = q.gt('id', after.id);
+            if (after && !byOffset) q = q.gt('id', after.id);
             q = q.order('id', { ascending: true });
         }
-        const { data, error } = await q.limit(limit);
+        const { data, error } = await (byOffset ? q.range(offset, offset + limit - 1) : q.limit(limit));
         if (error) throw new Error(error.message);
         return data ?? [];
     },

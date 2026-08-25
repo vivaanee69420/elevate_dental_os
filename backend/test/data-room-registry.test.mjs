@@ -89,7 +89,9 @@ describe('registry invariants', () => {
     expect(appts.roster).toBe(false);
     expect(appts.columns.find((c) => c.col === 'id')).toEqual({ col: 'id', pii: false });
     const patients = dentally.datasets.find((d) => d.key === 'patients');
-    expect(patients.roster).toBe(true);
+    expect(patients.roster).toBe(false); // dated on created_at (Data Room universal date filter)
+    const staff = dentally.datasets.find((d) => d.key === 'staff');
+    expect(staff.roster).toBe(true);
     expect(patients.columns.find((c) => c.col === 'email')).toEqual({ col: 'email', pii: true });
     expect(appts.table).toBeUndefined();
     expect(appts.where).toBeUndefined();

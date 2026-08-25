@@ -166,3 +166,42 @@ describe('logExport()', () => {
     });
   });
 });
+
+describe('dataRoomQuerySchema — page', () => {
+  it('has no page by default and coerces page to an integer >= 1', () => {
+    expect(dataRoomQuerySchema.parse({}).page).toBeUndefined();
+    expect(dataRoomQuerySchema.parse({ page: '3' }).page).toBe(3);
+    expect(() => dataRoomQuerySchema.parse({ page: '0' })).toThrow();
+    expect(() => dataRoomQuerySchema.parse({ page: '1.5' })).toThrow();
+  });
+});
+
+describe('page() — offset mode (numbered pages)', () => {
+  it('uses .range(offset, offset+limit-1) instead of a cursor when offset is given', async () => {
+    const ds = getDataset('dentally', 'appointments');
+    await dataRoomRepository.page(ORG, ds, NONE, { offset: 200, limit: 100 });
+    const q = supaRec.last;
+    expect(q.range).toEqual({ from: 200, to: 299 });
+    expect(q.limitN).toBeUndefined();
+    expect(q.ors).toBeUndefined();
+    expect(q.orders).toEqual([{ col: 'starts_at', opts: { ascending: true } }, { col: 'id', opts: { ascending: true } }]);
+  });
+  it('offset 0 is the first page; roster datasets keep id order with no id > cursor', async () => {
+    const ds = getDataset('dentally', 'practitioners');
+    await dataRoomRepository.page(ORG, ds, NONE, { offset: 0, limit: 25 });
+    const q = supaRec.last;
+    expect(q.range).toEqual({ from: 0, to: 24 });
+    expect(q.gts).toBeUndefined();
+    expect(q.orders).toEqual([{ col: 'id', opts: { ascending: true } }]);
+  });
+  it('patients is a dated dataset: the window filters and orders on created_at', async () => {
+    const ds = getDataset('dentally', 'patients');
+    await dataRoomRepository.page(ORG, ds,
+      { practiceId: null, practiceKeys: null, since: '2026-08-01T00:00:00.000Z', until: '2026-09-01T00:00:00.000Z' },
+      { offset: 0, limit: 100 });
+    const q = supaRec.last;
+    expect(q.gtes).toContainEqual({ col: 'created_at', val: '2026-08-01T00:00:00.000Z' });
+    expect(q.lts).toContainEqual({ col: 'created_at', val: '2026-09-01T00:00:00.000Z' });
+    expect(q.orders).toEqual([{ col: 'created_at', opts: { ascending: true } }, { col: 'id', opts: { ascending: true } }]);
+  });
+});
