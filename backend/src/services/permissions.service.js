@@ -18,6 +18,7 @@ import {
   DEFAULT_ROLE_PERMISSIONS,
   isValidPermission,
   resolveEffectivePermissions,
+  ROLES,
 } from '../lib/permissions.js';
 import { AppError } from '../middleware/errors.js';
 
@@ -47,7 +48,7 @@ const permissionsService = {
     } catch {
       rows = [];
     }
-    const roles = { owner: {}, practice_manager: {}, reception: {} };
+    const roles = Object.fromEntries(ROLES.map((r) => [r, {}]));
     // Base each role on its CODE defaults so the admin UI shows the true
     // effective baseline even before/without any DB rows.
     for (const role of Object.keys(roles)) {
@@ -66,7 +67,7 @@ const permissionsService = {
 
   /** Owner sets a role's default for one permission key. */
   async setRoleDefault(orgId, role, permissionKey, allowed) {
-    if (!['owner', 'practice_manager', 'reception'].includes(role)) {
+    if (!ROLES.includes(role)) {
       throw new AppError('Unknown role', 400);
     }
     if (!isValidPermission(permissionKey)) {

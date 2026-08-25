@@ -40,6 +40,20 @@ describe('code role defaults (no DB rows)', () => {
     const eff = resolveEffectivePermissions([], {});
     for (const k of PERMISSION_KEYS) expect(eff[k]).toBe(false);
   });
+
+  it('analyst gets ONLY data.export with empty rows', () => {
+    const eff = resolveEffectivePermissions([], {}, 'analyst');
+    expect(eff['data.export']).toBe(true);
+    for (const k of PERMISSION_KEYS) {
+      if (k !== 'data.export') expect(eff[k]).toBe(false);
+    }
+  });
+
+  it('owner and only owner holds data.export by default', () => {
+    expect(resolveEffectivePermissions([], {}, 'owner')['data.export']).toBe(true);
+    expect(resolveEffectivePermissions([], {}, 'practice_manager')['data.export']).toBe(false);
+    expect(resolveEffectivePermissions([], {}, 'reception')['data.export']).toBe(false);
+  });
 });
 
 describe('layering on top of code defaults', () => {

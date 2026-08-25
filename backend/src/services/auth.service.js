@@ -29,8 +29,8 @@ import * as errors_1 from "../middleware/errors.js";
 import { notificationService } from "./notification.service.js";
 import { platformAdminRepository } from "../repositories/platform-admin.repository.js";
 
-// owner > practice_manager > reception
-const ROLE_RANK = { owner: 3, practice_manager: 2, reception: 1 };
+// owner > practice_manager > reception = analyst
+const ROLE_RANK = { owner: 3, practice_manager: 2, reception: 1, analyst: 1 };
 
 /** True if a caller with `callerRole` may act on a member with `targetRole`. */
 export function canManageTarget(callerRole, targetRole) {

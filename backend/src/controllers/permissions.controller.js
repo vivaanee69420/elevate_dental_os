@@ -7,9 +7,10 @@
 
 import { z } from 'zod';
 import { permissionsService } from '../services/permissions.service.js';
+import { ROLES } from '../lib/permissions.js';
 
 const roleDefaultSchema = z.object({
-  role: z.enum(['owner', 'practice_manager', 'reception']),
+  role: z.enum(ROLES),
   permission_key: z.string().min(1),
   allowed: z.boolean(),
 });
