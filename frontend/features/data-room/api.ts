@@ -32,14 +32,15 @@ export function fetchDataRoomRegistry(): Promise<DataRoomRegistry> {
   return api<DataRoomRegistry>('/api/data-room/datasets');
 }
 
+/** One numbered page (offset mode on the backend): rows (page-1)*limit … page*limit-1. */
 export function fetchDataRoomPage(
   source: DataRoomSourceKey,
   dataset: string,
   params: DataRoomParams,
-  cursor: string | undefined,
-  limit = 100,
+  page: number,
+  limit: number,
 ): Promise<DataRoomPage> {
-  return api<DataRoomPage>(`/api/data-room/${source}/${dataset}?${qs(params, { cursor, limit })}`);
+  return api<DataRoomPage>(`/api/data-room/${source}/${dataset}?${qs(params, { page, limit })}`);
 }
 
 /** Same-origin download href — the browser streams the CSV to disk. */
