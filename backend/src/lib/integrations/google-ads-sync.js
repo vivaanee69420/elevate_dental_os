@@ -18,6 +18,7 @@
 // micros / 10,000 (micros/1e6 currency units * 100 pence). Rule 2: integer pence.
 
 import { integrationRepository } from "../../repositories/integration.repository.js";
+import { apiBase, fetchWithApiVersion } from './google-ads-version.js';
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
@@ -86,13 +87,7 @@ function parseSearchStream(batches) {
     return { rows: out, account };
 }
 
-function apiBase() {
-    return process.env.GOOGLE_ADS_API_BASE || 'https://googleads.googleapis.com';
-}
-function apiVersion() {
-    // Must track a currently-supported Google Ads API version (see provider).
-    return process.env.GOOGLE_ADS_API_VERSION || 'v21';
-}
+// API base + version: ./google-ads-version.js (self-heals when Google retires a version).
 
 // Ensure a fresh access token (refresh when within 60s of expiry / expired).
 async function ensureToken(orgId, integration) {
@@ -105,12 +100,10 @@ async function ensureToken(orgId, integration) {
 
 async function queryCustomer(customerId, accessToken, query) {
     const { adsHeaders } = await import('./google-ads-provider.js');
-    const url = `${apiBase()}/${apiVersion()}/customers/${customerId}/googleAds:searchStream`;
-    const res = await fetch(url, {
-        method: 'POST',
-        headers: adsHeaders(accessToken),
-        body: JSON.stringify({ query }),
-    });
+    const res = await fetchWithApiVersion(
+        (v) => `${apiBase()}/${v}/customers/${customerId}/googleAds:searchStream`,
+        { method: 'POST', headers: adsHeaders(accessToken), body: JSON.stringify({ query }) },
+    );
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body?.error?.message || `searchStream HTTP ${res.status}`);

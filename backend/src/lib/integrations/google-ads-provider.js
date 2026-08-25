@@ -19,6 +19,7 @@
 // Manager (MCC). The dev token + MCC are operator-level, NOT per-org.
 
 import { registerProvider } from './provider-interface.js';
+import { apiBase, fetchWithApiVersion } from './google-ads-version.js';
 import { integrationRepository as integrationsRepository } from '../../repositories/integration.repository.js';
 import { encryptSecret, decryptSecret } from '../crypto.js';
 
@@ -26,14 +27,7 @@ const AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const SCOPES = ['https://www.googleapis.com/auth/adwords'];
 
-function apiBase() {
-    return process.env.GOOGLE_ADS_API_BASE || 'https://googleads.googleapis.com';
-}
-function apiVersion() {
-    // Google sunsets Ads API versions ~yearly; a sunset version 404s every call.
-    // Keep this on a currently-supported version (override via env when bumping).
-    return process.env.GOOGLE_ADS_API_VERSION || 'v21';
-}
+// API base + version live in ./google-ads-version.js (self-healing on sunset).
 function backendUrl() {
     return process.env.BACKEND_PUBLIC_URL || 'http://localhost:8080';
 }
@@ -85,10 +79,13 @@ export async function listAccessibleCustomers(accessToken) {
     if (!(process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '').trim()) {
         throw new Error('GOOGLE_ADS_DEVELOPER_TOKEN is not configured on the server — a Google Ads developer token is required to list accounts.');
     }
-    const url = `${apiBase()}/${apiVersion()}/customers:listAccessibleCustomers`;
     // No login-customer-id: this lists the credential's own accounts; an MCC
-    // header makes Google reject it with INVALID_ARGUMENT.
-    const res = await fetch(url, { headers: adsHeaders(accessToken, { withLogin: false }) });
+    // header makes Google reject it with INVALID_ARGUMENT. fetchWithApiVersion
+    // advances past a retired API version (404) instead of failing connect.
+    const res = await fetchWithApiVersion(
+        (v) => `${apiBase()}/${v}/customers:listAccessibleCustomers`,
+        { headers: adsHeaders(accessToken, { withLogin: false }) },
+    );
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
         throw new Error(googleAdsErrorMessage(body, res.status, 'listAccessibleCustomers'));

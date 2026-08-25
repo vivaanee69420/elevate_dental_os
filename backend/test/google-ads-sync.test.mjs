@@ -11,6 +11,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
 
 const { syncOneOrg, syncAllOrgs, __test } = await import('../src/lib/integrations/google-ads-sync.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
+const { resetApiVersionCache } = await import('../src/lib/integrations/google-ads-version.js');
 
 // Window policy (product rule): nightly cron resyncs 3 months; on-connect /
 // reconnect backfills 6 months. Guards against silent window regressions.
@@ -231,5 +232,28 @@ describe('syncAllOrgs', () => {
         const q = queries.find((x) => x.table === 'integrations');
         expect(q.eqs).toEqual(expect.arrayContaining([{ col: 'provider', val: 'google_ads' }]));
         expect(q.ins).toEqual(expect.arrayContaining([{ col: 'status', vals: ['active', 'failed'] }]));
+    });
+});
+
+describe('API version self-heal (sunset version)', () => {
+    it('searchStream 404 on a retired version advances to the next live version and still syncs rows', async () => {
+        resetApiVersionCache();
+        process.env.GOOGLE_ADS_API_VERSION = 'v25';
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        const urls = [];
+        global.fetch = vi.fn(async (url, init = {}) => {
+            urls.push(String(url));
+            const v = String(url).match(/\/(v\d+)\//)[1];
+            const probe = !init.headers?.Authorization;
+            if (probe) return { ok: false, status: v === 'v26' ? 401 : 404, json: async () => ({}) };
+            if (v === 'v26') return { ok: true, status: 200, json: async () => ([
+                { results: [{ campaign: { id: 7, name: 'Brand' }, segments: { date: '2026-08-20' },
+                  metrics: { costMicros: 3_000_000, impressions: 500, clicks: 20, conversions: 2 } }] }]) };
+            return { ok: false, status: 404, json: async () => ({}) };
+        });
+        const res = await syncOneOrg('org-1', freshCreds(['1110000000']));
+        expect(res.rows).toBe(1);
+        expect(urls.at(-1)).toMatch(/\/v26\/customers\/1110000000\/googleAds:searchStream$/);
+        delete process.env.GOOGLE_ADS_API_VERSION;
     });
 });

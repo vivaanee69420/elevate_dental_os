@@ -18,6 +18,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
 
 const { GoogleAdsProvider, listAccessibleCustomers, adsHeaders } = await import('../src/lib/integrations/google-ads-provider.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
+const { resetApiVersionCache } = await import('../src/lib/integrations/google-ads-version.js');
 
 const TOKEN_OK = {
     ok: true, status: 200,
@@ -29,6 +30,7 @@ beforeEach(() => {
     process.env.GOOGLE_ADS_CLIENT_SECRET = 'secret';
     process.env.GOOGLE_ADS_DEVELOPER_TOKEN = 'devtoken';
     delete process.env.GOOGLE_ADS_API_VERSION;
+    resetApiVersionCache();
     integrationRepository.upsertSecrets.mockReset();
     integrationRepository.markFailed.mockReset();
 });
@@ -103,9 +105,25 @@ describe('listAccessibleCustomers', () => {
             return { ok: true, status: 200, json: async () => ({ resourceNames: ['customers/123'] }) };
         });
         await listAccessibleCustomers('tok');
-        // v15..v19 are sunset and 404. Guard against a regression back to them.
-        expect(calledUrl).not.toMatch(/\/v1[0-9]\//);
-        expect(calledUrl).toMatch(/\/v2[0-9]\/customers:listAccessibleCustomers$/);
+        // v15..v21 are sunset and 404 (v22 goes Oct 2026). /v2[0-9]/ let v21
+        // through while it was already dead — assert the number instead.
+        const v = Number(calledUrl.match(/\/v(\d+)\/customers:listAccessibleCustomers$/)?.[1]);
+        expect(v).toBeGreaterThanOrEqual(25);
+    });
+
+    it('self-heals when Google retires the configured version: probes newer versions and retries', async () => {
+        process.env.GOOGLE_ADS_API_VERSION = 'v25';
+        const urls = [];
+        global.fetch = vi.fn(async (url, init = {}) => {
+            urls.push(String(url));
+            const v = String(url).match(/\/(v\d+)\//)[1];
+            const probe = !init.headers?.Authorization;
+            if (probe) return { ok: false, status: v === 'v26' ? 401 : 404, json: async () => ({}) };
+            if (v === 'v26') return { ok: true, status: 200, json: async () => ({ resourceNames: ['customers/123'] }) };
+            return { ok: false, status: 404, json: async () => ({}) };
+        });
+        await expect(listAccessibleCustomers('tok')).resolves.toEqual(['123']);
+        expect(urls.at(-1)).toMatch(/\/v26\/customers:listAccessibleCustomers$/);
     });
 });
 
