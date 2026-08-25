@@ -137,16 +137,21 @@ export const dataRoomService = {
         const includePii = assertPii(user, query.pii);
         const cols = columnNames(ds, includePii);
         const orgId = user.organisation_id;
-        const diff = {
-            source: ds.source, dataset: ds.key, scope: query.scope,
-            since: ds.dateCol ? new Date(query.since).toISOString() : null,
-            until: ds.dateCol ? new Date(query.until).toISOString() : null,
-            pii: includePii, rows: 0,
-        };
-        // Validate BEFORE the first byte so errors still map to a JSON status.
+        // Validate BEFORE the first byte so errors still map to a JSON status
+        // (also before the diff is built: window() throws on a bad/missing
+        // range, and diff.since/until must reflect the VALIDATED bounds, not
+        // raw query input — new Date(undefined) would otherwise throw a
+        // RangeError that maps to an unmapped 500 instead of window()'s 400).
         const prepared = ds.derived
             ? { derived: await derivedRows(orgId, ds, query) }
             : await buildFilters(orgId, ds, query);
+
+        const diff = {
+            source: ds.source, dataset: ds.key, scope: query.scope,
+            since: ds.dateCol ? prepared.filters.since : null,
+            until: ds.dateCol ? prepared.filters.until : null,
+            pii: includePii, rows: 0,
+        };
 
         const audit = async (aborted) => {
             const d = aborted ? { ...diff, aborted: true } : diff;
