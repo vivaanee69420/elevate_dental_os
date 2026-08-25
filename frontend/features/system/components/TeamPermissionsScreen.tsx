@@ -23,7 +23,7 @@ import {
   useProvisionMember,
   useSetMemberPassword,
 } from '../hooks';
-import type { TeamMember } from '../api';
+import type { TeamMember, EditableRole } from '../api';
 import { SECTION_COLOURS } from '../data';
 
 /** Status -> chip colour, mirroring the STAGE_CHIP_COLOUR convention. */
@@ -36,6 +36,7 @@ const ROLE_LABEL: Record<TeamMember['role'], string> = {
   owner: 'Owner',
   practice_manager: 'Practice Manager',
   reception: 'Reception',
+  analyst: 'Data Analyst',
 };
 
 /** Team members management — add (set-password / invite), list, remove,
@@ -401,6 +402,7 @@ function TeamMembers() {
               <option value="owner">Owner</option>
               <option value="practice_manager">Practice Manager</option>
               <option value="reception">Reception</option>
+              <option value="analyst">Data Analyst</option>
             </select>
           </div>
           {mode === 'password' && (
@@ -455,6 +457,7 @@ function TeamMembers() {
 
 const PM_BLUE = '#3B82F6';
 const REC_GREEN = 'var(--success)';
+const AN_SLATE = '#475569';
 
 /**
  * Visual grouping of catalogue permission keys into the prototype's coloured
@@ -573,9 +576,12 @@ export default function TeamPermissionsScreen() {
   const recCount = data
     ? Object.values(data.roles.reception).filter(Boolean).length
     : 0;
+  const anCount = data
+    ? Object.values(data.roles.analyst).filter(Boolean).length
+    : 0;
 
   function toggle(
-    role: 'practice_manager' | 'reception',
+    role: EditableRole,
     permission_key: string,
     allowed: boolean,
   ) {
@@ -635,7 +641,7 @@ export default function TeamPermissionsScreen() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 1fr 1fr',
+            gridTemplateColumns: '1fr 1fr 1fr 1fr',
             gap: 24,
             textAlign: 'center',
           }}
@@ -651,7 +657,6 @@ export default function TeamPermissionsScreen() {
           <div
             style={{
               borderLeft: '1px solid rgba(255,255,255,0.2)',
-              borderRight: '1px solid rgba(255,255,255,0.2)',
             }}
           >
             <div className="display font-bold" style={{ marginTop: 4 }}>
@@ -661,12 +666,28 @@ export default function TeamPermissionsScreen() {
               {pmCount} of {totalPerms} permissions
             </div>
           </div>
-          <div>
+          <div
+            style={{
+              borderLeft: '1px solid rgba(255,255,255,0.2)',
+            }}
+          >
             <div className="display font-bold" style={{ marginTop: 4 }}>
               Reception
             </div>
             <div style={{ fontSize: 11, opacity: 0.8 }}>
               {recCount} of {totalPerms} permissions
+            </div>
+          </div>
+          <div
+            style={{
+              borderLeft: '1px solid rgba(255,255,255,0.2)',
+            }}
+          >
+            <div className="display font-bold" style={{ marginTop: 4 }}>
+              Data Analyst
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.8 }}>
+              {anCount} of {totalPerms} permissions
             </div>
           </div>
         </div>
@@ -679,7 +700,7 @@ export default function TeamPermissionsScreen() {
           padding: '10px 16px',
           marginBottom: 0,
           display: 'grid',
-          gridTemplateColumns: '1fr 90px 90px 90px',
+          gridTemplateColumns: '1fr 90px 90px 90px 90px',
           gap: 12,
           alignItems: 'center',
           background: 'var(--bg)',
@@ -695,6 +716,7 @@ export default function TeamPermissionsScreen() {
         <div style={{ textAlign: 'center' }}>Owner</div>
         <div style={{ textAlign: 'center', color: PM_BLUE }}>Manager</div>
         <div style={{ textAlign: 'center', color: REC_GREEN }}>Reception</div>
+        <div style={{ textAlign: 'center', color: AN_SLATE }}>Data Analyst</div>
       </div>
 
       {/* Permission sections */}
@@ -736,12 +758,13 @@ export default function TeamPermissionsScreen() {
             {rows.map((row) => {
               const pmAllowed = !!data.roles.practice_manager[row.key];
               const recAllowed = !!data.roles.reception[row.key];
+              const anAllowed = !!data.roles.analyst[row.key];
               return (
                 <div
                   key={row.key}
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 90px 90px 90px',
+                    gridTemplateColumns: '1fr 90px 90px 90px 90px',
                     gap: 12,
                     alignItems: 'center',
                     padding: '9px 14px',
@@ -794,6 +817,14 @@ export default function TeamPermissionsScreen() {
                       colour={REC_GREEN}
                       disabled={setRole.isPending}
                       onChange={(v) => toggle('reception', row.key, v)}
+                    />
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    <Toggle
+                      on={anAllowed}
+                      colour={AN_SLATE}
+                      disabled={setRole.isPending}
+                      onChange={(v) => toggle('analyst', row.key, v)}
                     />
                   </div>
                 </div>

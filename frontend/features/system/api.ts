@@ -1,7 +1,10 @@
 import { api } from '@/lib/api';
 
 /** Role keys the permissions matrix is editable for (Owner is implicit-all). */
-export type EditableRole = 'practice_manager' | 'reception';
+export type EditableRole = 'practice_manager' | 'reception' | 'analyst';
+
+/** All roles a user account can hold. */
+export type Role = 'owner' | 'practice_manager' | 'reception' | 'analyst';
 
 /** Shape of GET /api/admin/permissions. */
 export interface PermissionsMatrix {
@@ -12,6 +15,7 @@ export interface PermissionsMatrix {
     owner: Record<string, boolean>;
     practice_manager: Record<string, boolean>;
     reception: Record<string, boolean>;
+    analyst: Record<string, boolean>;
   };
 }
 
@@ -35,7 +39,7 @@ export interface TeamMember {
   id: string;
   email: string;
   full_name: string | null;
-  role: 'owner' | 'practice_manager' | 'reception';
+  role: Role;
   status: 'invited' | 'active';
   last_active_at: string | null;
 }
@@ -51,7 +55,7 @@ export function getTeam(): Promise<TeamResponse> {
 export interface InviteMemberInput {
   email: string;
   full_name: string;
-  role: 'owner' | 'practice_manager' | 'reception';
+  role: Role;
   /** Optional per-member permission overrides (catalogue key -> allowed). */
   permissions?: Record<string, boolean>;
 }
@@ -77,7 +81,7 @@ export function removeMember(
 export interface ProvisionMemberInput {
   email: string;
   full_name: string;
-  role: 'owner' | 'practice_manager' | 'reception';
+  role: Role;
   password: string;
   /** Optional per-member permission overrides (bounded server-side by the
    *  caller's own grants). */
