@@ -3,6 +3,7 @@ import { Sidebar } from '@/components/layout/sidebar';
 import { TopBar } from '@/components/layout/topbar';
 import { SectionTabs } from '@/components/layout/SectionTabs';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
+import { RoleHomeGuard } from '@/components/layout/RoleHomeGuard';
 import { ScopePeriodProvider } from '@/features/_shared/scope-context';
 import { SyncToastProvider } from '@/features/integrations/sync-toast';
 
@@ -13,6 +14,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <Suspense fallback={null}>
       <ScopePeriodProvider>
         <SidebarProvider>
+          <RoleHomeGuard />
           {/* Holds the live sync-progress toast above the routed pages so it
               survives client-side navigation (start a sync on Integrations,
               keep working anywhere — the toast stays until it finishes). */}

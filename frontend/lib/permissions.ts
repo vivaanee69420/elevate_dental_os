@@ -9,11 +9,13 @@
 //   finance.view, valuation.view, businesshealth.manage, operations.view,
 //   intelligence.view, growth.view, crm.view, crm.manage, wealth.view,
 //   training.view, system.manage, users.invite, users.manage,
-//   permissions.manage
+//   permissions.manage, data.export
 //
 // A route/item is visible only when permissions[key] === true. Overview has
 // no key (always visible to any signed-in user). Items that name a more
 // specific key (e.g. valuation, team-permissions) override their section.
+
+import { NAV, type NavSection } from './nav';
 
 export type PermissionKey =
   | 'finance.view'
@@ -29,7 +31,8 @@ export type PermissionKey =
   | 'system.manage'
   | 'users.invite'
   | 'users.manage'
-  | 'permissions.manage';
+  | 'permissions.manage'
+  | 'data.export';
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>;
 
@@ -118,6 +121,13 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   'data-hub': 'system.manage',
   'team-permissions': 'permissions.manage',
   settings: 'system.manage',
+
+  // Data Room — raw source rows for the analyst role (owner also holds the key)
+  'data-dentally': 'data.export',
+  'data-google-ads': 'data.export',
+  'data-meta-ads': 'data.export',
+  'data-gohighlevel': 'data.export',
+  'data-emergent': 'data.export',
 };
 
 /**
@@ -133,4 +143,37 @@ export function canAccessRoute(
   const key = ROUTE_PERMISSION[routeId];
   if (!key) return true; // Overview-level
   return permissions?.[key] === true;
+}
+
+/** The five Data Room route ids — the ONLY routes an analyst may see. */
+export const DATA_ROOM_ROUTES = [
+  'data-dentally',
+  'data-google-ads',
+  'data-meta-ads',
+  'data-gohighlevel',
+  'data-emergent',
+] as const;
+
+export function isDataRoomRoute(routeId: string): boolean {
+  return (DATA_ROOM_ROUTES as readonly string[]).includes(routeId);
+}
+
+/**
+ * Nav sections (with their items already filtered) visible to a user.
+ * Overview items have no permission key and normally show for everyone, so
+ * the `analyst` role is handled explicitly: it sees the Data Room section and
+ * nothing else. Every other role gets the per-item canAccessRoute filter.
+ */
+export function visibleNavSections(
+  role: string | undefined,
+  permissions: Permissions | null | undefined,
+): NavSection[] {
+  const out: NavSection[] = [];
+  for (const section of NAV) {
+    const items = section.items.filter((i) =>
+      role === 'analyst' ? isDataRoomRoute(i.id) && canAccessRoute(i.id, permissions) : canAccessRoute(i.id, permissions),
+    );
+    if (items.length > 0) out.push({ ...section, items });
+  }
+  return out;
 }

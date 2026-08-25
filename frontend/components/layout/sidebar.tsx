@@ -2,8 +2,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { canAccessRoute, type Permissions } from '@/lib/permissions';
-import { NAV, type NavItem, type NavSection } from '@/lib/nav';
+import { visibleNavSections, type Permissions } from '@/lib/permissions';
 import { useMe } from '@/hooks/useMe';
 import { useSidebar, HamburgerIcon } from '@/components/layout/sidebar-context';
 
@@ -32,6 +31,7 @@ const SECTION_ICONS: Record<string, string> = {
   Wealth: 'M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6',
   Training: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5',
   System: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.92.68 2 2 0 1 1-3.96 0 1.65 1.65 0 0 0-2.92-.68 2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a2 2 0 1 1 0-3.96 1.65 1.65 0 0 0-.68-2.92 2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 2.92-.68 2 2 0 1 1 3.96 0 1.65 1.65 0 0 0 2.92.68 2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0 .42 2.74z',
+  'Data Room': 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6',
 };
 
 function SectionIcon({ label }: { label: string }) {
@@ -120,16 +120,6 @@ export function Sidebar() {
   // permissions is null and only Overview routes resolve as visible.
   const permissions: Permissions | null = me?.permissions ?? null;
 
-  // True when an individual item should render for the effective permissions.
-  function canSeeItem(item: NavItem): boolean {
-    return canAccessRoute(item.id, permissions);
-  }
-
-  // A section renders only when at least one of its items is visible.
-  function canSeeSection(s: NavSection): boolean {
-    return s.items.some(canSeeItem);
-  }
-
   // Resolve a section's open/closed state: explicit toggle wins, else open
   // if it contains the active route, else open Overview + CRM by default.
   function sectionOpen(label: string, hasActive: boolean): boolean {
@@ -186,9 +176,8 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-        {NAV.filter(canSeeSection).map((section) => {
-          const items = section.items.filter(canSeeItem);
-          if (items.length === 0) return null;
+        {visibleNavSections(me?.role, permissions).map((section) => {
+          const items = section.items;
           const hasActive = items.some((i) => pathname === `/${i.id}`);
           const open = sectionOpen(section.label, hasActive);
           return (

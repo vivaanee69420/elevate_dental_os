@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { canAccessRoute, type Permissions } from '@/lib/permissions';
+import { visibleNavSections, type Permissions } from '@/lib/permissions';
 import { sectionForRoute } from '@/lib/nav';
 import { useMe } from '@/hooks/useMe';
 
@@ -19,7 +19,8 @@ export function SectionTabs() {
   const section = sectionForRoute(routeId);
   if (!section) return null;
 
-  const items = section.items.filter((i) => canAccessRoute(i.id, permissions));
+  const items =
+    visibleNavSections(me?.role, permissions).find((s) => s.label === section.label)?.items ?? [];
   if (items.length <= 1) return null;
 
   return (

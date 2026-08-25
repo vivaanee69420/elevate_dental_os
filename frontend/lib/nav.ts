@@ -95,6 +95,13 @@ export const NAV: NavSection[] = [
     { id: 'team-permissions', label: 'Team Permissions' },
     { id: 'settings', label: 'Settings' },
   ]},
+  { label: 'Data Room', items: [
+    { id: 'data-dentally', label: 'Dentally', isNew: true },
+    { id: 'data-google-ads', label: 'Google Ads', isNew: true },
+    { id: 'data-meta-ads', label: 'Meta Ads', isNew: true },
+    { id: 'data-gohighlevel', label: 'GoHighLevel', isNew: true },
+    { id: 'data-emergent', label: 'Emergent', isNew: true },
+  ]},
 ];
 
 // Resolve which section a route id belongs to (for SectionTabs).
