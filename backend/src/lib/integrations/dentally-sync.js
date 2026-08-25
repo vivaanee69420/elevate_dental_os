@@ -722,13 +722,19 @@ export function paymentRow(orgId, p, siteMap, contactMap) {
 // nhs_uda_value, nhs_completed_uda_value, completed, completed_at, start_date,
 // end_date }. private_treatment_value is money -> integer pence; UDA values are
 // units, kept numeric. associate_id/contact_id resolved via the existing maps;
-// raw ids persisted so they can be relinked on a later run.
-export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap = new Map()) {
+// raw ids persisted so they can be relinked on a later run. practice_id: the
+// feed carries no site, so (like treatment items) attribute via the
+// practitioner's home site — practiceByPractitioner from
+// loadPractitionerPracticeMap; restamp_treatment_plan_practices self-heals
+// rows whose practitioner joined the roster later.
+export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap = new Map(), practiceByPractitioner = new Map()) {
     const numOrNull = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+    const prac = tp.practitioner_id != null ? String(tp.practitioner_id) : null;
     return {
         organisation_id: orgId,
         source: 'dentally',
         pms_external_id: String(tp.id),
+        practice_id: prac ? (practiceByPractitioner.get(prac) ?? null) : null,
         pms_practitioner_id: tp.practitioner_id != null ? String(tp.practitioner_id) : null,
         pms_patient_id: tp.patient_id != null ? String(tp.patient_id) : null,
         associate_id: associateMap.get(String(tp.practitioner_id)) ?? null,
@@ -1120,12 +1126,12 @@ async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPa
     return { synced, skipped };
 }
 
-async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages) {
+async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages, practiceByPractitioner = new Map()) {
     let synced = 0;
     await streamPages(orgId, base, '/treatment_plans', auth, params, async (items) => {
         const rows = items
             .filter((tp) => tp && tp.id != null)
-            .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap));
+            .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap, practiceByPractitioner));
         synced += await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
     return { synced };
@@ -1400,7 +1406,8 @@ export async function applyWebhookEvent(orgId, resourceType, record, action = 'u
         // Associate production (the figure the Pay Run needs). associateMap is the
         // practitioner->associate map; contactMap resolves the patient.
         const associateMap = await loadPractitionerMap(orgId);
-        const row = treatmentPlanRow(orgId, record, associateMap, contactMap);
+        const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
+        const row = treatmentPlanRow(orgId, record, associateMap, contactMap, practiceByPractitioner);
         await upsertChunked('treatment_plans', [row], 'organisation_id,source,pms_external_id');
         return { table: 'treatment_plans', applied: 1 };
     }
@@ -1680,7 +1687,8 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         let treatmentPlans = { synced: 0 };
         if (want('treatment_plans') && !completedPhases.has('treatment_plans')) {
             try {
-                treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_after: since }, practitionerMap, contactMap, reporter(3), maxPages);
+                const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
+                treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_after: since }, practitionerMap, contactMap, reporter(3), maxPages, practiceByPractitioner);
                 await markPhaseDone('treatment_plans');
             } catch (err) {
                 console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
@@ -1739,6 +1747,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 await supabase_1.serviceClient.rpc('restamp_treatment_item_practices', { p_org: orgId });
             } catch (err) {
                 console.warn(`[dentally] treatment_items practice restamp skipped: ${err?.message || err}`);
+            }
+        }
+        // Same self-heal for treatment PLANS (practice via practitioner home site).
+        if (want('treatment_plans')) {
+            try {
+                await supabase_1.serviceClient.rpc('restamp_treatment_plan_practices', { p_org: orgId });
+            } catch (err) {
+                console.warn(`[dentally] treatment_plans practice restamp skipped: ${err?.message || err}`);
             }
         }
         // All pulls done; the relink RPCs below are set-based SQL that can take a
