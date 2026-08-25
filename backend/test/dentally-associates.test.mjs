@@ -100,6 +100,12 @@ describe('treatmentPlanRow (production)', () => {
             private_value_pence: 85050, nhs_uda_value: 3, completed: true,
         });
     });
+    it('stamps practice_id from the practitioner home site (practiceByPractitioner), null when unmapped', () => {
+        const practiceByPractitioner = new Map([['189834', 'prac-x']]);
+        expect(treatmentPlanRow(ORG, tp, assocMap, contactMap, practiceByPractitioner).practice_id).toBe('prac-x');
+        expect(treatmentPlanRow(ORG, tp, assocMap, contactMap).practice_id).toBeNull();
+        expect(treatmentPlanRow(ORG, { ...tp, practitioner_id: 1 }, assocMap, contactMap, practiceByPractitioner).practice_id).toBeNull();
+    });
     it('null associate/contact when unmapped; nhs values null-safe', () => {
         const row = treatmentPlanRow(ORG, { id: 1, practitioner_id: 7, patient_id: 8, private_treatment_value: '0.0' });
         expect(row.associate_id).toBeNull();
