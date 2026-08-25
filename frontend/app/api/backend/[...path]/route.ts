@@ -67,12 +67,24 @@ async function proxy(req: NextRequest, path: string[]) {
     );
   }
 
+  const resContentType = res.headers.get('content-type') || 'application/json';
+
+  // File downloads (Data Room CSV export) are streamed straight through so a
+  // 200k-row export never sits in this process's memory. Everything else
+  // keeps the buffered path (unchanged behaviour).
+  if (resContentType.startsWith('text/csv')) {
+    const headers: Record<string, string> = { 'Content-Type': resContentType };
+    const disposition = res.headers.get('content-disposition');
+    if (disposition) headers['Content-Disposition'] = disposition;
+    const cache = res.headers.get('cache-control');
+    if (cache) headers['Cache-Control'] = cache;
+    return new NextResponse(res.body, { status: res.status, headers });
+  }
+
   const text = await res.text();
   return new NextResponse(text, {
     status: res.status,
-    headers: {
-      'Content-Type': res.headers.get('content-type') || 'application/json',
-    },
+    headers: { 'Content-Type': resContentType },
   });
 }
 
