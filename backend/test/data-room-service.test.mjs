@@ -186,6 +186,14 @@ describe('streamCsv()', () => {
     await expect(dataRoomService.streamCsv(analyst, 'dentally', 'patients', { ...WIN, pii: true }, s, meta)).rejects.toBeInstanceOf(AppError);
     expect(s.chunks).toEqual([]);
   });
+
+  it('400s (not 500) when an event dataset export has no window, before writing anything', async () => {
+    const s = sink();
+    await expect(dataRoomService.streamCsv(owner, 'dentally', 'appointments', { ...WIN, since: undefined, until: undefined }, s, meta))
+      .rejects.toMatchObject({ statusCode: 400 });
+    expect(s.chunks).toEqual([]);
+    expect(repo.logExport).not.toHaveBeenCalled();
+  });
 });
 
 describe('exportFilename()', () => {
