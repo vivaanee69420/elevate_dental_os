@@ -55,6 +55,7 @@ describe('getMatrix', () => {
     });
     const m = await permissionsService.getMatrix('org-1');
     expect(Object.keys(m.roles).sort()).toEqual([
+      'analyst',
       'owner',
       'practice_manager',
       'reception',

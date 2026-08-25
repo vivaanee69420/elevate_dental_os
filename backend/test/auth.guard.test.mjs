@@ -28,4 +28,11 @@ describe('canManageTarget', () => {
     expect(canManageTarget('superuser', 'reception')).toBe(false);
     expect(canManageTarget('practice_manager', 'superuser')).toBe(false);
   });
+
+  it('analyst ranks with reception: PM manages analysts, analysts manage nobody', () => {
+    expect(canManageTarget('practice_manager', 'analyst')).toBe(true);
+    expect(canManageTarget('analyst', 'reception')).toBe(false);
+    expect(canManageTarget('analyst', 'analyst')).toBe(false);
+    expect(canManageTarget('reception', 'analyst')).toBe(false);
+  });
 });

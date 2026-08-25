@@ -41,9 +41,13 @@ export const PERMISSION_CATALOG = {
   'users.invite': 'Invite team members',
   'users.manage': 'Edit/remove team members',
   'permissions.manage': 'Edit the role-permission matrix',
+  'data.export': 'View & export raw source data (Data Room)',
 };
 
 export const PERMISSION_KEYS = Object.keys(PERMISSION_CATALOG);
+
+// Built-in roles. Single source for every enum/validation in the backend.
+export const ROLES = ['owner', 'practice_manager', 'reception', 'analyst'];
 
 // Code-defined default grants per built-in role. Source of truth for the
 // baseline (mirrors the SQL seed in 20260101000005). Any key omitted for a
@@ -51,6 +55,7 @@ export const PERMISSION_KEYS = Object.keys(PERMISSION_CATALOG);
 //   owner             -> everything
 //   practice_manager  -> ops/growth/CRM/training (no finance/wealth/system/perms)
 //   reception         -> CRM essentials only
+//   analyst           -> Data Room only (data.export)
 export const DEFAULT_ROLE_PERMISSIONS = {
   owner: PERMISSION_KEYS.reduce((m, k) => ((m[k] = true), m), {}),
   practice_manager: {
@@ -62,6 +67,9 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   },
   reception: {
     'crm.view': true,
+  },
+  analyst: {
+    'data.export': true,
   },
 };
 

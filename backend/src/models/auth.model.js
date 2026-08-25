@@ -15,7 +15,7 @@ export const loginSchema = zod_1.z.object({
 export const inviteSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     full_name: zod_1.z.string(),
-    role: zod_1.z.enum(['owner', 'practice_manager', 'reception']),
+    role: zod_1.z.enum(['owner', 'practice_manager', 'reception', 'analyst']),
     // Optional per-member permission overrides applied at provisioning time.
     permissions: zod_1.z.record(zod_1.z.boolean()).optional(),
 });
@@ -29,7 +29,7 @@ export const removeMemberSchema = zod_1.z.object({
 export const provisionMemberSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     full_name: zod_1.z.string(),
-    role: zod_1.z.enum(['owner', 'practice_manager', 'reception']),
+    role: zod_1.z.enum(['owner', 'practice_manager', 'reception', 'analyst']),
     password: zod_1.z.string().min(8),
     permissions: zod_1.z.record(zod_1.z.boolean()).optional(),
 });
