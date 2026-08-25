@@ -7,6 +7,8 @@ export type Column<T> = {
 };
 
 // Mirrors the table markup previously inlined in leads/contacts/payments.
+// The card scrolls horizontally when the table is wider than its container
+// (wide Data Room datasets) instead of clipping the right-hand columns.
 export function DataTable<T>({
   columns,
   rows,
@@ -20,14 +22,14 @@ export function DataTable<T>({
 }) {
   const isEmpty = !rows || rows.length === 0;
   return (
-    <div className="card overflow-hidden">
+    <div className="card overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-bg border-b border-border">
           <tr>
             {columns.map((c) => (
               <th
                 key={c.header}
-                className={`${c.align === 'right' ? 'text-right' : 'text-left'} p-3 font-semibold`}
+                className={`${c.align === 'right' ? 'text-right' : 'text-left'} p-3 font-semibold whitespace-nowrap`}
               >
                 {c.header}
               </th>

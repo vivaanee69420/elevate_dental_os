@@ -1,6 +1,7 @@
 export { PageHeader } from './PageHeader';
 export { Card } from './Card';
 export { DataTable, type Column } from './DataTable';
+export { Pagination, pageItems, DEFAULT_PAGE_SIZES } from './Pagination';
 export { StatusBadge } from './StatusBadge';
 export { ProgressBar, progressTone } from './ProgressBar';
 export { KpiTile } from './KpiTile';
