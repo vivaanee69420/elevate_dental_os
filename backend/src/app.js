@@ -56,6 +56,7 @@ import * as debt_routes_1 from "./routes/debt.routes.js";
 import * as notification_routes_1 from "./routes/notification.routes.js";
 import * as ad_attribution_routes_1 from "./routes/ad-attribution.routes.js";
 import * as call_reporting_routes_1 from "./routes/call-reporting.routes.js";
+import * as data_room_routes_1 from "./routes/data-room.routes.js";
 import platformAdminRouter from "./routes/platform-admin.routes.js";
 import platformCoursesRouter from "./routes/platform-courses.routes.js";
 import * as logs_routes_1 from "./routes/logs.routes.js";
@@ -262,6 +263,7 @@ export function buildApp() {
     api.use('/practices', practices_routes_1.default);
     api.use('/ad-attribution', ad_attribution_routes_1.default);
     api.use('/call-reporting', call_reporting_routes_1.default);
+    api.use('/data-room', data_room_routes_1.default);
     // Owner-only: read/download the on-disk production logs (LOG_DIR). Gated
     // here at the mount point so every route in the module is owner-restricted.
     api.use('/admin/logs', (0, auth_1.requireRole)('owner'), logs_routes_1.default);

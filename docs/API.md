@@ -1383,6 +1383,32 @@ avgPerDayPence, projectedPence, dailyTargetPence, byPractice[] }`.
   fact even though the individual row is not) — but is `null` itself when no
   practice reported at all this month.
 
+## Data Room (`/api/data-room/*`)
+
+Raw source rows for the data analyst. Every route requires the `data.export`
+permission key (owner by default; the `analyst` role holds only this key).
+Registry: `backend/src/lib/data-room/registry.js`. Spec:
+`docs/superpowers/specs/2026-08-25-data-room-design.md`.
+
+### `GET /api/data-room/datasets`
+
+Registry for the UI. `{ sources: [{ key, label, description, datasets: [{ key, label, roster, columns: [{ col, pii }] }] }] }`.
+Sources: `dentally`, `google-ads`, `meta-ads`, `gohighlevel`, `emergent`.
+
+### `GET /api/data-room/:source/:dataset?scope&since&until&cursor&limit&pii`
+
+- `scope` — `all` (default) or a practice UUID.
+- `since`, `until` — ISO instants, `[since, until)`. Required unless the dataset is `roster` (ignored then).
+- `cursor` — opaque, from the previous page's `next_cursor`.
+- `limit` — 1–500, default 100.
+- `pii` — `1` includes patient-identifying columns. **Owner only**; anyone else gets `403 { error: "PII export is owner-only" }`.
+
+Response `{ rows, next_cursor, total }`. Rows carry only registry columns; PII-flagged columns are absent unless `pii=1` by an owner. Ordering `(dateCol, id)` for event datasets, `id` for roster. Money is integer pence.
+
+### `GET /api/data-room/:source/:dataset/export.csv?scope&since&until&pii`
+
+Streams the whole filtered set: `text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="<source>-<dataset>_<since>_<until>.csv"` (roster: `_<today>`), UTF-8 BOM, CRLF. Written in 1000-row batches; any size. Every export writes an `audit_log` row (`action='export'`, `entity_type='data_room'`, `diff={source,dataset,scope,since,until,pii,rows[,aborted]}`).
+
 ## Ad attribution (`/api/ad-attribution/*`)
 
 Google-vs-Facebook lead performance from an explicit, operator-maintained
