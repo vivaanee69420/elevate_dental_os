@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PassThrough } from 'node:stream';
+import ExcelJS from 'exceljs';
 import './setup.js';
 
 vi.mock('../src/repositories/data-room.repository.js', () => ({
@@ -303,5 +305,62 @@ describe('freshness()', () => {
     expect(out.sources.summaries.last_sync_at).toBe('2026-08-27T03:10:00.000Z');
     expect(out.as_of).toBe('2026-08-27T03:10:00.000Z');
     expect(repo.freshness).toHaveBeenCalledWith(ORG);
+  });
+});
+
+async function readWorkbook(stream) {
+  const bufs = [];
+  for await (const b of stream) bufs.push(b);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(Buffer.concat(bufs));
+  return wb;
+}
+
+describe('xlsx export', () => {
+  it('prepareExport() enforces the PII gate, the window and the row cap before any byte', async () => {
+    await expect(dataRoomService.prepareExport(analyst, 'dentally', 'patients', { ...WIN, pii: true })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(dataRoomService.prepareExport(owner, 'dentally', 'appointments', { ...WIN, since: undefined, until: undefined })).rejects.toMatchObject({ statusCode: 400 });
+    repo.count.mockResolvedValue(500_001);
+    await expect(dataRoomService.prepareExport(owner, 'dentally', 'appointments', WIN)).rejects.toMatchObject({ statusCode: 413 });
+  });
+  it('writeXlsx() with scope=all writes one worksheet per practice plus Unassigned, and audits format=xlsx', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }, { id: '33333333-3333-4333-8333-333333333333', name: 'Bexleyheath' }]);
+    repo.count.mockResolvedValue(3);
+    repo.page.mockImplementation(async (orgId, ds, filters) => {
+      if (filters.practiceNull) return [{ id: 'u1', practice_id: null, starts_at: '2026-08-03T09:00:00.000Z', status: 'completed' }];
+      if (filters.practiceId === PRACTICE) return [{ id: 'a1', practice_id: PRACTICE, starts_at: '2026-08-01T09:00:00.000Z', status: 'completed' }];
+      return [];
+    });
+    const plan = await dataRoomService.prepareExport(analyst, 'dentally', 'appointments', WIN);
+    const out = new PassThrough();
+    const reading = readWorkbook(out);
+    const res = await dataRoomService.writeXlsx(plan, out, { isAborted: () => false, ip: '1.1.1.1', userAgent: 'vitest' });
+    const wb = await reading;
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Ashford', 'Bexleyheath', 'Unassigned']);
+    expect(wb.getWorksheet('Ashford').rowCount).toBe(2);
+    expect(wb.getWorksheet('Ashford').getRow(1).values).not.toContain('first_name');
+    expect(res).toEqual({ rows: 2 });
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ source: 'dentally', dataset: 'appointments', format: 'xlsx', rows: 2, pii: false });
+  });
+  it('writeXlsx() with a practice scope writes a single sheet named after the practice', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }]);
+    repo.count.mockResolvedValue(1);
+    repo.page.mockResolvedValue([{ id: 'a1', practice_id: PRACTICE, starts_at: '2026-08-01T09:00:00.000Z', status: 'completed' }]);
+    const plan = await dataRoomService.prepareExport(owner, 'dentally', 'appointments', { ...WIN, scope: PRACTICE });
+    const out = new PassThrough();
+    const reading = readWorkbook(out);
+    await dataRoomService.writeXlsx(plan, out, { isAborted: () => false });
+    const wb = await reading;
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Ashford']);
+  });
+  it('writeXlsx() for an rpc dataset writes one "All practices" sheet', async () => {
+    repo.rpcRows.mockResolvedValue([{ id: 'p:2026-08-01', practice_id: PRACTICE, practice_name: 'Ashford', day: '2026-08-01', occurred: 4, settled_pence: 1000 }]);
+    const plan = await dataRoomService.prepareExport(analyst, 'summaries', 'practice_day', WIN);
+    const out = new PassThrough();
+    const reading = readWorkbook(out);
+    await dataRoomService.writeXlsx(plan, out, { isAborted: () => false });
+    const wb = await reading;
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['All practices']);
+    expect(wb.getWorksheet('All practices').getRow(1).values).toContain('settled_gbp');
   });
 });
