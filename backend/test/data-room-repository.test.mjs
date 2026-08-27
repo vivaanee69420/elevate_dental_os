@@ -32,10 +32,10 @@ describe('page()', () => {
     const ds = getDataset('dentally', 'appointments');
     await dataRoomRepository.page(ORG, ds, NONE, { after: null, limit: 100 });
     const q = supaRec.last;
-    expect(q.table).toBe('appointments');
+    expect(q.table).toBe('data_room_dentally_appointments');
     expect(q.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
     expect(q.eqs).toContainEqual({ col: 'source', val: 'dentally' });
-    expect(q.select).toBe('id,practice_id,contact_id,associate_id,pms_external_id,pms_patient_id,pms_practitioner_id,starts_at,ends_at,status,appointment_type');
+    expect(q.select).toBe('id,practice_id,contact_id,associate_id,pms_external_id,pms_patient_id,pms_practitioner_id,starts_at,ends_at,status,appointment_type,is_patient_appointment,occurred,dna,cancelled,duration_mins,practitioner_name');
     expect(q.limitN).toBe(100);
   });
 
