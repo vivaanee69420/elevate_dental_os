@@ -23,7 +23,7 @@ And one hard constraint: **the existing organisation's data, integrations and ma
 | Separate `analytics` schema + read-only SQL login | **Deferred** — the Data Room, extended, is the analyst's space. SQL access can be added later if the analyst asks. |
 | Analyst scope | Internal analyst on the owner's side, cross-tenant is irrelevant today (one real organisation). PII gate stays as shipped: PII columns only for an owner who explicitly asks. |
 | Minimisation level | **Option 3**: keep name/email/phone; drop `date_of_birth` (→ `birth_year`), `address`, `postcode` (→ `postcode_district`), `notes` (contacts, appointments), `contacts.pms_patient`, `communications.body`. Consequence accepted: the Inbox shows who/when but not message text. |
-| Payments history | Re-pull **full** Dentally payments history (2020→) — no PII beyond the patient link, and cashflow trends use it. Everything else 12 months. |
+| Re-pull window | **12 months for every source, payments included** (owner's decision 2026-08-27). The rehearsal org will therefore hold no pre-window cash history; cashflow trend screens that read the 2020→ payments feed will differ from the old org for that reason alone, and the comparison report treats that as expected. |
 | Destructive steps | **None in this spec.** No truncate, no column drops. Cutover (promote the rehearsal org, or apply the same reset to the old org) is a separate decision after the comparison. |
 | Rehearsal org outbound behaviour | Read-only towards the outside world: no Google Sheets *writer*, board-report emails, WhatsApp report, notifications or workflows are copied. |
 | Webhooks | Stay pointed at the old org (Dentally's API key cannot register a second endpoint; GHL/Emergent push to one URL). The rehearsal org is nightly/manual-sync only. |
@@ -67,7 +67,7 @@ The registry gains `derived` column entries. PostgREST cannot compute expression
 | dentally/treatment_items | `counts_as_activity`, `practitioner_name` | `completed and not base_chart` (migration 000099) |
 | dentally/invoice_items | `fee_total_pence` | `fee_pence * quantity` |
 | dentally/payments | `is_settled` | `status = 'settled'` |
-| dentally/treatment_plans | `is_closed`, `is_paid` | as `plan_fees` RPCs (000074/000101) |
+| dentally/treatment_plans | — (deferred to Phase 2) | per-plan billed/paid needs an `invoice_items (organisation_id, treatment_plan_id)` index first; the practice-level figures are in the `summaries` datasets via the plan-fees rules (000074/000101) |
 | gohighlevel/opportunities | `pipeline_name`, `outcome` | pipeline id → name from `integration_accounts.config.pipelines`; `won` = `treatment_started|treatment_completed`, `lost` = `not_proceeding|failed_to_attend`, else `open` (RPC 000087) |
 | gohighlevel/contacts | `contact_key` | `sha256(organisation_id‖ghl_contact_id)` |
 | google-ads/meta-ads campaign_daily | `practice_name`, `cpl_pence` | via `ad_accounts.practice_id`; `spend_pence / nullif(conversions,0)` |
@@ -108,7 +108,7 @@ No code: the owner invites the analyst from Team with role `analyst` (invite →
 
 ### 2.1 `etl_runs` ledger
 
-Migration `20260101000131_etl_runs.sql`:
+Migration `20260101000132_etl_runs.sql` (`000131` is taken by the Phase 1 Data Room views/RPCs):
 
 ```sql
 create table if not exists public.etl_runs (
@@ -172,7 +172,7 @@ Schema changes are per table, not per org, so during the rehearsal **no columns 
 `backend/src/etl/cli.js`, exposed as `npm run etl -- <args>`:
 
 ```
-npm run etl -- --org <uuid> --source dentally  --months 12 [--payments-full] [--resume <run_id>] [--sweep] [--dry-run]
+npm run etl -- --org <uuid> --source dentally  --months 12 [--resume <run_id>] [--sweep] [--dry-run]
 npm run etl -- --org <uuid> --source gohighlevel [--account <uuid>] --months 12
 npm run etl -- --org <uuid> --source all --months 12          # sequential: dentally → gohighlevel → quickbooks → xero → google_ads → meta_ads → emergent → google_sheets → reviews
 npm run etl -- --list [--org <uuid>]                            # ledger view
@@ -184,7 +184,7 @@ Behaviour:
 - Rate limits: reuses the connector's `isRateLimited()` + backoff; the runner additionally sleeps between phases (`ETL_PHASE_PAUSE_MS`, default 2 000) and caps concurrency at 1 per org+source (the advisory lock).
 - `--sweep`: after a successful run, delete rows in the run's window whose `etl_run_id <> run.id` and `organisation_id = org` for the tables the run covered (= records the source no longer returned). Prints counts per table; requires `--confirm` above 1 000 rows per table. Not used in Phase 3 (fresh org), available for future re-pulls.
 - `--dry-run`: fetches and maps, reports counts, writes nothing.
-- Windows: `--months N` sets `window_from = now() - N months`; Dentally `payments` uses the full history when `--payments-full` (default **on** for the rehearsal, per the owner's decision); Ads honour their own `FULL_DAYS` unless `--months` is smaller.
+- Windows: `--months N` sets `window_from = now() - N months` for every entity of the source, payments included (no per-entity exceptions); Ads honour their own `FULL_DAYS` unless `--months` is smaller.
 - Progress: pino logs per phase + a final table; exit code 0/1; Sentry breadcrumbs, no cron monitor (manual).
 
 Worker change: `workers/index.js` is untouched except that each connector's `syncAllOrgs` now skips an org whose ledger shows a `running` `repull` run for that source (so the nightly cron does not fight a long re-pull).
@@ -216,7 +216,7 @@ Copied, with new ids and `organisation_id = new`:
 ### 3.3 Re-pull
 
 ```
-npm run etl -- --org <new> --source all --months 12 --payments-full
+npm run etl -- --org <new> --source all --months 12
 ```
 
 Run from the owner's machine (or a Railway one-off job) in daytime. Expected order and rough durations at today's volumes: Dentally 2–4 h (rate-limited; treatment items dominate), GHL 30–60 min (conversations), QuickBooks/Xero minutes, Ads minutes, Emergent/Sheets seconds. The old org's 03:00 nightly is unaffected; the ledger guard prevents the nightly from double-running the rehearsal org while the re-pull is live.
