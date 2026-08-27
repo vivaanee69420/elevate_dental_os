@@ -236,7 +236,7 @@ Per practice (matched by `pms_site_id`, then name) per month, old vs new vs diff
 - monthly financial lines (count, revenue £, costs £) per company
 - communications (count only)
 
-Plus the golden numbers: Ashford May 2026 occurred = **801**, treatment activity **421 / £79 757.72**, Plan Fees Collected ≈ **96 %**. Any cell with |diff| > 0.5 % is flagged; the report ends with a list of rows present in one org only (source-deleted or window-edge records). Output is Markdown + CSV; it is the artefact the owner reviews before Phase 4.
+Plus the golden numbers: Ashford May 2026 patient appointments (any status) = **801**, treatment activity **421 / £79 757.72**, Plan Fees Collected ≈ **96 %**. Any cell with |diff| > 0.5 % is flagged; the report ends with a list of rows present in one org only (source-deleted or window-edge records). Output is Markdown + CSV; it is the artefact the owner reviews before Phase 4.
 
 ---
 
