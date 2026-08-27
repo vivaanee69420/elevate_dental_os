@@ -4,7 +4,7 @@
 // the analyst can see and export per source. Pure data + validators.
 //
 // One entry per dataset (a "pill" on a source page):
-//   source    page key ('dentally' | 'google-ads' | 'meta-ads' | 'gohighlevel' | 'emergent')
+//   source    page key ('dentally' | 'google-ads' | 'meta-ads' | 'gohighlevel' | 'emergent' | 'summaries')
 //   key       dataset key (URL-safe, snake_case)
 //   table     Postgres table the repository reads
 //   where     static predicates: { col: value } (eq) | { col: { not: null } } (is not null)
@@ -17,14 +17,28 @@
 //   dateType  'date' | 'timestamptz' (default 'timestamptz') — how the window
 //             bounds are formatted for the column
 //   derived   'ghl_pipelines': rows are flattened in memory from
-//             integration_accounts.config.pipelines, not read from a table
-//   columns   ordered allowlist [{ col, pii?: true }]. organisation_id is
-//             never listed — the repository always applies it.
+//             integration_accounts.config.pipelines, not read from a table.
+//             'rpc': rows come from a Postgres function, not a table — `rpc`
+//             names the function and `table` equals that name (the validator
+//             needs a string; the repository calls .rpc(d.rpc, …) instead of
+//             .from(d.table)).
+//   rpc       function name for a `derived: 'rpc'` dataset.
+//   columns   ordered allowlist [{ col, pii?: true, derived?: true, unit,
+//             description }]. organisation_id is never listed — the
+//             repository always applies it. unit/description are merged in
+//             from dictionary.js at load time (docFor(ds, col.col)).
 //
 // Never list: raw, notes, pms_patient, secrets, webhook_token, pay/HR columns.
 // Patient identifiers carry pii: true and are omitted unless the caller is an
 // owner who explicitly asked for them (service enforces).
+//
+// `table` may name a `data_room_*` view (public schema, security_invoker)
+// instead of a base table — the views add derived columns (rule-computed
+// flags, resolved names, pseudonymous keys) alongside the raw row; those
+// columns carry derived: true here.
 // ============================================================================
+
+import { docFor } from './dictionary.js';
 
 export const FORBIDDEN_COLUMNS = new Set([
     'raw', 'notes', 'pms_patient', 'secrets', 'webhook_token', 'hourly_rate_pence',
@@ -42,10 +56,12 @@ export const SOURCES = [
     { key: 'meta-ads', label: 'Meta Ads', description: 'Per-campaign daily spend, impressions, clicks, reach and conversion counts from Facebook/Instagram ads. Meta does not supply individual leads.' },
     { key: 'gohighlevel', label: 'GoHighLevel', description: 'CRM data per connected subaccount: contacts, pipeline opportunities, conversations and calendar bookings. Pipelines maps pipeline ids to names.' },
     { key: 'emergent', label: 'Emergent', description: 'Treatments accepted per patient, manager-reported daily cash-ups and the monthly P&L sheet.' },
+    { key: 'summaries', label: 'Summaries', description: 'Practice-level KPIs per day and per month, computed with the same rules as the dashboard cards: patient appointments, occurred, DNA, new patients, treatment activity, billed and settled money, leads, ad spend and (monthly) accounting revenue and costs.' },
 ];
 
 const c = (col) => ({ col });
 const pii = (col) => ({ col, pii: true });
+const dv = (col) => ({ col, pii: undefined, derived: true }); // computed in the data_room_* view / RPC — not pii unless wrapped in pii()
 const cols = (...names) => names.map((n) => (typeof n === 'string' ? c(n) : n));
 
 export const DATASETS = [
@@ -54,24 +70,25 @@ export const DATASETS = [
         // Dated on created_at (when the patient record landed in Elevate) so the
         // Data Room's universal date filter applies; the initial Dentally backfill
         // stamps the whole historic roster on the connect day.
-        source: 'dentally', key: 'patients', label: 'Patients', table: 'contacts',
+        source: 'dentally', key: 'patients', label: 'Patients', table: 'data_room_dentally_patients',
         where: { source: 'dentally' }, practice: { col: 'practice_id' }, dateCol: 'created_at',
         columns: cols('id', 'practice_id', 'pms_external_id', pii('first_name'), pii('last_name'),
             pii('email'), pii('phone'), pii('date_of_birth'), pii('address'), pii('postcode'),
             'marketing_consent', 'sms_consent', 'next_recall_date', 'last_visit_date',
-            'pms_registered_at', 'created_at'),
+            'pms_registered_at', 'created_at', dv('patient_key'), dv('birth_year'), dv('postcode_district')),
     },
     {
-        source: 'dentally', key: 'appointments', label: 'Appointments', table: 'appointments',
+        source: 'dentally', key: 'appointments', label: 'Appointments', table: 'data_room_dentally_appointments',
         where: { source: 'dentally' }, practice: { col: 'practice_id' }, dateCol: 'starts_at',
         columns: cols('id', 'practice_id', 'contact_id', 'associate_id', 'pms_external_id',
-            'pms_patient_id', 'pms_practitioner_id', 'starts_at', 'ends_at', 'status', 'appointment_type'),
+            'pms_patient_id', 'pms_practitioner_id', 'starts_at', 'ends_at', 'status', 'appointment_type',
+            dv('is_patient_appointment'), dv('occurred'), dv('dna'), dv('cancelled'), dv('duration_mins'), dv('practitioner_name')),
     },
     {
-        source: 'dentally', key: 'payments', label: 'Payments', table: 'payments',
+        source: 'dentally', key: 'payments', label: 'Payments', table: 'data_room_dentally_payments',
         where: { source: 'dentally' }, practice: { col: 'practice_id' }, dateCol: 'processed_at',
         columns: cols('id', 'practice_id', 'contact_id', 'external_id', 'amount_pence', 'method',
-            'status', 'processed_at'),
+            'status', 'processed_at', dv('is_settled')),
     },
     {
         source: 'dentally', key: 'invoices', label: 'Invoices', table: 'invoices',
@@ -80,11 +97,12 @@ export const DATASETS = [
             'amount_outstanding_pence', 'dated_on', 'due_on', 'paid', 'treatment', pii('patient_name')),
     },
     {
-        source: 'dentally', key: 'invoice_items', label: 'Invoice items', table: 'invoice_items',
+        source: 'dentally', key: 'invoice_items', label: 'Invoice items', table: 'data_room_dentally_invoice_items',
         where: { source: 'dentally' }, practice: { col: 'practice_id' }, dateCol: 'invoiced_on', dateType: 'date',
         columns: cols('id', 'practice_id', 'contact_id', 'associate_id', 'pms_external_id',
             'pms_invoice_id', 'pms_practitioner_id', 'treatment_plan_id', 'treatment_name',
-            'unit_price_pence', 'fee_pence', 'quantity', 'nhs_charge', 'invoiced_on', 'invoice_paid'),
+            'unit_price_pence', 'fee_pence', 'quantity', 'nhs_charge', 'invoiced_on', 'invoice_paid',
+            dv('fee_total_pence'), dv('practitioner_name')),
     },
     {
         source: 'dentally', key: 'treatment_plans', label: 'Treatment plans', table: 'treatment_plans',
@@ -94,12 +112,12 @@ export const DATASETS = [
             'nhs_completed_uda_value', 'completed', 'completed_at', 'start_date', 'end_date'),
     },
     {
-        source: 'dentally', key: 'treatment_items', label: 'Treatment items', table: 'dentally_treatment_items',
+        source: 'dentally', key: 'treatment_items', label: 'Treatment items', table: 'data_room_dentally_treatment_items',
         practice: { col: 'practice_id' }, dateCol: 'completed_at',
         columns: cols('id', 'practice_id', 'contact_id', 'associate_id', 'pms_external_id',
             'pms_patient_id', 'pms_practitioner_id', 'treatment_plan_id', 'treatment_appointment_id',
             'pms_invoice_id', 'treatment_name', 'price_pence', 'duration', 'completed', 'completed_at',
-            'base_chart', 'charged', 'appear_on_invoice'),
+            'base_chart', 'charged', 'appear_on_invoice', dv('counts_as_activity'), dv('practitioner_name')),
     },
     {
         source: 'dentally', key: 'practitioners', label: 'Practitioners', table: 'associates',
@@ -120,12 +138,12 @@ export const DATASETS = [
         columns: cols('id', 'customer_id', 'name', 'currency', 'status', 'practice_id', 'is_selected'),
     },
     {
-        source: 'google-ads', key: 'campaign_daily', label: 'Campaign daily', table: 'ad_metrics',
+        source: 'google-ads', key: 'campaign_daily', label: 'Campaign daily', table: 'data_room_ad_metrics',
         where: { provider: 'google_ads' },
         practice: { via: { table: 'ad_accounts', key: 'customer_id', col: 'customer_id', where: { provider: 'google_ads' } } },
         dateCol: 'metric_date', dateType: 'date',
         columns: cols('id', 'customer_id', 'campaign_id', 'campaign_name', 'metric_date', 'spend_pence',
-            'impressions', 'clicks', 'conversions', 'campaign_status', 'objective'),
+            'impressions', 'clicks', 'conversions', 'campaign_status', 'objective', dv('practice_name'), dv('cpl_pence')),
     },
     // ---------------------------------------------------------------- Meta Ads
     {
@@ -136,12 +154,12 @@ export const DATASETS = [
             'period_conversions', 'period_window_start', 'period_window_end', 'period_synced_at'),
     },
     {
-        source: 'meta-ads', key: 'campaign_daily', label: 'Campaign daily', table: 'ad_metrics',
+        source: 'meta-ads', key: 'campaign_daily', label: 'Campaign daily', table: 'data_room_ad_metrics',
         where: { provider: 'meta_ads' },
         practice: { via: { table: 'ad_accounts', key: 'customer_id', col: 'customer_id', where: { provider: 'meta_ads' } } },
         dateCol: 'metric_date', dateType: 'date',
         columns: cols('id', 'customer_id', 'campaign_id', 'campaign_name', 'metric_date', 'spend_pence',
-            'impressions', 'clicks', 'conversions', 'reach', 'frequency', 'campaign_status', 'objective'),
+            'impressions', 'clicks', 'conversions', 'reach', 'frequency', 'campaign_status', 'objective', dv('practice_name'), dv('cpl_pence')),
     },
     // ------------------------------------------------------------- GoHighLevel
     {
@@ -156,17 +174,17 @@ export const DATASETS = [
         columns: cols('integration_account_id', 'practice_id', 'pipeline_id', 'pipeline_name', 'stage_id', 'stage_name'),
     },
     {
-        source: 'gohighlevel', key: 'contacts', label: 'Contacts', table: 'contacts',
+        source: 'gohighlevel', key: 'contacts', label: 'Contacts', table: 'data_room_gohighlevel_contacts',
         where: { source: 'gohighlevel' }, practice: { col: 'practice_id' }, dateCol: 'created_at',
         columns: cols('id', 'practice_id', 'integration_account_id', 'ghl_contact_id', pii('first_name'),
-            pii('last_name'), pii('email'), pii('phone'), 'created_at'),
+            pii('last_name'), pii('email'), pii('phone'), 'created_at', dv('contact_key')),
     },
     {
-        source: 'gohighlevel', key: 'opportunities', label: 'Opportunities', table: 'leads',
+        source: 'gohighlevel', key: 'opportunities', label: 'Opportunities', table: 'data_room_gohighlevel_opportunities',
         where: { source: 'gohighlevel' }, practice: { col: 'practice_id' }, dateCol: 'created_at',
         columns: cols('id', 'practice_id', 'integration_account_id', 'contact_id', 'ghl_opportunity_id',
             'ghl_pipeline_id', 'ghl_pipeline_stage_id', 'ghl_stage_name', 'treatment', 'estimated_value_pence',
-            'status', 'created_at', 'updated_at'),
+            'status', 'created_at', 'updated_at', dv('pipeline_name'), dv('outcome')),
     },
     {
         source: 'gohighlevel', key: 'conversations', label: 'Conversations', table: 'communications',
@@ -216,7 +234,30 @@ export const DATASETS = [
             'card_machine_charges_pence', 'custom_lines', 'emergent_created_at', 'last_updated_at',
             'last_updated_by'),
     },
+    // --------------------------------------------------------------- Summaries
+    {
+        source: 'summaries', key: 'practice_day', label: 'Practice by day', table: 'data_room_practice_day',
+        derived: 'rpc', rpc: 'data_room_practice_day',
+        practice: { col: 'practice_id' }, dateCol: 'day', dateType: 'date',
+        columns: cols('id', 'practice_id', 'practice_name', 'day', 'appointments', 'occurred', 'dna', 'cancelled',
+            'new_patients', 'treatment_items', 'treatment_items_pence', 'billed_pence', 'settled_pence',
+            'leads_new', 'leads_won', 'ad_spend_pence'),
+    },
+    {
+        source: 'summaries', key: 'practice_month', label: 'Practice by month', table: 'data_room_practice_month',
+        derived: 'rpc', rpc: 'data_room_practice_month',
+        practice: { col: 'practice_id' }, dateCol: 'month', dateType: 'date',
+        columns: cols('id', 'practice_id', 'practice_name', 'month', 'appointments', 'occurred', 'dna', 'cancelled',
+            'new_patients', 'treatment_items', 'treatment_items_pence', 'billed_pence', 'settled_pence',
+            'leads_new', 'leads_won', 'ad_spend_pence', 'dna_pct', 'avg_fee_pence', 'cost_per_lead_pence',
+            'financial_revenue_pence', 'financial_costs_pence'),
+    },
 ];
+
+// Merge unit + description into every column entry once, at load.
+for (const ds of DATASETS) {
+    ds.columns = ds.columns.map((col) => ({ ...col, ...docFor(ds, col.col) }));
+}
 
 export function getDataset(source, key) {
     return DATASETS.find((d) => d.source === source && d.key === key);
@@ -238,7 +279,10 @@ export function registryForClient() {
                 key: d.key,
                 label: d.label,
                 roster: d.dateCol === null,
-                columns: d.columns.map((c) => ({ col: c.col, pii: c.pii === true })),
+                summary: d.derived === 'rpc',
+                columns: d.columns.map((c) => ({
+                    col: c.col, pii: c.pii === true, derived: c.derived === true, unit: c.unit, description: c.description,
+                })),
             })),
         })),
     };
@@ -267,6 +311,10 @@ export function validateRegistry() {
         for (const col of names) {
             if (FORBIDDEN_COLUMNS.has(col)) problems.push(`${id}: forbidden column ${col}`);
             if (col === 'organisation_id') problems.push(`${id}: organisation_id must not be listed`);
+        }
+        if (d.derived === 'rpc' && typeof d.rpc !== 'string') problems.push(`${id}: rpc dataset must name its function`);
+        for (const col of d.columns || []) {
+            if (!col.description) problems.push(`${id}: undocumented column ${col.col}`);
         }
         for (const c of d.columns || []) {
             if (!PII_COLUMNS.has(c.col)) continue;

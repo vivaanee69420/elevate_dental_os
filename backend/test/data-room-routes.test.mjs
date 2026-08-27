@@ -18,13 +18,19 @@ vi.mock('../src/services/data-room.service.js', () => ({
       if (dataset === 'nope') throw new AppError('Unknown dataset', 404);
       return { rows: [{ id: 'r1' }], next_cursor: null, total: 1 };
     }),
-    exportFilename: vi.fn(() => 'dentally-appointments_2026-08-01_2026-08-31.csv'),
+    exportFilename: vi.fn((ds, query, ext = 'csv') => `dentally-appointments_2026-08-01_2026-08-31.${ext}`),
     streamCsv: vi.fn(async (user, source, dataset, query, sink) => {
       sink.write('﻿id\r\n');
       sink.write('r1\r\n');
       sink.end();
       return { rows: 1 };
     }),
+    freshness: vi.fn(async () => ({ sources: { dentally: { last_sync_at: '2026-08-27T03:10:00.000Z', status: 'active' } }, as_of: '2026-08-27T03:10:00.000Z' })),
+    prepareExport: vi.fn(async (user, source, dataset, query) => {
+      if (query.pii && user.role !== 'owner') throw new AppError('PII export is owner-only', 403);
+      return { ds: { source, key: dataset, dateCol: 'starts_at' }, query };
+    }),
+    writeXlsx: vi.fn(async (plan, stream) => { stream.write('PK'); stream.end(); return { rows: 1 }; }),
   },
 }));
 
@@ -132,5 +138,29 @@ describe('GET /:source/:dataset/export.csv', () => {
     const res = await get(`/api/data-room/dentally/patients/export.csv?${WIN}&pii=1`, 'analyst');
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'PII export is owner-only' });
+  });
+});
+
+describe('GET /freshness and /:source/:dataset/export.xlsx', () => {
+  it('GET /freshness passes for analyst and owner', async () => {
+    for (const role of ['analyst', 'owner']) {
+      const r = await get('/api/data-room/freshness', role);
+      expect(r.status).toBe(200);
+      expect((await r.json()).as_of).toBe('2026-08-27T03:10:00.000Z');
+    }
+  });
+  it('GET export.xlsx sets the spreadsheet headers and streams', async () => {
+    const r = await get(`/api/data-room/dentally/appointments/export.xlsx?${WIN}`, 'analyst');
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-type')).toMatch(/spreadsheetml/);
+    expect(r.headers.get('content-disposition')).toMatch(/\.xlsx"$/);
+    expect(r.headers.get('cache-control')).toBe('no-store');
+    expect(await r.text()).toBe('PK');
+  });
+  it('GET export.xlsx answers JSON 403 when prepare rejects (no headers sent)', async () => {
+    const r = await get(`/api/data-room/dentally/patients/export.xlsx?${WIN}&pii=1`, 'analyst');
+    expect(r.status).toBe(403);
+    expect(r.headers.get('content-type')).toMatch(/json/);
+    expect(dataRoomService.writeXlsx).not.toHaveBeenCalled();
   });
 });

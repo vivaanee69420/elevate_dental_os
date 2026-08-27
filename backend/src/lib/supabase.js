@@ -33,10 +33,18 @@ export const serviceClient = (0, supabase_js_1.createClient)(SUPABASE_URL, SUPAB
     auth: { autoRefreshToken: false, persistSession: false },
 });
 
-// Auth-only client (anon key) for password sign-in. Kept separate from
-// serviceClient so a sign-in never contaminates the service-role client's
-// Authorization header. Only used for `auth.signInWithPassword`; never for data.
-export const authClient = (0, supabase_js_1.createClient)(SUPABASE_URL, SUPABASE_ANON_KEY, {
+// Auth-only client for password sign-in. Kept separate from serviceClient so
+// a sign-in never contaminates the service-role client's Authorization header.
+// Only used for `auth.signInWithPassword`; never for data.
+//
+// Built with the SERVICE key, not the anon key: this is a server-to-server
+// call (the browser never talks to GoTrue directly), and Supabase's captcha
+// protection (Authentication → Attack Protection) rejects anon-key password
+// sign-ins that carry no captcha token — which surfaced as every login
+// failing with 401 "Invalid email or password". The service key is exempt
+// from that check; abuse protection for this route is the 5/min/IP limiter
+// in app.js.
+export const authClient = (0, supabase_js_1.createClient)(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
 });
 
