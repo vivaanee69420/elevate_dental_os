@@ -70,10 +70,25 @@ export async function POST(req: NextRequest) {
   }
 
   if (tenantRes.ok) {
-    // Establish the httpOnly Supabase session cookie.
+    // Establish the httpOnly Supabase session cookie from the tokens the
+    // backend already minted. Do NOT sign in a second time with the browser
+    // (anon-key) client: the credentials were verified once, server-side,
+    // and Supabase's captcha protection rejects anon-key password sign-ins
+    // that carry no captcha token — which turned every login into a 401.
+    const tokens = (await tenantRes.json().catch(() => null)) as
+      | { access_token?: string; refresh_token?: string }
+      | null;
+    if (!tokens?.access_token || !tokens?.refresh_token) {
+      console.error('[auth/login] backend login ok but no session tokens in response');
+      return NextResponse.json({ error: 'Sign in failed' }, { status: 502 });
+    }
     const supabase = getSupabaseRoute();
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.setSession({
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+    });
     if (error) {
+      console.error('[auth/login] setSession failed:', error.message);
       return NextResponse.json({ error: 'Sign in failed' }, { status: 401 });
     }
     return NextResponse.json({ success: true, redirect: '/business-hub' });
