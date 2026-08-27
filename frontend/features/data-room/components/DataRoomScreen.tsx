@@ -19,16 +19,18 @@ import {
   DataTable, EmptyState, PageHeader, AlertRow, SkeletonTable, Pagination, DEFAULT_PAGE_SIZES, type Column,
 } from '@/components/ui';
 import { formatPence } from '@/lib/format';
-import { useDataRoomPage, useDataRoomRegistry } from '../hooks';
+import { useDataRoomFreshness, useDataRoomPage, useDataRoomRegistry } from '../hooks';
 import { usePersistedScopePeriod } from '../use-persisted-period';
 import { dataRoomExportUrl, type DataRoomRow, type DataRoomSourceKey } from '../api';
 
 const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 const DEFAULT_PER = 100;
 
-function formatCell(col: string, v: unknown): string {
+function formatCell(col: string, v: unknown, unit?: string): string {
   if (v === null || v === undefined || v === '') return '—';
-  if (col.endsWith('_pence') && typeof v === 'number') return formatPence(v);
+  if ((unit === 'pence' || col.endsWith('_pence')) && typeof v === 'number') return formatPence(v);
+  if (unit === 'percent' && typeof v === 'number') return `${v.toLocaleString('en-GB', { maximumFractionDigits: 1 })}%`;
+  if (unit === 'minutes' && typeof v === 'number') return `${v} min`;
   if (typeof v === 'boolean') return v ? 'Yes' : 'No';
   if (typeof v === 'object') return JSON.stringify(v);
   if (typeof v === 'string' && ISO_TS.test(v)) {
@@ -68,6 +70,9 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
   usePersistedScopePeriod();
   const { data: registry, isLoading: regLoading, isError: regError } = useDataRoomRegistry();
   const { data: me } = useMe();
+  const { data: fresh } = useDataRoomFreshness();
+  const srcFresh = fresh?.sources[source];
+  const asOf = srcFresh?.last_sync_at ?? fresh?.as_of ?? null;
   const { scope, win } = useScopePeriod();
   const router = useRouter();
   const pathname = usePathname();
@@ -143,8 +148,8 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
       .filter((c) => includePii || !c.pii)
       .map((c) => ({
         header: c.col,
-        align: c.col.endsWith('_pence') ? 'right' : 'left',
-        render: (row: DataRoomRow) => <span className="whitespace-nowrap">{formatCell(c.col, row[c.col])}</span>,
+        align: c.unit === 'pence' || c.unit === 'count' || c.unit === 'percent' || c.col.endsWith('_pence') ? 'right' : 'left',
+        render: (row: DataRoomRow) => <span className="whitespace-nowrap">{formatCell(c.col, row[c.col], c.unit)}</span>,
       }));
   }, [active, includePii]);
 
@@ -188,6 +193,13 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
               {q.isLoading ? 'Counting…' : `${total.toLocaleString('en-GB')} rows`}
               {active.roster ? ' · current list — not date-filtered' : ` · ${win.label}`}
             </span>
+            <span
+              className="text-[12px] px-2 py-0.5 rounded-lg border border-border bg-card text-ink-muted"
+              title={srcFresh?.accounts?.length ? srcFresh.accounts.map((a) => `${a.label ?? 'account'}: ${a.last_sync_at ? new Date(a.last_sync_at).toLocaleString('en-GB', { timeZone: 'Europe/London' }) : 'never'} (${a.status ?? 'unknown'})`).join('\n') : undefined}
+            >
+              {asOf ? `Data as of ${new Date(asOf).toLocaleString('en-GB', { timeZone: 'Europe/London' })}` : 'Not yet synced'}
+              {srcFresh?.status === 'failed' ? ' · last sync failed' : ''}
+            </span>
             {isOwner && hasPii && (
               <label className="flex items-center gap-2 text-[13px] text-ink cursor-pointer">
                 <input type="checkbox" checked={pii} onChange={(e) => setPii(e.target.checked)} />
@@ -197,13 +209,23 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
             {!isOwner && hasPii && (
               <span className="text-[12px] text-ink-muted">Patient identifiers are withheld — rows join on contact and PMS ids.</span>
             )}
-            <a
-              href={dataRoomExportUrl(source, active.key, queryParams)}
-              download
-              className="ml-auto inline-flex items-center rounded-xl bg-brand px-4 py-2 text-[13px] font-medium text-white shadow-panel-sm hover:bg-brand-700"
-            >
-              Export CSV
-            </a>
+            <div className="ml-auto inline-flex rounded-xl shadow-panel-sm overflow-hidden">
+              <a
+                href={dataRoomExportUrl(source, active.key, queryParams, 'csv')}
+                download
+                className="inline-flex items-center bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-700 border-r border-white/20"
+              >
+                Export CSV
+              </a>
+              <a
+                href={dataRoomExportUrl(source, active.key, queryParams, 'xlsx')}
+                download
+                title={queryParams.scope === 'all' ? 'One worksheet per practice' : 'One worksheet'}
+                className="inline-flex items-center bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-700"
+              >
+                Export Excel
+              </a>
+            </div>
           </div>
 
           {q.isLoading ? (

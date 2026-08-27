@@ -1,11 +1,19 @@
 import { api } from '@/lib/api';
 
-export type DataRoomSourceKey = 'dentally' | 'google-ads' | 'meta-ads' | 'gohighlevel' | 'emergent';
+export type DataRoomSourceKey = 'dentally' | 'google-ads' | 'meta-ads' | 'gohighlevel' | 'emergent' | 'summaries';
 
-export interface DataRoomColumn { col: string; pii: boolean }
-export interface DataRoomDataset { key: string; label: string; roster: boolean; columns: DataRoomColumn[] }
+export type DataRoomUnit = 'id' | 'hash' | 'pence' | 'count' | 'number' | 'percent' | 'minutes' | 'flag' | 'date' | 'timestamptz' | 'text';
+export interface DataRoomColumn { col: string; pii: boolean; derived: boolean; unit: DataRoomUnit; description: string }
+export interface DataRoomDataset { key: string; label: string; roster: boolean; summary: boolean; columns: DataRoomColumn[] }
 export interface DataRoomSource { key: DataRoomSourceKey; label: string; description: string; datasets: DataRoomDataset[] }
 export interface DataRoomRegistry { sources: DataRoomSource[] }
+
+export interface DataRoomSourceFreshness {
+  last_sync_at: string | null;
+  status: string | null;
+  accounts?: { label: string | null; status: string | null; last_sync_at: string | null }[];
+}
+export interface DataRoomFreshness { sources: Record<string, DataRoomSourceFreshness>; as_of: string | null }
 
 export type DataRoomRow = Record<string, unknown>;
 export interface DataRoomPage { rows: DataRoomRow[]; next_cursor: string | null; total: number }
@@ -43,7 +51,16 @@ export function fetchDataRoomPage(
   return api<DataRoomPage>(`/api/data-room/${source}/${dataset}?${qs(params, { page, limit })}`);
 }
 
-/** Same-origin download href — the browser streams the CSV to disk. */
-export function dataRoomExportUrl(source: DataRoomSourceKey, dataset: string, params: DataRoomParams): string {
-  return `${PROXY}/api/data-room/${source}/${dataset}/export.csv?${qs(params)}`;
+export function fetchDataRoomFreshness(): Promise<DataRoomFreshness> {
+  return api<DataRoomFreshness>('/api/data-room/freshness');
+}
+
+/** Same-origin download href — the browser streams the file to disk. */
+export function dataRoomExportUrl(
+  source: DataRoomSourceKey,
+  dataset: string,
+  params: DataRoomParams,
+  format: 'csv' | 'xlsx' = 'csv',
+): string {
+  return `${PROXY}/api/data-room/${source}/${dataset}/export.${format}?${qs(params)}`;
 }
