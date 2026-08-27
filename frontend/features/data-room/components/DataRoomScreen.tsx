@@ -22,6 +22,7 @@ import { formatPence } from '@/lib/format';
 import { useDataRoomFreshness, useDataRoomPage, useDataRoomRegistry } from '../hooks';
 import { usePersistedScopePeriod } from '../use-persisted-period';
 import { dataRoomExportUrl, type DataRoomRow, type DataRoomSourceKey } from '../api';
+import DictionaryDrawer from './DictionaryDrawer';
 
 const ISO_TS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 const DEFAULT_PER = 100;
@@ -78,6 +79,7 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
   const pathname = usePathname();
   const params = useSearchParams();
   const [pii, setPii] = useState(false);
+  const [dict, setDict] = useState(false);
 
   const src = registry?.sources.find((s) => s.key === source);
   const datasets = src?.datasets ?? [];
@@ -147,7 +149,7 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
     return active.columns
       .filter((c) => includePii || !c.pii)
       .map((c) => ({
-        header: c.col,
+        header: c.derived ? `${c.col} ·` : c.col,
         align: c.unit === 'pence' || c.unit === 'count' || c.unit === 'percent' || c.col.endsWith('_pence') ? 'right' : 'left',
         render: (row: DataRoomRow) => <span className="whitespace-nowrap">{formatCell(c.col, row[c.col], c.unit)}</span>,
       }));
@@ -209,6 +211,13 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
             {!isOwner && hasPii && (
               <span className="text-[12px] text-ink-muted">Patient identifiers are withheld — rows join on contact and PMS ids.</span>
             )}
+            <button
+              type="button"
+              onClick={() => setDict(true)}
+              className="text-[13px] px-3 py-1.5 rounded-xl border border-border bg-card text-ink hover:border-brand-200"
+            >
+              Dictionary
+            </button>
             <div className="ml-auto inline-flex rounded-xl shadow-panel-sm overflow-hidden">
               <a
                 href={dataRoomExportUrl(source, active.key, queryParams, 'csv')}
@@ -252,6 +261,8 @@ export default function DataRoomScreen({ source }: { source: DataRoomSourceKey }
           )}
         </>
       )}
+
+      <DictionaryDrawer open={dict} dataset={active} sourceLabel={src.label} onClose={() => setDict(false)} />
     </div>
   );
 }
