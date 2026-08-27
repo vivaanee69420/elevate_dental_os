@@ -481,14 +481,14 @@ Practice-level KPIs per day and per month, computed with the same rules as the d
 
 | Column | Unit | PII | Derived | Description |
 |---|---|---|---|---|
-| `id` | id |  |  | Elevate row id (UUID). Stable across syncs. |
+| `id` | id |  |  | Summary row key: "<practice_id\|unassigned>:<day>". Not a UUID. |
 | `practice_id` | id |  |  | Practice the day's figures belong to. Null = rows not attributed to a site. |
 | `practice_name` | text |  |  | Practice name resolved from practice_id (ads: via the ad account mapping). "Group / unassigned" on summary rows not attributed to a site. |
 | `day` | date |  |  | Calendar day (Europe/London). |
 | `appointments` | count |  |  | Patient appointments in the period (any status). |
-| `occurred` | yes/no |  |  | Patient appointment with status completed — the dashboard's "Appointments occurred". |
-| `dna` | yes/no |  |  | Patient appointment marked did-not-attend (no_show). |
-| `cancelled` | yes/no |  |  | Appointment cancelled. |
+| `occurred` | count |  |  | Patient appointments completed in the period (count). |
+| `dna` | count |  |  | Patient appointments marked did-not-attend in the period (count). |
+| `cancelled` | count |  |  | Patient appointments cancelled in the period (count). |
 | `new_patients` | count |  |  | Patients whose Dentally registration date falls in the period. |
 | `treatment_items` | count |  |  | Completed treatment items (Practitioner Activity rule). |
 | `treatment_items_pence` | pence (integer; £ = ÷100) |  |  | Value of completed treatment items in pence. |
@@ -502,14 +502,14 @@ Practice-level KPIs per day and per month, computed with the same rules as the d
 
 | Column | Unit | PII | Derived | Description |
 |---|---|---|---|---|
-| `id` | id |  |  | Elevate row id (UUID). Stable across syncs. |
+| `id` | id |  |  | Summary row key: "<practice_id\|unassigned>:<YYYY-MM>". Not a UUID. |
 | `practice_id` | id |  |  | Practice the month's figures belong to. Null = org-level accounting rows / unattributed. |
 | `practice_name` | text |  |  | Practice name resolved from practice_id (ads: via the ad account mapping). "Group / unassigned" on summary rows not attributed to a site. |
 | `month` | date |  |  | Calendar month (first day, Europe/London). |
 | `appointments` | count |  |  | Patient appointments in the period (any status). |
-| `occurred` | yes/no |  |  | Patient appointment with status completed — the dashboard's "Appointments occurred". |
-| `dna` | yes/no |  |  | Patient appointment marked did-not-attend (no_show). |
-| `cancelled` | yes/no |  |  | Appointment cancelled. |
+| `occurred` | count |  |  | Patient appointments completed in the period (count). |
+| `dna` | count |  |  | Patient appointments marked did-not-attend in the period (count). |
+| `cancelled` | count |  |  | Patient appointments cancelled in the period (count). |
 | `new_patients` | count |  |  | Patients whose Dentally registration date falls in the period. |
 | `treatment_items` | count |  |  | Completed treatment items (Practitioner Activity rule). |
 | `treatment_items_pence` | pence (integer; £ = ÷100) |  |  | Value of completed treatment items in pence. |
@@ -521,6 +521,6 @@ Practice-level KPIs per day and per month, computed with the same rules as the d
 | `dna_pct` | % |  |  | DNA ÷ (occurred + DNA) × 100. |
 | `avg_fee_pence` | pence (integer; £ = ÷100) |  |  | treatment_items_pence ÷ treatment_items. |
 | `cost_per_lead_pence` | pence (integer; £ = ÷100) |  |  | Cost per CRM lead in pence: ad_spend_pence ÷ leads_new (null when no leads). Not the same as ad cpl_pence. |
-| `financial_revenue_pence` | pence (integer; £ = ÷100) |  |  | Accounting revenue (Xero/QuickBooks, accrual) for the month; manual rows only where no synced row exists. Null when the accounting feed is not mapped to this practice — group-level figures sit on the "Group / unassigned" row. |
+| `financial_revenue_pence` | pence (integer; £ = ÷100) |  |  | Accounting revenue (Xero/QuickBooks, accrual) for the month; manual rows only where no synced row exists. Null when the accounting feed is not mapped to this practice — group-level figures sit on the "Group / unassigned" row. The month's accounting rows are included in full even when the selected window covers only part of the month. |
 | `financial_costs_pence` | pence (integer; £ = ÷100) |  |  | Accounting costs (associates, staff, lab, materials, overhead, other; tax excluded) for the month. Null when not mapped to this practice — see financial_revenue_pence. |
 

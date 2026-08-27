@@ -274,7 +274,7 @@ export const COLUMN_DOCS = {
     ad_spend_pence: d('Google + Meta spend attributed to the practice in pence.'),
     dna_pct: d('DNA ÷ (occurred + DNA) × 100.'),
     avg_fee_pence: d('treatment_items_pence ÷ treatment_items.'),
-    financial_revenue_pence: d('Accounting revenue (Xero/QuickBooks, accrual) for the month; manual rows only where no synced row exists. Null when the accounting feed is not mapped to this practice — group-level figures sit on the "Group / unassigned" row.'),
+    financial_revenue_pence: d('Accounting revenue (Xero/QuickBooks, accrual) for the month; manual rows only where no synced row exists. Null when the accounting feed is not mapped to this practice — group-level figures sit on the "Group / unassigned" row. The month\'s accounting rows are included in full even when the selected window covers only part of the month.'),
     financial_costs_pence: d('Accounting costs (associates, staff, lab, materials, overhead, other; tax excluded) for the month. Null when not mapped to this practice — see financial_revenue_pence.'),
 };
 
@@ -310,15 +310,23 @@ export const DATASET_COLUMN_DOCS = {
     },
     'summaries/practice_day': {
         practice_id: d('Practice the day\'s figures belong to. Null = rows not attributed to a site.'),
+        id: d('Summary row key: "<practice_id|unassigned>:<day>". Not a UUID.'),
+        occurred: d('Patient appointments completed in the period (count).', 'count'),
+        dna: d('Patient appointments marked did-not-attend in the period (count).', 'count'),
+        cancelled: d('Patient appointments cancelled in the period (count).', 'count'),
     },
     'summaries/practice_month': {
         practice_id: d('Practice the month\'s figures belong to. Null = org-level accounting rows / unattributed.'),
+        id: d('Summary row key: "<practice_id|unassigned>:<YYYY-MM>". Not a UUID.'),
+        occurred: d('Patient appointments completed in the period (count).', 'count'),
+        dna: d('Patient appointments marked did-not-attend in the period (count).', 'count'),
+        cancelled: d('Patient appointments cancelled in the period (count).', 'count'),
     },
 };
 
 export function docFor(ds, col) {
     const override = DATASET_COLUMN_DOCS[`${ds.source}/${ds.key}`]?.[col];
     const base = COLUMN_DOCS[col];
-    const doc = override ?? base;
+    const doc = { ...(base ?? {}), ...(override ?? {}) };
     return { unit: doc?.unit ?? inferUnit(col), description: doc?.description ?? '' };
 }

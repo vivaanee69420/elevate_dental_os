@@ -38,6 +38,8 @@
 // columns carry derived: true here.
 // ============================================================================
 
+import { docFor } from './dictionary.js';
+
 export const FORBIDDEN_COLUMNS = new Set([
     'raw', 'notes', 'pms_patient', 'secrets', 'webhook_token', 'hourly_rate_pence',
     'weekly_hours', 'pay_pct', 'lab_split_pct', 'crm_system_notes', 'line_notes',
@@ -56,8 +58,6 @@ export const SOURCES = [
     { key: 'emergent', label: 'Emergent', description: 'Treatments accepted per patient, manager-reported daily cash-ups and the monthly P&L sheet.' },
     { key: 'summaries', label: 'Summaries', description: 'Practice-level KPIs per day and per month, computed with the same rules as the dashboard cards: patient appointments, occurred, DNA, new patients, treatment activity, billed and settled money, leads, ad spend and (monthly) accounting revenue and costs.' },
 ];
-
-import { docFor } from './dictionary.js';
 
 const c = (col) => ({ col });
 const pii = (col) => ({ col, pii: true });
