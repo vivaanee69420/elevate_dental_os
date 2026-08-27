@@ -1392,8 +1392,12 @@ Registry: `backend/src/lib/data-room/registry.js`. Spec:
 
 ### `GET /api/data-room/datasets`
 
-Registry for the UI. `{ sources: [{ key, label, description, datasets: [{ key, label, roster, columns: [{ col, pii }] }] }] }`.
-Sources: `dentally`, `google-ads`, `meta-ads`, `gohighlevel`, `emergent`.
+Registry for the UI. `{ sources: [{ key, label, description, datasets: [{ key, label, roster, summary, columns: [{ col, pii, derived, unit, description }] }] }] }`.
+Sources: `dentally`, `google-ads`, `meta-ads`, `gohighlevel`, `emergent`, `summaries`. `unit` ∈ `id`|`hash`|`pence`|`count`|`number`|`percent`|`minutes`|`flag`|`date`|`timestamptz`|`text`.
+
+### `GET /api/data-room/freshness`
+
+"Data as of" for the badge. `{ sources: { dentally|google-ads|meta-ads|gohighlevel|emergent|summaries: { last_sync_at, status, accounts?: [{ label, status, last_sync_at }] } }, as_of }` — `last_sync_at` from `integrations` (GoHighLevel: latest across `integration_accounts`, which are listed under `accounts`); `summaries.last_sync_at = as_of` = the latest of all sources.
 
 ### `GET /api/data-room/:source/:dataset?scope&since&until&page&cursor&limit&pii`
 
@@ -1406,9 +1410,15 @@ Sources: `dentally`, `google-ads`, `meta-ads`, `gohighlevel`, `emergent`.
 
 Response `{ rows, next_cursor, total }` in both modes (`total` is the exact filtered count, so the client derives `ceil(total / limit)` pages). Rows carry only registry columns; PII-flagged columns are absent unless `pii=1` by an owner. Ordering `(dateCol, id)` for event datasets, `id` for roster. Money is integer pence.
 
+**Derived columns** (`derived: true` in the registry) are computed in `public.data_room_*` views (migration `…000131`): appointments `is_patient_appointment / occurred / dna / cancelled / duration_mins / practitioner_name`, patients `patient_key / birth_year / postcode_district`, payments `is_settled`, invoice_items `fee_total_pence / practitioner_name`, treatment_items `counts_as_activity / practitioner_name`, GHL contacts `contact_key`, opportunities `pipeline_name / outcome`, ads `practice_name / cpl_pence` (spend ÷ platform conversions). **Summary datasets** (`summaries/practice_day`, `summaries/practice_month`; `summary: true`) come from RPCs `data_room_practice_day` / `data_room_practice_month` (service_role only), require `since`/`until`, page by offset, and carry `id = "<practice_id|unassigned>:<day|YYYY-MM>"`. `practice_month`'s `cost_per_lead_pence` (spend ÷ CRM leads, `leads_new`) is a different ratio from ads' `cpl_pence` above — the two must not be conflated. Summary financial columns `financial_revenue_pence`/`financial_costs_pence` are `null` when no accounting row is mapped to that practice+month; org-level accounting rows land on the row with `practice_id = null` and `practice_name = 'Group / unassigned'`, which a single-practice `scope` excludes.
+
 ### `GET /api/data-room/:source/:dataset/export.csv?scope&since&until&pii`
 
 Streams the whole filtered set: `text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="<source>-<dataset>_<since>_<until>.csv"` (roster: `_<today>`), UTF-8 BOM, CRLF. Written in 1000-row batches; any size. Every export writes an `audit_log` row (`action='export'`, `entity_type='data_room'`, `diff={source,dataset,scope,since,until,pii,rows[,aborted]}`).
+
+### `GET /api/data-room/:source/:dataset/export.xlsx?scope&since&until&pii`
+
+Same filters and PII gate as CSV. Streams an `.xlsx` workbook (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `Content-Disposition: attachment; filename="<source>-<dataset>_<since>_<until>.xlsx"`). `scope=all` on a practice-column dataset → one worksheet per practice (+ "Unassigned"); a practice scope → one worksheet named after it; `via`/summary datasets → "All practices". Header row bold + frozen; pence columns keep their integer value and gain a `<name>_gbp` neighbour formatted `£#,##0.00`; dates/timestamps are real Excel dates (UTC). Row cap 500 000 → `413 { error: "Export too large for Excel (N rows). Narrow the period or use CSV." }` before any byte. Audited like CSV with `format: 'xlsx'`.
 
 ## Ad attribution (`/api/ad-attribution/*`)
 

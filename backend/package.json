@@ -13,6 +13,7 @@
     "typecheck": "find src -name '*.js' -exec node --check {} +",
     "build": "echo 'no build: backend is native ESM'",
     "lint": "eslint src --ext .js",
+    "data-room:dictionary": "node scripts/data-room-dictionary.js",
     "migrate": "node ../scripts/migrate.js",
     "seed": "node ../scripts/seed-tenant.js"
   },
@@ -28,6 +29,7 @@
     "cors": "^2.8.5",
     "csv-parse": "^5.6.0",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "express-rate-limit": "^7.4.1",
     "helmet": "^8.0.0",

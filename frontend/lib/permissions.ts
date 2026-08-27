@@ -123,6 +123,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   settings: 'system.manage',
 
   // Data Room — raw source rows for the analyst role (owner also holds the key)
+  'data-summaries': 'data.export',
   'data-dentally': 'data.export',
   'data-google-ads': 'data.export',
   'data-meta-ads': 'data.export',
@@ -145,8 +146,9 @@ export function canAccessRoute(
   return permissions?.[key] === true;
 }
 
-/** The five Data Room route ids — the ONLY routes an analyst may see. */
+/** The six Data Room route ids — the ONLY routes an analyst may see. */
 export const DATA_ROOM_ROUTES = [
+  'data-summaries',
   'data-dentally',
   'data-google-ads',
   'data-meta-ads',

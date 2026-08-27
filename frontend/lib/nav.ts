@@ -96,6 +96,7 @@ export const NAV: NavSection[] = [
     { id: 'settings', label: 'Settings' },
   ]},
   { label: 'Data Room', items: [
+    { id: 'data-summaries', label: 'Summaries', isNew: true },
     { id: 'data-dentally', label: 'Dentally', isNew: true },
     { id: 'data-google-ads', label: 'Google Ads', isNew: true },
     { id: 'data-meta-ads', label: 'Meta Ads', isNew: true },

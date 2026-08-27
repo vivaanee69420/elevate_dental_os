@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PassThrough } from 'node:stream';
+import ExcelJS from 'exceljs';
 import './setup.js';
 
 vi.mock('../src/repositories/data-room.repository.js', () => ({
@@ -7,6 +9,9 @@ vi.mock('../src/repositories/data-room.repository.js', () => ({
     count: vi.fn(async () => 0),
     viaKeys: vi.fn(async () => []),
     pipelineRows: vi.fn(async () => []),
+    rpcRows: vi.fn(async () => []),
+    practices: vi.fn(async () => []),
+    freshness: vi.fn(async () => ({ integrations: [], accounts: [] })),
     logExport: vi.fn(async () => {}),
   },
 }));
@@ -27,6 +32,9 @@ beforeEach(() => {
   repo.count.mockReset().mockResolvedValue(0);
   repo.viaKeys.mockReset().mockResolvedValue([]);
   repo.pipelineRows.mockReset().mockResolvedValue([]);
+  repo.rpcRows.mockReset().mockResolvedValue([]);
+  repo.practices.mockReset().mockResolvedValue([]);
+  repo.freshness.mockReset().mockResolvedValue({ integrations: [], accounts: [] });
   repo.logExport.mockReset().mockResolvedValue(undefined);
 });
 
@@ -128,6 +136,12 @@ describe('page() — projection + pagination', () => {
     await dataRoomService.page(other, 'dentally', 'appointments', WIN);
     expect(repo.page.mock.calls[0][0]).toBe(other.organisation_id);
     expect(repo.count.mock.calls[0][0]).toBe(other.organisation_id);
+
+    await dataRoomService.page(analyst, 'summaries', 'practice_day', WIN);
+    expect(repo.rpcRows.mock.calls[0][0]).toBe(ORG);
+
+    await dataRoomService.freshness(analyst);
+    expect(repo.freshness.mock.calls[0][0]).toBe(ORG);
   });
 });
 
@@ -146,7 +160,7 @@ describe('streamCsv()', () => {
     const out = await dataRoomService.streamCsv(analyst, 'dentally', 'appointments', WIN, s, meta);
     expect(out.rows).toBe(1001);
     const text = s.text();
-    expect(text.startsWith('﻿id,practice_id,contact_id,associate_id,pms_external_id,pms_patient_id,pms_practitioner_id,starts_at,ends_at,status,appointment_type\r\n')).toBe(true);
+    expect(text.startsWith('﻿id,practice_id,contact_id,associate_id,pms_external_id,pms_patient_id,pms_practitioner_id,starts_at,ends_at,status,appointment_type,is_patient_appointment,occurred,dna,cancelled,duration_mins,practitioner_name\r\n')).toBe(true);
     expect(text.split('\r\n').length).toBe(1003); // header + 1001 rows + trailing ''
     expect(s.end).toHaveBeenCalledOnce();
     expect(repo.page).toHaveBeenCalledTimes(2);
@@ -249,5 +263,152 @@ describe('page() — numbered pages (offset mode)', () => {
     expect(repo.page.mock.calls[0][2]).toMatchObject({ since: WIN.since, until: WIN.until });
     await expect(dataRoomService.page(owner, 'dentally', 'patients', { ...WIN, since: undefined, until: undefined }))
       .rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('summaries (rpc datasets)', () => {
+  it('page() calls the rpc with the validated window and practice, pages by offset', async () => {
+    repo.rpcRows.mockResolvedValue([{ id: 'p:2026-08-01', occurred: 1 }, { id: 'p:2026-08-02', occurred: 2 }, { id: 'p:2026-08-03', occurred: 3 }]);
+    const out = await dataRoomService.page(analyst, 'summaries', 'practice_day', { ...WIN, scope: PRACTICE, page: 2, limit: 2 });
+    expect(repo.rpcRows).toHaveBeenCalledWith(ORG, 'data_room_practice_day', { since: WIN.since, until: WIN.until, practiceId: PRACTICE });
+    expect(out).toEqual({ rows: [{ id: 'p:2026-08-03', occurred: 3 }], next_cursor: null, total: 3 });
+  });
+  it('page() 400s without a window', async () => {
+    await expect(dataRoomService.page(analyst, 'summaries', 'practice_month', { ...WIN, since: undefined, until: undefined }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    expect(repo.rpcRows).not.toHaveBeenCalled();
+  });
+  it('streamCsv() writes rpc rows once and audits the validated window', async () => {
+    repo.rpcRows.mockResolvedValue([{ id: 'p:2026-08-01', practice_id: PRACTICE, practice_name: 'Ashford', day: '2026-08-01', occurred: 5 }]);
+    const chunks = [];
+    const sink = { write: (s) => chunks.push(s), end: vi.fn() };
+    const out = await dataRoomService.streamCsv(analyst, 'summaries', 'practice_day', WIN, sink, { isAborted: () => false });
+    expect(out).toEqual({ rows: 1 });
+    expect(chunks.join('')).toContain('Ashford');
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ source: 'summaries', dataset: 'practice_day', since: WIN.since, until: WIN.until, rows: 1 });
+  });
+});
+
+describe('freshness()', () => {
+  it('maps providers to source keys and takes the latest GHL account sync', async () => {
+    repo.freshness.mockResolvedValue({
+      integrations: [
+        { provider: 'dentally', status: 'active', last_sync_at: '2026-08-27T03:10:00.000Z' },
+        { provider: 'google_ads', status: 'active', last_sync_at: '2026-08-27T02:50:00.000Z' },
+        { provider: 'gohighlevel', status: 'active', last_sync_at: null },
+      ],
+      accounts: [
+        { provider: 'gohighlevel', label: 'Ashford', status: 'active', last_sync_at: '2026-08-26T22:05:00.000Z' },
+        { provider: 'gohighlevel', label: 'Bexley', status: 'failed', last_sync_at: '2026-08-25T22:05:00.000Z' },
+      ],
+    });
+    const out = await dataRoomService.freshness(analyst);
+    expect(out.sources.dentally).toEqual({ last_sync_at: '2026-08-27T03:10:00.000Z', status: 'active' });
+    expect(out.sources['google-ads'].last_sync_at).toBe('2026-08-27T02:50:00.000Z');
+    expect(out.sources['meta-ads']).toEqual({ last_sync_at: null, status: null });
+    expect(out.sources.gohighlevel.last_sync_at).toBe('2026-08-26T22:05:00.000Z');
+    expect(out.sources.gohighlevel.accounts).toHaveLength(2);
+    expect(out.sources.summaries.last_sync_at).toBe('2026-08-27T03:10:00.000Z');
+    expect(out.as_of).toBe('2026-08-27T03:10:00.000Z');
+    expect(repo.freshness).toHaveBeenCalledWith(ORG);
+  });
+});
+
+async function readWorkbook(stream) {
+  const bufs = [];
+  for await (const b of stream) bufs.push(b);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(Buffer.concat(bufs));
+  return wb;
+}
+
+/** Fails fast with a clear message if `p` never settles (rather than hanging the suite). */
+async function settles(p, ms = 2000) {
+  let t;
+  try {
+    return await Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('writeXlsx never settled')), ms); })]);
+  } finally { clearTimeout(t); }
+}
+
+describe('xlsx export', () => {
+  const META = { ip: '1.1.1.1', userAgent: 'vitest' };
+
+  it('prepareExport() enforces the PII gate, the window and the row cap before any byte', async () => {
+    await expect(dataRoomService.prepareExport(analyst, 'dentally', 'patients', { ...WIN, pii: true })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(dataRoomService.prepareExport(owner, 'dentally', 'appointments', { ...WIN, since: undefined, until: undefined })).rejects.toMatchObject({ statusCode: 400 });
+    repo.count.mockResolvedValue(500_001);
+    await expect(dataRoomService.prepareExport(owner, 'dentally', 'appointments', WIN)).rejects.toMatchObject({ statusCode: 413 });
+  });
+  it('writeXlsx() with scope=all writes one worksheet per practice plus Unassigned, and audits format=xlsx', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }, { id: '33333333-3333-4333-8333-333333333333', name: 'Bexleyheath' }]);
+    repo.count.mockResolvedValue(3);
+    repo.page.mockImplementation(async (orgId, ds, filters) => {
+      if (filters.practiceNull) return [{ id: 'u1', practice_id: null, starts_at: '2026-08-03T09:00:00.000Z', status: 'completed' }];
+      if (filters.practiceId === PRACTICE) return [{ id: 'a1', practice_id: PRACTICE, starts_at: '2026-08-01T09:00:00.000Z', status: 'completed' }];
+      return [];
+    });
+    const plan = await dataRoomService.prepareExport(analyst, 'dentally', 'appointments', WIN);
+    const out = new PassThrough();
+    const reading = readWorkbook(out);
+    const res = await dataRoomService.writeXlsx(plan, out, { isAborted: () => false, ip: '1.1.1.1', userAgent: 'vitest' });
+    const wb = await reading;
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Ashford', 'Bexleyheath', 'Unassigned']);
+    expect(wb.getWorksheet('Ashford').rowCount).toBe(2);
+    expect(wb.getWorksheet('Ashford').getRow(1).values).not.toContain('first_name');
+    expect(res).toEqual({ rows: 2 });
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ source: 'dentally', dataset: 'appointments', format: 'xlsx', rows: 2, pii: false });
+  });
+  it('writeXlsx() with a practice scope writes a single sheet named after the practice', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }]);
+    repo.count.mockResolvedValue(1);
+    repo.page.mockResolvedValue([{ id: 'a1', practice_id: PRACTICE, starts_at: '2026-08-01T09:00:00.000Z', status: 'completed' }]);
+    const plan = await dataRoomService.prepareExport(owner, 'dentally', 'appointments', { ...WIN, scope: PRACTICE });
+    const out = new PassThrough();
+    const reading = readWorkbook(out);
+    await dataRoomService.writeXlsx(plan, out, { isAborted: () => false });
+    const wb = await reading;
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['Ashford']);
+  });
+  // Mirrors the two streamCsv abort/failure cases: the handler must always
+  // settle and exactly one audit row must be written.
+  it('writeXlsx() stops when the client disconnects and audits aborted=true exactly once', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }]);
+    repo.count.mockResolvedValue(1000);
+    repo.page.mockResolvedValue(Array.from({ length: 1000 }, (_, i) => ({ id: `id-${i}`, starts_at: '2026-08-01T00:00:00.000Z' })));
+    const plan = await dataRoomService.prepareExport(owner, 'dentally', 'appointments', WIN);
+    // A real client disconnect DESTROYS the response: 'finish' never fires
+    // again, so anything awaiting exceljs's commit() would hang forever.
+    const out = new PassThrough();
+    out.on('error', () => {}); // Node's http layer owns this on a real `res`
+    out.destroy();
+    let calls = 0;
+    const res = await settles(dataRoomService.writeXlsx(plan, out, { ...META, isAborted: () => ++calls > 1 }));
+    expect(res).toEqual({ rows: 1000 });
+    expect(repo.page).toHaveBeenCalledTimes(1);
+    expect(repo.logExport).toHaveBeenCalledTimes(1);
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ format: 'xlsx', rows: 1000, aborted: true });
+  });
+  it('writeXlsx() audits aborted=true exactly once and rethrows when a batch fails mid-stream', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }]);
+    repo.count.mockResolvedValue(2000);
+    repo.page
+      .mockResolvedValueOnce(Array.from({ length: 1000 }, (_, i) => ({ id: `id-${i}`, starts_at: '2026-08-01T00:00:00.000Z' })))
+      .mockRejectedValueOnce(new Error('db down'));
+    const plan = await dataRoomService.prepareExport(owner, 'dentally', 'appointments', WIN);
+    const out = new PassThrough();
+    out.resume();
+    await expect(dataRoomService.writeXlsx(plan, out, { ...META, isAborted: () => false })).rejects.toThrow('db down');
+    expect(repo.logExport).toHaveBeenCalledTimes(1);
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ format: 'xlsx', rows: 1000, aborted: true });
+  });
+  it('writeXlsx() for an rpc dataset writes one "All practices" sheet', async () => {
+    repo.rpcRows.mockResolvedValue([{ id: 'p:2026-08-01', practice_id: PRACTICE, practice_name: 'Ashford', day: '2026-08-01', occurred: 4, settled_pence: 1000 }]);
+    const plan = await dataRoomService.prepareExport(analyst, 'summaries', 'practice_day', WIN);
+    const out = new PassThrough();
+    const reading = readWorkbook(out);
+    await dataRoomService.writeXlsx(plan, out, { isAborted: () => false });
+    const wb = await reading;
+    expect(wb.worksheets.map((w) => w.name)).toEqual(['All practices']);
+    expect(wb.getWorksheet('All practices').getRow(1).values).toContain('settled_gbp');
   });
 });

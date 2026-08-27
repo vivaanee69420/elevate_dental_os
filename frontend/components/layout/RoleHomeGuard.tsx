@@ -17,7 +17,7 @@ export function RoleHomeGuard() {
   useEffect(() => {
     if (me?.role !== 'analyst') return;
     const routeId = (pathname || '/').replace(/^\//, '').split('/')[0];
-    if (!isDataRoomRoute(routeId)) router.replace('/data-dentally');
+    if (!isDataRoomRoute(routeId)) router.replace('/data-summaries');
   }, [me?.role, pathname, router]);
 
   return null;

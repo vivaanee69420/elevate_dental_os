@@ -1,10 +1,14 @@
 'use client';
 
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { fetchDataRoomPage, fetchDataRoomRegistry, type DataRoomParams, type DataRoomSourceKey } from './api';
+import { fetchDataRoomFreshness, fetchDataRoomPage, fetchDataRoomRegistry, type DataRoomParams, type DataRoomSourceKey } from './api';
 
 export function useDataRoomRegistry() {
   return useQuery({ queryKey: ['data-room-registry'], queryFn: fetchDataRoomRegistry, staleTime: 10 * 60_000 });
+}
+
+export function useDataRoomFreshness() {
+  return useQuery({ queryKey: ['data-room-freshness'], queryFn: fetchDataRoomFreshness, staleTime: 60_000 });
 }
 
 /**
