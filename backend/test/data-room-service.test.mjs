@@ -136,6 +136,12 @@ describe('page() — projection + pagination', () => {
     await dataRoomService.page(other, 'dentally', 'appointments', WIN);
     expect(repo.page.mock.calls[0][0]).toBe(other.organisation_id);
     expect(repo.count.mock.calls[0][0]).toBe(other.organisation_id);
+
+    await dataRoomService.page(analyst, 'summaries', 'practice_day', WIN);
+    expect(repo.rpcRows.mock.calls[0][0]).toBe(ORG);
+
+    await dataRoomService.freshness(analyst);
+    expect(repo.freshness.mock.calls[0][0]).toBe(ORG);
   });
 });
 
