@@ -205,3 +205,45 @@ describe('page() — offset mode (numbered pages)', () => {
     expect(q.orders).toEqual([{ col: 'created_at', opts: { ascending: true } }, { col: 'id', opts: { ascending: true } }]);
   });
 });
+
+describe('rpcRows()', () => {
+  it('calls the named function with p_org always set and p_practice null for scope=all', async () => {
+    supaRec.rpcCalls = [];
+    supaRec.rpcProvider = () => ({ data: [{ id: 'x:2026-08-01', practice_id: PRACTICE, day: '2026-08-01', occurred: 3 }], error: null });
+    const rows = await dataRoomRepository.rpcRows(ORG, 'data_room_practice_day', { since: '2026-08-01T00:00:00.000Z', until: '2026-09-01T00:00:00.000Z', practiceId: null });
+    expect(rows).toHaveLength(1);
+    expect(supaRec.rpcCalls[0]).toEqual({ fn: 'data_room_practice_day', params: { p_org: ORG, p_since: '2026-08-01T00:00:00.000Z', p_until: '2026-09-01T00:00:00.000Z', p_practice: null } });
+    supaRec.rpcProvider = undefined;
+  });
+  it('throws on an rpc error', async () => {
+    supaRec.rpcProvider = () => ({ data: null, error: { message: 'boom' } });
+    await expect(dataRoomRepository.rpcRows(ORG, 'data_room_practice_day', { since: 'a', until: 'b', practiceId: null })).rejects.toThrow('boom');
+    supaRec.rpcProvider = undefined;
+  });
+});
+
+describe('practices() + practiceNull filter', () => {
+  it('lists org practices ordered by name', async () => {
+    supaRec.resultProvider = () => ({ data: [{ id: PRACTICE, name: 'Ashford' }], error: null });
+    const out = await dataRoomRepository.practices(ORG);
+    expect(out).toEqual([{ id: PRACTICE, name: 'Ashford' }]);
+    expect(supaRec.last.table).toBe('practices');
+    expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+    expect(supaRec.last.order).toEqual({ col: 'name', opts: { ascending: true } });
+  });
+  it('practiceNull filters IS NULL on the practice column', async () => {
+    const ds = getDataset('dentally', 'appointments');
+    await dataRoomRepository.page(ORG, ds, { ...NONE, practiceNull: true }, { after: null, limit: 10 });
+    expect(supaRec.last.iss).toContainEqual({ col: 'practice_id', val: null });
+  });
+});
+
+describe('freshness()', () => {
+  it('reads integrations and integration_accounts for the org only', async () => {
+    const seen = [];
+    supaRec.resultProvider = (q) => { seen.push(q); return { data: [], error: null }; };
+    await dataRoomRepository.freshness(ORG);
+    expect(seen.map((q) => q.table).sort()).toEqual(['integration_accounts', 'integrations']);
+    for (const q of seen) expect(q.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+  });
+});

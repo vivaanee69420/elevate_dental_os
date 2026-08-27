@@ -31,7 +31,8 @@ function applyFilters(q, orgId, ds, filters) {
     q = q.eq('organisation_id', orgId);
     q = applyWhere(q, ds.where);
     if (ds.practice.col) {
-        if (filters.practiceId) q = q.eq(ds.practice.col, filters.practiceId);
+        if (filters.practiceNull) q = q.is(ds.practice.col, null);
+        else if (filters.practiceId) q = q.eq(ds.practice.col, filters.practiceId);
     } else if (filters.practiceKeys) {
         q = q.in(ds.practice.via.col, filters.practiceKeys);
     }
@@ -118,6 +119,35 @@ export const dataRoomRepository = {
             }
         }
         return rows;
+    },
+
+    /** Summary dataset rows from a data_room_* RPC. p_org is always the caller's org. */
+    async rpcRows(orgId, fn, { since, until, practiceId }) {
+        const { data, error } = await supabase_1.serviceClient.rpc(fn, {
+            p_org: orgId, p_since: since, p_until: until, p_practice: practiceId ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
+
+    /** Practices of the org, for one-worksheet-per-practice exports. */
+    async practices(orgId) {
+        const { data, error } = await supabase_1.serviceClient.from('practices').select('id,name')
+            .eq('organisation_id', orgId)
+            .order('name', { ascending: true });
+        if (error) throw new Error(error.message);
+        return data ?? [];
+    },
+
+    /** Sync timestamps per provider (+ per GHL/QBO account) for the "data as of" badge. */
+    async freshness(orgId) {
+        const [ints, accs] = await Promise.all([
+            supabase_1.serviceClient.from('integrations').select('provider,status,last_sync_at').eq('organisation_id', orgId),
+            supabase_1.serviceClient.from('integration_accounts').select('provider,label,status,last_sync_at').eq('organisation_id', orgId),
+        ]);
+        if (ints.error) throw new Error(ints.error.message);
+        if (accs.error) throw new Error(accs.error.message);
+        return { integrations: ints.data ?? [], accounts: accs.data ?? [] };
     },
 
     /** Explicit audit row — the audit middleware only logs mutations. */
