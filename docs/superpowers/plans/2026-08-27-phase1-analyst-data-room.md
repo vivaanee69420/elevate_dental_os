@@ -419,15 +419,15 @@ select proname from pg_proc where proname in ('data_room_practice_day','data_roo
 
 - [ ] **Step 4: Run the reconciliation on live data**
 
-`execute_sql` with the script body, substituting the Plan4growth organisation id (`select id from organisations order by created_at limit 1` if unknown), `since = '2026-05-01T00:00:00+01:00'`, `until = '2026-06-01T00:00:00+01:00'`. Expected: every row `ok = true`; the Ashford row shows `occurred = 801` (golden number, memory `appointments-occurred-rollup`).
+`execute_sql` with the script body, substituting the Plan4growth organisation id (`select id from organisations order by created_at limit 1` if unknown), `since = '2026-05-01T00:00:00+01:00'`, `until = '2026-06-01T00:00:00+01:00'`. Expected: every row `ok = true`; the Ashford row shows `appointments = 801` — patient-present rows of ANY status, the 000076 rule (golden number, memory `appointments-occurred-rollup`); `occurred` (completed only) is lower.
 
 Also sanity-check a view:
 
 ```sql
-select count(*) filter (where occurred) as occurred, count(*) filter (where dna) as dna
+select count(*) filter (where is_patient_appointment) as appointments, count(*) filter (where occurred) as occurred, count(*) filter (where dna) as dna
 from data_room_dentally_appointments
 where organisation_id = '<org>' and practice_id = '<ashford>' and starts_at >= '2026-05-01T00:00:00+01:00' and starts_at < '2026-06-01T00:00:00+01:00';
--- occurred = 801
+-- appointments = 801
 ```
 
 - [ ] **Step 5: Commit**
