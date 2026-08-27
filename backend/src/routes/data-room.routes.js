@@ -12,8 +12,11 @@ import { dataRoomController } from "../controllers/data-room.controller.js";
 const router = (0, express_1.Router)();
 const gate = (0, auth_1.requirePermission)('data.export');
 
+// Static routes first — /:source/:dataset would otherwise swallow them.
 router.get('/datasets', gate, (0, async_handler_1.asyncHandler)(dataRoomController.datasets));
+router.get('/freshness', gate, (0, async_handler_1.asyncHandler)(dataRoomController.freshness));
 router.get('/:source/:dataset/export.csv', gate, (0, async_handler_1.asyncHandler)(dataRoomController.exportCsv));
+router.get('/:source/:dataset/export.xlsx', gate, (0, async_handler_1.asyncHandler)(dataRoomController.exportXlsx));
 router.get('/:source/:dataset', gate, (0, async_handler_1.asyncHandler)(dataRoomController.page));
 
 export default router;
