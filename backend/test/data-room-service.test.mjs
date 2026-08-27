@@ -7,6 +7,9 @@ vi.mock('../src/repositories/data-room.repository.js', () => ({
     count: vi.fn(async () => 0),
     viaKeys: vi.fn(async () => []),
     pipelineRows: vi.fn(async () => []),
+    rpcRows: vi.fn(async () => []),
+    practices: vi.fn(async () => []),
+    freshness: vi.fn(async () => ({ integrations: [], accounts: [] })),
     logExport: vi.fn(async () => {}),
   },
 }));
@@ -27,6 +30,9 @@ beforeEach(() => {
   repo.count.mockReset().mockResolvedValue(0);
   repo.viaKeys.mockReset().mockResolvedValue([]);
   repo.pipelineRows.mockReset().mockResolvedValue([]);
+  repo.rpcRows.mockReset().mockResolvedValue([]);
+  repo.practices.mockReset().mockResolvedValue([]);
+  repo.freshness.mockReset().mockResolvedValue({ integrations: [], accounts: [] });
   repo.logExport.mockReset().mockResolvedValue(undefined);
 });
 
@@ -146,7 +152,7 @@ describe('streamCsv()', () => {
     const out = await dataRoomService.streamCsv(analyst, 'dentally', 'appointments', WIN, s, meta);
     expect(out.rows).toBe(1001);
     const text = s.text();
-    expect(text.startsWith('﻿id,practice_id,contact_id,associate_id,pms_external_id,pms_patient_id,pms_practitioner_id,starts_at,ends_at,status,appointment_type\r\n')).toBe(true);
+    expect(text.startsWith('﻿id,practice_id,contact_id,associate_id,pms_external_id,pms_patient_id,pms_practitioner_id,starts_at,ends_at,status,appointment_type,is_patient_appointment,occurred,dna,cancelled,duration_mins,practitioner_name\r\n')).toBe(true);
     expect(text.split('\r\n').length).toBe(1003); // header + 1001 rows + trailing ''
     expect(s.end).toHaveBeenCalledOnce();
     expect(repo.page).toHaveBeenCalledTimes(2);
@@ -249,5 +255,53 @@ describe('page() — numbered pages (offset mode)', () => {
     expect(repo.page.mock.calls[0][2]).toMatchObject({ since: WIN.since, until: WIN.until });
     await expect(dataRoomService.page(owner, 'dentally', 'patients', { ...WIN, since: undefined, until: undefined }))
       .rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe('summaries (rpc datasets)', () => {
+  it('page() calls the rpc with the validated window and practice, pages by offset', async () => {
+    repo.rpcRows.mockResolvedValue([{ id: 'p:2026-08-01', occurred: 1 }, { id: 'p:2026-08-02', occurred: 2 }, { id: 'p:2026-08-03', occurred: 3 }]);
+    const out = await dataRoomService.page(analyst, 'summaries', 'practice_day', { ...WIN, scope: PRACTICE, page: 2, limit: 2 });
+    expect(repo.rpcRows).toHaveBeenCalledWith(ORG, 'data_room_practice_day', { since: WIN.since, until: WIN.until, practiceId: PRACTICE });
+    expect(out).toEqual({ rows: [{ id: 'p:2026-08-03', occurred: 3 }], next_cursor: null, total: 3 });
+  });
+  it('page() 400s without a window', async () => {
+    await expect(dataRoomService.page(analyst, 'summaries', 'practice_month', { ...WIN, since: undefined, until: undefined }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    expect(repo.rpcRows).not.toHaveBeenCalled();
+  });
+  it('streamCsv() writes rpc rows once and audits the validated window', async () => {
+    repo.rpcRows.mockResolvedValue([{ id: 'p:2026-08-01', practice_id: PRACTICE, practice_name: 'Ashford', day: '2026-08-01', occurred: 5 }]);
+    const chunks = [];
+    const sink = { write: (s) => chunks.push(s), end: vi.fn() };
+    const out = await dataRoomService.streamCsv(analyst, 'summaries', 'practice_day', WIN, sink, { isAborted: () => false });
+    expect(out).toEqual({ rows: 1 });
+    expect(chunks.join('')).toContain('Ashford');
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ source: 'summaries', dataset: 'practice_day', since: WIN.since, until: WIN.until, rows: 1 });
+  });
+});
+
+describe('freshness()', () => {
+  it('maps providers to source keys and takes the latest GHL account sync', async () => {
+    repo.freshness.mockResolvedValue({
+      integrations: [
+        { provider: 'dentally', status: 'active', last_sync_at: '2026-08-27T03:10:00.000Z' },
+        { provider: 'google_ads', status: 'active', last_sync_at: '2026-08-27T02:50:00.000Z' },
+        { provider: 'gohighlevel', status: 'active', last_sync_at: null },
+      ],
+      accounts: [
+        { provider: 'gohighlevel', label: 'Ashford', status: 'active', last_sync_at: '2026-08-26T22:05:00.000Z' },
+        { provider: 'gohighlevel', label: 'Bexley', status: 'failed', last_sync_at: '2026-08-25T22:05:00.000Z' },
+      ],
+    });
+    const out = await dataRoomService.freshness(analyst);
+    expect(out.sources.dentally).toEqual({ last_sync_at: '2026-08-27T03:10:00.000Z', status: 'active' });
+    expect(out.sources['google-ads'].last_sync_at).toBe('2026-08-27T02:50:00.000Z');
+    expect(out.sources['meta-ads']).toEqual({ last_sync_at: null, status: null });
+    expect(out.sources.gohighlevel.last_sync_at).toBe('2026-08-26T22:05:00.000Z');
+    expect(out.sources.gohighlevel.accounts).toHaveLength(2);
+    expect(out.sources.summaries.last_sync_at).toBe('2026-08-27T03:10:00.000Z');
+    expect(out.as_of).toBe('2026-08-27T03:10:00.000Z');
+    expect(repo.freshness).toHaveBeenCalledWith(ORG);
   });
 });

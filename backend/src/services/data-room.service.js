@@ -11,9 +11,15 @@
 //     key list short-circuits to zero rows — no query)
 //   - pagination: keyset via opaque cursors (export batching, default), or
 //     numbered pages (`page=N` -> offset mode) for the UI; derived (in-memory)
-//     datasets slice by offset either way
+//     datasets slice by offset either way — including `derived: 'rpc'`
+//     (source `summaries`), which windows + practice-scopes a Postgres
+//     function's rows the same way `ghl_pipelines` slices its in-memory rows
 //   - CSV streaming in 1000-row batches through a sink (Express res in prod,
-//     a recorder in tests); every export is audited (rows, aborted flag)
+//     a recorder in tests); every export is audited (rows, aborted flag) —
+//     the audited since/until always come from the validated `window()`,
+//     table-backed or rpc-backed alike
+//   - freshness(user): per-source (+ per-GHL-account) last_sync_at/status for
+//     the "data as of" badge, derived from dataRoomRepository.freshness()
 //
 // orgId always comes from req.user, never from the request.
 // ============================================================================
@@ -86,6 +92,11 @@ async function derivedRows(orgId, ds, query) {
         const practiceId = query.scope === 'all' ? null : query.scope;
         return dataRoomRepository.pipelineRows(orgId, practiceId);
     }
+    if (ds.derived === 'rpc') {
+        const win = window(ds, query);
+        const practiceId = query.scope === 'all' ? null : query.scope;
+        return dataRoomRepository.rpcRows(orgId, ds.rpc, { since: win.since, until: win.until, practiceId });
+    }
     throw new AppError(`Unknown derived dataset ${ds.derived}`, 500);
 }
 
@@ -121,12 +132,12 @@ export const dataRoomService = {
         return { rows: project(rows, cols), next_cursor: next, total };
     },
 
-    exportFilename(ds, query) {
+    exportFilename(ds, query, ext = 'csv') {
         const base = `${ds.source}-${ds.key}`;
-        if (!ds.dateCol) return `${base}_${londonDate(new Date().toISOString())}.csv`;
+        if (!ds.dateCol) return `${base}_${londonDate(new Date().toISOString())}.${ext}`;
         // until is exclusive: show the last INCLUDED London day.
         const lastDay = londonDate(new Date(new Date(query.until).getTime() - 1).toISOString());
-        return `${base}_${londonDate(query.since)}_${lastDay}.csv`;
+        return `${base}_${londonDate(query.since)}_${lastDay}.${ext}`;
     },
 
     /**
@@ -145,14 +156,14 @@ export const dataRoomService = {
         // range, and diff.since/until must reflect the VALIDATED bounds, not
         // raw query input — new Date(undefined) would otherwise throw a
         // RangeError that maps to an unmapped 500 instead of window()'s 400).
+        const win = window(ds, query); // validates before the first byte
         const prepared = ds.derived
             ? { derived: await derivedRows(orgId, ds, query) }
             : await buildFilters(orgId, ds, query);
 
         const diff = {
             source: ds.source, dataset: ds.key, scope: query.scope,
-            since: ds.dateCol ? prepared.filters.since : null,
-            until: ds.dateCol ? prepared.filters.until : null,
+            since: win.since, until: win.until,
             pii: includePii, rows: 0,
         };
 
@@ -186,5 +197,27 @@ export const dataRoomService = {
         await audit(false);
         sink.end();
         return { rows: diff.rows };
+    },
+
+    async freshness(user) {
+        const { integrations, accounts } = await dataRoomRepository.freshness(user.organisation_id);
+        const PROVIDER_TO_SOURCE = { dentally: 'dentally', google_ads: 'google-ads', meta_ads: 'meta-ads', gohighlevel: 'gohighlevel', emergent: 'emergent' };
+        const sources = {};
+        for (const key of ['dentally', 'google-ads', 'meta-ads', 'gohighlevel', 'emergent']) sources[key] = { last_sync_at: null, status: null };
+        for (const i of integrations) {
+            const key = PROVIDER_TO_SOURCE[i.provider];
+            if (!key) continue;
+            sources[key] = { last_sync_at: i.last_sync_at ?? null, status: i.status ?? null };
+        }
+        const ghlAccounts = accounts.filter((a) => a.provider === 'gohighlevel')
+            .map((a) => ({ label: a.label ?? null, status: a.status ?? null, last_sync_at: a.last_sync_at ?? null }));
+        if (ghlAccounts.length) {
+            const latest = ghlAccounts.map((a) => a.last_sync_at).filter(Boolean).sort().at(-1) ?? null;
+            sources.gohighlevel = { ...sources.gohighlevel, last_sync_at: latest ?? sources.gohighlevel.last_sync_at, accounts: ghlAccounts };
+        }
+        const all = Object.values(sources).map((s) => s.last_sync_at).filter(Boolean).sort();
+        const asOf = all.at(-1) ?? null;
+        sources.summaries = { last_sync_at: asOf, status: asOf ? 'active' : null };
+        return { sources, as_of: asOf };
     },
 };
