@@ -316,7 +316,17 @@ async function readWorkbook(stream) {
   return wb;
 }
 
+/** Fails fast with a clear message if `p` never settles (rather than hanging the suite). */
+async function settles(p, ms = 2000) {
+  let t;
+  try {
+    return await Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('writeXlsx never settled')), ms); })]);
+  } finally { clearTimeout(t); }
+}
+
 describe('xlsx export', () => {
+  const META = { ip: '1.1.1.1', userAgent: 'vitest' };
+
   it('prepareExport() enforces the PII gate, the window and the row cap before any byte', async () => {
     await expect(dataRoomService.prepareExport(analyst, 'dentally', 'patients', { ...WIN, pii: true })).rejects.toMatchObject({ statusCode: 403 });
     await expect(dataRoomService.prepareExport(owner, 'dentally', 'appointments', { ...WIN, since: undefined, until: undefined })).rejects.toMatchObject({ statusCode: 400 });
@@ -352,6 +362,38 @@ describe('xlsx export', () => {
     await dataRoomService.writeXlsx(plan, out, { isAborted: () => false });
     const wb = await reading;
     expect(wb.worksheets.map((w) => w.name)).toEqual(['Ashford']);
+  });
+  // Mirrors the two streamCsv abort/failure cases: the handler must always
+  // settle and exactly one audit row must be written.
+  it('writeXlsx() stops when the client disconnects and audits aborted=true exactly once', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }]);
+    repo.count.mockResolvedValue(1000);
+    repo.page.mockResolvedValue(Array.from({ length: 1000 }, (_, i) => ({ id: `id-${i}`, starts_at: '2026-08-01T00:00:00.000Z' })));
+    const plan = await dataRoomService.prepareExport(owner, 'dentally', 'appointments', WIN);
+    // A real client disconnect DESTROYS the response: 'finish' never fires
+    // again, so anything awaiting exceljs's commit() would hang forever.
+    const out = new PassThrough();
+    out.on('error', () => {}); // Node's http layer owns this on a real `res`
+    out.destroy();
+    let calls = 0;
+    const res = await settles(dataRoomService.writeXlsx(plan, out, { ...META, isAborted: () => ++calls > 1 }));
+    expect(res).toEqual({ rows: 1000 });
+    expect(repo.page).toHaveBeenCalledTimes(1);
+    expect(repo.logExport).toHaveBeenCalledTimes(1);
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ format: 'xlsx', rows: 1000, aborted: true });
+  });
+  it('writeXlsx() audits aborted=true exactly once and rethrows when a batch fails mid-stream', async () => {
+    repo.practices.mockResolvedValue([{ id: PRACTICE, name: 'Ashford' }]);
+    repo.count.mockResolvedValue(2000);
+    repo.page
+      .mockResolvedValueOnce(Array.from({ length: 1000 }, (_, i) => ({ id: `id-${i}`, starts_at: '2026-08-01T00:00:00.000Z' })))
+      .mockRejectedValueOnce(new Error('db down'));
+    const plan = await dataRoomService.prepareExport(owner, 'dentally', 'appointments', WIN);
+    const out = new PassThrough();
+    out.resume();
+    await expect(dataRoomService.writeXlsx(plan, out, { ...META, isAborted: () => false })).rejects.toThrow('db down');
+    expect(repo.logExport).toHaveBeenCalledTimes(1);
+    expect(repo.logExport.mock.calls[0][2]).toMatchObject({ format: 'xlsx', rows: 1000, aborted: true });
   });
   it('writeXlsx() for an rpc dataset writes one "All practices" sheet', async () => {
     repo.rpcRows.mockResolvedValue([{ id: 'p:2026-08-01', practice_id: PRACTICE, practice_name: 'Ashford', day: '2026-08-01', occurred: 4, settled_pence: 1000 }]);

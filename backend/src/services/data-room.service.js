@@ -28,6 +28,7 @@
 //
 // orgId always comes from req.user, never from the request.
 // ============================================================================
+import { once } from 'node:events';
 import { AppError } from '../middleware/errors.js';
 import { dataRoomRepository } from '../repositories/data-room.repository.js';
 import { getDataset, columnNames, registryForClient } from '../lib/data-room/registry.js';
@@ -267,18 +268,40 @@ export const dataRoomService = {
         return plan;
     },
 
-    /** Stream the prepared workbook to `stream`. Always writes ONE audit row. */
+    /**
+     * Stream the prepared workbook to `stream`. Always settles, and always
+     * writes EXACTLY ONE audit row — which is why the audit is written before
+     * the final flush rather than after it (see `flush`).
+     */
     async writeXlsx(plan, stream, meta) {
         const { ds, cols, typed, orgId, userId, query, win, includePii } = plan;
         const diff = {
             source: ds.source, dataset: ds.key, scope: query.scope,
             since: win.since, until: win.until, pii: includePii, format: 'xlsx', rows: 0,
         };
+        // `audited` flips BEFORE the insert is awaited: one attempt per export,
+        // so the catch below never logs a second row for a failed audit.
+        let audited = false;
         const audit = async (aborted) => {
+            if (audited) return;
+            audited = true;
             const d = aborted ? { ...diff, aborted: true } : diff;
             await dataRoomRepository.logExport(orgId, userId, d, { ip: meta.ip, userAgent: meta.userAgent });
         };
         const wb = openWorkbook(stream);
+        // exceljs resolves commit() on the destination's 'finish' event, which
+        // NEVER fires once a disconnected response has been destroyed — awaiting
+        // it unguarded pins the request handler forever. So: skip the flush for
+        // an already-dead stream, otherwise race it against 'close' (a
+        // disconnect during the final flush). Errors are swallowed; the audit
+        // row is always written before any call to this.
+        const dead = () => stream.destroyed || stream.writableEnded;
+        const flush = async () => {
+            if (dead()) return;
+            try {
+                await Promise.race([wb.finish(), once(stream, 'close')]);
+            } catch { /* stream died mid-flush — nothing left to salvage */ }
+        };
         try {
             for (const sheet of plan.sheets) {
                 const ws = wb.addSheet(sheet.name, typed);
@@ -290,16 +313,20 @@ export const dataRoomService = {
                         for (const row of batch) ws.addRow(row);
                         diff.rows += batch.length;
                     });
-                    if (aborted) { ws.commit(); await wb.finish(); await audit(true); return { rows: diff.rows }; }
+                    if (aborted) {
+                        await audit(true); // before the flush: the client is already gone
+                        if (!dead()) { ws.commit(); await flush(); }
+                        return { rows: diff.rows };
+                    }
                 }
                 ws.commit();
             }
-            await wb.finish();
+            await audit(false);
         } catch (err) {
             await audit(true);
             throw err;
         }
-        await audit(false);
+        await flush();
         return { rows: diff.rows };
     },
 

@@ -52,7 +52,11 @@ describe('openWorkbook', () => {
     expect(ws.getRow(1).values.slice(1)).toEqual(['id', 'starts_at', 'invoiced_on', 'fee_pence', 'fee_gbp', 'occurred', 'meta']);
     const r = ws.getRow(2);
     expect(r.getCell(2).value).toBeInstanceOf(Date);
+    expect(r.getCell(2).numFmt).toBe('yyyy-mm-dd hh:mm'); // timestamptz shows the time
     expect(r.getCell(3).value).toBeInstanceOf(Date);
+    // `date` keeps Excel's built-in short-date (numFmtId 14), which Excel
+    // renders in the VIEWER's locale — dd/mm/yyyy for a UK analyst.
+    expect(r.getCell(3).numFmt).toBe('mm-dd-yy');
     expect(r.getCell(4).value).toBe(12345);
     expect(r.getCell(5).value).toBe(123.45);
     expect(r.getCell(5).numFmt).toBe('£#,##0.00');

@@ -6,12 +6,15 @@
 // caller hands in the writable (Express `res` in prod, a PassThrough in
 // tests). Cell typing follows the dictionary unit:
 //   pence       -> integer cell + a `<col>_gbp` neighbour (£#,##0.00)
-//   date        -> Date (midnight UTC)      timestamptz -> Date
+//   date        -> Date (midnight UTC)      timestamptz -> Date + hh:mm format
 //   flag        -> boolean                  object      -> JSON text
 // ============================================================================
 import ExcelJS from 'exceljs';
 
 const FORBIDDEN = /[[\]:*?/\\]/g;
+const GBP_FMT = '£#,##0.00';
+// Excel renders a bare timestamp as a date and hides the time; be explicit.
+const DATETIME_FMT = 'yyyy-mm-dd hh:mm';
 
 /** Excel-safe, <=31 chars, unique within `used` (mutated). */
 export function sheetName(raw, used) {
@@ -58,11 +61,18 @@ export function openWorkbook(stream) {
                     plan.push({ key: c.col, unit: 'gbp' });
                 }
             }
-            // `ws.columns = …` writes the header row itself on a streaming
-            // worksheet, so the header must NOT be added (or committed) again.
+            // `ws.columns = …` populates row 1 from the `header` fields without
+            // writing it, so row 1 can still be styled; committing it here IS
+            // the header write (every later addRow() is row 2 onwards).
             ws.columns = header.map((h) => ({ header: h, key: h, width: Math.min(40, Math.max(12, h.length + 2)) }));
             ws.getRow(1).font = { bold: true };
             ws.getRow(1).commit();
+            // Cell number formats, resolved once per sheet: [1-based index, format].
+            const formats = [];
+            plan.forEach((p, i) => {
+                if (p.unit === 'gbp') formats.push([i + 1, GBP_FMT]);
+                else if (p.unit === 'timestamptz') formats.push([i + 1, DATETIME_FMT]);
+            });
             return {
                 addRow(row) {
                     const values = plan.map((p) => {
@@ -73,7 +83,7 @@ export function openWorkbook(stream) {
                         return cell(p.unit, row[p.key]);
                     });
                     const r = ws.addRow(values);
-                    plan.forEach((p, i) => { if (p.unit === 'gbp') r.getCell(i + 1).numFmt = '£#,##0.00'; });
+                    for (const [i, fmt] of formats) r.getCell(i).numFmt = fmt;
                     r.commit();
                 },
                 commit() { ws.commit(); },
