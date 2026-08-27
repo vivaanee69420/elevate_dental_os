@@ -13,6 +13,7 @@
     "typecheck": "find src -name '*.js' -exec node --check {} +",
     "build": "echo 'no build: backend is native ESM'",
     "lint": "eslint src --ext .js",
+    "data-room:dictionary": "node scripts/data-room-dictionary.js",
     "migrate": "node ../scripts/migrate.js",
     "seed": "node ../scripts/seed-tenant.js"
   },
