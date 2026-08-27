@@ -1393,7 +1393,7 @@ Registry: `backend/src/lib/data-room/registry.js`. Spec:
 ### `GET /api/data-room/datasets`
 
 Registry for the UI. `{ sources: [{ key, label, description, datasets: [{ key, label, roster, summary, columns: [{ col, pii, derived, unit, description }] }] }] }`.
-Sources: `summaries`, `dentally`, `google-ads`, `meta-ads`, `gohighlevel`, `emergent`. `unit` ∈ `id`|`hash`|`pence`|`count`|`number`|`percent`|`minutes`|`flag`|`date`|`timestamptz`|`text`.
+Sources: `dentally`, `google-ads`, `meta-ads`, `gohighlevel`, `emergent`, `summaries`. `unit` ∈ `id`|`hash`|`pence`|`count`|`number`|`percent`|`minutes`|`flag`|`date`|`timestamptz`|`text`.
 
 ### `GET /api/data-room/freshness`
 
