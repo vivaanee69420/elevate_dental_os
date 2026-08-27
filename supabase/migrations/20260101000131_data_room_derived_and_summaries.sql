@@ -6,16 +6,26 @@
 -- supabase-js repository. They select the whole base row (`t.*`) so the
 -- registry allowlist keeps working unchanged, plus the derived columns the
 -- analyst needs. Rules are the dashboard's: 000076 (patient-present
--- appointments; completed = occurred; no_show = DNA), 000099 (treatment
--- activity = completed and not base_chart), 000103 (practitioner via
--- associates.pms_external_id = pms_practitioner_id), 000087 (GHL won/lost),
--- 000108 (settled cash), 000077 (new patients = Dentally registration date),
--- monthlyFinancial.service bucketsByPeriod (synced-over-manual precedence).
--- Idempotent. API roles stay locked out (000129); service_role reads.
+-- appointments; completed = occurred; no_show = DNA; cancelled likewise
+-- patient-scoped), 000099 (treatment activity = completed and not
+-- base_chart), 000103 (practitioner via associates.pms_external_id =
+-- pms_practitioner_id), 000087 (GHL won/lost), 000108 (settled cash), 000077
+-- (new patients = Dentally registration date), monthlyFinancial.service
+-- bucketsByPeriod (synced-over-manual precedence).
+-- Idempotent. Views use `drop view if exists` + `create view` rather than
+-- `create or replace` because `create or replace` over a `t.*` select breaks
+-- once the base table gains a column (ordinal shift -> "cannot change name of
+-- view column"); drop + create always re-applies cleanly. API roles stay
+-- locked out (000129); service_role reads.
 -- ============================================================================
 
 -- ---------------------------------------------------------------- Dentally
-create or replace view public.data_room_dentally_patients
+
+-- Row scope (source = dentally) is applied by the Data Room registry's
+-- `where` clause, not by this view — data_room_dentally_patients
+-- intentionally exposes all contacts rows.
+drop view if exists public.data_room_dentally_patients;
+create view public.data_room_dentally_patients
 with (security_invoker = true) as
 select c.*,
        encode(sha256(convert_to(c.organisation_id::text || ':' || coalesce(c.pms_external_id, c.id::text), 'UTF8')), 'hex') as patient_key,
@@ -26,13 +36,14 @@ select c.*,
        end as postcode_district
 from public.contacts c;
 
-create or replace view public.data_room_dentally_appointments
+drop view if exists public.data_room_dentally_appointments;
+create view public.data_room_dentally_appointments
 with (security_invoker = true) as
 select a.*,
        (a.pms_patient_id is not null)                                              as is_patient_appointment,
        (a.pms_patient_id is not null and a.status = 'completed')                   as occurred,
        (a.pms_patient_id is not null and a.status = 'no_show')                     as dna,
-       (a.status = 'cancelled')                                                    as cancelled,
+       (a.pms_patient_id is not null and a.status = 'cancelled')                   as cancelled,
        round(extract(epoch from (a.ends_at - a.starts_at)) / 60)::int              as duration_mins,
        pr.full_name                                                                as practitioner_name
 from public.appointments a
@@ -42,12 +53,14 @@ left join lateral (
   limit 1
 ) pr on true;
 
-create or replace view public.data_room_dentally_payments
+drop view if exists public.data_room_dentally_payments;
+create view public.data_room_dentally_payments
 with (security_invoker = true) as
 select p.*, (p.status = 'settled') as is_settled
 from public.payments p;
 
-create or replace view public.data_room_dentally_invoice_items
+drop view if exists public.data_room_dentally_invoice_items;
+create view public.data_room_dentally_invoice_items
 with (security_invoker = true) as
 select ii.*,
        (ii.fee_pence * coalesce(ii.quantity, 1))::bigint as fee_total_pence,
@@ -59,7 +72,8 @@ left join lateral (
   limit 1
 ) pr on true;
 
-create or replace view public.data_room_dentally_treatment_items
+drop view if exists public.data_room_dentally_treatment_items;
+create view public.data_room_dentally_treatment_items
 with (security_invoker = true) as
 select ti.*,
        (ti.completed is true and ti.base_chart is false) as counts_as_activity,
@@ -72,13 +86,20 @@ left join lateral (
 ) pr on true;
 
 -- ------------------------------------------------------------- GoHighLevel
-create or replace view public.data_room_gohighlevel_contacts
+
+-- Row scope (source = gohighlevel) is applied by the Data Room registry's
+-- `where` clause, not by this view — data_room_gohighlevel_contacts
+-- intentionally exposes all contacts rows (same underlying table as
+-- data_room_dentally_patients above).
+drop view if exists public.data_room_gohighlevel_contacts;
+create view public.data_room_gohighlevel_contacts
 with (security_invoker = true) as
 select c.*,
        encode(sha256(convert_to(c.organisation_id::text || ':' || coalesce(c.ghl_contact_id, c.id::text), 'UTF8')), 'hex') as contact_key
 from public.contacts c;
 
-create or replace view public.data_room_gohighlevel_opportunities
+drop view if exists public.data_room_gohighlevel_opportunities;
+create view public.data_room_gohighlevel_opportunities
 with (security_invoker = true) as
 select l.*,
        pl.pipeline_name,
@@ -97,10 +118,14 @@ left join lateral (
 ) pl on true;
 
 -- ---------------------------------------------------------------- Ads
-create or replace view public.data_room_ad_metrics
+drop view if exists public.data_room_ad_metrics;
+create view public.data_room_ad_metrics
 with (security_invoker = true) as
 select m.*,
        pr.name as practice_name,
+       -- cpl_pence: ad spend ÷ platform conversions (the ad platform's own
+       -- conversion count) — NOT the same denominator as the month RPC's
+       -- cost_per_lead_pence, which divides by CRM leads_new.
        case when coalesce(m.conversions, 0) > 0
             then round(m.spend_pence::numeric / m.conversions)::bigint end as cpl_pence
 from public.ad_metrics m
@@ -137,12 +162,12 @@ language sql stable security definer set search_path = public as $$
   with since_d as (select (p_since at time zone 'Europe/London')::date as d),
        until_d as (select (p_until at time zone 'Europe/London')::date as d),
   m as (
-    -- appointments: patient-present rows only (000076); status decides occurred / DNA
+    -- appointments: patient-present rows only (000076); status decides occurred / DNA / cancelled
     select a.practice_id, (a.starts_at at time zone 'Europe/London')::date as day,
            count(*) filter (where a.pms_patient_id is not null)::bigint                            as appointments,
            count(*) filter (where a.pms_patient_id is not null and a.status = 'completed')::bigint as occurred,
            count(*) filter (where a.pms_patient_id is not null and a.status = 'no_show')::bigint   as dna,
-           count(*) filter (where a.status = 'cancelled')::bigint                                  as cancelled,
+           count(*) filter (where a.pms_patient_id is not null and a.status = 'cancelled')::bigint as cancelled,
            0::bigint as new_patients, 0::bigint as treatment_items, 0::bigint as treatment_items_pence,
            0::bigint as billed_pence, 0::bigint as settled_pence, 0::bigint as leads_new,
            0::bigint as leads_won, 0::bigint as ad_spend_pence
@@ -202,13 +227,13 @@ language sql stable security definer set search_path = public as $$
     group by 1, 2
   )
   select coalesce(m.practice_id::text, 'unassigned') || ':' || m.day::text as id,
-         m.practice_id, pr.name as practice_name, m.day,
+         m.practice_id, coalesce(pr.name, 'Group / unassigned') as practice_name, m.day,
          sum(m.appointments)::bigint, sum(m.occurred)::bigint, sum(m.dna)::bigint, sum(m.cancelled)::bigint,
          sum(m.new_patients)::bigint, sum(m.treatment_items)::bigint, sum(m.treatment_items_pence)::bigint,
          sum(m.billed_pence)::bigint, sum(m.settled_pence)::bigint, sum(m.leads_new)::bigint,
          sum(m.leads_won)::bigint, sum(m.ad_spend_pence)::bigint
   from m
-  left join practices pr on pr.id = m.practice_id
+  left join practices pr on pr.id = m.practice_id and pr.organisation_id = p_org
   where p_practice is null or m.practice_id = p_practice
   group by m.practice_id, pr.name, m.day
   order by m.day, pr.name nulls last;
@@ -223,7 +248,7 @@ returns table(
   appointments bigint, occurred bigint, dna bigint, cancelled bigint, new_patients bigint,
   treatment_items bigint, treatment_items_pence bigint, billed_pence bigint, settled_pence bigint,
   leads_new bigint, leads_won bigint, ad_spend_pence bigint,
-  dna_pct numeric, avg_fee_pence bigint, cpl_pence bigint,
+  dna_pct numeric, avg_fee_pence bigint, cost_per_lead_pence bigint,
   financial_revenue_pence bigint, financial_costs_pence bigint
 )
 language sql stable security definer set search_path = public as $$
@@ -237,6 +262,13 @@ language sql stable security definer set search_path = public as $$
     from data_room_practice_day(p_org, p_since, p_until, p_practice)
     group by 1, 2
   ),
+  -- Financials are month-grain and mostly org-level: QuickBooks/Xero land per
+  -- company, not per practice, so per-practice rows in monthly_financials are
+  -- usually NULL and the group P&L appears on the 'Group / unassigned'
+  -- (practice_id is null) row below, rather than being spread across
+  -- practices. Also note the window's lower bound is truncated to calendar
+  -- month start (date_trunc) but the upper bound is not, so a partial-month
+  -- window still pulls in that whole month's financial rows.
   fin_cell as (
     -- synced-over-manual precedence per period + bucket (monthlyFinancial.service bucketsByPeriod)
     select practice_id, to_date(period, 'YYYY-MM') as month, dental_bucket,
@@ -262,7 +294,7 @@ language sql stable security definer set search_path = public as $$
   )
   select coalesce(coalesce(d.practice_id, fin.practice_id)::text, 'unassigned') || ':' || to_char(coalesce(d.month, fin.month), 'YYYY-MM') as id,
          coalesce(d.practice_id, fin.practice_id) as practice_id,
-         pr.name as practice_name,
+         coalesce(pr.name, 'Group / unassigned') as practice_name,
          coalesce(d.month, fin.month) as month,
          coalesce(d.appointments, 0)::bigint, coalesce(d.occurred, 0)::bigint, coalesce(d.dna, 0)::bigint,
          coalesce(d.cancelled, 0)::bigint, coalesce(d.new_patients, 0)::bigint,
@@ -271,11 +303,17 @@ language sql stable security definer set search_path = public as $$
          coalesce(d.leads_new, 0)::bigint, coalesce(d.leads_won, 0)::bigint, coalesce(d.ad_spend_pence, 0)::bigint,
          round(100.0 * coalesce(d.dna, 0) / nullif(coalesce(d.occurred, 0) + coalesce(d.dna, 0), 0), 1) as dna_pct,
          (coalesce(d.treatment_items_pence, 0) / nullif(d.treatment_items, 0))::bigint            as avg_fee_pence,
-         (coalesce(d.ad_spend_pence, 0) / nullif(d.leads_new, 0))::bigint                          as cpl_pence,
-         coalesce(fin.revenue_pence, 0)::bigint, coalesce(fin.costs_pence, 0)::bigint
+         -- cost_per_lead_pence: ad spend ÷ CRM leads_new — NOT the same
+         -- denominator as data_room_ad_metrics.cpl_pence, which divides by
+         -- platform conversions.
+         (coalesce(d.ad_spend_pence, 0) / nullif(d.leads_new, 0))::bigint                          as cost_per_lead_pence,
+         -- Left un-coalesced deliberately: NULL means "no financial data for
+         -- this practice+month" (the common case — see the fin_cell comment
+         -- above), distinct from a genuine 0.
+         fin.revenue_pence, fin.costs_pence
   from d
   full outer join fin on fin.practice_id is not distinct from d.practice_id and fin.month = d.month
-  left join practices pr on pr.id = coalesce(d.practice_id, fin.practice_id)
+  left join practices pr on pr.id = coalesce(d.practice_id, fin.practice_id) and pr.organisation_id = p_org
   order by 4, 3 nulls last;
 $$;
 
