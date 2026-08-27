@@ -226,7 +226,7 @@ export const COLUMN_DOCS = {
     appointment_booked_for: d('Appointments booked for (free text from the cash-up).'),
     detail_patient_rows_count: d('Patient rows on the detailed cash-up.'),
     detail_patient_money_total_pence: d('Sum of the detailed patient rows in pence.'),
-    variance_manager_vs_detail: d('Manager total minus detailed rows total, pence.', 'number'),
+    variance_manager_vs_detail: d('Manager total minus detailed rows total, in pence.', 'pence'),
     emergent_created_at: d('Created in Emergent.'),
     emergent_created_by: d('Created by (Emergent user).'),
     period_month: d('Accounting month.'),
