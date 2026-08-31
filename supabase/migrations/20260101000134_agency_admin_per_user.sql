@@ -17,9 +17,11 @@ create index if not exists idx_users_agency_admin
 
 -- Seed the current agency staff. Idempotent and additive: re-applying never
 -- revokes a grant made later through the platform console.
+-- Deliberately NOT the day-to-day accounts inside the client-facing agency
+-- org: agency powers belong to a superadmin-operated login only.
 update public.users
    set is_agency_admin = true
- where lower(email) in ('dev.ruhithpasha@gmail.com', 'ruhithpasha813@gmail.com');
+ where lower(email) = 'ruhithpasha813@gmail.com';
 
 -- Exactly ONE agency org, which owns every sub-account. Agency admins may sit
 -- in a different org (they are granted per user above) and still administer
