@@ -1,5 +1,10 @@
 import DataRoomScreen from '@/features/data-room/components/DataRoomScreen';
+import { FeatureGate } from '@/components/FeatureGate';
 
 export default function Page() {
-  return <DataRoomScreen source="meta-ads" />;
+  return (
+    <FeatureGate feature="data_room">
+      <DataRoomScreen source="meta-ads" />
+    </FeatureGate>
+  );
 }
