@@ -134,7 +134,9 @@ export function usePlanFeesLines(
     queryKey: ['plan-fees-lines', qs],
     queryFn: () => api<PlanFeesLines>(`/api/analytics/plan-fees-lines?${qs}`),
     enabled,
-    staleTime: 30_000,
+    // Matches the server-side Business Hub payload TTL, so returning to a
+    // screen within the window is served from cache instead of refetching.
+    staleTime: 60_000,
   });
 }
 
@@ -150,6 +152,8 @@ export function useBusinessHub(arg?: number | HubWindow) {
   return useQuery({
     queryKey: ['business-hub', win],
     queryFn: () => getBusinessHub(win),
-    staleTime: 30_000,
+    // Matches the server-side Business Hub payload TTL, so returning to a
+    // screen within the window is served from cache instead of refetching.
+    staleTime: 60_000,
   });
 }

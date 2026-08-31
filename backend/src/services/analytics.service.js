@@ -25,6 +25,14 @@ import { checkBudget, recordUsage } from "../lib/ai/guardrails.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonParts, londonMonthKey } from "../lib/tz.js";
+import * as async_pool_1 from "../lib/async-pool.js";
+import { createTtlCache } from "../lib/ttl-cache.js";
+
+// Business Hub payload cache. The endpoint recomputes 16 heavy aggregates per
+// call; the same org+window is requested repeatedly (reloads, tab switches,
+// two panels on one screen). 60s is short enough that a finished sync shows up
+// promptly and long enough to collapse a burst into one computation.
+const businessHubCache = createTtlCache({ ttlMs: 60_000, max: 300 });
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -2569,7 +2577,25 @@ export const analyticsService = {
             lines,
         };
     },
-    async businessHub(orgId, { days = 90, since = null, until = null, label = null, practiceId = null, now = () => new Date() } = {}) {
+    // Cache-aside wrapper. Keyed on everything that changes the numbers, so a
+    // different org, practice or window never reads another's payload. Callers
+    // that pass a custom `now` (tests) bypass the cache entirely.
+    async businessHub(orgId, opts = {}) {
+        if (opts.now) return this._businessHubUncached(orgId, opts);
+        const { days = 90, since = null, until = null, label = null, practiceId = null } = opts;
+        const key = `${orgId}|${days}|${since}|${until}|${label}|${practiceId}`;
+        const hit = businessHubCache.get(key);
+        if (hit) return hit;
+        return businessHubCache.set(key, await this._businessHubUncached(orgId, opts));
+    },
+
+    // Drop cached Business Hub payloads for one org (after a sync writes new
+    // rows), or all of them when called bare.
+    invalidateBusinessHub(orgId) {
+        businessHubCache.invalidate(orgId ? `${orgId}|` : undefined);
+    },
+
+    async _businessHubUncached(orgId, { days = 90, since = null, until = null, label = null, practiceId = null, now = () => new Date() } = {}) {
         // Window: an explicit [since, until] (a picked month/day) takes priority;
         // otherwise fall back to the trailing N-day window (until open).
         const sinceISO = since || new Date(now().getTime() - days * 86400000).toISOString();
@@ -2581,42 +2607,45 @@ export const analyticsService = {
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
         const adFromDate = sinceISO.slice(0, 10);
         const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 86400000) : now()).toISOString().slice(0, 10);
-        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg, acceptedByPractice, completedRows] = await Promise.all([
-            analytics_repository_1.analyticsRepository.practicesFull(orgId),
-            analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
-            analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
-            analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId, leadSinceISO, untilISO),
-            analytics_repository_1.analyticsRepository.treatmentsRollupByOrg(orgId, sinceISO, untilISO),
-            analytics_repository_1.analyticsRepository.treatmentsClosedRevenueByPractice(orgId, sinceISO, untilISO),
-            this._actualsBundle(orgId),
-            analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
-            analytics_repository_1.analyticsRepository.hasNoShowData(orgId),
-            analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, sinceISO, untilISO),
+        // Bounded fan-out. These are 16 heavy aggregates; firing them all at
+        // once starved individual statements past the 8s statement_timeout
+        // (panels failed while their neighbours on the same page loaded).
+        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg, acceptedByPractice, completedRows] = await (0, async_pool_1.mapWithConcurrency)([
+            () => analytics_repository_1.analyticsRepository.practicesFull(orgId),
+            () => analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
+            () => analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
+            () => analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId, leadSinceISO, untilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentsRollupByOrg(orgId, sinceISO, untilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentsClosedRevenueByPractice(orgId, sinceISO, untilISO),
+            () => this._actualsBundle(orgId),
+            () => analytics_repository_1.analyticsRepository.baselineMaybe(orgId),
+            () => analytics_repository_1.analyticsRepository.hasNoShowData(orgId),
+            () => analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, sinceISO, untilISO),
             // Cash banked in window — settled receipts (payments processed).
             // Pre-filtered in SQL when scoped to a practice (p_practice).
             // Distinct from turnover (settled invoices); the gap is outstanding/debtors.
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
+            () => analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             // Real ad-platform leads (Google + Meta conversions) + Dentally new
             // patients by registration ("joined") date — matches Dentally's New
             // Patients report. Live sources for the Leads / New Patients KPIs (CRM
             // `leads` is empty for Dentally-only orgs).
-            analytics_repository_1.analyticsRepository.adLeadsByProvider(orgId, adFromDate, adToDate),
-            analytics_repository_1.analyticsRepository.newPatientsRegisteredByPractice(orgId, sinceISO, untilISO),
+            () => analytics_repository_1.analyticsRepository.adLeadsByProvider(orgId, adFromDate, adToDate),
+            () => analytics_repository_1.analyticsRepository.newPatientsRegisteredByPractice(orgId, sinceISO, untilISO),
             // Treatments ACCEPTED (Emergent ops app) — count + value in window.
             // Gated on an active emergent integration; zeros (placeholder) until connected.
-            analytics_repository_1.analyticsRepository.treatmentAcceptedRollup(orgId, sinceISO, untilISO, practiceId),
+            () => analytics_repository_1.analyticsRepository.treatmentAcceptedRollup(orgId, sinceISO, untilISO, practiceId),
             // Treatments ACCEPTED split by practice — feeds the card's click-to-
             // breakdown (which practice's data the card reflects). Group-wide
             // regardless of practiceId scope; [] until Emergent is connected.
-            analytics_repository_1.analyticsRepository.treatmentAcceptedByPractice(orgId, sinceISO, untilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentAcceptedByPractice(orgId, sinceISO, untilISO),
             // Treatments COMPLETED per practice — the REAL Practitioner Activity feed
             // (dentally_treatment_items, migration 000099): completed treatments by
             // completed_at, charting rows excluded, attributed to a practice via the
             // practitioner's site. Replaces the old org-wide treatments_rollup_by_org
             // count (plan headers + planned-estimate value) so the card matches
             // Dentally's report and scopes per practice.
-            analytics_repository_1.analyticsRepository.treatmentsCompletedByPractice(orgId, sinceISO, untilISO),
-        ]);
+            () => analytics_repository_1.analyticsRepository.treatmentsCompletedByPractice(orgId, sinceISO, untilISO),
+        ], 4);
         // Practice name lookup BEFORE the practiceId filter narrows `practices`, so
         // the accepted breakdown can name every practice even under a scoped call.
         const practiceNameById = new Map((practices || []).map((p) => [p.id, p.name]));

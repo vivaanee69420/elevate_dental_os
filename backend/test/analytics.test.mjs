@@ -30,6 +30,9 @@ const rpcReceipts = (rows = []) => (fn) =>
   fn === 'settled_receipts_by_day' ? { data: rows, error: null } : { data: null, error: { message: `rpc ${fn} not stubbed` } };
 
 beforeEach(() => {
+  // Each test drives different mock rows through the SAME org+window, so the
+  // 60s Business Hub payload cache would serve the previous test's numbers.
+  svc.invalidateBusinessHub();
   supaRec.last = undefined;
   supaRec.resultProvider = () => ({ data: [], error: null });
   supaRec.rpcProvider = () => ({ data: [], error: null });
@@ -712,6 +715,8 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(off.group.noShowTracked).toBe(false);
 
     // One no_show row present -> tracked=true so the real rate shows.
+    // Same org+window, so drop the payload cache the way a finished sync does.
+    svc.invalidateBusinessHub(ORG_A);
     supaRec.resultProvider = (q) =>
       q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
