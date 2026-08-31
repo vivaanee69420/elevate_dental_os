@@ -55,9 +55,11 @@ Response:
   "email": "...",
   "role": "owner" | "practice_manager" | "reception",
   "organisation_id": "uuid",
-  "organisation_name": "..."
+  "organisation_name": "...",
+  "features": ["data_room", "call_reporting"]
 }
 ```
+- **`features`** — enabled org-level feature keys. Catalog in `backend/src/lib/features.js`. Internal features default off; product modules default on.
 
 ### `POST /auth/invite` *(owner-only)*
 Invites a team member.
@@ -67,6 +69,23 @@ Request:
   "email": "...",
   "full_name": "...",
   "role": "owner" | "practice_manager" | "reception"
+}
+```
+
+## Feature-gated endpoints
+
+The following endpoint families are feature-gated and return 403 if the feature is not enabled for the organisation:
+
+- **Data Room** (`/api/data-room/*`) — analyst-ready dataset registry and export
+- **Call Reporting** (`/api/call-reporting/*`, `/api/integrations/google-sheets/*`) — Google Sheets lead-response dashboard
+- **Emergent Integration** (`/api/integrations/emergent/*`) — real-time webhook and practice mapping
+- **Google Sheets Writer** (`/api/integrations/google-sheets-writer/*`) — GHL→Dentally conversion export
+
+All feature-gated 403 responses share the error body:
+```json
+{
+  "error": "Feature not enabled",
+  "code": "FEATURE_DISABLED"
 }
 ```
 
