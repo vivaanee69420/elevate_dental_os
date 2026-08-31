@@ -1,10 +1,13 @@
 import express from 'express';
-import { requireRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/auth.js';
 import { getPerformance } from '../controllers/marketing.controller.js';
 
 const router = express.Router();
 
-// Reception is CRM-only (rule 5) and must never reach marketing figures.
-router.get('/performance', requireRole('owner', 'practice_manager'), getPerformance);
+// Dynamic RBAC gate, not requireRole — this is the path that matches the
+// Team Permissions matrix. Reception never gets 'marketing.view' in
+// DEFAULT_ROLE_PERMISSIONS (rule 5, CRM-only), so it stays denied by
+// default, but an owner can also re-grant/revoke this per role/user.
+router.get('/performance', requirePermission('marketing.view'), getPerformance);
 
 export default router;
