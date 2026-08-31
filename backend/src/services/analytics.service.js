@@ -2596,9 +2596,14 @@ export const analyticsService = {
         if (warm) return businessHubCache.set(key, warm);
 
         const fresh = await this._businessHubUncached(orgId, opts);
-        // Closed windows (an explicit past `until`) can be held far longer —
-        // their numbers only move if a sync backfills history.
-        const ttlMs = until && Date.parse(until) < Date.now() ? 6 * 60 * 60_000 : 60_000;
+        // 10 minutes for a live window — deliberately longer than the 5-minute
+        // `business-hub-warm` cron, so a single slow warm never leaves a gap
+        // where a real page load has to compute 16 aggregates itself. Sources
+        // sync nightly, and invalidateBusinessHub() clears both tiers the
+        // moment new rows land, so this is not a staleness risk.
+        // Closed windows (an explicit past `until`) are held far longer — their
+        // numbers only move if a sync backfills history.
+        const ttlMs = until && Date.parse(until) < Date.now() ? 6 * 60 * 60_000 : 10 * 60_000;
         await (0, dashboard_cache_1.writeDashboardCache)(orgId, `hub:${key}`, fresh, ttlMs);
         return businessHubCache.set(key, fresh);
     },
