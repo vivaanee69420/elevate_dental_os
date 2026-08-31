@@ -22,8 +22,11 @@ export function agencyHomeOrgId(req) {
     return req.agencyContext?.homeOrgId ?? req.user.organisation_id;
 }
 
-function gate() {
-    return async (req, res, next) => {
+// Named so the function is identifiable in stack traces and in the structural
+// route tests that assert a mount carries the gate (a factory-returned arrow
+// is anonymous otherwise).
+function gate(name) {
+    const fn = async (req, res, next) => {
         try {
             if (await isAgencyActor(req)) return next();
         } catch (err) {
@@ -31,7 +34,9 @@ function gate() {
         }
         return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
     };
+    Object.defineProperty(fn, 'name', { value: name });
+    return fn;
 }
 
-export const requireAgencyActor = gate();
-export const requireAgencyOwner = gate();
+export const requireAgencyActor = gate('requireAgencyActor');
+export const requireAgencyOwner = gate('requireAgencyOwner');

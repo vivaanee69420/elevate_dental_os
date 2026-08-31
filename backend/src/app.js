@@ -12,6 +12,8 @@ import * as helmet_1 from "helmet";
 import * as express_rate_limit_1 from "express-rate-limit";
 import * as pino_http_1 from "pino-http";
 import * as auth_1 from "./middleware/auth.js";
+import * as agency_1 from "./middleware/agency.js";
+import * as features_1 from "./middleware/features.js";
 import * as audit_1 from "./middleware/audit.js";
 import * as errors_1 from "./middleware/errors.js";
 import { analystLock } from "./middleware/analyst-lock.js";
@@ -233,31 +235,40 @@ export function buildApp() {
         message: { error: `Rate limit exceeded: ${API_RATE_MAX} requests per minute` },
     }));
     api.use(audit_1.audit);
+    // ---- Module gates (phase A3) ----
+    // Only mounts consumed by EXACTLY ONE nav section are gated. Anything an
+    // always-on Overview page also reads (/analytics, /growth, /wealth,
+    // /health, /leads, /treatments, /tasks, /integrations, /practices,
+    // /finance/quickbooks, /ad-attribution) stays ungated — Overview has no
+    // module key by design, so gating those would break the home section.
+    // business_health, growth and wealth own no exclusive mount and are
+    // therefore nav-only toggles today.
+    const moduleGate = (key) => (0, features_1.requireFeature)(key);
     api.use('/health', health_business_routes_1.default);
     api.use('/leads', leads_routes_1.default);
-    api.use('/contacts', contacts_routes_1.default);
-    api.use('/appointments', appointments_routes_1.default);
-    api.use('/chair-utilisation', chair_utilisation_routes_1.default);
-    api.use('/associates', associate_routes_1.default);
+    api.use('/contacts', moduleGate('crm'), contacts_routes_1.default);
+    api.use('/appointments', moduleGate('operations'), appointments_routes_1.default);
+    api.use('/chair-utilisation', moduleGate('operations'), chair_utilisation_routes_1.default);
+    api.use('/associates', moduleGate('operations'), associate_routes_1.default);
     api.use('/treatments', treatment_routes_1.default);
-    api.use('/staff', staff_routes_1.default);
+    api.use('/staff', moduleGate('operations'), staff_routes_1.default);
     api.use('/tasks', tasks_routes_1.default);
-    api.use('/comms', comms_routes_1.default);
+    api.use('/comms', moduleGate('crm'), comms_routes_1.default);
     api.use('/notifications', notification_routes_1.default);
-    api.use('/payments', payments_routes_1.default);
+    api.use('/payments', moduleGate('finance'), payments_routes_1.default);
     api.use('/debt', debt_routes_1.default);
-    api.use('/pay-runs', pay_runs_routes_1.default);
-    api.use('/workflows', workflows_routes_1.default);
-    api.use('/crm/templates', crm_templates_routes_1.default);
-    api.use('/crm/settings', crm_settings_routes_1.default);
+    api.use('/pay-runs', moduleGate('operations'), pay_runs_routes_1.default);
+    api.use('/workflows', moduleGate('crm'), workflows_routes_1.default);
+    api.use('/crm/templates', moduleGate('crm'), crm_templates_routes_1.default);
+    api.use('/crm/settings', moduleGate('crm'), crm_settings_routes_1.default);
     api.use('/files', files_routes_1.default);
-    api.use('/imports', csv_import_routes_1.default);
+    api.use('/imports', moduleGate('system'), csv_import_routes_1.default);
     api.use('/billing', billing_routes_1.default);
     api.use('/integrations', integrations_routes_1.default);
     api.use('/p4g-ai', p4g_ai_routes_1.default);
     api.use('/analytics', analytics_routes_1.default);
     api.use('/cockpit', cockpit_routes_1.default);
-    api.use('/monthly-financials', monthly_financials_routes_1.default);
+    api.use('/monthly-financials', moduleGate('finance'), monthly_financials_routes_1.default);
     api.use('/finance/quickbooks', finance_quickbooks_routes_1.default);
     api.use('/memberships', memberships_routes_1.default);
     api.use('/reviews', reviews_routes_1.default);
@@ -265,15 +276,19 @@ export function buildApp() {
     api.use('/admin/team', members_routes_1.default);
     api.use('/growth', growth_routes_1.default);
     api.use('/wealth', wealth_routes_1.default);
-    api.use('/training', training_routes_1.default);
+    api.use('/training', moduleGate('training'), training_routes_1.default);
     api.use('/practices', practices_routes_1.default);
     api.use('/agency', agency_routes_1.default);
     api.use('/ad-attribution', ad_attribution_routes_1.default);
     api.use('/call-reporting', call_reporting_routes_1.default);
     api.use('/data-room', data_room_routes_1.default);
-    // Owner-only: read/download the on-disk production logs (LOG_DIR). Gated
-    // here at the mount point so every route in the module is owner-restricted.
-    api.use('/admin/logs', (0, auth_1.requireRole)('owner'), logs_routes_1.default);
+    // Read/download the on-disk production logs (LOG_DIR). AGENCY-only, not
+    // merely owner-only: these are the PROCESS-WIDE pino files, carrying every
+    // tenant's organisation ids, user emails and integration/webhook
+    // diagnostics, and the controller has no org concept so it cannot filter
+    // what it serves. Once a second tenant exists, "owner" stops being a
+    // boundary — a sub-account owner could tail another practice group's logs.
+    api.use('/admin/logs', (0, auth_1.requireRole)('owner'), agency_1.requireAgencyActor, logs_routes_1.default);
     app.use('/api', api);
     // Sentry Express error handler — must come AFTER routes, BEFORE our handler.
     Sentry.setupExpressErrorHandler(app);
