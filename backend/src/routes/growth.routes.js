@@ -13,6 +13,11 @@ import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonYmd, londonDaysAgo, londonStartOfDayISO, londonMidnightUTC } from "../lib/tz.js";
 const router = (0, express_1.Router)();
+import { createTtlCache } from "../lib/ttl-cache.js";
+
+// 60s payload cache, matching the Business Hub. These aggregates are identical
+// for every viewer of the same org+window and compete for the same database.
+const practicePerformanceCache = createTtlCache({ ttlMs: 60_000, max: 300 });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -237,11 +242,17 @@ router.get('/practice-performance', (0, async_handler_1.asyncHandler)(async (req
     const orgId = req.user.organisation_id;
     const { fromISO, toISO } = resolveWindow(req.query);
     const practiceId = parsePracticeId(req.query);
+    // Same treatment as the Business Hub payload: this aggregate is recomputed
+    // identically for every viewer of the same org+window, and it shares the
+    // database with the rest of the dashboard's fan-out.
+    const cacheKey = `${orgId}|${fromISO}|${toISO}|${practiceId}`;
+    const cached = practicePerformanceCache.get(cacheKey);
+    if (cached) return res.json(cached);
     const { data, error } = await supabase_1.serviceClient.rpc('growth_practice_performance', {
         p_org: orgId, p_since: fromISO, p_until: toISO, p_practice: practiceId,
     });
     if (error) throw new Error(error.message);
-    res.json({
+    res.json(practicePerformanceCache.set(cacheKey, {
         practices: (data ?? []).map((r) => ({
             practice_id: r.practice_id,
             name: r.name,
@@ -251,7 +262,7 @@ router.get('/practice-performance', (0, async_handler_1.asyncHandler)(async (req
             no_show_30d: Number(r.no_shows) || 0,
             revenue_pence_30d: Number(r.revenue_pence) || 0,
         })),
-    });
+    }));
 }));
 
 // Patient roster for one practice (contacts of type 'patient'), paginated.
