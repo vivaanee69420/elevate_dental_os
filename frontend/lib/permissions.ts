@@ -24,6 +24,7 @@ export type PermissionKey =
   | 'operations.view'
   | 'intelligence.view'
   | 'growth.view'
+  | 'marketing.view'
   | 'crm.view'
   | 'crm.manage'
   | 'wealth.view'
@@ -82,6 +83,13 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   booking: 'growth.view',
   benchmark: 'growth.view',
   'ad-performance': 'growth.view',
+
+  // Marketing — its own dedicated key (not growth.view): Task 7 registered
+  // marketing.view specifically so Reception (crm.view only, rule 5) never
+  // gets it by default while an owner can still grant/revoke it independently
+  // of Growth via the Team Permissions matrix.
+  'marketing-overview': 'marketing.view',
+  'marketing-campaigns': 'marketing.view',
 
   // Elevate CRM
   // Call Reporting is a lead-response analytics surface, not a CRM tool —
@@ -158,6 +166,7 @@ export const SECTION_FEATURE: Record<string, string> = {
   'Business Health': 'business_health',
   Operations: 'operations',
   Growth: 'growth',
+  Marketing: 'marketing',
   'Elevate CRM': 'crm',
   Wealth: 'wealth',
   Training: 'training',

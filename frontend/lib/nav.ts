@@ -66,6 +66,10 @@ export const NAV: NavSection[] = [
     { id: 'booking', label: 'Online Booking' },
     { id: 'benchmark', label: 'Benchmark' },
   ]},
+  { label: 'Marketing', items: [
+    { id: 'marketing-overview', label: 'Overview', isNew: true },
+    { id: 'marketing-campaigns', label: 'Campaigns', isNew: true },
+  ]},
   { label: 'Elevate CRM', items: [
     { id: 'crm-today', label: 'Today' },
     { id: 'inbox', label: 'Inbox' },
