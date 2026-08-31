@@ -44,11 +44,11 @@ describe('internal route families carry their feature gates', () => {
   it('every /google-sheets/* route is gated on call_reporting', () => {
     const routes = integrationsRouter.stack.filter((l) => l.route?.path.startsWith('/google-sheets/'));
     expect(routes.length).toBeGreaterThan(0);
-    expect(ungatedRoutes(integrationsRouter, (p) => p.startsWith('/google-sheets/'), 'call_reporting')).toEqual([]);
+    expect(ungatedRoutes(integrationsRouter, (p) => p === '/google-sheets' || p.startsWith('/google-sheets/'), 'call_reporting')).toEqual([]);
   });
   it('every /google-sheets-writer/* route is gated on sheet_export', () => {
     const routes = integrationsRouter.stack.filter((l) => l.route?.path.startsWith('/google-sheets-writer/'));
     expect(routes.length).toBeGreaterThan(0);
-    expect(ungatedRoutes(integrationsRouter, (p) => p.startsWith('/google-sheets-writer/'), 'sheet_export')).toEqual([]);
+    expect(ungatedRoutes(integrationsRouter, (p) => p === '/google-sheets-writer' || p.startsWith('/google-sheets-writer/'), 'sheet_export')).toEqual([]);
   });
 });
