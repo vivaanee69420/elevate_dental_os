@@ -15,9 +15,21 @@ import { useAdAttributionConfig } from '../hooks';
 import SubaccountPracticeStep from './SubaccountPracticeStep';
 import PipelineChannelStep from './PipelineChannelStep';
 import AdAccountPracticeStep from './AdAccountPracticeStep';
+import { useMe, isAgencyActor } from '@/hooks/useMe';
 
 export default function AdAttributionSettings() {
+  const { data: me, isLoading: meLoading } = useMe();
   const { data, isLoading, error } = useAdAttributionConfig();
+
+  // Attribution mapping is an agency-actor power (A2).
+  if (!meLoading && !isAgencyActor(me)) {
+    return (
+      <div className="card-padded" style={{ margin: 24 }}>
+        <h2 className="font-display text-lg font-semibold text-ink">Not available</h2>
+        <p className="text-sm text-ink-muted">Practice mapping is managed by your agency.</p>
+      </div>
+    );
+  }
 
   if (isLoading) return <p className="p-6 text-sm text-slate-500">Loading…</p>;
   if (error || !data) {

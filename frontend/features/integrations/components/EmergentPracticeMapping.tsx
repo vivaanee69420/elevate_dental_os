@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { useEmergentPractices, useSetEmergentPractice } from '@/features/integrations/hooks';
+import { useMe, isAgencyActor } from '@/hooks/useMe';
 
 export default function EmergentPracticeMapping() {
+  const { data: me } = useMe();
   const { data, isLoading, error } = useEmergentPractices();
   const setMapping = useSetEmergentPractice();
   const [saving, setSaving] = useState<string | null>(null); // business_id
 
+  // Practice mapping is an agency-actor power (A2) — hide the whole panel.
+  if (!isAgencyActor(me)) return null;
   if (isLoading) return null;
   if (error || !data) return null;
   if (!data.connected) return null; // Only show if Emergent is connected
