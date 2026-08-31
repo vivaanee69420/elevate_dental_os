@@ -20,7 +20,7 @@ export function SectionTabs() {
   if (!section) return null;
 
   const items =
-    visibleNavSections(me?.role, permissions).find((s) => s.label === section.label)?.items ?? [];
+    visibleNavSections(me?.role, permissions, me?.features).find((s) => s.label === section.label)?.items ?? [];
   if (items.length <= 1) return null;
 
   return (

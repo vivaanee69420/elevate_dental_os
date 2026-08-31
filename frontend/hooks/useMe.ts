@@ -13,6 +13,8 @@ export interface Me {
   permissions?: Permissions;
   /** True once email/WhatsApp delivery is configured — gates the invite UI. */
   invite_enabled?: boolean;
+  /** Enabled org-level feature keys (agency model). Absent on older backends. */
+  features?: string[];
 }
 
 // Single shared, cached /auth/me. Before this, sidebar + topbar (and the

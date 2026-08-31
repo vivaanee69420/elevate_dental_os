@@ -132,6 +132,32 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
 };
 
 /**
+ * Route ids that additionally require an org-level feature (agency model).
+ * Enforcement lives in the backend (requireFeature); this only mirrors it in
+ * nav. `features === undefined` (backend without the field yet) allows —
+ * the API stays the boundary.
+ */
+export const ROUTE_FEATURE: Record<string, string> = {
+  'call-reporting': 'call_reporting',
+  'data-summaries': 'data_room',
+  'data-dentally': 'data_room',
+  'data-google-ads': 'data_room',
+  'data-meta-ads': 'data_room',
+  'data-gohighlevel': 'data_room',
+  'data-emergent': 'data_room',
+};
+
+export function featureAllowsRoute(
+  routeId: string,
+  features: string[] | undefined | null,
+): boolean {
+  const key = ROUTE_FEATURE[routeId];
+  if (!key) return true;
+  if (features === undefined || features === null) return true;
+  return features.includes(key);
+}
+
+/**
  * True when the given route id is visible under the supplied effective
  * permissions. Routes not in the map are Overview-level (always visible).
  * A null/undefined permissions object (e.g. /auth/me failed) yields visible
@@ -169,11 +195,14 @@ export function isDataRoomRoute(routeId: string): boolean {
 export function visibleNavSections(
   role: string | undefined,
   permissions: Permissions | null | undefined,
+  features?: string[] | null,
 ): NavSection[] {
   const out: NavSection[] = [];
   for (const section of NAV) {
     const items = section.items.filter((i) =>
-      role === 'analyst' ? isDataRoomRoute(i.id) && canAccessRoute(i.id, permissions) : canAccessRoute(i.id, permissions),
+      (role === 'analyst'
+        ? isDataRoomRoute(i.id) && canAccessRoute(i.id, permissions)
+        : canAccessRoute(i.id, permissions)) && featureAllowsRoute(i.id, features),
     );
     if (items.length > 0) out.push({ ...section, items });
   }
