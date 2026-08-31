@@ -508,4 +508,36 @@ scheduleMonitored('ai-context-finalize', '0 3 3 * *', async () => {
     }
 }, { maxRuntime: 55 });
 
+// --------------------------------------------------------------------------
+// Business Hub cache warmer — every 5 minutes.
+//
+// The payload cache only helps the SECOND viewer inside its TTL; the first
+// load after each expiry still pays for 16 aggregates and is the slow one
+// people actually notice. Recomputing it on a schedule means a real page load
+// is almost always a cache hit. The TTL (10 min) is deliberately longer than
+// this interval so a single slow run never leaves a gap.
+//
+// Only the default current-month, all-practices window is warmed — the shape
+// every dashboard opens on. Narrower scopes still compute on demand.
+// --------------------------------------------------------------------------
+scheduleMonitored('business-hub-warm', '*/5 * * * *', async () => {
+    const { data: orgs } = await supabase_1.serviceClient
+        .from('organisations')
+        .select('id')
+        .neq('subscription_plan', 'cancelled');
+    const now = new Date();
+    const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+    const until = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+    for (const o of orgs || []) {
+        try {
+            // Force a recompute so the cached copy is refreshed rather than
+            // re-read: invalidate, then populate both tiers.
+            analyticsService.invalidateBusinessHub(o.id);
+            await analyticsService.businessHub(o.id, { since, until, label: 'month' });
+        } catch (e) {
+            console.warn('[business-hub-warm] failed', o.id, e.message);
+        }
+    }
+}, { maxRuntime: 240 });
+
 console.log('[workers] Started — cron schedules active');
