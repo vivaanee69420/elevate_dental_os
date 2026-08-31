@@ -7,6 +7,7 @@ import * as errors_1 from "../middleware/errors.js";
 import * as lead_model_1 from "../models/lead.model.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 export const leadService = {
     list(orgId, q) {
         return lead_repository_1.leadRepository.list(orgId, q);
@@ -69,6 +70,9 @@ export const leadService = {
         return data;
     },
     async create(orgId, input) {
+        // Leads embed contact + practice on read, so both ids must be ours.
+        await assertOrgOwns(orgId, 'contacts', input.contact_id, 'Contact');
+        await assertOrgOwns(orgId, 'practices', input.practice_id, 'Practice');
         let contactId = input.contact_id;
         if (!contactId && input.contact) {
             const { data: contact, error: contactErr } = await lead_repository_1.leadRepository.createContact(orgId, input.practice_id, input.contact);

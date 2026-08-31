@@ -9,6 +9,7 @@ import { authRepository } from "../repositories/auth.repository.js";
 import { analyticsService } from "./analytics.service.js";
 import { generateTasksFromData } from "../lib/gemini.js";
 import { checkBudget, recordUsage } from "../lib/ai/guardrails.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 
 
 // Compose the reminder email for one task and send it via the messaging
@@ -48,9 +49,14 @@ export const taskService = {
         return task_repository_1.taskRepository.list(orgId, q);
     },
     async create(orgId, input) {
+        // assigned_to is embedded back as `assignee:users(...)` on read and is
+        // used to address reminder emails — an unvalidated foreign id would
+        // both disclose that user and send them mail. (The AI path already
+        // validates against validMemberIds; this is the manual path.)
+        await assertOrgOwns(orgId, 'users', input.assigned_to, 'Assignee');
         const { data, error } = await task_repository_1.taskRepository.create({
-            organisation_id: orgId,
             ...input,
+            organisation_id: orgId,
         });
         if (error)
             throw new errors_1.AppError(error.message, 400);

@@ -3,6 +3,7 @@
 // ============================================================================
 import * as stripe_1 from "stripe";
 import * as payment_repository_1 from "../repositories/payment.repository.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 export const paymentService = {
     async list(orgId, q) {
@@ -15,6 +16,12 @@ export const paymentService = {
         return payment_repository_1.paymentRepository.summary(orgId, filters);
     },
     async createManual(orgId, input) {
+        // The payments list embeds contact + practice, and this route carries
+        // no role gate — so an unvalidated FK here is a cross-org patient-name
+        // read available to ANY authenticated tenant user.
+        await assertOrgOwns(orgId, 'practices', input.practice_id, 'Practice');
+        await assertOrgOwns(orgId, 'contacts', input.contact_id, 'Contact');
+        await assertOrgOwns(orgId, 'leads', input.lead_id, 'Lead');
         const row = {
             organisation_id: orgId,
             practice_id: input.practice_id,

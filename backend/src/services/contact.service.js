@@ -4,6 +4,7 @@
 // ============================================================================
 import * as contact_repository_1 from "../repositories/contact.repository.js";
 import * as errors_1 from "../middleware/errors.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 export const contactService = {
     list(orgId, q) {
         return contact_repository_1.contactRepository.list(orgId, q);
@@ -15,9 +16,11 @@ export const contactService = {
         return data;
     },
     async create(orgId, input) {
+        // Contacts embed `practice:practices(id, name)` on read.
+        await assertOrgOwns(orgId, 'practices', input.practice_id, 'Practice');
         const { data, error } = await contact_repository_1.contactRepository.create({
-            organisation_id: orgId,
             ...input,
+            organisation_id: orgId,
         });
         if (error)
             throw new errors_1.AppError(error.message, 400);
