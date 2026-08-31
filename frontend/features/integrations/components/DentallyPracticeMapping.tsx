@@ -18,6 +18,7 @@ import {
 import type { DentallySyncResource } from '../api';
 import { useSyncToast } from '../sync-toast';
 import CollapsibleCard from './CollapsibleCard';
+import { useMe, isAgencyActor } from '@/hooks/useMe';
 
 // Selectable Dentally collections for a scoped backfill. Order = pull order.
 const SYNC_RESOURCES: { key: DentallySyncResource; label: string }[] = [
@@ -67,6 +68,7 @@ function Row({ id, name, current }: { id: string; name: string; current: string 
 }
 
 export default function DentallyPracticeMapping() {
+  const { data: me } = useMe();
   const { data, isLoading } = usePractices();
   const sync = useSyncIntegration();
   // Global sync toast — survives navigation. `syncing` drives button state.
@@ -102,6 +104,9 @@ export default function DentallyPracticeMapping() {
       : SYNC_RESOURCES.map((r) => r.key).filter((k) => selected.has(k));
     await sync.mutateAsync({ provider: 'dentally', full: true, resources });
   }
+
+  // Practice mapping is an agency-actor power (A2) — hide the whole panel.
+  if (!isAgencyActor(me)) return null;
 
   return (
     <CollapsibleCard

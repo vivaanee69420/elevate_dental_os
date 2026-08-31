@@ -13,8 +13,13 @@ import {
   useSyncIntegration,
 } from '@/features/integrations/hooks';
 import CollapsibleCard from './CollapsibleCard';
+import { useMe, isAgencyActor } from '@/hooks/useMe';
 
 export default function AdAccountSelector({ provider, label }: { provider: string; label: string }) {
+  const { data: me } = useMe();
+  // Practice mapping is an agency-actor power (A2) — the dropdown below hides
+  // for non-actors; account selection itself stays an owner control.
+  const canMap = isAgencyActor(me);
   const { data: accounts, isLoading } = useAdAccounts(provider);
   const save = useSetAdAccountSelection(provider);
   // Practice mapping: which practice each account's spend belongs to. Without
@@ -110,7 +115,7 @@ export default function AdAccountSelector({ provider, label }: { provider: strin
                 {a.name || a.customer_id}
               </span>
             </label>
-            {practices.length > 0 && (
+            {canMap && practices.length > 0 && (
               <select
                 value={a.practice_id ?? ''}
                 disabled={mappingSaving === a.id}
