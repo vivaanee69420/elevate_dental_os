@@ -38,8 +38,11 @@ export default function MarketingOverviewScreen() {
           </div>
           {t.unattributedLeads > 0 ? (
             <p className="text-[13px] text-ink-muted">
-              {t.unattributedLeads.toLocaleString('en-GB')} leads in this window carry no ad
-              tracking, so they are counted in the lead total but not against any campaign.
+              {t.attributedLeads.toLocaleString('en-GB')} of {t.leads.toLocaleString('en-GB')}{' '}
+              leads in this window are matched to a campaign with spend; cost per lead and cost
+              per patient are measured against those only. The other{' '}
+              {t.unattributedLeads.toLocaleString('en-GB')} carry no ad tracking, so they are
+              counted in the lead total but not against any campaign.
             </p>
           ) : null}
         </>

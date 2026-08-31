@@ -1,23 +1,8 @@
-// Tier model + campaign aggregation. Every figure must declare which tier it
-// came from: a blended number must never present itself as a measured one.
+// Campaign aggregation. Every figure must be measured against the population it
+// claims: a blended number must never present itself as a measured one, and the
+// table must reconcile to the tiles above it.
 import { describe, it, expect } from 'vitest';
 const { __test } = await import('../src/services/marketing.service.js');
-
-describe('resolveTier', () => {
-    it('campaign tier when the lead carries a campaign id', () => {
-        expect(__test.resolveTier({ ad_campaign_id: '120249721894530517' })).toBe('campaign');
-    });
-    it('channel tier when only a mapped pipeline channel is known', () => {
-        expect(__test.resolveTier({ ad_campaign_id: null, channel: 'meta_ads' })).toBe('channel');
-    });
-    it('unattributed when neither is present', () => {
-        expect(__test.resolveTier({ ad_campaign_id: null, channel: null })).toBe('unattributed');
-    });
-    it('campaign id WINS over a pipeline channel — tiers are strictly ordered', () => {
-        // A lead that resolves at campaign level never consults the pipeline map.
-        expect(__test.resolveTier({ ad_campaign_id: '111', channel: 'google_ads' })).toBe('campaign');
-    });
-});
 
 describe('joinSpendToLeads', () => {
     const spend = [
@@ -69,5 +54,44 @@ describe('joinSpendToLeads', () => {
         const { totals } = __test.joinSpendToLeads(spend, leads);
         expect(totals.platformConversions).toBe(464);   // 412 + 52
         expect(totals.patients).toBe(2);
+    });
+
+    // A lead whose campaign has no spend IN THIS WINDOW produces no row. It must
+    // still be accounted for, or the table silently loses people.
+    const strayCampaignLeads = [
+        ...leads,
+        { ad_campaign_id: '999999999', contact_id: 'c5', converted: false }, // no spend row
+    ];
+
+    it('the table reconciles to the tiles: sum(rows.leads) + unattributed === leads', () => {
+        const { rows, totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
+        const inRows = rows.reduce((n, r) => n + r.leads, 0);
+        expect(inRows + totals.unattributedLeads).toBe(totals.leads);
+    });
+
+    it('counts a lead whose campaign has no spend row as unattributed', () => {
+        const { totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
+        expect(totals.leads).toBe(5);
+        expect(totals.attributedLeads).toBe(3);      // c1, c2, c3
+        expect(totals.unattributedLeads).toBe(2);    // c4 (no id) + c5 (unspent campaign)
+    });
+
+    it('costs divide spend by the ATTRIBUTED population, not every enquirer', () => {
+        const { totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
+        const spendPence = 147265 + 88668;           // 235933
+        expect(totals.spendPence).toBe(spendPence);
+        // Attributed leads (3), NOT totals.leads (5): paid spend must never be
+        // charged against organic or unspent-campaign enquiries.
+        expect(totals.costPerLeadPence).toBe(Math.round(spendPence / 3));
+        expect(totals.costPerPatientPence).toBe(Math.round(spendPence / 2));
+    });
+
+    it('no attributed leads at all yields null costs, never Infinity or 0', () => {
+        const { totals } = __test.joinSpendToLeads(spend, [
+            { ad_campaign_id: null, contact_id: 'c8', converted: false },
+        ]);
+        expect(totals.attributedLeads).toBe(0);
+        expect(totals.costPerLeadPence).toBeNull();
+        expect(totals.costPerPatientPence).toBeNull();
     });
 });

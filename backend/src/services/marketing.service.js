@@ -1,16 +1,13 @@
-// Marketing business logic: attribution tiers + campaign performance.
+// Marketing business logic: campaign performance from ad spend joined to leads.
 // Money is integer pence throughout (rule 2) — never floats.
 import { marketingRepository } from '../repositories/marketing.repository.js';
 
-// Tiers are STRICTLY ORDERED. A lead that carries a campaign id never consults
-// the pipeline map; the map exists only for the residue. Every figure the UI
-// renders declares its tier so a blended number can never masquerade as a
-// measured one.
-function resolveTier(lead) {
-    if (lead?.ad_campaign_id) return 'campaign';
-    if (lead?.channel) return 'channel';
-    return 'unattributed';
-}
+// Every row this service emits is campaign-tier: it is built from a campaign
+// that has measured spend in the window. The channel tier (pipeline -> channel
+// via ad_channel_pipelines) belongs to a later phase and is deliberately absent
+// rather than stubbed — a blended number must never masquerade as a measured
+// one, and a resolver that reads a field no data shape carries is worse than
+// no resolver at all.
 
 // Integer-pence division that refuses to invent a number. A campaign with
 // spend and no leads has NO cost per lead — null, never Infinity or 0.
@@ -22,21 +19,27 @@ function joinSpendToLeads(spendRows, leadRows) {
     // Count PEOPLE, not lead rows: one contact sitting in several pipelines is
     // one lead. This is the same correction made in the Cockpit's matchBreakdown.
     const peopleByCampaign = new Map();   // campaign_id -> Map<contact_id, converted>
-    let unattributedPeople = new Set();
     const allPeople = new Set();
 
     for (const l of leadRows) {
         allPeople.add(l.contact_id);
-        if (!l.ad_campaign_id) { unattributedPeople.add(l.contact_id); continue; }
+        if (!l.ad_campaign_id) continue;
         if (!peopleByCampaign.has(l.ad_campaign_id)) peopleByCampaign.set(l.ad_campaign_id, new Map());
         const m = peopleByCampaign.get(l.ad_campaign_id);
         m.set(l.contact_id, (m.get(l.contact_id) ?? false) || l.converted);
     }
 
+    // People the table can actually account for. A lead is attributed only if
+    // its campaign id produced a ROW — carrying a campaign id whose spend falls
+    // outside the window is not enough, or the person would appear in neither
+    // the rows nor the unattributed count and the table would not reconcile to
+    // the tiles. Invariant: sum(rows.leads) + unattributedLeads === totals.leads.
+    const attributedPeople = new Set();
     const rows = spendRows.map((s) => {
         const people = peopleByCampaign.get(s.campaign_id) ?? new Map();
         const leads = people.size;
         const patients = [...people.values()].filter(Boolean).length;
+        for (const contactId of people.keys()) attributedPeople.add(contactId);
         return {
             provider: s.provider,
             campaignId: s.campaign_id,
@@ -58,11 +61,20 @@ function joinSpendToLeads(spendRows, leadRows) {
         impressions: rows.reduce((n, r) => n + r.impressions, 0),
         clicks: rows.reduce((n, r) => n + r.clicks, 0),
         platformConversions: rows.reduce((n, r) => n + r.platformConversions, 0),
+        // Every person in the window, organic and unattributed included. Honest
+        // and shown on the screen — but NOT a denominator for paid spend.
         leads: allPeople.size,
+        // The people the spend actually bought, and the ones the table shows.
+        attributedLeads: attributedPeople.size,
         patients: rows.reduce((n, r) => n + r.patients, 0),
-        unattributedLeads: unattributedPeople.size,
+        unattributedLeads: allPeople.size - attributedPeople.size,
     };
-    totals.costPerLeadPence = perUnitPence(totals.spendPence, totals.leads);
+    // Both cost figures divide paid spend by the population that spend can be
+    // measured against. Dividing by `leads` would charge paid spend against
+    // organic enquiries and quietly understate the cost per lead, while cost per
+    // patient used the attributed denominator — two different populations
+    // presented side by side as if they were one.
+    totals.costPerLeadPence = perUnitPence(totals.spendPence, totals.attributedLeads);
     totals.costPerPatientPence = perUnitPence(totals.spendPence, totals.patients);
     return { rows, totals };
 }
@@ -77,4 +89,4 @@ export const marketingService = {
     },
 };
 
-export const __test = { resolveTier, joinSpendToLeads, perUnitPence };
+export const __test = { joinSpendToLeads, perUnitPence };
