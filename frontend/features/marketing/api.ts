@@ -24,7 +24,10 @@ export interface MarketingTotals {
   impressions: number;
   clicks: number;
   platformConversions: number;
+  /** Everyone who enquired in the window — organic and unattributed included. */
   leads: number;
+  /** Only the people matched to a campaign with spend: the cost denominators. */
+  attributedLeads: number;
   patients: number;
   unattributedLeads: number;
   costPerLeadPence: number | null;
@@ -37,7 +40,7 @@ export const EMPTY_PERFORMANCE: MarketingPerformance = {
   rows: [],
   totals: {
     spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
-    leads: 0, patients: 0, unattributedLeads: 0,
+    leads: 0, attributedLeads: 0, patients: 0, unattributedLeads: 0,
     costPerLeadPence: null, costPerPatientPence: null,
   },
 };
