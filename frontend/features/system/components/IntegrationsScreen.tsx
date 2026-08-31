@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import { Chip } from '@/components/ui';
+import { useMe } from '@/hooks/useMe';
 import {
   useIntegrations,
   useStartConnect,
@@ -71,6 +72,9 @@ function relTime(iso: string | null): string {
 }
 
 export default function IntegrationsScreen() {
+  const { data: me } = useMe();
+  // undefined = backend predates features (allow); [] = nothing enabled.
+  const hasFeature = (k: string) => !me?.features || me.features.includes(k);
   const { data, isLoading, error } = useIntegrations();
   const startConnect = useStartConnect();
   const submitKey = useSubmitBrokerKey();
@@ -213,10 +217,10 @@ export default function IntegrationsScreen() {
       {dentallyConnected && <DentallyWebhookPanel />}
       {ghlPanelVisible && <GoHighLevelPanel />}
       <QuickBooksPanel />
-      <EmergentPracticeMapping />
-      <EmergentPanel />
-      <GoogleSheetsPanel />
-      <GoogleSheetsWriterPanel />
+      {hasFeature('emergent') && <EmergentPracticeMapping />}
+      {hasFeature('emergent') && <EmergentPanel />}
+      {hasFeature('call_reporting') && <GoogleSheetsPanel />}
+      {hasFeature('sheet_export') && <GoogleSheetsWriterPanel />}
       {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
       {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
 
