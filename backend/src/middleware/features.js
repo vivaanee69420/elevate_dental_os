@@ -5,7 +5,9 @@
 //   requireFeature(key)  403 FEATURE_DISABLED unless the acting org's
 //                        effective features enable `key`. Runs AFTER
 //                        authenticate (needs req.user.organisation_id) and
-//                        after any role/permission gate on the route.
+//                        BEFORE any role/permission gate on the route — org
+//                        entitlement is checked first; FEATURE_DISABLED to
+//                        an authenticated org member is not sensitive.
 //
 // Resolution = code catalog defaults <- org_features rows (features.service,
 // 60s cache), so this adds at most one cached lookup per org per minute.
