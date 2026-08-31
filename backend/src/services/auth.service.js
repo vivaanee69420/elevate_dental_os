@@ -24,6 +24,7 @@
 //     creator (users.permissions wins at highest precedence in
 //     lib/permissions.js resolveEffectivePermissions).
 // ============================================================================
+import crypto from "node:crypto";
 import * as auth_repository_1 from "../repositories/auth.repository.js";
 import * as errors_1 from "../middleware/errors.js";
 import { notificationService } from "./notification.service.js";
@@ -126,10 +127,18 @@ export async function provisionOrgOwner(body, status) {
         await auth_repository_1.authRepository.createAuthUser(body.email, body.password);
     if (authError)
         throw new errors_1.AppError(authError.message, 400);
-    // Create organisation
-    const slug = body.organisation_name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 40);
-    const { data: org, error: orgError } =
-        await auth_repository_1.authRepository.createOrganisation(body.organisation_name, slug);
+    // Create organisation. organisations.slug is UNIQUE but derived from the
+    // NAME, so two practices called the same thing collide — routine once an
+    // agency onboards many sub-accounts. Retry once with a short random
+    // suffix; the first use of a name still gets the clean slug.
+    const baseSlug = body.organisation_name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 40);
+    let { data: org, error: orgError } =
+        await auth_repository_1.authRepository.createOrganisation(body.organisation_name, baseSlug);
+    if (orgError?.code === '23505') {
+        const suffixed = `${baseSlug.slice(0, 34)}-${crypto.randomBytes(3).toString('hex')}`;
+        ({ data: org, error: orgError } =
+            await auth_repository_1.authRepository.createOrganisation(body.organisation_name, suffixed));
+    }
     if (orgError) {
         await rollbackAuthIdentity(authData.user.id, body.email);
         throw new errors_1.AppError(orgError.message, 400);
