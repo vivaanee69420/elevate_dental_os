@@ -86,8 +86,10 @@ function CreateForm({ onDone }: { onDone: () => void }) {
         setError('');
         try {
           setResult(await createSubaccount(form));
-        } catch {
-          setError('Could not create the sub-account. Check the email is not already in use.');
+        } catch (err) {
+          // Surface the backend's own message (e.g. "An account with this
+          // email already exists") — a generic string here hides the cause.
+          setError((err as Error).message || 'Could not create the sub-account.');
         } finally {
           setSaving(false);
         }
@@ -128,7 +130,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
 export function AgencyScreen() {
   const { data: me, isLoading } = useMe();
   const actor = isAgencyActor(me) && me?.agency !== undefined;
-  const { data, refetch } = useSubaccounts(actor);
+  const { data, error, refetch } = useSubaccounts(actor);
   const [creating, setCreating] = useState(false);
 
   if (isLoading) return null;
@@ -195,7 +197,14 @@ export function AgencyScreen() {
                 </td>
               </tr>
             ))}
-            {data && data.subaccounts.length === 0 && (
+            {error && (
+              <tr>
+                <td colSpan={4} className="px-4 py-6 text-center text-sm text-red-600">
+                  Could not load sub-accounts: {(error as Error).message}
+                </td>
+              </tr>
+            )}
+            {!error && data && data.subaccounts.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-4 py-6 text-center text-ink-muted">
                   No sub-accounts yet — create the first one.

@@ -10,10 +10,13 @@ export interface Subaccount {
   features: Record<string, boolean>;
 }
 
+// NB: `api()` posts to the same-origin proxy, which forwards the path VERBATIM
+// to the backend — so every path here carries the `/api` prefix the Express
+// routers are mounted under. Dropping it 404s silently.
 export function useSubaccounts(enabled: boolean) {
   return useQuery<{ subaccounts: Subaccount[] }>({
     queryKey: ['agency', 'subaccounts'],
-    queryFn: () => api('/agency/subaccounts'),
+    queryFn: () => api('/api/agency/subaccounts'),
     enabled,
     staleTime: 60_000,
   });
@@ -27,7 +30,10 @@ export async function switchInto(orgId: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ orgId }),
   });
-  if (!res.ok) throw new Error('Switch failed');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: 'Switch failed' }));
+    throw new Error(body.error || 'Switch failed');
+  }
   window.location.assign('/business-hub');
 }
 
@@ -42,13 +48,13 @@ export async function createSubaccount(body: {
   owner_name: string;
 }) {
   return api<{ organisation_id: string; owner_email: string; temp_password: string }>(
-    '/agency/subaccounts',
+    '/api/agency/subaccounts',
     { method: 'POST', body: JSON.stringify(body) },
   );
 }
 
 export async function setSubaccountFeature(orgId: string, feature: string, enabled: boolean) {
-  return api<{ features: Record<string, boolean> }>(`/agency/subaccounts/${orgId}/features`, {
+  return api<{ features: Record<string, boolean> }>(`/api/agency/subaccounts/${orgId}/features`, {
     method: 'PATCH',
     body: JSON.stringify({ feature, enabled }),
   });
