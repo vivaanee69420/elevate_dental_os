@@ -201,29 +201,47 @@ function DeleteControl({ sub, onDeleted }: { sub: Subaccount; onDeleted: () => v
   );
 }
 
-function SubaccountRow({ sub }: { sub: Subaccount }) {
+function SubaccountRow({ sub, defaultOpen }: { sub: Subaccount; defaultOpen: boolean }) {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
+  const keys = Object.keys(sub.features);
+  const enabled = keys.filter((k) => sub.features[k]).length;
+
   return (
     <li className="border-b border-border last:border-0 py-2.5">
       <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setOpen((v) => !v)}
-          className="flex-1 text-left text-sm font-medium text-ink hover:text-brand">
-          {open ? '▾' : '▸'} {sub.name}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-ink">{sub.name}</div>
+          <div className="text-[11px] text-ink-muted">
+            {enabled} of {keys.length} tabs enabled
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+            open ? 'border-brand bg-brand-50 text-brand' : 'border-border text-ink hover:bg-bg'
+          }`}
+        >
+          {open ? 'Done' : 'Manage'}
         </button>
         <button type="button" onClick={() => switchInto(sub.id)}
           className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-ink hover:bg-bg">
           Open
         </button>
       </div>
+
       {open && (
-        <div className="mt-2 pl-4">
+        <div className="mt-3 rounded-lg bg-bg p-3">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
             Tab access
           </span>
-          <div className="mt-1.5"><FeatureToggles sub={sub} /></div>
+          <p className="mt-0.5 text-[11px] text-ink-muted">
+            Click a tab to grant or remove it. Green means this account can open it.
+          </p>
+          <div className="mt-2"><FeatureToggles sub={sub} /></div>
           <UsersPanel sub={sub} />
-          <div className="mt-3">
+          <div className="mt-3 border-t border-border pt-2.5">
             <DeleteControl
               sub={sub}
               onDeleted={() => qc.invalidateQueries({ queryKey: ['agency', 'subaccounts'] })}
@@ -303,7 +321,8 @@ export function AgencyDialog() {
               <div>
                 <h3 style={{ fontSize: 17, fontWeight: 700 }}>Sub-accounts</h3>
                 <p className="text-ink-muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  Open an account, choose which tabs it can use, add its users, or delete it.
+                  <strong>Manage</strong> sets which tabs an account can use and who its users
+                  are. <strong>Open</strong> switches you into it.
                 </p>
               </div>
               <button type="button" onClick={() => setOpen(false)}
@@ -352,7 +371,11 @@ export function AgencyDialog() {
             {err && <p className="mt-2 text-xs text-red-600">{err}</p>}
 
             <ul className="mt-3">
-              {subs.map((s) => <SubaccountRow key={s.id} sub={s} />)}
+              {/* With a single sub-account, open it straight away — otherwise
+                  the tab-access controls read as "not there". */}
+              {subs.map((s) => (
+                <SubaccountRow key={s.id} sub={s} defaultOpen={subs.length === 1} />
+              ))}
             </ul>
 
             {error && (
