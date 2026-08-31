@@ -6,7 +6,7 @@ import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn() },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn(), markAdAccountStatus: vi.fn(), listAdAccounts: vi.fn(async () => []) },
 }));
 
 const { syncOneOrg, syncAllOrgs, __test } = await import('../src/lib/integrations/google-ads-sync.js');
@@ -76,6 +76,9 @@ describe('syncOneOrg', () => {
         integrationRepository.upsert.mockReset();
         integrationRepository.markFailed.mockReset();
         integrationRepository.markSynced.mockReset();
+        integrationRepository.markAdAccountStatus.mockReset();
+        integrationRepository.listAdAccounts.mockReset();
+        integrationRepository.listAdAccounts.mockResolvedValue([]);
         // The window replace now goes through the ad_metrics_replace_window RPC
         // (delete + upsert in one advisory-locked transaction). Stub it green.
         supaRec.rpcCalls = [];
@@ -219,6 +222,92 @@ describe('syncOneOrg', () => {
         expect(rpc).toBeTruthy();
         expect(rpc.params.p_customer_ids).toEqual(['2220000000']);   // only the customer that returned rows
         expect(integrationRepository.markSynced).toHaveBeenCalled();       // partial success still active
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Permanently-unusable customers. listAccessibleCustomers returns EVERY account
+// the login can reach — including the Manager (MCC) account itself, which can
+// never serve metrics, and accounts that have been deactivated. Both were being
+// re-queried on every nightly sync forever, and both surfaced as Google's
+// generic "invalid argument" because queryCustomer only read error.message and
+// never walked details[].errors[] for the real code.
+// ---------------------------------------------------------------------------
+describe('permanently-unusable customers', () => {
+    it('classifies the two permanent Google error codes, and nothing else', () => {
+        expect(__test.classifyCustomerError('Metrics cannot be requested for a manager account. (REQUESTED_METRICS_FOR_MANAGER)')).toBe('manager');
+        expect(__test.classifyCustomerError("The customer account can't be accessed because it is not yet enabled or has been deactivated. (CUSTOMER_NOT_ENABLED)")).toBe('not_enabled');
+        // A transient/unknown failure must stay retryable — marking it permanent
+        // would silently drop a real account out of the sync forever.
+        expect(__test.classifyCustomerError('Deadline exceeded')).toBeNull();
+        expect(__test.classifyCustomerError('searchStream HTTP 500')).toBeNull();
+        expect(__test.classifyCustomerError(undefined)).toBeNull();
+    });
+
+    it('marks a manager (MCC) account so it is not re-queried nightly', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = vi.fn(async (url) => String(url).includes('/customers/9990000000/')
+            ? { ok: false, status: 400, json: async () => ([{ error: { message: 'Request contains an invalid argument.', details: [{ errors: [{ errorCode: { requestError: 'REQUESTED_METRICS_FOR_MANAGER' }, message: 'Metrics cannot be requested for a manager account.' }] }] } }]) }
+            : { ok: true, status: 200, json: async () => ([{ results: [
+                { campaign: { id: 7, name: 'Brand' }, segments: { date: '2026-05-10' },
+                  metrics: { costMicros: 3_000_000, impressions: 500, clicks: 20, conversions: 2 } }] }]) });
+
+        const res = await syncOneOrg('org-1', freshCreds(['9990000000', '1112223333']));
+
+        expect(integrationRepository.markAdAccountStatus)
+            .toHaveBeenCalledWith('org-1', 'google_ads', '9990000000', 'manager');
+        // The good account still syncs — one bad account never sinks the run.
+        expect(res.rows).toBe(1);
+        expect(integrationRepository.markSynced).toHaveBeenCalled();
+    });
+
+    it('marks a deactivated account with the specific code, not a generic message', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = vi.fn(async (url) => String(url).includes('/customers/8880000000/')
+            ? { ok: false, status: 403, json: async () => ([{ error: { message: 'Request contains an invalid argument.', details: [{ errors: [{ errorCode: { authorizationError: 'CUSTOMER_NOT_ENABLED' }, message: "The customer account can't be accessed because it is not yet enabled or has been deactivated." }] }] } }]) }
+            : { ok: true, status: 200, json: async () => ([{ results: [
+                { campaign: { id: 7, name: 'Brand' }, segments: { date: '2026-05-10' },
+                  metrics: { costMicros: 3_000_000, impressions: 500, clicks: 20, conversions: 2 } }] }]) });
+
+        const res = await syncOneOrg('org-1', freshCreds(['8880000000', '1112223333']));
+
+        expect(integrationRepository.markAdAccountStatus)
+            .toHaveBeenCalledWith('org-1', 'google_ads', '8880000000', 'not_enabled');
+        // The skip reason carries the real Google code, not "invalid argument".
+        expect(res.skipped.find((s) => s.cid === '8880000000').error).toContain('CUSTOMER_NOT_ENABLED');
+    });
+
+    it('skips already-marked customers WITHOUT issuing a request for them', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        integrationRepository.listAdAccounts.mockResolvedValueOnce([
+            { customer_id: '9990000000', status: 'manager' },
+            { customer_id: '8880000000', status: 'not_enabled' },
+            { customer_id: '1112223333', status: null },
+        ]);
+        global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ([{ results: [
+            { campaign: { id: 7, name: 'Brand' }, segments: { date: '2026-05-10' },
+              metrics: { costMicros: 3_000_000, impressions: 500, clicks: 20, conversions: 2 } }] }]) }));
+
+        const res = await syncOneOrg('org-1', freshCreds(['9990000000', '8880000000', '1112223333']));
+
+        const urls = global.fetch.mock.calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.includes('/customers/9990000000/'))).toBe(false);
+        expect(urls.some((u) => u.includes('/customers/8880000000/'))).toBe(false);
+        expect(urls.some((u) => u.includes('/customers/1112223333/'))).toBe(true);
+        expect(res.rows).toBe(1);
+    });
+
+    it('marks the integration failed when EVERY customer is permanently unusable', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        integrationRepository.listAdAccounts.mockResolvedValueOnce([
+            { customer_id: '9990000000', status: 'manager' },
+        ]);
+        global.fetch = vi.fn();
+
+        await expect(syncOneOrg('org-1', freshCreds(['9990000000']))).rejects.toThrow(/no usable/i);
+        // Never silently reports healthy with zero rows pulled.
+        expect(integrationRepository.markSynced).not.toHaveBeenCalled();
+        expect(global.fetch).not.toHaveBeenCalled();
     });
 });
 
