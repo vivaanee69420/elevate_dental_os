@@ -108,8 +108,19 @@ export async function authenticate(req, res, next) {
     // its sub-accounts. The grant is per user and they may sit in a different
     // org, so the org they administer is resolved here rather than assumed to
     // be their own. Cached 60s, so this costs nothing per request.
-    const isAgencyAdmin = user.is_agency_admin === true;
-    const agencyOrgId = isAgencyAdmin ? await orgMetaService.getAgencyOrgId() : null;
+    let isAgencyAdmin = user.is_agency_admin === true;
+    let agencyOrgId = null;
+    if (isAgencyAdmin) {
+      const [ownOrg, resolved] = await Promise.all([
+        orgMetaService.getOrgMeta(user.organisation_id),
+        orgMetaService.getAgencyOrgId(),
+      ]);
+      // Belt and braces: a user who SITS IN a sub-account is never an agency
+      // admin, whatever the flag says. An accidental grant must not hand a
+      // tenant the agency console for the account above it.
+      if (ownOrg?.parent_organisation_id) isAgencyAdmin = false;
+      else agencyOrgId = resolved;
+    }
 
     // Agency switch (phase A2): a signed httpOnly cookie, forwarded by the
     // Next proxy as x-agency-switch, lets an agency admin act as the owner of

@@ -71,7 +71,9 @@ describe('authenticate agency switch', () => {
     const { req } = await run({ 'x-agency-switch': signSwitchToken('someone-else', SUB) });
     expect(req.user.organisation_id).toBe(HOME);
     expect(req.agencyContext).toBeUndefined();
-    expect(orgMetaService.getOrgMeta).not.toHaveBeenCalled();
+    // The TARGET org is never even looked up. (The caller's own org is, for
+    // the sits-in-a-sub-account guard — that is a different lookup.)
+    expect(orgMetaService.getOrgMeta).not.toHaveBeenCalledWith(SUB);
   });
 
   it('target that is not a child of home is ignored', async () => {
@@ -107,6 +109,19 @@ describe('authenticate agency switch', () => {
     const { req } = await run({ 'x-agency-switch': signSwitchToken(AUTH_UID, SUB) });
     expect(req.user.organisation_id).toBe(SUB);
     expect(req.agencyContext).toEqual({ actorUserId: AUTH_UID, homeOrgId: ELSEWHERE });
+  });
+
+  it('a granted user who SITS IN a sub-account is not an agency admin', async () => {
+    // Defence in depth: an accidental grant on a tenant user must not hand
+    // them the agency console for the account above them.
+    orgMetaService.getOrgMeta.mockImplementation(metaFor({
+      [HOME]: { id: HOME, name: 'Sub', is_agency: false, parent_organisation_id: 'some-parent' },
+      [SUB]: { id: SUB, name: 'Other sub', is_agency: false, parent_organisation_id: HOME },
+    }));
+    const { req } = await run({ 'x-agency-switch': signSwitchToken(AUTH_UID, SUB) });
+    expect(req.user.is_agency_admin).toBe(false);
+    expect(req.agencyContext).toBeUndefined();
+    expect(req.agencyOrgId).toBeUndefined();
   });
 
   it('forged/garbage token -> ignored', async () => {
