@@ -197,6 +197,20 @@ export const platformAdminService = {
     return rows;
   },
 
+  // Grant/revoke agency access (users.is_agency_admin). Agency powers are no
+  // longer implied by owning an org — they are handed out here, one user at a
+  // time, by the superadmin.
+  async setAgencyAdmin(admin, userId, enabled, req) {
+    const user = await platformAdminRepository.setAgencyAdmin(userId, enabled === true);
+    await audit(admin, 'set_agency_admin', {
+      req,
+      userId,
+      orgId: user?.organisation_id,
+      payload: { email: user?.email, is_agency_admin: enabled === true },
+    });
+    return user;
+  },
+
   async overview(admin, { days }, req) {
     const data = await platformAdminRepository.metricsOverview(days);
     await audit(admin, 'view_metrics_overview', { req, payload: { days } });

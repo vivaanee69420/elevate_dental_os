@@ -176,11 +176,24 @@ export const platformAdminRepository = {
   async searchUsers({ q, limit }) {
     const { data, error } = await serviceClient
       .from('users')
-      .select('id, email, full_name, role, organisation_id, status, created_at')
+      .select('id, email, full_name, role, organisation_id, status, created_at, is_agency_admin')
       .ilike('email', `%${q}%`)
       .limit(limit);
     if (error) throw error;
     return data ?? [];
+  },
+
+  // Grant/revoke agency access for one user. Deliberately cross-org (this is
+  // the superadmin console) — the tenant API can never reach this repository.
+  async setAgencyAdmin(userId, enabled) {
+    const { data, error } = await serviceClient
+      .from('users')
+      .update({ is_agency_admin: enabled })
+      .eq('id', userId)
+      .select('id, email, organisation_id, is_agency_admin')
+      .single();
+    if (error) throw error;
+    return data;
   },
 
   async listOrgActivity(orgId, limit = 100) {

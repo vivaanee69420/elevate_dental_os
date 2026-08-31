@@ -23,11 +23,14 @@ export interface Me {
   };
 }
 
-/** Agency-actor check with undefined-allows for older backends. */
+/**
+ * Agency-actor check. Agency access is a per-user grant, so this FAILS CLOSED:
+ * an absent `agency` field (older backend, or a stale cached /auth/me) means
+ * no agency UI. The previous `role === 'owner'` fallback showed the Agency
+ * menu and mapping controls to every org owner whenever the field was missing.
+ */
 export function isAgencyActor(me: Me | undefined): boolean {
-  if (!me) return false;
-  if (me.agency === undefined) return me.role === 'owner';
-  return me.agency.is_agency_actor;
+  return me?.agency?.is_agency_actor === true;
 }
 
 // Single shared, cached /auth/me. Before this, sidebar + topbar (and the

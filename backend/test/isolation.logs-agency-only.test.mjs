@@ -45,10 +45,12 @@ describe('/api/admin/logs mount', () => {
     expect(res.status).toHaveBeenCalledWith(403);
   });
 
-  it('requireAgencyActor admits an owner of the agency org', async () => {
+  it('requireAgencyActor admits a user holding the agency grant', async () => {
     const res = { status: vi.fn(() => res), json: vi.fn(() => res) };
     const next = vi.fn();
-    await requireAgencyActor({ user: { role: 'owner', organisation_id: 'agency-1' } }, res, next);
+    await requireAgencyActor(
+      { user: { role: 'owner', organisation_id: 'agency-1', is_agency_admin: true } }, res, next,
+    );
     expect(next).toHaveBeenCalledOnce();
   });
 });

@@ -56,6 +56,16 @@ router.get('/orgs/:id/activity',           asyncHandler(platformAdminController.
 
 router.get('/users',                       asyncHandler(platformAdminController.searchUsers));
 
+// Grant/revoke agency access for one tenant user (users.is_agency_admin).
+// Agency powers — sub-account creation, practice mapping, production logs —
+// are no longer implied by owning an org, so this is the lever that hands
+// them out. Superadmin-only, like the other privilege-changing actions.
+router.patch(
+  '/users/:id/agency-admin',
+  requirePlatformRole('superadmin'),
+  asyncHandler(platformAdminController.setAgencyAdmin),
+);
+
 router.get('/metrics/overview',            asyncHandler(platformAdminController.overview));
 router.get('/metrics/integrations',        asyncHandler(platformAdminController.integrations));
 

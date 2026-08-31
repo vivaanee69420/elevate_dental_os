@@ -129,7 +129,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
 
 export function AgencyScreen() {
   const { data: me, isLoading } = useMe();
-  const actor = isAgencyActor(me) && me?.agency !== undefined;
+  const actor = isAgencyActor(me);
   const { data, error, refetch } = useSubaccounts(actor);
   const [creating, setCreating] = useState(false);
 

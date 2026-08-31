@@ -33,7 +33,7 @@ describe('GET /auth/me', () => {
 
   it('includes the agency shape (unswitched agency owner)', async () => {
     const req = {
-      user: { id: 'u1', email: 'o@t.dev', role: 'owner', organisation_id: 'org-1', permissions: {} },
+      user: { id: 'u1', email: 'o@t.dev', role: 'owner', organisation_id: 'org-1', permissions: {}, is_agency_admin: true },
     };
     const res = { json: vi.fn() };
     await authController.me(req, res);
@@ -44,7 +44,7 @@ describe('GET /auth/me', () => {
 
   it('includes home_org while switched', async () => {
     const req = {
-      user: { id: 'u1', email: 'o@t.dev', role: 'owner', organisation_id: 'sub-1', permissions: {} },
+      user: { id: 'u1', email: 'o@t.dev', role: 'owner', organisation_id: 'sub-1', permissions: {}, is_agency_admin: true },
       agencyContext: { actorUserId: 'u1', homeOrgId: 'org-1' },
     };
     const res = { json: vi.fn() };

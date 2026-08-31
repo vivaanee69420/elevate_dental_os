@@ -93,7 +93,11 @@ The generic multi-provider integration routes (`POST /api/integrations/connect`,
 
 ## Agency (A2)
 
-An **agency** is an organisation with `is_agency=true`; its **sub-accounts** are organisations with `parent_organisation_id` set to it. All routes below require an *agency owner* (an owner of an agency org — they keep working while switched into a sub-account, acting on the caller's HOME org). Non-agency callers get 403:
+Agency access is a **per-user grant**: `users.is_agency_admin`. It is NOT implied by owning an org — an agency org holds both agency staff and client users, so the org flag alone would hand sub-account creation, practice mapping and production logs to clients. `organisations.is_agency` now only marks the single org that **owns** the sub-accounts; an agency admin may sit in a different org and still administer it (the acting org is resolved server-side in `authenticate`, never taken from the caller).
+
+Grant or revoke with `PATCH /api/platform/users/:id/agency-admin` — body `{ "enabled": true|false }`, **superadmin-only**, audited as `set_agency_admin`.
+
+**Sub-accounts** are organisations with `parent_organisation_id` set to the agency org. All routes below require an agency admin (they keep working while switched into a sub-account). Callers without the grant get 403:
 
 ```json
 { "error": "Agency access required", "code": "AGENCY_ONLY" }

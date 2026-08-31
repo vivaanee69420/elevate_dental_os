@@ -1,11 +1,9 @@
-// Agency-actor gates: switched context short-circuits; otherwise owner of an
-// is_agency org (cached lookup). Non-actors get 403 AGENCY_ONLY.
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+// Agency-actor gates. Access is a PER-USER grant (users.is_agency_admin), not
+// "owner of an org flagged is_agency" — an agency org holds our staff AND
+// client users, so the org flag alone handed sub-account creation, practice
+// mapping and production logs to real clients.
+import { describe, it, expect, vi } from 'vitest';
 
-vi.mock('../src/services/org-meta.service.js', () => ({
-  orgMetaService: { getOrgMeta: vi.fn() },
-}));
-const { orgMetaService } = await import('../src/services/org-meta.service.js');
 const { isAgencyActor, requireAgencyActor, requireAgencyOwner, agencyHomeOrgId } =
   await import('../src/middleware/agency.js');
 
@@ -16,60 +14,63 @@ function mockRes() {
   return res;
 }
 
+const AGENCY_ORG = 'agency-1';
+
 describe('agency middleware', () => {
-  // Braced body on purpose: an implicit-return arrow would hand the mock fn
-  // back to vitest, which treats a function returned from a hook as a
-  // teardown callback and CALLS it after the test.
-  beforeEach(() => { orgMetaService.getOrgMeta.mockReset(); });
-
-  it('switched context is an agency actor without any lookup', async () => {
-    const req = {
-      user: { role: 'owner', organisation_id: 'sub-1' },
-      agencyContext: { actorUserId: 'u1', homeOrgId: 'agency-1' },
-    };
+  it('a user holding the grant is an actor', async () => {
+    const req = { user: { role: 'owner', organisation_id: 'org-x', is_agency_admin: true } };
     expect(await isAgencyActor(req)).toBe(true);
-    expect(orgMetaService.getOrgMeta).not.toHaveBeenCalled();
-    expect(agencyHomeOrgId(req)).toBe('agency-1');
   });
 
-  it('unswitched owner of an agency org is an actor (cached lookup)', async () => {
-    orgMetaService.getOrgMeta.mockResolvedValue({ id: 'org-1', is_agency: true, parent_organisation_id: null, name: 'A' });
-    const req = { user: { role: 'owner', organisation_id: 'org-1' } };
-    expect(await isAgencyActor(req)).toBe(true);
-    expect(agencyHomeOrgId(req)).toBe('org-1');
+  it('an OWNER without the grant is NOT an actor, even in the agency org', async () => {
+    // The regression this replaced: Plan4growth's client owners.
+    const req = { user: { role: 'owner', organisation_id: AGENCY_ORG, is_agency_admin: false } };
+    expect(await isAgencyActor(req)).toBe(false);
   });
 
-  it('owner of a non-agency org is NOT an actor', async () => {
-    orgMetaService.getOrgMeta.mockResolvedValue({ id: 'sub-1', is_agency: false, parent_organisation_id: 'org-1', name: 'S' });
+  it('a sub-account owner is NOT an actor', async () => {
     expect(await isAgencyActor({ user: { role: 'owner', organisation_id: 'sub-1' } })).toBe(false);
   });
 
-  it('non-owner of an agency org is NOT an actor', async () => {
-    orgMetaService.getOrgMeta.mockResolvedValue({ id: 'org-1', is_agency: true, parent_organisation_id: null, name: 'A' });
-    expect(await isAgencyActor({ user: { role: 'practice_manager', organisation_id: 'org-1' } })).toBe(false);
+  it('a switched context is an actor (already validated in authenticate)', async () => {
+    const req = {
+      user: { role: 'owner', organisation_id: 'sub-1' },
+      agencyContext: { actorUserId: 'u1', homeOrgId: AGENCY_ORG },
+    };
+    expect(await isAgencyActor(req)).toBe(true);
   });
 
-  it('requireAgencyActor 403s AGENCY_ONLY for non-actors and passes actors', async () => {
-    orgMetaService.getOrgMeta.mockResolvedValue({ id: 'sub-1', is_agency: false, parent_organisation_id: 'org-1', name: 'S' });
+  it('requireAgencyActor 403s AGENCY_ONLY without the grant and passes with it', async () => {
     const res = mockRes(); const next = vi.fn();
-    await requireAgencyActor({ user: { role: 'owner', organisation_id: 'sub-1' } }, res, next);
+    await requireAgencyActor({ user: { role: 'owner', organisation_id: AGENCY_ORG } }, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json).toHaveBeenCalledWith({ error: 'Agency access required', code: 'AGENCY_ONLY' });
     expect(next).not.toHaveBeenCalled();
 
     const res2 = mockRes(); const next2 = vi.fn();
-    await requireAgencyOwner(
-      { user: { role: 'owner', organisation_id: 'x' }, agencyContext: { actorUserId: 'u', homeOrgId: 'org-1' } },
-      res2, next2,
-    );
+    await requireAgencyOwner({ user: { role: 'owner', organisation_id: 'org-x', is_agency_admin: true } }, res2, next2);
     expect(next2).toHaveBeenCalledOnce();
   });
+});
 
-  it('fails closed (403) when the org lookup throws', async () => {
-    orgMetaService.getOrgMeta.mockImplementation(async () => { throw new Error('db down'); });
-    const res = mockRes(); const next = vi.fn();
-    await requireAgencyActor({ user: { role: 'owner', organisation_id: 'org-1' }, log: { warn: vi.fn() } }, res, next);
-    expect(res.status).toHaveBeenCalledWith(403);
-    expect(next).not.toHaveBeenCalled();
+describe('agencyHomeOrgId', () => {
+  it('uses the resolved agency org, not the admin\'s own org', () => {
+    // An agency admin may sit in a DIFFERENT org and still administer the
+    // agency's sub-accounts.
+    const req = { user: { organisation_id: 'developer-org' }, agencyOrgId: AGENCY_ORG };
+    expect(agencyHomeOrgId(req)).toBe(AGENCY_ORG);
+  });
+
+  it('prefers the switched context home org', () => {
+    const req = {
+      user: { organisation_id: 'sub-1' },
+      agencyOrgId: AGENCY_ORG,
+      agencyContext: { actorUserId: 'u1', homeOrgId: AGENCY_ORG },
+    };
+    expect(agencyHomeOrgId(req)).toBe(AGENCY_ORG);
+  });
+
+  it('falls back to the caller org when no agency context exists', () => {
+    expect(agencyHomeOrgId({ user: { organisation_id: 'org-y' } })).toBe('org-y');
   });
 });
