@@ -27,6 +27,7 @@ describe('extractAttribution', () => {
         { utmSessionSource: 'Paid Social', adSource: 'facebook', medium: 'facebook',
           utmSource: 'facebook', utmCampaign: 'Dental Implant Open Day Sept 26',
           utmCampaignId: '120249721894530517', utmAdId: '120249722055010517',
+          adSetId: '120249721894660517',
           utmMedium: 'Photos | 35+ | 258K | 03/08/26', utmContent: 'AD 2', isFirst: true },
     ] };
 
@@ -36,9 +37,13 @@ describe('extractAttribution', () => {
         const a = extractAttribution(metaContact);
         expect(a.ad_campaign_id).toBe('120249721894530517');
         expect(a.ad_id).toBe('120249722055010517');
+        expect(a.ad_set_id).toBe('120249721894660517');
         expect(a.attribution_source).toBe('Paid Social');
+        expect(a.attribution_medium).toBe('facebook');
         expect(a.attribution_campaign_name).toBe('Dental Implant Open Day Sept 26');
         expect(a.utm_source).toBe('facebook');
+        expect(a.utm_medium).toBe('Photos | 35+ | 258K | 03/08/26');
+        expect(a.utm_campaign).toBe('Dental Implant Open Day Sept 26');
     });
 
     it('falls back to the first element when no row is flagged isFirst', () => {
@@ -57,6 +62,12 @@ describe('extractAttribution', () => {
         expect(a.ad_campaign_id).toBe('22794584316');
         expect(a.gclid).toBe('CjwKCAjw');
         expect(a.landing_page_url).toContain('orthodontist-lp');
+    });
+
+    it('falls back to url property when pageUrl is absent', () => {
+        const a = extractAttribution({ attributions: [{
+            utmSessionSource: 'Organic', url: 'https://example.com/contact-us' }] });
+        expect(a.landing_page_url).toBe('https://example.com/contact-us');
     });
 
     it('prefers an explicit utmCampaignId over the URL parse', () => {
