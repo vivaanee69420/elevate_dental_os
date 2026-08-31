@@ -5,6 +5,7 @@
 // column dedup. Spec: docs/superpowers/specs/2026-08-06-ghl-dentally-sheet-export-design.md
 import { sheetExportRepository } from '../repositories/sheet-export.repository.js';
 import { integrationRepository } from '../repositories/integration.repository.js';
+import { featuresService } from './features.service.js';
 import { AppError } from '../middleware/errors.js';
 import { findMatch, pipelineNameMap, journeyFromLeads } from './sheet-export-match.service.js';
 import { WRITER_PROVIDER_ID } from '../lib/integrations/google-sheets-writer-provider.js';
@@ -333,6 +334,10 @@ export const sheetExportService = {
         const orgs = await sheetExportRepository.orgsWithWriter();
         const results = [];
         for (const orgId of orgs) {
+            if (!(await featuresService.orgHasFeature(orgId, 'sheet_export'))) {
+                results.push({ orgId, skipped: 'feature_disabled' });
+                continue;
+            }
             try {
                 results.push({ orgId, ...(await sheetExportService.refreshOrg(orgId)) });
             } catch (err) {
@@ -348,6 +353,10 @@ export const sheetExportService = {
         const orgs = await sheetExportRepository.orgsWithWriter();
         const results = [];
         for (const orgId of orgs) {
+            if (!(await featuresService.orgHasFeature(orgId, 'sheet_export'))) {
+                results.push({ orgId, skipped: 'feature_disabled' });
+                continue;
+            }
             try {
                 results.push({ orgId, ...(await sheetExportService.drainOrg(orgId, { includeNoMatch: true })) });
             } catch (err) {
