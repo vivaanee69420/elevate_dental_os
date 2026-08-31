@@ -15,6 +15,19 @@ export interface Me {
   invite_enabled?: boolean;
   /** Enabled org-level feature keys (agency model). Absent on older backends. */
   features?: string[];
+  /** Agency shape (A2). Absent on older backends. */
+  agency?: {
+    is_agency_actor: boolean;
+    switched: boolean;
+    home_org: { id: string; name: string } | null;
+  };
+}
+
+/** Agency-actor check with undefined-allows for older backends. */
+export function isAgencyActor(me: Me | undefined): boolean {
+  if (!me) return false;
+  if (me.agency === undefined) return me.role === 'owner';
+  return me.agency.is_agency_actor;
 }
 
 // Single shared, cached /auth/me. Before this, sidebar + topbar (and the

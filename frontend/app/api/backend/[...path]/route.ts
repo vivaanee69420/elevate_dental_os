@@ -47,6 +47,10 @@ async function proxy(req: NextRequest, path: string[]) {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${session.access_token}`,
   };
+  // Agency switch (A2): re-inject the httpOnly switch cookie as a header the
+  // backend validates per request. Absent cookie -> header absent -> home org.
+  const agencySwitch = req.cookies.get('agency_switch')?.value;
+  if (agencySwitch) headers['x-agency-switch'] = agencySwitch;
   const contentType = req.headers.get('content-type');
   if (contentType) headers['Content-Type'] = contentType;
 
