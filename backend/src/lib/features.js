@@ -34,6 +34,21 @@ export const FEATURE_CATALOG = {
 
 export const FEATURE_KEYS = Object.keys(FEATURE_CATALOG);
 
+// Provider id -> feature key, for the integration providers that ride the
+// GENERIC multi-provider integration routes (`POST …/connect`, `/:provider/
+// callback|refresh|sync-progress|webhook-info|webhook-secret`) instead of
+// their own literal-path routes with a static requireFeature(key) gate. Those
+// generic routes can't wire a static gate — the provider (and so the feature
+// key) is only known at request time (req.body.provider on connect,
+// req.params.provider elsewhere) — so callers resolve this map at runtime
+// instead. A provider absent from this map is NOT feature-bound: the generic
+// routes are completely unaffected for it (dentally, gohighlevel, xero, ...).
+export const PROVIDER_FEATURE = {
+  emergent: 'emergent',
+  google_sheets: 'call_reporting',
+  google_sheets_writer: 'sheet_export',
+};
+
 export function defaultFeatures() {
   const out = {};
   for (const [k, v] of Object.entries(FEATURE_CATALOG)) out[k] = v.default;

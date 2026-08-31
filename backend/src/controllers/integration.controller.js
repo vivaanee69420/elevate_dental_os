@@ -10,6 +10,7 @@ import { decryptSecret } from "../lib/crypto.js";
 import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema } from "../models/integration.model.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
 import { emergentService } from "../services/emergent.service.js";
+import { featuresService } from "../services/features.service.js";
 
 function frontendUrl() {
     const raw = (process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').trim();
@@ -121,6 +122,12 @@ export const integrationController = {
         const { full: bodyFull, resources } = integration_model_1.syncBodySchema.parse(req.body ?? {});
         const full = req.query.full === 'true' || bodyFull === true;
         const { organisation_id } = req.user;
+        // Gated inline (like syncProgress below) because the service call is
+        // fire-and-forget — syncNow's own quiet skip would still answer 200
+        // "started" here, and the caller deserves the honest 403.
+        if (!(await featuresService.orgHasProviderFeature(organisation_id, provider))) {
+            return res.status(403).json({ error: 'Feature not enabled', code: 'FEATURE_DISABLED' });
+        }
         console.log(`[integrationController] sync started: orgId=${organisation_id}, provider=${provider}, full=${full}`);
         integration_service_1.integrationService.syncNow(organisation_id, provider, { full, resources: resources ?? null })
             .catch((err) => console.error(`[integrations] sync ${provider} failed:`, err?.message || err));
@@ -135,8 +142,15 @@ export const integrationController = {
         res.json({ started });
     },
     // Live progress of the running/last sync (in-memory). Polled by the UI bar.
+    // Gated inline (not via integration.service.js like the other generic
+    // entry points) because integrationService.syncProgress is synchronous
+    // and this controller doesn't await its result before res.json — an
+    // async gate INSIDE that service method would silently ship a Promise.
     async syncProgress(req, res) {
         const { provider } = providerParamSchema.parse(req.params);
+        if (!(await featuresService.orgHasProviderFeature(req.user.organisation_id, provider))) {
+            return res.status(403).json({ error: 'Feature not enabled', code: 'FEATURE_DISABLED' });
+        }
         res.json(integration_service_1.integrationService.syncProgress(req.user.organisation_id, provider));
     },
     // Distinct Dentally site_ids (with counts) to drive practice mapping.

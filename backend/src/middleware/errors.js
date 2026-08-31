@@ -3,9 +3,15 @@ import * as zod_1 from "zod";
 // AppError lets services throw with an explicit status code.
 export class AppError extends Error {
     statusCode;
-    constructor(message, statusCode = 500) {
+    code;
+    // `code` is an optional machine-readable tag (e.g. 'FEATURE_DISABLED')
+    // surfaced alongside `message` for callers that branch on it instead of
+    // parsing the human-readable string. Existing 2-arg call sites are
+    // unaffected — `code` stays undefined and is omitted from the response.
+    constructor(message, statusCode = 500, code) {
         super(message);
         this.statusCode = statusCode;
+        this.code = code;
     }
 }
 
@@ -36,6 +42,7 @@ export function errorHandler(err, req, res, _next) {
             ? (isProd ? 'Internal server error' : (err instanceof Error ? err.message : 'Internal server error'))
             : (err instanceof Error ? err.message : 'Internal server error'));
     const body = { error: message };
+    if (isApp && err.code) body.code = err.code;
     if (!isProd && !isApp && err instanceof Error && err.stack) {
         body.stack = err.stack.split('\n').slice(0, 6);
     }
