@@ -64,7 +64,8 @@ The spec's §1 table says `leads`. **Implement on `contacts` instead.** `attribu
 - Create: `supabase/migrations/20260101000137_lead_attribution.sql`
 
 **Interfaces:**
-- Produces: columns `contacts.ad_campaign_id`, `.ad_id`, `.ad_set_id`, `.gclid`, `.landing_page_url`, `.attribution_source`, `.attribution_medium`, `.attribution_campaign_name`, `.attribution_captured_at`. Later tasks test "needs fill" as `attribution_captured_at IS NULL`.
+- Produces: columns `contacts.ad_campaign_id`, `.ad_id`, `.ad_set_id`, `.gclid`, `.landing_page_url`, `.attribution_source`, `.attribution_medium`, `.attribution_campaign_name`, `.attribution_captured_at`, `.utm_source`, `.utm_medium`, `.utm_campaign`. Later tasks test "needs fill" as `attribution_captured_at IS NULL`.
+- **The full set matters:** Task 3 spreads Task 2's entire extractor output into a `contacts` upsert. Any key missing a column fails the whole write.
 
 - [ ] **Step 1: Write the migration**
 
@@ -93,6 +94,14 @@ ALTER TABLE contacts ADD COLUMN IF NOT EXISTS attribution_source TEXT;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS attribution_medium TEXT;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS attribution_campaign_name TEXT;
 ALTER TABLE contacts ADD COLUMN IF NOT EXISTS attribution_captured_at TIMESTAMPTZ;
+-- utm_* exist on `leads` but NOT on `contacts`. contactRow spreads the whole
+-- extractor output into a contacts upsert, so without these three every contact
+-- write fails with "column does not exist" and the entire GHL sync breaks.
+-- utmMedium is not redundant: for Meta it carries the AD SET name
+-- ("Photos | 35+ | 258K | 03/08/26"), which no other column holds.
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS utm_source TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS utm_medium TEXT;
+ALTER TABLE contacts ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
 
 -- The hot read: join a lead's contact to ad_metrics by campaign.
 CREATE INDEX IF NOT EXISTS idx_contacts_ad_campaign
@@ -293,7 +302,7 @@ export function extractAttribution(contact) {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd backend && npx vitest run test/ghl-attribution.test.mjs`
-Expected: PASS, 8 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -902,7 +911,7 @@ export const __test = { resolveTier, joinSpendToLeads, perUnitPence };
 - [ ] **Step 5: Run tests**
 
 Run: `cd backend && npx vitest run test/marketing.service.test.mjs`
-Expected: PASS, 10 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 6: Commit**
 
