@@ -2,6 +2,7 @@
 // Contact model — Zod schemas + inferred types for the contacts domain.
 // ============================================================================
 import * as zod_1 from "zod";
+import { stripImmutable } from "../lib/tenant-guard.js";
 export const contactListQuerySchema = zod_1.z.object({
     type: zod_1.z.enum(['lead', 'patient', 'lapsed']).optional(),
     // Length-capped; PostgREST filter metacharacters are stripped in the
@@ -28,4 +29,7 @@ export const contactCreateSchema = zod_1.z.object({
     sms_consent: zod_1.z.boolean().optional(),
     tags: zod_1.z.array(zod_1.z.string()).optional(),
 });
-export const contactUpdateSchema = zod_1.z.record(zod_1.z.any());
+// Freeform patch, but row identity/tenancy is stripped at the parse boundary:
+// the UPDATE's WHERE is org-scoped, so without this a caller could set
+// organisation_id and push its own row into another tenant.
+export const contactUpdateSchema = zod_1.z.record(zod_1.z.any()).transform(stripImmutable);

@@ -2,6 +2,7 @@
 // Appointment model — Zod schemas + inferred types for the appointments domain.
 // ============================================================================
 import * as zod_1 from "zod";
+import { stripImmutable } from "../lib/tenant-guard.js";
 export const appointmentListQuerySchema = zod_1.z.object({
     from: zod_1.z.string().optional(),
     to: zod_1.z.string().optional(),
@@ -27,4 +28,7 @@ export const appointmentCreateSchema = zod_1.z.object({
     notes: zod_1.z.string().optional(),
     deposit_pence: zod_1.z.number().int().optional(),
 });
-export const appointmentUpdateSchema = zod_1.z.record(zod_1.z.any());
+// Freeform patch, but row identity/tenancy is stripped at the parse boundary:
+// the UPDATE's WHERE is org-scoped, so without this a caller could set
+// organisation_id and push its own row into another tenant.
+export const appointmentUpdateSchema = zod_1.z.record(zod_1.z.any()).transform(stripImmutable);
