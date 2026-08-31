@@ -35,6 +35,12 @@ export function audit(req, res, next) {
             action,
             entity_type: entityType,
             entity_id: entityId,
+            // Agency switch (A2): keep the acting org as organisation_id and
+            // the real human as user_id, and mark the row so "who did this"
+            // is answerable from the log alone.
+            diff: req.agencyContext
+                ? { via_agency: { home_organisation_id: req.agencyContext.homeOrgId, actor_user_id: req.agencyContext.actorUserId } }
+                : undefined,
             ip_address: req.ip,
             user_agent: req.headers['user-agent'],
         })
