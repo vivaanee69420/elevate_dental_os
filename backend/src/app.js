@@ -49,6 +49,7 @@ import * as members_routes_1 from "./routes/members.routes.js";
 import * as memberships_routes_1 from "./routes/memberships.routes.js";
 import * as reviews_routes_1 from "./routes/reviews.routes.js";
 import * as growth_routes_1 from "./routes/growth.routes.js";
+import * as marketing_routes_1 from "./routes/marketing.routes.js";
 import * as wealth_routes_1 from "./routes/wealth.routes.js";
 import * as training_routes_1 from "./routes/training.routes.js";
 import * as practices_routes_1 from "./routes/practices.routes.js";
@@ -275,6 +276,7 @@ export function buildApp() {
     api.use('/admin/permissions', permissions_routes_1.default);
     api.use('/admin/team', members_routes_1.default);
     api.use('/growth', growth_routes_1.default);
+    api.use('/marketing', moduleGate('marketing'), marketing_routes_1.default);
     api.use('/wealth', wealth_routes_1.default);
     api.use('/training', moduleGate('training'), training_routes_1.default);
     api.use('/practices', practices_routes_1.default);

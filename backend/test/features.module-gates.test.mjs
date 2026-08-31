@@ -26,6 +26,7 @@ const GATED = {
   'monthly-financials': 'finance',
   training: 'training',
   imports: 'system',
+  marketing: 'marketing',
 };
 
 // Mounts that MUST NOT carry a module gate (shared with Overview or infra).
