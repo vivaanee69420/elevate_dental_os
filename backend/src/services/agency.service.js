@@ -6,7 +6,7 @@
 // afterwards with a permanent password the agency sets. There is deliberately
 // no temporary-password handover — user provisioning REUSES provisionMember,
 // so a sub-account user is an ordinary member of exactly one org and is
-// isolated from every other account by users.organisation_id.
+// reachable in exactly the accounts they hold a membership for.
 // ============================================================================
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
@@ -16,6 +16,7 @@ import { authService } from './auth.service.js';
 import { featuresService } from './features.service.js';
 import { orgMetaService } from './org-meta.service.js';
 import { signSwitchToken, SWITCH_TTL_MS } from '../lib/agency-switch.js';
+import { membershipRepository } from '../repositories/membership.repository.js';
 
 async function assertChild(agencyOrgId, subOrgId) {
     const children = await agencyRepository.childOrgs(agencyOrgId);
@@ -64,11 +65,25 @@ export const agencyService = {
     // permanent — set by the agency, no forced change on first login.
     async addSubaccountUser(agencyOrgId, subOrgId, actor, body) {
         await assertChild(agencyOrgId, subOrgId);
+
+        // If this email is already a login somewhere, grant a MEMBERSHIP of
+        // this account rather than failing with "already a member". That is
+        // the whole point of the membership model: the same person, reachable
+        // in several accounts, switching between them with one password.
+        const existing = await authRepository.findUserByEmail(body.email);
+        if (existing) {
+            await membershipRepository.add(existing.id, subOrgId, body.role, {});
+            return { user_id: existing.id, email: body.email, role: body.role, linked: true };
+        }
+
         // provisionMember gates on the CALLER's role hierarchy. The agency
         // admin is acting as that org's owner, which is the ceiling here.
         const caller = { id: actor?.id ?? null, role: 'owner', permissions: {} };
         const out = await authService.provisionMember(subOrgId, caller, { ...body, permissions: {} });
-        return { user_id: out.user_id, email: body.email, role: body.role };
+        // New login: its home org is this sub-account, and it needs the
+        // matching membership row so the picker and switch see it.
+        await membershipRepository.add(out.user_id, subOrgId, body.role, {});
+        return { user_id: out.user_id, email: body.email, role: body.role, linked: false };
     },
 
     // IRREVERSIBLE: organisations cascades every business table. Guarded by

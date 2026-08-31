@@ -51,6 +51,11 @@ async function proxy(req: NextRequest, path: string[]) {
   // backend validates per request. Absent cookie -> header absent -> home org.
   const agencySwitch = req.cookies.get('agency_switch')?.value;
   if (agencySwitch) headers['x-agency-switch'] = agencySwitch;
+  // Multi-org membership: which of the caller's accounts they are acting in.
+  // The backend re-validates it against their memberships every request, so an
+  // stale or forged value simply falls back to their home account.
+  const activeOrg = req.cookies.get('active_org')?.value;
+  if (activeOrg) headers['x-active-org'] = activeOrg;
   const contentType = req.headers.get('content-type');
   if (contentType) headers['Content-Type'] = contentType;
 

@@ -3,6 +3,7 @@ import * as auth_model_1 from "../models/auth.model.js";
 import * as features_service_1 from "../services/features.service.js";
 import { isAgencyActor } from "../middleware/agency.js";
 import { orgMetaService } from "../services/org-meta.service.js";
+import * as membership_repository_1 from "../repositories/membership.repository.js";
 export const authController = {
     async signup(req, res) {
         const body = auth_model_1.signupSchema.parse(req.body);
@@ -22,6 +23,10 @@ export const authController = {
             permissions: req.user.permissions,
             // Org-level entitlements (agency model) — drives nav/page gating.
             features: await features_service_1.featuresService.enabledKeys(req.user.organisation_id),
+            // Every account this login can reach (multi-org membership) and
+            // where it is acting now — drives the account picker.
+            accounts: req.user.accounts ?? [],
+            active_organisation_id: req.user.organisation_id,
             // Agency shape (A2): drives the topbar switcher + mapping-control
             // visibility. home_org only while switched.
             agency: {
@@ -37,6 +42,14 @@ export const authController = {
             // Frontend hides the email-invite mode until delivery is wired.
             invite_enabled: process.env.TEAM_INVITE_ENABLED === 'true',
         });
+    },
+    async switchOrg(req, res) {
+        const { orgId } = auth_model_1.switchOrgSchema.parse(req.body);
+        const member = await membership_repository_1.membershipRepository.find(req.user.id, orgId);
+        if (!member) {
+            return res.status(403).json({ error: 'You do not have access to that account' });
+        }
+        res.json({ organisation_id: orgId, role: member.role });
     },
     async invite(req, res) {
         const body = auth_model_1.inviteSchema.parse(req.body);

@@ -13,7 +13,10 @@ vi.mock('../src/repositories/agency.repository.js', () => ({
   },
 }));
 vi.mock('../src/repositories/auth.repository.js', () => ({
-  authRepository: { deleteAuthUser: vi.fn() },
+  authRepository: { deleteAuthUser: vi.fn(), findUserByEmail: vi.fn(async () => null) },
+}));
+vi.mock('../src/repositories/membership.repository.js', () => ({
+  membershipRepository: { add: vi.fn(), find: vi.fn(), remove: vi.fn(), listForUser: vi.fn() },
 }));
 vi.mock('../src/services/auth.service.js', () => ({
   authService: { provisionMember: vi.fn(async () => ({ success: true, user_id: 'new-user' })) },
@@ -30,6 +33,8 @@ vi.mock('../src/services/org-meta.service.js', () => ({
 
 const { agencyRepository } = await import('../src/repositories/agency.repository.js');
 const { authService } = await import('../src/services/auth.service.js');
+const { authRepository } = await import('../src/repositories/auth.repository.js');
+const { membershipRepository } = await import('../src/repositories/membership.repository.js');
 const { featuresService } = await import('../src/services/features.service.js');
 const { orgMetaService } = await import('../src/services/org-meta.service.js');
 const { agencyService } = await import('../src/services/agency.service.js');
@@ -40,6 +45,9 @@ const SUB = 'sub-1';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks clears CALLS, not implementations — reset the default so a
+  // test that stubs an existing login doesn't leak into the next one.
+  authRepository.findUserByEmail.mockResolvedValue(null);
   agencyRepository.childOrgs.mockResolvedValue([{ id: SUB, name: 'Bexley Dental', created_at: '2026-08-31' }]);
   agencyRepository.orgIntegrations.mockResolvedValue([{ organisation_id: SUB, provider: 'dentally', status: 'active' }]);
   agencyRepository.featureRows.mockResolvedValue([]);
@@ -89,6 +97,25 @@ describe('addSubaccountUser', () => {
       email: 'u@s.dev', full_name: 'U', password: 'permanent-pw', role: 'owner',
     })).rejects.toMatchObject({ statusCode: 404 });
     expect(authService.provisionMember).not.toHaveBeenCalled();
+  });
+
+  it('links an EXISTING email as a membership instead of failing', async () => {
+    // The point of the membership model: one person, several accounts, one
+    // password. Previously this threw "This email is already a member".
+    authRepository.findUserByEmail.mockResolvedValue({ id: 'existing-user', email: 'u@s.dev' });
+    const out = await agencyService.addSubaccountUser(AGENCY, SUB, { id: 'actor' }, {
+      email: 'u@s.dev', full_name: 'U', password: 'irrelevant', role: 'reception',
+    });
+    expect(membershipRepository.add).toHaveBeenCalledWith('existing-user', SUB, 'reception', {});
+    expect(authService.provisionMember).not.toHaveBeenCalled(); // no second login
+    expect(out).toMatchObject({ user_id: 'existing-user', linked: true });
+  });
+
+  it('gives a NEW login its membership row too, so the picker sees it', async () => {
+    await agencyService.addSubaccountUser(AGENCY, SUB, { id: 'actor' }, {
+      email: 'new@s.dev', full_name: 'N', password: 'permanent-pw', role: 'owner',
+    });
+    expect(membershipRepository.add).toHaveBeenCalledWith('new-user', SUB, 'owner', {});
   });
 
   it('adds the user to the SUB-ACCOUNT org, isolating them there', async () => {

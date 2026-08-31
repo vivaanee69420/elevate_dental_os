@@ -38,3 +38,8 @@ export const setPasswordSchema = zod_1.z.object({
     user_id: zod_1.z.string().uuid(),
     password: zod_1.z.string().min(8),
 });
+
+// Switch the acting account (multi-org membership).
+export const switchOrgSchema = zod_1.z.object({
+    orgId: zod_1.z.string().uuid(),
+});

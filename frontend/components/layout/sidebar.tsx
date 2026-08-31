@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { visibleNavSections, type Permissions } from '@/lib/permissions';
 import { useMe } from '@/hooks/useMe';
 import { AgencyDialog } from '@/features/agency/components/AgencyDialog';
+import { AccountPicker } from '@/features/agency/components/AccountPicker';
 import { useSidebar, HamburgerIcon } from '@/components/layout/sidebar-context';
 
 // Sidebar — the app shell's primary navigation.
@@ -165,6 +166,11 @@ export function Sidebar() {
       {/* Account switcher — agency actors only. Top-left, GHL-style: opens the
           one dialog that switches into a sub-account and manages it. */}
       <AgencyDialog />
+
+      {/* Account picker — only for a login that belongs to several accounts.
+          Separate from the agency dialog above: these are accounts the person
+          is a MEMBER of, not sub-accounts they administer. */}
+      <AccountPicker />
 
       {/* User card */}
       {me && (
