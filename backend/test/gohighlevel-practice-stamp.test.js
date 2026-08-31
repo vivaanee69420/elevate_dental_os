@@ -24,3 +24,23 @@ describe('GHL practice_id stamping', () => {
     expect(captured.practice_id).toBe('prac-9');
   });
 });
+
+describe('contactRow attribution', () => {
+    it('stamps attribution and a capture timestamp when GHL sends it', () => {
+        const r = contactRow('org-1', {
+            id: 'c1', firstName: 'Ada', email: 'A@Example.com',
+            attributions: [{ utmSessionSource: 'Paid Social', utmCampaignId: '120249721894530517',
+                             utmAdId: '120249722055010517', isFirst: true }],
+        }, 'practice-1', 'acct-1');
+        expect(r.ad_campaign_id).toBe('120249721894530517');
+        expect(r.ad_id).toBe('120249722055010517');
+        expect(r.attribution_source).toBe('Paid Social');
+        expect(typeof r.attribution_captured_at).toBe('string');
+    });
+
+    it('omits attribution keys entirely when there is none, so an upsert cannot null out a row that already has it', () => {
+        const r = contactRow('org-1', { id: 'c2', firstName: 'Bob' }, null, null);
+        expect(r).not.toHaveProperty('ad_campaign_id');
+        expect(r).not.toHaveProperty('attribution_captured_at');
+    });
+});

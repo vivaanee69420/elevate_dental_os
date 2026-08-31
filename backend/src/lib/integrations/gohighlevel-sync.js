@@ -33,6 +33,7 @@ import { ghlAppointmentRepository } from '../../repositories/ghl-appointment.rep
 import { decryptSecret } from '../crypto.js';
 import { GoHighLevelProvider } from './gohighlevel-provider.js';
 import { syncConversations } from './gohighlevel-conversations.js';
+import { extractAttribution } from './ghl-attribution.js';
 import * as supabase_1 from '../supabase.js';
 // Capture is a no-op when Sentry was never init'd (no SENTRY_DSN, e.g. local
 // and tests), so this is safe to import unconditionally.
@@ -127,6 +128,10 @@ export function contactRow(orgId, c, practiceId, integrationAccountId = null) {
         const d = new Date(rawCreated);
         if (!Number.isNaN(d.getTime())) createdIso = d.toISOString();
     }
+    // Attribution keys are SPREAD ONLY WHEN PRESENT. contacts is written with
+    // upsert, so emitting explicit nulls would wipe attribution captured on an
+    // earlier run every time GHL sends the contact back without it.
+    const attribution = extractAttribution(c);
     return {
         organisation_id: orgId,
         practice_id: practiceId,
@@ -138,6 +143,7 @@ export function contactRow(orgId, c, practiceId, integrationAccountId = null) {
         email: c.email ? String(c.email).toLowerCase() : null,
         phone: c.phone ?? null,
         ...(createdIso ? { created_at: createdIso } : {}),
+        ...(attribution ? { ...attribution, attribution_captured_at: new Date().toISOString() } : {}),
     };
 }
 
