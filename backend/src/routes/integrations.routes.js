@@ -8,6 +8,7 @@ import * as auth_1 from "../middleware/auth.js";
 import * as integration_controller_1 from "../controllers/integration.controller.js";
 import * as daily_report_controller_1 from "../controllers/daily-report.controller.js";
 import * as features_1 from "../middleware/features.js";
+import { requireAgencyActor } from "../middleware/agency.js";
 import { sheetsController } from "../controllers/sheets.controller.js";
 import { sheetExportController } from "../controllers/sheet-export.controller.js";
 const router = (0, express_1.Router)();
@@ -34,7 +35,8 @@ router.post('/emergent', emergentFeature, (0, auth_1.requireRole)('owner'), (0, 
 router.post('/emergent/sync', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSync));
 router.delete('/emergent', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentDisconnect));
 router.get('/emergent/practices', emergentFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentPractices));
-router.post('/emergent/practices', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSetPractice));
+// Emergent business→practice mapping is an agency-actor power (A2).
+router.post('/emergent/practices', emergentFeature, (0, auth_1.requireRole)('owner'), requireAgencyActor, (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSetPractice));
 router.get('/google-sheets/status', callReportingFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetsController.status));
 router.get('/google-sheets/picker-config', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.pickerConfig));
 router.post('/google-sheets/sources', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.addSource));
