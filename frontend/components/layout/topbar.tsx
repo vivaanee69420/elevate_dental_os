@@ -4,7 +4,6 @@ import { useMe } from '@/hooks/useMe';
 import { NotificationBell } from '@/features/notifications/components/NotificationBell';
 import { GlobalRefresh } from '@/components/layout/global-refresh';
 import { useSidebar, HamburgerIcon } from '@/components/layout/sidebar-context';
-import { AgencySwitcher } from '@/features/agency/components/AgencySwitcher';
 import { exitSwitch } from '@/features/agency/api';
 
 // TopBar — app shell header. Mirrors the preview prototype's .topbar:
@@ -63,7 +62,6 @@ export function TopBar() {
           </button>
         )}
         <span className="font-medium text-ink truncate">{me?.organisation_name ?? ''}</span>
-        <AgencySwitcher />
       </div>
       <div className="flex items-center gap-3">
         <GlobalRefresh />
