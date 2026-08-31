@@ -1,6 +1,8 @@
 import * as auth_service_1 from "../services/auth.service.js";
 import * as auth_model_1 from "../models/auth.model.js";
 import * as features_service_1 from "../services/features.service.js";
+import { isAgencyActor } from "../middleware/agency.js";
+import { orgMetaService } from "../services/org-meta.service.js";
 export const authController = {
     async signup(req, res) {
         const body = auth_model_1.signupSchema.parse(req.body);
@@ -20,6 +22,18 @@ export const authController = {
             permissions: req.user.permissions,
             // Org-level entitlements (agency model) — drives nav/page gating.
             features: await features_service_1.featuresService.enabledKeys(req.user.organisation_id),
+            // Agency shape (A2): drives the topbar switcher + mapping-control
+            // visibility. home_org only while switched.
+            agency: {
+                is_agency_actor: await isAgencyActor(req),
+                switched: Boolean(req.agencyContext),
+                home_org: req.agencyContext
+                    ? {
+                        id: req.agencyContext.homeOrgId,
+                        name: (await orgMetaService.getOrgMeta(req.agencyContext.homeOrgId))?.name ?? '',
+                    }
+                    : null,
+            },
             // Frontend hides the email-invite mode until delivery is wired.
             invite_enabled: process.env.TEAM_INVITE_ENABLED === 'true',
         });

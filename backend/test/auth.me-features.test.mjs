@@ -6,6 +6,11 @@ vi.mock('../src/services/features.service.js', () => ({
 vi.mock('../src/services/auth.service.js', () => ({
   authService: { organisationName: vi.fn().mockResolvedValue('Test Org') },
 }));
+vi.mock('../src/services/org-meta.service.js', () => ({
+  orgMetaService: {
+    getOrgMeta: vi.fn(async () => ({ id: 'org-1', name: 'Test Org', is_agency: true, parent_organisation_id: null })),
+  },
+}));
 
 const { authController } = await import('../src/controllers/auth.controller.js');
 const { featuresService } = await import('../src/services/features.service.js');
@@ -24,5 +29,28 @@ describe('GET /auth/me', () => {
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ features: ['finance', 'crm', 'data_room'] }),
     );
+  });
+
+  it('includes the agency shape (unswitched agency owner)', async () => {
+    const req = {
+      user: { id: 'u1', email: 'o@t.dev', role: 'owner', organisation_id: 'org-1', permissions: {} },
+    };
+    const res = { json: vi.fn() };
+    await authController.me(req, res);
+    expect(res.json.mock.calls[0][0].agency).toEqual({
+      is_agency_actor: true, switched: false, home_org: null,
+    });
+  });
+
+  it('includes home_org while switched', async () => {
+    const req = {
+      user: { id: 'u1', email: 'o@t.dev', role: 'owner', organisation_id: 'sub-1', permissions: {} },
+      agencyContext: { actorUserId: 'u1', homeOrgId: 'org-1' },
+    };
+    const res = { json: vi.fn() };
+    await authController.me(req, res);
+    expect(res.json.mock.calls[0][0].agency).toEqual({
+      is_agency_actor: true, switched: true, home_org: { id: 'org-1', name: 'Test Org' },
+    });
   });
 });
