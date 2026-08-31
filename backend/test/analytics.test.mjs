@@ -848,7 +848,15 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
   it('org-scoped: table queries + every rollup RPC pin the org', async () => {
     const tables = [];
     supaRec.resultProvider = (q) => {
-      tables.push({ table: q.table, org: q.eqs.find((e) => e.col === 'organisation_id')?.val });
+      // A read pins the org with .eq(); a write (the payload-cache upsert)
+      // carries it in the row instead. Both count as org-scoped — what must
+      // never happen is a table touched with neither.
+      tables.push({
+        table: q.table,
+        org: q.eqs.find((e) => e.col === 'organisation_id')?.val
+          ?? q.upsertVals?.organisation_id
+          ?? q.insertVals?.organisation_id,
+      });
       return q.table === 'business_health' ? { data: { baseline: {} }, error: null } : { data: [], error: null };
     };
     supaRec.rpcProvider = () => ({ data: [], error: null });

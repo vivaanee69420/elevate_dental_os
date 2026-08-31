@@ -26,6 +26,7 @@ import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonParts, londonMonthKey } from "../lib/tz.js";
 import * as async_pool_1 from "../lib/async-pool.js";
+import * as dashboard_cache_1 from "../lib/dashboard-cache.js";
 import { createTtlCache } from "../lib/ttl-cache.js";
 
 // Business Hub payload cache. The endpoint recomputes 16 heavy aggregates per
@@ -2584,15 +2585,31 @@ export const analyticsService = {
         if (opts.now) return this._businessHubUncached(orgId, opts);
         const { days = 90, since = null, until = null, label = null, practiceId = null } = opts;
         const key = `${orgId}|${days}|${since}|${until}|${label}|${practiceId}`;
-        const hit = businessHubCache.get(key);
-        if (hit) return hit;
-        return businessHubCache.set(key, await this._businessHubUncached(orgId, opts));
+
+        // Tier 1 — in-process. Fastest, but per-instance and lost on deploy.
+        const hot = businessHubCache.get(key);
+        if (hot) return hot;
+
+        // Tier 2 — Postgres. Survives deploys and is shared across instances,
+        // so the first load after a push doesn't pay for 16 aggregates again.
+        const warm = await (0, dashboard_cache_1.readDashboardCache)(orgId, `hub:${key}`);
+        if (warm) return businessHubCache.set(key, warm);
+
+        const fresh = await this._businessHubUncached(orgId, opts);
+        // Closed windows (an explicit past `until`) can be held far longer —
+        // their numbers only move if a sync backfills history.
+        const ttlMs = until && Date.parse(until) < Date.now() ? 6 * 60 * 60_000 : 60_000;
+        await (0, dashboard_cache_1.writeDashboardCache)(orgId, `hub:${key}`, fresh, ttlMs);
+        return businessHubCache.set(key, fresh);
     },
 
     // Drop cached Business Hub payloads for one org (after a sync writes new
     // rows), or all of them when called bare.
     invalidateBusinessHub(orgId) {
         businessHubCache.invalidate(orgId ? `${orgId}|` : undefined);
+        // Best-effort: clear the durable tier too, else a sync's new numbers
+        // would stay hidden behind a warm row.
+        if (orgId) (0, dashboard_cache_1.purgeDashboardCache)(orgId).catch(() => {});
     },
 
     async _businessHubUncached(orgId, { days = 90, since = null, until = null, label = null, practiceId = null, now = () => new Date() } = {}) {
