@@ -25,6 +25,8 @@
 import { serviceClient, tenantClient, verifyToken } from '../lib/supabase.js';
 import { permissionsService } from '../services/permissions.service.js';
 import { defaultPermissionsForRole, resolveEffectivePermissions } from '../lib/permissions.js';
+import { verifySwitchToken } from '../lib/agency-switch.js';
+import { orgMetaService } from '../services/org-meta.service.js';
 
 // Load the users row + that user's (org, role) role_permissions in ONE DB
 // round trip via the auth_bootstrap RPC. Falls back to the original
@@ -102,14 +104,46 @@ export async function authenticate(req, res, next) {
       });
     }
 
+    // Agency switch (phase A2): a signed httpOnly cookie, forwarded by the
+    // Next proxy as x-agency-switch, lets an agency OWNER act as the owner of
+    // a CHILD org. Re-validated per request against the DB (cached 60s):
+    // token user must be THIS user, home org must be an agency, target's
+    // parent must be home. Any failure -> silently act at home (a stale
+    // cookie is a UX non-event, never an error).
+    let actingOrgId = user.organisation_id;
+    let actingRole = user.role;
+    let actingPermissions = permissions;
+    let agencyContext;
+    const switchHeader = req.headers['x-agency-switch'];
+    if (switchHeader && user.role === 'owner') {
+      try {
+        const { userId: tokenUser, orgId: targetOrg } = verifySwitchToken(switchHeader);
+        if (tokenUser === user.id && targetOrg !== user.organisation_id) {
+          const [home, target] = await Promise.all([
+            orgMetaService.getOrgMeta(user.organisation_id),
+            orgMetaService.getOrgMeta(targetOrg),
+          ]);
+          if (home?.is_agency === true && target?.parent_organisation_id === user.organisation_id) {
+            actingOrgId = targetOrg;
+            actingRole = 'owner';
+            actingPermissions = defaultPermissionsForRole('owner');
+            agencyContext = { actorUserId: user.id, homeOrgId: user.organisation_id };
+          }
+        }
+      } catch (switchErr) {
+        req.log?.debug?.({ err: switchErr }, 'agency switch token ignored');
+      }
+    }
+
     req.user = {
       id: user.id,
       email: user.email,
-      organisation_id: user.organisation_id,
-      role: user.role,
-      permissions,
+      organisation_id: actingOrgId,
+      role: actingRole,
+      permissions: actingPermissions,
       access_token: token,
     };
+    if (agencyContext) req.agencyContext = agencyContext;
 
     // RLS-scoped client for per-request queries. Lazy: repos use serviceClient
     // (manual org filters), so req.db is read by almost no handler — only build
