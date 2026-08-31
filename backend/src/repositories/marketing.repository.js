@@ -2,6 +2,7 @@
 // serviceClient has NO automatic isolation: every query filters
 // organisation_id explicitly (rule 3).
 import * as supabase_1 from '../lib/supabase.js';
+import { londonYmd } from '../lib/tz.js';
 
 export const marketingRepository = {
     // Spend per campaign per provider over the window. ad_metrics is campaign x
@@ -16,10 +17,16 @@ export const marketingRepository = {
                 .select('provider, customer_id, campaign_id, campaign_name, spend_pence, impressions, clicks, conversions')
                 .eq('organisation_id', orgId)
                 // metric_date is a DATE while the scope window is an ISO
-                // datetime with an EXCLUSIVE until — slice to the date part and
-                // keep the half-open comparison, or the last day double-counts.
-                .gte('metric_date', String(since).slice(0, 10))
-                .lt('metric_date', String(until).slice(0, 10))
+                // instant with an EXCLUSIVE until. The instant must be resolved
+                // to its LONDON calendar date, never sliced: the scope bar emits
+                // 2026-07-31T23:00:00Z for the start of August under BST, and a
+                // slice would read that as 31 July — pulling in a day of July
+                // spend and, at the other end, excluding 31 August. Spend and
+                // ad_lead_conversions would then be measured over different
+                // days and every cost-per-lead figure would be wrong. The
+                // half-open comparison itself is right and is kept.
+                .gte('metric_date', londonYmd(since))
+                .lt('metric_date', londonYmd(until))
                 .range(from, from + PAGE - 1);
             if (practiceId) q = q.eq('practice_id', practiceId);
             const { data, error } = await q;
