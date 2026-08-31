@@ -516,14 +516,21 @@ async function loadContactDedupMaps(orgId) {
     const byGhl = new Map();   // ghl_contact_id -> our id
     const byEmail = new Map(); // lower(email)   -> { id, ghl }
     const byPhone = new Map(); // normphone      -> { id, ghl }
+    // ghl_contact_ids whose attribution has never been captured. Drives the
+    // opportunistic fill: the walk already holds these contacts, so writing
+    // them costs no extra API call.
+    const needsAttribution = new Set();
     const PAGE = 1000;
     for (let from = 0; ; from += PAGE) {
         const { data } = await supabase_1.serviceClient
-            .from('contacts').select('id, ghl_contact_id, email, phone')
+            .from('contacts').select('id, ghl_contact_id, email, phone, attribution_captured_at')
             .eq('organisation_id', orgId).range(from, from + PAGE - 1);
         const rows = data ?? [];
         for (const c of rows) {
-            if (c.ghl_contact_id) byGhl.set(String(c.ghl_contact_id), c.id);
+            if (c.ghl_contact_id) {
+                byGhl.set(String(c.ghl_contact_id), c.id);
+                if (!c.attribution_captured_at) needsAttribution.add(String(c.ghl_contact_id));
+            }
             const e = c.email ? String(c.email).toLowerCase() : null;
             if (e && !byEmail.has(e)) byEmail.set(e, { id: c.id, ghl: c.ghl_contact_id });
             const np = normalizePhone(c.phone);
@@ -531,7 +538,22 @@ async function loadContactDedupMaps(orgId) {
         }
         if (rows.length < PAGE) break;
     }
-    return { byGhl, byEmail, byPhone };
+    return { byGhl, byEmail, byPhone, needsAttribution };
+}
+
+// Which fetched contacts are worth writing. Changed-since-last-sync, OR
+// unchanged but still missing attribution we already hold. Pure, so the rule
+// is testable without a sync.
+export function selectContactsToWrite(fetched, since, needsAttribution) {
+    const sinceMs = since == null ? null : Date.parse(since);
+    if (sinceMs == null || Number.isNaN(sinceMs)) return fetched;
+    return fetched.filter((rc) => {
+        if (rc?.id != null && needsAttribution.has(String(rc.id))) return true;
+        const raw = rc?.dateUpdated ?? rc?.updatedAt ?? null;
+        if (raw == null) return true;   // no timestamp -> never silently dropped
+        const t = Date.parse(raw);
+        return Number.isNaN(t) || t >= sinceMs;
+    });
 }
 
 // Pull the contact book (paginated) and reconcile in BULK. Classify each remote
@@ -545,16 +567,13 @@ async function pullContacts(orgId, accessToken, locationId, practiceId, onPage =
         arrayKey: 'contacts', locationParam: 'locationId', maxPages, onPage,
     });
     // Incremental window: GHL's /contacts/ list cannot filter server-side, so
-    // the walk is unavoidable — but rows unchanged since `since` need no write.
-    // A contact with no update timestamp is kept (never silently dropped).
-    const sinceMs = since == null ? null : Date.parse(since);
-    const remote = sinceMs == null ? fetched : fetched.filter((rc) => {
-        const raw = rc?.dateUpdated ?? rc?.updatedAt ?? null;
-        if (raw == null) return true;
-        const t = Date.parse(raw);
-        return Number.isNaN(t) || t >= sinceMs;
-    });
-    const { byGhl, byEmail, byPhone } = await loadContactDedupMaps(orgId);
+    // the walk is unavoidable — but rows unchanged since `since` need no write,
+    // UNLESS their attribution has never been captured (opportunistic fill: the
+    // walk already holds these contacts in memory, so writing them costs no
+    // extra API call). A contact with no update timestamp is kept (never
+    // silently dropped).
+    const { byGhl, byEmail, byPhone, needsAttribution } = await loadContactDedupMaps(orgId);
+    const remote = selectContactsToWrite(fetched, since, needsAttribution);
     const toUpsert = [];
     const toLink = []; // { id, ghl_contact_id } — existing non-GHL row to relink
     for (const rc of remote) {
@@ -987,3 +1006,5 @@ export async function syncAllOrgs() {
     }
     return results;
 }
+
+export const __test = { selectContactsToWrite };
