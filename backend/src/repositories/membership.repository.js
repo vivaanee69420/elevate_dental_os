@@ -1,24 +1,66 @@
 // ============================================================================
-// Membership repository — all Supabase data access for memberships domain.
+// Multi-organisation membership. One login may belong to several accounts;
+// users.organisation_id remains the HOME/default org and these rows are
+// additive. Every acting-org decision is validated against this table on the
+// request path — the client's chosen org is never trusted on its own.
 // ============================================================================
-import * as supabase_1 from "../lib/supabase.js";
+import { serviceClient } from "../lib/supabase.js";
+
 export const membershipRepository = {
-    async listPlans(orgId) {
-        const { data } = await supabase_1.serviceClient
-            .from('membership_plans')
-            .select('*')
+    // Accounts this login can reach, named for the picker.
+    async listForUser(userId) {
+        const { data, error } = await serviceClient
+            .from('user_organisations')
+            .select('organisation_id, role, permissions, organisations(name)')
+            .eq('user_id', userId);
+        if (error) throw error;
+        return (data ?? []).map((r) => ({
+            organisation_id: r.organisation_id,
+            name: r.organisations?.name ?? null,
+            role: r.role,
+            permissions: r.permissions ?? {},
+        }));
+    },
+
+    async listForOrg(orgId) {
+        const { data, error } = await serviceClient
+            .from('user_organisations')
+            .select('user_id, role, created_at')
             .eq('organisation_id', orgId);
-        return data;
+        if (error) throw error;
+        return data ?? [];
     },
-    async list(orgId) {
-        const { data } = await supabase_1.serviceClient
-            .from('memberships')
-            .select('*, contact:contacts(first_name, last_name, email), plan:membership_plans(name, monthly_price_pence)')
+
+    // Returns the membership row, or null. The authorisation check for a
+    // requested acting org.
+    async find(userId, orgId) {
+        if (!userId || !orgId) return null;
+        const { data, error } = await serviceClient
+            .from('user_organisations')
+            .select('organisation_id, role, permissions')
+            .eq('user_id', userId)
             .eq('organisation_id', orgId)
-            .order('started_at', { ascending: false });
-        return data;
+            .maybeSingle();
+        if (error) return null;
+        return data ?? null;
     },
-    async create(row) {
-        return supabase_1.serviceClient.from('memberships').insert(row).select().single();
+
+    async add(userId, orgId, role, permissions = {}) {
+        const { error } = await serviceClient
+            .from('user_organisations')
+            .upsert(
+                { user_id: userId, organisation_id: orgId, role, permissions },
+                { onConflict: 'user_id,organisation_id' },
+            );
+        if (error) throw error;
+    },
+
+    async remove(userId, orgId) {
+        const { error } = await serviceClient
+            .from('user_organisations')
+            .delete()
+            .eq('user_id', userId)
+            .eq('organisation_id', orgId);
+        if (error) throw error;
     },
 };

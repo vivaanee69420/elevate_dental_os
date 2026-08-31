@@ -44,7 +44,7 @@ async function loadAuthContext(authUserId, log) {
       user.permissions,
       user.role,
     );
-    return { user, permissions };
+    return { user, permissions, memberships: data.memberships || [] };
   } catch (rpcErr) {
     // Fallback: RPC unavailable (pre-migration / transient). Original path.
     log?.warn({ err: rpcErr }, 'auth_bootstrap RPC unavailable; using fallback queries');
@@ -68,7 +68,9 @@ async function loadAuthContext(authUserId, log) {
       log?.warn({ err: permErr }, 'Permission resolution failed; using code role defaults');
       permissions = defaultPermissionsForRole(user.role, user.permissions);
     }
-    return { user, permissions };
+    // Fallback path: the RPC is unavailable, so memberships come back empty and
+    // the caller simply acts in its home org (pre-membership behaviour).
+    return { user, permissions, memberships: [] };
   }
 }
 
@@ -132,6 +134,24 @@ export async function authenticate(req, res, next) {
     let actingRole = user.role;
     let actingPermissions = permissions;
     let agencyContext;
+
+    // Multi-org membership: one login may belong to several accounts. The
+    // requested org is honoured ONLY when a membership backs it — the header
+    // is never authorisation by itself. Memberships arrive in the same
+    // auth_bootstrap round trip, so this costs no extra query.
+    const memberships = Array.isArray(ctx.memberships) ? ctx.memberships : [];
+    const requestedOrg = req.headers['x-active-org'];
+    if (requestedOrg && requestedOrg !== user.organisation_id) {
+      const member = memberships.find((m) => m.organisation_id === requestedOrg);
+      if (member) {
+        actingOrgId = member.organisation_id;
+        // That account's OWN role/permissions apply — a membership must never
+        // widen (or narrow) what the person can do in their home org.
+        actingRole = member.role;
+        actingPermissions = resolveEffectivePermissions([], member.permissions, member.role);
+      }
+      // No membership -> silently stay home; a stale cookie is not an error.
+    }
     const switchHeader = req.headers['x-agency-switch'];
     if (switchHeader && isAgencyAdmin && agencyOrgId) {
       try {
@@ -157,6 +177,8 @@ export async function authenticate(req, res, next) {
       role: actingRole,
       permissions: actingPermissions,
       is_agency_admin: isAgencyAdmin,
+      // Every account this login can reach — drives the account picker.
+      accounts: memberships.map((m) => ({ id: m.organisation_id, name: m.name, role: m.role })),
       access_token: token,
     };
     if (agencyContext) req.agencyContext = agencyContext;

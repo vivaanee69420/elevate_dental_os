@@ -15,6 +15,10 @@ export interface Me {
   invite_enabled?: boolean;
   /** Enabled org-level feature keys (agency model). Absent on older backends. */
   features?: string[];
+  /** Every organisation this login can reach (multi-org membership). */
+  accounts?: { id: string; name: string | null; role: string }[];
+  /** Which of those accounts the caller is acting in right now. */
+  active_organisation_id?: string;
   /** Agency shape (A2). Absent on older backends. */
   agency?: {
     is_agency_actor: boolean;

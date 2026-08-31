@@ -17,6 +17,18 @@ export const authRepository = {
             .select()
             .single();
     },
+    // Cross-org by design: emails are globally unique (Supabase auth), and the
+    // membership model needs to know whether this person already has a login
+    // anywhere before creating a second one. Returns identity only — never
+    // another org's data.
+    async findUserByEmail(email) {
+        const { data } = await supabase_1.serviceClient
+            .from('users')
+            .select('id, email')
+            .ilike('email', String(email).trim())
+            .maybeSingle();
+        return data ?? null;
+    },
     createUser(row) {
         return supabase_1.serviceClient.from('users').insert(row);
     },

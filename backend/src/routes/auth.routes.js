@@ -27,6 +27,11 @@ const credentialLimiter = (0, express_rate_limit_1.default)({
 router.post('/signup', credentialLimiter, (0, async_handler_1.asyncHandler)(auth_controller_1.authController.signup));
 router.post('/login', credentialLimiter, (0, async_handler_1.asyncHandler)(auth_controller_1.authController.login));
 router.get('/me', auth_1.authenticate, (0, async_handler_1.asyncHandler)(auth_controller_1.authController.me));
+// Switch which of the caller's accounts they act in. Authorisation is the
+// membership itself, so this only confirms one exists — the Next layer stores
+// the choice in an httpOnly cookie and the proxy replays it as x-active-org,
+// which authenticate re-validates on every request.
+router.post('/switch-org', auth_1.authenticate, (0, async_handler_1.asyncHandler)(auth_controller_1.authController.switchOrg));
 // CQ1: gate by the dynamic 'users.invite' capability, not a hardcoded role.
 router.post('/invite', auth_1.authenticate, (0, auth_1.requirePermission)('users.invite'), (0, async_handler_1.asyncHandler)(auth_controller_1.authController.invite));
 export default router;
