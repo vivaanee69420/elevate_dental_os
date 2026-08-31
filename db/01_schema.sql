@@ -1078,3 +1078,24 @@ CREATE INDEX IF NOT EXISTS idx_appointments_org_contact_created
   ON appointments (organisation_id, contact_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_appointments_org_created
   ON appointments (organisation_id, created_at);
+
+-- ============================================================================
+-- 000133 agency + org_features
+-- ============================================================================
+ALTER TABLE public.organisations
+  ADD COLUMN IF NOT EXISTS parent_organisation_id UUID REFERENCES public.organisations(id),
+  ADD COLUMN IF NOT EXISTS is_agency BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS idx_organisations_parent
+  ON public.organisations(parent_organisation_id);
+
+CREATE TABLE IF NOT EXISTS public.org_features (
+  organisation_id UUID NOT NULL REFERENCES public.organisations(id) ON DELETE CASCADE,
+  feature TEXT NOT NULL,
+  enabled BOOLEAN NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (organisation_id, feature)
+);
+
+ALTER TABLE public.org_features ENABLE ROW LEVEL SECURITY;
