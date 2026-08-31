@@ -7,6 +7,7 @@
 // "Patients" counts someone matched to a Dentally record.
 import { useState } from 'react';
 import { PageHeader, EmptyState, SkeletonTable } from '@/components/ui';
+import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useMarketingPerformance } from '../hooks';
@@ -51,6 +52,7 @@ export default function CampaignsScreen() {
       ) : rows.length === 0 ? (
         <EmptyState message="No campaign spend in this window. Connect Google Ads or Meta Ads in Integrations to see campaigns here." />
       ) : (
+        <DeferUntilVisible minHeight={360}>
         <div className="overflow-x-auto rounded-panel border border-border bg-surface">
           <table className="w-full text-[13.5px]">
             <thead className="bg-bg">
@@ -84,6 +86,7 @@ export default function CampaignsScreen() {
             </tbody>
           </table>
         </div>
+        </DeferUntilVisible>
       )}
     </div>
   );
