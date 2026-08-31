@@ -24,6 +24,7 @@
 // using the sheet's own timezone. Row values are never logged — counts only.
 
 import crypto from 'node:crypto';
+import * as features_service_1 from "../../services/features.service.js";
 import { sheetRepository } from '../../repositories/sheet.repository.js';
 import { sheetsFetch } from './google-sheets-provider.js';
 
@@ -340,6 +341,10 @@ export async function syncAllOrgs() {
     const sources = await sheetRepository.listConfiguredSources();
     const results = [];
     for (const s of sources) {
+        if (!(await features_service_1.featuresService.orgHasFeature(s.organisation_id, 'call_reporting'))) {
+            results.push({ orgId: s.organisation_id, sourceId: s.id, skipped: 'feature_disabled' });
+            continue;
+        }
         try {
             const r = await fullSync(s.organisation_id, s.id);
             results.push({ orgId: s.organisation_id, sourceId: s.id, ...r });

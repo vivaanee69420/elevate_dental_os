@@ -19,6 +19,7 @@
 // ============================================================================
 import crypto from "node:crypto";
 import * as supabase_1 from "../supabase.js";
+import * as features_service_1 from "../../services/features.service.js";
 import { decryptSecret } from "../crypto.js";
 import { integrationRepository } from "../../repositories/integration.repository.js";
 import { treatmentAcceptedRepository } from "../../repositories/treatment-accepted.repository.js";
@@ -463,6 +464,10 @@ export async function syncAllOrgs() {
         .eq('status', 'active');
     const results = [];
     for (const { organisation_id: orgId } of data ?? []) {
+        if (!(await features_service_1.featuresService.orgHasFeature(orgId, 'emergent'))) {
+            results.push({ orgId, skipped: 'feature_disabled' });
+            continue;
+        }
         try {
             results.push({ orgId, ...(await syncOrg(orgId)) });
         } catch (err) {
