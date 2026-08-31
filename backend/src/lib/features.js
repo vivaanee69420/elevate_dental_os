@@ -26,6 +26,7 @@ export const FEATURE_CATALOG = {
   business_health: { label: 'Business Health', kind: 'module', default: true, navSection: 'Business Health' },
   operations:      { label: 'Operations', kind: 'module', default: true, navSection: 'Operations' },
   growth:          { label: 'Growth', kind: 'module', default: true, navSection: 'Growth' },
+  marketing:       { label: 'Marketing', kind: 'module', default: true, navSection: 'Marketing' },
   crm:             { label: 'Elevate CRM', kind: 'module', default: true, navSection: 'Elevate CRM' },
   wealth:          { label: 'Wealth', kind: 'module', default: true, navSection: 'Wealth' },
   training:        { label: 'Training', kind: 'module', default: true, navSection: 'Training' },

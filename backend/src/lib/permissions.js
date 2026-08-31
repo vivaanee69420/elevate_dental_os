@@ -33,6 +33,7 @@ export const PERMISSION_CATALOG = {
   'operations.view': 'View operations (associates, staff, chair, UDA)',
   'intelligence.view': 'View intelligence (scenarios, tax, debt, alerts)',
   'growth.view': 'View growth (marketing, loyalty, reviews, booking)',
+  'marketing.view': 'View marketing (campaigns, ad spend, cost per lead)',
   'crm.view': 'View CRM (inbox, pipeline, contacts)',
   'crm.manage': 'Manage CRM (edit leads, workflows, templates)',
   'wealth.view': 'View wealth (net worth, property, pensions, FIRE)',
@@ -61,6 +62,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   practice_manager: {
     'operations.view': true,
     'growth.view': true,
+    'marketing.view': true,
     'crm.view': true,
     'crm.manage': true,
     'training.view': true,
