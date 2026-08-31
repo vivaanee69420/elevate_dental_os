@@ -8,6 +8,7 @@ import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohigh
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { decryptSecret } from "../lib/crypto.js";
 import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema } from "../models/integration.model.js";
+import { isAgencyActor } from "../middleware/agency.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
 import { emergentService } from "../services/emergent.service.js";
 import { featuresService } from "../services/features.service.js";
@@ -202,6 +203,11 @@ export const integrationController = {
         res.json(await ghlAccountService.addAccount(req.user.organisation_id, body));
     },
     async ghlAccountUpdate(req, res) {
+        // practice_id is the agency-controlled mapping field; the rest of the
+        // PATCH (PIT rotation, config) stays a normal owner power.
+        if (req.body?.practice_id !== undefined && !(await isAgencyActor(req))) {
+            return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
+        }
         const { id } = idParamSchema.parse(req.params);
         const body = ghlAccountUpdateSchema.parse(req.body);
         res.json(await ghlAccountService.updateAccount(req.user.organisation_id, id, body));
