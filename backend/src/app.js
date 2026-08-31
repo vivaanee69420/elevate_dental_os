@@ -24,6 +24,7 @@ import * as leads_routes_1 from "./routes/leads.routes.js";
 import * as contacts_routes_1 from "./routes/contacts.routes.js";
 import * as appointments_routes_1 from "./routes/appointments.routes.js";
 import * as tasks_routes_1 from "./routes/tasks.routes.js";
+import * as agency_routes_1 from "./routes/agency.routes.js";
 import * as comms_routes_1 from "./routes/comms.routes.js";
 import * as payments_routes_1 from "./routes/payments.routes.js";
 import * as pay_runs_routes_1 from "./routes/pay-runs.routes.js";
@@ -266,6 +267,7 @@ export function buildApp() {
     api.use('/wealth', wealth_routes_1.default);
     api.use('/training', training_routes_1.default);
     api.use('/practices', practices_routes_1.default);
+    api.use('/agency', agency_routes_1.default);
     api.use('/ad-attribution', ad_attribution_routes_1.default);
     api.use('/call-reporting', call_reporting_routes_1.default);
     api.use('/data-room', data_room_routes_1.default);
