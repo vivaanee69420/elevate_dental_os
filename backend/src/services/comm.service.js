@@ -9,11 +9,17 @@ import * as messaging_1 from "../lib/messaging.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { sendMessage as ghlSendMessage } from "../lib/integrations/gohighlevel-conversations.js";
 import * as supabase_1 from "../lib/supabase.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 export const commService = {
     list(orgId, q, viewer) {
         return comm_repository_1.commRepository.list(orgId, q, viewer);
     },
     async send(orgId, input, log) {
+        // The Inbox embeds `contact:contacts(...)` on read, so storing a
+        // foreign contact_id would disclose that patient's name and email.
+        // Validate before any send work happens.
+        await assertOrgOwns(orgId, 'contacts', input.contact_id, 'Contact');
+        await assertOrgOwns(orgId, 'leads', input.lead_id, 'Lead');
         let externalId;
         let provider = 'native';
         let conversationId = null;

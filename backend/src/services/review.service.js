@@ -13,6 +13,7 @@ import { getUserToken, listPages } from "../lib/integrations/meta-reviews.js";
 import { syncOneOrg } from "../lib/integrations/reviews-sync.js";
 import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
 import { isRevoked } from "../lib/integration-gating.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 
 const SYNC_PROVIDER = 'reviews';
 const SYNC_STALE_MS = 10 * 60 * 1000;
@@ -116,6 +117,8 @@ export const reviewService = {
     },
 
     async addSource(orgId, input) {
+        // review_sources embeds `practice:practices(name)` on read.
+        await assertOrgOwns(orgId, 'practices', input.practice_id, 'Practice');
         const source = await reviewSourceRepository.add(orgId, input);
         // Pull this source immediately so the screen isn't empty after adding.
         this.syncNow(orgId).catch((err) => console.error('[reviews] add-source sync failed:', err?.message || err));
@@ -128,6 +131,7 @@ export const reviewService = {
     },
 
     async setSourcePractice(orgId, id, practiceId) {
+        await assertOrgOwns(orgId, 'practices', practiceId, 'Practice');
         return { source: await reviewSourceRepository.setPractice(orgId, id, practiceId) };
     },
 

@@ -17,6 +17,7 @@ import { AppError } from "../middleware/errors.js";
 import { verifyCredentials, syncOrg } from "../lib/integrations/emergent-sync.js";
 import { emergentPracticeMapRepository } from "../repositories/emergent-practice-map.repository.js";
 import { treatmentAcceptedRepository } from "../repositories/treatment-accepted.repository.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 
 const PROVIDER = 'emergent';
 
@@ -107,6 +108,10 @@ export const emergentService = {
         if (!businessId || String(businessId).trim() === '') {
             throw new AppError('business_id is required', 400);
         }
+        // The mapping list embeds `practices(name)`; a foreign practice_id
+        // would leak that name AND re-stamp our own treatment_accepted rows
+        // with an id from another tenant.
+        await assertOrgOwns(orgId, 'practices', practiceId, 'Practice');
         // Look up the cached name so the map row keeps a label even if discovery
         // has not stamped it yet (best-effort; null is fine).
         const existing = (await emergentPracticeMapRepository.list(orgId))
