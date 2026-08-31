@@ -91,6 +91,24 @@ All feature-gated 403 responses share the error body:
 
 The generic multi-provider integration routes (`POST /api/integrations/connect`, `/api/integrations/:provider/{callback,refresh,sync,sync-progress,webhook-info,webhook-secret}`) enforce the same 403 at runtime when `:provider` is one of the three feature-bound providers (`emergent`, `google_sheets`, `google_sheets_writer`). `POST /api/integrations/:provider/revoke` is deliberately **not** gated — an organisation whose feature is switched off can always disconnect the provider.
 
+## Agency (A2)
+
+An **agency** is an organisation with `is_agency=true`; its **sub-accounts** are organisations with `parent_organisation_id` set to it. All routes below require an *agency owner* (an owner of an agency org — they keep working while switched into a sub-account, acting on the caller's HOME org). Non-agency callers get 403:
+
+```json
+{ "error": "Agency access required", "code": "AGENCY_ONLY" }
+```
+
+- `GET /api/agency/subaccounts` — `{ subaccounts: [{ id, name, created_at, integrations: [{provider,status}], features: {key:bool} }] }`.
+- `POST /api/agency/subaccounts` — `{ organisation_name, owner_email, owner_name }` → 201 `{ organisation_id, owner_id, owner_email, temp_password }`. Reuses `provisionOrgOwner` (owner active immediately; the temp password is surfaced ONCE, never stored).
+- `GET /api/agency/subaccounts/:id/features` — `{ features, overrides }` (effective map + raw `org_features` rows).
+- `PATCH /api/agency/subaccounts/:id/features` — `{ feature, enabled }` (key must exist in the catalog; target must be a child org) → `{ features }`.
+- `POST /api/agency/switch` — `{ orgId }` → `{ token, expires_at, organisation }`. The token is HMAC-signed (secret `AGENCY_SWITCH_SECRET`, falling back to `OAUTH_STATE_SECRET`), bound to the calling user, ~12h expiry.
+
+**Switch transport**: the frontend stores the token in an httpOnly `agency_switch` cookie (set by the Next route `/api/agency-switch`; `DELETE` clears it) and the generic backend proxy re-injects it as an `x-agency-switch` header on every request. `authenticate` re-validates it per request (token user = caller, home org is an agency, target's parent = home org) and then acts as the target org's owner with `req.agencyContext = { actorUserId, homeOrgId }`; any invalid/stale token is silently ignored (home context). Switched mutations audit with the acting org + real actor plus `diff.via_agency`. `/auth/me` gains `agency: { is_agency_actor, switched, home_org }`.
+
+**Agency-actor-only mapping mutations** (403 `AGENCY_ONLY` otherwise): `PUT /api/ad-attribution/pipelines/:accountId/:pipelineId`, `PATCH /api/ad-attribution/subaccounts/:id`, `PATCH /api/ad-attribution/ad-accounts/:id`, `PATCH /api/practices/:id/pms-site-id`, `POST /api/integrations/emergent/practices`, and the `practice_id` field of `PATCH /api/integrations/gohighlevel/accounts/:id`. Reads stay owner/PM.
+
 ## Business Health
 
 ### `GET /api/health`
