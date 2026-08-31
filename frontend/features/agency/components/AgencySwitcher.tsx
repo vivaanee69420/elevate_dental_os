@@ -6,7 +6,7 @@ import { useSubaccounts, switchInto, exitSwitch } from '../api';
 /** Topbar account switcher — rendered only for agency actors. */
 export function AgencySwitcher() {
   const { data: me } = useMe();
-  const actor = isAgencyActor(me) && me?.agency !== undefined;
+  const actor = isAgencyActor(me);
   const switched = me?.agency?.switched === true;
   const [open, setOpen] = useState(false);
   const { data } = useSubaccounts(actor && open);

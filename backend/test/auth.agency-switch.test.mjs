@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { supaRec } from './setup.js';
 
 vi.mock('../src/services/org-meta.service.js', () => ({
-  orgMetaService: { getOrgMeta: vi.fn() },
+  orgMetaService: { getOrgMeta: vi.fn(), getAgencyOrgId: vi.fn() },
 }));
 
 const { orgMetaService } = await import('../src/services/org-meta.service.js');
@@ -17,13 +17,18 @@ const AUTH_UID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const HOME = 'a0000000-0000-0000-0000-000000000001';
 const SUB = 'a0000000-0000-0000-0000-000000000002';
 
-function stubUser(role = 'owner') {
+// HOME is the agency org; the acting user holds the per-user grant unless a
+// test says otherwise.
+function stubUser(role = 'owner', isAgencyAdmin = true) {
   supaRec.authUser = { id: AUTH_UID };
   supaRec.rpcProvider = (fn) =>
     fn === 'auth_bootstrap'
       ? {
           data: {
-            user: { id: AUTH_UID, email: 'o@a.dev', organisation_id: HOME, role, permissions: {}, status: 'active' },
+            user: {
+              id: AUTH_UID, email: 'o@a.dev', organisation_id: HOME, role,
+              permissions: {}, status: 'active', is_agency_admin: isAgencyAdmin,
+            },
             role_permissions: [],
           },
           error: null,
@@ -47,11 +52,12 @@ describe('authenticate agency switch', () => {
     supaRec.resultProvider = () => ({ data: [], error: null }); // last_active_at touch
     orgMetaService.getOrgMeta.mockReset();
     orgMetaService.getOrgMeta.mockResolvedValue(null);
+    orgMetaService.getAgencyOrgId.mockReset();
+    orgMetaService.getAgencyOrgId.mockResolvedValue(HOME);
   });
 
-  it('valid token + agency home + child target -> acts as sub-account owner', async () => {
+  it('valid token + agency grant + child target -> acts as sub-account owner', async () => {
     orgMetaService.getOrgMeta.mockImplementation(metaFor({
-      [HOME]: { id: HOME, name: 'Agency', is_agency: true, parent_organisation_id: null },
       [SUB]: { id: SUB, name: 'Sub', is_agency: false, parent_organisation_id: HOME },
     }));
     const { req } = await run({ 'x-agency-switch': signSwitchToken(AUTH_UID, SUB) });
@@ -78,22 +84,29 @@ describe('authenticate agency switch', () => {
     expect(req.agencyContext).toBeUndefined();
   });
 
-  it('home org not an agency -> ignored', async () => {
+  it('an OWNER WITHOUT the agency grant is ignored (no lookup at all)', async () => {
+    // The regression this guards: a client owner inside the agency org.
+    stubUser('owner', false);
     orgMetaService.getOrgMeta.mockImplementation(metaFor({
-      [HOME]: { id: HOME, name: 'Org', is_agency: false, parent_organisation_id: null },
       [SUB]: { id: SUB, name: 'Sub', is_agency: false, parent_organisation_id: HOME },
     }));
     const { req } = await run({ 'x-agency-switch': signSwitchToken(AUTH_UID, SUB) });
+    expect(req.user.organisation_id).toBe(HOME);
+    expect(req.user.is_agency_admin).toBe(false);
     expect(req.agencyContext).toBeUndefined();
+    expect(orgMetaService.getAgencyOrgId).not.toHaveBeenCalled();
   });
 
-  it('non-owner with a valid token -> ignored (no lookup)', async () => {
-    stubUser('practice_manager');
+  it('a granted user acting from ANOTHER org still administers the agency org', async () => {
+    // is_agency_admin is per user; the admin need not sit in the agency org.
+    const ELSEWHERE = 'a0000000-0000-0000-0000-0000000000ff';
+    orgMetaService.getAgencyOrgId.mockResolvedValue(ELSEWHERE);
+    orgMetaService.getOrgMeta.mockImplementation(metaFor({
+      [SUB]: { id: SUB, name: 'Sub', is_agency: false, parent_organisation_id: ELSEWHERE },
+    }));
     const { req } = await run({ 'x-agency-switch': signSwitchToken(AUTH_UID, SUB) });
-    expect(req.user.organisation_id).toBe(HOME);
-    expect(req.user.role).toBe('practice_manager');
-    expect(req.agencyContext).toBeUndefined();
-    expect(orgMetaService.getOrgMeta).not.toHaveBeenCalled();
+    expect(req.user.organisation_id).toBe(SUB);
+    expect(req.agencyContext).toEqual({ actorUserId: AUTH_UID, homeOrgId: ELSEWHERE });
   });
 
   it('forged/garbage token -> ignored', async () => {

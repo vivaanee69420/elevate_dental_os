@@ -8,18 +8,24 @@
 // The predicate is identical today; two names keep intent readable and let
 // the definitions diverge later without a route sweep.
 // ============================================================================
-import { orgMetaService } from '../services/org-meta.service.js';
 
+// Agency access is a PER-USER grant (users.is_agency_admin), not "owner of an
+// org that happens to be flagged is_agency". An agency org can hold both our
+// staff and client users — Plan4growth does — so the org flag alone handed
+// sub-account creation, practice mapping and production logs to real clients.
+// The org flag now only says "may parent sub-accounts"; this says who may act.
 export async function isAgencyActor(req) {
+    // A switched context was already validated against the grant in
+    // authenticate(), so it needs no second lookup.
     if (req.agencyContext) return true;
-    if (!req.user || req.user.role !== 'owner') return false;
-    const meta = await orgMetaService.getOrgMeta(req.user.organisation_id);
-    return meta?.is_agency === true;
+    return req.user?.is_agency_admin === true;
 }
 
-// The caller's agency (home) org id — where /api/agency/* operations act.
+// The org /api/agency/* operates on: the single agency org, resolved in
+// authenticate(). NOT the caller's own organisation_id — an agency admin may
+// sit in a different org and still administer the agency's sub-accounts.
 export function agencyHomeOrgId(req) {
-    return req.agencyContext?.homeOrgId ?? req.user.organisation_id;
+    return req.agencyContext?.homeOrgId ?? req.agencyOrgId ?? req.user.organisation_id;
 }
 
 // Named so the function is identifiable in stack traces and in the structural

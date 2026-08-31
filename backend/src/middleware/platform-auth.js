@@ -72,11 +72,14 @@ export async function platformAuthenticate(req, _res, next) {
 }
 
 export function requirePlatformRole(...roles) {
-  return (req, _res, next) => {
+  // Named so structural route tests can assert a mount carries the gate, and
+  // so it is identifiable in stack traces.
+  const platformRoleGate = (req, _res, next) => {
     if (!req.platformAdmin) return next(new AppError('Unauthenticated', 401));
     if (!roles.includes(req.platformAdmin.role)) {
       return next(new AppError('Forbidden', 403));
     }
     next();
   };
+  return platformRoleGate;
 }

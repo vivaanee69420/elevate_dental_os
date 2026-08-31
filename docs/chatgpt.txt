@@ -1,0 +1,402 @@
+I need you to investigate and implement Chair Utilisation data from Dentally.
+
+IMPORTANT:
+- Do NOT guess or invent Dentally API endpoints/fields.
+- Do NOT immediately build an approximate utilisation calculation.
+- First inspect our existing Dentally integration and understand exactly how authentication, API calls, pagination, syncing, and Supabase storage currently work.
+- We already have a working Dentally API integration using an access token.
+- Patients, appointments, practitioners, users, sites, payments, etc. are already being fetched successfully.
+- Your goal is to determine whether we can obtain Dentally's actual Chair Utilisation data, or the underlying data needed to calculate it as accurately as possible.
+
+Existing Dentally API base:
+https://api.dentally.co/v1
+
+Existing OAuth scopes currently used:
+patient:read appointment:read user:read practice:read financials:read treatments
+
+Existing relevant endpoints:
+GET /patients
+GET /appointments
+GET /practitioners
+GET /users
+GET /sites
+GET /practices
+GET /appointments/availability
+
+Our existing appointment records currently contain fields including:
+- id
+- patient_id
+- practitioner_id
+- practitioner_site_id
+- site_id
+- start_time
+- finish_time
+- state/status
+- appointment_type/reason
+
+There is evidence that Dentally appointments may also contain:
+- room_id
+
+The Dentally Chair Utilisation report is based on chair availability versus chair usage. We need to determine how to obtain both sides of that calculation.
+
+TASK 1 — Inspect the existing code
+
+Inspect:
+- backend/src/lib/integrations/dentally-provider.js
+- backend/src/lib/integrations/dentally-sync.js
+- relevant Supabase migrations/schema
+- any Dentally API documentation stored in the repository
+- any existing tests
+
+Understand:
+- how the access token is loaded
+- how requests are authenticated
+- how API errors are handled
+- how pagination works
+- how appointments are mapped into Supabase
+- whether room_id is already present in the raw API response but simply not persisted
+
+Do NOT modify anything yet.
+
+TASK 2 — Test the existing appointment endpoint
+
+Using the existing Dentally integration/authentication mechanism and the existing configured Dentally credentials/token, make a safe GET request against:
+
+GET /v1/appointments
+
+Inspect a real sanitized response and determine whether appointment objects contain:
+
+- room_id
+- room
+- surgery
+- chair
+- diary
+- any other room/chair-related field
+
+Do NOT log or expose access tokens, patient PII, or other sensitive information.
+
+If room_id exists:
+- determine its format/type
+- determine whether the same room_id consistently represents a surgery/room
+- check whether appointments across different dates/practitioners contain room_id
+
+TASK 3 — Investigate Dentally diary/rota/availability endpoints
+
+We need to determine whether Dentally exposes underlying availability data.
+
+Safely test the following if appropriate:
+
+GET /v1/appointments/availability
+
+Then investigate whether any of these undocumented or related resources exist:
+
+GET /v1/practitioner_diaries
+GET /v1/practitioner_diary
+GET /v1/diaries
+GET /v1/rotas
+GET /v1/practitioner_rotas
+GET /v1/surgeries
+GET /v1/rooms
+GET /v1/chairs
+GET /v1/chair_availability
+GET /v1/room_availability
+GET /v1/opening_hours
+GET /v1/site_opening_hours
+GET /v1/practice_opening_hours
+
+IMPORTANT:
+- Do not blindly hammer the API.
+- Respect existing rate limiting/backoff behavior.
+- Start with HEAD/OPTIONS only if supported; otherwise use a minimal GET.
+- If an endpoint returns 401/403/404, record that fact and move on.
+- A 403 may mean the endpoint exists but the current OAuth scope/token is insufficient, so distinguish that from a true 404 where possible.
+- Do not modify production data.
+- Do not create/update/delete Dentally webhooks.
+- Do not change OAuth scopes automatically.
+
+Also inspect Dentally's current official API documentation and community/API discussions if web access is available.
+
+TASK 4 — Investigate /v1/sites and /v1/practices more deeply
+
+Our current code apparently only consumes:
+- id
+- name/title/label
+
+Inspect the raw response from /v1/sites and /v1/practices.
+
+Determine whether the response contains any additional fields related to:
+- opening hours
+- working hours
+- surgeries
+- rooms
+- chairs
+- calendars
+- availability
+- schedules
+- configuration
+
+If such fields exist, document them and determine whether they can be used for Chair Utilisation.
+
+TASK 5 — Investigate /v1/appointments/availability properly
+
+Determine exactly what this endpoint returns.
+
+Check:
+- required parameters
+- practitioner_ids
+- start_time
+- finish_time
+- duration
+- returned start/finish windows
+- whether results are based on practitioner rota
+- whether breaks are excluded
+- whether rooms/chairs are considered
+- whether room_id is returned
+- whether historical dates are supported
+- whether it can be used to calculate availability for a historical period
+
+We specifically need to know:
+
+Can this endpoint tell us CHAIR availability?
+
+Or does it only tell us PRACTITIONER availability?
+
+Do not conflate the two.
+
+TASK 6 — Determine whether Dentally exposes the official Chair Utilisation report
+
+Search the official Dentally API documentation and community documentation for:
+
+- Chair Utilisation
+- Chair Utilization
+- surgery utilisation
+- surgery utilization
+- room utilisation
+- room utilization
+- chair availability
+- surgery availability
+- chair usage
+- room usage
+
+Look for:
+- API endpoints
+- report endpoints
+- exports
+- reporting APIs
+- undocumented endpoints
+- NexGen API equivalents
+
+Determine whether there is any API that returns the actual Dentally-calculated Chair Utilisation percentage.
+
+If there is one, provide:
+- endpoint
+- HTTP method
+- required OAuth scope
+- parameters
+- response structure
+- example sanitized response
+- exact implementation approach
+
+TASK 7 — Investigate NexGen API
+
+Dentally is currently rolling out NexGen APIs.
+
+Check whether NexGen exposes anything related to:
+- rooms
+- surgeries
+- chairs
+- diaries
+- schedules
+- rotas
+- availability
+- chair utilisation
+- reporting
+
+Do not replace the existing v1 integration unless there is a concrete reason.
+
+Just determine whether NexGen provides something that solves the missing Chair Utilisation data.
+
+TASK 8 — Determine the best possible calculation
+
+If Dentally does NOT expose the official Chair Utilisation report directly, determine whether we can accurately reproduce it.
+
+We need to identify:
+
+NUMERATOR:
+Actual chair/room usage.
+
+Potential source:
+appointments.room_id + appointment start_time/finish_time
+
+DENOMINATOR:
+Actual chair/room available time.
+
+Potential sources:
+- chair schedules
+- room schedules
+- surgery opening hours
+- practitioner diaries
+- rotas
+- site opening hours
+- appointment availability
+- another Dentally resource
+
+Do NOT assume that practitioner availability equals chair availability.
+
+Do NOT assume:
+number of chairs × practice opening hours
+
+unless Dentally actually provides evidence that this is how its Chair Utilisation report is calculated.
+
+The final calculation should be something like:
+
+chair_utilisation =
+    utilised_chair_minutes /
+    available_chair_minutes
+    * 100
+
+But only implement this if we can establish the correct source of available_chair_minutes.
+
+TASK 9 — Compare our result against Dentally
+
+If possible, choose a small historical date range/practice where the Dentally UI's Chair Utilisation report can be manually checked.
+
+For example:
+
+Practice X
+Date range:
+2026-08-01 → 2026-08-31
+
+Compare:
+
+Dentally Chair Utilisation:
+Chair 1 = X%
+Chair 2 = Y%
+
+Our calculated result:
+Chair 1 = X%
+Chair 2 = Y%
+
+Document any discrepancies and explain exactly why they occur.
+
+Pay particular attention to:
+- cancelled appointments
+- did-not-attend appointments
+- meetings
+- blocked diary time
+- breaks
+- practitioner absence
+- bank holidays
+- room changes
+- appointments without patients
+- overlapping appointments
+- appointments spanning breaks
+- appointments outside opening hours
+
+TASK 10 — Implementation
+
+ONLY AFTER the investigation is complete, implement the best supported solution.
+
+If room_id is available:
+- add room_id to our appointment mapping/storage
+- create the necessary Supabase migration if needed
+- preserve existing data
+- do not break the existing sync
+- add appropriate indexes
+
+If a reliable availability source exists:
+- create a clean Chair Utilisation data model
+- calculate/store daily utilisation
+- retain enough raw data to reproduce the calculation
+- support practice/site and room/chair dimensions
+- avoid recalculating the entire historical dataset on every sync
+
+If the official Dentally Chair Utilisation data is directly available:
+- prefer storing the official values rather than recalculating them.
+
+If neither direct data nor sufficient underlying data is available:
+- DO NOT implement a misleading fake Chair Utilisation metric.
+- Instead, implement room-level booked/occupied time if room_id is available.
+- Clearly label it as ROOM OCCUPANCY / BOOKED ROOM TIME, NOT Chair Utilisation.
+
+TASK 11 — Historical data
+
+Our appointment sync already supports historical windows and stores appointment start/end times.
+
+Determine whether the required Chair Utilisation inputs can be backfilled historically.
+
+If the availability endpoint is forward-looking only, do not pretend it can reconstruct historical availability.
+
+If historical availability cannot be obtained, clearly state the limitation.
+
+TASK 12 — Final report
+
+Before making significant code changes, give me a concise investigation report with:
+
+1. Direct Chair Utilisation API:
+   YES/NO
+
+2. Chair endpoint:
+   YES/NO
+
+3. Surgery/room endpoint:
+   YES/NO
+
+4. room_id on appointments:
+   YES/NO
+
+5. Diary endpoint:
+   YES/NO
+
+6. Rota endpoint:
+   YES/NO
+
+7. Opening-hours endpoint:
+   YES/NO
+
+8. Chair availability endpoint:
+   YES/NO
+
+9. Practitioner availability endpoint:
+   YES/NO
+
+10. Historical availability:
+    YES/NO
+
+11. NexGen solution:
+    YES/NO/UNKNOWN
+
+12. Can we reproduce Dentally's exact Chair Utilisation?
+    YES/NO/PARTIALLY
+
+13. If YES:
+    Show the exact formula and data sources.
+
+14. If NO:
+    Explain precisely what data is missing.
+
+15. Recommended implementation:
+    Give the safest production-ready approach.
+
+16. Files that need to change:
+    List exact paths.
+
+17. Database changes:
+    List exact tables/columns/indexes.
+
+18. API calls:
+    List exact endpoints and parameters.
+
+19. Security:
+    Confirm that no credentials, tokens, or patient PII were logged.
+
+IMPORTANT FINAL RULE:
+
+Do not tell me "we can calculate chair utilisation" unless you have identified BOTH:
+A) the actual chair/room usage time
+AND
+B) the actual chair/room available time.
+
+If we only have A, call it room occupancy/booked time.
+
+The goal is to get as close as possible to the SAME Chair Utilisation number Dentally displays, not to create a convenient but inaccurate metric.

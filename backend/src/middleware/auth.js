@@ -50,7 +50,7 @@ async function loadAuthContext(authUserId, log) {
     log?.warn({ err: rpcErr }, 'auth_bootstrap RPC unavailable; using fallback queries');
     const { data: user, error } = await serviceClient
       .from('users')
-      .select('id, email, organisation_id, role, permissions, status')
+      .select('id, email, organisation_id, role, permissions, status, is_agency_admin')
       .eq('id', authUserId)
       .single();
     if (error || !user) return null;
@@ -104,30 +104,34 @@ export async function authenticate(req, res, next) {
       });
     }
 
+    // Agency admins (users.is_agency_admin) administer the ONE agency org and
+    // its sub-accounts. The grant is per user and they may sit in a different
+    // org, so the org they administer is resolved here rather than assumed to
+    // be their own. Cached 60s, so this costs nothing per request.
+    const isAgencyAdmin = user.is_agency_admin === true;
+    const agencyOrgId = isAgencyAdmin ? await orgMetaService.getAgencyOrgId() : null;
+
     // Agency switch (phase A2): a signed httpOnly cookie, forwarded by the
-    // Next proxy as x-agency-switch, lets an agency OWNER act as the owner of
-    // a CHILD org. Re-validated per request against the DB (cached 60s):
-    // token user must be THIS user, home org must be an agency, target's
-    // parent must be home. Any failure -> silently act at home (a stale
-    // cookie is a UX non-event, never an error).
+    // Next proxy as x-agency-switch, lets an agency admin act as the owner of
+    // a sub-account. Re-validated per request against the DB (cached 60s):
+    // token user must be THIS user, and the target must be a child of the
+    // agency org. Any failure -> silently act at home (a stale cookie is a UX
+    // non-event, never an error).
     let actingOrgId = user.organisation_id;
     let actingRole = user.role;
     let actingPermissions = permissions;
     let agencyContext;
     const switchHeader = req.headers['x-agency-switch'];
-    if (switchHeader && user.role === 'owner') {
+    if (switchHeader && isAgencyAdmin && agencyOrgId) {
       try {
         const { userId: tokenUser, orgId: targetOrg } = verifySwitchToken(switchHeader);
-        if (tokenUser === user.id && targetOrg !== user.organisation_id) {
-          const [home, target] = await Promise.all([
-            orgMetaService.getOrgMeta(user.organisation_id),
-            orgMetaService.getOrgMeta(targetOrg),
-          ]);
-          if (home?.is_agency === true && target?.parent_organisation_id === user.organisation_id) {
+        if (tokenUser === user.id && targetOrg !== agencyOrgId) {
+          const target = await orgMetaService.getOrgMeta(targetOrg);
+          if (target?.parent_organisation_id === agencyOrgId) {
             actingOrgId = targetOrg;
             actingRole = 'owner';
             actingPermissions = defaultPermissionsForRole('owner');
-            agencyContext = { actorUserId: user.id, homeOrgId: user.organisation_id };
+            agencyContext = { actorUserId: user.id, homeOrgId: agencyOrgId };
           }
         }
       } catch (switchErr) {
@@ -141,9 +145,13 @@ export async function authenticate(req, res, next) {
       organisation_id: actingOrgId,
       role: actingRole,
       permissions: actingPermissions,
+      is_agency_admin: isAgencyAdmin,
       access_token: token,
     };
     if (agencyContext) req.agencyContext = agencyContext;
+    // The org an agency admin administers — /api/agency/* acts on this, NOT on
+    // the admin's own organisation_id (they may sit elsewhere).
+    if (agencyOrgId) req.agencyOrgId = agencyOrgId;
 
     // RLS-scoped client for per-request queries. Lazy: repos use serviceClient
     // (manual org filters), so req.db is read by almost no handler — only build

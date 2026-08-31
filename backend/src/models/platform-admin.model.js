@@ -33,6 +33,11 @@ export const userIdParamSchema = z.object({
   id: z.string().uuid(),
 });
 
+// Grant/revoke agency access for one tenant user.
+export const agencyAdminBodySchema = z.object({
+  enabled: z.boolean(),
+});
+
 export const userSearchQuerySchema = z.object({
   q: z.string().trim().min(1),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),

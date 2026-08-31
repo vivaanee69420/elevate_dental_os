@@ -8,6 +8,7 @@ import {
   metricsRangeQuerySchema,
   createOrgSchema,
   userIdParamSchema,
+  agencyAdminBodySchema,
 } from '../models/platform-admin.model.js';
 import { platformAdminService } from '../services/platform-admin.service.js';
 
@@ -80,6 +81,12 @@ export const platformAdminController = {
     const q = userSearchQuerySchema.parse(req.query);
     const out = await platformAdminService.searchUsers(req.platformAdmin, q, req);
     res.json(out);
+  },
+
+  async setAgencyAdmin(req, res) {
+    const { id } = userIdParamSchema.parse(req.params);
+    const { enabled } = agencyAdminBodySchema.parse(req.body);
+    res.json(await platformAdminService.setAgencyAdmin(req.platformAdmin, id, enabled, req));
   },
 
   async overview(req, res) {

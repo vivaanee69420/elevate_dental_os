@@ -247,7 +247,7 @@ export function Sidebar() {
 
         {/* Agency menu — agency owners only (A2). Standalone entry, not part
             of the frozen NAV catalog. */}
-        {isAgencyActor(me) && me?.agency !== undefined && (
+        {isAgencyActor(me) && (
           <Link
             href="/agency"
             aria-current={pathname === '/agency' ? 'page' : undefined}
