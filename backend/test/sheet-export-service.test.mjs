@@ -55,6 +55,13 @@ vi.mock('../src/lib/integrations/google-sheets-provider.js', () => ({
   parseSpreadsheetId: vi.fn(),
 }));
 
+// drainOrg checks the sheet_export flag first — default true here so every
+// pre-existing test below (written before the flag check landed) keeps
+// exercising the real drain logic; the flag-off behaviour gets its own test.
+vi.mock('../src/services/features.service.js', () => ({
+  featuresService: { orgHasFeature: vi.fn() },
+}));
+
 vi.mock('../src/lib/integrations/google-sheets-writer.js', () => ({
   ensurePracticeTab: vi.fn(),
   ensureOpenDayTab: vi.fn(),
@@ -77,6 +84,7 @@ import { parseSpreadsheetId } from '../src/lib/integrations/google-sheets-provid
 import { ensurePracticeTab, ensureOpenDayTab, appendRows, readExportIds, londonDateSerial, listMappedTabs, readTabGrid, batchUpdateCells, sortMappedTabsByLeadDate }
   from '../src/lib/integrations/google-sheets-writer.js';
 import { sheetExportService } from '../src/services/sheet-export.service.js';
+import { featuresService } from '../src/services/features.service.js';
 
 const ORG = '00000000-0000-0000-0000-000000000001';
 const OTHER_ORG = '00000000-0000-0000-0000-000000000002';
@@ -124,6 +132,7 @@ function matchResult(overrides = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  featuresService.orgHasFeature.mockResolvedValue(true);
   sheetExportRepository.enqueue.mockResolvedValue(0);
   sheetExportRepository.claim.mockResolvedValue([]);
   sheetExportRepository.practices.mockResolvedValue([{ id: 'practice-1', name: 'Bexleyheath' }]);
@@ -147,6 +156,19 @@ beforeEach(() => {
 });
 
 describe('drainOrg', () => {
+  it('0. sheet_export flag off -> skipped: feature_disabled, no repository work (kicked drains + post-sync re-check both call drainOrg directly, bypassing the cron fan-out\'s own flag check)', async () => {
+    featuresService.orgHasFeature.mockResolvedValue(false);
+    integrationRepository.getByProvider.mockResolvedValue(integ());
+
+    const result = await sheetExportService.drainOrg(ORG);
+
+    expect(result).toEqual({ skipped: 'feature_disabled' });
+    expect(featuresService.orgHasFeature).toHaveBeenCalledWith(ORG, 'sheet_export');
+    expect(integrationRepository.getByProvider).not.toHaveBeenCalled();
+    expect(sheetExportRepository.enqueue).not.toHaveBeenCalled();
+    expect(sheetExportRepository.claim).not.toHaveBeenCalled();
+  });
+
   it('1. not connected / revoked / no spreadsheet_id -> skipped, no RPC calls', async () => {
     integrationRepository.getByProvider.mockResolvedValue(null);
     let result = await sheetExportService.drainOrg(ORG);

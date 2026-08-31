@@ -15,6 +15,21 @@ import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
 import { signWebhookToken } from "../lib/webhook-token.js";
 import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
+import { featuresService } from "./features.service.js";
+
+// Guard for the generic multi-provider entry points (connect/callback/
+// refresh/webhook-info/webhook-secret) — the ONLY routes for the three
+// feature-bound providers (emergent, google_sheets, google_sheets_writer)
+// that aren't already behind a static requireFeature(key) route gate (their
+// own literal-path routes, e.g. `/emergent`, `/google-sheets/status`, are).
+// A provider absent from PROVIDER_FEATURE is unaffected (returns silently).
+// `revoke` is deliberately NOT guarded — an org whose flag is flipped off
+// must still be able to disconnect. See docs/API.md.
+async function assertProviderFeature(orgId, provider) {
+    if (!(await featuresService.orgHasProviderFeature(orgId, provider))) {
+        throw new errors_1.AppError('Feature not enabled', 403, 'FEATURE_DISABLED');
+    }
+}
 
 // Providers that receive real-time webhooks (vs poll-only).
 const WEBHOOK_PROVIDERS = new Set(['dentally', 'emergent']);
@@ -62,10 +77,18 @@ const REFRESH_ALL_PROVIDERS = ['dentally', 'gohighlevel', 'google_ads', 'meta_ad
 export const integrationService = {
     async list(orgId) {
         const connected = await integration_repository_1.integrationRepository.list(orgId);
-        const available = listProviders();
+        // A feature-bound provider (emergent, google_sheets, google_sheets_writer)
+        // the org lacks must not appear as a connectable card — already-connected
+        // rows stay visible in `integrations` (disconnect must still work), only
+        // the "start a new connection" list is filtered.
+        const available = [];
+        for (const meta of listProviders()) {
+            if (await featuresService.orgHasProviderFeature(orgId, meta.id)) available.push(meta);
+        }
         return { integrations: connected, available };
     },
     async startConnect(orgId, provider, extra = {}) {
+        await assertProviderFeature(orgId, provider);
         const { impl } = getProvider(provider);
         try {
             return await impl.authorize(orgId, extra);
@@ -82,6 +105,7 @@ export const integrationService = {
         }
     },
     async finishConnect(orgId, provider, payload) {
+        await assertProviderFeature(orgId, provider);
         const { impl } = getProvider(provider);
         let result;
         try {
@@ -130,6 +154,14 @@ export const integrationService = {
     // full=true ignores the incremental cursor (re-pulls the default window) so a
     // backfill after mapping practices re-pulls previously-skipped rows.
     async syncNow(orgId, provider, { full = false, resources = null } = {}) {
+        // Feature-bound providers skip QUIETLY (marker, not throw) when the
+        // org's flag is off: syncAll's fire-and-forget loop and the generic
+        // POST /:provider/sync both funnel here, and a throw would log noise /
+        // stamp failure state for what is simply "not entitled". The
+        // controller additionally 403s the direct route before firing.
+        if (!(await featuresService.orgHasProviderFeature(orgId, provider))) {
+            return { skipped: 'feature_disabled', provider };
+        }
         const syncer = ON_DEMAND_SYNCERS[provider];
         if (!syncer)
             throw new errors_1.AppError(`Provider ${provider} does not support on-demand sync`, 400);
@@ -300,6 +332,7 @@ export const integrationService = {
         return result;
     },
     async refresh(orgId, provider) {
+        await assertProviderFeature(orgId, provider);
         const { impl } = getProvider(provider);
         return impl.refresh(orgId);
     },
@@ -311,6 +344,7 @@ export const integrationService = {
     // is a stable signed encoding of orgId (no auth on the public webhook route).
     // `configured` reflects whether a verifying secret is already set.
     async webhookInfo(orgId, provider) {
+        await assertProviderFeature(orgId, provider);
         if (!WEBHOOK_PROVIDERS.has(provider)) {
             throw new errors_1.AppError(`${provider} does not support webhooks`, 400);
         }
@@ -353,6 +387,7 @@ export const integrationService = {
     // Store/replace the per-org webhook signing secret (the value the owner also
     // sets in Dentally). Used to verify the HMAC on every inbound event.
     async setWebhookSecret(orgId, provider, secret) {
+        await assertProviderFeature(orgId, provider);
         if (!WEBHOOK_PROVIDERS.has(provider)) {
             throw new errors_1.AppError(`${provider} does not support webhooks`, 400);
         }

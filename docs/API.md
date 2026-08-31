@@ -89,6 +89,8 @@ All feature-gated 403 responses share the error body:
 }
 ```
 
+The generic multi-provider integration routes (`POST /api/integrations/connect`, `/api/integrations/:provider/{callback,refresh,sync,sync-progress,webhook-info,webhook-secret}`) enforce the same 403 at runtime when `:provider` is one of the three feature-bound providers (`emergent`, `google_sheets`, `google_sheets_writer`). `POST /api/integrations/:provider/revoke` is deliberately **not** gated — an organisation whose feature is switched off can always disconnect the provider.
+
 ## Business Health
 
 ### `GET /api/health`

@@ -114,6 +114,12 @@ export const sheetExportService = {
     },
 
     async drainOrg(orgId, { includeNoMatch = false, ignoreBackoff = false } = {}) {
+        // Both fire-and-forget callers (webhook.service.js's kickDrain, and the
+        // post-GHL-account-sync re-check in integration.controller.js) reach
+        // this directly, bypassing the flag check that only the cron fan-outs
+        // (drainAllOrgs) previously had. Checked here — the single choke point
+        // for every caller — rather than duplicated at each call site.
+        if (!(await featuresService.orgHasFeature(orgId, 'sheet_export'))) return { skipped: 'feature_disabled' };
         const integ = await integrationRepository.getByProvider(orgId, WRITER_PROVIDER_ID);
         if (!integ || integ.status === 'revoked' || !integ.secrets) return { skipped: 'not_connected' };
         const spreadsheetId = integ.config?.spreadsheet_id;
