@@ -1,7 +1,7 @@
 // Campaign aggregation. Every figure must be measured against the population it
 // claims: a blended number must never present itself as a measured one, and the
 // table must reconcile to the tiles above it.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { __test } = await import('../src/services/marketing.service.js');
 
 describe('joinSpendToLeads', () => {
@@ -93,5 +93,29 @@ describe('joinSpendToLeads', () => {
         expect(totals.attributedLeads).toBe(0);
         expect(totals.costPerLeadPence).toBeNull();
         expect(totals.costPerPatientPence).toBeNull();
+    });
+});
+
+
+// The marketing payload is cached per org + window + practice. Ad spend arrives
+// from a nightly sync and leads from the GoHighLevel sync, so it cannot change
+// minute to minute — and both marketing screens plus every practice-toggle ask
+// for the same window.
+describe('cache key', () => {
+    it('separates orgs implicitly and windows/practices explicitly', () => {
+        const a = __test.cacheKey('2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', null);
+        const b = __test.cacheKey('2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', 'practice-1');
+        const c = __test.cacheKey('2026-07-01T00:00:00Z', '2026-08-01T00:00:00Z', null);
+        // A practice-scoped payload must never be served for "all practices",
+        // and a different window must never reuse another window's figures.
+        expect(a).not.toBe(b);
+        expect(a).not.toBe(c);
+        // The org is NOT in the key: readDashboardCache/writeDashboardCache are
+        // org-scoped by their own organisation_id filter, so folding the org in
+        // here would be redundant — but the cache must stay org-scoped there.
+        expect(a).not.toContain('org');
+    });
+    it('is stable for the same inputs, or the cache would never hit', () => {
+        expect(__test.cacheKey('s', 'u', null)).toBe(__test.cacheKey('s', 'u', null));
     });
 });

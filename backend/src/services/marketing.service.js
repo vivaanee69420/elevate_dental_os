@@ -1,6 +1,7 @@
 // Marketing business logic: campaign performance from ad spend joined to leads.
 // Money is integer pence throughout (rule 2) — never floats.
 import { marketingRepository } from '../repositories/marketing.repository.js';
+import { readDashboardCache, writeDashboardCache } from '../lib/dashboard-cache.js';
 
 // Every row this service emits is campaign-tier: it is built from a campaign
 // that has measured spend in the window. The channel tier (pipeline -> channel
@@ -79,14 +80,35 @@ function joinSpendToLeads(spendRows, leadRows) {
     return { rows, totals };
 }
 
+// Cached for 10 minutes per org + window + practice. Ad spend is imported by
+// a nightly sync and leads arrive through the GoHighLevel sync, so this payload
+// simply cannot change minute to minute — and BOTH marketing screens request
+// the same window, as does every practice-filter toggle the user clicks back
+// and forth between. The durable (Postgres) tier is what makes the cache
+// survive a deploy and be shared across instances; an in-process TTL alone
+// would recompute on every restart. Cache failures log and fall through to a
+// live read — a cache must never be able to break the page.
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+function cacheKey(since, until, practiceId) {
+    return `marketing:perf:${since}|${until}|${practiceId ?? 'all'}`;
+}
+
 export const marketingService = {
-    async campaignPerformance(orgId, { since, until, practiceId = null } = {}) {
+    async campaignPerformance(orgId, { since, until, practiceId = null, refresh = false } = {}) {
+        const key = cacheKey(since, until, practiceId);
+        if (!refresh) {
+            const cached = await readDashboardCache(orgId, key).catch(() => undefined);
+            if (cached) return cached;
+        }
         const [spend, leads] = await Promise.all([
             marketingRepository.campaignSpend(orgId, since, until, practiceId),
             marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
         ]);
-        return joinSpendToLeads(spend, leads);
+        const payload = joinSpendToLeads(spend, leads);
+        await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});
+        return payload;
     },
 };
 
-export const __test = { joinSpendToLeads, perUnitPence };
+export const __test = { joinSpendToLeads, perUnitPence, cacheKey };
