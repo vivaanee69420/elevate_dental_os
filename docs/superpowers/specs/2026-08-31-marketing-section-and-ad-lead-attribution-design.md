@@ -150,9 +150,19 @@ alongside (migration `000137`):
 
 `utm_source`/`utm_medium`/`utm_campaign` get populated too, since they exist and are free.
 
-**Backfill**: the fields are only obtainable from GHL, and a full re-pull of ~29k
-contacts across 4 subaccounts is a one-off cost. Run it as an explicit one-shot worker,
-not as part of the nightly sync, and make it resumable.
+**No backfill worker. Opportunistic fill instead** (owner decision). The nightly pull
+already walks every contact — `pullContacts` fetches the full page set and then filters
+*writes* to rows whose `dateUpdated` is newer than `since`. So a contact's attribution is
+already in memory and is currently discarded. The fill is therefore: when a contact has
+been fetched and its attribution columns are still empty, write them, even if the contact
+itself is unchanged. No separate worker, no re-pull, no extra API requests.
+
+Two consequences to design for. `MAX_PAGES = 50` caps a routine run at ~5k rows per
+resource, so coverage builds over several nightly runs rather than landing at once — that
+is acceptable and must be visible, which is what the coverage bar is for. And the write
+must be genuinely conditional: an unchanged contact whose attribution is already present
+gets no write at all, or the incremental sync degenerates into a full rewrite every
+night.
 
 ### 2. Google campaign resolution
 
@@ -232,9 +242,15 @@ requires it.
 
 ### Marketing section
 
-A new nav section, module key `marketing` in `lib/features.js` (`kind: 'module'`,
-`default: true`, `navSection: 'Marketing'`), so the agency can toggle it per sub-account
-like any other. Gated on a new `marketing.view` permission key.
+A **new top-level nav section**, structured like Overview — a section heading with
+several pages beneath it, not a single screen. Module key `marketing` in
+`lib/features.js` (`kind: 'module'`, `default: true`, `navSection: 'Marketing'`), so the
+agency can toggle it per sub-account like any other. Gated on a new `marketing.view`
+permission key.
+
+The existing `Marketing & ROI` (under Growth) and `Ad Performance` (under Overview) stay
+exactly where they are, untouched — owner decision. This section is the third marketing
+surface and the only one that works without GoHighLevel pipeline mapping.
 
 Reception must not see it — rule 5 confines Reception to Inbox, Pipeline and Contacts.
 Follow the Call Reporting precedent, which is deliberately gated on `growth.view` rather
@@ -300,14 +316,15 @@ attribution fields are ad identifiers, not personal data.
 |---|---|
 | `gad_campaignid` coverage unknown across the full lead set | Measure before building route B. If low, `click_view` becomes primary and Google attribution is 90-day-bounded. |
 | 55.6% campaign coverage may not hold beyond the 2,400 sample | Backfill reports true coverage; the bar shows it honestly rather than hiding it. |
-| Backfilling ~29k contacts hits GHL rate limits | Resumable one-shot worker, not the nightly sync. Reuse the existing `ghlFetchUrl` retry/backoff. |
+| Opportunistic fill turns the incremental sync into a nightly full rewrite | The write is conditional on the attribution columns being empty, not on the contact being fetched. Pin it with a test. |
+| Coverage builds slowly because `MAX_PAGES` caps a routine run at ~5k rows | Expected and acceptable; the coverage bar makes the ramp visible rather than hiding it. |
 | `ad_insights` mixed grains double-count | `level` filter enforced in the repository; tests pin it. |
 | Deleted GHL pipelines strand mappings | Absence of a row already means unassigned — no migration needed. |
 
 ## Phasing
 
-1. **Attribution ingest + backfill.** Nothing else works without this data. Ends with a
-   real coverage number.
+1. **Attribution ingest + opportunistic fill.** Nothing else works without this data.
+   Ends with a real, measured coverage number.
 2. **Tiers + conversion RPC.** Campaign-level CPL and lead-to-patient conversion.
 3. **Marketing section**, overview and campaigns, off `ad_metrics` + tier data.
 4. **Mapping screen** rebuild.
