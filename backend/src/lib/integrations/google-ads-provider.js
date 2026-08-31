@@ -98,8 +98,12 @@ export async function listAccessibleCustomers(accessToken) {
 // generic "Request contains an invalid argument." Surface the specific code so a
 // misconfigured dev token (DEVELOPER_TOKEN_PROHIBITED / _NOT_APPROVED, etc.) is
 // diagnosable instead of opaque.
-function googleAdsErrorMessage(body, status, label) {
-    const err = body?.error;
+export function googleAdsErrorMessage(body, status, label) {
+    // searchStream reports errors as a single-element ARRAY ([{ error: {...} }]),
+    // unlike the plain object every other endpoint returns. Unwrap it or the
+    // detail walk below finds nothing and callers get Google's generic
+    // "Request contains an invalid argument." with the real code discarded.
+    const err = (Array.isArray(body) ? body[0] : body)?.error;
     const detail = err?.details?.find((d) => Array.isArray(d?.errors) && d.errors.length);
     const first = detail?.errors?.[0];
     if (first) {

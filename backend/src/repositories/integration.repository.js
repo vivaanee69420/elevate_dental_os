@@ -183,6 +183,22 @@ export const integrationRepository = {
         return data ?? [];
     },
 
+    // Narrow status-only write for ONE ad account. Deliberately not
+    // upsertAdAccounts: that sets name/currency from the payload, so marking a
+    // failed account through it would null out the label the selector shows.
+    // Used by the syncs to record a permanently-unusable account (a Manager/MCC
+    // account, or a deactivated one) so it is not re-queried every night.
+    // Org-scoped explicitly — the serviceClient path has no automatic isolation.
+    async markAdAccountStatus(orgId, provider, customerId, status) {
+        const { error } = await supabase_1.serviceClient
+            .from('ad_accounts')
+            .update({ status })
+            .eq('organisation_id', orgId)
+            .eq('provider', provider)
+            .eq('customer_id', String(customerId));
+        if (error) throw new Error(`ad_accounts status: ${error.message}`);
+    },
+
     // All accounts for an org (optionally one provider), for the selector UI.
     async listAdAccounts(orgId, provider = null) {
         let q = supabase_1.serviceClient

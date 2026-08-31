@@ -99,17 +99,46 @@ async function ensureToken(orgId, integration) {
 }
 
 async function queryCustomer(customerId, accessToken, query) {
-    const { adsHeaders } = await import('./google-ads-provider.js');
+    const { adsHeaders, googleAdsErrorMessage } = await import('./google-ads-provider.js');
     const res = await fetchWithApiVersion(
         (v) => `${apiBase()}/${v}/customers/${customerId}/googleAds:searchStream`,
         { method: 'POST', headers: adsHeaders(accessToken), body: JSON.stringify({ query }) },
     );
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error?.message || `searchStream HTTP ${res.status}`);
+        // googleAdsErrorMessage walks details[].errors[] for the specific code.
+        // Reading error.message alone yields Google's generic "Request contains
+        // an invalid argument", which is what made a Manager account and a
+        // deactivated account indistinguishable from a transient glitch.
+        throw new Error(googleAdsErrorMessage(body, res.status, 'searchStream'));
     }
     return res.json();
 }
+
+// Two Google error codes mean an account can NEVER serve metrics, no matter how
+// often we retry: the login's own Manager (MCC) account, which
+// listAccessibleCustomers returns alongside the real ones, and an account that
+// has been deactivated. Everything else — throttles, deadlines, 5xx — stays
+// retryable, because marking a live account permanent would drop it out of the
+// sync silently and for good.
+const PERMANENT_CUSTOMER_ERRORS = {
+    REQUESTED_METRICS_FOR_MANAGER: 'manager',
+    CUSTOMER_NOT_ENABLED: 'not_enabled',
+};
+
+export function classifyCustomerError(message) {
+    const msg = String(message ?? '');
+    for (const [code, status] of Object.entries(PERMANENT_CUSTOMER_ERRORS)) {
+        if (msg.includes(code)) return status;
+    }
+    return null;
+}
+
+// The ad_accounts statuses that take a customer out of the nightly pull. A
+// successful sync or a reconnect writes status back to null (upsertAdAccounts
+// sets it from the payload), so this self-heals the moment the account works
+// again — a reactivated Google Ads account recovers on the next connect.
+const SKIP_STATUSES = new Set(Object.values(PERMANENT_CUSTOMER_ERRORS));
 
 export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'google_ads');
@@ -119,9 +148,26 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
     }
     try {
         integration = await ensureToken(orgId, integration);
-        const customerIds = integration.config?.customer_ids ?? [];
-        if (customerIds.length === 0) {
+        const allCustomerIds = integration.config?.customer_ids ?? [];
+        if (allCustomerIds.length === 0) {
             throw new Error('no accessible Google Ads customers (check developer token / MCC access)');
+        }
+        // Drop accounts already known to be permanently unusable so the nightly
+        // run stops spending a doomed request on each of them forever.
+        let permanent = new Set();
+        try {
+            const known = await integrationRepository.listAdAccounts(orgId, 'google_ads');
+            permanent = new Set((known ?? [])
+                .filter((a) => SKIP_STATUSES.has(a.status))
+                .map((a) => String(a.customer_id)));
+        } catch (err) {
+            // Non-fatal: without the skip list we simply query everything, which
+            // is the old behaviour. Never let it block a real sync.
+            console.error('[google_ads] ad_accounts skip-list read failed:', err.message);
+        }
+        const customerIds = allCustomerIds.filter((cid) => !permanent.has(String(cid)));
+        if (customerIds.length === 0) {
+            throw new Error(`no usable Google Ads customers — all ${allCustomerIds.length} are manager or deactivated accounts`);
         }
         const { access_token } = JSON.parse(decryptSecret(integration.secrets));
         // Full backfill pulls 6mo; the nightly cron pulls the trailing 3mo.
@@ -146,7 +192,18 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
                     all.push({ organisation_id: orgId, practice_id: null, provider: 'google_ads', source: 'google_ads', customer_id: cid, ...row });
                 }
             } catch (err) {
-                skipped.push({ cid, error: String(err.message).slice(0, 200) });
+                const msg = String(err.message).slice(0, 200);
+                skipped.push({ cid, error: msg });
+                // Permanent failure: record it so tomorrow's run skips this
+                // account outright instead of repeating the same doomed call.
+                const permanentStatus = classifyCustomerError(msg);
+                if (permanentStatus) {
+                    try {
+                        await integrationRepository.markAdAccountStatus(orgId, 'google_ads', cid, permanentStatus);
+                    } catch (e) {
+                        console.error('[google_ads] mark %s as %s failed: %s', cid, permanentStatus, e.message);
+                    }
+                }
             }
         }
         // Refresh account names/currency for the selector (non-fatal).
@@ -196,7 +253,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
 
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'google_ads');
-        return { rows: all.length, customers: customerIds.length, skipped };
+        return { rows: all.length, customers: customerIds.length, skipped, permanentlySkipped: [...permanent] };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'google_ads', String(err.message).slice(0, 500));
         throw err;
@@ -224,4 +281,4 @@ export async function syncAllOrgs() {
     return results;
 }
 
-export const __test = { microsToPence, parseSearchStream, buildGaql, INCREMENTAL_DAYS, FULL_DAYS };
+export const __test = { microsToPence, parseSearchStream, buildGaql, classifyCustomerError, INCREMENTAL_DAYS, FULL_DAYS };
