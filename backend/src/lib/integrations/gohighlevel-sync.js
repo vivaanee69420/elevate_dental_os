@@ -556,6 +556,62 @@ export function selectContactsToWrite(fetched, since, needsAttribution) {
     });
 }
 
+// A contact we LOOKED AT and found no attribution on still records WHEN it was
+// checked. Without this stamp it stays in needsAttribution forever and is
+// re-upserted every single night — the "incremental sync degenerates into a
+// full rewrite" failure. Only `attribution_captured_at` is added: the other
+// attribution columns must stay OUT of this row's key set, or the upsert would
+// null values captured on an earlier run. Pure, so it is testable.
+export function stampAttributionChecked(rows, now = new Date().toISOString()) {
+    return rows.map((r) => ('attribution_captured_at' in r ? r : { ...r, attribution_captured_at: now }));
+}
+
+// Split rows into groups that share an identical COLUMN SET.
+//
+// postgrest-js builds `?columns=<union of every row's keys>` from the array it
+// is handed and sends `defaultToNull`, so PostgREST writes NULL into every
+// column a given row omits. contactRow deliberately omits attribution (and
+// created_at) when the source has none — correct per row, fatal per batch: one
+// attributed contact in a 500-row chunk would NULL the attribution of every
+// unattributed row beside it. Every array handed to .upsert() must therefore be
+// homogeneous in its keys. Pure, so the invariant is testable.
+export function groupByColumnSet(rows) {
+    const groups = new Map();
+    for (const r of rows) {
+        const key = Object.keys(r).sort().join(' ');
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(r);
+    }
+    return [...groups.values()];
+}
+
+// Bulk-write contact rows: stamp the checked-but-empty rows, group by column
+// set, then chunk each group. On a chunk error, fall back to per-row upserts so
+// one unstorable row cannot lose the other 499. Exported so the homogeneity
+// invariant can be asserted without running a whole sync.
+export async function upsertContactRows(rows, onProgress = () => {}) {
+    let synced = 0;
+    let failed = 0;
+    let written = 0;
+    const total = rows.length;
+    for (const group of groupByColumnSet(stampAttributionChecked(rows))) {
+        for (let i = 0; i < group.length; i += UPSERT_CHUNK) {
+            const chunk = group.slice(i, i + UPSERT_CHUNK);
+            const { error } = await supabase_1.serviceClient.from('contacts').upsert(chunk, { onConflict: 'organisation_id,ghl_contact_id' });
+            if (!error) { synced += chunk.length; }
+            else {
+                for (const row of chunk) {
+                    const { error: e2 } = await supabase_1.serviceClient.from('contacts').upsert([row], { onConflict: 'organisation_id,ghl_contact_id' });
+                    if (e2) failed++; else synced++;
+                }
+            }
+            written += chunk.length;
+            if (onProgress) onProgress(written, total, synced); // progress during the write phase
+        }
+    }
+    return { synced, failed };
+}
+
 // Pull the contact book (paginated) and reconcile in BULK. Classify each remote
 // contact against the preloaded maps: already-GHL or brand-new -> bulk upsert on
 // (org, ghl_contact_id); matches an existing Dentally/manual/CSV contact by
@@ -595,20 +651,8 @@ async function pullContacts(orgId, accessToken, locationId, practiceId, onPage =
         }
         toUpsert.push(r); // new
     }
-    let synced = 0;
-    let failed = 0;
-    for (let i = 0; i < toUpsert.length; i += UPSERT_CHUNK) {
-        const chunk = toUpsert.slice(i, i + UPSERT_CHUNK);
-        const { error } = await supabase_1.serviceClient.from('contacts').upsert(chunk, { onConflict: 'organisation_id,ghl_contact_id' });
-        if (!error) { synced += chunk.length; }
-        else {
-            for (const row of chunk) {
-                const { error: e2 } = await supabase_1.serviceClient.from('contacts').upsert([row], { onConflict: 'organisation_id,ghl_contact_id' });
-                if (e2) failed++; else synced++;
-            }
-        }
-        if (onPage) onPage(i + chunk.length, toUpsert.length, synced); // progress during the write phase
-    }
+    const { synced: upserted, failed } = await upsertContactRows(toUpsert, onPage);
+    let synced = upserted;
     for (const lk of toLink) {
         const { error } = await supabase_1.serviceClient.from('contacts')
             .update({ ghl_contact_id: lk.ghl_contact_id, integration_account_id: integrationAccountId || undefined }).eq('id', lk.id).eq('organisation_id', orgId);
@@ -1007,4 +1051,4 @@ export async function syncAllOrgs() {
     return results;
 }
 
-export const __test = { selectContactsToWrite };
+export const __test = { selectContactsToWrite, stampAttributionChecked, groupByColumnSet, upsertContactRows };
