@@ -176,7 +176,7 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-        {visibleNavSections(me?.role, permissions).map((section) => {
+        {visibleNavSections(me?.role, permissions, me?.features).map((section) => {
           const items = section.items;
           const hasActive = items.some((i) => pathname === `/${i.id}`);
           const open = sectionOpen(section.label, hasActive);
