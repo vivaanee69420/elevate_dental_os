@@ -17,7 +17,10 @@ function mockRes() {
 }
 
 describe('agency middleware', () => {
-  beforeEach(() => orgMetaService.getOrgMeta.mockReset());
+  // Braced body on purpose: an implicit-return arrow would hand the mock fn
+  // back to vitest, which treats a function returned from a hook as a
+  // teardown callback and CALLS it after the test.
+  beforeEach(() => { orgMetaService.getOrgMeta.mockReset(); });
 
   it('switched context is an agency actor without any lookup', async () => {
     const req = {
@@ -63,7 +66,7 @@ describe('agency middleware', () => {
   });
 
   it('fails closed (403) when the org lookup throws', async () => {
-    orgMetaService.getOrgMeta.mockRejectedValue(new Error('db down'));
+    orgMetaService.getOrgMeta.mockImplementation(async () => { throw new Error('db down'); });
     const res = mockRes(); const next = vi.fn();
     await requireAgencyActor({ user: { role: 'owner', organisation_id: 'org-1' }, log: { warn: vi.fn() } }, res, next);
     expect(res.status).toHaveBeenCalledWith(403);
