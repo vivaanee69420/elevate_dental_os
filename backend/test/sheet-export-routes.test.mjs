@@ -10,6 +10,15 @@ import http from 'node:http';
 import express from 'express';
 import { AppError } from '../src/middleware/errors.js';
 
+// google-sheets-writer/* routes now carry a per-route requireFeature
+// ('sheet_export') gate ahead of the role gate under test here — stub the
+// org as entitled so these role-gating assertions stay isolated from
+// feature-flag resolution (covered separately in
+// features.middleware.test.mjs / features.route-gates.test.mjs).
+vi.mock('../src/services/features.service.js', () => ({
+  featuresService: { orgHasFeature: vi.fn(async () => true) },
+}));
+
 vi.mock('../src/services/sheet-export.service.js', () => ({
   sheetExportService: {
     status: vi.fn(async () => ({

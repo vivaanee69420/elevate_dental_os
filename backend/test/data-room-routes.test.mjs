@@ -11,6 +11,15 @@ import express from 'express';
 import { AppError } from '../src/middleware/errors.js';
 import { analystLock } from '../src/middleware/analyst-lock.js';
 
+// The router now carries a router-level requireFeature('data_room') gate
+// (agency entitlement) ahead of the permission gate under test here — stub
+// the org as entitled so these role/permission assertions stay isolated
+// from feature-flag resolution (covered separately in
+// features.middleware.test.mjs / features.route-gates.test.mjs).
+vi.mock('../src/services/features.service.js', () => ({
+  featuresService: { orgHasFeature: vi.fn(async () => true) },
+}));
+
 vi.mock('../src/services/data-room.service.js', () => ({
   dataRoomService: {
     datasets: vi.fn(() => ({ sources: [{ key: 'dentally', label: 'Dentally', description: '', datasets: [] }] })),
