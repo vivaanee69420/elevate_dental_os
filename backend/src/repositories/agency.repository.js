@@ -46,6 +46,43 @@ export const agencyRepository = {
         if (error) throw error;
     },
 
+    // Create a sub-account organisation directly under the agency. Unlike
+    // provisionOrgOwner this makes NO user — the agency adds them afterwards.
+    async createOrg(name, slug, parentOrgId) {
+        return serviceClient
+            .from('organisations')
+            .insert({ name, slug, parent_organisation_id: parentOrgId, is_agency: false })
+            .select('id, name, created_at')
+            .single();
+    },
+
+    async listOrgUsers(orgId) {
+        const { data, error } = await serviceClient
+            .from('users')
+            .select('id, email, full_name, role, status, created_at')
+            .eq('organisation_id', orgId)
+            .order('created_at', { ascending: true });
+        if (error) throw error;
+        return data ?? [];
+    },
+
+    // Read BEFORE deleting the org: the cascade removes public.users, but the
+    // Supabase auth identities have to be deleted explicitly or they orphan.
+    async orgUserIds(orgId) {
+        const { data, error } = await serviceClient
+            .from('users')
+            .select('id')
+            .eq('organisation_id', orgId);
+        if (error) throw error;
+        return (data ?? []).map((r) => r.id);
+    },
+
+    // Irreversible: every business table FKs organisation_id ON DELETE CASCADE.
+    async deleteOrg(orgId) {
+        const { error } = await serviceClient.from('organisations').delete().eq('id', orgId);
+        if (error) throw error;
+    },
+
     async setParent(orgId, parentOrgId) {
         const { error } = await serviceClient
             .from('organisations')

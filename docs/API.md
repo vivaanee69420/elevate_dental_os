@@ -104,7 +104,10 @@ Grant or revoke with `PATCH /api/platform/users/:id/agency-admin` — body `{ "e
 ```
 
 - `GET /api/agency/subaccounts` — `{ subaccounts: [{ id, name, created_at, integrations: [{provider,status}], features: {key:bool} }] }`.
-- `POST /api/agency/subaccounts` — `{ organisation_name, owner_email, owner_name }` → 201 `{ organisation_id, owner_id, owner_email, temp_password }`. Reuses `provisionOrgOwner` (owner active immediately; the temp password is surfaced ONCE, never stored).
+- `POST /api/agency/subaccounts` — `{ organisation_name }` → 201 `{ organisation_id, name }`. Creates the **organisation only** — no owner and no temporary password. Users are added separately (below) with a permanent password the agency sets. Slug collisions retry once with a suffix.
+- `GET /api/agency/subaccounts/:id/users` — `{ users: [{ id, email, full_name, role, status }] }`.
+- `POST /api/agency/subaccounts/:id/users` — `{ email, full_name, password, role }` (role: `owner` | `practice_manager` | `reception`) → 201. Reuses `provisionMember` against the sub-account org, so the user is an ordinary member of exactly one organisation and is isolated from every other account by `users.organisation_id`. The password is permanent; there is no forced change.
+- `DELETE /api/agency/subaccounts/:id` — `{ confirm_name }` must equal the organisation's name (case/whitespace-insensitive). **Irreversible**: `organisations` cascades every business table, and the Supabase auth identities are deleted explicitly so none are orphaned.
 - `GET /api/agency/subaccounts/:id/features` — `{ features, overrides }` (effective map + raw `org_features` rows).
 - `PATCH /api/agency/subaccounts/:id/features` — `{ feature, enabled }` (key must exist in the catalog; target must be a child org) → `{ features }`.
 - `POST /api/agency/switch` — `{ orgId }` → `{ token, expires_at, organisation }`. The token is HMAC-signed (secret `AGENCY_SWITCH_SECRET`, falling back to `OAUTH_STATE_SECRET`), bound to the calling user, ~12h expiry.

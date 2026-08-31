@@ -3,7 +3,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { visibleNavSections, type Permissions } from '@/lib/permissions';
-import { useMe, isAgencyActor } from '@/hooks/useMe';
+import { useMe } from '@/hooks/useMe';
+import { AgencyDialog } from '@/features/agency/components/AgencyDialog';
 import { useSidebar, HamburgerIcon } from '@/components/layout/sidebar-context';
 
 // Sidebar — the app shell's primary navigation.
@@ -161,6 +162,10 @@ export function Sidebar() {
         </button>
       </div>
 
+      {/* Account switcher — agency actors only. Top-left, GHL-style: opens the
+          one dialog that switches into a sub-account and manages it. */}
+      <AgencyDialog />
+
       {/* User card */}
       {me && (
         <div className="mx-3 mt-3 px-3 py-2.5 bg-bg rounded-xl flex items-center gap-2.5">
@@ -245,22 +250,6 @@ export function Sidebar() {
           );
         })}
 
-        {/* Agency menu — agency owners only (A2). Standalone entry, not part
-            of the frozen NAV catalog. */}
-        {isAgencyActor(me) && (
-          <Link
-            href="/agency"
-            aria-current={pathname === '/agency' ? 'page' : undefined}
-            className={`group flex items-center gap-2 px-3 py-2 mt-2 text-[11px] uppercase tracking-wider font-semibold rounded-lg transition ${
-              pathname === '/agency' ? 'text-brand bg-brand-50' : 'text-ink-muted hover:text-ink hover:bg-bg'
-            }`}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-4h6v4" />
-            </svg>
-            <span className="flex-1">Agency</span>
-          </Link>
-        )}
       </nav>
 
       {/* Drag handle — stretch sidebar width */}

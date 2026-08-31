@@ -1,22 +1,21 @@
 // ============================================================================
 // Agency → sub-account lifecycle. Every child-targeting call re-validates
-// child-of-agency via childOrgs (no trust in caller-supplied ids). Owner
-// provisioning REUSES provisionOrgOwner — one implementation for platform
-// create-org, self-signup and agency create (same temp-password contract as
-// the platform path: surfaced once, never persisted).
+// child-of-agency via childOrgs (no trust in caller-supplied ids).
+//
+// Creating a sub-account makes the ORGANISATION only; users are added to it
+// afterwards with a permanent password the agency sets. There is deliberately
+// no temporary-password handover — user provisioning REUSES provisionMember,
+// so a sub-account user is an ordinary member of exactly one org and is
+// isolated from every other account by users.organisation_id.
 // ============================================================================
 import crypto from 'node:crypto';
 import { AppError } from '../middleware/errors.js';
 import { agencyRepository } from '../repositories/agency.repository.js';
-import { provisionOrgOwner } from './auth.service.js';
+import { authRepository } from '../repositories/auth.repository.js';
+import { authService } from './auth.service.js';
 import { featuresService } from './features.service.js';
 import { orgMetaService } from './org-meta.service.js';
 import { signSwitchToken, SWITCH_TTL_MS } from '../lib/agency-switch.js';
-
-// One-time handover credential — same shape as the platform create-org path.
-function generateTempPassword() {
-    return crypto.randomBytes(12).toString('base64url');
-}
 
 async function assertChild(agencyOrgId, subOrgId) {
     const children = await agencyRepository.childOrgs(agencyOrgId);
@@ -39,20 +38,63 @@ export const agencyService = {
         return { subaccounts };
     },
 
+    // Creates the ORGANISATION only. No owner, no temporary password to hand
+    // over — the agency adds users afterwards with a password it sets.
     async createSubaccount(agencyOrgId, body) {
-        const password = generateTempPassword();
-        const { organisation_id, owner_id } = await provisionOrgOwner(
-            {
-                organisation_name: body.organisation_name,
-                email: body.owner_email,
-                full_name: body.owner_name,
-                password,
-            },
-            'active',
-        );
-        await agencyRepository.setParent(organisation_id, agencyOrgId);
-        orgMetaService.invalidate(organisation_id);
-        return { organisation_id, owner_id, owner_email: body.owner_email, temp_password: password };
+        const base = body.organisation_name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 40);
+        let { data, error } = await agencyRepository.createOrg(body.organisation_name, base, agencyOrgId);
+        // organisations.slug is UNIQUE and name-derived; two practices with the
+        // same name are routine for an agency, so retry once with a suffix.
+        if (error?.code === '23505') {
+            const suffixed = `${base.slice(0, 34)}-${crypto.randomBytes(3).toString('hex')}`;
+            ({ data, error } = await agencyRepository.createOrg(body.organisation_name, suffixed, agencyOrgId));
+        }
+        if (error) throw new AppError(error.message, 400);
+        orgMetaService.invalidate(data.id);
+        return { organisation_id: data.id, name: data.name };
+    },
+
+    async listSubaccountUsers(agencyOrgId, subOrgId) {
+        await assertChild(agencyOrgId, subOrgId);
+        return { users: await agencyRepository.listOrgUsers(subOrgId) };
+    },
+
+    // Add a user to ONE sub-account. users.organisation_id is single-valued,
+    // so the account is isolated to that org by construction. The password is
+    // permanent — set by the agency, no forced change on first login.
+    async addSubaccountUser(agencyOrgId, subOrgId, actor, body) {
+        await assertChild(agencyOrgId, subOrgId);
+        // provisionMember gates on the CALLER's role hierarchy. The agency
+        // admin is acting as that org's owner, which is the ceiling here.
+        const caller = { id: actor?.id ?? null, role: 'owner', permissions: {} };
+        const out = await authService.provisionMember(subOrgId, caller, { ...body, permissions: {} });
+        return { user_id: out.user_id, email: body.email, role: body.role };
+    },
+
+    // IRREVERSIBLE: organisations cascades every business table. Guarded by
+    // child-of-agency AND an exact name echo, so a mis-clicked id cannot
+    // destroy a tenant. Auth identities are removed explicitly — the cascade
+    // only reaches public.users and would otherwise leave orphans.
+    async deleteSubaccount(agencyOrgId, subOrgId, confirmName) {
+        const child = await assertChild(agencyOrgId, subOrgId);
+        const given = String(confirmName ?? '').trim().toLowerCase();
+        if (given !== child.name.trim().toLowerCase()) {
+            throw new AppError('Type the organisation name exactly to confirm deletion', 400);
+        }
+        const userIds = await agencyRepository.orgUserIds(subOrgId);
+        await agencyRepository.deleteOrg(subOrgId);
+        for (const id of userIds) {
+            try {
+                await authRepository.deleteAuthUser(id);
+            } catch (err) {
+                // The org is already gone; a stuck auth row is an orphan to
+                // clean up, not a reason to fail the delete.
+                console.error('[agency] auth identity delete failed:', id, err?.message || err);
+            }
+        }
+        orgMetaService.invalidate(subOrgId);
+        featuresService.invalidate(subOrgId);
+        return { deleted: subOrgId, users: userIds.length };
     },
 
     async subaccountFeatures(agencyOrgId, subOrgId) {
