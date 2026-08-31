@@ -147,6 +147,34 @@ export const ROUTE_FEATURE: Record<string, string> = {
   'data-emergent': 'data_room',
 };
 
+/**
+ * Nav SECTION label -> module feature key (agency model, phase A3). Backend
+ * enforcement is `requireFeature` on the section's own route mounts; this
+ * mirrors it in nav. Overview has no key by design (it is the always-on home
+ * section) and Data Room is gated per-item via ROUTE_FEATURE above.
+ */
+export const SECTION_FEATURE: Record<string, string> = {
+  Finance: 'finance',
+  'Business Health': 'business_health',
+  Operations: 'operations',
+  Growth: 'growth',
+  'Elevate CRM': 'crm',
+  Wealth: 'wealth',
+  Training: 'training',
+  System: 'system',
+};
+
+/** As featureAllowsRoute, but for a whole nav section. */
+export function featureAllowsSection(
+  sectionLabel: string,
+  features: string[] | undefined | null,
+): boolean {
+  const key = SECTION_FEATURE[sectionLabel];
+  if (!key) return true;
+  if (features === undefined || features === null) return true;
+  return features.includes(key);
+}
+
 export function featureAllowsRoute(
   routeId: string,
   features: string[] | undefined | null,
@@ -199,6 +227,8 @@ export function visibleNavSections(
 ): NavSection[] {
   const out: NavSection[] = [];
   for (const section of NAV) {
+    // A module the org does not have hides its whole section.
+    if (!featureAllowsSection(section.label, features)) continue;
     const items = section.items.filter((i) =>
       (role === 'analyst'
         ? isDataRoomRoute(i.id) && canAccessRoute(i.id, permissions)
