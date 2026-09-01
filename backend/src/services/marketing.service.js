@@ -16,6 +16,55 @@ function perUnitPence(totalPence, units) {
     return units > 0 ? Math.round(totalPence / units) : null;
 }
 
+// Channel rollup. Built from the SAME campaign rows and the SAME people sets
+// as the table, so Google + Facebook always add up to the tiles.
+function channelSplit(rows) {
+    const by = new Map();
+    for (const r of rows) {
+        const e = by.get(r.provider) ?? {
+            provider: r.provider, spendPence: 0, impressions: 0, clicks: 0,
+            platformConversions: 0, leads: 0, patients: 0, campaigns: 0,
+        };
+        e.spendPence += r.spendPence;
+        e.impressions += r.impressions;
+        e.clicks += r.clicks;
+        e.platformConversions += r.platformConversions;
+        e.leads += r.leads;
+        e.patients += r.patients;
+        e.campaigns += 1;
+        by.set(r.provider, e);
+    }
+    return [...by.values()]
+        .map((e) => ({
+            ...e,
+            costPerLeadPence: perUnitPence(e.spendPence, e.leads),
+            costPerPatientPence: perUnitPence(e.spendPence, e.patients),
+        }))
+        .sort((a, b) => b.spendPence - a.spendPence);
+}
+
+// Why a practice can legitimately show no spend. £0.00 on its own is ambiguous
+// — it reads as "this practice wasted no money" when the truth may be "no ad
+// account is mapped to it, so none of the group's spend can be attributed
+// here". The screen needs to tell those apart.
+function buildCoverage(accounts, practiceId, unmappedSpendPence) {
+    const mapped = accounts.filter((a) => a.practice_id);
+    const unmapped = accounts.filter((a) => !a.practice_id);
+    return {
+        totalAccounts: accounts.length,
+        mappedAccounts: mapped.length,
+        unmappedAccounts: unmapped.length,
+        unmappedAccountNames: unmapped.map((a) => a.name || a.customer_id),
+        // Only meaningful on the group view: a practice-scoped query already
+        // excludes unmapped rows, so reporting it there would be a number the
+        // user cannot see in any tile.
+        unmappedSpendPence: practiceId ? 0 : unmappedSpendPence,
+        practiceHasMappedAccount: practiceId
+            ? mapped.some((a) => a.practice_id === practiceId)
+            : null,
+    };
+}
+
 function joinSpendToLeads(spendRows, leadRows) {
     // Count PEOPLE, not lead rows: one contact sitting in several pipelines is
     // one lead. This is the same correction made in the Cockpit's matchBreakdown.
@@ -101,14 +150,18 @@ export const marketingService = {
             const cached = await readDashboardCache(orgId, key).catch(() => undefined);
             if (cached) return cached;
         }
-        const [spend, leads] = await Promise.all([
+        const [spend, leads, accounts] = await Promise.all([
             marketingRepository.campaignSpend(orgId, since, until, practiceId),
             marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
+            marketingRepository.adAccounts(orgId),
         ]);
-        const payload = joinSpendToLeads(spend, leads);
+        const payload = joinSpendToLeads(spend.campaigns, leads);
+        payload.byChannel = channelSplit(payload.rows);
+        payload.series = spend.series;
+        payload.coverage = buildCoverage(accounts, practiceId, spend.unmappedSpendPence);
         await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});
         return payload;
     },
 };
 
-export const __test = { joinSpendToLeads, perUnitPence, cacheKey };
+export const __test = { joinSpendToLeads, perUnitPence, cacheKey, channelSplit, buildCoverage };
