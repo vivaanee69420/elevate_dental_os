@@ -139,8 +139,15 @@ function joinSpendToLeads(spendRows, leadRows) {
 // live read — a cache must never be able to break the page.
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
+// BUMP THIS whenever the payload SHAPE changes. A cache entry written before a
+// deploy is read after it, so a new field added to the payload would be absent
+// on every hit for the whole TTL — the screen would render against a shape that
+// no longer exists (an undefined series is a crash, not a blank chart). The
+// version makes old entries unreachable rather than merely stale.
+const PAYLOAD_VERSION = 2;   // v2: + byChannel, series, coverage
+
 function cacheKey(since, until, practiceId) {
-    return `marketing:perf:${since}|${until}|${practiceId ?? 'all'}`;
+    return `marketing:perf:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
 }
 
 export const marketingService = {

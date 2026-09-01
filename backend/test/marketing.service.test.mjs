@@ -185,3 +185,19 @@ describe('channelSplit', () => {
     expect(out[0].costPerPatientPence).toBeNull();   // never Infinity, never 0
   });
 });
+
+// A cache entry written before a deploy is read after it. When the payload
+// gains a field, every hit for the whole TTL would return the OLD shape — and
+// an absent `series` is a crash on the overview, not a blank chart. The version
+// segment makes pre-deploy entries unreachable instead of merely stale.
+describe('cacheKey payload version', () => {
+  it('carries a version segment', () => {
+    expect(__test.cacheKey('s', 'u', null)).toMatch(/^marketing:perf:v\d+:/);
+  });
+
+  it('never collides with a key written by an earlier payload shape', () => {
+    const current = __test.cacheKey('2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', null);
+    const v1 = 'marketing:perf:2026-08-01T00:00:00Z|2026-09-01T00:00:00Z|all';
+    expect(current).not.toBe(v1);
+  });
+});
