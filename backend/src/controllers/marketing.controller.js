@@ -15,12 +15,49 @@ const PerformanceQuerySchema = z.object({
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const CHANNELS = ['google_ads', 'meta_ads', 'other'];
+
+const LeadListQuerySchema = PerformanceQuerySchema.extend({
+    channel: z.enum(CHANNELS).optional(),
+    // Sent as a string on the query string; 'any' means no filter.
+    converted: z.enum(['true', 'false', 'any']).optional(),
+    page: z.coerce.number().int().min(1).max(10_000).optional(),
+    size: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+const practiceOf = (scope) => (scope && UUID_RE.test(scope) ? scope : null);
+
 export async function getPerformance(req, res, next) {
     try {
         const q = PerformanceQuerySchema.parse(req.query);
-        const practiceId = q.scope && UUID_RE.test(q.scope) ? q.scope : null;
         const data = await marketingService.campaignPerformance(req.user.organisation_id, {
-            since: q.since, until: q.until, practiceId,
+            since: q.since, until: q.until, practiceId: practiceOf(q.scope),
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+export async function getTrend(req, res, next) {
+    try {
+        const q = PerformanceQuerySchema.parse(req.query);
+        const data = await marketingService.trend(req.user.organisation_id, {
+            since: q.since, until: q.until, practiceId: practiceOf(q.scope),
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+export async function getLeads(req, res, next) {
+    try {
+        const q = LeadListQuerySchema.parse(req.query);
+        const data = await marketingService.leadList(req.user.organisation_id, {
+            since: q.since,
+            until: q.until,
+            practiceId: practiceOf(q.scope),
+            channel: q.channel ?? null,
+            converted: q.converted === 'true' ? true : q.converted === 'false' ? false : null,
+            page: q.page ?? 1,
+            size: q.size ?? 50,
         });
         res.json(data);
     } catch (err) { next(err); }

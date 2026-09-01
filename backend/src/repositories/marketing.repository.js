@@ -42,6 +42,16 @@ export const marketingRepository = {
         const unmappedSpendPence = out.reduce(
             (n, r) => (r.practice_id ? n : n + Number(r.spend_pence ?? 0)), 0);
 
+        // Spend per practice, for the comparison screen. Built here because the
+        // campaign collapse discards practice_id — a campaign can only belong
+        // to one account and therefore one practice, but the collapsed row does
+        // not carry it.
+        const spendByPractice = new Map();
+        for (const r of out) {
+            const k = r.practice_id ?? null;
+            spendByPractice.set(k, (spendByPractice.get(k) ?? 0) + Number(r.spend_pence ?? 0));
+        }
+
         // Daily series for the trend, built from the SAME rows as the campaign
         // collapse so the chart and the tiles can never disagree.
         const byDay = new Map();
@@ -71,7 +81,12 @@ export const marketingRepository = {
             if (!e.campaign_name && r.campaign_name) e.campaign_name = r.campaign_name;
             byCampaign.set(k, e);
         }
-        return { campaigns: [...byCampaign.values()], series, unmappedSpendPence };
+        return {
+            campaigns: [...byCampaign.values()],
+            series,
+            unmappedSpendPence,
+            spendByPractice: [...spendByPractice.entries()],
+        };
     },
 
     // The org's ad accounts and which practice each is mapped to. Read so the
@@ -126,7 +141,45 @@ export const marketingRepository = {
             ad_campaign_id: r.ad_campaign_id ?? null,
             attribution_source: r.attribution_source ?? null,
             contact_id: r.contact_id,
+            practice_id: r.practice_id ?? null,
             converted: r.converted === true,
+            is_new_patient: r.is_new_patient === true,
+            matched_by: r.matched_by ?? null,
+            first_lead_at: r.first_lead_at ?? null,
         }));
+    },
+
+    // Spend, leads and patients per month per channel.
+    //
+    // A dedicated aggregate, NOT leadsByCampaign over a wide window: a year is
+    // 10,429 lead rows at 2.8s a call, and PostgREST's 1000-row cap forces
+    // eleven of them. This returns months x 3 channels — 36 rows, 238ms warm.
+    async monthlyRollup(orgId, since, until, practiceId = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('marketing_monthly_rollup', {
+            p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
+        });
+        if (error) throw new Error(`marketing_monthly_rollup: ${error.message}`);
+        return (data ?? []).map((r) => ({
+            month: r.month,
+            channel: r.channel,
+            leads: Number(r.leads ?? 0),
+            patients: Number(r.patients ?? 0),
+            newPatients: Number(r.new_patients ?? 0),
+            spendPence: Number(r.spend_pence ?? 0),
+        }));
+    },
+
+    // Display fields for ONE PAGE of leads. Only the ids actually being shown
+    // are fetched — the window can hold thousands of people, and none of the
+    // rest need their name read out of the database to render a table of 50.
+    async contactsByIds(orgId, ids) {
+        if (!ids?.length) return [];
+        const { data, error } = await supabase_1.serviceClient
+            .from('contacts')
+            .select('id, first_name, last_name, email, phone, source')
+            .eq('organisation_id', orgId)
+            .in('id', ids);
+        if (error) throw new Error(`contacts read: ${error.message}`);
+        return data ?? [];
     },
 };

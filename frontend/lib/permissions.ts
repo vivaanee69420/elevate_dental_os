@@ -90,6 +90,10 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // of Growth via the Team Permissions matrix.
   'marketing-overview': 'marketing.view',
   'marketing-campaigns': 'marketing.view',
+  'marketing-channels': 'marketing.view',
+  'marketing-practices': 'marketing.view',
+  'marketing-leads': 'marketing.view',
+  'marketing-health': 'marketing.view',
 
   // Elevate CRM
   // Call Reporting is a lead-response analytics surface, not a CRM tool —
