@@ -68,7 +68,11 @@ export const NAV: NavSection[] = [
   ]},
   { label: 'Marketing', items: [
     { id: 'marketing-overview', label: 'Overview', isNew: true },
+    { id: 'marketing-channels', label: 'Channels', isNew: true },
     { id: 'marketing-campaigns', label: 'Campaigns', isNew: true },
+    { id: 'marketing-practices', label: 'Practices', isNew: true },
+    { id: 'marketing-leads', label: 'Leads', isNew: true },
+    { id: 'marketing-health', label: 'Attribution health', isNew: true },
   ]},
   { label: 'Elevate CRM', items: [
     { id: 'crm-today', label: 'Today' },

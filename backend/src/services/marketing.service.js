@@ -123,6 +123,46 @@ function buildCoverage(accounts, practiceId, unmappedSpendPence) {
     };
 }
 
+// Per-practice performance, for the comparison screen.
+//
+// Spend comes from the campaign rows, which are already scoped to the requested
+// practice when one is selected — so this is only meaningful on the group view,
+// where every practice's rows are present. Leads carry the practice they first
+// enquired at, and the RPC emits one row per person, so the practices sum to
+// the group total instead of double-counting somebody who enquired at two.
+function practiceSplit(spendByPractice, leadRows, campaignProvider) {
+    const by = new Map();
+    const row = (id) => {
+        if (!by.has(id)) {
+            by.set(id, {
+                practiceId: id, spendPence: 0, leads: 0, patients: 0, newPatients: 0,
+                channels: { meta_ads: 0, google_ads: 0, other: 0 },
+            });
+        }
+        return by.get(id);
+    };
+
+    for (const [practiceId, spendPence] of spendByPractice) row(practiceId).spendPence += spendPence;
+
+    for (const l of leadRows) {
+        const e = row(l.practice_id ?? null);
+        e.leads += 1;
+        if (l.converted) e.patients += 1;
+        if (l.is_new_patient) e.newPatients += 1;
+        e.channels[resolveLeadChannel(l, campaignProvider)] += 1;
+    }
+
+    return [...by.values()]
+        .map((e) => ({
+            ...e,
+            costPerLeadPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.leads) : null,
+            costPerNewPatientPence: e.spendPence > 0 && e.newPatients > 0
+                ? perUnitPence(e.spendPence, e.newPatients)
+                : null,
+        }))
+        .sort((a, b) => b.spendPence - a.spendPence || b.leads - a.leads);
+}
+
 function joinSpendToLeads(spendRows, leadRows) {
     // Count PEOPLE, not lead rows: one contact sitting in several pipelines is
     // one lead. This is the same correction made in the Cockpit's matchBreakdown.
@@ -183,6 +223,11 @@ function joinSpendToLeads(spendRows, leadRows) {
         patients: leadRows.reduce((n, l) => n + (l.converted ? 1 : 0), 0),
         // The cost denominator: patients whose campaign we hold spend for.
         attributedPatients: rows.reduce((n, r) => n + r.patients, 0),
+        // Of those patients, the ones who had never been to the practice
+        // before this window. The rest are existing patients enquiring again —
+        // real enquiries, but not acquisition, and reporting them as such
+        // overstates what the advertising bought.
+        newPatients: leadRows.reduce((n, l) => n + (l.is_new_patient ? 1 : 0), 0),
         unattributedLeads: allPeople.size - attributedPeople.size,
     };
     // Both cost figures divide paid spend by the population that spend can be
@@ -210,13 +255,135 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // on every hit for the whole TTL — the screen would render against a shape that
 // no longer exists (an undefined series is a crash, not a blank chart). The
 // version makes old entries unreachable rather than merely stale.
-const PAYLOAD_VERSION = 4;   // v4: lead population no longer excludes existing patients
+const PAYLOAD_VERSION = 5;   // v5: byPractice, totals.newPatients
 
 function cacheKey(since, until, practiceId) {
     return `marketing:perf:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
 }
 
+// The trend and the leads list get their own cache keys: they answer different
+// windows (a year) and different page slices from the performance payload, and
+// sharing one key would evict on every page change.
+function trendKey(since, until, practiceId) {
+    return `marketing:trend:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
+}
+
 export const marketingService = {
+    // Month-by-month per channel. Served by a SQL aggregate rather than the
+    // row-level function — see marketingRepository.monthlyRollup.
+    async trend(orgId, { since, until, practiceId = null, refresh = false } = {}) {
+        const key = trendKey(since, until, practiceId);
+        if (!refresh) {
+            const cached = await readDashboardCache(orgId, key).catch(() => undefined);
+            if (cached) return cached;
+        }
+        const rows = await marketingRepository.monthlyRollup(orgId, since, until, practiceId);
+
+        // Pivot to one entry per month so the chart has a single row per x
+        // position, with every channel present even when it did nothing that
+        // month — a missing key would break the line rather than flatten it.
+        const byMonth = new Map();
+        for (const r of rows) {
+            if (!byMonth.has(r.month)) {
+                byMonth.set(r.month, {
+                    month: r.month,
+                    spendPence: 0, leads: 0, patients: 0, newPatients: 0,
+                    channels: {
+                        meta_ads: { spendPence: 0, leads: 0, patients: 0, newPatients: 0 },
+                        google_ads: { spendPence: 0, leads: 0, patients: 0, newPatients: 0 },
+                        other: { spendPence: 0, leads: 0, patients: 0, newPatients: 0 },
+                    },
+                });
+            }
+            const m = byMonth.get(r.month);
+            const c = m.channels[r.channel];
+            if (!c) continue;                       // a provider we do not chart
+            c.spendPence += r.spendPence;
+            c.leads += r.leads;
+            c.patients += r.patients;
+            c.newPatients += r.newPatients;
+            m.spendPence += r.spendPence;
+            m.leads += r.leads;
+            m.patients += r.patients;
+            m.newPatients += r.newPatients;
+        }
+
+        // Cost per lead per channel per month. Null, never zero, when that
+        // channel spent nothing that month — a gap in the line reads as "not
+        // measured", a zero reads as "free".
+        const months = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
+        for (const m of months) {
+            for (const c of Object.values(m.channels)) {
+                c.costPerLeadPence = c.spendPence > 0 ? perUnitPence(c.spendPence, c.leads) : null;
+            }
+        }
+        const payload = { months };
+        await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});
+        return payload;
+    },
+
+    // One page of the named people behind the counts.
+    //
+    // Reuses the same classification as every other screen, then fetches
+    // display fields for the visible page ONLY — the window can hold thousands
+    // of people and a table of 50 needs 50 names.
+    async leadList(orgId, {
+        since, until, practiceId = null, channel = null, converted = null,
+        page = 1, size = 50,
+    } = {}) {
+        const [spend, leads] = await Promise.all([
+            marketingRepository.campaignSpend(orgId, since, until, practiceId),
+            marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
+        ]);
+        const campaignProvider = new Map(spend.campaigns.map((c) => [c.campaign_id, c.provider]));
+        const campaignName = new Map(spend.campaigns.map((c) => [c.campaign_id, c.campaign_name]));
+
+        let rows = leads.map((l) => ({
+            contactId: l.contact_id,
+            practiceId: l.practice_id,
+            channel: resolveLeadChannel(l, campaignProvider),
+            campaignId: l.ad_campaign_id,
+            campaignName: l.ad_campaign_id ? campaignName.get(l.ad_campaign_id) ?? null : null,
+            attributionSource: l.attribution_source,
+            enquiredAt: l.first_lead_at,
+            converted: l.converted,
+            isNewPatient: l.is_new_patient,
+            matchedBy: l.matched_by,
+        }));
+        if (channel) rows = rows.filter((r) => r.channel === channel);
+        if (converted === true) rows = rows.filter((r) => r.converted);
+        if (converted === false) rows = rows.filter((r) => !r.converted);
+
+        // Newest enquiry first. contactId breaks ties so paging is stable when
+        // several people enquired in the same second.
+        rows.sort((a, b) => String(b.enquiredAt ?? '').localeCompare(String(a.enquiredAt ?? ''))
+            || String(a.contactId).localeCompare(String(b.contactId)));
+
+        const total = rows.length;
+        const start = Math.max(0, (page - 1) * size);
+        const pageRows = rows.slice(start, start + size);
+        const people = await marketingRepository.contactsByIds(
+            orgId, pageRows.map((r) => r.contactId),
+        );
+        const person = new Map(people.map((c) => [c.id, c]));
+
+        return {
+            total,
+            page,
+            size,
+            rows: pageRows.map((r) => {
+                const c = person.get(r.contactId);
+                const name = [c?.first_name, c?.last_name].filter(Boolean).join(' ').trim();
+                return {
+                    ...r,
+                    name: name || null,
+                    email: c?.email ?? null,
+                    phone: c?.phone ?? null,
+                };
+            }),
+        };
+    },
+
     async campaignPerformance(orgId, { since, until, practiceId = null, refresh = false } = {}) {
         const key = cacheKey(since, until, practiceId);
         if (!refresh) {
@@ -236,6 +403,7 @@ export const marketingService = {
             spend.campaigns.map((c) => [c.campaign_id, c.provider]),
         );
         payload.byChannel = channelSplit(payload.rows, leads, campaignProvider);
+        payload.byPractice = practiceSplit(spend.spendByPractice, leads, campaignProvider);
         payload.series = spend.series;
         payload.coverage = buildCoverage(accounts, practiceId, spend.unmappedSpendPence);
         await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});
@@ -245,4 +413,5 @@ export const marketingService = {
 
 export const __test = {
     joinSpendToLeads, perUnitPence, cacheKey, channelSplit, buildCoverage, resolveLeadChannel,
+    practiceSplit,
 };

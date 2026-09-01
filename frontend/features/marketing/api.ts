@@ -32,6 +32,8 @@ export interface MarketingTotals {
   patients: number;
   /** Patients whose campaign we hold spend for: the cost-per-patient denominator. */
   attributedPatients: number;
+  /** Of those patients, the ones with no appointment before this window. */
+  newPatients: number;
   unattributedLeads: number;
   costPerLeadPence: number | null;
   costPerPatientPence: number | null;
@@ -86,22 +88,77 @@ export interface MarketingCoverage {
   practiceHasMappedAccount: boolean | null;
 }
 
+/** One practice's figures, for the comparison screen. */
+export interface PracticeRow {
+  practiceId: string | null;
+  spendPence: number;
+  leads: number;
+  patients: number;
+  newPatients: number;
+  channels: Record<Channel, number>;
+  costPerLeadPence: number | null;
+  costPerNewPatientPence: number | null;
+}
+
 export interface MarketingPerformance {
   rows: CampaignRow[];
   totals: MarketingTotals;
   byChannel: ChannelRow[];
+  byPractice: PracticeRow[];
   series: SpendDay[];
   coverage: MarketingCoverage;
+}
+
+export interface TrendChannel {
+  spendPence: number;
+  leads: number;
+  patients: number;
+  newPatients: number;
+  costPerLeadPence: number | null;
+}
+
+export interface TrendMonth {
+  month: string;
+  spendPence: number;
+  leads: number;
+  patients: number;
+  newPatients: number;
+  channels: Record<Channel, TrendChannel>;
+}
+
+export interface MarketingLead {
+  contactId: string;
+  practiceId: string | null;
+  channel: Channel;
+  campaignId: string | null;
+  campaignName: string | null;
+  attributionSource: string | null;
+  enquiredAt: string | null;
+  converted: boolean;
+  isNewPatient: boolean;
+  matchedBy: string | null;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
+export interface MarketingLeadPage {
+  total: number;
+  page: number;
+  size: number;
+  rows: MarketingLead[];
 }
 
 export const EMPTY_PERFORMANCE: MarketingPerformance = {
   rows: [],
   totals: {
     spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
-    leads: 0, attributedLeads: 0, patients: 0, attributedPatients: 0, unattributedLeads: 0,
+    leads: 0, attributedLeads: 0, patients: 0, attributedPatients: 0, newPatients: 0,
+    unattributedLeads: 0,
     costPerLeadPence: null, costPerPatientPence: null,
   },
   byChannel: [],
+  byPractice: [],
   series: [],
   coverage: {
     totalAccounts: 0, mappedAccounts: 0, unmappedAccounts: 0,
@@ -131,4 +188,12 @@ export const CHANNEL_COLOUR: Record<string, string> = {
 
 export async function fetchMarketingPerformance(qs: string): Promise<MarketingPerformance> {
   return api(`/api/marketing/performance?${qs}`);
+}
+
+export async function fetchMarketingTrend(qs: string): Promise<{ months: TrendMonth[] }> {
+  return api(`/api/marketing/trend?${qs}`);
+}
+
+export async function fetchMarketingLeads(qs: string): Promise<MarketingLeadPage> {
+  return api(`/api/marketing/leads?${qs}`);
 }

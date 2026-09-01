@@ -324,3 +324,58 @@ describe('totals.patients population', () => {
     expect(channels.reduce((n, c) => n + c.leads, 0)).toBe(totals.leads);
   });
 });
+
+describe('practiceSplit', () => {
+  const { practiceSplit } = __test;
+  const PROVIDER = new Map([['m1', 'meta_ads']]);
+  const lead = (id, practiceId, over = {}) => ({
+    contact_id: id, practice_id: practiceId, ad_campaign_id: null,
+    attribution_source: null, converted: false, is_new_patient: false, ...over,
+  });
+
+  it('puts each practice beside the others with its own money', () => {
+    const out = practiceSplit(
+      [['p1', 500000], ['p2', 100000]],
+      [
+        lead('a', 'p1', { attribution_source: 'Paid Social', converted: true, is_new_patient: true }),
+        lead('b', 'p1', { attribution_source: 'Paid Search' }),
+        lead('c', 'p2', { converted: true }),
+      ],
+      PROVIDER,
+    );
+    const p1 = out.find((r) => r.practiceId === 'p1');
+    expect(p1).toMatchObject({ spendPence: 500000, leads: 2, patients: 1, newPatients: 1 });
+    expect(p1.channels).toEqual({ meta_ads: 1, google_ads: 1, other: 0 });
+    expect(out[0].practiceId).toBe('p1');   // highest spend first
+  });
+
+  it('keeps leads with no practice visible instead of dropping them', () => {
+    const out = practiceSplit([], [lead('a', null)], PROVIDER);
+    expect(out.find((r) => r.practiceId === null)?.leads).toBe(1);
+  });
+
+  it('costs against NEW patients, and leaves it blank when there are none', () => {
+    const out = practiceSplit(
+      [['p1', 100000]],
+      [lead('a', 'p1', { converted: true, is_new_patient: false })],
+      PROVIDER,
+    );
+    expect(out[0].patients).toBe(1);
+    expect(out[0].newPatients).toBe(0);
+    expect(out[0].costPerNewPatientPence).toBeNull();  // never divide by zero
+  });
+
+  it('never reports a cost for a practice with no spend', () => {
+    const out = practiceSplit([], [lead('a', 'p1')], PROVIDER);
+    expect(out[0].costPerLeadPence).toBeNull();        // not £0.00
+  });
+
+  // The RPC emits one row per person, attributed to their first enquiry, so a
+  // person who enquired at two practices is counted once — the practices sum
+  // to the group rather than double-counting.
+  it('sums to the lead total', () => {
+    const leads = [lead('a', 'p1'), lead('b', 'p2'), lead('c', null)];
+    const out = practiceSplit([], leads, PROVIDER);
+    expect(out.reduce((n, r) => n + r.leads, 0)).toBe(leads.length);
+  });
+});
