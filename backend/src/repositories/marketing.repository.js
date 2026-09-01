@@ -54,12 +54,41 @@ export const marketingRepository = {
     },
 
     // Leads with their attribution and whether they became a Dentally patient.
+    //
+    // PAGINATED, and it must be. PostgREST's 1000-row cap applies to a
+    // set-returning FUNCTION exactly as it does to a table — the result is
+    // exposed as a relation — so a plain `.rpc()` silently returned the first
+    // 1000 leads and nothing said so. Plan4growth's August 2026 window holds
+    // 1,222; the screen showed "Leads 1,000" and, because the truncation cut
+    // the converted rows too, 44 patients against a true 122. A round number
+    // in a KPI tile is the tell.
+    //
+    // Ordering is what makes paging sound: OFFSET without ORDER BY may return
+    // the same row twice and skip another. The function emits exactly one row
+    // per contact (its lead_contacts CTE is DISTINCT on contact columns), so
+    // contact_id is a unique, stable sort key.
     async leadsByCampaign(orgId, since, until, practiceId = null) {
-        const { data, error } = await supabase_1.serviceClient.rpc('ad_lead_conversions', {
-            p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
-        });
-        if (error) throw new Error(`ad_lead_conversions: ${error.message}`);
-        return (data ?? []).map((r) => ({
+        const PAGE = 1000;
+        const rows = [];
+        for (let from = 0; ; ) {
+            const { data, error } = await supabase_1.serviceClient
+                .rpc('ad_lead_conversions', {
+                    p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
+                })
+                .order('contact_id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(`ad_lead_conversions: ${error.message}`);
+            const page = data ?? [];
+            rows.push(...page);
+            // Advance by what the server actually returned and stop only on an
+            // EMPTY page, never on a short one. The server's cap is its own
+            // setting: if it were below PAGE, treating a short page as the last
+            // page would reintroduce the very truncation this fixes, just at a
+            // different number. Costs one extra round trip; buys immunity.
+            if (page.length === 0) break;
+            from += page.length;
+        }
+        return rows.map((r) => ({
             ad_campaign_id: r.ad_campaign_id ?? null,
             attribution_source: r.attribution_source ?? null,
             contact_id: r.contact_id,
