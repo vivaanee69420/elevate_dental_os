@@ -160,12 +160,36 @@ const h = vi.hoisted(() => {
       // RPC recorder. Default returns an ERROR result so callers that treat
       // RPC as optional (auth middleware's auth_bootstrap fast path) fall back
       // to their query path, matching pre-RPC behaviour. Tests that want a
-      // specific RPC outcome set supaRec.rpcProvider(fn, params).
-      rpc: async (fn, params) => {
-        (supaRec.rpcCalls ||= []).push({ fn, params });
-        return supaRec.rpcProvider
-          ? supaRec.rpcProvider(fn, params)
-          : { data: null, error: { message: `rpc ${fn} not stubbed` } };
+      // specific RPC outcome set supaRec.rpcProvider(fn, params, mods).
+      //
+      // Returns a THENABLE BUILDER, not a promise: PostgREST exposes a
+      // set-returning function as a relation, so a caller may chain .order()
+      // and .range() onto it to page past the 1000-row cap. `await
+      // client.rpc(...)` still works unchanged because the builder is
+      // thenable. `mods` carries { order, range } so a provider can serve a
+      // specific page.
+      rpc: (fn, params) => {
+        // `mods` is attached to the record only once a modifier is actually
+        // used, so the many existing `toEqual({ fn, params })` assertions on
+        // unmodified RPC calls keep passing.
+        const call = { fn, params };
+        (supaRec.rpcCalls ||= []).push(call);
+        const settle = async () =>
+          supaRec.rpcProvider
+            ? supaRec.rpcProvider(fn, params, call.mods ?? {})
+            : { data: null, error: { message: `rpc ${fn} not stubbed` } };
+        const builder = {
+          order(col, opts) {
+            (call.mods ||= {}).order = { col, opts };
+            return builder;
+          },
+          range(from, to) {
+            (call.mods ||= {}).range = { from, to };
+            return builder;
+          },
+          then: (resolve, reject) => settle().then(resolve, reject),
+        };
+        return builder;
       },
       auth: {
         getUser: async () =>

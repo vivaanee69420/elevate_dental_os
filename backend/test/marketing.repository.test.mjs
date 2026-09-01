@@ -93,4 +93,66 @@ describe('leadsByCampaign', () => {
             p_org: ORG, p_since: AUG_SINCE, p_until: AUG_UNTIL, p_practice: null,
         });
     });
+
+    // The bug this pins: PostgREST caps a set-returning FUNCTION at 1000 rows
+    // just as it caps a table. An unpaginated .rpc() returned Plan4growth's
+    // first 1000 August leads out of 1,222 and the screen read "Leads 1,000"
+    // with 44 patients instead of 122 — no error, just a wrong round number.
+    function pagedLeads(total) {
+        const all = Array.from({ length: total }, (_, i) => ({
+            contact_id: `c-${String(i).padStart(5, '0')}`,
+            ad_campaign_id: 'camp-1',
+            attribution_source: 'facebook',
+            converted: i % 10 === 0,
+        }));
+        const CAP = 1000;   // what the server enforces, whatever we ask for
+        return (_fn, _params, mods) => {
+            const from = mods.range?.from ?? 0;
+            const to = mods.range?.to ?? all.length - 1;
+            return { data: all.slice(from, Math.min(to + 1, from + CAP)), error: null };
+        };
+    }
+
+    it('pages past the 1000-row cap instead of silently truncating', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = pagedLeads(1222);
+        const rows = await marketingRepository.leadsByCampaign(ORG, AUG_SINCE, AUG_UNTIL, null);
+        expect(rows).toHaveLength(1222);
+        expect(new Set(rows.map((r) => r.contact_id)).size).toBe(1222);
+        expect(rows.filter((r) => r.converted)).toHaveLength(123);
+    });
+
+    it('orders by a unique key so paging cannot duplicate or skip a lead', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = pagedLeads(1222);
+        await marketingRepository.leadsByCampaign(ORG, AUG_SINCE, AUG_UNTIL, null);
+        // Every page must carry the same deterministic order.
+        for (const call of supaRec.rpcCalls) {
+            expect(call.mods.order).toEqual({ col: 'contact_id', opts: { ascending: true } });
+            expect(call.mods.range).toBeDefined();
+        }
+    });
+
+    it('stops on an empty page, not a short one — a lower server cap still pages', async () => {
+        supaRec.rpcCalls = [];
+        // A server capping at 400 returns short pages forever; breaking on a
+        // short page would truncate at 400 and look exactly like the old bug.
+        const all = Array.from({ length: 950 }, (_, i) => ({
+            contact_id: `c-${String(i).padStart(5, '0')}`,
+            ad_campaign_id: null, attribution_source: null, converted: false,
+        }));
+        supaRec.rpcProvider = (_fn, _params, mods) => {
+            const from = mods.range?.from ?? 0;
+            return { data: all.slice(from, from + 400), error: null };
+        };
+        const rows = await marketingRepository.leadsByCampaign(ORG, AUG_SINCE, AUG_UNTIL, null);
+        expect(rows).toHaveLength(950);
+    });
+
+    it('surfaces an RPC error rather than returning a short result', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = () => ({ data: null, error: { message: 'statement timeout' } });
+        await expect(marketingRepository.leadsByCampaign(ORG, AUG_SINCE, AUG_UNTIL, null))
+            .rejects.toThrow(/statement timeout/);
+    });
 });

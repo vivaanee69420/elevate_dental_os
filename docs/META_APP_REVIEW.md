@@ -1,3 +1,31 @@
+> # SUPERSEDED — do not action this document
+>
+> **Meta App Review for `leads_retrieval` was abandoned on 31 August 2026**, not deferred.
+> The owner cannot complete Meta **Business Verification**, which is a hard prerequisite for
+> Advanced Access to any of the permissions below. Nothing in this checklist is reachable.
+>
+> **What replaced it.** A read-only spike the same day found that GoHighLevel already carries
+> campaign- and ad-level attribution in the `GET /contacts/?locationId=` **list** response —
+> `attributions[]` is present on 92.3% of contacts and costs zero extra API calls on top of
+> the nightly pull. That is now the lead-attribution source, joined to `ad_metrics` by
+> `utmCampaignId` (Meta) and by `gad_campaignid` parsed from the landing-page URL (Google).
+> Spend, impressions, clicks and campaign structure continue to come directly from the Google
+> Ads and Meta Ads APIs, which need no approval.
+>
+> Google's `lead_form_submission_data` is shelved for a separate reason: the connected account
+> runs one lead-form asset with **zero submissions in 30 days**. Its conversions are calls and
+> local actions, not form fills.
+>
+> **Do not plan work that depends on Meta App Review or on Google lead-form ingestion.**
+>
+> - Decision and evidence: `docs/HANDOFF-2026-09-01.md`
+> - Design that replaced this: `docs/superpowers/specs/2026-08-31-marketing-section-and-ad-lead-attribution-design.md`
+> - Memory: `ad-lead-fetch-feasibility`
+>
+> Kept only as a record of what Meta's requirements were, should Business Verification ever
+> become possible. Re-verify every requirement against current Meta documentation before
+> reviving any of it.
+
 # Meta App Review — lead retrieval (kickoff checklist)
 
 Goal: let tenants' Meta lead-form leads be fetched directly by Elevate (Sub-project B of
