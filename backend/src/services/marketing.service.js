@@ -210,7 +210,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // on every hit for the whole TTL — the screen would render against a shape that
 // no longer exists (an undefined series is a crash, not a blank chart). The
 // version makes old entries unreachable rather than merely stale.
-const PAYLOAD_VERSION = 3;   // v3: leads-first byChannel, totals.attributedPatients
+const PAYLOAD_VERSION = 4;   // v4: lead population no longer excludes existing patients
 
 function cacheKey(since, until, practiceId) {
     return `marketing:perf:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
