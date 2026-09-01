@@ -26,17 +26,31 @@ export interface MarketingTotals {
   platformConversions: number;
   /** Everyone who enquired in the window — organic and unattributed included. */
   leads: number;
-  /** Only the people matched to a campaign with spend: the cost denominators. */
+  /** Only the people matched to a campaign with spend: the cost denominator. */
   attributedLeads: number;
+  /** Everyone in the lead population who became a patient. */
   patients: number;
+  /** Patients whose campaign we hold spend for: the cost-per-patient denominator. */
+  attributedPatients: number;
   unattributedLeads: number;
   costPerLeadPence: number | null;
   costPerPatientPence: number | null;
 }
 
-/** One channel's roll-up of the campaign rows. Sums to `totals`. */
+export type Channel = 'google_ads' | 'meta_ads' | 'other';
+
+/**
+ * One channel's own figures. Built LEADS-FIRST, not by rolling up the campaign
+ * table: a channel appears whenever it has leads OR spend, so a practice whose
+ * Google account spent nothing this month still sees its Google leads instead
+ * of having them silently folded into a single blended number.
+ *
+ * Every lead lands in exactly one channel, so `leads` across the rows sums to
+ * the lead total. `other` is organic social, referral, direct and untracked
+ * traffic — it carries leads and patients but never a cost.
+ */
 export interface ChannelRow {
-  provider: 'google_ads' | 'meta_ads';
+  channel: Channel;
   spendPence: number;
   impressions: number;
   clicks: number;
@@ -84,7 +98,7 @@ export const EMPTY_PERFORMANCE: MarketingPerformance = {
   rows: [],
   totals: {
     spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
-    leads: 0, attributedLeads: 0, patients: 0, unattributedLeads: 0,
+    leads: 0, attributedLeads: 0, patients: 0, attributedPatients: 0, unattributedLeads: 0,
     costPerLeadPence: null, costPerPatientPence: null,
   },
   byChannel: [],
@@ -98,6 +112,7 @@ export const EMPTY_PERFORMANCE: MarketingPerformance = {
 export const CHANNEL_LABEL: Record<string, string> = {
   google_ads: 'Google',
   meta_ads: 'Facebook',
+  other: 'Other sources',
 };
 
 /**
@@ -109,6 +124,9 @@ export const CHANNEL_LABEL: Record<string, string> = {
 export const CHANNEL_COLOUR: Record<string, string> = {
   google_ads: '#0d9488',
   meta_ads: '#1d4ed8',
+  // Deliberately a neutral, not a third hue: "other" is the absence of a paid
+  // channel, and giving it a colour of its own would let it read as one.
+  other: '#9ca3af',
 };
 
 export async function fetchMarketingPerformance(qs: string): Promise<MarketingPerformance> {

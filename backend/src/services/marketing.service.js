@@ -16,31 +16,89 @@ function perUnitPence(totalPence, units) {
     return units > 0 ? Math.round(totalPence / units) : null;
 }
 
-// Channel rollup. Built from the SAME campaign rows and the SAME people sets
-// as the table, so Google + Facebook always add up to the tiles.
-function channelSplit(rows) {
-    const by = new Map();
-    for (const r of rows) {
-        const e = by.get(r.provider) ?? {
-            provider: r.provider, spendPence: 0, impressions: 0, clicks: 0,
-            platformConversions: 0, leads: 0, patients: 0, campaigns: 0,
-        };
-        e.spendPence += r.spendPence;
-        e.impressions += r.impressions;
-        e.clicks += r.clicks;
-        e.platformConversions += r.platformConversions;
-        e.leads += r.leads;
-        e.patients += r.patients;
+// Which paid channel a lead came from.
+//
+// Derived from live data rather than assumed (probe, 2026-09-01, 9,532
+// attributed Plan4growth contacts):
+//   - `gclid` and attribution_source 'Paid Search' are PERFECTLY coincident —
+//     0 contacts carry one without the other — so the session source alone
+//     identifies Google. That is why this needs no extra RPC column.
+//   - 'Paid Social' is 3,420 contacts, of which only 2 carry a non-Meta medium.
+//   - 103 contacts carry a campaign id while sitting OUTSIDE both paid buckets
+//     (GoHighLevel files some booked Facebook traffic under 'Social media').
+//     Rule 1 catches them, which is why it runs first.
+//
+// Rule 1 is definitive: a campaign id that matches a campaign we hold spend for
+// names its own provider. The session source is the fallback, not the primary.
+//
+// Everything else — organic social, referral, direct, CRM workflows, and leads
+// with no attribution at all — is 'other'. Organic Facebook traffic is NOT
+// folded into paid Facebook: it cost nothing, and averaging it into the paid
+// denominator would quietly flatter cost per lead.
+export function resolveLeadChannel(lead, campaignProvider) {
+    const viaCampaign = lead.ad_campaign_id
+        ? campaignProvider.get(lead.ad_campaign_id) ?? null
+        : null;
+    if (viaCampaign) return viaCampaign;
+    const src = (lead.attribution_source ?? '').toLowerCase();
+    if (src === 'paid search') return 'google_ads';
+    if (src === 'paid social') return 'meta_ads';
+    return 'other';
+}
+
+const CHANNEL_ORDER = ['meta_ads', 'google_ads', 'other'];
+
+// Per-channel performance, built LEADS-FIRST.
+//
+// The earlier version rolled up the campaign table, which meant a channel only
+// existed if it had a campaign with spend in the window — so Barnet's 33 Google
+// leads were invisible on a month where its Google account spent nothing, and
+// the whole 315 read as though it were one Facebook number. Counting the leads
+// themselves and attaching each channel's spend to them keeps every lead
+// visible and every channel's cost honest.
+//
+// The 'other' row carries leads and patients but never a cost: dividing paid
+// spend by organic enquiries is exactly the error the totals already avoid.
+function channelSplit(spendRows, leadRows, campaignProvider) {
+    const blank = () => ({
+        spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
+        campaigns: 0, leads: 0, patients: 0,
+    });
+    const by = new Map(CHANNEL_ORDER.map((c) => [c, { channel: c, ...blank() }]));
+
+    for (const s of spendRows) {
+        const e = by.get(s.provider);
+        if (!e) continue;                     // a provider we do not chart
+        e.spendPence += s.spendPence;
+        e.impressions += s.impressions;
+        e.clicks += s.clicks;
+        e.platformConversions += s.platformConversions;
         e.campaigns += 1;
-        by.set(r.provider, e);
     }
-    return [...by.values()]
-        .map((e) => ({
-            ...e,
-            costPerLeadPence: perUnitPence(e.spendPence, e.leads),
-            costPerPatientPence: perUnitPence(e.spendPence, e.patients),
-        }))
-        .sort((a, b) => b.spendPence - a.spendPence);
+
+    for (const l of leadRows) {
+        const e = by.get(resolveLeadChannel(l, campaignProvider));
+        e.leads += 1;
+        if (l.converted) e.patients += 1;
+    }
+
+    return CHANNEL_ORDER
+        .map((c) => by.get(c))
+        // Drop a channel that has neither spend nor leads — an empty Google row
+        // on an account that has never run Google is noise, not information.
+        .filter((e) => e.spendPence > 0 || e.leads > 0)
+        .map((e) => {
+            // No spend in this window means NO cost per lead — null, never
+            // £0.00, which would read as "these leads were free". A channel can
+            // legitimately have leads and no spend: the ads that won them ran
+            // in an earlier window, or on an account nobody has mapped.
+            const costed = e.channel !== 'other' && e.spendPence > 0;
+            return {
+                ...e,
+                costPerLeadPence: costed ? perUnitPence(e.spendPence, e.leads) : null,
+                costPerPatientPence: costed ? perUnitPence(e.spendPence, e.patients) : null,
+            };
+        });
 }
 
 // Why a practice can legitimately show no spend. £0.00 on its own is ambiguous
@@ -116,7 +174,15 @@ function joinSpendToLeads(spendRows, leadRows) {
         leads: allPeople.size,
         // The people the spend actually bought, and the ones the table shows.
         attributedLeads: attributedPeople.size,
-        patients: rows.reduce((n, r) => n + r.patients, 0),
+        // Everyone in that same population who became a patient. This MUST be
+        // measured over the same people as `leads` — it previously counted only
+        // campaign-matched patients while `leads` counted everybody, so the two
+        // tiles sat side by side describing different populations and implied a
+        // conversion rate roughly a third of the real one (Barnet, Aug 2026: 19
+        // against 315 reads as 6%, when 30 of those 315 became patients).
+        patients: leadRows.reduce((n, l) => n + (l.converted ? 1 : 0), 0),
+        // The cost denominator: patients whose campaign we hold spend for.
+        attributedPatients: rows.reduce((n, r) => n + r.patients, 0),
         unattributedLeads: allPeople.size - attributedPeople.size,
     };
     // Both cost figures divide paid spend by the population that spend can be
@@ -125,7 +191,7 @@ function joinSpendToLeads(spendRows, leadRows) {
     // patient used the attributed denominator — two different populations
     // presented side by side as if they were one.
     totals.costPerLeadPence = perUnitPence(totals.spendPence, totals.attributedLeads);
-    totals.costPerPatientPence = perUnitPence(totals.spendPence, totals.patients);
+    totals.costPerPatientPence = perUnitPence(totals.spendPence, totals.attributedPatients);
     return { rows, totals };
 }
 
@@ -144,7 +210,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // on every hit for the whole TTL — the screen would render against a shape that
 // no longer exists (an undefined series is a crash, not a blank chart). The
 // version makes old entries unreachable rather than merely stale.
-const PAYLOAD_VERSION = 2;   // v2: + byChannel, series, coverage
+const PAYLOAD_VERSION = 3;   // v3: leads-first byChannel, totals.attributedPatients
 
 function cacheKey(since, until, practiceId) {
     return `marketing:perf:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
@@ -163,7 +229,13 @@ export const marketingService = {
             marketingRepository.adAccounts(orgId),
         ]);
         const payload = joinSpendToLeads(spend.campaigns, leads);
-        payload.byChannel = channelSplit(payload.rows);
+        // campaign id -> provider, from the campaigns we hold spend for. This is
+        // the definitive arm of channel resolution, so it is built from the same
+        // spend rows the table is built from.
+        const campaignProvider = new Map(
+            spend.campaigns.map((c) => [c.campaign_id, c.provider]),
+        );
+        payload.byChannel = channelSplit(payload.rows, leads, campaignProvider);
         payload.series = spend.series;
         payload.coverage = buildCoverage(accounts, practiceId, spend.unmappedSpendPence);
         await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});
@@ -171,4 +243,6 @@ export const marketingService = {
     },
 };
 
-export const __test = { joinSpendToLeads, perUnitPence, cacheKey, channelSplit, buildCoverage };
+export const __test = {
+    joinSpendToLeads, perUnitPence, cacheKey, channelSplit, buildCoverage, resolveLeadChannel,
+};
