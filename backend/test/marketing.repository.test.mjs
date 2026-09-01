@@ -74,10 +74,46 @@ describe('campaignSpend window', () => {
             ],
             error: null,
         });
-        const rows = await marketingRepository.campaignSpend(ORG, AUG_SINCE, AUG_UNTIL);
-        expect(rows).toHaveLength(1);
-        expect(rows[0].spend_pence).toBe(3350);       // integer pence, summed
-        expect(rows[0].campaign_name).toBe('Implants'); // a later name fills a null
+        const { campaigns } = await marketingRepository.campaignSpend(ORG, AUG_SINCE, AUG_UNTIL);
+        expect(campaigns).toHaveLength(1);
+        expect(campaigns[0].spend_pence).toBe(3350);       // integer pence, summed
+        expect(campaigns[0].campaign_name).toBe('Implants'); // a later name fills a null
+    });
+
+    // The trend and the tiles are built from ONE read of the same rows, so they
+    // cannot drift apart the way two separate queries would.
+    it('returns a per-day series that sums to the same total as the campaigns', async () => {
+        supaRec.resultProvider = () => ({
+            data: [
+                { provider: 'meta_ads', customer_id: 'act_1', campaign_id: 'c1', campaign_name: 'A', practice_id: 'p1', metric_date: '2026-08-02', spend_pence: 1000, impressions: 0, clicks: 0, conversions: 0 },
+                { provider: 'meta_ads', customer_id: 'act_1', campaign_id: 'c2', campaign_name: 'B', practice_id: 'p1', metric_date: '2026-08-01', spend_pence: 2350, impressions: 0, clicks: 0, conversions: 0 },
+                { provider: 'google_ads', customer_id: 'g_1', campaign_id: 'c3', campaign_name: 'C', practice_id: 'p1', metric_date: '2026-08-01', spend_pence: 500, impressions: 0, clicks: 0, conversions: 0 },
+            ],
+            error: null,
+        });
+        const { campaigns, series } = await marketingRepository.campaignSpend(ORG, AUG_SINCE, AUG_UNTIL);
+        expect(series.map((d) => d.date)).toEqual(['2026-08-01', '2026-08-02']);  // chronological
+        expect(series[0].spendPence).toBe(2850);
+        expect(series[0].meta_ads).toBe(2350);
+        expect(series[0].google_ads).toBe(500);
+        const seriesTotal = series.reduce((n, d) => n + d.spendPence, 0);
+        const campaignTotal = campaigns.reduce((n, c) => n + c.spend_pence, 0);
+        expect(seriesTotal).toBe(campaignTotal);
+    });
+
+    // A practice reading £0.00 is ambiguous — "spent nothing" or "no ad account
+    // is mapped to it". The screen can only tell those apart if the read
+    // reports how much spend belongs to no practice at all.
+    it('reports spend sitting on accounts with no practice mapping', async () => {
+        supaRec.resultProvider = () => ({
+            data: [
+                { provider: 'meta_ads', customer_id: 'a', campaign_id: 'c1', campaign_name: 'A', practice_id: 'p1', metric_date: '2026-08-01', spend_pence: 1000, impressions: 0, clicks: 0, conversions: 0 },
+                { provider: 'meta_ads', customer_id: 'b', campaign_id: 'c2', campaign_name: 'B', practice_id: null, metric_date: '2026-08-01', spend_pence: 700, impressions: 0, clicks: 0, conversions: 0 },
+            ],
+            error: null,
+        });
+        const { unmappedSpendPence } = await marketingRepository.campaignSpend(ORG, AUG_SINCE, AUG_UNTIL);
+        expect(unmappedSpendPence).toBe(700);
     });
 });
 

@@ -119,3 +119,69 @@ describe('cache key', () => {
         expect(__test.cacheKey('s', 'u', null)).toBe(__test.cacheKey('s', 'u', null));
     });
 });
+
+// £0.00 on a practice is ambiguous. It reads as "this practice spent nothing"
+// when the truth may be "no ad account is mapped to it, so none of the group's
+// spend can be attributed here" — the exact state that made the Marketing
+// overview show Barnet £0.00 beside 315 leads. coverage is what lets the
+// screen tell those two apart.
+describe('buildCoverage', () => {
+  const { buildCoverage } = __test;
+  const ACC = [
+    { provider: 'meta_ads', customer_id: 'm1', name: 'GM Barnet', practice_id: 'prac-barnet' },
+    { provider: 'google_ads', customer_id: 'g1', name: 'GM Rochester', practice_id: 'prac-roch' },
+    { provider: 'google_ads', customer_id: 'g2', name: 'Snoreeze', practice_id: null },
+  ];
+
+  it('flags a scoped practice that has no ad account mapped to it', () => {
+    const c = buildCoverage(ACC, 'prac-ashford', 5000);
+    expect(c.practiceHasMappedAccount).toBe(false);
+    expect(c.unmappedAccounts).toBe(1);
+    expect(c.unmappedAccountNames).toEqual(['Snoreeze']);
+  });
+
+  it('confirms a scoped practice that does have one', () => {
+    expect(buildCoverage(ACC, 'prac-barnet', 5000).practiceHasMappedAccount).toBe(true);
+  });
+
+  it('reports unmapped spend only on the group view', () => {
+    // Group view: the money is in the total the user can see, so name it.
+    expect(buildCoverage(ACC, null, 5000).unmappedSpendPence).toBe(5000);
+    // Practice view: the query already excluded those rows, so surfacing the
+    // figure would be a number that appears in no tile on the page.
+    expect(buildCoverage(ACC, 'prac-barnet', 5000).unmappedSpendPence).toBe(0);
+    expect(buildCoverage(ACC, null, 5000).practiceHasMappedAccount).toBeNull();
+  });
+
+  it('handles an org with no ad accounts connected at all', () => {
+    const c = buildCoverage([], null, 0);
+    expect(c).toMatchObject({ totalAccounts: 0, mappedAccounts: 0, unmappedAccounts: 0 });
+  });
+});
+
+describe('channelSplit', () => {
+  const { channelSplit } = __test;
+  const ROWS = [
+    { provider: 'meta_ads', spendPence: 4000, impressions: 10, clicks: 5, platformConversions: 2, leads: 8, patients: 2 },
+    { provider: 'meta_ads', spendPence: 1000, impressions: 5, clicks: 1, platformConversions: 1, leads: 2, patients: 0 },
+    { provider: 'google_ads', spendPence: 3000, impressions: 7, clicks: 4, platformConversions: 3, leads: 5, patients: 1 },
+  ];
+
+  it('rolls campaigns up per channel, highest spend first', () => {
+    const out = channelSplit(ROWS);
+    expect(out.map((c) => c.provider)).toEqual(['meta_ads', 'google_ads']);
+    expect(out[0]).toMatchObject({ spendPence: 5000, leads: 10, patients: 2, campaigns: 2 });
+  });
+
+  it('reconciles to the table total — the channels cannot disagree with the tiles', () => {
+    const out = channelSplit(ROWS);
+    expect(out.reduce((n, c) => n + c.spendPence, 0))
+      .toBe(ROWS.reduce((n, r) => n + r.spendPence, 0));
+  });
+
+  it('gives no cost per patient to a channel that won none', () => {
+    const out = channelSplit([{ provider: 'meta_ads', spendPence: 1000, impressions: 0, clicks: 0, platformConversions: 0, leads: 3, patients: 0 }]);
+    expect(out[0].costPerLeadPence).toBe(333);
+    expect(out[0].costPerPatientPence).toBeNull();   // never Infinity, never 0
+  });
+});

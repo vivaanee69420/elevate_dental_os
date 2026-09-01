@@ -14,7 +14,7 @@ export const marketingRepository = {
         for (let from = 0; ; from += PAGE) {
             let q = supabase_1.serviceClient
                 .from('ad_metrics')
-                .select('provider, customer_id, campaign_id, campaign_name, spend_pence, impressions, clicks, conversions')
+                .select('provider, customer_id, campaign_id, campaign_name, practice_id, metric_date, spend_pence, impressions, clicks, conversions')
                 .eq('organisation_id', orgId)
                 // metric_date is a DATE while the scope window is an ISO
                 // instant with an EXCLUSIVE until. The instant must be resolved
@@ -35,6 +35,27 @@ export const marketingRepository = {
             out.push(...rows);
             if (rows.length < PAGE) break;
         }
+        // Spend that belongs to no practice: the account it was bought on has
+        // no practice mapping. It is real spend and stays in the group total,
+        // but it can never appear under a practice — so the screen must be able
+        // to say so rather than let a practice quietly read low.
+        const unmappedSpendPence = out.reduce(
+            (n, r) => (r.practice_id ? n : n + Number(r.spend_pence ?? 0)), 0);
+
+        // Daily series for the trend, built from the SAME rows as the campaign
+        // collapse so the chart and the tiles can never disagree.
+        const byDay = new Map();
+        for (const r of out) {
+            const d = r.metric_date;
+            if (!d) continue;
+            const e = byDay.get(d) ?? { date: d, spendPence: 0, google_ads: 0, meta_ads: 0 };
+            const spend = Number(r.spend_pence ?? 0);
+            e.spendPence += spend;
+            if (r.provider === 'google_ads' || r.provider === 'meta_ads') e[r.provider] += spend;
+            byDay.set(d, e);
+        }
+        const series = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+
         // Collapse campaign x day -> campaign.
         const byCampaign = new Map();
         for (const r of out) {
@@ -50,7 +71,20 @@ export const marketingRepository = {
             if (!e.campaign_name && r.campaign_name) e.campaign_name = r.campaign_name;
             byCampaign.set(k, e);
         }
-        return [...byCampaign.values()];
+        return { campaigns: [...byCampaign.values()], series, unmappedSpendPence };
+    },
+
+    // The org's ad accounts and which practice each is mapped to. Read so the
+    // screen can distinguish "this practice spent nothing" from "no ad account
+    // is mapped to this practice, so we cannot attribute any spend to it" —
+    // two very different messages that both render as £0.00 without it.
+    async adAccounts(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('ad_accounts')
+            .select('provider, customer_id, name, practice_id, is_selected')
+            .eq('organisation_id', orgId);
+        if (error) throw new Error(`ad_accounts read: ${error.message}`);
+        return data ?? [];
     },
 
     // Leads with their attribution and whether they became a Dentally patient.
