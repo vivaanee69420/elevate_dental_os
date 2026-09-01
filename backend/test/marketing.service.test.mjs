@@ -161,35 +161,116 @@ describe('buildCoverage', () => {
 
 describe('channelSplit', () => {
   const { channelSplit } = __test;
-  const ROWS = [
-    { provider: 'meta_ads', spendPence: 4000, impressions: 10, clicks: 5, platformConversions: 2, leads: 8, patients: 2 },
-    { provider: 'meta_ads', spendPence: 1000, impressions: 5, clicks: 1, platformConversions: 1, leads: 2, patients: 0 },
-    { provider: 'google_ads', spendPence: 3000, impressions: 7, clicks: 4, platformConversions: 3, leads: 5, patients: 1 },
+  // Two Meta campaigns with spend, one Google campaign with none in this window.
+  const SPEND = [
+    { provider: 'meta_ads', campaignId: 'm1', spendPence: 4000, impressions: 10, clicks: 5, platformConversions: 2, leads: 8, patients: 2 },
+    { provider: 'meta_ads', campaignId: 'm2', spendPence: 1000, impressions: 5, clicks: 1, platformConversions: 1, leads: 2, patients: 0 },
   ];
-
-  it('rolls campaigns up per channel, highest spend first', () => {
-    const out = channelSplit(ROWS);
-    expect(out.map((c) => c.provider)).toEqual(['meta_ads', 'google_ads']);
-    expect(out[0]).toMatchObject({ spendPence: 5000, leads: 10, patients: 2, campaigns: 2 });
+  const PROVIDER = new Map([['m1', 'meta_ads'], ['m2', 'meta_ads']]);
+  const lead = (id, over = {}) => ({
+    contact_id: id, ad_campaign_id: null, attribution_source: null, converted: false, ...over,
   });
 
-  it('reconciles to the table total — the channels cannot disagree with the tiles', () => {
-    const out = channelSplit(ROWS);
+  it('separates Facebook from Google rather than blending them', () => {
+    const leads = [
+      lead('a', { ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: true }),
+      lead('b', { attribution_source: 'Paid Social' }),
+      lead('c', { attribution_source: 'Paid Search', converted: true }),
+      lead('d', { attribution_source: 'Paid Search' }),
+    ];
+    const out = channelSplit(SPEND, leads, PROVIDER);
+    const fb = out.find((c) => c.channel === 'meta_ads');
+    const g = out.find((c) => c.channel === 'google_ads');
+    expect(fb).toMatchObject({ leads: 2, patients: 1, spendPence: 5000 });
+    expect(g).toMatchObject({ leads: 2, patients: 1, spendPence: 0 });
+  });
+
+  // The bug this replaced: a channel only existed if it had a campaign with
+  // spend, so a practice whose Google account spent £0 that month showed its
+  // Google leads nowhere and the whole figure read as one Facebook number.
+  it('still shows a channel that had leads but no spend in the window', () => {
+    const leads = [lead('c', { attribution_source: 'Paid Search' })];
+    const g = channelSplit(SPEND, leads, PROVIDER).find((c) => c.channel === 'google_ads');
+    expect(g).toBeDefined();
+    expect(g.leads).toBe(1);
+    expect(g.spendPence).toBe(0);
+    expect(g.costPerLeadPence).toBeNull();   // no spend to divide, never £0
+  });
+
+  it('every lead lands in exactly one channel, so the split reconciles', () => {
+    const leads = [
+      lead('a', { attribution_source: 'Paid Social' }),
+      lead('b', { attribution_source: 'Paid Search' }),
+      lead('c', { attribution_source: 'Social media' }),
+      lead('d'),
+    ];
+    const out = channelSplit(SPEND, leads, PROVIDER);
+    expect(out.reduce((n, c) => n + c.leads, 0)).toBe(leads.length);
+  });
+
+  it('never charges paid spend against the organic bucket', () => {
+    const leads = [lead('c', { attribution_source: 'Social media' })];
+    const other = channelSplit(SPEND, leads, PROVIDER).find((c) => c.channel === 'other');
+    expect(other.leads).toBe(1);
+    expect(other.spendPence).toBe(0);
+    expect(other.costPerLeadPence).toBeNull();
+    expect(other.costPerPatientPence).toBeNull();
+  });
+
+  it('omits a channel with neither spend nor leads', () => {
+    const out = channelSplit(SPEND, [lead('a', { attribution_source: 'Paid Social' })], PROVIDER);
+    expect(out.map((c) => c.channel)).toEqual(['meta_ads']);
+  });
+
+  it('keeps channel spend reconciled to the campaign rows', () => {
+    const out = channelSplit(SPEND, [], PROVIDER);
     expect(out.reduce((n, c) => n + c.spendPence, 0))
-      .toBe(ROWS.reduce((n, r) => n + r.spendPence, 0));
-  });
-
-  it('gives no cost per patient to a channel that won none', () => {
-    const out = channelSplit([{ provider: 'meta_ads', spendPence: 1000, impressions: 0, clicks: 0, platformConversions: 0, leads: 3, patients: 0 }]);
-    expect(out[0].costPerLeadPence).toBe(333);
-    expect(out[0].costPerPatientPence).toBeNull();   // never Infinity, never 0
+      .toBe(SPEND.reduce((n, r) => n + r.spendPence, 0));
   });
 });
 
-// A cache entry written before a deploy is read after it. When the payload
-// gains a field, every hit for the whole TTL would return the OLD shape — and
-// an absent `series` is a crash on the overview, not a blank chart. The version
-// segment makes pre-deploy entries unreachable instead of merely stale.
+describe('resolveLeadChannel', () => {
+  const { resolveLeadChannel } = __test;
+  const PROVIDER = new Map([['m1', 'meta_ads'], ['g1', 'google_ads']]);
+
+  it('trusts a matched campaign id over the session source', () => {
+    // GoHighLevel files some booked Facebook traffic under 'Social media';
+    // 103 live contacts carry a campaign id while sitting outside both paid
+    // buckets. The campaign id names its own provider, so it wins.
+    expect(resolveLeadChannel(
+      { ad_campaign_id: 'm1', attribution_source: 'Social media' }, PROVIDER,
+    )).toBe('meta_ads');
+  });
+
+  it('falls back to the session source when the campaign is unknown to us', () => {
+    expect(resolveLeadChannel(
+      { ad_campaign_id: 'not-ours', attribution_source: 'Paid Search' }, PROVIDER,
+    )).toBe('google_ads');
+  });
+
+  it('reads Paid Search as Google — gclid and Paid Search are coincident in the data', () => {
+    expect(resolveLeadChannel({ attribution_source: 'Paid Search' }, PROVIDER)).toBe('google_ads');
+  });
+
+  it('reads Paid Social as Facebook', () => {
+    expect(resolveLeadChannel({ attribution_source: 'Paid Social' }, PROVIDER)).toBe('meta_ads');
+  });
+
+  it('does NOT fold organic social into paid Facebook', () => {
+    // It cost nothing; averaging it into the paid denominator would flatter
+    // cost per lead.
+    expect(resolveLeadChannel({ attribution_source: 'Social media' }, PROVIDER)).toBe('other');
+  });
+
+  it('puts an unattributed lead in other, never in a paid channel', () => {
+    expect(resolveLeadChannel({ ad_campaign_id: null, attribution_source: null }, PROVIDER)).toBe('other');
+  });
+
+  it('is case-insensitive about the session source', () => {
+    expect(resolveLeadChannel({ attribution_source: 'PAID SEARCH' }, PROVIDER)).toBe('google_ads');
+  });
+});
+
 describe('cacheKey payload version', () => {
   it('carries a version segment', () => {
     expect(__test.cacheKey('s', 'u', null)).toMatch(/^marketing:perf:v\d+:/);
@@ -199,5 +280,47 @@ describe('cacheKey payload version', () => {
     const current = __test.cacheKey('2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', null);
     const v1 = 'marketing:perf:2026-08-01T00:00:00Z|2026-09-01T00:00:00Z|all';
     expect(current).not.toBe(v1);
+  });
+});
+
+// The Leads tile counts every person who enquired; the Became patients tile
+// beside it must count that same population. It used to count only
+// campaign-matched patients, so the pair implied a conversion rate about a
+// third of the real one — and it contradicted the per-channel cards, whose
+// patients sum to every converted lead.
+describe('totals.patients population', () => {
+  const { joinSpendToLeads } = __test;
+  const SPEND = [{
+    provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'A',
+    spend_pence: 10000, impressions: 0, clicks: 0, conversions: 0,
+  }];
+  const LEADS = [
+    // matched to the campaign we hold spend for
+    { contact_id: 'a', ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: true },
+    { contact_id: 'b', ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: false },
+    // paid, but its campaign has no spend in this window
+    { contact_id: 'c', ad_campaign_id: 'zz', attribution_source: 'Paid Search', converted: true },
+    // organic
+    { contact_id: 'd', ad_campaign_id: null, attribution_source: 'Social media', converted: true },
+  ];
+
+  it('counts every converted person, not only the campaign-matched ones', () => {
+    const { totals } = joinSpendToLeads(SPEND, LEADS);
+    expect(totals.leads).toBe(4);
+    expect(totals.patients).toBe(3);          // a, c and d all became patients
+    expect(totals.attributedPatients).toBe(1); // only a sits on a campaign with spend
+  });
+
+  it('still divides spend by the attributable patients, never by all of them', () => {
+    const { totals } = joinSpendToLeads(SPEND, LEADS);
+    expect(totals.costPerPatientPence).toBe(10000);   // 10000 / 1, not / 3
+  });
+
+  it('reconciles with the channel cards — both count the same patients', () => {
+    const { rows, totals } = joinSpendToLeads(SPEND, LEADS);
+    const provider = new Map(SPEND.map((c) => [c.campaign_id, c.provider]));
+    const channels = __test.channelSplit(rows, LEADS, provider);
+    expect(channels.reduce((n, c) => n + c.patients, 0)).toBe(totals.patients);
+    expect(channels.reduce((n, c) => n + c.leads, 0)).toBe(totals.leads);
   });
 });

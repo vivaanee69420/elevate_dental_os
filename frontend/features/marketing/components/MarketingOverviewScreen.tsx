@@ -19,7 +19,7 @@ import { useScopePeriod } from '@/features/_shared/scope-context';
 import { usePractices } from '@/features/practices/hooks';
 import { useMarketingPerformance } from '../hooks';
 import { CoverageNotice } from './CoverageNotice';
-import { ChannelBreakdown } from './ChannelBreakdown';
+import { ChannelCards } from './ChannelCards';
 import { TopCampaigns } from './TopCampaigns';
 
 // recharts is the heaviest dependency on the page and the only thing on it that
@@ -79,20 +79,28 @@ export default function MarketingOverviewScreen() {
 
           {t.unattributedLeads > 0 ? (
             <p className="text-[13px] text-ink-muted">
-              {t.attributedLeads.toLocaleString('en-GB')} of {t.leads.toLocaleString('en-GB')}{' '}
-              leads in this window are matched to a campaign with spend; cost per lead and cost
-              per patient are measured against those only. The other{' '}
-              {t.unattributedLeads.toLocaleString('en-GB')} carry no ad tracking, so they are
-              counted in the lead total but not against any campaign.
+              Leads and patients count everyone who enquired in this window, however they
+              found you.
+              {' '}
+              {t.attributedLeads.toLocaleString('en-GB')}
+              {' '}
+              of them are matched to a campaign with spend
+              {t.patients > 0 ? `, ${t.attributedPatients.toLocaleString('en-GB')} of the ${t.patients.toLocaleString('en-GB')} patients among them` : ''}
+              , and only those are used as the denominators for cost per lead and cost per
+              patient — charging paid spend against organic enquiries would understate both.
+              The other
+              {' '}
+              {t.unattributedLeads.toLocaleString('en-GB')}
+              {' '}
+              carry no ad tracking. The cards below split all of it by channel.
             </p>
           ) : null}
 
+          <ChannelCards rows={data.byChannel} />
+
           <SpendTrend series={data.series} />
 
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            <TopCampaigns rows={data.rows} />
-            <ChannelBreakdown rows={data.byChannel} />
-          </div>
+          <TopCampaigns rows={data.rows} />
 
           {data.rows.length === 0 && data.coverage.totalAccounts > 0 ? (
             <EmptyState message="No campaign had spend in this window. Try a wider period, or check that the advertising accounts are still syncing under Integrations." />
