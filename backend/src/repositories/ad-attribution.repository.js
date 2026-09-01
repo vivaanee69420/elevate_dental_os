@@ -94,6 +94,19 @@ export const adAttributionRepository = {
         if (error) throw new Error(error.message);
     },
 
+    // Carry an ad-account -> practice mapping change onto the spend rows.
+    // ad_metrics.practice_id is a denormalised copy of ad_accounts.practice_id
+    // (migration 000140); without this the Marketing and Intelligence screens
+    // would keep scoping spend to the OLD practice until the nightly sync
+    // happened to re-cut that window. Same instant-backfill contract as
+    // Emergent's restampPractice. Returns the number of rows restamped.
+    async restampAdMetricsPractices(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('restamp_ad_metrics_practices', { p_org: orgId });
+        if (error) throw new Error(`restamp_ad_metrics_practices: ${error.message}`);
+        return Number(data ?? 0);
+    },
+
     // Leads created in [since, until), with the contact fields the matcher needs.
     async leadsInWindow(orgId, since, until) {
         return fetchAllPages(() => supabase_1.serviceClient

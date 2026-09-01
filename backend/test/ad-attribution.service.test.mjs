@@ -18,6 +18,7 @@ vi.mock('../src/repositories/ad-attribution.repository.js', () => ({
     adSpend: vi.fn(),
     leadCountsByPipeline: vi.fn(),
     setAdAccountPractice: vi.fn(),
+    restampAdMetricsPractices: vi.fn(),
     emergentBusinesses: vi.fn(),
     adSpendDetailed: vi.fn(),
     adAccountFeedHealth: vi.fn(),
@@ -1058,5 +1059,29 @@ describe('computePerformance per-practice spend via the ad_accounts join', () =>
       });
       expect(out.groupOnlySpendPence).toBe(0);
     });
+  });
+});
+
+// A remap that does not restamp leaves every practice-scoped spend figure
+// reading the PREVIOUS mapping until the nightly sync happens to re-cut that
+// window — up to a day of wrong numbers with nothing on screen to say so.
+describe('adAttributionService.setAdAccountPractice', () => {
+  beforeEach(() => {
+    adAttributionRepository.setAdAccountPractice.mockReset();
+    adAttributionRepository.restampAdMetricsPractices.mockReset();
+    adAttributionRepository.restampAdMetricsPractices.mockResolvedValue(42);
+  });
+
+  it('writes the mapping and then restamps the existing spend rows', async () => {
+    const out = await adAttributionService.setAdAccountPractice('org1', 'acct-1', 'prac-9');
+    expect(adAttributionRepository.setAdAccountPractice)
+      .toHaveBeenCalledWith('org1', 'acct-1', 'prac-9');
+    expect(adAttributionRepository.restampAdMetricsPractices).toHaveBeenCalledWith('org1');
+    expect(out).toEqual({ ok: true, restamped: 42 });
+  });
+
+  it('restamps when a mapping is CLEARED too, so stale stamps are removed', async () => {
+    await adAttributionService.setAdAccountPractice('org1', 'acct-1', null);
+    expect(adAttributionRepository.restampAdMetricsPractices).toHaveBeenCalledWith('org1');
   });
 });

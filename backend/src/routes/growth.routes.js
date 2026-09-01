@@ -442,10 +442,16 @@ router.get('/benchmark', (0, async_handler_1.asyncHandler)(async (req, res) => {
 
 // Live ad spend & performance from connected marketing providers (Google Ads
 // now; Meta Ads next), read from ad_metrics. Org-scoped; window-aware via
-// ?from=&to= (else 30-day rolling). NOTE: ad spend is account-level, not
-// practice-attributed (ad_metrics.practice_id is null), so practice_id is
-// intentionally ignored here. Returns per-provider totals, per-campaign rows,
-// a daily spend series for charting, and overall totals. All money in pence.
+// ?from=&to= (else 30-day rolling). Returns per-provider totals, per-campaign
+// rows, a daily spend series for charting, and overall totals. All money in
+// pence.
+//
+// ?practice_id= now scopes the spend. It used to be accepted and then silently
+// ignored, because ad_metrics.practice_id was null on every row — so the honest
+// choice at the time was org-wide spend over a guaranteed zero. Migration
+// 000140 stamps the column from the account's mapping, so the filter means
+// something and a practice-scoped view no longer quietly reports the whole
+// group's spend under one practice's name.
 router.get('/marketing/ad-spend', (0, async_handler_1.asyncHandler)(async (req, res) => {
     // London-local day strings drive the ad_metrics.metric_date (DATE) filter
     // and the live Meta reach window, so they line up with the platforms' buckets.
@@ -453,12 +459,14 @@ router.get('/marketing/ad-spend', (0, async_handler_1.asyncHandler)(async (req, 
 
     const orgId = req.user.organisation_id;
     const { ids: accountIds } = await resolveAdAccountFilter(orgId, req.query);
+    const practiceId = parsePracticeId(req.query);
 
     let q = supabase_1.serviceClient.from('ad_metrics')
         .select('provider, customer_id, campaign_id, campaign_name, campaign_status, objective, metric_date, spend_pence, impressions, clicks, reach, frequency, leads, conversions')
         .eq('organisation_id', orgId)
         .gte('metric_date', fromDate)
         .lte('metric_date', toDate);
+    if (practiceId) q = q.eq('practice_id', practiceId);
     // Dynamic, org-isolated account filter (selected accounts, or ?account_ids=).
     if (accountIds !== null) q = q.in('customer_id', accountIds);
     const { data: rows = [] } = await q;
@@ -582,10 +590,12 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     const { fromDate, toDate, fromISO, toEndISO: toEnd } = resolveWindow(req.query);
     const toEndISO = toEnd ?? new Date().toISOString();
     // Optional per-practice scope (Practice Deep Dive). leads/contacts/payments
-    // carry practice_id; business_health is org-level (baseline). Ad spend is the
-    // exception: ad_metrics.practice_id is always null, so spend is scoped to a
-    // practice via its mapped ad_accounts (account.practice_id, migration 000069)
-    // -> customer_ids, NOT by filtering ad_metrics.practice_id (which yields zero).
+    // carry practice_id; business_health is org-level (baseline). Ad spend is
+    // scoped through the account mapping (account.practice_id, migration 000069)
+    // -> customer_ids. Since migration 000140 ad_metrics.practice_id carries the
+    // same mapping and filtering it directly would work too; this route keeps
+    // the customer_id route because it must intersect that set with the
+    // selected-accounts filter anyway. Both resolve to the same rows.
     const pid = typeof req.query.practice_id === 'string'
         && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.query.practice_id)
         ? req.query.practice_id : null;
