@@ -40,12 +40,14 @@ export function resolveChannel(channelMap, accountId, pipelineId) {
 // somebody sits in two pipelines.
 export const personKey = (lead) => lead.contact_id ?? `lead:${lead.id}`;
 
-// ad_metrics.practice_id is written as literal null by BOTH ad connectors
-// (meta-ads-sync.js, google-ads-sync.js) and nothing backfills it, so a spend
-// row cannot say which practice it belongs to on its own. The mapping that IS
-// maintained lives on ad_accounts.practice_id, reachable from a spend row via
-// customer_id. This map is that join, and it is the ONLY place it is
-// expressed — both the spend endpoint and computePerformance use it.
+// The ad_accounts.practice_id mapping, keyed for lookup from a spend row.
+//
+// Since migration 000140 ad_metrics.practice_id carries a stamped copy of this
+// same mapping, so this join is no longer the only way to reach it. It is kept
+// as the resolver for THIS service because it computes the mapped/unmapped
+// split for the attribution screen and needs the account dimension anyway —
+// and because resolving live means an account remapped seconds ago is already
+// reflected here, independent of the restamp.
 //
 // Keyed on provider AND customer_id: ad_accounts is unique on
 // (organisation_id, provider, customer_id), so a bare customer id could
@@ -347,12 +349,11 @@ export function computePerformance({
         if (!AD_CHANNELS.includes(row.provider)) continue;
         const g = group.get(row.provider);
         g.spendPence += row.spend_pence || 0;
-        // ad_metrics.practice_id is written as literal null by BOTH connectors
-        // and nothing backfills it, so it can never attribute spend below group
-        // level. The mapping that IS maintained is ad_accounts.practice_id,
-        // reached from this row via customer_id — see
-        // accountPracticeByCustomerId. Only spend on an account mapped to a
-        // practice can be attributed to that practice.
+        // Practice is resolved live from ad_accounts rather than read off
+        // row.practice_id: identical answer (000140 stamps the column from the
+        // same mapping), but immune to a row stamped before the most recent
+        // remap. Only spend on an account mapped to a practice can be
+        // attributed to that practice.
         const rowPractice = adAccountPractice.get(`${row.provider}|${row.customer_id}`) ?? null;
         if (rowPractice) {
             const p = practiceStats(rowPractice, row.provider);
@@ -576,7 +577,12 @@ export const adAttributionService = {
 
     async setAdAccountPractice(orgId, adAccountId, practiceId) {
         await adAttributionRepository.setAdAccountPractice(orgId, adAccountId, practiceId);
-        return { ok: true };
+        // Push the new mapping onto the existing spend rows immediately. A
+        // remap that only took effect on the next nightly sync would leave the
+        // practice-scoped spend figures reading the previous mapping for up to
+        // a day, with nothing on screen to say so.
+        const restamped = await adAttributionRepository.restampAdMetricsPractices(orgId);
+        return { ok: true, restamped };
     },
 
     async getPerformance(orgId, { since, until, practiceId }) {

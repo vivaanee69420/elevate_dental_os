@@ -344,3 +344,26 @@ describe('pagination', () => {
     expect(rows.length).toBe(2);
   });
 });
+
+// ad_metrics.practice_id is a denormalised copy of ad_accounts.practice_id
+// (migration 000140). Before it existed, every ad_metrics row in the database
+// had practice_id NULL, so every practice-scoped ad-spend figure in the product
+// read £0 — the Marketing overview showed "Barnet: £0.00" beside 315 leads
+// while that practice's mapped Meta account had £4,612.79 that month.
+describe('restampAdMetricsPractices', () => {
+  it('calls the org-scoped restamp RPC and returns the row count', async () => {
+    supaRec.rpcCalls = [];
+    supaRec.rpcProvider = () => ({ data: 20201, error: null });
+    const n = await adAttributionRepository.restampAdMetricsPractices(ORG);
+    expect(n).toBe(20201);
+    expect(supaRec.rpcCalls[0].fn).toBe('restamp_ad_metrics_practices');
+    expect(supaRec.rpcCalls[0].params).toEqual({ p_org: ORG });
+  });
+
+  it('throws on RPC failure rather than reporting a silent zero', async () => {
+    supaRec.rpcCalls = [];
+    supaRec.rpcProvider = () => ({ data: null, error: { message: 'boom' } });
+    await expect(adAttributionRepository.restampAdMetricsPractices(ORG))
+      .rejects.toThrow(/restamp_ad_metrics_practices: boom/);
+  });
+});

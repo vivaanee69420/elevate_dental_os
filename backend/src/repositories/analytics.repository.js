@@ -120,9 +120,14 @@ export const analyticsRepository = {
     },
     // Marketing & ROI sources (Intelligence OS). Real ad spend per provider +
     // CRM leads for channel attribution within [since, until). practiceIds (array
-    // | null) scopes to specific entities; null = whole org. ad_metrics.practice_id
-    // is frequently NULL (one ad account per group) — an entity scope then sees no
-    // paid spend, which is honest (spend isn't tagged to that practice).
+    // | null) scopes to specific entities; null = whole org.
+    //
+    // ad_metrics.practice_id is stamped from the account's mapping (migration
+    // 000140). Before that it was NULL on every row, so ANY practice scope
+    // returned zero paid spend — reported as "honest" here, but it was simply
+    // a filter on an empty column. A practice whose ad account is deliberately
+    // left unmapped still sees no paid spend, which IS honest: that spend
+    // belongs to the group, not to the practice.
     // accountIds (array | null): when non-null, restrict to those ad-account
     // customer_ids (the dynamic, org-isolated account filter). null = no account
     // filter (all of the org's accounts).
