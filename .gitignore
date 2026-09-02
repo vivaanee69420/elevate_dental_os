@@ -13,3 +13,6 @@ backend/_*.log
 .DS_Store
 **/.DS_Store
 .claude/
+
+# Added by ggshield
+.cache_ggshield
