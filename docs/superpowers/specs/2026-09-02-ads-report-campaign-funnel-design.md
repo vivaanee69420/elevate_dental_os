@@ -3,7 +3,7 @@
 **Date:** 2 September 2026
 **Status:** design, approved in brainstorming, not yet implemented
 **Branch:** `feat/marketing-campaign-funnel`
-**Migration:** `20260101000144_ad_lead_funnel.sql` (`000143` is the highest on disk and applied on hosted)
+**Migrations:** `20260101000144_ad_lead_conversions_booked.sql` (widens the row-level function) and `20260101000145_ad_campaign_funnel.sql` (the aggregate). `000143` is the highest on disk and applied on hosted.
 
 Part A of three. B (ad set and ad grain) and C (Google keywords and search
 terms) get their own specs and are deliberately out of scope here; the sections
@@ -50,25 +50,34 @@ achievable, now or in part B, and no design should imply otherwise.
 
 These are the whole design. Everything downstream is plumbing.
 
-**Booked** — the person holds a GoHighLevel calendar booking whose status is
-neither `cancelled` nor `invalid`, **or** a Dentally `appointments` row. The
-Dentally arm probes both the lead contact itself and the `patient_contact` that
-`ad_lead_conversions` already matched by email or phone; without that second
-probe the signal collapses, because only 52 ad-attributed contacts link to a
-Dentally appointment by `contact_id` directly.
+**Booked** — the person holds a GoHighLevel calendar booking **or** a Dentally
+`appointments` row, subject to two rules that apply equally to both arms:
 
-Measured over the last three months, 1,861 ad-attributed leads:
+1. **Cancellations do not count.** GHL status not in (`cancelled`, `invalid`);
+   Dentally status not `cancelled`. Excluding cancellations on one side only
+   would be indefensible.
+2. **The appointment must start at or after the enquiry.** Without this an
+   existing patient who enquires again counts as "booked" on a visit from two
+   years ago — the same class of error `is_new_patient` was added in `000142`
+   to correct.
 
-| Signal | Count |
-|---|---|
-| GHL calendar booking | 77 |
-| Dentally appointment (direct or via matched patient) | 157 |
-| **Union — the definition above** | **202** (10.9%) |
-| Matched to a patient record at all | 190 |
+The Dentally arm probes both the lead contact itself and the `patient_contact`
+that `ad_lead_conversions` already matched by email or phone; without that
+second probe the signal collapses, because only 52 ad-attributed contacts link
+to a Dentally appointment by `contact_id` directly against 157 that resolve
+through the match.
 
-The union exceeds the matched-patient count, so it is not a subset of
-conversion: some people book a GHL slot and never reach a patient record. Both
-arms earn their place.
+The union is not a subset of conversion. On a trailing-three-month sample of
+1,861 ad-attributed leads the two arms contributed 77 and 157 for a union of
+202, against 190 people matched to a patient record at all — so some people
+book a GoHighLevel slot and never reach a patient record. Both arms earn their
+place.
+
+Under the two rules above, over the fixed reference window used for
+verification (org `1a5f888a-0dfe-4802-acf8-6003665089ad`, 1 June – 31 August
+2026 London), the whole lead population is **3,325**, of which **1,946** carry a
+campaign id, **533** booked and **323** attended. These are the numbers the
+implementation is checked against.
 
 **Attended** — a Dentally `appointments` row with status `completed`.
 
@@ -252,7 +261,7 @@ Backend and frontend ship together but the change is additive — new columns on
 an existing payload, one new route. No breaking shape change, so no forced-
 together constraint of the kind Call Reporting v2 carried.
 
-Migration `000144` is applied on hosted after merge, followed by `NOTIFY pgrst,
+Migrations `000144` and `000145` are applied on hosted after merge, in that order, followed by `NOTIFY pgrst,
 'reload schema';`. Verify the two functions exist with the new signatures and
 that `anon`/`authenticated` hold no EXECUTE.
 
