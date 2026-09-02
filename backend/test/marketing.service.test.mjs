@@ -193,6 +193,37 @@ describe('channelSplit', () => {
         const out = __test.channelSplit(spend, funnel, campaignProvider);
         expect(out.reduce((n, c) => n + c.leads, 0)).toBe(22);
     });
+
+    // The costed guard has two arms: `channel !== 'other'` (gated by name) and
+    // `spendPence > 0` (gated by the window's actual spend). Every other test
+    // in this block only exercises the name arm — a paid channel here always
+    // has spend too. This is the real case the spend arm exists for: the ads
+    // that won these leads ran in an earlier window, or on an account nobody
+    // has mapped, so the channel is genuinely £0 this window even though it
+    // is not 'other'.
+    it('has no cost on a paid channel with leads but zero spend in this window', () => {
+        const noSpend = [];
+        const leadsOnly = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+                              leads: 3, booked: 1, attended: 1, patients: 1, newPatients: 1 }];
+        const out = __test.channelSplit(noSpend, leadsOnly, campaignProvider);
+        const meta = out.find((c) => c.channel === 'meta_ads');
+        expect(meta.leads).toBe(3);
+        expect(meta.spendPence).toBe(0);
+        expect(meta.costPerLeadPence).toBeNull();
+        expect(meta.costPerBookingPence).toBeNull();
+        expect(meta.costPerPatientPence).toBeNull();
+    });
+
+    it('drops a channel that has neither spend nor leads in the window', () => {
+        const metaOnlySpend = [
+            { provider: 'meta_ads', spendPence: 100000, impressions: 0, clicks: 0, platformConversions: 0 },
+        ];
+        const metaOnlyFunnel = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+                                   leads: 5, booked: 2, attended: 1, patients: 1, newPatients: 1 }];
+        const out = __test.channelSplit(metaOnlySpend, metaOnlyFunnel, campaignProvider);
+        expect(out.map((c) => c.channel)).not.toContain('google_ads');
+        expect(out.map((c) => c.channel)).toContain('meta_ads');
+    });
 });
 
 describe('resolveLeadChannel', () => {
@@ -320,5 +351,45 @@ describe('practiceSplit', () => {
     it('practices sum to the group total rather than double-counting', () => {
         const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
         expect(out.reduce((n, p) => n + p.leads, 0)).toBe(16);
+    });
+
+    it('distributes a group by its LEAD COUNT, not one per group', () => {
+      // += 1 per group would score 1 here; the group holds 5 people.
+      const groups = [
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 5, booked: 2, attended: 1, patients: 3, newPatients: 2 },
+        { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
+          leads: 4, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+      ];
+      const out = __test.practiceSplit([['p1', 100000]], groups, new Map([['m1', 'meta_ads']]));
+      const p1 = out.find((p) => p.practiceId === 'p1');
+      expect(p1.channels.meta_ads).toBe(5);
+      expect(p1.channels.other).toBe(4);
+      expect(p1.channels.google_ads).toBe(0);
+      // The channel tally must account for every lead at the practice.
+      expect(p1.channels.meta_ads + p1.channels.google_ads + p1.channels.other).toBe(p1.leads);
+    });
+
+    it('orders practices by spend, highest first', () => {
+        const out = __test.practiceSplit(
+            [['p1', 200000], ['p2', 600000]],
+            funnel,
+            campaignProvider,
+        );
+        expect(out[0].practiceId).toBe('p2');
+        expect(out[1].practiceId).toBe('p1');
+    });
+
+    // The costed guards are gated on `e.spendPence > 0` — a practice with real
+    // leads but no spend at all (no account mapped, or none of the group's
+    // spend attributable here) must show every cost as null, not £0.00.
+    it('has no cost at all for a practice with leads and zero spend', () => {
+        const out = __test.practiceSplit([], funnel, campaignProvider);
+        const p1 = out.find((p) => p.practiceId === 'p1');
+        expect(p1.leads).toBe(10);
+        expect(p1.spendPence).toBe(0);
+        expect(p1.costPerLeadPence).toBeNull();
+        expect(p1.costPerBookingPence).toBeNull();
+        expect(p1.costPerNewPatientPence).toBeNull();
     });
 });
