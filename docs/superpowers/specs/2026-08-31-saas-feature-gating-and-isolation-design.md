@@ -1,4 +1,4 @@
---# Agency + sub-accounts SaaS model, feature gating, isolation audit — design (v2)
+# Agency + sub-accounts SaaS model, feature gating, isolation audit — design (v2)
 
 **Date:** 2026-08-31 (v2 — supersedes the flat feature-flag v1 of the same day)
 **Status:** Approved (owner, in-session)
