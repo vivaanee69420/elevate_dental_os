@@ -1,8 +1,12 @@
 // Campaign aggregation. Every figure must be measured against the population it
 // claims: a blended number must never present itself as a measured one, and the
 // table must reconcile to the tiles above it.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { supaRec } from './setup.js';
 const { __test } = await import('../src/services/marketing.service.js');
+
+const SINCE = '2026-05-31T23:00:00Z';
+const UNTIL = '2026-08-31T23:00:00Z';
 
 describe('joinSpendToLeads', () => {
     const spend = [
@@ -11,88 +15,84 @@ describe('joinSpendToLeads', () => {
         { provider: 'google_ads', campaign_id: '22794584316', campaign_name: '.G New Patient',
           spend_pence: 88668, impressions: 10916, clicks: 764, conversions: 52 },
     ];
-    const leads = [
-        { ad_campaign_id: '120249721894530517', contact_id: 'c1', converted: true },
-        { ad_campaign_id: '120249721894530517', contact_id: 'c2', converted: false },
-        { ad_campaign_id: '22794584316', contact_id: 'c3', converted: true },
-        { ad_campaign_id: null, contact_id: 'c4', converted: false },
+    // One group per (campaign, source, practice). Each PERSON appears in
+    // exactly one group, so the counts add up without double-counting.
+    const funnel = [
+        { ad_campaign_id: '120249721894530517', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 2, booked: 1, attended: 1, patients: 1, newPatients: 1 },
+        { ad_campaign_id: '22794584316', attribution_source: 'Paid Search', practice_id: 'p1',
+          leads: 1, booked: 1, attended: 0, patients: 1, newPatients: 0 },
+        { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
+          leads: 1, booked: 0, attended: 0, patients: 0, newPatients: 0 },
     ];
 
-    it('computes cost per lead in integer pence, per campaign', () => {
-        const { rows } = __test.joinSpendToLeads(spend, leads);
+    it('computes cost per lead, per booking and per new patient in integer pence', () => {
+        const { rows } = __test.joinSpendToLeads(spend, funnel);
         const meta = rows.find((r) => r.campaignId === '120249721894530517');
         expect(meta.leads).toBe(2);
-        expect(meta.spendPence).toBe(147265);
-        expect(meta.costPerLeadPence).toBe(73633);  // round(147265 / 2)
-        expect(meta.patients).toBe(1);
-        expect(meta.costPerPatientPence).toBe(147265);
+        expect(meta.booked).toBe(1);
+        expect(meta.attended).toBe(1);
+        expect(meta.costPerLeadPence).toBe(73633);        // round(147265 / 2)
+        expect(meta.costPerBookingPence).toBe(147265);    // 147265 / 1
+        expect(meta.costPerNewPatientPence).toBe(147265); // 147265 / 1
     });
 
-    it('counts PEOPLE, not lead rows — one contact in two pipelines is one lead', () => {
-        const dupes = [
-            { ad_campaign_id: '22794584316', contact_id: 'c9', converted: false },
-            { ad_campaign_id: '22794584316', contact_id: 'c9', converted: false },
+    it('sums several groups that share a campaign', () => {
+        // The same campaign reached two practices, so it arrives as two groups.
+        const split = [
+            { ad_campaign_id: '22794584316', attribution_source: 'Paid Search', practice_id: 'p1',
+              leads: 3, booked: 2, attended: 1, patients: 1, newPatients: 1 },
+            { ad_campaign_id: '22794584316', attribution_source: 'Paid Search', practice_id: 'p2',
+              leads: 4, booked: 1, attended: 0, patients: 2, newPatients: 1 },
         ];
-        const { rows } = __test.joinSpendToLeads(spend, dupes);
-        expect(rows.find((r) => r.campaignId === '22794584316').leads).toBe(1);
+        const { rows } = __test.joinSpendToLeads(spend, split);
+        const g = rows.find((r) => r.campaignId === '22794584316');
+        expect(g.leads).toBe(7);
+        expect(g.booked).toBe(3);
+        expect(g.attended).toBe(1);
+        expect(g.patients).toBe(3);
     });
 
-    it('never divides by zero — a campaign with spend and no leads has null CPL, not Infinity', () => {
-        const { rows } = __test.joinSpendToLeads(spend, []);
-        expect(rows.every((r) => r.costPerLeadPence === null)).toBe(true);
+    it('never divides by zero — spend with no bookings has null CPB, not Infinity', () => {
+        const noneBooked = [{ ad_campaign_id: '22794584316', attribution_source: 'Paid Search',
+                              practice_id: null, leads: 4, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
+        const { rows } = __test.joinSpendToLeads(spend, noneBooked);
+        const g = rows.find((r) => r.campaignId === '22794584316');
+        expect(g.costPerBookingPence).toBeNull();
+        expect(g.costPerNewPatientPence).toBeNull();
     });
 
-    it('keeps unattributed leads out of every campaign row but counted in totals', () => {
-        const { rows, totals } = __test.joinSpendToLeads(spend, leads);
+    it('keeps unattributed leads out of every row but counted in totals', () => {
+        const { rows, totals } = __test.joinSpendToLeads(spend, funnel);
         expect(rows.some((r) => r.campaignId === null)).toBe(false);
         expect(totals.unattributedLeads).toBe(1);
         expect(totals.leads).toBe(4);
     });
 
     it('reports platform conversions separately from real patients', () => {
-        // Google/Facebook count a form submission; we count someone in Dentally.
-        const { totals } = __test.joinSpendToLeads(spend, leads);
-        expect(totals.platformConversions).toBe(464);   // 412 + 52
-        expect(totals.patients).toBe(2);
+        const { totals } = __test.joinSpendToLeads(spend, funnel);
+        expect(totals.platformConversions).toBe(464);   // 412 + 52, from the ad platforms
+        expect(totals.patients).toBe(2);                // matched to a Dentally record
     });
 
-    // A lead whose campaign has no spend IN THIS WINDOW produces no row. It must
-    // still be accounted for, or the table silently loses people.
-    const strayCampaignLeads = [
-        ...leads,
-        { ad_campaign_id: '999999999', contact_id: 'c5', converted: false }, // no spend row
-    ];
-
-    it('the table reconciles to the tiles: sum(rows.leads) + unattributed === leads', () => {
-        const { rows, totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
-        const inRows = rows.reduce((n, r) => n + r.leads, 0);
-        expect(inRows + totals.unattributedLeads).toBe(totals.leads);
+    it('totals the funnel over every person, and costs over the attributed ones', () => {
+        const { totals } = __test.joinSpendToLeads(spend, funnel);
+        expect(totals.booked).toBe(2);                 // everyone, referral included
+        expect(totals.attended).toBe(1);
+        expect(totals.attributedBooked).toBe(2);       // only campaigns with spend
+        expect(totals.attributedNewPatients).toBe(1);
+        expect(totals.costPerBookingPence).toBe(117967);      // round(235933 / 2)
+        expect(totals.costPerNewPatientPence).toBe(235933);   // 235933 / 1
     });
 
-    it('counts a lead whose campaign has no spend row as unattributed', () => {
-        const { totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
-        expect(totals.leads).toBe(5);
-        expect(totals.attributedLeads).toBe(3);      // c1, c2, c3
-        expect(totals.unattributedLeads).toBe(2);    // c4 (no id) + c5 (unspent campaign)
-    });
-
-    it('costs divide spend by the ATTRIBUTED population, not every enquirer', () => {
-        const { totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
-        const spendPence = 147265 + 88668;           // 235933
-        expect(totals.spendPence).toBe(spendPence);
-        // Attributed leads (3), NOT totals.leads (5): paid spend must never be
-        // charged against organic or unspent-campaign enquiries.
-        expect(totals.costPerLeadPence).toBe(Math.round(spendPence / 3));
-        expect(totals.costPerPatientPence).toBe(Math.round(spendPence / 2));
-    });
-
-    it('no attributed leads at all yields null costs, never Infinity or 0', () => {
-        const { totals } = __test.joinSpendToLeads(spend, [
-            { ad_campaign_id: null, contact_id: 'c8', converted: false },
-        ]);
-        expect(totals.attributedLeads).toBe(0);
-        expect(totals.costPerLeadPence).toBeNull();
-        expect(totals.costPerPatientPence).toBeNull();
+    // A lead whose campaign has no spend IN THIS WINDOW produces no row. It
+    // must still be accounted for, or the table silently loses people.
+    it('reconciles: sum(rows.leads) + unattributedLeads === totals.leads', () => {
+        const orphan = [...funnel, { ad_campaign_id: 'no-spend-here', attribution_source: 'Paid Social',
+                                     practice_id: 'p1', leads: 6, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
+        const { rows, totals } = __test.joinSpendToLeads(spend, orphan);
+        const shown = rows.reduce((n, r) => n + r.leads, 0);
+        expect(shown + totals.unattributedLeads).toBe(totals.leads);
     });
 });
 
@@ -160,73 +160,74 @@ describe('buildCoverage', () => {
 });
 
 describe('channelSplit', () => {
-  const { channelSplit } = __test;
-  // Two Meta campaigns with spend, one Google campaign with none in this window.
-  const SPEND = [
-    { provider: 'meta_ads', campaignId: 'm1', spendPence: 4000, impressions: 10, clicks: 5, platformConversions: 2, leads: 8, patients: 2 },
-    { provider: 'meta_ads', campaignId: 'm2', spendPence: 1000, impressions: 5, clicks: 1, platformConversions: 1, leads: 2, patients: 0 },
-  ];
-  const PROVIDER = new Map([['m1', 'meta_ads'], ['m2', 'meta_ads']]);
-  const lead = (id, over = {}) => ({
-    contact_id: id, ad_campaign_id: null, attribution_source: null, converted: false, ...over,
-  });
-
-  it('separates Facebook from Google rather than blending them', () => {
-    const leads = [
-      lead('a', { ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: true }),
-      lead('b', { attribution_source: 'Paid Social' }),
-      lead('c', { attribution_source: 'Paid Search', converted: true }),
-      lead('d', { attribution_source: 'Paid Search' }),
+    const spend = [
+        { provider: 'meta_ads', spendPence: 100000, impressions: 1000, clicks: 100, platformConversions: 10 },
+        { provider: 'google_ads', spendPence: 50000, impressions: 500, clicks: 50, platformConversions: 5 },
     ];
-    const out = channelSplit(SPEND, leads, PROVIDER);
-    const fb = out.find((c) => c.channel === 'meta_ads');
-    const g = out.find((c) => c.channel === 'google_ads');
-    expect(fb).toMatchObject({ leads: 2, patients: 1, spendPence: 5000 });
-    expect(g).toMatchObject({ leads: 2, patients: 1, spendPence: 0 });
-  });
-
-  // The bug this replaced: a channel only existed if it had a campaign with
-  // spend, so a practice whose Google account spent £0 that month showed its
-  // Google leads nowhere and the whole figure read as one Facebook number.
-  it('still shows a channel that had leads but no spend in the window', () => {
-    const leads = [lead('c', { attribution_source: 'Paid Search' })];
-    const g = channelSplit(SPEND, leads, PROVIDER).find((c) => c.channel === 'google_ads');
-    expect(g).toBeDefined();
-    expect(g.leads).toBe(1);
-    expect(g.spendPence).toBe(0);
-    expect(g.costPerLeadPence).toBeNull();   // no spend to divide, never £0
-  });
-
-  it('every lead lands in exactly one channel, so the split reconciles', () => {
-    const leads = [
-      lead('a', { attribution_source: 'Paid Social' }),
-      lead('b', { attribution_source: 'Paid Search' }),
-      lead('c', { attribution_source: 'Social media' }),
-      lead('d'),
+    const campaignProvider = new Map([['m1', 'meta_ads'], ['g1', 'google_ads']]);
+    const funnel = [
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 10, booked: 4, attended: 2, patients: 3, newPatients: 2 },
+        { ad_campaign_id: 'g1', attribution_source: 'Paid Search', practice_id: 'p1',
+          leads: 5, booked: 2, attended: 1, patients: 1, newPatients: 1 },
+        { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
+          leads: 7, booked: 1, attended: 1, patients: 2, newPatients: 1 },
     ];
-    const out = channelSplit(SPEND, leads, PROVIDER);
-    expect(out.reduce((n, c) => n + c.leads, 0)).toBe(leads.length);
-  });
 
-  it('never charges paid spend against the organic bucket', () => {
-    const leads = [lead('c', { attribution_source: 'Social media' })];
-    const other = channelSplit(SPEND, leads, PROVIDER).find((c) => c.channel === 'other');
-    expect(other.leads).toBe(1);
-    expect(other.spendPence).toBe(0);
-    expect(other.costPerLeadPence).toBeNull();
-    expect(other.costPerPatientPence).toBeNull();
-  });
+    it('carries booked and attended per channel', () => {
+        const out = __test.channelSplit(spend, funnel, campaignProvider);
+        const meta = out.find((c) => c.channel === 'meta_ads');
+        expect(meta.leads).toBe(10);
+        expect(meta.booked).toBe(4);
+        expect(meta.attended).toBe(2);
+    });
 
-  it('omits a channel with neither spend nor leads', () => {
-    const out = channelSplit(SPEND, [lead('a', { attribution_source: 'Paid Social' })], PROVIDER);
-    expect(out.map((c) => c.channel)).toEqual(['meta_ads']);
-  });
+    it('gives the organic channel leads and bookings but never a cost', () => {
+        // Organic enquiries cost nothing; averaging them into a paid
+        // denominator would quietly flatter every cost per unit.
+        const out = __test.channelSplit(spend, funnel, campaignProvider);
+        const other = out.find((c) => c.channel === 'other');
+        expect(other.leads).toBe(7);
+        expect(other.booked).toBe(1);
+        expect(other.costPerLeadPence).toBeNull();
+        expect(other.costPerBookingPence).toBeNull();
+    });
 
-  it('keeps channel spend reconciled to the campaign rows', () => {
-    const out = channelSplit(SPEND, [], PROVIDER);
-    expect(out.reduce((n, c) => n + c.spendPence, 0))
-      .toBe(SPEND.reduce((n, r) => n + r.spendPence, 0));
-  });
+    it('every lead lands in exactly one channel, so channels sum to the total', () => {
+        const out = __test.channelSplit(spend, funnel, campaignProvider);
+        expect(out.reduce((n, c) => n + c.leads, 0)).toBe(22);
+    });
+
+    // The costed guard has two arms: `channel !== 'other'` (gated by name) and
+    // `spendPence > 0` (gated by the window's actual spend). Every other test
+    // in this block only exercises the name arm — a paid channel here always
+    // has spend too. This is the real case the spend arm exists for: the ads
+    // that won these leads ran in an earlier window, or on an account nobody
+    // has mapped, so the channel is genuinely £0 this window even though it
+    // is not 'other'.
+    it('has no cost on a paid channel with leads but zero spend in this window', () => {
+        const noSpend = [];
+        const leadsOnly = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+                              leads: 3, booked: 1, attended: 1, patients: 1, newPatients: 1 }];
+        const out = __test.channelSplit(noSpend, leadsOnly, campaignProvider);
+        const meta = out.find((c) => c.channel === 'meta_ads');
+        expect(meta.leads).toBe(3);
+        expect(meta.spendPence).toBe(0);
+        expect(meta.costPerLeadPence).toBeNull();
+        expect(meta.costPerBookingPence).toBeNull();
+        expect(meta.costPerPatientPence).toBeNull();
+    });
+
+    it('drops a channel that has neither spend nor leads in the window', () => {
+        const metaOnlySpend = [
+            { provider: 'meta_ads', spendPence: 100000, impressions: 0, clicks: 0, platformConversions: 0 },
+        ];
+        const metaOnlyFunnel = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+                                   leads: 5, booked: 2, attended: 1, patients: 1, newPatients: 1 }];
+        const out = __test.channelSplit(metaOnlySpend, metaOnlyFunnel, campaignProvider);
+        expect(out.map((c) => c.channel)).not.toContain('google_ads');
+        expect(out.map((c) => c.channel)).toContain('meta_ads');
+    });
 });
 
 describe('resolveLeadChannel', () => {
@@ -294,88 +295,301 @@ describe('totals.patients population', () => {
     provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'A',
     spend_pence: 10000, impressions: 0, clicks: 0, conversions: 0,
   }];
-  const LEADS = [
-    // matched to the campaign we hold spend for
-    { contact_id: 'a', ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: true },
-    { contact_id: 'b', ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: false },
-    // paid, but its campaign has no spend in this window
-    { contact_id: 'c', ad_campaign_id: 'zz', attribution_source: 'Paid Search', converted: true },
-    // organic
-    { contact_id: 'd', ad_campaign_id: null, attribution_source: 'Social media', converted: true },
+  // The same four people as before, now grouped: a and b share a campaign AND a
+  // source, so they are ONE group of two. c's campaign has no spend in this
+  // window; d is organic.
+  const FUNNEL = [
+    { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: null,
+      leads: 2, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+    { ad_campaign_id: 'zz', attribution_source: 'Paid Search', practice_id: null,
+      leads: 1, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+    { ad_campaign_id: null, attribution_source: 'Social media', practice_id: null,
+      leads: 1, booked: 0, attended: 0, patients: 1, newPatients: 0 },
   ];
 
   it('counts every converted person, not only the campaign-matched ones', () => {
-    const { totals } = joinSpendToLeads(SPEND, LEADS);
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
     expect(totals.leads).toBe(4);
-    expect(totals.patients).toBe(3);          // a, c and d all became patients
-    expect(totals.attributedPatients).toBe(1); // only a sits on a campaign with spend
+    expect(totals.patients).toBe(3);           // the m1, zz and organic converters
+    expect(totals.attributedPatients).toBe(1); // only m1 sits on a campaign with spend
   });
 
   it('still divides spend by the attributable patients, never by all of them', () => {
-    const { totals } = joinSpendToLeads(SPEND, LEADS);
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
     expect(totals.costPerPatientPence).toBe(10000);   // 10000 / 1, not / 3
   });
 
   it('reconciles with the channel cards — both count the same patients', () => {
-    const { rows, totals } = joinSpendToLeads(SPEND, LEADS);
+    const { rows, totals } = joinSpendToLeads(SPEND, FUNNEL);
     const provider = new Map(SPEND.map((c) => [c.campaign_id, c.provider]));
-    const channels = __test.channelSplit(rows, LEADS, provider);
+    const channels = __test.channelSplit(rows, FUNNEL, provider);
     expect(channels.reduce((n, c) => n + c.patients, 0)).toBe(totals.patients);
     expect(channels.reduce((n, c) => n + c.leads, 0)).toBe(totals.leads);
   });
 });
 
 describe('practiceSplit', () => {
-  const { practiceSplit } = __test;
-  const PROVIDER = new Map([['m1', 'meta_ads']]);
-  const lead = (id, practiceId, over = {}) => ({
-    contact_id: id, practice_id: practiceId, ad_campaign_id: null,
-    attribution_source: null, converted: false, is_new_patient: false, ...over,
-  });
+    const campaignProvider = new Map([['m1', 'meta_ads']]);
+    const funnel = [
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 10, booked: 4, attended: 2, patients: 3, newPatients: 2 },
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p2',
+          leads: 6, booked: 1, attended: 0, patients: 1, newPatients: 1 },
+    ];
 
-  it('puts each practice beside the others with its own money', () => {
-    const out = practiceSplit(
-      [['p1', 500000], ['p2', 100000]],
-      [
-        lead('a', 'p1', { attribution_source: 'Paid Social', converted: true, is_new_patient: true }),
-        lead('b', 'p1', { attribution_source: 'Paid Search' }),
-        lead('c', 'p2', { converted: true }),
-      ],
-      PROVIDER,
-    );
-    const p1 = out.find((r) => r.practiceId === 'p1');
-    expect(p1).toMatchObject({ spendPence: 500000, leads: 2, patients: 1, newPatients: 1 });
-    expect(p1.channels).toEqual({ meta_ads: 1, google_ads: 1, other: 0 });
-    expect(out[0].practiceId).toBe('p1');   // highest spend first
-  });
+    it('carries booked as a raw count per practice, with no cost derived from it', () => {
+        // `booked` at a practice sums every group there, including the 'other'
+        // (organic) channel — there is no per-practice "attributed booked"
+        // figure, so dividing paid spend by it would understate every cost.
+        // practiceSplit therefore emits the count and no costPerBookingPence
+        // at all (see marketing.service.js practiceSplit).
+        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
+        const p1 = out.find((p) => p.practiceId === 'p1');
+        expect(p1.booked).toBe(4);
+        expect(p1).not.toHaveProperty('costPerBookingPence');
+        expect(p1.costPerNewPatientPence).toBe(100000);   // 200000 / 2
+    });
 
-  it('keeps leads with no practice visible instead of dropping them', () => {
-    const out = practiceSplit([], [lead('a', null)], PROVIDER);
-    expect(out.find((r) => r.practiceId === null)?.leads).toBe(1);
-  });
+    it('practices sum to the group total rather than double-counting', () => {
+        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
+        expect(out.reduce((n, p) => n + p.leads, 0)).toBe(16);
+    });
 
-  it('costs against NEW patients, and leaves it blank when there are none', () => {
-    const out = practiceSplit(
-      [['p1', 100000]],
-      [lead('a', 'p1', { converted: true, is_new_patient: false })],
-      PROVIDER,
-    );
-    expect(out[0].patients).toBe(1);
-    expect(out[0].newPatients).toBe(0);
-    expect(out[0].costPerNewPatientPence).toBeNull();  // never divide by zero
-  });
+    it('distributes a group by its LEAD COUNT, not one per group', () => {
+      // += 1 per group would score 1 here; the group holds 5 people.
+      const groups = [
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 5, booked: 2, attended: 1, patients: 3, newPatients: 2 },
+        { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
+          leads: 4, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+      ];
+      const out = __test.practiceSplit([['p1', 100000]], groups, new Map([['m1', 'meta_ads']]));
+      const p1 = out.find((p) => p.practiceId === 'p1');
+      expect(p1.channels.meta_ads).toBe(5);
+      expect(p1.channels.other).toBe(4);
+      expect(p1.channels.google_ads).toBe(0);
+      // The channel tally must account for every lead at the practice.
+      expect(p1.channels.meta_ads + p1.channels.google_ads + p1.channels.other).toBe(p1.leads);
+    });
 
-  it('never reports a cost for a practice with no spend', () => {
-    const out = practiceSplit([], [lead('a', 'p1')], PROVIDER);
-    expect(out[0].costPerLeadPence).toBeNull();        // not £0.00
-  });
+    it('orders practices by spend, highest first', () => {
+        const out = __test.practiceSplit(
+            [['p1', 200000], ['p2', 600000]],
+            funnel,
+            campaignProvider,
+        );
+        expect(out[0].practiceId).toBe('p2');
+        expect(out[1].practiceId).toBe('p1');
+    });
 
-  // The RPC emits one row per person, attributed to their first enquiry, so a
-  // person who enquired at two practices is counted once — the practices sum
-  // to the group rather than double-counting.
-  it('sums to the lead total', () => {
-    const leads = [lead('a', 'p1'), lead('b', 'p2'), lead('c', null)];
-    const out = practiceSplit([], leads, PROVIDER);
-    expect(out.reduce((n, r) => n + r.leads, 0)).toBe(leads.length);
-  });
+    // The costed guards are gated on `e.spendPence > 0` — a practice with real
+    // leads but no spend at all (no account mapped, or none of the group's
+    // spend attributable here) must show every cost as null, not £0.00.
+    it('has no cost at all for a practice with leads and zero spend', () => {
+        const out = __test.practiceSplit([], funnel, campaignProvider);
+        const p1 = out.find((p) => p.practiceId === 'p1');
+        expect(p1.leads).toBe(10);
+        expect(p1.spendPence).toBe(0);
+        expect(p1.costPerLeadPence).toBeNull();
+        expect(p1.costPerNewPatientPence).toBeNull();
+    });
+});
+
+describe('campaignPerformance', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('reads the aggregate, NOT the per-person function', async () => {
+        // The per-person function returns one row per contact and has to be
+        // paged around PostgREST's 1000-row cap. Counting through it here was
+        // eleven round trips to produce numbers SQL can produce in one.
+        const repo = await import('../src/repositories/marketing.repository.js');
+        const funnel = vi.spyOn(repo.marketingRepository, 'campaignFunnel').mockResolvedValue([]);
+        const perPerson = vi.spyOn(repo.marketingRepository, 'leadsByCampaign').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+            campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
+        });
+        vi.spyOn(repo.marketingRepository, 'adAccounts').mockResolvedValue([]);
+
+        const { marketingService } = await import('../src/services/marketing.service.js');
+        await marketingService.campaignPerformance('org-1', {
+            since: SINCE, until: UNTIL, refresh: true,
+        });
+        expect(funnel).toHaveBeenCalledTimes(1);
+        expect(perPerson).not.toHaveBeenCalled();
+    });
+});
+
+describe('cacheKey', () => {
+    it('is versioned, so a payload with new fields is never served from an old entry', () => {
+        // A cache entry written before the deploy is read after it. Without the
+        // bump, every hit for the whole TTL renders against a shape that no
+        // longer exists.
+        expect(__test.cacheKey(SINCE, UNTIL, null)).toContain('v6');
+    });
+});
+
+describe('leadList', () => {
+    const people = [
+        { contact_id: 'a', ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          converted: true, is_new_patient: true, matched_by: 'email',
+          first_lead_at: '2026-07-01T10:00:00Z', booked_at: '2026-07-04T09:00:00Z', attended: true },
+        { contact_id: 'b', ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          converted: false, is_new_patient: false, matched_by: null,
+          first_lead_at: '2026-07-02T10:00:00Z', booked_at: '2026-07-06T09:00:00Z', attended: false },
+        { contact_id: 'c', ad_campaign_id: 'g1', attribution_source: 'Paid Search', practice_id: 'p1',
+          converted: false, is_new_patient: false, matched_by: null,
+          first_lead_at: '2026-07-03T10:00:00Z', booked_at: null, attended: false },
+    ];
+
+    async function run(opts, leadRows = people) {
+        const repo = await import('../src/repositories/marketing.repository.js');
+        vi.spyOn(repo.marketingRepository, 'leadsByCampaign').mockResolvedValue(leadRows);
+        vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+            campaigns: [{ provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'Implants', spend_pence: 1, impressions: 0, clicks: 0, conversions: 0 },
+                        { provider: 'google_ads', campaign_id: 'g1', campaign_name: 'New Patient', spend_pence: 1, impressions: 0, clicks: 0, conversions: 0 }],
+            series: [], unmappedSpendPence: 0, spendByPractice: [],
+        });
+        vi.spyOn(repo.marketingRepository, 'contactsByIds').mockResolvedValue([
+            { id: 'a', first_name: 'Ada', last_name: 'Lovelace', email: 'ada@example.com', phone: '07700900001' },
+            { id: 'b', first_name: 'Bea', last_name: 'Webb', email: 'bea@example.com', phone: '07700900002' },
+            { id: 'c', first_name: 'Cai', last_name: 'Jones', email: 'cai@example.com', phone: '07700900003' },
+        ]);
+        vi.spyOn(repo.marketingRepository, 'pipelineNames').mockResolvedValue(
+            new Map([['pipe-chat', '6. Chatbot Website']]),
+        );
+        const { marketingService } = await import('../src/services/marketing.service.js');
+        return marketingService.leadList('org-1', { since: SINCE, until: UNTIL, ...opts });
+    }
+
+    it('names the pipeline a person came in on', async () => {
+        // For an unattributed lead this is the ONLY origin we hold — most carry
+        // no attribution source at all, so without it the row says nothing.
+        const out = await run({}, [{
+            ...people[0], contact_id: 'p1', ad_campaign_id: null,
+            attribution_source: null, ghl_pipeline_id: 'pipe-chat',
+        }]);
+        const row = out.rows.find((r) => r.contactId === 'p1');
+        expect(row.pipelineId).toBe('pipe-chat');
+        expect(row.pipelineName).toBe('6. Chatbot Website');
+    });
+
+    it('leaves the name null when the id matches no synced pipeline', async () => {
+        // An archived or deleted pipeline. The screen falls back to the
+        // attribution source rather than printing a raw id at the user.
+        const out = await run({}, [{
+            ...people[0], contact_id: 'p2', ghl_pipeline_id: 'pipe-gone',
+        }]);
+        const row = out.rows.find((r) => r.contactId === 'p2');
+        expect(row.pipelineId).toBe('pipe-gone');
+        expect(row.pipelineName).toBeNull();
+    });
+
+    it('carries a null pipeline when the lead has none at all', async () => {
+        const out = await run({}, [{ ...people[0], contact_id: 'p3', ghl_pipeline_id: null }]);
+        const row = out.rows.find((r) => r.contactId === 'p3');
+        expect(row.pipelineId).toBeNull();
+        expect(row.pipelineName).toBeNull();
+    });
+
+    it('filters to one campaign', async () => {
+        const out = await run({ campaignId: 'm1' });
+        expect(out.total).toBe(2);
+        expect(out.rows.every((r) => r.campaignId === 'm1')).toBe(true);
+    });
+
+    it('reports the stage each person reached', async () => {
+        const out = await run({});
+        const stage = Object.fromEntries(out.rows.map((r) => [r.contactId, r.stage]));
+        expect(stage.a).toBe('new_patient');
+        expect(stage.b).toBe('booked');
+        expect(stage.c).toBe('enquired');
+    });
+
+    it('carries bookedAt and attended per person', async () => {
+        const out = await run({ campaignId: 'm1' });
+        const b = out.rows.find((r) => r.contactId === 'b');
+        expect(b.bookedAt).toBe('2026-07-06T09:00:00Z');
+        // false here means UNKNOWN, not "did not attend" — GoHighLevel has
+        // recorded two no-shows in its entire history.
+        expect(b.attended).toBe(false);
+    });
+
+    it('an attended person who is not new reads as attended, not new_patient', async () => {
+        // NOTE: passed as leadRows rather than pre-mocked before run(), which
+        // internally re-mocks leadsByCampaign to the default `people` fixture
+        // — pre-mocking here would be silently clobbered before leadList runs.
+        const out = await run({}, [{ ...people[0], contact_id: 'd', is_new_patient: false }]);
+        expect(out.rows.find((r) => r.contactId === 'd').stage).toBe('attended');
+    });
+
+    // The expensive inputs (spend + the full per-person window) are cached so
+    // that a campaign detail page click, and every Previous/Next press after
+    // it, does not re-page the whole window. page/campaignId are filters
+    // applied to the cached arrays — neither belongs in the cache key, and
+    // this is the regression that would silently reappear if one leaked in.
+    describe('caching the expensive fetch', () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+            supaRec.resultProvider = () => ({ data: [], error: null });
+        });
+
+        it('two calls differing only by page hit leadsByCampaign once, not twice', async () => {
+            // A minimal in-memory stand-in for the dashboard_cache table, keyed
+            // by cache_key, so the second call reads back what the first wrote
+            // — the same round trip the real Postgres tier makes.
+            const store = new Map();
+            supaRec.resultProvider = (q) => {
+                if (q.table !== 'dashboard_cache') return { data: [], error: null };
+                if (q.op === 'upsert') {
+                    store.set(q.upsertVals.cache_key, q.upsertVals);
+                    return { data: null, error: null };
+                }
+                const key = q.eqs.find((e) => e.col === 'cache_key')?.val;
+                return { data: store.get(key) ?? null, error: null };
+            };
+
+            const repo = await import('../src/repositories/marketing.repository.js');
+            const fetchLeads = vi.spyOn(repo.marketingRepository, 'leadsByCampaign')
+                .mockResolvedValue(people);
+            vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+                campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
+            });
+            vi.spyOn(repo.marketingRepository, 'contactsByIds').mockResolvedValue([]);
+
+            const { marketingService } = await import('../src/services/marketing.service.js');
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, page: 1 });
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, page: 2 });
+
+            expect(fetchLeads).toHaveBeenCalledTimes(1);
+        });
+
+        it('two calls differing only by campaignId hit leadsByCampaign once, not twice', async () => {
+            const store = new Map();
+            supaRec.resultProvider = (q) => {
+                if (q.table !== 'dashboard_cache') return { data: [], error: null };
+                if (q.op === 'upsert') {
+                    store.set(q.upsertVals.cache_key, q.upsertVals);
+                    return { data: null, error: null };
+                }
+                const key = q.eqs.find((e) => e.col === 'cache_key')?.val;
+                return { data: store.get(key) ?? null, error: null };
+            };
+
+            const repo = await import('../src/repositories/marketing.repository.js');
+            const fetchLeads = vi.spyOn(repo.marketingRepository, 'leadsByCampaign')
+                .mockResolvedValue(people);
+            vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+                campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
+            });
+            vi.spyOn(repo.marketingRepository, 'contactsByIds').mockResolvedValue([]);
+
+            const { marketingService } = await import('../src/services/marketing.service.js');
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, campaignId: 'm1' });
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, campaignId: 'g1' });
+
+            expect(fetchLeads).toHaveBeenCalledTimes(1);
+        });
+    });
 });

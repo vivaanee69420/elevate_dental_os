@@ -17,10 +17,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const CHANNELS = ['google_ads', 'meta_ads', 'other'];
 
-const LeadListQuerySchema = PerformanceQuerySchema.extend({
+export const LeadListQuerySchema = PerformanceQuerySchema.extend({
     channel: z.enum(CHANNELS).optional(),
     // Sent as a string on the query string; 'any' means no filter.
     converted: z.enum(['true', 'false', 'any']).optional(),
+    // The ad platform's OWN campaign id (e.g. '120249721894530517'), not a
+    // uuid. Bounded in length so the filter cannot be used to send a payload.
+    campaignId: z.string().min(1).max(128).optional(),
     page: z.coerce.number().int().min(1).max(10_000).optional(),
     size: z.coerce.number().int().min(1).max(200).optional(),
 });
@@ -56,6 +59,7 @@ export async function getLeads(req, res, next) {
             practiceId: practiceOf(q.scope),
             channel: q.channel ?? null,
             converted: q.converted === 'true' ? true : q.converted === 'false' ? false : null,
+            campaignId: q.campaignId ?? null,
             page: q.page ?? 1,
             size: q.size ?? 50,
         });

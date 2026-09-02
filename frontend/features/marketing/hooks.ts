@@ -61,7 +61,8 @@ export function useMarketingTrend(months = 12) {
 // The leads list is paged and filtered SERVER-side, so a window holding
 // thousands of people never ships thousands of names to the browser.
 export function useMarketingLeads(opts: {
-  page: number; size: number; channel: string | null; converted: 'true' | 'false' | 'any';
+  page: number; size: number; channel: string | null;
+  converted: 'true' | 'false' | 'any'; campaignId?: string | null;
 }) {
   const { scope, win } = useScopePeriod();
   const params = new URLSearchParams(windowParams(scope, win));
@@ -69,10 +70,14 @@ export function useMarketingLeads(opts: {
   params.set('size', String(opts.size));
   if (opts.channel) params.set('channel', opts.channel);
   if (opts.converted !== 'any') params.set('converted', opts.converted);
+  if (opts.campaignId) params.set('campaignId', opts.campaignId);
   const qs = params.toString();
 
   return useQuery<MarketingLeadPage>({
-    queryKey: ['marketing', 'leads', scopeKey({ scope, win }), opts.page, opts.size, opts.channel, opts.converted],
+    // campaignId is part of the key: without it the detail page for one
+    // campaign would serve another campaign's cached page.
+    queryKey: ['marketing', 'leads', scopeKey({ scope, win }), opts.page, opts.size,
+               opts.channel, opts.converted, opts.campaignId ?? null],
     queryFn: () => fetchMarketingLeads(qs),
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,

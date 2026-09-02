@@ -59,10 +59,10 @@ const CHANNEL_ORDER = ['meta_ads', 'google_ads', 'other'];
 //
 // The 'other' row carries leads and patients but never a cost: dividing paid
 // spend by organic enquiries is exactly the error the totals already avoid.
-function channelSplit(spendRows, leadRows, campaignProvider) {
+function channelSplit(spendRows, funnelRows, campaignProvider) {
     const blank = () => ({
         spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
-        campaigns: 0, leads: 0, patients: 0,
+        campaigns: 0, leads: 0, booked: 0, attended: 0, patients: 0,
     });
     const by = new Map(CHANNEL_ORDER.map((c) => [c, { channel: c, ...blank() }]));
 
@@ -76,10 +76,12 @@ function channelSplit(spendRows, leadRows, campaignProvider) {
         e.campaigns += 1;
     }
 
-    for (const l of leadRows) {
-        const e = by.get(resolveLeadChannel(l, campaignProvider));
-        e.leads += 1;
-        if (l.converted) e.patients += 1;
+    for (const g of funnelRows) {
+        const e = by.get(resolveLeadChannel(g, campaignProvider));
+        e.leads += g.leads;
+        e.booked += g.booked;
+        e.attended += g.attended;
+        e.patients += g.patients;
     }
 
     return CHANNEL_ORDER
@@ -96,6 +98,7 @@ function channelSplit(spendRows, leadRows, campaignProvider) {
             return {
                 ...e,
                 costPerLeadPence: costed ? perUnitPence(e.spendPence, e.leads) : null,
+                costPerBookingPence: costed ? perUnitPence(e.spendPence, e.booked) : null,
                 costPerPatientPence: costed ? perUnitPence(e.spendPence, e.patients) : null,
             };
         });
@@ -130,12 +133,12 @@ function buildCoverage(accounts, practiceId, unmappedSpendPence) {
 // where every practice's rows are present. Leads carry the practice they first
 // enquired at, and the RPC emits one row per person, so the practices sum to
 // the group total instead of double-counting somebody who enquired at two.
-function practiceSplit(spendByPractice, leadRows, campaignProvider) {
+function practiceSplit(spendByPractice, funnelRows, campaignProvider) {
     const by = new Map();
     const row = (id) => {
         if (!by.has(id)) {
             by.set(id, {
-                practiceId: id, spendPence: 0, leads: 0, patients: 0, newPatients: 0,
+                practiceId: id, spendPence: 0, leads: 0, booked: 0, patients: 0, newPatients: 0,
                 channels: { meta_ads: 0, google_ads: 0, other: 0 },
             });
         }
@@ -144,17 +147,23 @@ function practiceSplit(spendByPractice, leadRows, campaignProvider) {
 
     for (const [practiceId, spendPence] of spendByPractice) row(practiceId).spendPence += spendPence;
 
-    for (const l of leadRows) {
-        const e = row(l.practice_id ?? null);
-        e.leads += 1;
-        if (l.converted) e.patients += 1;
-        if (l.is_new_patient) e.newPatients += 1;
-        e.channels[resolveLeadChannel(l, campaignProvider)] += 1;
+    for (const g of funnelRows) {
+        const e = row(g.practice_id ?? null);
+        e.leads += g.leads;
+        e.booked += g.booked;
+        e.patients += g.patients;
+        e.newPatients += g.newPatients;
+        e.channels[resolveLeadChannel(g, campaignProvider)] += g.leads;
     }
 
     return [...by.values()]
         .map((e) => ({
             ...e,
+            // NOTE: no costPerBookingPence here. `e.booked` sums every group at
+            // this practice, including the 'other' (organic) channel — dividing
+            // paid spend by that population is the exact defect this file was
+            // corrected for elsewhere. A per-practice "attributed booked" figure
+            // does not exist yet, so this stays a raw count, not a false cost.
             costPerLeadPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.leads) : null,
             costPerNewPatientPence: e.spendPence > 0 && e.newPatients > 0
                 ? perUnitPence(e.spendPence, e.newPatients)
@@ -163,31 +172,38 @@ function practiceSplit(spendByPractice, leadRows, campaignProvider) {
         .sort((a, b) => b.spendPence - a.spendPence || b.leads - a.leads);
 }
 
-function joinSpendToLeads(spendRows, leadRows) {
-    // Count PEOPLE, not lead rows: one contact sitting in several pipelines is
-    // one lead. This is the same correction made in the Cockpit's matchBreakdown.
-    const peopleByCampaign = new Map();   // campaign_id -> Map<contact_id, converted>
-    const allPeople = new Set();
-
-    for (const l of leadRows) {
-        allPeople.add(l.contact_id);
-        if (!l.ad_campaign_id) continue;
-        if (!peopleByCampaign.has(l.ad_campaign_id)) peopleByCampaign.set(l.ad_campaign_id, new Map());
-        const m = peopleByCampaign.get(l.ad_campaign_id);
-        m.set(l.contact_id, (m.get(l.contact_id) ?? false) || l.converted);
+// Campaign rows and window totals, from SPEND joined to FUNNEL GROUPS.
+//
+// The second argument is one row per (campaign, source, practice) — NOT one row
+// per person. ad_lead_conversions emits exactly one row per contact, so every
+// person lands in exactly one group and summing group counts is exact. That is
+// what lets this stop paging ten thousand rows in order to count them.
+function joinSpendToLeads(spendRows, funnelRows) {
+    // Collapse the groups to campaign for the table.
+    const byCampaign = new Map();
+    const blank = () => ({ leads: 0, booked: 0, attended: 0, patients: 0, newPatients: 0 });
+    for (const g of funnelRows) {
+        if (!g.ad_campaign_id) continue;
+        const e = byCampaign.get(g.ad_campaign_id) ?? blank();
+        e.leads += g.leads;
+        e.booked += g.booked;
+        e.attended += g.attended;
+        e.patients += g.patients;
+        e.newPatients += g.newPatients;
+        byCampaign.set(g.ad_campaign_id, e);
     }
 
-    // People the table can actually account for. A lead is attributed only if
-    // its campaign id produced a ROW — carrying a campaign id whose spend falls
-    // outside the window is not enough, or the person would appear in neither
-    // the rows nor the unattributed count and the table would not reconcile to
-    // the tiles. Invariant: sum(rows.leads) + unattributedLeads === totals.leads.
-    const attributedPeople = new Set();
+    // A lead is attributed only if its campaign produced a ROW — carrying a
+    // campaign id whose spend falls outside the window is not enough, or the
+    // person appears in neither the rows nor the unattributed count and the
+    // table stops reconciling to the tiles.
+    const attributed = blank();
     const rows = spendRows.map((s) => {
-        const people = peopleByCampaign.get(s.campaign_id) ?? new Map();
-        const leads = people.size;
-        const patients = [...people.values()].filter(Boolean).length;
-        for (const contactId of people.keys()) attributedPeople.add(contactId);
+        const f = byCampaign.get(s.campaign_id) ?? blank();
+        attributed.leads += f.leads;
+        attributed.booked += f.booked;
+        attributed.patients += f.patients;
+        attributed.newPatients += f.newPatients;
         return {
             provider: s.provider,
             campaignId: s.campaign_id,
@@ -196,47 +212,52 @@ function joinSpendToLeads(spendRows, leadRows) {
             impressions: s.impressions,
             clicks: s.clicks,
             platformConversions: s.conversions,
-            leads,
-            patients,
-            costPerLeadPence: perUnitPence(s.spend_pence, leads),
-            costPerPatientPence: perUnitPence(s.spend_pence, patients),
+            leads: f.leads,
+            booked: f.booked,
+            attended: f.attended,
+            patients: f.patients,
+            newPatients: f.newPatients,
+            costPerLeadPence: perUnitPence(s.spend_pence, f.leads),
+            costPerBookingPence: perUnitPence(s.spend_pence, f.booked),
+            costPerPatientPence: perUnitPence(s.spend_pence, f.patients),
+            costPerNewPatientPence: perUnitPence(s.spend_pence, f.newPatients),
             tier: 'campaign',
         };
     }).sort((a, b) => b.spendPence - a.spendPence);
+
+    // The whole population, organic and unattributed included.
+    const all = funnelRows.reduce((n, g) => ({
+        leads: n.leads + g.leads,
+        booked: n.booked + g.booked,
+        attended: n.attended + g.attended,
+        patients: n.patients + g.patients,
+        newPatients: n.newPatients + g.newPatients,
+    }), blank());
 
     const totals = {
         spendPence: rows.reduce((n, r) => n + r.spendPence, 0),
         impressions: rows.reduce((n, r) => n + r.impressions, 0),
         clicks: rows.reduce((n, r) => n + r.clicks, 0),
         platformConversions: rows.reduce((n, r) => n + r.platformConversions, 0),
-        // Every person in the window, organic and unattributed included. Honest
-        // and shown on the screen — but NOT a denominator for paid spend.
-        leads: allPeople.size,
-        // The people the spend actually bought, and the ones the table shows.
-        attributedLeads: attributedPeople.size,
-        // Everyone in that same population who became a patient. This MUST be
-        // measured over the same people as `leads` — it previously counted only
-        // campaign-matched patients while `leads` counted everybody, so the two
-        // tiles sat side by side describing different populations and implied a
-        // conversion rate roughly a third of the real one (Barnet, Aug 2026: 19
-        // against 315 reads as 6%, when 30 of those 315 became patients).
-        patients: leadRows.reduce((n, l) => n + (l.converted ? 1 : 0), 0),
-        // The cost denominator: patients whose campaign we hold spend for.
-        attributedPatients: rows.reduce((n, r) => n + r.patients, 0),
-        // Of those patients, the ones who had never been to the practice
-        // before this window. The rest are existing patients enquiring again —
-        // real enquiries, but not acquisition, and reporting them as such
-        // overstates what the advertising bought.
-        newPatients: leadRows.reduce((n, l) => n + (l.is_new_patient ? 1 : 0), 0),
-        unattributedLeads: allPeople.size - attributedPeople.size,
+        // Honest and shown on the screen — but NOT a denominator for paid spend.
+        leads: all.leads,
+        booked: all.booked,
+        attended: all.attended,
+        patients: all.patients,
+        newPatients: all.newPatients,
+        // The cost denominators: the population the spend can be measured
+        // against. Dividing paid spend by organic enquiries understates every
+        // cost per unit.
+        attributedLeads: attributed.leads,
+        attributedBooked: attributed.booked,
+        attributedPatients: attributed.patients,
+        attributedNewPatients: attributed.newPatients,
+        unattributedLeads: all.leads - attributed.leads,
     };
-    // Both cost figures divide paid spend by the population that spend can be
-    // measured against. Dividing by `leads` would charge paid spend against
-    // organic enquiries and quietly understate the cost per lead, while cost per
-    // patient used the attributed denominator — two different populations
-    // presented side by side as if they were one.
     totals.costPerLeadPence = perUnitPence(totals.spendPence, totals.attributedLeads);
+    totals.costPerBookingPence = perUnitPence(totals.spendPence, totals.attributedBooked);
     totals.costPerPatientPence = perUnitPence(totals.spendPence, totals.attributedPatients);
+    totals.costPerNewPatientPence = perUnitPence(totals.spendPence, totals.attributedNewPatients);
     return { rows, totals };
 }
 
@@ -255,7 +276,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // on every hit for the whole TTL — the screen would render against a shape that
 // no longer exists (an undefined series is a crash, not a blank chart). The
 // version makes old entries unreachable rather than merely stale.
-const PAYLOAD_VERSION = 5;   // v5: byPractice, totals.newPatients
+const PAYLOAD_VERSION = 6;   // v6: booked, attended, CPB, cost per new patient
 
 function cacheKey(since, until, practiceId) {
     return `marketing:perf:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
@@ -266,6 +287,28 @@ function cacheKey(since, until, practiceId) {
 // sharing one key would evict on every page change.
 function trendKey(since, until, practiceId) {
     return `marketing:trend:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
+}
+
+// leadList's own key. Deliberately built from ONLY the inputs that change
+// what gets FETCHED — org (implicit: readDashboardCache/writeDashboardCache
+// are org-scoped), since, until, practiceId. page/size/channel/converted/
+// campaignId are filters applied client-side of the cache, all against the
+// same cached arrays, so folding any of them in here would turn one cached
+// fetch into a cache entry per filter combination and defeat the point.
+function leadListKey(since, until, practiceId) {
+    return `marketing:leads:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
+}
+
+// Where a person stopped. Computed once, server-side, so the leads table and
+// anything else that reports the funnel can never disagree about a person.
+//
+// attended is Dentally-only: false means UNKNOWN for someone whose only booking
+// is a GoHighLevel one, so a person never falls BELOW 'booked' on its account.
+function leadStage(lead) {
+    if (lead.is_new_patient) return 'new_patient';
+    if (lead.attended) return 'attended';
+    if (lead.booked_at) return 'booked';
+    return 'enquired';
 }
 
 export const marketingService = {
@@ -329,14 +372,45 @@ export const marketingService = {
     // of people and a table of 50 needs 50 names.
     async leadList(orgId, {
         since, until, practiceId = null, channel = null, converted = null,
-        page = 1, size = 50,
+        campaignId = null, page = 1, size = 50,
     } = {}) {
-        const [spend, leads] = await Promise.all([
-            marketingRepository.campaignSpend(orgId, since, until, practiceId),
-            marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
-        ]);
+        // This is now a PER-CAMPAIGN entry point — the campaign detail screen
+        // calls it on every click and every Previous/Next press — so the
+        // expensive inputs (spend + the full per-person funnel for the window)
+        // are cached, the same as trend/campaignPerformance. Filtering, sorting
+        // and paging stay below, operating on the cached arrays, so one cached
+        // fetch serves every page and every filter combination.
+        const key = leadListKey(since, until, practiceId);
+        const cached = await readDashboardCache(orgId, key).catch(() => undefined);
+        let spend;
+        let leads;
+        if (cached) {
+            ({ spend, leads } = cached);
+        } else {
+            [spend, leads] = await Promise.all([
+                marketingRepository.campaignSpend(orgId, since, until, practiceId),
+                marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
+            ]);
+            // A year-wide window on the largest org runs to ~10,000 person
+            // rows — too large to push into the cache table, so that case is
+            // simply served live on every page/filter change rather than
+            // skipped from being returned. Every smaller window (the common
+            // case, since the campaign detail screen defaults to a month) is
+            // still cached.
+            if (leads.length <= 5000) {
+                await writeDashboardCache(orgId, key, { spend, leads }, CACHE_TTL_MS).catch(() => {});
+            }
+        }
         const campaignProvider = new Map(spend.campaigns.map((c) => [c.campaign_id, c.provider]));
         const campaignName = new Map(spend.campaigns.map((c) => [c.campaign_id, c.campaign_name]));
+
+        // Where the person actually came in. For the 'other' channel this is
+        // the ONLY origin we hold: most of those leads carry no attribution
+        // source at all, so the row would otherwise say nothing beyond "not
+        // paid". Deliberately NOT cached with the leads above — pipelines are
+        // renamed in GoHighLevel far more often than a window's leads change,
+        // and this read is one small row per subaccount.
+        const pipelineName = await marketingRepository.pipelineNames(orgId).catch(() => new Map());
 
         let rows = leads.map((l) => ({
             contactId: l.contact_id,
@@ -345,11 +419,22 @@ export const marketingService = {
             campaignId: l.ad_campaign_id,
             campaignName: l.ad_campaign_id ? campaignName.get(l.ad_campaign_id) ?? null : null,
             attributionSource: l.attribution_source,
+            pipelineId: l.ghl_pipeline_id ?? null,
+            // Null when the id resolves to no synced definition — an archived
+            // or since-deleted pipeline. The screen falls back to the
+            // attribution source rather than showing a raw id.
+            pipelineName: l.ghl_pipeline_id
+                ? pipelineName.get(String(l.ghl_pipeline_id)) ?? null
+                : null,
             enquiredAt: l.first_lead_at,
+            bookedAt: l.booked_at,
+            attended: l.attended,
+            stage: leadStage(l),
             converted: l.converted,
             isNewPatient: l.is_new_patient,
             matchedBy: l.matched_by,
         }));
+        if (campaignId) rows = rows.filter((r) => r.campaignId === campaignId);
         if (channel) rows = rows.filter((r) => r.channel === channel);
         if (converted === true) rows = rows.filter((r) => r.converted);
         if (converted === false) rows = rows.filter((r) => !r.converted);
@@ -390,20 +475,20 @@ export const marketingService = {
             const cached = await readDashboardCache(orgId, key).catch(() => undefined);
             if (cached) return cached;
         }
-        const [spend, leads, accounts] = await Promise.all([
+        const [spend, funnel, accounts] = await Promise.all([
             marketingRepository.campaignSpend(orgId, since, until, practiceId),
-            marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
+            marketingRepository.campaignFunnel(orgId, since, until, practiceId),
             marketingRepository.adAccounts(orgId),
         ]);
-        const payload = joinSpendToLeads(spend.campaigns, leads);
+        const payload = joinSpendToLeads(spend.campaigns, funnel);
         // campaign id -> provider, from the campaigns we hold spend for. This is
         // the definitive arm of channel resolution, so it is built from the same
         // spend rows the table is built from.
         const campaignProvider = new Map(
             spend.campaigns.map((c) => [c.campaign_id, c.provider]),
         );
-        payload.byChannel = channelSplit(payload.rows, leads, campaignProvider);
-        payload.byPractice = practiceSplit(spend.spendByPractice, leads, campaignProvider);
+        payload.byChannel = channelSplit(payload.rows, funnel, campaignProvider);
+        payload.byPractice = practiceSplit(spend.spendByPractice, funnel, campaignProvider);
         payload.series = spend.series;
         payload.coverage = buildCoverage(accounts, practiceId, spend.unmappedSpendPence);
         await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});
@@ -413,5 +498,5 @@ export const marketingService = {
 
 export const __test = {
     joinSpendToLeads, perUnitPence, cacheKey, channelSplit, buildCoverage, resolveLeadChannel,
-    practiceSplit,
+    practiceSplit, leadStage, leadListKey,
 };
