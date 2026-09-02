@@ -537,9 +537,16 @@ Then add `campaignFunnel` immediately after `leadsByCampaign`:
                 .rpc('ad_campaign_funnel', {
                     p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
                 })
-                // OFFSET without ORDER BY may repeat one row and skip another.
-                // The group key is unique per row, so it is a sound sort key.
+                // OFFSET without a UNIQUE sort key may repeat one row and skip
+                // another. ad_campaign_id ALONE is not unique here: the RPC
+                // groups by three columns, and unattributed leads carry a null
+                // campaign id across several practices and sources, so ordering
+                // on it alone ties. All three together ARE the group key and so
+                // are unique per row. Each is nullable, hence explicit null
+                // placement on every key.
                 .order('ad_campaign_id', { ascending: true, nullsFirst: true })
+                .order('attribution_source', { ascending: true, nullsFirst: true })
+                .order('practice_id', { ascending: true, nullsFirst: true })
                 .range(from, from + PAGE - 1);
             if (error) throw new Error(`ad_campaign_funnel: ${error.message}`);
             const page = data ?? [];

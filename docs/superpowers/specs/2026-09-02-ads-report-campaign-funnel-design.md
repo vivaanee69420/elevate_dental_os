@@ -185,7 +185,10 @@ The migration ends with `NOTIFY pgrst, 'reload schema';`.
 practiceId)` — a paged, deterministically ordered read of `ad_campaign_funnel`.
 Paged on principle: the row count should sit in the low hundreds, but the
 1000-row cap has bitten this file twice and defensive paging costs four lines.
-Ordering is required for sound paging, on the full group key.
+Ordering is required for sound paging, and it must cover the FULL group key.
+A single column ties — unattributed leads carry a null campaign id across
+several practices and sources — and OFFSET across a tie group duplicates one
+row and drops another.
 
 `marketingService.campaignPerformance` swaps `leadsByCampaign` for
 `campaignFunnel`. This is a net performance win — the campaigns screen stops
