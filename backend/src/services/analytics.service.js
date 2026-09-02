@@ -2093,17 +2093,33 @@ export const analyticsService = {
             return { month, inPence, outPence: out, costsAvailable: !!(c && c.costsAvailable), projected: false };
         });
 
-        // Run-rate for projection: average of recent months (IN always real;
-        // OUT only from months that have a real cost source).
-        const recentIn = real.slice(-3);
+        // Run-rate: average of recent COMPLETE months.
+        //
+        // The current calendar month is excluded, and that exclusion is the
+        // whole point. On the 3rd of September this window's last month held
+        // three days of takings (£9,475 against a £133,083 August), and
+        // averaging it in as though it were a whole month dragged the run-rate
+        // from £146,601 to £100,892 — a third low. The same stub month cut the
+        // cost side too, so the two errors did not cancel: they made a burning
+        // practice look self-funding. A forward number that is most wrong at the
+        // start of every month is worse than no forward number.
+        const currentKey = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+        const isComplete = (m) => m.month !== currentKey;
+        // Fall back to whatever exists only when NO month is complete (a brand
+        // new org in its first month) — a rough figure beats a zero there.
+        const completeReal = real.filter(isComplete).length ? real.filter(isComplete) : real;
+        const recentIn = completeReal.slice(-3);
         const inRunRate = recentIn.length ? Math.round(recentIn.reduce((s, m) => s + m.inPence, 0) / recentIn.length) : 0;
-        const costMonths = real.filter((m) => m.costsAvailable);
+        const costMonthsAll = real.filter((m) => m.costsAvailable);
+        const costMonths = costMonthsAll.filter(isComplete).length
+            ? costMonthsAll.filter(isComplete)
+            : costMonthsAll;
         let outRunRate = costMonths.length
             ? Math.round(costMonths.slice(-3).reduce((s, m) => s + m.outPence, 0) / Math.min(3, costMonths.length))
             : 0;
         // No per-month costs at all → fall back to the org baseline cost base.
-        let costsBasis = costMonths.length ? 'actuals' : 'none';
-        if (!costMonths.length && !practiceId) {
+        let costsBasis = costMonthsAll.length ? 'actuals' : 'none';
+        if (!costMonthsAll.length && !practiceId) {
             const health = await analytics_repository_1.analyticsRepository.baselineSingle(orgId);
             const b = health?.baseline;
             if (b?.revenue) {
@@ -2201,6 +2217,13 @@ export const analyticsService = {
             anchorBankPence: anchorBank,
             costsAvailable,
             costsBasis,
+            // WHY cash out is missing, so the screen stops telling an owner to
+            // connect a feed they already connected. 'unmapped-practice' is the
+            // common case: QuickBooks books costs against a COMPANY, never a
+            // practice, so every practice-scoped view finds none even though the
+            // org has a live feed with thousands of rows.
+            costsUnavailableReason: costsAvailable ? null
+                : (outSrcSlugs?.length ? (practiceId ? 'unmapped-practice' : 'no-rows') : 'no-feed'),
             inSource,  // human label for the cash-in feed (e.g. 'Dentally')
             outSource, // human label for the cash-out feed (e.g. 'QuickBooks')
             balancesReconstructed: currentIdx >= 1, // historical closings derived from today's balance
