@@ -76,8 +76,15 @@ place.
 Under the two rules above, over the fixed reference window used for
 verification (org `1a5f888a-0dfe-4802-acf8-6003665089ad`, 1 June – 31 August
 2026 London), the whole lead population is **3,325**, of which **1,946** carry a
-campaign id, **533** booked and **323** attended. These are the numbers the
-implementation is checked against.
+campaign id, **533** booked and **323** attended.
+
+The lead figures are stable — the window is closed. The booking figures are a
+**floor**: nothing bounds a booking's date from above, so someone who enquired
+in August can book in December and the count rises the moment the sync pulls it.
+Measured drift of +1 on each within an hour. Verification asserts the lead
+counts exactly and the booking counts as a minimum; the durable checks are the
+invariants (earliest-booking ordering, no booking before its enquiry, and the
+aggregate reconciling to the row-level function in the same session).
 
 **Attended** — a Dentally `appointments` row with status `completed`.
 
