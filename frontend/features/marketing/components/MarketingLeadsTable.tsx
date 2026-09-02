@@ -56,8 +56,15 @@ export function MarketingLeadsTable({ rows }: { rows: MarketingLead[] }) {
                   />
                   {CHANNEL_LABEL[r.channel] ?? r.channel}
                 </span>
-                {r.attributionSource ? (
-                  <div className="mt-0.5 text-[12.5px] text-ink-muted">{r.attributionSource}</div>
+                {/* Where they came in. The pipeline is the more useful of the
+                    two — "6. Chatbot Website" says something, "Paid Social"
+                    under a bold "Facebook" does not — so it wins, and the
+                    attribution source is the fallback when the pipeline id
+                    resolves to no synced definition. */}
+                {(r.pipelineName ?? r.attributionSource) ? (
+                  <div className="mt-0.5 text-[12.5px] text-ink-muted">
+                    {r.pipelineName ?? r.attributionSource}
+                  </div>
                 ) : null}
               </td>
               <td className="px-4 py-3 text-ink-muted">

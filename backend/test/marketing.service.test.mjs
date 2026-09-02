@@ -456,9 +456,42 @@ describe('leadList', () => {
             { id: 'b', first_name: 'Bea', last_name: 'Webb', email: 'bea@example.com', phone: '07700900002' },
             { id: 'c', first_name: 'Cai', last_name: 'Jones', email: 'cai@example.com', phone: '07700900003' },
         ]);
+        vi.spyOn(repo.marketingRepository, 'pipelineNames').mockResolvedValue(
+            new Map([['pipe-chat', '6. Chatbot Website']]),
+        );
         const { marketingService } = await import('../src/services/marketing.service.js');
         return marketingService.leadList('org-1', { since: SINCE, until: UNTIL, ...opts });
     }
+
+    it('names the pipeline a person came in on', async () => {
+        // For an unattributed lead this is the ONLY origin we hold — most carry
+        // no attribution source at all, so without it the row says nothing.
+        const out = await run({}, [{
+            ...people[0], contact_id: 'p1', ad_campaign_id: null,
+            attribution_source: null, ghl_pipeline_id: 'pipe-chat',
+        }]);
+        const row = out.rows.find((r) => r.contactId === 'p1');
+        expect(row.pipelineId).toBe('pipe-chat');
+        expect(row.pipelineName).toBe('6. Chatbot Website');
+    });
+
+    it('leaves the name null when the id matches no synced pipeline', async () => {
+        // An archived or deleted pipeline. The screen falls back to the
+        // attribution source rather than printing a raw id at the user.
+        const out = await run({}, [{
+            ...people[0], contact_id: 'p2', ghl_pipeline_id: 'pipe-gone',
+        }]);
+        const row = out.rows.find((r) => r.contactId === 'p2');
+        expect(row.pipelineId).toBe('pipe-gone');
+        expect(row.pipelineName).toBeNull();
+    });
+
+    it('carries a null pipeline when the lead has none at all', async () => {
+        const out = await run({}, [{ ...people[0], contact_id: 'p3', ghl_pipeline_id: null }]);
+        const row = out.rows.find((r) => r.contactId === 'p3');
+        expect(row.pipelineId).toBeNull();
+        expect(row.pipelineName).toBeNull();
+    });
 
     it('filters to one campaign', async () => {
         const out = await run({ campaignId: 'm1' });

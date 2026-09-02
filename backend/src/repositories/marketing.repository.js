@@ -148,7 +148,46 @@ export const marketingRepository = {
             first_lead_at: r.first_lead_at ?? null,
             booked_at: r.booked_at ?? null,
             attended: r.attended === true,
+            ghl_pipeline_id: r.ghl_pipeline_id ?? null,
         }));
+    },
+
+    // GoHighLevel pipeline id -> name, for the org's connected subaccounts.
+    //
+    // Names are NOT stored on the lead: a lead carries only ghl_pipeline_id,
+    // and the definitions live in each subaccount's synced config. Two
+    // subaccounts hold disjoint pipeline sets, so this merges across all of
+    // them — a lead can only belong to its own Location's pipeline, so the
+    // merged map cannot mis-resolve one.
+    //
+    // Falls back to the single legacy `integrations` row for orgs connected
+    // before the multi-subaccount model, which is the same order of precedence
+    // leadService.pipelines uses.
+    async pipelineNames(orgId) {
+        const byId = new Map();
+        const { data: accounts, error } = await supabase_1.serviceClient
+            .from('integration_accounts')
+            .select('config')
+            .eq('organisation_id', orgId)
+            .eq('provider', 'gohighlevel');
+        if (error) throw new Error(`integration_accounts read: ${error.message}`);
+        for (const account of accounts ?? []) {
+            for (const p of account?.config?.pipelines ?? []) {
+                if (p?.id && p?.name && !byId.has(String(p.id))) byId.set(String(p.id), p.name);
+            }
+        }
+        if (byId.size) return byId;
+
+        const { data: legacy } = await supabase_1.serviceClient
+            .from('integrations')
+            .select('config')
+            .eq('organisation_id', orgId)
+            .eq('provider', 'gohighlevel')
+            .maybeSingle();
+        for (const p of legacy?.config?.pipelines ?? []) {
+            if (p?.id && p?.name && !byId.has(String(p.id))) byId.set(String(p.id), p.name);
+        }
+        return byId;
     },
 
     // Campaign-grain counts: leads, booked, attended, patients, new patients.

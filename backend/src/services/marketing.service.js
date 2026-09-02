@@ -404,6 +404,14 @@ export const marketingService = {
         const campaignProvider = new Map(spend.campaigns.map((c) => [c.campaign_id, c.provider]));
         const campaignName = new Map(spend.campaigns.map((c) => [c.campaign_id, c.campaign_name]));
 
+        // Where the person actually came in. For the 'other' channel this is
+        // the ONLY origin we hold: most of those leads carry no attribution
+        // source at all, so the row would otherwise say nothing beyond "not
+        // paid". Deliberately NOT cached with the leads above — pipelines are
+        // renamed in GoHighLevel far more often than a window's leads change,
+        // and this read is one small row per subaccount.
+        const pipelineName = await marketingRepository.pipelineNames(orgId).catch(() => new Map());
+
         let rows = leads.map((l) => ({
             contactId: l.contact_id,
             practiceId: l.practice_id,
@@ -411,6 +419,13 @@ export const marketingService = {
             campaignId: l.ad_campaign_id,
             campaignName: l.ad_campaign_id ? campaignName.get(l.ad_campaign_id) ?? null : null,
             attributionSource: l.attribution_source,
+            pipelineId: l.ghl_pipeline_id ?? null,
+            // Null when the id resolves to no synced definition — an archived
+            // or since-deleted pipeline. The screen falls back to the
+            // attribution source rather than showing a raw id.
+            pipelineName: l.ghl_pipeline_id
+                ? pipelineName.get(String(l.ghl_pipeline_id)) ?? null
+                : null,
             enquiredAt: l.first_lead_at,
             bookedAt: l.booked_at,
             attended: l.attended,
