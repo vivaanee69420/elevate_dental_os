@@ -159,7 +159,9 @@ export interface CashflowOutlook {
   bankConnected: boolean;
   anchorBank: number;
   costsAvailable: boolean;
-  costsBasis: 'actuals' | 'baseline' | 'none';
+costsBasis: 'actuals' | 'baseline' | 'none';
+  /** Why cash out is missing, so the UI does not tell an owner to connect a feed they have. */
+  costsUnavailableReason: 'no-feed' | 'unmapped-practice' | 'no-rows' | null;
   inSource: string | null;  // feed behind cash-in (e.g. 'Dentally')
   outSource: string | null; // feed behind cash-out (e.g. 'QuickBooks')
   balancesReconstructed: boolean;
@@ -193,6 +195,7 @@ export async function getCashflowOutlook(
     anchorBank: p(r.anchorBankPence),
     costsAvailable: !!r.costsAvailable,
     costsBasis: r.costsBasis ?? 'none',
+    costsUnavailableReason: r.costsUnavailableReason ?? null,
     inSource: r.inSource ?? null,
     outSource: r.outSource ?? null,
     balancesReconstructed: !!r.balancesReconstructed,
