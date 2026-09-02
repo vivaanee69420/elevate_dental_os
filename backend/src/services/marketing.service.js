@@ -275,7 +275,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // on every hit for the whole TTL — the screen would render against a shape that
 // no longer exists (an undefined series is a crash, not a blank chart). The
 // version makes old entries unreachable rather than merely stale.
-const PAYLOAD_VERSION = 5;   // v5: byPractice, totals.newPatients
+const PAYLOAD_VERSION = 6;   // v6: booked, attended, CPB, cost per new patient
 
 function cacheKey(since, until, practiceId) {
     return `marketing:perf:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
@@ -410,20 +410,20 @@ export const marketingService = {
             const cached = await readDashboardCache(orgId, key).catch(() => undefined);
             if (cached) return cached;
         }
-        const [spend, leads, accounts] = await Promise.all([
+        const [spend, funnel, accounts] = await Promise.all([
             marketingRepository.campaignSpend(orgId, since, until, practiceId),
-            marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
+            marketingRepository.campaignFunnel(orgId, since, until, practiceId),
             marketingRepository.adAccounts(orgId),
         ]);
-        const payload = joinSpendToLeads(spend.campaigns, leads);
+        const payload = joinSpendToLeads(spend.campaigns, funnel);
         // campaign id -> provider, from the campaigns we hold spend for. This is
         // the definitive arm of channel resolution, so it is built from the same
         // spend rows the table is built from.
         const campaignProvider = new Map(
             spend.campaigns.map((c) => [c.campaign_id, c.provider]),
         );
-        payload.byChannel = channelSplit(payload.rows, leads, campaignProvider);
-        payload.byPractice = practiceSplit(spend.spendByPractice, leads, campaignProvider);
+        payload.byChannel = channelSplit(payload.rows, funnel, campaignProvider);
+        payload.byPractice = practiceSplit(spend.spendByPractice, funnel, campaignProvider);
         payload.series = spend.series;
         payload.coverage = buildCoverage(accounts, practiceId, spend.unmappedSpendPence);
         await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});

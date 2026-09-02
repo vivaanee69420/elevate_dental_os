@@ -1,8 +1,11 @@
 // Campaign aggregation. Every figure must be measured against the population it
 // claims: a blended number must never present itself as a measured one, and the
 // table must reconcile to the tiles above it.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const { __test } = await import('../src/services/marketing.service.js');
+
+const SINCE = '2026-05-31T23:00:00Z';
+const UNTIL = '2026-08-31T23:00:00Z';
 
 describe('joinSpendToLeads', () => {
     const spend = [
@@ -391,5 +394,40 @@ describe('practiceSplit', () => {
         expect(p1.costPerLeadPence).toBeNull();
         expect(p1.costPerBookingPence).toBeNull();
         expect(p1.costPerNewPatientPence).toBeNull();
+    });
+});
+
+describe('campaignPerformance', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('reads the aggregate, NOT the per-person function', async () => {
+        // The per-person function returns one row per contact and has to be
+        // paged around PostgREST's 1000-row cap. Counting through it here was
+        // eleven round trips to produce numbers SQL can produce in one.
+        const repo = await import('../src/repositories/marketing.repository.js');
+        const funnel = vi.spyOn(repo.marketingRepository, 'campaignFunnel').mockResolvedValue([]);
+        const perPerson = vi.spyOn(repo.marketingRepository, 'leadsByCampaign').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+            campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
+        });
+        vi.spyOn(repo.marketingRepository, 'adAccounts').mockResolvedValue([]);
+
+        const { marketingService } = await import('../src/services/marketing.service.js');
+        await marketingService.campaignPerformance('org-1', {
+            since: SINCE, until: UNTIL, refresh: true,
+        });
+        expect(funnel).toHaveBeenCalledTimes(1);
+        expect(perPerson).not.toHaveBeenCalled();
+    });
+});
+
+describe('cacheKey', () => {
+    it('is versioned, so a payload with new fields is never served from an old entry', () => {
+        // A cache entry written before the deploy is read after it. Without the
+        // bump, every hit for the whole TTL renders against a shape that no
+        // longer exists.
+        expect(__test.cacheKey(SINCE, UNTIL, null)).toContain('v6');
     });
 });
