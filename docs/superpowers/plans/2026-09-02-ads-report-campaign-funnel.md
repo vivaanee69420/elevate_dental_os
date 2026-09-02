@@ -1153,19 +1153,45 @@ describe('leadList', () => {
 });
 ```
 
-Append to `backend/test/marketing.routes.test.mjs`, following the existing request helper in that file:
+Append to `backend/test/marketing.routes.test.mjs`. That file has **no supertest harness** — it imports modules and asserts declaratively — so this tests the schema directly rather than an HTTP round trip:
 
 ```javascript
-it('accepts campaignId as a free-text platform id, not a uuid', async () => {
-    // ad_campaign_id is Google's or Meta's own id — '120249721894530517' is a
-    // valid one. Validating it as a uuid would reject every real campaign.
-    const res = await request(app)
-        .get('/api/marketing/leads')
-        .query({ since: SINCE, until: UNTIL, scope: 'all', campaignId: '120249721894530517' })
-        .set(authHeader);
-    expect(res.status).toBe(200);
+describe('leads query validation', () => {
+    it('accepts campaignId as a free-text platform id, not a uuid', async () => {
+        // ad_campaign_id is Google's or Meta's OWN id: '120249721894530517' is
+        // a real one. Validating it as a uuid would reject every live campaign
+        // and the filter would silently never match.
+        const { LeadListQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = LeadListQuerySchema.parse({
+            since: '2026-07-31T23:00:00.000Z',
+            until: '2026-08-31T23:00:00.000Z',
+            scope: 'all',
+            campaignId: '120249721894530517',
+        });
+        expect(parsed.campaignId).toBe('120249721894530517');
+    });
+
+    it('rejects an over-long campaignId', async () => {
+        const { LeadListQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => LeadListQuerySchema.parse({
+            since: '2026-07-31T23:00:00.000Z',
+            until: '2026-08-31T23:00:00.000Z',
+            campaignId: 'x'.repeat(129),
+        })).toThrow();
+    });
+
+    it('leaves campaignId optional — the unfiltered list still validates', async () => {
+        const { LeadListQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = LeadListQuerySchema.parse({
+            since: '2026-07-31T23:00:00.000Z',
+            until: '2026-08-31T23:00:00.000Z',
+        });
+        expect(parsed.campaignId).toBeUndefined();
+    });
 });
 ```
+
+This requires the schema to be exported. In `backend/src/controllers/marketing.controller.js`, change `const LeadListQuerySchema = …` to `export const LeadListQuerySchema = …`. It is exported for the test and for nothing else; do not import it anywhere but the test.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
