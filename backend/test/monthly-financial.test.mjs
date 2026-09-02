@@ -264,3 +264,58 @@ describe('service createManual delegates to the repo', () => {
     expect(supaRec.last.upsertVals).toMatchObject({ dental_bucket: 'materials', amount_pence: 1234 });
   });
 });
+
+// ============================================================================
+// PostgREST's row ceiling. `.limit(5000)` does NOT lift it — the server
+// truncates at its own db-max-rows and reports no error. Measured on the live
+// database: an org holding 3,064 rows had exactly 1,000 returned, so two
+// thirds of every cost silently vanished and August's cash out read £207,200
+// against a true £299,071. Every finance surface fed by allForOrg — cashflow,
+// runway, P&L, margin, benchmark — was wrong, by a different amount each
+// month, because the read carried no ORDER BY either.
+// ============================================================================
+describe('monthly_financials reads page past the server row ceiling', () => {
+  const row = (i) => ({
+    id: i, period: '2026-08', account_code: `a${i}`, dental_bucket: 'overhead',
+    amount_pence: 100, source: 'quickbooks', practice_id: null,
+    integration_account_id: null, accounting_method: 'accrual',
+  });
+  // The harness serves one dataset through .range(), exactly as the server does.
+  const serve = (rows) => { supaRec.resultProvider = () => ({ data: rows, error: null }); };
+
+  beforeEach(() => { supaRec.last = undefined; });
+
+  it('returns EVERY row when the ledger exceeds one page, not just the first', async () => {
+    serve(Array.from({ length: 1064 }, (_, i) => row(i)));
+    const out = await repo.allForOrg(ORG_A);
+    // 1,064 — not the 1,000 the server hands back in one page.
+    expect(out).toHaveLength(1064);
+    expect(out.reduce((n, r) => n + r.amount_pence, 0)).toBe(106400);
+  });
+
+  it('does not stop on a SHORT page, only an empty one', async () => {
+    // The server's ceiling is its own setting: treating a short page as the
+    // last would reintroduce this truncation at whatever that number is.
+    serve(Array.from({ length: 700 }, (_, i) => row(i)));
+    expect(await repo.allForOrg(ORG_A)).toHaveLength(700);
+  });
+
+  it('orders the paged read, so OFFSET cannot repeat or skip a row', async () => {
+    serve([]);
+    await repo.allForOrg(ORG_A);
+    expect(supaRec.last.orders?.some((o) => o.col === 'id')).toBe(true);
+  });
+
+  it('still scopes every page to the organisation', async () => {
+    serve([row(1)]);
+    await repo.allForOrg(ORG_B);
+    expect(orgFilter(supaRec.last).val).toBe(ORG_B);
+  });
+
+  it('pages the owner-facing list too, ordered so paging is sound', async () => {
+    serve(Array.from({ length: 1200 }, (_, i) => row(i)));
+    const out = await repo.list(ORG_A, {});
+    expect(out).toHaveLength(1200);
+    expect(supaRec.last.orders?.some((o) => o.col === 'id')).toBe(true);
+  });
+});

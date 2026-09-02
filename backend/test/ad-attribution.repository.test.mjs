@@ -297,12 +297,11 @@ describe('adSpendDetailed', () => {
 
   it('pages past the 1000-row PostgREST cap', async () => {
     let call = 0;
-    supaRec.resultProvider = () => {
-      call += 1;
-      // First page full (1000) forces a second request; second page short ends it.
-      if (call === 1) return { data: Array.from({ length: 1000 }, (_, i) => ({ id: `r${i}` })), error: null };
-      return { data: [{ id: 'last' }], error: null };
-    };
+    // One dataset of 1,001 rows. The harness serves it through .range(), so the
+    // first request gets a full 1,000 and forces a second, which returns the
+    // remaining one and ends the loop.
+    const all = Array.from({ length: 1001 }, (_, i) => ({ id: `r${i}` }));
+    supaRec.resultProvider = () => { call += 1; return { data: all, error: null }; };
     const rows = await adAttributionRepository.adSpendDetailed(ORG, '2026-07-01', '2026-08-01');
     expect(call).toBe(2);
     expect(rows).toHaveLength(1001);
@@ -317,14 +316,13 @@ describe('pagination', () => {
   it('concatenates a full 1000-row first page with a second page, and advances range', async () => {
     let calls = 0;
     const ranges = [];
+    // 1,002 rows served through .range() by the harness: a full first page of
+    // 1,000, then the remaining two.
+    const all = Array.from({ length: 1002 }, (_, i) => ({ id: `l${i}` }));
     supaRec.resultProvider = (q) => {
       calls += 1;
       ranges.push({ ...q.range });
-      if (calls === 1) {
-        const page1 = Array.from({ length: 1000 }, (_, i) => ({ id: `l${i}` }));
-        return { data: page1, error: null };
-      }
-      return { data: [{ id: 'l1000' }, { id: 'l1001' }], error: null };
+      return { data: all, error: null };
     };
     const rows = await adAttributionRepository.leadsInWindow(ORG, '2026-01-01', '2026-02-01');
     expect(calls).toBe(2);
