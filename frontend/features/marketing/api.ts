@@ -121,7 +121,6 @@ export interface PracticeRow {
   newPatients: number;
   channels: Record<Channel, number>;
   costPerLeadPence: number | null;
-  costPerBookingPence: number | null;
   costPerNewPatientPence: number | null;
 }
 

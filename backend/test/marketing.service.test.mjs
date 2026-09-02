@@ -2,6 +2,7 @@
 // claims: a blended number must never present itself as a measured one, and the
 // table must reconcile to the tiles above it.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { supaRec } from './setup.js';
 const { __test } = await import('../src/services/marketing.service.js');
 
 const SINCE = '2026-05-31T23:00:00Z';
@@ -336,19 +337,17 @@ describe('practiceSplit', () => {
           leads: 6, booked: 1, attended: 0, patients: 1, newPatients: 1 },
     ];
 
-    it('carries booked per practice and costs it against that practice spend', () => {
+    it('carries booked as a raw count per practice, with no cost derived from it', () => {
+        // `booked` at a practice sums every group there, including the 'other'
+        // (organic) channel — there is no per-practice "attributed booked"
+        // figure, so dividing paid spend by it would understate every cost.
+        // practiceSplit therefore emits the count and no costPerBookingPence
+        // at all (see marketing.service.js practiceSplit).
         const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
         const p1 = out.find((p) => p.practiceId === 'p1');
         expect(p1.booked).toBe(4);
-        expect(p1.costPerBookingPence).toBe(50000);       // 200000 / 4
+        expect(p1).not.toHaveProperty('costPerBookingPence');
         expect(p1.costPerNewPatientPence).toBe(100000);   // 200000 / 2
-    });
-
-    it('has no cost per booking where the practice booked nobody', () => {
-        const none = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p3',
-                        leads: 3, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
-        const out = __test.practiceSplit([['p3', 90000]], none, campaignProvider);
-        expect(out[0].costPerBookingPence).toBeNull();
     });
 
     it('practices sum to the group total rather than double-counting', () => {
@@ -392,7 +391,6 @@ describe('practiceSplit', () => {
         expect(p1.leads).toBe(10);
         expect(p1.spendPence).toBe(0);
         expect(p1.costPerLeadPence).toBeNull();
-        expect(p1.costPerBookingPence).toBeNull();
         expect(p1.costPerNewPatientPence).toBeNull();
     });
 });
@@ -491,5 +489,74 @@ describe('leadList', () => {
         // — pre-mocking here would be silently clobbered before leadList runs.
         const out = await run({}, [{ ...people[0], contact_id: 'd', is_new_patient: false }]);
         expect(out.rows.find((r) => r.contactId === 'd').stage).toBe('attended');
+    });
+
+    // The expensive inputs (spend + the full per-person window) are cached so
+    // that a campaign detail page click, and every Previous/Next press after
+    // it, does not re-page the whole window. page/campaignId are filters
+    // applied to the cached arrays — neither belongs in the cache key, and
+    // this is the regression that would silently reappear if one leaked in.
+    describe('caching the expensive fetch', () => {
+        afterEach(() => {
+            vi.restoreAllMocks();
+            supaRec.resultProvider = () => ({ data: [], error: null });
+        });
+
+        it('two calls differing only by page hit leadsByCampaign once, not twice', async () => {
+            // A minimal in-memory stand-in for the dashboard_cache table, keyed
+            // by cache_key, so the second call reads back what the first wrote
+            // — the same round trip the real Postgres tier makes.
+            const store = new Map();
+            supaRec.resultProvider = (q) => {
+                if (q.table !== 'dashboard_cache') return { data: [], error: null };
+                if (q.op === 'upsert') {
+                    store.set(q.upsertVals.cache_key, q.upsertVals);
+                    return { data: null, error: null };
+                }
+                const key = q.eqs.find((e) => e.col === 'cache_key')?.val;
+                return { data: store.get(key) ?? null, error: null };
+            };
+
+            const repo = await import('../src/repositories/marketing.repository.js');
+            const fetchLeads = vi.spyOn(repo.marketingRepository, 'leadsByCampaign')
+                .mockResolvedValue(people);
+            vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+                campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
+            });
+            vi.spyOn(repo.marketingRepository, 'contactsByIds').mockResolvedValue([]);
+
+            const { marketingService } = await import('../src/services/marketing.service.js');
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, page: 1 });
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, page: 2 });
+
+            expect(fetchLeads).toHaveBeenCalledTimes(1);
+        });
+
+        it('two calls differing only by campaignId hit leadsByCampaign once, not twice', async () => {
+            const store = new Map();
+            supaRec.resultProvider = (q) => {
+                if (q.table !== 'dashboard_cache') return { data: [], error: null };
+                if (q.op === 'upsert') {
+                    store.set(q.upsertVals.cache_key, q.upsertVals);
+                    return { data: null, error: null };
+                }
+                const key = q.eqs.find((e) => e.col === 'cache_key')?.val;
+                return { data: store.get(key) ?? null, error: null };
+            };
+
+            const repo = await import('../src/repositories/marketing.repository.js');
+            const fetchLeads = vi.spyOn(repo.marketingRepository, 'leadsByCampaign')
+                .mockResolvedValue(people);
+            vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+                campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
+            });
+            vi.spyOn(repo.marketingRepository, 'contactsByIds').mockResolvedValue([]);
+
+            const { marketingService } = await import('../src/services/marketing.service.js');
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, campaignId: 'm1' });
+            await marketingService.leadList('org-1', { since: SINCE, until: UNTIL, campaignId: 'g1' });
+
+            expect(fetchLeads).toHaveBeenCalledTimes(1);
+        });
     });
 });
