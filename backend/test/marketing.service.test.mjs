@@ -11,88 +11,84 @@ describe('joinSpendToLeads', () => {
         { provider: 'google_ads', campaign_id: '22794584316', campaign_name: '.G New Patient',
           spend_pence: 88668, impressions: 10916, clicks: 764, conversions: 52 },
     ];
-    const leads = [
-        { ad_campaign_id: '120249721894530517', contact_id: 'c1', converted: true },
-        { ad_campaign_id: '120249721894530517', contact_id: 'c2', converted: false },
-        { ad_campaign_id: '22794584316', contact_id: 'c3', converted: true },
-        { ad_campaign_id: null, contact_id: 'c4', converted: false },
+    // One group per (campaign, source, practice). Each PERSON appears in
+    // exactly one group, so the counts add up without double-counting.
+    const funnel = [
+        { ad_campaign_id: '120249721894530517', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 2, booked: 1, attended: 1, patients: 1, newPatients: 1 },
+        { ad_campaign_id: '22794584316', attribution_source: 'Paid Search', practice_id: 'p1',
+          leads: 1, booked: 1, attended: 0, patients: 1, newPatients: 0 },
+        { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
+          leads: 1, booked: 0, attended: 0, patients: 0, newPatients: 0 },
     ];
 
-    it('computes cost per lead in integer pence, per campaign', () => {
-        const { rows } = __test.joinSpendToLeads(spend, leads);
+    it('computes cost per lead, per booking and per new patient in integer pence', () => {
+        const { rows } = __test.joinSpendToLeads(spend, funnel);
         const meta = rows.find((r) => r.campaignId === '120249721894530517');
         expect(meta.leads).toBe(2);
-        expect(meta.spendPence).toBe(147265);
-        expect(meta.costPerLeadPence).toBe(73633);  // round(147265 / 2)
-        expect(meta.patients).toBe(1);
-        expect(meta.costPerPatientPence).toBe(147265);
+        expect(meta.booked).toBe(1);
+        expect(meta.attended).toBe(1);
+        expect(meta.costPerLeadPence).toBe(73633);        // round(147265 / 2)
+        expect(meta.costPerBookingPence).toBe(147265);    // 147265 / 1
+        expect(meta.costPerNewPatientPence).toBe(147265); // 147265 / 1
     });
 
-    it('counts PEOPLE, not lead rows — one contact in two pipelines is one lead', () => {
-        const dupes = [
-            { ad_campaign_id: '22794584316', contact_id: 'c9', converted: false },
-            { ad_campaign_id: '22794584316', contact_id: 'c9', converted: false },
+    it('sums several groups that share a campaign', () => {
+        // The same campaign reached two practices, so it arrives as two groups.
+        const split = [
+            { ad_campaign_id: '22794584316', attribution_source: 'Paid Search', practice_id: 'p1',
+              leads: 3, booked: 2, attended: 1, patients: 1, newPatients: 1 },
+            { ad_campaign_id: '22794584316', attribution_source: 'Paid Search', practice_id: 'p2',
+              leads: 4, booked: 1, attended: 0, patients: 2, newPatients: 1 },
         ];
-        const { rows } = __test.joinSpendToLeads(spend, dupes);
-        expect(rows.find((r) => r.campaignId === '22794584316').leads).toBe(1);
+        const { rows } = __test.joinSpendToLeads(spend, split);
+        const g = rows.find((r) => r.campaignId === '22794584316');
+        expect(g.leads).toBe(7);
+        expect(g.booked).toBe(3);
+        expect(g.attended).toBe(1);
+        expect(g.patients).toBe(3);
     });
 
-    it('never divides by zero — a campaign with spend and no leads has null CPL, not Infinity', () => {
-        const { rows } = __test.joinSpendToLeads(spend, []);
-        expect(rows.every((r) => r.costPerLeadPence === null)).toBe(true);
+    it('never divides by zero — spend with no bookings has null CPB, not Infinity', () => {
+        const noneBooked = [{ ad_campaign_id: '22794584316', attribution_source: 'Paid Search',
+                              practice_id: null, leads: 4, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
+        const { rows } = __test.joinSpendToLeads(spend, noneBooked);
+        const g = rows.find((r) => r.campaignId === '22794584316');
+        expect(g.costPerBookingPence).toBeNull();
+        expect(g.costPerNewPatientPence).toBeNull();
     });
 
-    it('keeps unattributed leads out of every campaign row but counted in totals', () => {
-        const { rows, totals } = __test.joinSpendToLeads(spend, leads);
+    it('keeps unattributed leads out of every row but counted in totals', () => {
+        const { rows, totals } = __test.joinSpendToLeads(spend, funnel);
         expect(rows.some((r) => r.campaignId === null)).toBe(false);
         expect(totals.unattributedLeads).toBe(1);
         expect(totals.leads).toBe(4);
     });
 
     it('reports platform conversions separately from real patients', () => {
-        // Google/Facebook count a form submission; we count someone in Dentally.
-        const { totals } = __test.joinSpendToLeads(spend, leads);
-        expect(totals.platformConversions).toBe(464);   // 412 + 52
-        expect(totals.patients).toBe(2);
+        const { totals } = __test.joinSpendToLeads(spend, funnel);
+        expect(totals.platformConversions).toBe(464);   // 412 + 52, from the ad platforms
+        expect(totals.patients).toBe(2);                // matched to a Dentally record
     });
 
-    // A lead whose campaign has no spend IN THIS WINDOW produces no row. It must
-    // still be accounted for, or the table silently loses people.
-    const strayCampaignLeads = [
-        ...leads,
-        { ad_campaign_id: '999999999', contact_id: 'c5', converted: false }, // no spend row
-    ];
-
-    it('the table reconciles to the tiles: sum(rows.leads) + unattributed === leads', () => {
-        const { rows, totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
-        const inRows = rows.reduce((n, r) => n + r.leads, 0);
-        expect(inRows + totals.unattributedLeads).toBe(totals.leads);
+    it('totals the funnel over every person, and costs over the attributed ones', () => {
+        const { totals } = __test.joinSpendToLeads(spend, funnel);
+        expect(totals.booked).toBe(2);                 // everyone, referral included
+        expect(totals.attended).toBe(1);
+        expect(totals.attributedBooked).toBe(2);       // only campaigns with spend
+        expect(totals.attributedNewPatients).toBe(1);
+        expect(totals.costPerBookingPence).toBe(117967);      // round(235933 / 2)
+        expect(totals.costPerNewPatientPence).toBe(235933);   // 235933 / 1
     });
 
-    it('counts a lead whose campaign has no spend row as unattributed', () => {
-        const { totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
-        expect(totals.leads).toBe(5);
-        expect(totals.attributedLeads).toBe(3);      // c1, c2, c3
-        expect(totals.unattributedLeads).toBe(2);    // c4 (no id) + c5 (unspent campaign)
-    });
-
-    it('costs divide spend by the ATTRIBUTED population, not every enquirer', () => {
-        const { totals } = __test.joinSpendToLeads(spend, strayCampaignLeads);
-        const spendPence = 147265 + 88668;           // 235933
-        expect(totals.spendPence).toBe(spendPence);
-        // Attributed leads (3), NOT totals.leads (5): paid spend must never be
-        // charged against organic or unspent-campaign enquiries.
-        expect(totals.costPerLeadPence).toBe(Math.round(spendPence / 3));
-        expect(totals.costPerPatientPence).toBe(Math.round(spendPence / 2));
-    });
-
-    it('no attributed leads at all yields null costs, never Infinity or 0', () => {
-        const { totals } = __test.joinSpendToLeads(spend, [
-            { ad_campaign_id: null, contact_id: 'c8', converted: false },
-        ]);
-        expect(totals.attributedLeads).toBe(0);
-        expect(totals.costPerLeadPence).toBeNull();
-        expect(totals.costPerPatientPence).toBeNull();
+    // A lead whose campaign has no spend IN THIS WINDOW produces no row. It
+    // must still be accounted for, or the table silently loses people.
+    it('reconciles: sum(rows.leads) + unattributedLeads === totals.leads', () => {
+        const orphan = [...funnel, { ad_campaign_id: 'no-spend-here', attribution_source: 'Paid Social',
+                                     practice_id: 'p1', leads: 6, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
+        const { rows, totals } = __test.joinSpendToLeads(spend, orphan);
+        const shown = rows.reduce((n, r) => n + r.leads, 0);
+        expect(shown + totals.unattributedLeads).toBe(totals.leads);
     });
 });
 
