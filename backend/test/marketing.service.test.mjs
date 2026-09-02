@@ -431,3 +431,65 @@ describe('cacheKey', () => {
         expect(__test.cacheKey(SINCE, UNTIL, null)).toContain('v6');
     });
 });
+
+describe('leadList', () => {
+    const people = [
+        { contact_id: 'a', ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          converted: true, is_new_patient: true, matched_by: 'email',
+          first_lead_at: '2026-07-01T10:00:00Z', booked_at: '2026-07-04T09:00:00Z', attended: true },
+        { contact_id: 'b', ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          converted: false, is_new_patient: false, matched_by: null,
+          first_lead_at: '2026-07-02T10:00:00Z', booked_at: '2026-07-06T09:00:00Z', attended: false },
+        { contact_id: 'c', ad_campaign_id: 'g1', attribution_source: 'Paid Search', practice_id: 'p1',
+          converted: false, is_new_patient: false, matched_by: null,
+          first_lead_at: '2026-07-03T10:00:00Z', booked_at: null, attended: false },
+    ];
+
+    async function run(opts, leadRows = people) {
+        const repo = await import('../src/repositories/marketing.repository.js');
+        vi.spyOn(repo.marketingRepository, 'leadsByCampaign').mockResolvedValue(leadRows);
+        vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+            campaigns: [{ provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'Implants', spend_pence: 1, impressions: 0, clicks: 0, conversions: 0 },
+                        { provider: 'google_ads', campaign_id: 'g1', campaign_name: 'New Patient', spend_pence: 1, impressions: 0, clicks: 0, conversions: 0 }],
+            series: [], unmappedSpendPence: 0, spendByPractice: [],
+        });
+        vi.spyOn(repo.marketingRepository, 'contactsByIds').mockResolvedValue([
+            { id: 'a', first_name: 'Ada', last_name: 'Lovelace', email: 'ada@example.com', phone: '07700900001' },
+            { id: 'b', first_name: 'Bea', last_name: 'Webb', email: 'bea@example.com', phone: '07700900002' },
+            { id: 'c', first_name: 'Cai', last_name: 'Jones', email: 'cai@example.com', phone: '07700900003' },
+        ]);
+        const { marketingService } = await import('../src/services/marketing.service.js');
+        return marketingService.leadList('org-1', { since: SINCE, until: UNTIL, ...opts });
+    }
+
+    it('filters to one campaign', async () => {
+        const out = await run({ campaignId: 'm1' });
+        expect(out.total).toBe(2);
+        expect(out.rows.every((r) => r.campaignId === 'm1')).toBe(true);
+    });
+
+    it('reports the stage each person reached', async () => {
+        const out = await run({});
+        const stage = Object.fromEntries(out.rows.map((r) => [r.contactId, r.stage]));
+        expect(stage.a).toBe('new_patient');
+        expect(stage.b).toBe('booked');
+        expect(stage.c).toBe('enquired');
+    });
+
+    it('carries bookedAt and attended per person', async () => {
+        const out = await run({ campaignId: 'm1' });
+        const b = out.rows.find((r) => r.contactId === 'b');
+        expect(b.bookedAt).toBe('2026-07-06T09:00:00Z');
+        // false here means UNKNOWN, not "did not attend" — GoHighLevel has
+        // recorded two no-shows in its entire history.
+        expect(b.attended).toBe(false);
+    });
+
+    it('an attended person who is not new reads as attended, not new_patient', async () => {
+        // NOTE: passed as leadRows rather than pre-mocked before run(), which
+        // internally re-mocks leadsByCampaign to the default `people` fixture
+        // — pre-mocking here would be silently clobbered before leadList runs.
+        const out = await run({}, [{ ...people[0], contact_id: 'd', is_new_patient: false }]);
+        expect(out.rows.find((r) => r.contactId === 'd').stage).toBe('attended');
+    });
+});
