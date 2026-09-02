@@ -87,6 +87,7 @@ export default function CampaignDetailScreen() {
           <Stage
             label="New patients" value={count(campaign.newPatients)}
             costLabel="Cost per new patient" cost={money(campaign.costPerNewPatientPence)}
+            note="Not necessarily one of the bookings above — someone can register as a patient with no booking recorded here."
           />
         </div>
       )}

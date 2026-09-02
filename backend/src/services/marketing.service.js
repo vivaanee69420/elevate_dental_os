@@ -159,10 +159,12 @@ function practiceSplit(spendByPractice, funnelRows, campaignProvider) {
     return [...by.values()]
         .map((e) => ({
             ...e,
+            // NOTE: no costPerBookingPence here. `e.booked` sums every group at
+            // this practice, including the 'other' (organic) channel — dividing
+            // paid spend by that population is the exact defect this file was
+            // corrected for elsewhere. A per-practice "attributed booked" figure
+            // does not exist yet, so this stays a raw count, not a false cost.
             costPerLeadPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.leads) : null,
-            costPerBookingPence: e.spendPence > 0 && e.booked > 0
-                ? perUnitPence(e.spendPence, e.booked)
-                : null,
             costPerNewPatientPence: e.spendPence > 0 && e.newPatients > 0
                 ? perUnitPence(e.spendPence, e.newPatients)
                 : null,
@@ -200,7 +202,6 @@ function joinSpendToLeads(spendRows, funnelRows) {
         const f = byCampaign.get(s.campaign_id) ?? blank();
         attributed.leads += f.leads;
         attributed.booked += f.booked;
-        attributed.attended += f.attended;
         attributed.patients += f.patients;
         attributed.newPatients += f.newPatients;
         return {
@@ -288,6 +289,16 @@ function trendKey(since, until, practiceId) {
     return `marketing:trend:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
 }
 
+// leadList's own key. Deliberately built from ONLY the inputs that change
+// what gets FETCHED — org (implicit: readDashboardCache/writeDashboardCache
+// are org-scoped), since, until, practiceId. page/size/channel/converted/
+// campaignId are filters applied client-side of the cache, all against the
+// same cached arrays, so folding any of them in here would turn one cached
+// fetch into a cache entry per filter combination and defeat the point.
+function leadListKey(since, until, practiceId) {
+    return `marketing:leads:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
+}
+
 // Where a person stopped. Computed once, server-side, so the leads table and
 // anything else that reports the funnel can never disagree about a person.
 //
@@ -363,10 +374,33 @@ export const marketingService = {
         since, until, practiceId = null, channel = null, converted = null,
         campaignId = null, page = 1, size = 50,
     } = {}) {
-        const [spend, leads] = await Promise.all([
-            marketingRepository.campaignSpend(orgId, since, until, practiceId),
-            marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
-        ]);
+        // This is now a PER-CAMPAIGN entry point — the campaign detail screen
+        // calls it on every click and every Previous/Next press — so the
+        // expensive inputs (spend + the full per-person funnel for the window)
+        // are cached, the same as trend/campaignPerformance. Filtering, sorting
+        // and paging stay below, operating on the cached arrays, so one cached
+        // fetch serves every page and every filter combination.
+        const key = leadListKey(since, until, practiceId);
+        const cached = await readDashboardCache(orgId, key).catch(() => undefined);
+        let spend;
+        let leads;
+        if (cached) {
+            ({ spend, leads } = cached);
+        } else {
+            [spend, leads] = await Promise.all([
+                marketingRepository.campaignSpend(orgId, since, until, practiceId),
+                marketingRepository.leadsByCampaign(orgId, since, until, practiceId),
+            ]);
+            // A year-wide window on the largest org runs to ~10,000 person
+            // rows — too large to push into the cache table, so that case is
+            // simply served live on every page/filter change rather than
+            // skipped from being returned. Every smaller window (the common
+            // case, since the campaign detail screen defaults to a month) is
+            // still cached.
+            if (leads.length <= 5000) {
+                await writeDashboardCache(orgId, key, { spend, leads }, CACHE_TTL_MS).catch(() => {});
+            }
+        }
         const campaignProvider = new Map(spend.campaigns.map((c) => [c.campaign_id, c.provider]));
         const campaignName = new Map(spend.campaigns.map((c) => [c.campaign_id, c.campaign_name]));
 
@@ -449,5 +483,5 @@ export const marketingService = {
 
 export const __test = {
     joinSpendToLeads, perUnitPence, cacheKey, channelSplit, buildCoverage, resolveLeadChannel,
-    practiceSplit, leadStage,
+    practiceSplit, leadStage, leadListKey,
 };
