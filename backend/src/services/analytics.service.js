@@ -2218,12 +2218,16 @@ export const analyticsService = {
             costsAvailable,
             costsBasis,
             // WHY cash out is missing, so the screen stops telling an owner to
-            // connect a feed they already connected. 'unmapped-practice' is the
-            // common case: QuickBooks books costs against a COMPANY, never a
-            // practice, so every practice-scoped view finds none even though the
-            // org has a live feed with thousands of rows.
+            // connect a feed they already connected.
+            //
+            // 'org-level-costs' is BY DESIGN, not a gap awaiting a mapping: a
+            // QuickBooks company is an independent entity and is deliberately
+            // never mapped to a practice (owner's decision, see the QuickBooks
+            // multi-account model). Costs therefore exist only at org level, so
+            // every practice-scoped view has none however healthy the feed is.
+            // Do not "fix" this by adding a practice mapping.
             costsUnavailableReason: costsAvailable ? null
-                : (outSrcSlugs?.length ? (practiceId ? 'unmapped-practice' : 'no-rows') : 'no-feed'),
+                : (outSrcSlugs?.length ? (practiceId ? 'org-level-costs' : 'no-rows') : 'no-feed'),
             inSource,  // human label for the cash-in feed (e.g. 'Dentally')
             outSource, // human label for the cash-out feed (e.g. 'QuickBooks')
             balancesReconstructed: currentIdx >= 1, // historical closings derived from today's balance

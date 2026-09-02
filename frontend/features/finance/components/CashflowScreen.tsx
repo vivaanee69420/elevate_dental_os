@@ -272,13 +272,13 @@ export default function CashflowScreen() {
       {outlook && !outlook.costsAvailable && (
         <div className="card-padded mb-6" style={{ borderLeft: '4px solid var(--warning)' }}>
           <div className="font-semibold">
-            {outlook.costsUnavailableReason === 'unmapped-practice'
-              ? 'Cash out is not split by practice'
+            {outlook.costsUnavailableReason === 'org-level-costs'
+              ? 'Cash out is tracked for the group, not per practice'
               : 'Cash out is not yet measured'}
           </div>
           <div className="text-sm text-ink-muted">
-            {outlook.costsUnavailableReason === 'unmapped-practice'
-              ? `Your accounting feed${outlook.outSource ? ` (${outlook.outSource})` : ''} books costs against a company, not a practice, so no cash out can be attributed to this one. Select All practices to see group cash out. Cash in below is real settled receipts for this practice.`
+            {outlook.costsUnavailableReason === 'org-level-costs'
+              ? `Your accounting feed${outlook.outSource ? ` (${outlook.outSource})` : ''} is kept as independent companies rather than per practice, so cash out is a group figure by design. Select All practices to see it. Cash in below is real settled receipts for this practice.`
               : 'Connect Xero/QuickBooks or enter monthly financials so cash out, net cash and tax estimates become real. Cash in below is real settled receipts.'}
           </div>
         </div>
@@ -311,10 +311,10 @@ export default function CashflowScreen() {
                   color: 'var(--ink-muted)',
                 }}
               >
-                {outlook.costsUnavailableReason === 'unmapped-practice' ? (
+                {outlook.costsUnavailableReason === 'org-level-costs' ? (
                   <>
-                    Cash <strong>out</strong> is booked against a company, not a practice, so
-                    none can be attributed here. Select All practices for group cash out.
+                    Cash <strong>out</strong> is tracked for the group, not per practice, by
+                    design. Select All practices to see it.
                     Only money <strong>in</strong> (settled receipts) is shown below.
                   </>
                 ) : (

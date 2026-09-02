@@ -1147,14 +1147,14 @@ describe('cashflowOutlook — run-rate excludes the incomplete current month', (
   });
 
   it('says WHY cash out is missing rather than blaming a missing feed', async () => {
-    // A practice-scoped view of an org whose accounting feed books costs
-    // against a company: the feed exists, it just carries no practice.
+    // A practice-scoped view of an org whose accounting feed is kept as
+    // independent companies: the feed exists, it is simply org-level by design.
     supaRec.resultProvider = (q) =>
       q.table === 'monthly_financials' ? { data: [{ source: 'quickbooks' }], error: null } : { data: [], error: null };
     supaRec.rpcProvider = () => ({ data: [], error: null });
     const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
     expect(r.costsAvailable).toBe(false);
-    expect(r.costsUnavailableReason).toBe('unmapped-practice');
+    expect(r.costsUnavailableReason).toBe('org-level-costs');
   });
 
   it('reports no-feed when there genuinely is no accounting source', async () => {
