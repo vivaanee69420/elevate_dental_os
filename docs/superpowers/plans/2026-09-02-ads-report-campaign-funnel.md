@@ -235,9 +235,13 @@ SELECT count(*) AS leads,
 FROM ( <the body query> ) t;
 ```
 
-Expected, exactly: `leads = 3325`, `attributed = 1946`, `booked = 533`, `attended = 323`.
+Expected: `leads = 3325` and `attributed = 1946` **exactly** — the lead window is closed, so its population is stable.
 
-If `booked` comes back higher than 533, the most likely cause is a missing `organisation_id` predicate on one of the three booking arms — a cross-org leak. Re-check each arm before adjusting anything else.
+`booked` and `attended` are a **floor, not an equality**: `booked >= 533` and `attended >= 323`. Both counts drift upward as syncs land, because nothing bounds a booking's date from above — a lead who enquired in August can book in December, and that booking appears the moment the sync pulls it. Measured drift of +1 on each within an hour of the plan being written.
+
+A count **below** the floor, or `leads`/`attributed` off at all, means a real bug. A count far above it — tens, not ones — most likely means a missing `organisation_id` predicate on one of the three booking arms, which is a cross-org leak; re-check each arm before adjusting anything else. Small upward drift is expected and is not a finding.
+
+The invariants in Step 3 are the durable check. Absolute counts against a database that syncs nightly are a smoke test, not a specification.
 
 - [ ] **Step 3: Verify `booked_at` is the EARLIEST booking, not an arbitrary one**
 
@@ -1838,7 +1842,7 @@ FROM ad_lead_conversions('1a5f888a-0dfe-4802-acf8-6003665089ad',
                          '2026-05-31T23:00:00Z', '2026-08-31T23:00:00Z', NULL);
 ```
 
-Expected: `leads = 3325`, `booked = 533`, `attended = 323` — the same numbers Task 1 verified inline.
+Expected: `leads = 3325` exactly; `booked >= 533` and `attended >= 323` (see Task 1 Step 2 — these two drift upward as syncs land). The numbers must match what Task 1 measured inline, allowing for drift since.
 
 ```sql
 SELECT sum(leads) AS leads, sum(booked) AS booked, sum(attended) AS attended
@@ -1846,7 +1850,7 @@ FROM ad_campaign_funnel('1a5f888a-0dfe-4802-acf8-6003665089ad',
                         '2026-05-31T23:00:00Z', '2026-08-31T23:00:00Z', NULL);
 ```
 
-Expected: identical to the row-level totals above. A mismatch means the aggregate is not reading through the row-level function.
+Expected: identical to the row-level totals above, in the SAME query session. This is an equality even though the absolute values drift: both functions read the same data at the same moment, so any difference means the aggregate is not reading through the row-level function.
 
 - [ ] **Step 5: Confirm the grants**
 
