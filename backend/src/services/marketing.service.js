@@ -163,31 +163,39 @@ function practiceSplit(spendByPractice, leadRows, campaignProvider) {
         .sort((a, b) => b.spendPence - a.spendPence || b.leads - a.leads);
 }
 
-function joinSpendToLeads(spendRows, leadRows) {
-    // Count PEOPLE, not lead rows: one contact sitting in several pipelines is
-    // one lead. This is the same correction made in the Cockpit's matchBreakdown.
-    const peopleByCampaign = new Map();   // campaign_id -> Map<contact_id, converted>
-    const allPeople = new Set();
-
-    for (const l of leadRows) {
-        allPeople.add(l.contact_id);
-        if (!l.ad_campaign_id) continue;
-        if (!peopleByCampaign.has(l.ad_campaign_id)) peopleByCampaign.set(l.ad_campaign_id, new Map());
-        const m = peopleByCampaign.get(l.ad_campaign_id);
-        m.set(l.contact_id, (m.get(l.contact_id) ?? false) || l.converted);
+// Campaign rows and window totals, from SPEND joined to FUNNEL GROUPS.
+//
+// The second argument is one row per (campaign, source, practice) — NOT one row
+// per person. ad_lead_conversions emits exactly one row per contact, so every
+// person lands in exactly one group and summing group counts is exact. That is
+// what lets this stop paging ten thousand rows in order to count them.
+function joinSpendToLeads(spendRows, funnelRows) {
+    // Collapse the groups to campaign for the table.
+    const byCampaign = new Map();
+    const blank = () => ({ leads: 0, booked: 0, attended: 0, patients: 0, newPatients: 0 });
+    for (const g of funnelRows) {
+        if (!g.ad_campaign_id) continue;
+        const e = byCampaign.get(g.ad_campaign_id) ?? blank();
+        e.leads += g.leads;
+        e.booked += g.booked;
+        e.attended += g.attended;
+        e.patients += g.patients;
+        e.newPatients += g.newPatients;
+        byCampaign.set(g.ad_campaign_id, e);
     }
 
-    // People the table can actually account for. A lead is attributed only if
-    // its campaign id produced a ROW — carrying a campaign id whose spend falls
-    // outside the window is not enough, or the person would appear in neither
-    // the rows nor the unattributed count and the table would not reconcile to
-    // the tiles. Invariant: sum(rows.leads) + unattributedLeads === totals.leads.
-    const attributedPeople = new Set();
+    // A lead is attributed only if its campaign produced a ROW — carrying a
+    // campaign id whose spend falls outside the window is not enough, or the
+    // person appears in neither the rows nor the unattributed count and the
+    // table stops reconciling to the tiles.
+    const attributed = blank();
     const rows = spendRows.map((s) => {
-        const people = peopleByCampaign.get(s.campaign_id) ?? new Map();
-        const leads = people.size;
-        const patients = [...people.values()].filter(Boolean).length;
-        for (const contactId of people.keys()) attributedPeople.add(contactId);
+        const f = byCampaign.get(s.campaign_id) ?? blank();
+        attributed.leads += f.leads;
+        attributed.booked += f.booked;
+        attributed.attended += f.attended;
+        attributed.patients += f.patients;
+        attributed.newPatients += f.newPatients;
         return {
             provider: s.provider,
             campaignId: s.campaign_id,
@@ -196,47 +204,52 @@ function joinSpendToLeads(spendRows, leadRows) {
             impressions: s.impressions,
             clicks: s.clicks,
             platformConversions: s.conversions,
-            leads,
-            patients,
-            costPerLeadPence: perUnitPence(s.spend_pence, leads),
-            costPerPatientPence: perUnitPence(s.spend_pence, patients),
+            leads: f.leads,
+            booked: f.booked,
+            attended: f.attended,
+            patients: f.patients,
+            newPatients: f.newPatients,
+            costPerLeadPence: perUnitPence(s.spend_pence, f.leads),
+            costPerBookingPence: perUnitPence(s.spend_pence, f.booked),
+            costPerPatientPence: perUnitPence(s.spend_pence, f.patients),
+            costPerNewPatientPence: perUnitPence(s.spend_pence, f.newPatients),
             tier: 'campaign',
         };
     }).sort((a, b) => b.spendPence - a.spendPence);
+
+    // The whole population, organic and unattributed included.
+    const all = funnelRows.reduce((n, g) => ({
+        leads: n.leads + g.leads,
+        booked: n.booked + g.booked,
+        attended: n.attended + g.attended,
+        patients: n.patients + g.patients,
+        newPatients: n.newPatients + g.newPatients,
+    }), blank());
 
     const totals = {
         spendPence: rows.reduce((n, r) => n + r.spendPence, 0),
         impressions: rows.reduce((n, r) => n + r.impressions, 0),
         clicks: rows.reduce((n, r) => n + r.clicks, 0),
         platformConversions: rows.reduce((n, r) => n + r.platformConversions, 0),
-        // Every person in the window, organic and unattributed included. Honest
-        // and shown on the screen — but NOT a denominator for paid spend.
-        leads: allPeople.size,
-        // The people the spend actually bought, and the ones the table shows.
-        attributedLeads: attributedPeople.size,
-        // Everyone in that same population who became a patient. This MUST be
-        // measured over the same people as `leads` — it previously counted only
-        // campaign-matched patients while `leads` counted everybody, so the two
-        // tiles sat side by side describing different populations and implied a
-        // conversion rate roughly a third of the real one (Barnet, Aug 2026: 19
-        // against 315 reads as 6%, when 30 of those 315 became patients).
-        patients: leadRows.reduce((n, l) => n + (l.converted ? 1 : 0), 0),
-        // The cost denominator: patients whose campaign we hold spend for.
-        attributedPatients: rows.reduce((n, r) => n + r.patients, 0),
-        // Of those patients, the ones who had never been to the practice
-        // before this window. The rest are existing patients enquiring again —
-        // real enquiries, but not acquisition, and reporting them as such
-        // overstates what the advertising bought.
-        newPatients: leadRows.reduce((n, l) => n + (l.is_new_patient ? 1 : 0), 0),
-        unattributedLeads: allPeople.size - attributedPeople.size,
+        // Honest and shown on the screen — but NOT a denominator for paid spend.
+        leads: all.leads,
+        booked: all.booked,
+        attended: all.attended,
+        patients: all.patients,
+        newPatients: all.newPatients,
+        // The cost denominators: the population the spend can be measured
+        // against. Dividing paid spend by organic enquiries understates every
+        // cost per unit.
+        attributedLeads: attributed.leads,
+        attributedBooked: attributed.booked,
+        attributedPatients: attributed.patients,
+        attributedNewPatients: attributed.newPatients,
+        unattributedLeads: all.leads - attributed.leads,
     };
-    // Both cost figures divide paid spend by the population that spend can be
-    // measured against. Dividing by `leads` would charge paid spend against
-    // organic enquiries and quietly understate the cost per lead, while cost per
-    // patient used the attributed denominator — two different populations
-    // presented side by side as if they were one.
     totals.costPerLeadPence = perUnitPence(totals.spendPence, totals.attributedLeads);
+    totals.costPerBookingPence = perUnitPence(totals.spendPence, totals.attributedBooked);
     totals.costPerPatientPence = perUnitPence(totals.spendPence, totals.attributedPatients);
+    totals.costPerNewPatientPence = perUnitPence(totals.spendPence, totals.attributedNewPatients);
     return { rows, totals };
 }
 
