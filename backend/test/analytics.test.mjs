@@ -1083,3 +1083,84 @@ describe('treatmentsCompletedLines — completed-treatment detail', () => {
     expect(call.params.p_practice).toBe('prac-9');
   });
 });
+
+// ============================================================================
+// The run-rate must never average in the CURRENT, part-finished month.
+// Observed live on 3 September: that month held 3 days of takings (£9,475
+// against a £133,083 August), and including it dragged the projected run-rate
+// from £146,601 to £100,892 — a third low. The cost side was cut the same way,
+// so the two errors did not cancel; they made a burning practice read
+// "self-funding". A forward figure that is most wrong on the 1st of every
+// month is worse than no forward figure.
+// ============================================================================
+describe('cashflowOutlook — run-rate excludes the incomplete current month', () => {
+  const now = () => new Date(2026, 8, 3);   // 3 September 2026
+
+  // Two complete months, then a 3-day stub for the current month.
+  const receipts = [
+    { day: '2026-07-15', pence: 16_011_800 },
+    { day: '2026-08-15', pence: 13_308_300 },
+    { day: '2026-09-02', pence: 947_500 },
+  ];
+
+  it('averages only complete months, ignoring the stub', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: receipts, error: null } : { data: [], error: null };
+    // months:3 -> window is Jul, Aug, Sep, so the only complete months are the
+    // two real ones. forward:1 exposes the run-rate directly on the projection.
+    const r = await svc.cashflowOutlook(ORG_A, { months: 3, forward: 1, now });
+    const projected = r.months.find((m) => m.projected);
+    // (16,011,800 + 13,308,300) / 2 = 14,660,050 — NOT 10,089,200, which is
+    // what averaging the 3-day September in would give.
+    expect(projected.inPence).toBe(14_660_050);
+  });
+
+  it('still reports the stub month itself as real money received', async () => {
+    // Excluding it from the AVERAGE must not hide it from the ledger.
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: receipts, error: null } : { data: [], error: null };
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.months.find((m) => m.month === '2026-09').inPence).toBe(947_500);
+  });
+
+  it('forward:0 produces no projected months at all', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day' ? { data: receipts, error: null } : { data: [], error: null };
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.months.some((m) => m.projected)).toBe(false);
+  });
+
+  it('falls back to the partial month when NO month is complete', async () => {
+    // A brand-new org in its first month: a rough figure beats a zero.
+    // months:1 makes September the only month in the window, so there is no
+    // complete month to fall back to.
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = (fn) =>
+      fn === 'settled_receipts_by_day'
+        ? { data: [{ day: '2026-09-02', pence: 947_500 }], error: null }
+        : { data: [], error: null };
+    const r = await svc.cashflowOutlook(ORG_A, { months: 1, forward: 1, now });
+    expect(r.months.find((m) => m.projected).inPence).toBe(947_500);
+  });
+
+  it('says WHY cash out is missing rather than blaming a missing feed', async () => {
+    // A practice-scoped view of an org whose accounting feed is kept as
+    // independent companies: the feed exists, it is simply org-level by design.
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials' ? { data: [{ source: 'quickbooks' }], error: null } : { data: [], error: null };
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
+    expect(r.costsAvailable).toBe(false);
+    expect(r.costsUnavailableReason).toBe('org-level-costs');
+  });
+
+  it('reports no-feed when there genuinely is no accounting source', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = () => ({ data: [], error: null });
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
+    expect(r.costsUnavailableReason).toBe('no-feed');
+  });
+});

@@ -68,3 +68,37 @@ describe('marketing route guard is permission-based, not role-based', () => {
         expect(nextCalled).toBe(true);
     });
 });
+
+describe('leads query validation', () => {
+    it('accepts campaignId as a free-text platform id, not a uuid', async () => {
+        // ad_campaign_id is Google's or Meta's OWN id: '120249721894530517' is
+        // a real one. Validating it as a uuid would reject every live campaign
+        // and the filter would silently never match.
+        const { LeadListQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = LeadListQuerySchema.parse({
+            since: '2026-07-31T23:00:00.000Z',
+            until: '2026-08-31T23:00:00.000Z',
+            scope: 'all',
+            campaignId: '120249721894530517',
+        });
+        expect(parsed.campaignId).toBe('120249721894530517');
+    });
+
+    it('rejects an over-long campaignId', async () => {
+        const { LeadListQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => LeadListQuerySchema.parse({
+            since: '2026-07-31T23:00:00.000Z',
+            until: '2026-08-31T23:00:00.000Z',
+            campaignId: 'x'.repeat(129),
+        })).toThrow();
+    });
+
+    it('leaves campaignId optional — the unfiltered list still validates', async () => {
+        const { LeadListQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = LeadListQuerySchema.parse({
+            since: '2026-07-31T23:00:00.000Z',
+            until: '2026-08-31T23:00:00.000Z',
+        });
+        expect(parsed.campaignId).toBeUndefined();
+    });
+});

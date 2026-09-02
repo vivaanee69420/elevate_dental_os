@@ -9,11 +9,11 @@
 // Paged and filtered on the SERVER: a window can hold thousands of people, and
 // a table of fifty needs fifty names, not all of them.
 import { useState } from 'react';
-import { PageHeader, EmptyState, SkeletonTable, StatusBadge } from '@/components/ui';
+import { PageHeader, EmptyState, SkeletonTable } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
-import { usePractices } from '@/features/practices/hooks';
 import { useMarketingLeads } from '../hooks';
-import { CHANNEL_COLOUR, CHANNEL_LABEL, type Channel } from '../api';
+import { type Channel } from '../api';
+import { MarketingLeadsTable } from './MarketingLeadsTable';
 
 const SIZE = 50;
 const CHANNEL_FILTERS: Array<{ value: Channel | null; label: string }> = [
@@ -44,13 +44,6 @@ function Pill({ active, onClick, children }: {
   );
 }
 
-function formatWhen(iso: string | null) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-GB', {
-    day: 'numeric', month: 'short', year: 'numeric',
-  });
-}
-
 export default function LeadsScreen() {
   const [page, setPage] = useState(1);
   const [channel, setChannel] = useState<Channel | null>(null);
@@ -58,10 +51,6 @@ export default function LeadsScreen() {
   const { data, isLoading, isError, error } = useMarketingLeads({
     page, size: SIZE, channel, converted,
   });
-  const { data: practiceData } = usePractices();
-  const practiceName = (id: string | null) => (id
-    ? practiceData?.practices?.find((p) => p.id === id)?.name ?? '—'
-    : '—');
 
   // Any filter change invalidates the current page number.
   const reset = <T,>(set: (v: T) => void) => (v: T) => { set(v); setPage(1); };
@@ -94,65 +83,12 @@ export default function LeadsScreen() {
       {isError ? (
         <EmptyState message={`Couldn't load leads: ${(error as Error)?.message ?? 'unknown error'}`} />
       ) : isLoading && !data ? (
-        <SkeletonTable rows={10} cols={6} />
+        <SkeletonTable rows={10} cols={7} />
       ) : total === 0 ? (
         <EmptyState message="Nobody enquired in this period under these filters." />
       ) : (
         <>
-          <div className="overflow-x-auto rounded-panel border border-border bg-surface">
-            <table className="w-full text-[13.5px]">
-              <thead className="bg-bg">
-                <tr>
-                  <th className="px-4 py-3 text-left font-medium text-ink-muted">Name</th>
-                  <th className="px-4 py-3 text-left font-medium text-ink-muted">Enquired</th>
-                  <th className="px-4 py-3 text-left font-medium text-ink-muted">Channel</th>
-                  <th className="px-4 py-3 text-left font-medium text-ink-muted">Campaign</th>
-                  <th className="px-4 py-3 text-left font-medium text-ink-muted">Practice</th>
-                  <th className="px-4 py-3 text-left font-medium text-ink-muted">Outcome</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.rows.map((r) => (
-                  <tr key={r.contactId} className="border-t border-border hover:bg-bg">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-ink">{r.name ?? 'Name not recorded'}</div>
-                      {r.email || r.phone ? (
-                        <div className="mt-0.5 text-[12.5px] text-ink-muted">
-                          {r.email ?? r.phone}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3 text-ink-muted">{formatWhen(r.enquiredAt)}</td>
-                    <td className="px-4 py-3">
-                      <span className="flex items-center gap-2">
-                        <span
-                          className="inline-block h-2.5 w-2.5 rounded-full"
-                          style={{ background: CHANNEL_COLOUR[r.channel] }}
-                        />
-                        {CHANNEL_LABEL[r.channel] ?? r.channel}
-                      </span>
-                      {r.attributionSource ? (
-                        <div className="mt-0.5 text-[12.5px] text-ink-muted">{r.attributionSource}</div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-3 text-ink-muted">
-                      {r.campaignName ?? (r.campaignId ? r.campaignId : '—')}
-                    </td>
-                    <td className="px-4 py-3 text-ink-muted">{practiceName(r.practiceId)}</td>
-                    <td className="px-4 py-3">
-                      {r.isNewPatient ? (
-                        <StatusBadge tone="success">New patient</StatusBadge>
-                      ) : r.converted ? (
-                        <span className="text-ink-muted">Existing patient</span>
-                      ) : (
-                        <span className="text-ink-muted">Enquiry only</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <MarketingLeadsTable rows={data?.rows ?? []} />
 
           <div className="flex items-center justify-between text-[13px] text-ink-muted">
             <span>

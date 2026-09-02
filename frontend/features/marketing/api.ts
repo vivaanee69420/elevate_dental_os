@@ -13,9 +13,16 @@ export interface CampaignRow {
   clicks: number;
   platformConversions: number;
   leads: number;
+  /** Held a GoHighLevel calendar slot or a Dentally appointment after enquiring. */
+  booked: number;
+  /** Dentally-only: a completed appointment. Never derived from GoHighLevel. */
+  attended: number;
   patients: number;
+  newPatients: number;
   costPerLeadPence: number | null;
+  costPerBookingPence: number | null;
   costPerPatientPence: number | null;
+  costPerNewPatientPence: number | null;
   tier: Tier;
 }
 
@@ -28,15 +35,25 @@ export interface MarketingTotals {
   leads: number;
   /** Only the people matched to a campaign with spend: the cost denominator. */
   attributedLeads: number;
+  /** Held a GoHighLevel calendar slot or a Dentally appointment after enquiring. */
+  booked: number;
+  /** Of the booked, matched to a campaign with spend: the cost-per-booking denominator. */
+  attributedBooked: number;
+  /** Dentally-only: a completed appointment. Never derived from GoHighLevel. */
+  attended: number;
   /** Everyone in the lead population who became a patient. */
   patients: number;
   /** Patients whose campaign we hold spend for: the cost-per-patient denominator. */
   attributedPatients: number;
   /** Of those patients, the ones with no appointment before this window. */
   newPatients: number;
+  /** New patients whose campaign we hold spend for: the cost-per-new-patient denominator. */
+  attributedNewPatients: number;
   unattributedLeads: number;
   costPerLeadPence: number | null;
+  costPerBookingPence: number | null;
   costPerPatientPence: number | null;
+  costPerNewPatientPence: number | null;
 }
 
 export type Channel = 'google_ads' | 'meta_ads' | 'other';
@@ -58,9 +75,14 @@ export interface ChannelRow {
   clicks: number;
   platformConversions: number;
   leads: number;
+  /** Held a GoHighLevel calendar slot or a Dentally appointment after enquiring. */
+  booked: number;
+  /** Dentally-only: a completed appointment. Never derived from GoHighLevel. */
+  attended: number;
   patients: number;
   campaigns: number;
   costPerLeadPence: number | null;
+  costPerBookingPence: number | null;
   costPerPatientPence: number | null;
 }
 
@@ -93,6 +115,8 @@ export interface PracticeRow {
   practiceId: string | null;
   spendPence: number;
   leads: number;
+  /** Held a GoHighLevel calendar slot or a Dentally appointment after enquiring. */
+  booked: number;
   patients: number;
   newPatients: number;
   channels: Record<Channel, number>;
@@ -126,6 +150,20 @@ export interface TrendMonth {
   channels: Record<Channel, TrendChannel>;
 }
 
+export type LeadStage = 'enquired' | 'booked' | 'attended' | 'new_patient';
+
+/**
+ * How far a person got. Attendance comes from Dentally only — GoHighLevel has
+ * recorded two no-shows in its entire history — so a person who booked through
+ * GoHighLevel alone stays at "Booked" rather than being reported as a no-show.
+ */
+export const STAGE_LABEL: Record<LeadStage, string> = {
+  enquired: 'Enquired',
+  booked: 'Booked',
+  attended: 'Attended',
+  new_patient: 'New patient',
+};
+
 export interface MarketingLead {
   contactId: string;
   practiceId: string | null;
@@ -133,13 +171,22 @@ export interface MarketingLead {
   campaignId: string | null;
   campaignName: string | null;
   attributionSource: string | null;
+  /** GoHighLevel pipeline the person first came in on, e.g. '6. Chatbot Website'. */
+  pipelineId: string | null;
+  /** Null when the id matches no synced pipeline definition (archived or deleted). */
+  pipelineName: string | null;
   enquiredAt: string | null;
+  bookedAt: string | null;
   converted: boolean;
+  /** Dentally-only: a completed appointment. Never derived from GoHighLevel. */
+  attended: boolean;
   isNewPatient: boolean;
   matchedBy: string | null;
   name: string | null;
   email: string | null;
   phone: string | null;
+  /** How far this person got. See STAGE_LABEL for the no-show caveat. */
+  stage: LeadStage;
 }
 
 export interface MarketingLeadPage {
@@ -153,9 +200,11 @@ export const EMPTY_PERFORMANCE: MarketingPerformance = {
   rows: [],
   totals: {
     spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
-    leads: 0, attributedLeads: 0, patients: 0, attributedPatients: 0, newPatients: 0,
+    leads: 0, attributedLeads: 0, booked: 0, attended: 0, attributedBooked: 0,
+    patients: 0, attributedPatients: 0, newPatients: 0, attributedNewPatients: 0,
     unattributedLeads: 0,
-    costPerLeadPence: null, costPerPatientPence: null,
+    costPerLeadPence: null, costPerBookingPence: null,
+    costPerPatientPence: null, costPerNewPatientPence: null,
   },
   byChannel: [],
   byPractice: [],

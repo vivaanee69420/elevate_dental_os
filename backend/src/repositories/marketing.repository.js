@@ -146,6 +146,100 @@ export const marketingRepository = {
             is_new_patient: r.is_new_patient === true,
             matched_by: r.matched_by ?? null,
             first_lead_at: r.first_lead_at ?? null,
+            booked_at: r.booked_at ?? null,
+            attended: r.attended === true,
+            ghl_pipeline_id: r.ghl_pipeline_id ?? null,
+        }));
+    },
+
+    // GoHighLevel pipeline id -> name, for the org's connected subaccounts.
+    //
+    // Names are NOT stored on the lead: a lead carries only ghl_pipeline_id,
+    // and the definitions live in each subaccount's synced config. Two
+    // subaccounts hold disjoint pipeline sets, so this merges across all of
+    // them — a lead can only belong to its own Location's pipeline, so the
+    // merged map cannot mis-resolve one.
+    //
+    // Falls back to the single legacy `integrations` row for orgs connected
+    // before the multi-subaccount model, which is the same order of precedence
+    // leadService.pipelines uses.
+    async pipelineNames(orgId) {
+        const byId = new Map();
+        const { data: accounts, error } = await supabase_1.serviceClient
+            .from('integration_accounts')
+            .select('config')
+            .eq('organisation_id', orgId)
+            .eq('provider', 'gohighlevel');
+        if (error) throw new Error(`integration_accounts read: ${error.message}`);
+        for (const account of accounts ?? []) {
+            for (const p of account?.config?.pipelines ?? []) {
+                if (p?.id && p?.name && !byId.has(String(p.id))) byId.set(String(p.id), p.name);
+            }
+        }
+        if (byId.size) return byId;
+
+        const { data: legacy } = await supabase_1.serviceClient
+            .from('integrations')
+            .select('config')
+            .eq('organisation_id', orgId)
+            .eq('provider', 'gohighlevel')
+            .maybeSingle();
+        for (const p of legacy?.config?.pipelines ?? []) {
+            if (p?.id && p?.name && !byId.has(String(p.id))) byId.set(String(p.id), p.name);
+        }
+        return byId;
+    },
+
+    // Campaign-grain counts: leads, booked, attended, patients, new patients.
+    //
+    // A dedicated aggregate rather than counting leadsByCampaign in JS. That
+    // function returns one row per PERSON — 10,429 over a year at 2.8s a call,
+    // which PostgREST's 1000-row cap turns into eleven calls just to produce
+    // counts. This returns campaigns x sources x practices, a few hundred rows.
+    //
+    // Grouped rather than collapsed to campaign so ONE call still feeds the
+    // campaign table, the channel split and the practice comparison. Exact, not
+    // approximate: ad_lead_conversions emits one row per person, so each person
+    // lands in exactly one group.
+    //
+    // Paged on principle. The row count should sit well under the cap, but the
+    // cap has silently truncated this file twice and four lines buy immunity.
+    async campaignFunnel(orgId, since, until, practiceId = null) {
+        const PAGE = 1000;
+        const rows = [];
+        for (let from = 0; ; ) {
+            const { data, error } = await supabase_1.serviceClient
+                .rpc('ad_campaign_funnel', {
+                    p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
+                })
+                // OFFSET without ORDER BY may repeat one row and skip another.
+                // The RPC groups by (ad_campaign_id, attribution_source,
+                // practice_id) together — that triple is the GROUP BY key and
+                // so is unique per row, but NONE of the three columns is
+                // unique alone (e.g. every unattributed group shares
+                // ad_campaign_id = NULL, split across practices and sources).
+                // Sort by all three, or a page boundary landing inside a tie
+                // can duplicate one row and drop another.
+                .order('ad_campaign_id', { ascending: true, nullsFirst: true })
+                .order('attribution_source', { ascending: true, nullsFirst: true })
+                .order('practice_id', { ascending: true, nullsFirst: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(`ad_campaign_funnel: ${error.message}`);
+            const page = data ?? [];
+            rows.push(...page);
+            // Stop on an EMPTY page, never a short one — see leadsByCampaign.
+            if (page.length === 0) break;
+            from += page.length;
+        }
+        return rows.map((r) => ({
+            ad_campaign_id: r.ad_campaign_id ?? null,
+            attribution_source: r.attribution_source ?? null,
+            practice_id: r.practice_id ?? null,
+            leads: Number(r.leads ?? 0),
+            booked: Number(r.booked ?? 0),
+            attended: Number(r.attended ?? 0),
+            patients: Number(r.patients ?? 0),
+            newPatients: Number(r.new_patients ?? 0),
         }));
     },
 

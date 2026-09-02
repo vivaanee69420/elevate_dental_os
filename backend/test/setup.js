@@ -43,7 +43,15 @@ const h = vi.hoisted(() => {
   function makeFrom(table) {
     const q = { table, eqs: [], op: 'select' };
     supaRec.last = q;
-    const settle = () => Promise.resolve(supaRec.resultProvider(q));
+    // Honour .range() the way a real server does: return only that window of
+    // the provider's rows. Without this a paged repository re-reads the SAME
+    // rows on every iteration — it never reaches the empty page that ends the
+    // loop. Providers that return less than one page (the overwhelming
+    // majority) are unaffected: slice() hands their data back unchanged.
+    const settle = () => Promise.resolve(supaRec.resultProvider(q)).then((res) => {
+      if (!q.range || !Array.isArray(res?.data)) return res;
+      return { ...res, data: res.data.slice(q.range.from, q.range.to + 1) };
+    });
     const builder = {
       select(...a) {
         q.op = 'select';
@@ -180,7 +188,13 @@ const h = vi.hoisted(() => {
             : { data: null, error: { message: `rpc ${fn} not stubbed` } };
         const builder = {
           order(col, opts) {
+            // `mods.order` keeps its old single-value shape (last .order()
+            // call wins) so existing `toEqual({ col, opts })` assertions
+            // keep passing. `mods.orders` accumulates every call in
+            // sequence, for callers (like campaignFunnel) that chain
+            // multiple .order() calls to sort by a composite key.
             (call.mods ||= {}).order = { col, opts };
+            (call.mods.orders ||= []).push({ col, opts });
             return builder;
           },
           range(from, to) {

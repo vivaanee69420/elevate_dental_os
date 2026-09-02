@@ -83,7 +83,11 @@ export default function CashflowScreen() {
   const [practiceId, setPracticeId] = useState<string | null>(null);
   const [range, setRange] = useState<DateRange>(thisMonthRange());
   const { data, isLoading, isError } = useCashflow(13, practiceId, range);
-  const { data: outlook } = useCashflowOutlook(4, 2, practiceId);
+  // forward = 0: NO projected months. This screen shows what actually happened
+  // and nothing else. The projection averaged the current, part-finished month
+  // in with complete ones, so on the 3rd of a month it forecast from three days
+  // of takings and read a third low — an assumption presented beside real money.
+  const { data: outlook } = useCashflowOutlook(6, 0, practiceId);
   // Context strip — group KPIs + live paid-marketing efficiency, both following
   // the page's practice + period filters. Selected [from,to] → explicit window;
   // the filter defaults to the current month. The trailing-90-day fallback is
@@ -172,15 +176,18 @@ export default function CashflowScreen() {
         const periodSub = range.from && range.to ? 'Selected period' : 'Last 90 days';
         return (
           <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))' }}>
+            {/* "Group" only when it IS the group. With a practice selected these
+                cards show that practice's figures, and the old fixed labels
+                claimed otherwise — the tabs above already name the scope. */}
             <StripKpi
-              label="Group takings"
+              label={practiceId ? 'Takings' : 'Group takings'}
               value={gbp(takings)}
               sub={`Settled receipts · ${periodSub}`}
               tag={vsTarget != null ? `${vsTarget >= 0 ? '▲' : '▼'} ${Math.abs(vsTarget).toFixed(0)}% vs target` : undefined}
               tone={vsTarget != null && vsTarget >= 0 ? 'good' : 'warn'}
             />
             <StripKpi
-              label="Group profit"
+              label={practiceId ? 'Profit' : 'Group profit'}
               value={g.marginPct ? gbp(profit) : '—'}
               sub={g.marginPct ? `Contribution · ${g.marginPct.toFixed(1)}% of turnover` : 'Set a baseline margin'}
             />
@@ -222,7 +229,7 @@ export default function CashflowScreen() {
               <div className="text-xs text-ink-muted uppercase">Cash position today</div>
               <div className="display text-3xl font-bold mt-1">{gbp(outlook.anchorBank)}</div>
               <div className="text-xs text-ink-muted mt-1">
-                {cur ? `Projected close ${monthShort(cur.month)} · ${gbp(cur.closing)}` : 'Real bank balance'}
+                {cur ? `Balance to date · ${monthShort(cur.month)} · ${gbp(cur.closing)}` : 'Real bank balance'}
               </div>
               {!outlook.bankConnected && (
                 <div className="text-xs mt-1" style={{ color: 'var(--warning)' }}>
@@ -264,10 +271,15 @@ export default function CashflowScreen() {
 
       {outlook && !outlook.costsAvailable && (
         <div className="card-padded mb-6" style={{ borderLeft: '4px solid var(--warning)' }}>
-          <div className="font-semibold">Cash out is not yet measured</div>
+          <div className="font-semibold">
+            {outlook.costsUnavailableReason === 'org-level-costs'
+              ? 'Cash out is tracked for the group, not per practice'
+              : 'Cash out is not yet measured'}
+          </div>
           <div className="text-sm text-ink-muted">
-            Connect Xero/QuickBooks or enter monthly financials so cash out, net cash, runway
-            and tax estimates become real. Cash in below is real settled receipts.
+            {outlook.costsUnavailableReason === 'org-level-costs'
+              ? `Your accounting feed${outlook.outSource ? ` (${outlook.outSource})` : ''} is kept as independent companies rather than per practice, so cash out is a group figure by design. Select All practices to see it. Cash in below is real settled receipts for this practice.`
+              : 'Connect Xero/QuickBooks or enter monthly financials so cash out, net cash and tax estimates become real. Cash in below is real settled receipts.'}
           </div>
         </div>
       )}
@@ -299,9 +311,19 @@ export default function CashflowScreen() {
                   color: 'var(--ink-muted)',
                 }}
               >
-                Cash <strong>out</strong> needs an accounting feed. Connect QuickBooks or
-                Xero (or add monthly costs) to see outflows, net position and runway.
-                Only money <strong>in</strong> (settled receipts) is shown below.
+                {outlook.costsUnavailableReason === 'org-level-costs' ? (
+                  <>
+                    Cash <strong>out</strong> is tracked for the group, not per practice, by
+                    design. Select All practices to see it.
+                    Only money <strong>in</strong> (settled receipts) is shown below.
+                  </>
+                ) : (
+                  <>
+                    Cash <strong>out</strong> needs an accounting feed. Connect QuickBooks or
+                    Xero (or add monthly costs) to see outflows and net position.
+                    Only money <strong>in</strong> (settled receipts) is shown below.
+                  </>
+                )}
               </div>
             )}
             {outlook.months.map((m) => (
@@ -332,9 +354,10 @@ export default function CashflowScreen() {
               </div>
             ))}
             <p className="text-ink-muted" style={{ fontSize: 11, marginTop: 10 }}>
-              * projected from recent run-rate. In = real settled receipts
+              Actual months only, no projection. In = real settled receipts
               {outlook.inSource ? ` (${outlook.inSource})` : ''}; out = P&amp;L cost base
               {outlook.outSource ? ` (${outlook.outSource})` : outlook.costsBasis !== 'none' ? ` (${outlook.costsBasis})` : ' (not sourced)'}.
+              The current month is still in progress.
             </p>
           </div>
 
@@ -378,10 +401,10 @@ export default function CashflowScreen() {
               </tbody>
             </table>
             <p className="text-ink-muted" style={{ fontSize: 11, marginTop: 10 }}>
-              Lowest projected point: <strong>{gbp(outlook.lowestProjected)}</strong>.
+              Lowest point in this window: <strong>{gbp(outlook.lowestProjected)}</strong>.
               {outlook.balancesReconstructed
-                ? " Historical balances reconstructed from today's bank balance; * months projected."
-                : ' * months projected from run-rate.'}
+                ? " Historical balances reconstructed from today's bank balance. The current month is still in progress."
+                : ' The current month is still in progress.'}
             </p>
           </div>
         </div>

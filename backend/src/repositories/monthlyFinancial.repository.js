@@ -35,16 +35,37 @@ export const monthlyFinancialRepository = {
     },
     async list(orgId, { from, to, practice_id } = {}) {
         const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
-        let q = supabase_1.serviceClient
-            .from('monthly_financials')
-            .select('id, period, account_code, dental_bucket, amount_pence, practice_id, source, updated_at')
-            .eq('organisation_id', orgId);
-        if (from) q = q.gte('period', from);
-        if (to) q = q.lte('period', to);
-        if (practice_id) q = q.eq('practice_id', practice_id);
-        const { data, error } = await q.order('period', { ascending: false }).limit(LIMIT_GUARD);
-        if (error) throw new Error(error.message);
-        return (data || []).filter((r) => !drop.has(r.source));
+        // Paged for the same reason as allForOrg: `.limit()` does NOT lift
+        // PostgREST's server-side ceiling, so an org with more rows than that
+        // ceiling silently loses the tail of its ledger. `period` alone is not
+        // unique, so id breaks the tie and keeps OFFSET paging sound.
+        //
+        // The query is rebuilt on every page rather than reused: a Supabase
+        // builder accumulates its modifiers, so calling .order()/.range() on the
+        // same instance twice sends two of each.
+        const PAGE = 1000;
+        const MAX_PAGES = 500;   // see allForOrg: a bound against a faulty server
+        const rows = [];
+        for (let offset = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            let q = supabase_1.serviceClient
+                .from('monthly_financials')
+                .select('id, period, account_code, dental_bucket, amount_pence, practice_id, source, updated_at')
+                .eq('organisation_id', orgId);
+            if (from) q = q.gte('period', from);
+            if (to) q = q.lte('period', to);
+            if (practice_id) q = q.eq('practice_id', practice_id);
+            const { data, error } = await q
+                .order('period', { ascending: false })
+                .order('id', { ascending: true })
+                .range(offset, offset + PAGE - 1);
+            if (error) throw new Error(error.message);
+            const page = Array.isArray(data) ? data : [];
+            rows.push(...page);
+            // Stop on an EMPTY page, never a short one.
+            if (page.length === 0) break;
+            offset += page.length;
+        }
+        return rows.filter((r) => !drop.has(r.source));
     },
     // All rows for an org (both 'manual' and 'xero'/'quickbooks'), for the
     // analytics read path. Source is selected so the reader can apply the
@@ -54,16 +75,42 @@ export const monthlyFinancialRepository = {
     // accounting_method is selected so the service layer can split cash vs accrual.
     async allForOrg(orgId, { source = null, accountId = null } = {}) {
         const drop = new Set(await revokedSources(orgId, FINANCE_SOURCES));
-        let q = supabase_1.serviceClient
-            .from('monthly_financials')
-            .select('period, account_code, dental_bucket, amount_pence, source, practice_id, integration_account_id, accounting_method')
-            .eq('organisation_id', orgId)
-            .limit(LIMIT_GUARD);
-        if (source) q = q.eq('source', source);
-        if (accountId) q = q.eq('integration_account_id', accountId);
-        const { data, error } = await q;
-        if (error) throw new Error(error.message);
-        return (Array.isArray(data) ? data : []).filter((r) => !drop.has(r.source));
+        // PAGED, and it must be. `.limit(5000)` does NOT lift PostgREST's own
+        // db-max-rows ceiling — the server truncates at 1000 and says nothing.
+        // Measured on the live database: this org holds 3,064 rows and the API
+        // returned exactly 1,000, so two thirds of every cost was silently
+        // discarded. Cash out for August read £207,200 against a true £299,071,
+        // and because the read carried no ORDER BY, *which* rows survived was
+        // arbitrary — every finance screen built on this bundle (cashflow,
+        // runway, P&L, margin, benchmark) was wrong by a different amount each
+        // month. Ordering by id makes the paging sound as well as the totals.
+        const PAGE = 1000;
+        // A hard bound so a server that never returns an empty page cannot hang
+        // the request or exhaust memory. 500 pages is 500k rows — orders of
+        // magnitude above any real org's ledger, so it can only ever trip on a
+        // fault, never on legitimate data.
+        const MAX_PAGES = 500;
+        const rows = [];
+        for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            let q = supabase_1.serviceClient
+                .from('monthly_financials')
+                .select('period, account_code, dental_bucket, amount_pence, source, practice_id, integration_account_id, accounting_method, id')
+                .eq('organisation_id', orgId)
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (source) q = q.eq('source', source);
+            if (accountId) q = q.eq('integration_account_id', accountId);
+            const { data, error } = await q;
+            if (error) throw new Error(error.message);
+            const page = Array.isArray(data) ? data : [];
+            rows.push(...page);
+            // Stop on an EMPTY page, never a short one: the server's cap is its
+            // own setting, so treating a short page as the last reintroduces
+            // this very truncation at whatever number that cap happens to be.
+            if (page.length === 0) break;
+            from += page.length;
+        }
+        return rows.filter((r) => !drop.has(r.source));
     },
     // Distinct cost-data sources present for an org (e.g. ['quickbooks'] or
     // ['xero','manual']), revoked providers excluded. Cheap — used to name the
