@@ -192,3 +192,70 @@ describe('leadsByCampaign', () => {
             .rejects.toThrow(/statement timeout/);
     });
 });
+
+// The repository pages: it calls the RPC until a page comes back EMPTY. Serve
+// the pages in order, ending with [] so the loop terminates.
+function servePages(...pages) {
+    let call = 0;
+    supaRec.rpcProvider = () => ({ data: pages[call++] ?? [], error: null });
+}
+
+describe('campaignFunnel', () => {
+    beforeEach(() => { supaRec.rpcCalls = []; });
+
+    it('maps snake_case RPC columns to numbers, defaulting missing counts to 0', async () => {
+        servePages([
+            { ad_campaign_id: 'c1', attribution_source: 'Paid Social', practice_id: 'p1',
+              leads: '12', booked: '3', attended: '1', patients: '2', new_patients: '2' },
+            { ad_campaign_id: null, attribution_source: null, practice_id: null, leads: '5' },
+        ], []);
+        const rows = await marketingRepository.campaignFunnel(ORG, AUG_SINCE, AUG_UNTIL, null);
+        expect(rows[0]).toEqual({
+            ad_campaign_id: 'c1', attribution_source: 'Paid Social', practice_id: 'p1',
+            leads: 12, booked: 3, attended: 1, patients: 2, newPatients: 2,
+        });
+        // A group the RPC returned without every count must not become NaN.
+        expect(rows[1]).toEqual({
+            ad_campaign_id: null, attribution_source: null, practice_id: null,
+            leads: 5, booked: 0, attended: 0, patients: 0, newPatients: 0,
+        });
+    });
+
+    it('passes the org through as p_org — there is no automatic isolation', async () => {
+        servePages([]);
+        await marketingRepository.campaignFunnel('org-9', AUG_SINCE, AUG_UNTIL, 'prac-2');
+        expect(supaRec.rpcCalls[0]).toMatchObject({
+            fn: 'ad_campaign_funnel',
+            params: { p_org: 'org-9', p_since: AUG_SINCE, p_until: AUG_UNTIL, p_practice: 'prac-2' },
+        });
+    });
+
+    it('stops on an EMPTY page, not a short one', async () => {
+        // A short page must not be treated as the last: the server's cap is its
+        // own setting and could sit below PAGE, which would reintroduce the
+        // truncation this paging exists to prevent.
+        const short = new Array(700).fill(0).map((_, i) => ({ ad_campaign_id: `c${i}`, leads: '1' }));
+        servePages(short, []);
+        const rows = await marketingRepository.campaignFunnel(ORG, AUG_SINCE, AUG_UNTIL, null);
+        expect(rows).toHaveLength(700);
+        expect(supaRec.rpcCalls).toHaveLength(2);
+    });
+});
+
+describe('leadsByCampaign booking fields', () => {
+    beforeEach(() => { supaRec.rpcCalls = []; });
+
+    it('carries booked_at and attended through to the caller', async () => {
+        servePages([{ contact_id: 'x1', booked_at: '2026-07-02T09:00:00Z', attended: true }], []);
+        const rows = await marketingRepository.leadsByCampaign(ORG, AUG_SINCE, AUG_UNTIL, null);
+        expect(rows[0].booked_at).toBe('2026-07-02T09:00:00Z');
+        expect(rows[0].attended).toBe(true);
+    });
+
+    it('defaults a missing booked_at to null and attended to false', async () => {
+        servePages([{ contact_id: 'x2' }], []);
+        const rows = await marketingRepository.leadsByCampaign(ORG, AUG_SINCE, AUG_UNTIL, null);
+        expect(rows[0].booked_at).toBeNull();
+        expect(rows[0].attended).toBe(false);
+    });
+});

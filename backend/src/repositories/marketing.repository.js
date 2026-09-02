@@ -146,6 +146,53 @@ export const marketingRepository = {
             is_new_patient: r.is_new_patient === true,
             matched_by: r.matched_by ?? null,
             first_lead_at: r.first_lead_at ?? null,
+            booked_at: r.booked_at ?? null,
+            attended: r.attended === true,
+        }));
+    },
+
+    // Campaign-grain counts: leads, booked, attended, patients, new patients.
+    //
+    // A dedicated aggregate rather than counting leadsByCampaign in JS. That
+    // function returns one row per PERSON — 10,429 over a year at 2.8s a call,
+    // which PostgREST's 1000-row cap turns into eleven calls just to produce
+    // counts. This returns campaigns x sources x practices, a few hundred rows.
+    //
+    // Grouped rather than collapsed to campaign so ONE call still feeds the
+    // campaign table, the channel split and the practice comparison. Exact, not
+    // approximate: ad_lead_conversions emits one row per person, so each person
+    // lands in exactly one group.
+    //
+    // Paged on principle. The row count should sit well under the cap, but the
+    // cap has silently truncated this file twice and four lines buy immunity.
+    async campaignFunnel(orgId, since, until, practiceId = null) {
+        const PAGE = 1000;
+        const rows = [];
+        for (let from = 0; ; ) {
+            const { data, error } = await supabase_1.serviceClient
+                .rpc('ad_campaign_funnel', {
+                    p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
+                })
+                // OFFSET without ORDER BY may repeat one row and skip another.
+                // The group key is unique per row, so it is a sound sort key.
+                .order('ad_campaign_id', { ascending: true, nullsFirst: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(`ad_campaign_funnel: ${error.message}`);
+            const page = data ?? [];
+            rows.push(...page);
+            // Stop on an EMPTY page, never a short one — see leadsByCampaign.
+            if (page.length === 0) break;
+            from += page.length;
+        }
+        return rows.map((r) => ({
+            ad_campaign_id: r.ad_campaign_id ?? null,
+            attribution_source: r.attribution_source ?? null,
+            practice_id: r.practice_id ?? null,
+            leads: Number(r.leads ?? 0),
+            booked: Number(r.booked ?? 0),
+            attended: Number(r.attended ?? 0),
+            patients: Number(r.patients ?? 0),
+            newPatients: Number(r.new_patients ?? 0),
         }));
     },
 
