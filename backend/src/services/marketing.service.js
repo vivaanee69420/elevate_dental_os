@@ -59,10 +59,10 @@ const CHANNEL_ORDER = ['meta_ads', 'google_ads', 'other'];
 //
 // The 'other' row carries leads and patients but never a cost: dividing paid
 // spend by organic enquiries is exactly the error the totals already avoid.
-function channelSplit(spendRows, leadRows, campaignProvider) {
+function channelSplit(spendRows, funnelRows, campaignProvider) {
     const blank = () => ({
         spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
-        campaigns: 0, leads: 0, patients: 0,
+        campaigns: 0, leads: 0, booked: 0, attended: 0, patients: 0,
     });
     const by = new Map(CHANNEL_ORDER.map((c) => [c, { channel: c, ...blank() }]));
 
@@ -76,10 +76,12 @@ function channelSplit(spendRows, leadRows, campaignProvider) {
         e.campaigns += 1;
     }
 
-    for (const l of leadRows) {
-        const e = by.get(resolveLeadChannel(l, campaignProvider));
-        e.leads += 1;
-        if (l.converted) e.patients += 1;
+    for (const g of funnelRows) {
+        const e = by.get(resolveLeadChannel(g, campaignProvider));
+        e.leads += g.leads;
+        e.booked += g.booked;
+        e.attended += g.attended;
+        e.patients += g.patients;
     }
 
     return CHANNEL_ORDER
@@ -96,6 +98,7 @@ function channelSplit(spendRows, leadRows, campaignProvider) {
             return {
                 ...e,
                 costPerLeadPence: costed ? perUnitPence(e.spendPence, e.leads) : null,
+                costPerBookingPence: costed ? perUnitPence(e.spendPence, e.booked) : null,
                 costPerPatientPence: costed ? perUnitPence(e.spendPence, e.patients) : null,
             };
         });
@@ -130,12 +133,12 @@ function buildCoverage(accounts, practiceId, unmappedSpendPence) {
 // where every practice's rows are present. Leads carry the practice they first
 // enquired at, and the RPC emits one row per person, so the practices sum to
 // the group total instead of double-counting somebody who enquired at two.
-function practiceSplit(spendByPractice, leadRows, campaignProvider) {
+function practiceSplit(spendByPractice, funnelRows, campaignProvider) {
     const by = new Map();
     const row = (id) => {
         if (!by.has(id)) {
             by.set(id, {
-                practiceId: id, spendPence: 0, leads: 0, patients: 0, newPatients: 0,
+                practiceId: id, spendPence: 0, leads: 0, booked: 0, patients: 0, newPatients: 0,
                 channels: { meta_ads: 0, google_ads: 0, other: 0 },
             });
         }
@@ -144,18 +147,22 @@ function practiceSplit(spendByPractice, leadRows, campaignProvider) {
 
     for (const [practiceId, spendPence] of spendByPractice) row(practiceId).spendPence += spendPence;
 
-    for (const l of leadRows) {
-        const e = row(l.practice_id ?? null);
-        e.leads += 1;
-        if (l.converted) e.patients += 1;
-        if (l.is_new_patient) e.newPatients += 1;
-        e.channels[resolveLeadChannel(l, campaignProvider)] += 1;
+    for (const g of funnelRows) {
+        const e = row(g.practice_id ?? null);
+        e.leads += g.leads;
+        e.booked += g.booked;
+        e.patients += g.patients;
+        e.newPatients += g.newPatients;
+        e.channels[resolveLeadChannel(g, campaignProvider)] += g.leads;
     }
 
     return [...by.values()]
         .map((e) => ({
             ...e,
             costPerLeadPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.leads) : null,
+            costPerBookingPence: e.spendPence > 0 && e.booked > 0
+                ? perUnitPence(e.spendPence, e.booked)
+                : null,
             costPerNewPatientPence: e.spendPence > 0 && e.newPatients > 0
                 ? perUnitPence(e.spendPence, e.newPatients)
                 : null,
