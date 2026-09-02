@@ -288,6 +288,18 @@ function trendKey(since, until, practiceId) {
     return `marketing:trend:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
 }
 
+// Where a person stopped. Computed once, server-side, so the leads table and
+// anything else that reports the funnel can never disagree about a person.
+//
+// attended is Dentally-only: false means UNKNOWN for someone whose only booking
+// is a GoHighLevel one, so a person never falls BELOW 'booked' on its account.
+function leadStage(lead) {
+    if (lead.is_new_patient) return 'new_patient';
+    if (lead.attended) return 'attended';
+    if (lead.booked_at) return 'booked';
+    return 'enquired';
+}
+
 export const marketingService = {
     // Month-by-month per channel. Served by a SQL aggregate rather than the
     // row-level function — see marketingRepository.monthlyRollup.
@@ -349,7 +361,7 @@ export const marketingService = {
     // of people and a table of 50 needs 50 names.
     async leadList(orgId, {
         since, until, practiceId = null, channel = null, converted = null,
-        page = 1, size = 50,
+        campaignId = null, page = 1, size = 50,
     } = {}) {
         const [spend, leads] = await Promise.all([
             marketingRepository.campaignSpend(orgId, since, until, practiceId),
@@ -366,10 +378,14 @@ export const marketingService = {
             campaignName: l.ad_campaign_id ? campaignName.get(l.ad_campaign_id) ?? null : null,
             attributionSource: l.attribution_source,
             enquiredAt: l.first_lead_at,
+            bookedAt: l.booked_at,
+            attended: l.attended,
+            stage: leadStage(l),
             converted: l.converted,
             isNewPatient: l.is_new_patient,
             matchedBy: l.matched_by,
         }));
+        if (campaignId) rows = rows.filter((r) => r.campaignId === campaignId);
         if (channel) rows = rows.filter((r) => r.channel === channel);
         if (converted === true) rows = rows.filter((r) => r.converted);
         if (converted === false) rows = rows.filter((r) => !r.converted);
@@ -433,5 +449,5 @@ export const marketingService = {
 
 export const __test = {
     joinSpendToLeads, perUnitPence, cacheKey, channelSplit, buildCoverage, resolveLeadChannel,
-    practiceSplit,
+    practiceSplit, leadStage,
 };
