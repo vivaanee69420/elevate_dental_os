@@ -240,6 +240,23 @@ describe('campaignFunnel', () => {
         expect(rows).toHaveLength(700);
         expect(supaRec.rpcCalls).toHaveLength(2);
     });
+
+    it('orders by the full (ad_campaign_id, attribution_source, practice_id) group key', async () => {
+        // The RPC's GROUP BY is the three-column tuple, not ad_campaign_id
+        // alone — real data ties on it (every unattributed group shares
+        // ad_campaign_id = NULL across several practices/sources). Sorting by
+        // one column only would let a page boundary fall inside a tie and
+        // duplicate one row while dropping another. Assert all three keys
+        // were requested, in order — `mods.order` only ever holds the LAST
+        // .order() call, so this reads the accumulated `mods.orders` array.
+        servePages([]);
+        await marketingRepository.campaignFunnel(ORG, AUG_SINCE, AUG_UNTIL, null);
+        expect(supaRec.rpcCalls[0].mods.orders).toEqual([
+            { col: 'ad_campaign_id', opts: { ascending: true, nullsFirst: true } },
+            { col: 'attribution_source', opts: { ascending: true, nullsFirst: true } },
+            { col: 'practice_id', opts: { ascending: true, nullsFirst: true } },
+        ]);
+    });
 });
 
 describe('leadsByCampaign booking fields', () => {
