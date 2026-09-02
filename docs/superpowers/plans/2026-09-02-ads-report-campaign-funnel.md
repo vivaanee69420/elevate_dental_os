@@ -896,6 +896,53 @@ describe('practiceSplit', () => {
 });
 ```
 
+Also replace the `describe('totals.patients population', …)` block. It is a THIRD block feeding
+per-person rows — the plan originally missed it, and Task 4 left its three tests failing. Do not
+delete it: it pins the population rules corrected in a prior session (patients counted over
+everyone, cost divided only by the attributable denominator, channel cards reconciling to
+totals). Convert its fixture to groups, preserving every assertion:
+
+```javascript
+describe('totals.patients population', () => {
+  const { joinSpendToLeads } = __test;
+  const SPEND = [{
+    provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'A',
+    spend_pence: 10000, impressions: 0, clicks: 0, conversions: 0,
+  }];
+  // The same four people as before, now grouped: a and b share a campaign AND a
+  // source, so they are ONE group of two. c's campaign has no spend in this
+  // window; d is organic.
+  const FUNNEL = [
+    { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: null,
+      leads: 2, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+    { ad_campaign_id: 'zz', attribution_source: 'Paid Search', practice_id: null,
+      leads: 1, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+    { ad_campaign_id: null, attribution_source: 'Social media', practice_id: null,
+      leads: 1, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+  ];
+
+  it('counts every converted person, not only the campaign-matched ones', () => {
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
+    expect(totals.leads).toBe(4);
+    expect(totals.patients).toBe(3);           // the m1, zz and organic converters
+    expect(totals.attributedPatients).toBe(1); // only m1 sits on a campaign with spend
+  });
+
+  it('still divides spend by the attributable patients, never by all of them', () => {
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
+    expect(totals.costPerPatientPence).toBe(10000);   // 10000 / 1, not / 3
+  });
+
+  it('reconciles with the channel cards — both count the same patients', () => {
+    const { rows, totals } = joinSpendToLeads(SPEND, FUNNEL);
+    const provider = new Map(SPEND.map((c) => [c.campaign_id, c.provider]));
+    const channels = __test.channelSplit(rows, FUNNEL, provider);
+    expect(channels.reduce((n, c) => n + c.patients, 0)).toBe(totals.patients);
+    expect(channels.reduce((n, c) => n + c.leads, 0)).toBe(totals.leads);
+  });
+});
+```
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cd backend && npx vitest run test/marketing.service.test.mjs -t Split`
