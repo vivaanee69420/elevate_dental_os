@@ -237,9 +237,9 @@ FROM ( <the body query> ) t;
 
 Expected: `leads = 3325` and `attributed = 1946` **exactly** — the lead window is closed, so its population is stable.
 
-`booked` and `attended` are a **floor, not an equality**: `booked >= 533` and `attended >= 323`. Both counts drift upward as syncs land, because nothing bounds a booking's date from above — a lead who enquired in August can book in December, and that booking appears the moment the sync pulls it. Measured drift of +1 on each within an hour of the plan being written.
+`booked` and `attended` are a **moving snapshot — neither a floor nor a ceiling.** They rise as syncs pull bookings made after the window (nothing bounds a booking's date from above), and they FALL when appointments already counted are later cancelled, because cancellations are excluded. Observed live: 533 -> 534 -> 535 over two hours, then 518 overnight after a sync added 116 cancellations in the window.
 
-A count **below** the floor, or `leads`/`attributed` off at all, means a real bug. A count far above it — tens, not ones — most likely means a missing `organisation_id` predicate on one of the three booking arms, which is a cross-org leak; re-check each arm before adjusting anything else. Small upward drift is expected and is not a finding.
+Do not assert an exact value or a bound on these two. What IS a bug: `leads`/`attributed` off at all, or a count wildly out of range (hundreds, not tens) — the latter most likely a missing `organisation_id` predicate on one of the three booking arms, i.e. a cross-org leak. Re-check each arm before adjusting anything else.
 
 The invariants in Step 3 are the durable check. Absolute counts against a database that syncs nightly are a smoke test, not a specification.
 

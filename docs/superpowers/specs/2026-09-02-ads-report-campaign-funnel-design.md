@@ -78,13 +78,20 @@ verification (org `1a5f888a-0dfe-4802-acf8-6003665089ad`, 1 June – 31 August
 2026 London), the whole lead population is **3,325**, of which **1,946** carry a
 campaign id, **533** booked and **323** attended.
 
-The lead figures are stable — the window is closed. The booking figures are a
-**floor**: nothing bounds a booking's date from above, so someone who enquired
-in August can book in December and the count rises the moment the sync pulls it.
-Measured drift of +1 on each within an hour. Verification asserts the lead
-counts exactly and the booking counts as a minimum; the durable checks are the
-invariants (earliest-booking ordering, no booking before its enquiry, and the
-aggregate reconciling to the row-level function in the same session).
+The lead figures are stable — the window is closed. **The booking figures are
+not, and they move in BOTH directions.** They rise because nothing bounds a
+booking's date from above: someone who enquired in August can book in December,
+and the count grows the moment the sync pulls it. They FALL because cancelled
+appointments are excluded, and an appointment already counted can be cancelled
+afterwards. Observed on the live database: booked went 533 -> 534 -> 535 over two
+hours, then to 518 overnight when a Dentally sync raised cancellations in the
+window by 116.
+
+So a booking count is a snapshot, never a floor and never a ceiling. Do NOT
+write a test or a verification step that asserts one. The durable checks are the
+invariants: earliest-booking ordering, no booking before its enquiry, and the
+aggregate reconciling EXACTLY to the row-level function when both are read in
+the same session. Those hold whatever the data does.
 
 **Attended** — a Dentally `appointments` row with status `completed`.
 
