@@ -83,7 +83,7 @@ export default function LeadsScreen() {
       {isError ? (
         <EmptyState message={`Couldn't load leads: ${(error as Error)?.message ?? 'unknown error'}`} />
       ) : isLoading && !data ? (
-        <SkeletonTable rows={10} cols={6} />
+        <SkeletonTable rows={10} cols={7} />
       ) : total === 0 ? (
         <EmptyState message="Nobody enquired in this period under these filters." />
       ) : (

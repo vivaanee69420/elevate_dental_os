@@ -6,6 +6,7 @@
 // separate columns on purpose: Google and Facebook count a form submission,
 // "Patients" counts someone matched to a Dentally record.
 import { useState } from 'react';
+import Link from 'next/link';
 import { PageHeader, EmptyState, SkeletonTable } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { formatPence } from '@/lib/format';
@@ -26,7 +27,7 @@ export default function CampaignsScreen() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Campaigns"
-        subtitle="Every campaign with spend in this window, ordered by spend."
+        subtitle="Every campaign with spend in this window, ordered by spend. Attendance is recorded in Dentally only."
       />
       <ScopePeriodBar />
 
@@ -48,7 +49,7 @@ export default function CampaignsScreen() {
       {isError ? (
         <EmptyState message={`Couldn't load campaigns: ${(error as Error)?.message ?? 'unknown error'}`} />
       ) : isLoading ? (
-        <SkeletonTable rows={8} cols={8} />
+        <SkeletonTable rows={8} cols={11} />
       ) : rows.length === 0 ? (
         <EmptyState message="No campaign spend in this window. Connect Google Ads or Meta Ads in Integrations to see campaigns here." />
       ) : (
@@ -62,6 +63,9 @@ export default function CampaignsScreen() {
                 <th className="px-4 py-3 text-right font-medium text-ink-muted">Spend</th>
                 <th className="px-4 py-3 text-right font-medium text-ink-muted">Clicks</th>
                 <th className="px-4 py-3 text-right font-medium text-ink-muted">Leads</th>
+                <th className="px-4 py-3 text-right font-medium text-ink-muted">Booked</th>
+                <th className="px-4 py-3 text-right font-medium text-ink-muted">Attended</th>
+                <th className="px-4 py-3 text-right font-medium text-ink-muted">CPB</th>
                 <th className="px-4 py-3 text-right font-medium text-ink-muted">Cost per lead</th>
                 <th className="px-4 py-3 text-right font-medium text-ink-muted">Patients</th>
                 <th className="px-4 py-3 text-right font-medium text-ink-muted">Cost per patient</th>
@@ -71,13 +75,21 @@ export default function CampaignsScreen() {
               {rows.map((r) => (
                 <tr key={`${r.provider}-${r.campaignId}`} className="border-t border-border hover:bg-bg">
                   <td className="px-4 py-3">
-                    <div className="font-medium text-ink">{r.campaignName ?? r.campaignId}</div>
+                    <Link
+                      href={`/marketing-campaigns/${encodeURIComponent(r.campaignId)}`}
+                      className="font-medium text-brand hover:underline"
+                    >
+                      {r.campaignName ?? r.campaignId}
+                    </Link>
                     <div className="mt-1"><TierBadge tier={r.tier} /></div>
                   </td>
                   <td className="px-4 py-3 text-ink-muted">{CHANNEL[r.provider] ?? r.provider}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{money(r.spendPence)}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{r.clicks.toLocaleString('en-GB')}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{r.leads.toLocaleString('en-GB')}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{r.booked.toLocaleString('en-GB')}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{r.attended.toLocaleString('en-GB')}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{money(r.costPerBookingPence)}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{money(r.costPerLeadPence)}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{r.patients.toLocaleString('en-GB')}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{money(r.costPerPatientPence)}</td>
