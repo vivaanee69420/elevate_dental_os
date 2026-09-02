@@ -180,7 +180,13 @@ const h = vi.hoisted(() => {
             : { data: null, error: { message: `rpc ${fn} not stubbed` } };
         const builder = {
           order(col, opts) {
+            // `mods.order` keeps its old single-value shape (last .order()
+            // call wins) so existing `toEqual({ col, opts })` assertions
+            // keep passing. `mods.orders` accumulates every call in
+            // sequence, for callers (like campaignFunnel) that chain
+            // multiple .order() calls to sort by a composite key.
             (call.mods ||= {}).order = { col, opts };
+            (call.mods.orders ||= []).push({ col, opts });
             return builder;
           },
           range(from, to) {

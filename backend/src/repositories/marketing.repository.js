@@ -174,8 +174,16 @@ export const marketingRepository = {
                     p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
                 })
                 // OFFSET without ORDER BY may repeat one row and skip another.
-                // The group key is unique per row, so it is a sound sort key.
+                // The RPC groups by (ad_campaign_id, attribution_source,
+                // practice_id) together — that triple is the GROUP BY key and
+                // so is unique per row, but NONE of the three columns is
+                // unique alone (e.g. every unattributed group shares
+                // ad_campaign_id = NULL, split across practices and sources).
+                // Sort by all three, or a page boundary landing inside a tie
+                // can duplicate one row and drop another.
                 .order('ad_campaign_id', { ascending: true, nullsFirst: true })
+                .order('attribution_source', { ascending: true, nullsFirst: true })
+                .order('practice_id', { ascending: true, nullsFirst: true })
                 .range(from, from + PAGE - 1);
             if (error) throw new Error(`ad_campaign_funnel: ${error.message}`);
             const page = data ?? [];
