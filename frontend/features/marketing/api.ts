@@ -171,6 +171,10 @@ export interface MarketingLead {
   campaignId: string | null;
   campaignName: string | null;
   attributionSource: string | null;
+  /** GoHighLevel pipeline the person first came in on, e.g. '6. Chatbot Website'. */
+  pipelineId: string | null;
+  /** Null when the id matches no synced pipeline definition (archived or deleted). */
+  pipelineName: string | null;
   enquiredAt: string | null;
   bookedAt: string | null;
   converted: boolean;
