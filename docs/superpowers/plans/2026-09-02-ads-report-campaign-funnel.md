@@ -1160,9 +1160,14 @@ describe('leadList', () => {
           first_lead_at: '2026-07-03T10:00:00Z', booked_at: null, attended: false },
     ];
 
-    async function run(opts) {
+    // leadRows is a PARAMETER, not a pre-set mock. vi.spyOn on an
+    // already-spied method returns the SAME spy, so a test that mocked
+    // leadsByCampaign before calling run() would have its rows silently
+    // overwritten here by the default fixture — the test would then pass
+    // under any implementation at all.
+    async function run(opts, leadRows = people) {
         const repo = await import('../src/repositories/marketing.repository.js');
-        vi.spyOn(repo.marketingRepository, 'leadsByCampaign').mockResolvedValue(people);
+        vi.spyOn(repo.marketingRepository, 'leadsByCampaign').mockResolvedValue(leadRows);
         vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
             campaigns: [{ provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'Implants', spend_pence: 1, impressions: 0, clicks: 0, conversions: 0 },
                         { provider: 'google_ads', campaign_id: 'g1', campaign_name: 'New Patient', spend_pence: 1, impressions: 0, clicks: 0, conversions: 0 }],
@@ -1201,11 +1206,7 @@ describe('leadList', () => {
     });
 
     it('an attended person who is not new reads as attended, not new_patient', async () => {
-        const repo = await import('../src/repositories/marketing.repository.js');
-        vi.spyOn(repo.marketingRepository, 'leadsByCampaign').mockResolvedValue([
-            { ...people[0], contact_id: 'd', is_new_patient: false },
-        ]);
-        const out = await run({});
+        const out = await run({}, [{ ...people[0], contact_id: 'd', is_new_patient: false }]);
         expect(out.rows.find((r) => r.contactId === 'd').stage).toBe('attended');
     });
 });
