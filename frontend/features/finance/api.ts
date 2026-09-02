@@ -160,8 +160,12 @@ export interface CashflowOutlook {
   anchorBank: number;
   costsAvailable: boolean;
 costsBasis: 'actuals' | 'baseline' | 'none';
-  /** Why cash out is missing, so the UI does not tell an owner to connect a feed they have. */
-  costsUnavailableReason: 'no-feed' | 'unmapped-practice' | 'no-rows' | null;
+  /**
+   * Why cash out is missing, so the UI does not tell an owner to connect a feed
+   * they have. 'org-level-costs' is by design: a QuickBooks company is never
+   * mapped to a practice, so costs live only at org level.
+   */
+  costsUnavailableReason: 'no-feed' | 'org-level-costs' | 'no-rows' | null;
   inSource: string | null;  // feed behind cash-in (e.g. 'Dentally')
   outSource: string | null; // feed behind cash-out (e.g. 'QuickBooks')
   balancesReconstructed: boolean;
