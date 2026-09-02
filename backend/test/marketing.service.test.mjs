@@ -156,73 +156,43 @@ describe('buildCoverage', () => {
 });
 
 describe('channelSplit', () => {
-  const { channelSplit } = __test;
-  // Two Meta campaigns with spend, one Google campaign with none in this window.
-  const SPEND = [
-    { provider: 'meta_ads', campaignId: 'm1', spendPence: 4000, impressions: 10, clicks: 5, platformConversions: 2, leads: 8, patients: 2 },
-    { provider: 'meta_ads', campaignId: 'm2', spendPence: 1000, impressions: 5, clicks: 1, platformConversions: 1, leads: 2, patients: 0 },
-  ];
-  const PROVIDER = new Map([['m1', 'meta_ads'], ['m2', 'meta_ads']]);
-  const lead = (id, over = {}) => ({
-    contact_id: id, ad_campaign_id: null, attribution_source: null, converted: false, ...over,
-  });
-
-  it('separates Facebook from Google rather than blending them', () => {
-    const leads = [
-      lead('a', { ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: true }),
-      lead('b', { attribution_source: 'Paid Social' }),
-      lead('c', { attribution_source: 'Paid Search', converted: true }),
-      lead('d', { attribution_source: 'Paid Search' }),
+    const spend = [
+        { provider: 'meta_ads', spendPence: 100000, impressions: 1000, clicks: 100, platformConversions: 10 },
+        { provider: 'google_ads', spendPence: 50000, impressions: 500, clicks: 50, platformConversions: 5 },
     ];
-    const out = channelSplit(SPEND, leads, PROVIDER);
-    const fb = out.find((c) => c.channel === 'meta_ads');
-    const g = out.find((c) => c.channel === 'google_ads');
-    expect(fb).toMatchObject({ leads: 2, patients: 1, spendPence: 5000 });
-    expect(g).toMatchObject({ leads: 2, patients: 1, spendPence: 0 });
-  });
-
-  // The bug this replaced: a channel only existed if it had a campaign with
-  // spend, so a practice whose Google account spent £0 that month showed its
-  // Google leads nowhere and the whole figure read as one Facebook number.
-  it('still shows a channel that had leads but no spend in the window', () => {
-    const leads = [lead('c', { attribution_source: 'Paid Search' })];
-    const g = channelSplit(SPEND, leads, PROVIDER).find((c) => c.channel === 'google_ads');
-    expect(g).toBeDefined();
-    expect(g.leads).toBe(1);
-    expect(g.spendPence).toBe(0);
-    expect(g.costPerLeadPence).toBeNull();   // no spend to divide, never £0
-  });
-
-  it('every lead lands in exactly one channel, so the split reconciles', () => {
-    const leads = [
-      lead('a', { attribution_source: 'Paid Social' }),
-      lead('b', { attribution_source: 'Paid Search' }),
-      lead('c', { attribution_source: 'Social media' }),
-      lead('d'),
+    const campaignProvider = new Map([['m1', 'meta_ads'], ['g1', 'google_ads']]);
+    const funnel = [
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 10, booked: 4, attended: 2, patients: 3, newPatients: 2 },
+        { ad_campaign_id: 'g1', attribution_source: 'Paid Search', practice_id: 'p1',
+          leads: 5, booked: 2, attended: 1, patients: 1, newPatients: 1 },
+        { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
+          leads: 7, booked: 1, attended: 1, patients: 2, newPatients: 1 },
     ];
-    const out = channelSplit(SPEND, leads, PROVIDER);
-    expect(out.reduce((n, c) => n + c.leads, 0)).toBe(leads.length);
-  });
 
-  it('never charges paid spend against the organic bucket', () => {
-    const leads = [lead('c', { attribution_source: 'Social media' })];
-    const other = channelSplit(SPEND, leads, PROVIDER).find((c) => c.channel === 'other');
-    expect(other.leads).toBe(1);
-    expect(other.spendPence).toBe(0);
-    expect(other.costPerLeadPence).toBeNull();
-    expect(other.costPerPatientPence).toBeNull();
-  });
+    it('carries booked and attended per channel', () => {
+        const out = __test.channelSplit(spend, funnel, campaignProvider);
+        const meta = out.find((c) => c.channel === 'meta_ads');
+        expect(meta.leads).toBe(10);
+        expect(meta.booked).toBe(4);
+        expect(meta.attended).toBe(2);
+    });
 
-  it('omits a channel with neither spend nor leads', () => {
-    const out = channelSplit(SPEND, [lead('a', { attribution_source: 'Paid Social' })], PROVIDER);
-    expect(out.map((c) => c.channel)).toEqual(['meta_ads']);
-  });
+    it('gives the organic channel leads and bookings but never a cost', () => {
+        // Organic enquiries cost nothing; averaging them into a paid
+        // denominator would quietly flatter every cost per unit.
+        const out = __test.channelSplit(spend, funnel, campaignProvider);
+        const other = out.find((c) => c.channel === 'other');
+        expect(other.leads).toBe(7);
+        expect(other.booked).toBe(1);
+        expect(other.costPerLeadPence).toBeNull();
+        expect(other.costPerBookingPence).toBeNull();
+    });
 
-  it('keeps channel spend reconciled to the campaign rows', () => {
-    const out = channelSplit(SPEND, [], PROVIDER);
-    expect(out.reduce((n, c) => n + c.spendPence, 0))
-      .toBe(SPEND.reduce((n, r) => n + r.spendPence, 0));
-  });
+    it('every lead lands in exactly one channel, so channels sum to the total', () => {
+        const out = __test.channelSplit(spend, funnel, campaignProvider);
+        expect(out.reduce((n, c) => n + c.leads, 0)).toBe(22);
+    });
 });
 
 describe('resolveLeadChannel', () => {
@@ -290,88 +260,65 @@ describe('totals.patients population', () => {
     provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'A',
     spend_pence: 10000, impressions: 0, clicks: 0, conversions: 0,
   }];
-  const LEADS = [
-    // matched to the campaign we hold spend for
-    { contact_id: 'a', ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: true },
-    { contact_id: 'b', ad_campaign_id: 'm1', attribution_source: 'Paid Social', converted: false },
-    // paid, but its campaign has no spend in this window
-    { contact_id: 'c', ad_campaign_id: 'zz', attribution_source: 'Paid Search', converted: true },
-    // organic
-    { contact_id: 'd', ad_campaign_id: null, attribution_source: 'Social media', converted: true },
+  // The same four people as before, now grouped: a and b share a campaign AND a
+  // source, so they are ONE group of two. c's campaign has no spend in this
+  // window; d is organic.
+  const FUNNEL = [
+    { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: null,
+      leads: 2, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+    { ad_campaign_id: 'zz', attribution_source: 'Paid Search', practice_id: null,
+      leads: 1, booked: 0, attended: 0, patients: 1, newPatients: 0 },
+    { ad_campaign_id: null, attribution_source: 'Social media', practice_id: null,
+      leads: 1, booked: 0, attended: 0, patients: 1, newPatients: 0 },
   ];
 
   it('counts every converted person, not only the campaign-matched ones', () => {
-    const { totals } = joinSpendToLeads(SPEND, LEADS);
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
     expect(totals.leads).toBe(4);
-    expect(totals.patients).toBe(3);          // a, c and d all became patients
-    expect(totals.attributedPatients).toBe(1); // only a sits on a campaign with spend
+    expect(totals.patients).toBe(3);           // the m1, zz and organic converters
+    expect(totals.attributedPatients).toBe(1); // only m1 sits on a campaign with spend
   });
 
   it('still divides spend by the attributable patients, never by all of them', () => {
-    const { totals } = joinSpendToLeads(SPEND, LEADS);
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
     expect(totals.costPerPatientPence).toBe(10000);   // 10000 / 1, not / 3
   });
 
   it('reconciles with the channel cards — both count the same patients', () => {
-    const { rows, totals } = joinSpendToLeads(SPEND, LEADS);
+    const { rows, totals } = joinSpendToLeads(SPEND, FUNNEL);
     const provider = new Map(SPEND.map((c) => [c.campaign_id, c.provider]));
-    const channels = __test.channelSplit(rows, LEADS, provider);
+    const channels = __test.channelSplit(rows, FUNNEL, provider);
     expect(channels.reduce((n, c) => n + c.patients, 0)).toBe(totals.patients);
     expect(channels.reduce((n, c) => n + c.leads, 0)).toBe(totals.leads);
   });
 });
 
 describe('practiceSplit', () => {
-  const { practiceSplit } = __test;
-  const PROVIDER = new Map([['m1', 'meta_ads']]);
-  const lead = (id, practiceId, over = {}) => ({
-    contact_id: id, practice_id: practiceId, ad_campaign_id: null,
-    attribution_source: null, converted: false, is_new_patient: false, ...over,
-  });
+    const campaignProvider = new Map([['m1', 'meta_ads']]);
+    const funnel = [
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+          leads: 10, booked: 4, attended: 2, patients: 3, newPatients: 2 },
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p2',
+          leads: 6, booked: 1, attended: 0, patients: 1, newPatients: 1 },
+    ];
 
-  it('puts each practice beside the others with its own money', () => {
-    const out = practiceSplit(
-      [['p1', 500000], ['p2', 100000]],
-      [
-        lead('a', 'p1', { attribution_source: 'Paid Social', converted: true, is_new_patient: true }),
-        lead('b', 'p1', { attribution_source: 'Paid Search' }),
-        lead('c', 'p2', { converted: true }),
-      ],
-      PROVIDER,
-    );
-    const p1 = out.find((r) => r.practiceId === 'p1');
-    expect(p1).toMatchObject({ spendPence: 500000, leads: 2, patients: 1, newPatients: 1 });
-    expect(p1.channels).toEqual({ meta_ads: 1, google_ads: 1, other: 0 });
-    expect(out[0].practiceId).toBe('p1');   // highest spend first
-  });
+    it('carries booked per practice and costs it against that practice spend', () => {
+        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
+        const p1 = out.find((p) => p.practiceId === 'p1');
+        expect(p1.booked).toBe(4);
+        expect(p1.costPerBookingPence).toBe(50000);       // 200000 / 4
+        expect(p1.costPerNewPatientPence).toBe(100000);   // 200000 / 2
+    });
 
-  it('keeps leads with no practice visible instead of dropping them', () => {
-    const out = practiceSplit([], [lead('a', null)], PROVIDER);
-    expect(out.find((r) => r.practiceId === null)?.leads).toBe(1);
-  });
+    it('has no cost per booking where the practice booked nobody', () => {
+        const none = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p3',
+                        leads: 3, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
+        const out = __test.practiceSplit([['p3', 90000]], none, campaignProvider);
+        expect(out[0].costPerBookingPence).toBeNull();
+    });
 
-  it('costs against NEW patients, and leaves it blank when there are none', () => {
-    const out = practiceSplit(
-      [['p1', 100000]],
-      [lead('a', 'p1', { converted: true, is_new_patient: false })],
-      PROVIDER,
-    );
-    expect(out[0].patients).toBe(1);
-    expect(out[0].newPatients).toBe(0);
-    expect(out[0].costPerNewPatientPence).toBeNull();  // never divide by zero
-  });
-
-  it('never reports a cost for a practice with no spend', () => {
-    const out = practiceSplit([], [lead('a', 'p1')], PROVIDER);
-    expect(out[0].costPerLeadPence).toBeNull();        // not £0.00
-  });
-
-  // The RPC emits one row per person, attributed to their first enquiry, so a
-  // person who enquired at two practices is counted once — the practices sum
-  // to the group rather than double-counting.
-  it('sums to the lead total', () => {
-    const leads = [lead('a', 'p1'), lead('b', 'p2'), lead('c', null)];
-    const out = practiceSplit([], leads, PROVIDER);
-    expect(out.reduce((n, r) => n + r.leads, 0)).toBe(leads.length);
-  });
+    it('practices sum to the group total rather than double-counting', () => {
+        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
+        expect(out.reduce((n, p) => n + p.leads, 0)).toBe(16);
+    });
 });
