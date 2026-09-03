@@ -449,10 +449,31 @@ export async function syncOrg(orgId, { full = false } = {}) {
             orgId,
             records.map((r) => ({ business_id: r.business_id, business_name: r.business_name })),
         );
+        // PER-RECORD FAULT ISOLATION. This loop used to be bare inside the
+        // outer try, so ONE unwritable record aborted the whole run: the
+        // tenant lost its treatments AND its cash-ups AND its monthly P&L for
+        // that night, and the integration was marked failed. In a multi-tenant
+        // product that is the wrong blast radius — one practice's malformed row
+        // must cost that row, not a tenant's entire night of data.
+        //
+        // Failures are counted and reported rather than swallowed: `rejected`
+        // rides in the return value so the worker log and the integration
+        // status show that something needs attention, instead of a silent
+        // partial sync that looks like success.
         let synced = 0;
+        const rejected = [];
         for (const rec of records) {
-            await treatmentAcceptedRepository.upsert(mapRecord(rec, orgId, maps));
-            synced += 1;
+            try {
+                await treatmentAcceptedRepository.upsert(mapRecord(rec, orgId, maps));
+                synced += 1;
+            } catch (recErr) {
+                rejected.push({
+                    external_id: externalId(rec),
+                    patient: rec.patient_name ?? null,
+                    date: rec.date ?? null,
+                    error: recErr.message,
+                });
+            }
         }
 
         const today = new Date().toISOString().slice(0, 10);
@@ -465,17 +486,47 @@ export async function syncOrg(orgId, { full = false } = {}) {
             orgId,
             cashups.map((r) => ({ business_id: r.business_id, business_name: r.business_name })),
         );
+        // Same isolation per cash-up sheet and per P&L month: a single bad
+        // sheet must not take the rest of the window with it.
         for (const sheet of cashups) {
-            const { row, patients } = mapCashup(sheet, orgId, maps);
-            await emergentDailyCashupRepository.upsert(row);
-            for (const p of patients) await treatmentAcceptedRepository.upsert(p);
+            try {
+                const { row, patients } = mapCashup(sheet, orgId, maps);
+                await emergentDailyCashupRepository.upsert(row);
+                for (const p of patients) {
+                    try {
+                        await treatmentAcceptedRepository.upsert(p);
+                    } catch (pErr) {
+                        rejected.push({ cashup_date: sheet.date ?? null, patient: p.patient_name ?? null, error: pErr.message });
+                    }
+                }
+            } catch (sheetErr) {
+                rejected.push({ cashup_date: sheet.date ?? null, error: sheetErr.message });
+            }
         }
         for (const plRow of plRows) {
-            await emergentMonthlyPlRepository.upsert(mapMonthlyPl(plRow, orgId, maps));
+            try {
+                await emergentMonthlyPlRepository.upsert(mapMonthlyPl(plRow, orgId, maps));
+            } catch (plErr) {
+                rejected.push({ period_month: plRow.period_month ?? plRow.month ?? null, error: plErr.message });
+            }
         }
 
+        // A run that wrote nothing at all while having records to write is a
+        // real failure, not a quiet success — surface it on the integration so
+        // the tenant's Integrations page shows it rather than a stale
+        // "last synced" timestamp implying all is well.
+        if (synced === 0 && records.length > 0) {
+            const reason = `every record rejected (${rejected.length}); first: ${rejected[0]?.error ?? 'unknown'}`;
+            await integrationRepository.markFailed(orgId, PROVIDER, reason).catch(() => {});
+            return { synced: 0, cashups: 0, monthlyPl: 0, rejected: rejected.length, failed: reason };
+        }
         await integrationRepository.setSyncTime(orgId, PROVIDER);
-        return { synced, cashups: cashups.length, monthlyPl: plRows.length };
+        return {
+            synced,
+            cashups: cashups.length,
+            monthlyPl: plRows.length,
+            ...(rejected.length ? { rejected: rejected.length, rejectedSample: rejected.slice(0, 5) } : {}),
+        };
     } catch (err) {
         await integrationRepository.markFailed(orgId, PROVIDER, err.message).catch(() => {});
         throw err;

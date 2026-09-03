@@ -822,6 +822,17 @@ export const analyticsRepository = {
     // ------------------------------------------------------------------------
     // Data Quality Engine (Phase 5) — per-practice defect counts in ONE query
     // via the data_quality_by_practice RPC (appointments is large; no JS scan).
+    // Per-tenant integrity findings a constraint cannot decide (migration
+    // 000150): cross-business duplicate treatments, unpriced accepted rows,
+    // money attributed to no practice. Advisory — nothing is rewritten. Fails
+    // SOFT: an integrity check that breaks the whole Data Hub page would be
+    // worse than one that is briefly missing.
+    async dataIntegrityAlerts(orgId) {
+        const { data, error } = await supabase_1.serviceClient.rpc('data_integrity_alerts', { p_org: orgId });
+        if (error) return [];
+        return data ?? [];
+    },
+
     async dataQualityByPractice(orgId) {
         if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('data_quality_by_practice', {
