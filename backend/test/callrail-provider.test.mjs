@@ -19,6 +19,19 @@ vi.mock('../src/repositories/integration-account.repository.js', () => ({
         markRevoked: vi.fn().mockResolvedValue(undefined),
     },
 }));
+// Task 4's call-side repository. Stubbed here because this suite is about the
+// SESSION ORG ID, not about counting calls: callrailStatus fans out to it, and
+// sourceBreakdown now goes through the RPC callrail_source_breakdown, which the
+// shared Supabase mock refuses unless explicitly stubbed. Task 4's own suite
+// covers what these return.
+vi.mock('../src/repositories/callrail.repository.js', () => ({
+    callrailRepository: {
+        sourceBreakdown: vi.fn().mockResolvedValue([]),
+        callCountsByAccount: vi.fn().mockResolvedValue([]),
+        upsertCalls: vi.fn().mockResolvedValue(0),
+        restampPractice: vi.fn().mockResolvedValue(0),
+    },
+}));
 
 import { integrationRepository } from '../src/repositories/integration.repository.js';
 import { integrationAccountRepository } from '../src/repositories/integration-account.repository.js';
