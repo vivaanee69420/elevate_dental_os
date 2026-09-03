@@ -49,6 +49,14 @@ import {
 const ORG_A = 'org-aaaa';
 const TOKEN_A = 'tok-aaaa-1111';
 
+// api_key and signing_key share ONE encrypted `secrets` column (see
+// callrail.service.js::updateAccount) — never config, never plaintext.
+function makeSecrets({ apiKey = 'test-api-key', signingKey } = {}) {
+  const obj = { api_key: apiKey };
+  if (signingKey !== undefined) obj.signing_key = signingKey;
+  return encryptSecret(JSON.stringify(obj));
+}
+
 function makeAccount(overrides = {}) {
   return {
     id: 'acc-1',
@@ -60,10 +68,19 @@ function makeAccount(overrides = {}) {
     status: 'active',
     webhook_token: TOKEN_A,
     config: {},
-    secrets: encryptSecret(JSON.stringify({ api_key: 'test-api-key' })),
+    secrets: makeSecrets(),
     ...overrides,
   };
 }
+
+// Deliberately DIFFERENT from CANONICAL_CALL.id below, and realistic: the
+// vendor's own webhook example carries this exact NUMBER as `id`, while the
+// v3 API returns a `CAL…` STRING for the same call. If PAYLOAD_ID and
+// CANONICAL_CALL.id were ever equal by construction, a bug that trusted the
+// payload's own id instead of re-fetching would be indistinguishable from
+// correct behaviour in every test below — see the 'IDENTITY' describe block,
+// and the mutation-test proof in task-5-6-report.md §1.
+const PAYLOAD_ID = 766970532;
 
 const CANONICAL_CALL = {
   id: 'CAL8154748ae6bd4e278a7cddd38a662f4f',
@@ -118,7 +135,7 @@ beforeEach(() => {
 });
 
 function deliveryBody(overrides = {}) {
-  return Buffer.from(JSON.stringify({ id: CANONICAL_CALL.id, timestamp: '2026-09-01T10:20:00Z', ...overrides }));
+  return Buffer.from(JSON.stringify({ id: PAYLOAD_ID, timestamp: '2026-09-01T10:20:00Z', ...overrides }));
 }
 
 describe('CALLRAIL_FIELDS — shared ?fields= constant', () => {
@@ -172,6 +189,27 @@ describe('idempotency — through the REAL upsert, on the REAL conflict target',
     expect(store.size).toBe(1);
     expect(supaRec.last.table).toBe('callrail_calls');
     expect(supaRec.last.upsertOpts.onConflict).toBe('organisation_id,callrail_id');
+  });
+});
+
+// IDENTITY — the RULING this whole file is built around (see the file
+// header): a webhook delivery's own `id` is untrusted, and the stored row
+// must be keyed on the CANONICAL id the re-fetch returns. PAYLOAD_ID and
+// CANONICAL_CALL.id are deliberately different values (see PAYLOAD_ID's own
+// comment) precisely so this is a REAL discriminating test, not one that
+// happens to pass because the two ids were equal by construction.
+describe('IDENTITY — the stored row is keyed on the CANONICAL id, never the payload\'s own id', () => {
+  it('stores callrail_id = CANONICAL_CALL.id; the payload\'s own id never appears as a stored key', async () => {
+    const res = await handleWebhook(TOKEN_A, deliveryBody(), undefined);
+    expect(res.stored).toBe(true);
+
+    const canonicalRow = store.get(`${ORG_A}|${CANONICAL_CALL.id}`);
+    expect(canonicalRow).toBeTruthy();
+    expect(canonicalRow.callrail_id).toBe(CANONICAL_CALL.id);
+
+    expect(store.has(`${ORG_A}|${PAYLOAD_ID}`)).toBe(false);
+    expect(store.has(`${ORG_A}|${String(PAYLOAD_ID)}`)).toBe(false);
+    expect([...store.values()].every((r) => r.callrail_id !== String(PAYLOAD_ID))).toBe(true);
   });
 });
 
@@ -245,13 +283,13 @@ describe('Signature header — HMAC-SHA1, second factor, per-account key', () =>
   });
 
   it("accepts the vendor's own example delivery end to end", async () => {
-    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    accounts = [makeAccount({ secrets: makeSecrets({ signingKey: VENDOR_KEY }) })];
     const res = await handleWebhook(TOKEN_A, VENDOR_BODY, VENDOR_SIGNATURE);
     expect(res.stored).toBe(true);
   });
 
   it('rejects the vendor body when a single byte is appended — the signature is over the RAW bytes', async () => {
-    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    accounts = [makeAccount({ secrets: makeSecrets({ signingKey: VENDOR_KEY }) })];
     // One trailing newline moves the digest to slJqKZkCtpJp2y989jy0zSM7tz4=.
     // Anything that re-serialises the body would fail here the same way, which
     // is what makes this an assertion about the raw-body mount, not just HMAC.
@@ -261,7 +299,7 @@ describe('Signature header — HMAC-SHA1, second factor, per-account key', () =>
   });
 
   it('accepts a correctly HMAC-SHA1-signed delivery when a signing key is on file', async () => {
-    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    accounts = [makeAccount({ secrets: makeSecrets({ signingKey: VENDOR_KEY }) })];
     const body = deliveryBody();
     const sig = sign(VENDOR_KEY, body);
     const res = await handleWebhook(TOKEN_A, body, sig);
@@ -269,26 +307,26 @@ describe('Signature header — HMAC-SHA1, second factor, per-account key', () =>
   });
 
   it('rejects a tampered signature', async () => {
-    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    accounts = [makeAccount({ secrets: makeSecrets({ signingKey: VENDOR_KEY }) })];
     const body = deliveryBody();
     const badSig = sign(VENDOR_KEY, body).slice(0, -2) + 'xx';
     await expect(handleWebhook(TOKEN_A, body, badSig)).rejects.toMatchObject({ statusCode: 401 });
   });
 
   it('rejects a signature computed with SHA256 instead of SHA1 — algorithm matters, not just shape', async () => {
-    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    accounts = [makeAccount({ secrets: makeSecrets({ signingKey: VENDOR_KEY }) })];
     const body = deliveryBody();
     const sha256Sig = crypto.createHmac('sha256', VENDOR_KEY).update(body).digest('base64');
     await expect(handleWebhook(TOKEN_A, body, sha256Sig)).rejects.toMatchObject({ statusCode: 401 });
   });
 
   it('rejects a missing Signature header when a key IS configured', async () => {
-    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    accounts = [makeAccount({ secrets: makeSecrets({ signingKey: VENDOR_KEY }) })];
     await expect(handleWebhook(TOKEN_A, deliveryBody(), undefined)).rejects.toMatchObject({ statusCode: 401 });
   });
 
   it('is a no-op (never rejects on signature) when no signing key is configured for the account', async () => {
-    accounts = [makeAccount({ config: {} })]; // no signing_key — every account today
+    accounts = [makeAccount()]; // default secrets: api_key only, no signing_key
     const res = await handleWebhook(TOKEN_A, deliveryBody(), 'garbage-not-even-base64');
     expect(res.stored).toBe(true);
   });

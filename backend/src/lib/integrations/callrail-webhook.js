@@ -23,9 +23,11 @@
 //      Base64-encoded, keyed by a signing key CallRail mints per COMPANY
 //      (viewable on that company's own Webhooks configuration page inside
 //      CallRail). Verified as a SECOND factor only when a signing key has
-//      been entered for THIS account (integration_accounts.config.signing_key)
-//      — there is no route to set one yet (a later task), so today every
-//      delivery is authenticated by the path token alone.
+//      been entered for THIS account — owner-settable via
+//      `PATCH /api/integrations/callrail/accounts/:id { signingKey }`
+//      (callrail.service.js::updateAccount). It is a CREDENTIAL, so it is
+//      encrypted into the SAME `secrets` blob as the API key (there is only
+//      one `secrets` column per account) — never plaintext in `config`.
 //   Deliberately NOT wired through WEBHOOK_PROVIDERS / integration.service.js's
 //   org-level webhook-secret scheme (see the comment on that Set, commit
 //   7e73336): CallRail's key is per COMPANY. An org-level secret would force
@@ -158,12 +160,37 @@ async function resolveAccount(token) {
     return account;
 }
 
+// Decrypt the account's secrets blob ONCE per delivery (api_key + the
+// optional signing_key live in the same encrypted JSON — there is only one
+// `secrets` column per account row). Never throws: a corrupt/missing blob
+// degrades to "no credentials, no signing key" rather than a 500, since a
+// downstream failure here must still answer 2xx (see file header).
+function decryptAccountSecrets(account) {
+    try {
+        return JSON.parse(decryptSecret(account.secrets)) ?? {};
+    } catch (err) {
+        console.error('[callrail-webhook] could not decrypt account credentials', {
+            accountId: account.id, error: err.message,
+        });
+        return {};
+    }
+}
+
 // Second-factor signature check. A no-op (never throws) when this account
 // has no signing key on file — the path token remains the sole
-// authentication for that company, exactly as it is today for every account
-// (see file header: there is no route yet to set one).
-function verifySignature(account, rawBody, signatureHeader) {
-    const key = account.config?.signing_key;
+// authentication for that company until the owner sets one via
+// PATCH .../accounts/:id { signingKey }.
+//
+// DELIBERATE ASYMMETRY, reviewed and kept: an unknown token and a revoked
+// company's token answer the SAME 404 (resolveAccount, above) so a client
+// can't tell those apart. A WRONG SIGNATURE on a VALID token answers 401,
+// a different and more specific outcome — collapsing it into 404 would hide
+// a genuine misconfiguration (an owner whose signing key is wrong would see
+// "not found" with no way to tell why deliveries stopped). The token itself
+// is 24 random bytes, so a 401 leaking "this token is valid" is not the same
+// risk as a 404 leaking "this org has no CallRail connection".
+function verifySignature(secrets, account, rawBody, signatureHeader) {
+    const key = secrets?.signing_key;
     if (!key) return;
     const raw = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody ?? ''), 'utf8');
     const expected = crypto.createHmac('sha1', key).update(raw).digest('base64');
@@ -177,7 +204,7 @@ function verifySignature(account, rawBody, signatureHeader) {
 // auto-disable an integration after repeated failed deliveries, and never
 // resends a dropped one — the nightly pull (callrail-sync.js) is what
 // recovers anything lost here. Every branch below returns a plain object.
-async function ingestDelivery(account, rawBody) {
+async function ingestDelivery(account, secrets, rawBody) {
     let payload;
     try {
         const text = Buffer.isBuffer(rawBody) ? rawBody.toString('utf8') : String(rawBody ?? '');
@@ -194,14 +221,7 @@ async function ingestDelivery(account, rawBody) {
         return { received: true, stored: false, reason: 'no_call_id' };
     }
 
-    let apiKey;
-    try {
-        apiKey = JSON.parse(decryptSecret(account.secrets))?.api_key;
-    } catch (err) {
-        console.error('[callrail-webhook] could not decrypt account credentials', {
-            accountId: account.id, error: err.message,
-        });
-    }
+    const apiKey = secrets?.api_key;
     if (!apiKey) {
         return { received: true, stored: false, reason: 'no_credentials' };
     }
@@ -248,6 +268,7 @@ async function ingestDelivery(account, rawBody) {
 // silently-accepted forged delivery would be worse than a lost one.
 export async function handleWebhook(token, rawBody, signatureHeader) {
     const account = await resolveAccount(token);
-    verifySignature(account, rawBody, signatureHeader);
-    return ingestDelivery(account, rawBody);
+    const secrets = decryptAccountSecrets(account);
+    verifySignature(secrets, account, rawBody, signatureHeader);
+    return ingestDelivery(account, secrets, rawBody);
 }
