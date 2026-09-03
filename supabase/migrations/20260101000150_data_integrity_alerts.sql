@@ -110,6 +110,55 @@ BEGIN
     WHERE organisation_id = $1 AND status = 'accepted' AND practice_id IS NULL
     HAVING count(*) > 0
 
+    UNION ALL
+
+    -- 5. CROSS-FEED RECONCILIATION — the strongest integrity signal available,
+    -- because it has two independent witnesses.
+    --
+    -- emergent_daily_cashup.detail_patient_money_total and treatment_accepted
+    -- are separate tables fed by the same underlying patient list, so per month
+    -- they should agree to the penny. They now do, in 4 of the last 5 months.
+    --
+    -- THIS IS THE CHECK THAT WOULD HAVE CAUGHT THE ORIGINAL INCIDENT ON DAY
+    -- ONE. While the duplicate records were accumulating, August read £284,960
+    -- of accepted value against the cash-up's £197,378 — a 44% divergence,
+    -- sitting in the database for months with nothing looking at it. Any future
+    -- divergence, from duplication or from anything else, now surfaces here.
+    --
+    -- Severity scales with the gap so an ordinary reporting lag stays quiet: a
+    -- treatment keyed after that day's cash-up was finalised shows as `low`
+    -- (there is a real live example worth £80 on £517k), while a structural
+    -- problem shows as `high`.
+    SELECT 'feed_reconciliation'::text,
+           CASE WHEN abs(x.diff) > greatest(x.base * 0.05, 100000) THEN 'high'
+                WHEN abs(x.diff) > greatest(x.base * 0.01, 20000)  THEN 'medium'
+                ELSE 'low' END::text,
+           'Accepted value vs cash-up detail · ' || to_char(x.m, 'Mon YYYY'),
+           'The treatments feed and the daily cash-up sheets disagree by '
+             || CASE WHEN x.diff > 0 THEN 'accepted being £' ELSE 'cash-up being £' END
+             || trim(to_char(abs(x.diff) / 100.0, 'FM999999990.00'))
+             || ' higher. They are independent records of the same patients, so '
+             || 'a gap means one feed is missing, late or double-counting.',
+           1::bigint,
+           abs(x.diff)::bigint
+    FROM (
+      SELECT coalesce(cu.m, ta.m) AS m,
+             coalesce(ta.accepted, 0) - coalesce(cu.detail, 0) AS diff,
+             greatest(coalesce(ta.accepted, 0), coalesce(cu.detail, 0))::numeric AS base
+      FROM (SELECT date_trunc('month', cashup_date)::date m,
+                   sum(detail_patient_money_total_pence) detail
+              FROM emergent_daily_cashup
+             WHERE organisation_id = $1 AND cashup_date >= (current_date - interval '12 months')
+             GROUP BY 1) cu
+      FULL JOIN (SELECT date_trunc('month', accepted_date)::date m,
+                        sum(value_pence) accepted
+                   FROM treatment_accepted
+                  WHERE organisation_id = $1 AND status = 'accepted'
+                    AND accepted_date >= (current_date - interval '12 months')
+                  GROUP BY 1) ta ON ta.m = cu.m
+    ) x
+    WHERE x.diff <> 0 AND x.base > 0
+
     ORDER BY 2, 5 DESC
   $q$ USING p_org;
 END;
