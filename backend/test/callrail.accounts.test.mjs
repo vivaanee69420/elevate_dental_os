@@ -368,6 +368,22 @@ describe('callrailService', () => {
             ]);
         });
 
+        it('a removed company leaves the panel, but its calls still count in the source breakdown', async () => {
+            seedAccount({ organisation_id: ORG_A, id: 'acc-live', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford' });
+            seedAccount({ organisation_id: ORG_A, id: 'acc-gone', external_account_id: 'CR-2', webhook_token: 'tok-2', label: 'Bexleyheath', status: 'revoked' });
+            callrailRepoMock.sourceBreakdown.mockResolvedValueOnce([{ source: 'google_ads', callCount: 42 }]);
+
+            const status = await svc.status(ORG_A);
+
+            // Disconnect is a soft revoke — the row survives so its calls keep
+            // their integration_account_id — but an owner who clicks Disconnect
+            // and still sees the company has been told the action failed.
+            expect(status.accounts.map((a) => a.id)).toEqual(['acc-live']);
+            // The revoked company's historical calls really happened, so the
+            // org-wide breakdown still counts them.
+            expect(status.sourceBreakdown).toEqual([{ source: 'google_ads', callCount: 42 }]);
+        });
+
         it('connected reflects the provider marker row status', async () => {
             const integrationRepo = (await import('../src/repositories/integration.repository.js')).integrationRepository;
             integrationRepo.getByProvider.mockResolvedValueOnce(null);
