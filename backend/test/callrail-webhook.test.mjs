@@ -57,6 +57,11 @@ function makeSecrets({ apiKey = 'test-api-key', signingKey } = {}) {
   return encryptSecret(JSON.stringify(obj));
 }
 
+// external_account_id is the CallRail COMPANY id; config.account_id is the
+// CallRail ACCOUNT id that company lives under. CallRail has no
+// company-scoped single-call endpoint — the canonical re-fetch below is
+// necessarily account-scoped (config.account_id), which is exactly why
+// ingestDelivery cross-checks the returned call's own company_id.
 function makeAccount(overrides = {}) {
   return {
     id: 'acc-1',
@@ -67,7 +72,7 @@ function makeAccount(overrides = {}) {
     label: 'Ashford',
     status: 'active',
     webhook_token: TOKEN_A,
-    config: {},
+    config: { account_id: 'ACC1' },
     secrets: makeSecrets(),
     ...overrides,
   };
@@ -213,6 +218,61 @@ describe('IDENTITY — the stored row is keyed on the CANONICAL id, never the pa
   });
 });
 
+// ACCOUNT vs COMPANY — CallRail has no company-scoped single-call endpoint,
+// so the canonical re-fetch is necessarily built against config.account_id
+// (the CallRail ACCOUNT), never external_account_id (the CallRail COMPANY).
+// Because that re-fetch is account-scoped, ingestDelivery cross-checks the
+// returned call's own company_id against this row's company before writing.
+describe('account-scoped canonical re-fetch, and the company_id cross-check', () => {
+  it('fetches against config.account_id, not external_account_id', async () => {
+    await handleWebhook(TOKEN_A, deliveryBody(), undefined);
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toContain('/v3/a/ACC1/calls/');
+    expect(url).not.toContain('/v3/a/ACT1/');
+  });
+
+  it('drops a canonical call whose company_id disagrees with this row\'s company — never stamped with the wrong company\'s practice', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ ...CANONICAL_CALL, company_id: 'SOME-OTHER-COMPANY' }),
+    }));
+    const res = await handleWebhook(TOKEN_A, deliveryBody(), undefined);
+    expect(res).toEqual({ received: true, stored: false, reason: 'company_mismatch' });
+    expect(store.size).toBe(0);
+  });
+
+  it('a canonical call carrying no company_id at all is trusted (opportunistic check, not required)', async () => {
+    // CANONICAL_CALL itself carries no company_id — every other test in this
+    // file relies on that still storing successfully.
+    const res = await handleWebhook(TOKEN_A, deliveryBody(), undefined);
+    expect(res.stored).toBe(true);
+  });
+
+  it('a canonical call whose company_id agrees is stored normally', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ ...CANONICAL_CALL, company_id: 'ACT1' }),
+    }));
+    const res = await handleWebhook(TOKEN_A, deliveryBody(), undefined);
+    expect(res.stored).toBe(true);
+    expect(store.get(`${ORG_A}|${CANONICAL_CALL.id}`)).toBeTruthy();
+  });
+
+  it('company_id is never written as a callrail_calls column, even when it matches', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200, json: async () => ({ ...CANONICAL_CALL, company_id: 'ACT1' }),
+    }));
+    await handleWebhook(TOKEN_A, deliveryBody(), undefined);
+    const row = store.get(`${ORG_A}|${CANONICAL_CALL.id}`);
+    expect(row).not.toHaveProperty('company_id');
+  });
+
+  it('a company row with no CallRail ACCOUNT id on config cannot be re-fetched — no_credentials, never a fetch attempt', async () => {
+    accounts = [makeAccount({ config: {} })];
+    const res = await handleWebhook(TOKEN_A, deliveryBody(), undefined);
+    expect(res).toEqual({ received: true, stored: false, reason: 'no_credentials' });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('missing id/start_time — rejected, not stored half-formed', () => {
   it('parseCallPayload returns null when the call has no id', () => {
     expect(parseCallPayload({ start_time: '2026-09-01T10:00:00Z' })).toBeNull();
@@ -264,7 +324,8 @@ describe('re-fetch (IDENTITY ruling) failure', () => {
 });
 
 describe('Signature header — HMAC-SHA1, second factor, per-account key', () => {
-  // The vendor's own published key and body (callrail-api-findings.md §1).
+  // The vendor's own published key and body
+  // (docs/superpowers/specs/2026-09-04-callrail-api-facts.md §1).
   const VENDOR_KEY = '072e77e426f92738a72fe23c4d1953b4';
   const VENDOR_BODY = readFileSync(
     new URL('./fixtures/callrail-signature-vector.json', import.meta.url),

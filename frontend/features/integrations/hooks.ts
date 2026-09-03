@@ -35,6 +35,7 @@ import {
   disconnectSheetsWriter,
   getSheetsWriterActivity,
   getCallRailStatus,
+  listCallRailCompanies,
   addCallRailAccount,
   updateCallRailAccount,
   removeCallRailAccount,
@@ -390,10 +391,19 @@ export function useCallRailStatus() {
   });
 }
 
+// Add-company step 1: not cached (deliberately not a useQuery) — a fresh
+// lookup every time the owner clicks, and the api key/account id never sit
+// in the query cache.
+export function useLookupCallRailCompanies() {
+  return useMutation({
+    mutationFn: (body: { apiKey: string; callrailAccountId: string }) => listCallRailCompanies(body),
+  });
+}
+
 export function useAddCallRailAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { apiKey: string; callrailAccountId: string; label: string; practiceId?: string | null }) =>
+    mutationFn: (body: { apiKey: string; callrailAccountId: string; callrailCompanyId: string; label: string; practiceId?: string | null }) =>
       addCallRailAccount(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
   });
@@ -402,7 +412,7 @@ export function useAddCallRailAccount() {
 export function useUpdateCallRailAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...body }: { id: string; practiceId?: string | null; label?: string }) =>
+    mutationFn: ({ id, ...body }: { id: string; practiceId?: string | null; label?: string; apiKey?: string; signingKey?: string | null }) =>
       updateCallRailAccount(id, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
   });

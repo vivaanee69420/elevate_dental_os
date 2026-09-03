@@ -368,7 +368,7 @@ correction takes effect on history and not only on what arrives next."
 
 - [ ] **Step 1: Read the researched CallRail facts — this is already established, do not re-research**
 
-`.superpowers/sdd/2026-09-03-callrail-integration/callrail-api-findings.md` records what the official v3 docs say, read directly. Summary of what binds you:
+`docs/superpowers/specs/2026-09-04-callrail-api-facts.md` records what the official v3 docs say, read directly (moved there from the gitignored `.superpowers/sdd/` scratch directory during the 2026-09-04 review round so a fresh clone can read it). Summary of what binds you:
 
 **CallRail DOES sign.** Header `Signature`. **HMAC-SHA1**, not SHA256 — do NOT copy the Dentally/Emergent SHA256 helper unchanged. Computed over the RAW body, then Base64 (strict). Node: `crypto.createHmac('sha1', key).update(rawBody).digest('base64')`. Compare with `crypto.timingSafeEqual`, never `===`.
 

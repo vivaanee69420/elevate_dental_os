@@ -7,7 +7,7 @@ import { quickbooksAccountService } from "../services/quickbooks-account.service
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { decryptSecret } from "../lib/crypto.js";
-import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema, callrailAccountCreateSchema, callrailAccountUpdateSchema } from "../models/integration.model.js";
+import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema, callrailAccountCreateSchema, callrailAccountUpdateSchema, callrailListCompaniesSchema } from "../models/integration.model.js";
 import { isAgencyActor } from "../middleware/agency.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
 import { emergentService } from "../services/emergent.service.js";
@@ -68,7 +68,17 @@ export const integrationController = {
     async callrailDisconnect(req, res) {
         res.json(await integration_service_1.integrationService.callrailDisconnect(req.user.organisation_id));
     },
-    // --- CallRail companies (Task 4) ----------------------------------------
+    // --- CallRail companies --------------------------------------------------
+    // Add-company step 1: list every company under a CallRail ACCOUNT so the
+    // owner picks one rather than typing an opaque id. POST, not GET+query,
+    // deliberately — the API key never belongs in a URL/query string (logs,
+    // browser history, proxies). Ungated beyond the standard requireRole on
+    // the route: this never persists anything, so there is nothing for the
+    // agency-actor check to protect.
+    async callrailListCompanies(req, res) {
+        const body = callrailListCompaniesSchema.parse(req.body);
+        res.json({ companies: await callrailService.listCompanies(req.user.organisation_id, body) });
+    },
     async callrailAccountCreate(req, res) {
         // practiceId is the agency-controlled mapping field, same rule as
         // ghlAccountUpdate's practice_id — a non-agency owner may still add

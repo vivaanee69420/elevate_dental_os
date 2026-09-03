@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { supaRec } from './setup.js';
 import { callrailRepository } from '../src/repositories/callrail.repository.js';
 import { CALLRAIL_FIELDS } from '../src/lib/integrations/callrail-webhook.js';
+import { londonDaysAgo } from '../src/lib/tz.js';
 
 vi.mock('../src/repositories/integration-account.repository.js', () => ({
   integrationAccountRepository: {
@@ -39,6 +40,10 @@ import { syncAccount, syncAllOrgs, fetchAllCalls } from '../src/lib/integrations
 const ORG_A = 'org-aaaa';
 const ORG_B = 'org-bbbb';
 
+// external_account_id is the CallRail COMPANY id; config.account_id is the
+// CallRail ACCOUNT id that company lives under — deliberately two different
+// values (see callrail-sync.js's file header on why conflating them was the
+// root defect this integration shipped with).
 function makeAccount(overrides = {}) {
   return {
     id: 'acc-1',
@@ -48,7 +53,7 @@ function makeAccount(overrides = {}) {
     practice_id: 'practice-1',
     label: 'Ashford',
     status: 'active',
-    config: {},
+    config: { account_id: 'ACC1' },
     secrets: 'enc:placeholder',
     ...overrides,
   };
@@ -72,8 +77,8 @@ describe('fetchAllCalls — pagination', () => {
     // No date parameters at all does not mean "everything": CallRail applies
     // date_range=recent, the previous seven days, and answers 200. A 90-day
     // nightly sync would quietly become a 7-day one with nothing to notice.
-    await expect(fetchAllCalls('key', 'ACT1', {})).rejects.toThrow(/requires start_date and end_date/);
-    await expect(fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01' })).rejects.toThrow(/requires start_date and end_date/);
+    await expect(fetchAllCalls('key', 'ACC1', 'ACT1', {})).rejects.toThrow(/requires start_date and end_date/);
+    await expect(fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01' })).rejects.toThrow(/requires start_date and end_date/);
   });
 
   it('follows next_page across a short-then-full-then-short run and stops the instant has_next_page is false (asserts REQUEST COUNT)', async () => {
@@ -85,7 +90,7 @@ describe('fetchAllCalls — pagination', () => {
     let n = 0;
     global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => pages[n++] }));
 
-    const { calls, requests } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+    const { calls, requests } = await fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
 
     expect(requests).toBe(3);
     expect(global.fetch).toHaveBeenCalledTimes(3);
@@ -97,7 +102,7 @@ describe('fetchAllCalls — pagination', () => {
       ok: true, status: 200,
       json: async () => page(Array.from({ length: 250 }, (_, i) => ({ id: `C-${i}` })), { hasNext: false, next: null }),
     }));
-    const { calls, requests } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+    const { calls, requests } = await fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
     expect(requests).toBe(1);
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(calls.length).toBe(250);
@@ -110,20 +115,22 @@ describe('fetchAllCalls — pagination', () => {
     ];
     let n = 0;
     global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => pages[n++] }));
-    const { calls, requests } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+    const { calls, requests } = await fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
     expect(requests).toBe(2);
     expect(calls.length).toBe(1);
   });
 
-  it('requests the shared CALLRAIL_FIELDS list on every page — the same constant the webhook re-fetch uses', async () => {
+  it('requests the shared CALLRAIL_FIELDS list AND an explicit company_id on every page — the same constant the webhook re-fetch uses, plus the defence against an account-wide key', async () => {
     global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => page([]) }));
-    await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+    await fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
     const calledUrl = new URL(global.fetch.mock.calls[0][0]);
+    expect(calledUrl.pathname).toBe('/v3/a/ACC1/calls.json');
     expect(calledUrl.searchParams.get('fields')).toBe(CALLRAIL_FIELDS);
     expect(calledUrl.searchParams.get('relative_pagination')).toBe('true');
+    expect(calledUrl.searchParams.get('company_id')).toBe('ACT1');
   });
 
-  it('flags truncation and warns, naming the account, when the pagination cap is hit with more data still waiting', async () => {
+  it('flags truncation and warns, naming the CallRail account id, when the pagination cap is hit with more data still waiting', async () => {
     // has_next_page is ALWAYS true here — this is the only way to reach the
     // cap in a test without a real 50k-call account. 200 mocked round trips
     // is still fast (no real network/timers).
@@ -133,19 +140,42 @@ describe('fetchAllCalls — pagination', () => {
     }));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const { requests, truncated } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+    const { requests, truncated } = await fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
 
     expect(requests).toBe(200); // MAX_PAGES
     expect(truncated).toBe(true);
-    const warned = warnSpy.mock.calls.some((args) => args.join(' ').includes('ACT1'));
+    const warned = warnSpy.mock.calls.some((args) => args.join(' ').includes('ACC1'));
     expect(warned).toBe(true);
     warnSpy.mockRestore();
   });
 
   it('does NOT flag truncation on a run that finishes naturally (has_next_page: false before the cap)', async () => {
     global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => page([]) }));
-    const { truncated } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+    const { truncated } = await fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
     expect(truncated).toBe(false);
+  });
+});
+
+// ============================================================================
+// opts.full WINDOW WIRING — was dead code (no caller ever passed it, so
+// FULL_DAYS was unreachable and even a fresh reconnect only ever pulled the
+// 90-day incremental window). callrail.service.js now passes { full: true }
+// on the manual per-company sync and the one-off pull after adding a
+// company; this proves syncAccount itself actually branches on the flag.
+// ============================================================================
+describe('opts.full — INCREMENTAL_DAYS vs FULL_DAYS window', () => {
+  it('defaults to the 90-day INCREMENTAL window when opts.full is omitted', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => page([]) }));
+    await syncAccount(ORG_A, makeAccount());
+    const calledUrl = new URL(global.fetch.mock.calls[0][0]);
+    expect(calledUrl.searchParams.get('start_date')).toBe(londonDaysAgo(90));
+  });
+
+  it('pulls the 183-day FULL window when opts.full is true', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => page([]) }));
+    await syncAccount(ORG_A, makeAccount(), () => {}, { full: true });
+    const calledUrl = new URL(global.fetch.mock.calls[0][0]);
+    expect(calledUrl.searchParams.get('start_date')).toBe(londonDaysAgo(183));
   });
 });
 
@@ -244,6 +274,95 @@ describe('resilience', () => {
     expect(results.map((r) => r.accountId).sort()).toEqual(['acc-active', 'acc-failed']);
     expect(integrationAccountRepository.markSynced).toHaveBeenCalledWith(ORG_A, 'acc-active');
     expect(integrationAccountRepository.markSynced).toHaveBeenCalledWith(ORG_B, 'acc-failed');
+  });
+
+  it('skips a company row with no CallRail ACCOUNT id on config — a company id alone is not enough to build a /v3/a/{...} URL', async () => {
+    global.fetch = vi.fn();
+    const result = await syncAccount(ORG_A, makeAccount({ config: {} }));
+    expect(result.skipped).toBe('no_credentials');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// ACCOUNT vs COMPANY — every /v3/a/{...} URL uses config.account_id (the
+// CallRail ACCOUNT), never external_account_id (the CallRail COMPANY); and
+// calls.json is filtered by company_id so an account-wide key cannot pull
+// another company's calls under this practice.
+// ============================================================================
+describe('account vs company URLs, and the company_id defence in depth', () => {
+  it('calls.json is built against the ACCOUNT id, filtered to the COMPANY id — never the reverse', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => page([]) }));
+    await syncAccount(ORG_A, makeAccount({ config: { account_id: 'ACC-REAL' }, external_account_id: 'COM-REAL' }));
+    const calledUrl = new URL(global.fetch.mock.calls[0][0]);
+    expect(calledUrl.pathname).toBe('/v3/a/ACC-REAL/calls.json');
+    expect(calledUrl.searchParams.get('company_id')).toBe('COM-REAL');
+  });
+
+  it('drops a call whose company_id disagrees with this row\'s company, counts and logs the drop once, and never writes it', async () => {
+    const store = new Map();
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'callrail_calls' && q.upsertVals !== undefined) {
+        const rows = Array.isArray(q.upsertVals) ? q.upsertVals : [q.upsertVals];
+        for (const r of rows) store.set(`${r.organisation_id}|${r.callrail_id}`, r);
+        return { data: rows.map(() => ({ id: 'x' })), error: null };
+      }
+      return { data: [], error: null };
+    };
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200,
+      json: async () => page([
+        { id: 'CAL-MINE', start_time: '2026-09-01T09:00:00Z', company_id: 'ACT1' },
+        { id: 'CAL-OTHER', start_time: '2026-09-01T09:00:00Z', company_id: 'SOME-OTHER-COMPANY' },
+      ]),
+    }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await syncAccount(ORG_A, makeAccount());
+
+    expect(result.ingested).toBe(1);
+    expect(result.fetched).toBe(2);
+    expect(store.has(`${ORG_A}|CAL-MINE`)).toBe(true);
+    expect(store.has(`${ORG_A}|CAL-OTHER`)).toBe(false);
+    const warned = warnSpy.mock.calls.some((args) => args.join(' ').includes('dropped 1'));
+    expect(warned).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('company_id is never written as a callrail_calls column — even a matching one is stripped before the upsert', async () => {
+    let captured;
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'callrail_calls' && q.upsertVals !== undefined) {
+        captured = Array.isArray(q.upsertVals) ? q.upsertVals : [q.upsertVals];
+        return { data: captured.map(() => ({ id: 'x' })), error: null };
+      }
+      return { data: [], error: null };
+    };
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200,
+      json: async () => page([{ id: 'CAL-1', start_time: '2026-09-01T09:00:00Z', company_id: 'ACT1' }]),
+    }));
+    await syncAccount(ORG_A, makeAccount());
+    expect(captured[0]).not.toHaveProperty('company_id');
+  });
+
+  it('a call with no company_id at all is trusted (not dropped) — the field is opportunistic, not required', async () => {
+    const store = new Map();
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'callrail_calls' && q.upsertVals !== undefined) {
+        const rows = Array.isArray(q.upsertVals) ? q.upsertVals : [q.upsertVals];
+        for (const r of rows) store.set(`${r.organisation_id}|${r.callrail_id}`, r);
+        return { data: rows.map(() => ({ id: 'x' })), error: null };
+      }
+      return { data: [], error: null };
+    };
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200,
+      json: async () => page([{ id: 'CAL-1', start_time: '2026-09-01T09:00:00Z' }]),
+    }));
+    const result = await syncAccount(ORG_A, makeAccount());
+    expect(result.ingested).toBe(1);
+    expect(store.has(`${ORG_A}|CAL-1`)).toBe(true);
   });
 });
 
