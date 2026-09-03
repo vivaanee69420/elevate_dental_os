@@ -230,6 +230,8 @@ Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide (incl. 
 
 ## Appointments
 
+**Analyst role:** every `/api` route also passes `analystLock` (`middleware/analyst-lock.js`, mounted at `app.js:221`), a deny-by-default net for the `analyst` role — several legacy routers carry no permission gate, so nav hiding is not a boundary. It is **permission-aware**: a listed prefix opens only when the analyst holds one of its keys (`/appointments` needs `operations.view`, `/pay-runs` needs `payrun.manage`, `/data-room` needs `data.export`, and so on), and anything unlisted stays denied whatever the grant. It used to be a flat path allowlist that ignored the matrix entirely, so granting an analyst a section made the tab appear and every request behind it still returned `Insufficient permissions`. Only list a router that carries its own `requirePermission` gate.
+
 All Operations endpoints (`/appointments`, `/associates`, `/staff`, `/chair-utilisation`, `/treatments`) are gated on the **`operations.view`** permission, not on a role list. A role list made the Team Permissions matrix decorative — granting the key to another role did nothing, and revoking it from a practice manager was ignored. Owner and practice_manager hold the key by default in every org, so this is behaviour-preserving for them. **`/pay-runs` is the exception**: payroll has its own **`payrun.manage`** key (owner-only by default), so an owner can hand out the rest of Operations without handing out payroll.
 
 ### `GET /api/appointments?from=...&to=...&page=1&per_page=25`
