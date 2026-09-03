@@ -34,6 +34,13 @@ import {
   drainSheetsWriter,
   disconnectSheetsWriter,
   getSheetsWriterActivity,
+  getCallRailStatus,
+  addCallRailAccount,
+  updateCallRailAccount,
+  removeCallRailAccount,
+  syncCallRailAccount,
+  syncAllCallRail,
+  disconnectCallRail,
   type ConnectInput,
   type DentallySyncResource,
 } from './api';
@@ -371,5 +378,65 @@ export function useSheetsWriterActivity(enabled: boolean) {
     queryFn: getSheetsWriterActivity,
     enabled,
     staleTime: 15_000,
+  });
+}
+
+// --- CallRail companies (multi-company call tracking) -----------------------
+export function useCallRailStatus() {
+  return useQuery({
+    queryKey: ['callrail-status'],
+    queryFn: getCallRailStatus,
+    staleTime: 30_000,
+  });
+}
+
+export function useAddCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { apiKey: string; callrailAccountId: string; label: string; practiceId: string | null }) =>
+      addCallRailAccount(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useUpdateCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; practiceId?: string | null; label?: string }) =>
+      updateCallRailAccount(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useRemoveCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => removeCallRailAccount(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useSyncCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => syncCallRailAccount(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+// "Sync now — every company".
+export function useSyncAllCallRail() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => syncAllCallRail(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useDisconnectCallRail() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => disconnectCallRail(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
   });
 }

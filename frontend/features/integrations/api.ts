@@ -487,3 +487,79 @@ export function getSheetsWriterActivity() {
     '/api/integrations/google-sheets-writer/activity',
   );
 }
+
+// --- CallRail companies (multi-company call tracking) -----------------------
+// CallRail tracks the phone calls each Google Ads campaign drives, so a call
+// can be credited back to the ad that produced it. One CallRail company = one
+// API key, mapped 1:1 to a practice — the same shape as a GHL subaccount. The
+// first company added IS the connection; there is no separate singleton
+// key-paste route, and there is no owner-maintained tracking-number map — a
+// call's practice follows from the company (API key) that fetched it.
+export interface CallRailAccount {
+  id: string;
+  label: string | null;
+  callrailAccountId: string;
+  practiceId: string | null;
+  practiceName: string | null;
+  status: IntegrationStatus;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+  webhookUrl: string | null;
+  callCount: number;
+  lastCallAt: string | null;
+}
+
+// What CallRail itself attributes a call to (e.g. a Google Ads campaign vs.
+// organic/direct) — shown so the "every tracked call is an ad call" working
+// assumption is checkable against real data rather than permanent and invisible.
+export interface CallRailSourceBreakdown {
+  source: string;
+  callCount: number;
+}
+
+export interface CallRailStatus {
+  connected: boolean;
+  accounts: CallRailAccount[];
+  sourceBreakdown: CallRailSourceBreakdown[];
+}
+
+export function getCallRailStatus() {
+  return api<CallRailStatus>('/api/integrations/callrail');
+}
+
+export function addCallRailAccount(body: {
+  apiKey: string;
+  callrailAccountId: string;
+  label: string;
+  practiceId: string | null;
+}) {
+  return api<CallRailAccount>('/api/integrations/callrail/accounts', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateCallRailAccount(id: string, body: { practiceId?: string | null; label?: string }) {
+  return api<CallRailAccount>(`/api/integrations/callrail/accounts/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export function removeCallRailAccount(id: string) {
+  return api<{ removed: true }>(`/api/integrations/callrail/accounts/${id}`, { method: 'DELETE' });
+}
+
+export function syncCallRailAccount(id: string) {
+  return api<{ ingested: number }>(`/api/integrations/callrail/accounts/${id}/sync`, { method: 'POST' });
+}
+
+// Every company, one call.
+export function syncAllCallRail() {
+  return api<{ ingested: number }>('/api/integrations/callrail/sync', { method: 'POST' });
+}
+
+// Disconnects the provider and every company beneath it.
+export function disconnectCallRail() {
+  return api<{ connected: false }>('/api/integrations/callrail', { method: 'DELETE' });
+}
