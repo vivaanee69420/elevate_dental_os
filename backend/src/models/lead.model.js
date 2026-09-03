@@ -8,6 +8,44 @@ export const LEAD_STATUSES = [
     'consultation_attended', 'treatment_started', 'treatment_completed',
     'not_proceeding', 'failed_to_attend',
 ];
+// The ordered pipeline a lead walks. `not_proceeding` / `failed_to_attend` are
+// TERMINAL, not stages — a lead can die at any point along this path.
+export const FUNNEL_STAGES = [
+    { key: 'new', label: 'New' },
+    { key: 'contact_attempted', label: 'Contact attempted' },
+    { key: 'contact_made', label: 'Contact made' },
+    { key: 'consultation_booked', label: 'Consult booked' },
+    { key: 'consultation_attended', label: 'Consult attended' },
+    { key: 'treatment_started', label: 'Treatment started' },
+];
+
+// How far along FUNNEL_STAGES a lead in `status` got. -1 = not on the path.
+//
+// The terminal statuses are the reason this function exists. A lost lead has no
+// stage of its own, but it certainly reached one before it was lost, and a
+// funnel that drops lost leads entirely reports a top-of-funnel smaller than
+// the number of leads received — which is never true.
+//
+// GoHighLevel does not tell us where a lead died, so we place a terminal lead
+// at `new` (index 0): the ONLY thing we can assert without inventing history is
+// that it existed. Deliberately conservative — it keeps the funnel's top bar
+// equal to the true lead count and never overstates progress down the pipeline.
+// If GHL stage history is ever synced, this is the single place to improve it.
+const STAGE_INDEX = new Map(FUNNEL_STAGES.map((s, i) => [s.key, i]));
+export function furthestStageIndex(status) {
+    if (STAGE_INDEX.has(status)) return STAGE_INDEX.get(status);
+    if (status === 'treatment_completed') return FUNNEL_STAGES.length - 1;
+    if (status === 'not_proceeding' || status === 'failed_to_attend') return 0;
+    return -1;
+}
+
+// Funnel window + practice scope. All optional: no window = all time.
+export const leadFunnelQuerySchema = zod_1.z.object({
+    since: zod_1.z.string().optional(),
+    until: zod_1.z.string().optional(),
+    practice_id: zod_1.z.string().uuid().optional(),
+});
+
 export const leadListQuerySchema = zod_1.z.object({
     status: zod_1.z.enum(LEAD_STATUSES).optional(),
     practice_id: zod_1.z.string().uuid().optional(),

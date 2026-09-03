@@ -112,15 +112,69 @@ export const leadService = {
             throw new errors_1.AppError(error.message, 400);
         return { success: true };
     },
-    async funnel(orgId) {
-        const rows = await lead_repository_1.leadRepository.funnelRows(orgId);
-        const funnel = {};
+    // ------------------------------------------------------------------------
+    // Lead funnel for a window — the source of truth for every funnel surface.
+    //
+    // Two correctness rules live here rather than in the browser, because the
+    // browser got both of them wrong:
+    //
+    // 1. COUNT EVERY LEAD, INCLUDING LOST ONES. The stages are cumulative
+    //    ("reached this stage or beyond"), so a lead's furthest point decides
+    //    which stages it counts in. A lead that reached `consultation_attended`
+    //    and then went `not_proceeding` still reached consultation — it must
+    //    count at every stage up to there. The old client-side version tested
+    //    `allStages.slice(i).includes(status)`, and since `not_proceeding` is
+    //    not a stage it matched nothing, dropping such leads out of EVERY
+    //    stage including "New". On Plan4growth that hid 415 of 1,388 leads
+    //    (30%), so the funnel's top bar read 973 directly beside a header that
+    //    said 1,388. `furthestStageOf` maps a terminal status back to the
+    //    stage it died at, so lost leads stay in the funnel — which is the
+    //    entire point of a funnel.
+    //
+    // 2. NEVER DERIVE THE FUNNEL FROM A PAGE OF ROWS. Counts come from the
+    //    aggregate RPC, so no row cap can distort them.
+    //
+    // `lost` is reported alongside rather than folded away: a stage count that
+    // includes leads which have since died is honest only if the death toll is
+    // visible next to it.
+    async funnel(orgId, { since = null, until = null, practiceId = null } = {}) {
+        const rows = await lead_repository_1.leadRepository.funnelCounts(orgId, { since, until, practiceId });
+
+        const byStatus = {};
         for (const status of lead_model_1.LEAD_STATUSES)
-            funnel[status] = { count: 0, value: 0 };
-        for (const lead of rows || []) {
-            funnel[lead.status].count++;
-            funnel[lead.status].value += lead.estimated_value_pence;
+            byStatus[status] = { count: 0, valuePence: 0 };
+        let total = 0;
+        for (const r of rows) {
+            const status = r.status;
+            if (!byStatus[status]) continue; // unknown status: counted in total only
+            byStatus[status].count += Number(r.n || 0);
+            byStatus[status].valuePence += Number(r.value_pence || 0);
         }
-        return { funnel };
+        for (const r of rows) total += Number(r.n || 0);
+
+        // Cumulative stage counts: a lead counts at its furthest stage and at
+        // every stage before it.
+        const stages = lead_model_1.FUNNEL_STAGES.map((s, i) => {
+            let count = 0;
+            for (const status of lead_model_1.LEAD_STATUSES) {
+                const reached = lead_model_1.furthestStageIndex(status);
+                if (reached >= i) count += byStatus[status].count;
+            }
+            return { key: s.key, label: s.label, count };
+        });
+
+        const started = byStatus.treatment_started.count + byStatus.treatment_completed.count;
+        const lost = byStatus.not_proceeding.count + byStatus.failed_to_attend.count;
+
+        return {
+            total,
+            started,
+            lost,
+            // One decimal place, and null (not 0) when there is nothing to
+            // divide by — a 0% conversion on zero leads is not a real zero.
+            conversionPct: total ? Math.round((started / total) * 1000) / 10 : null,
+            stages,
+            byStatus,
+        };
     },
 };

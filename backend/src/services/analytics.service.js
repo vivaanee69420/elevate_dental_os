@@ -1781,6 +1781,39 @@ export const analyticsService = {
             revenuePence = billedPence;
             turnoverBasis = 'billed';
         }
+        // --------------------------------------------------------------------
+        // Cash figures. These three used to be: cashflow = bank balance,
+        // reserve = 0, excess = bank balance. The Command Centre rendered them
+        // as a running statement —
+        //     Cash collected − costs = Operating cashflow − reserve = Excess
+        // — so the page presented an arithmetic that its own numbers did not
+        // satisfy. On Plan4growth YTD it showed +£765,391 of "operating
+        // cashflow" where its two input rows give −£112,646: the same bank
+        // balance printed twice, once under a label describing a subtraction
+        // that never happened, and it flipped the sign of the group's real
+        // operating position.
+        //
+        // Now each figure means what its name says, and anything we cannot
+        // compute is null (the UI renders "—") rather than a 0 that reads as a
+        // real zero. `bankBalancePence` is the honest name for the bank number;
+        // `cashflowPence` is genuine operating cashflow.
+        //
+        // The reserve needs a monthly cost run-rate, so it exists only on the
+        // actuals basis. A Dentally-only org with no cost feed gets nulls —
+        // which is the truth, and is why "Less: 2mo cost reserve (£0)" was
+        // misleading rather than merely empty.
+        const monthsCovered = ranged
+            ? Math.max(1, (Number(to.slice(0, 4)) * 12 + Number(to.slice(5, 7)))
+                - (Number(from.slice(0, 4)) * 12 + Number(from.slice(5, 7))) + 1)
+            : 12;
+        const haveCosts = useActuals && totalCostsPence > 0;
+        const operatingCashflowPence = haveCosts ? periodRevenue - totalCostsPence : null;
+        const reservePence = haveCosts ? Math.round((totalCostsPence / monthsCovered) * 2) : null;
+        // Bank is org-level, so a practice-scoped request has no bank figure at
+        // all — null, not the £0 that a practice filter used to produce.
+        const bankKnown = !practiceId;
+        const excessCashPence = bankKnown && reservePence !== null ? bankPence - reservePence : null;
+
         return {
             basis: useActuals ? 'actuals' : 'revenue-only',
             turnoverBasis,
@@ -1789,9 +1822,14 @@ export const analyticsService = {
             marginPct,
             totalCostsPence,
             cashCollectedPence: periodRevenue,
-            cashflowPence: bankPence,
-            reservePence: 0,
-            excessCashPence: bankPence,
+            monthsCovered,
+            // Real operating cashflow: cash in less costs. Null without costs.
+            cashflowPence: operatingCashflowPence,
+            // The bank position itself — a different thing from cashflow, and
+            // indicative only (it includes card/clearing accounts).
+            bankBalancePence: bankKnown ? bankPence : null,
+            reservePence,
+            excessCashPence,
         };
     },
     // 12-month revenue series — EXACT real settled payments per month (RPC), no

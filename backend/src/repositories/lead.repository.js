@@ -80,14 +80,23 @@ export const leadRepository = {
             throw new Error(error.message);
         return data ?? [];
     },
-    async funnelRows(orgId) {
+    // Per-status lead counts for a window, aggregated IN SQL.
+    //
+    // This replaced a `.select('status, estimated_value_pence')` over the whole
+    // table with no .limit(), which PostgREST silently capped at 1000 rows —
+    // so on any org past 1000 leads the funnel was computed from an arbitrary
+    // subset. An aggregate that returns one row per status (9 max) cannot be
+    // capped, however many leads the tenant accumulates.
+    async funnelCounts(orgId, { since = null, until = null, practiceId = null } = {}) {
         if (await crmHidden(orgId)) return [];
-        const { data, error } = await supabase_1.serviceClient
-            .from('leads')
-            .select('status, estimated_value_pence')
-            .eq('organisation_id', orgId);
+        const { data, error } = await supabase_1.serviceClient.rpc('lead_funnel_counts', {
+            p_org: orgId,
+            p_since: since ?? null,
+            p_until: until ?? null,
+            p_practice: practiceId ?? null,
+        });
         if (error)
             throw new Error(error.message);
-        return data;
+        return Array.isArray(data) ? data : [];
     },
 };

@@ -210,7 +210,14 @@ describe('plBenchmark — /profit data-source toggle', () => {
 describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
   const now = () => new Date(2026, 4, 15);
 
-  it('no real costs → revenue real (payments), costs/profit/margin 0, cash = bank', async () => {
+  // Without a cost feed there is no operating cashflow and no cost reserve to
+  // compute. These used to return the BANK BALANCE as `cashflowPence` and again
+  // as `excessCashPence`, with `reservePence: 0` — so the Command Centre's cash
+  // table printed "Cash collected − costs = Operating cashflow" over three
+  // numbers that did not satisfy it, and showed the same bank figure twice
+  // under two different labels. Null means "we cannot compute this", and the
+  // UI renders "—"; a 0 on a cash line reads as a real zero.
+  it('no cost feed → cashflow/reserve/excess are null, and bank is its own field', async () => {
     supaRec.resultProvider = (q) =>
       q.table === 'monthly_financials' ? { data: [], error: null }
       : q.table === 'bank_accounts' ? { data: [{ balance_pence: 3_000_000, last_synced_at: '2026-05-14T00:00:00Z' }], error: null }
@@ -223,9 +230,42 @@ describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
     expect(r.netProfitPence).toBe(0);
     expect(r.marginPct).toBe(0);
     expect(r.cashCollectedPence).toBe(100_000_000);
-    expect(r.cashflowPence).toBe(3_000_000); // real bank balance
-    expect(r.reservePence).toBe(0);
-    expect(r.excessCashPence).toBe(3_000_000);
+    expect(r.cashflowPence).toBeNull();       // no costs → no operating cashflow
+    expect(r.reservePence).toBeNull();        // no cost run-rate → no reserve
+    expect(r.excessCashPence).toBeNull();     // needs the reserve
+    expect(r.bankBalancePence).toBe(3_000_000); // the bank number, honestly named
+  });
+
+  it('with a cost feed → cashflow is cash in less costs, and the table reconciles', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials'
+        ? { data: [
+            { period: '2026-01', dental_bucket: 'revenue', amount_pence: 60_000_000, source: 'xero' },
+            { period: '2026-01', dental_bucket: 'staff', amount_pence: 24_000_000, source: 'xero' },
+          ], error: null }
+        : q.table === 'bank_accounts'
+          ? { data: [{ balance_pence: 9_000_000 }], error: null }
+          : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-03-01', pence: 20_000_000 }]);
+    const r = await svc.dashboardSummary(ORG_A, { now });
+    // The identity the UI draws must hold on the numbers the UI is given.
+    expect(r.cashflowPence).toBe(r.cashCollectedPence - r.totalCostsPence);
+    expect(r.cashflowPence).toBe(-4_000_000);   // and it is legitimately negative
+    // 2 months of the window's cost run-rate (24m over a trailing-12 window).
+    expect(r.reservePence).toBe(Math.round((24_000_000 / 12) * 2));
+    expect(r.excessCashPence).toBe(r.bankBalancePence - r.reservePence);
+  });
+
+  // Bank is org-level, so a practice-scoped request has no bank figure at all.
+  // It used to report £0, which reads as "this practice has no money".
+  it('practice scope → bank and excess are null, not a £0 bank balance', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'bank_accounts' ? { data: [{ balance_pence: 3_000_000 }], error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-03-01', pence: 5_000_000 }]);
+    const r = await svc.dashboardSummary(ORG_A, { now, practiceId: 'p1' });
+    expect(r.bankBalancePence).toBeNull();
+    expect(r.excessCashPence).toBeNull();
   });
 
   it('billed production > settled cash → turnover = invoiced, cash = settled (<100%)', async () => {
