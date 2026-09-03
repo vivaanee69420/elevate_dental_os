@@ -7,11 +7,12 @@ import { quickbooksAccountService } from "../services/quickbooks-account.service
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { decryptSecret } from "../lib/crypto.js";
-import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema } from "../models/integration.model.js";
+import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema, callrailAccountCreateSchema, callrailAccountUpdateSchema } from "../models/integration.model.js";
 import { isAgencyActor } from "../middleware/agency.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
 import { emergentService } from "../services/emergent.service.js";
 import { featuresService } from "../services/features.service.js";
+import { callrailService } from "../services/callrail.service.js";
 
 function frontendUrl() {
     const raw = (process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').trim();
@@ -55,15 +56,44 @@ export const integrationController = {
         }));
     },
     // ---- CallRail (multi-company call tracking) — provider-level status/
-    // sync/disconnect. Task 4 adds the per-company /accounts routes on top.
+    // sync/disconnect (Task 3), plus the per-company /accounts routes below
+    // (Task 4). callrailGet now reads the real per-company rows + source
+    // breakdown via callrail.service.js rather than the Task-3-era stub.
     async callrailGet(req, res) {
-        res.json(await integration_service_1.integrationService.callrailStatus(req.user.organisation_id));
+        res.json(await callrailService.status(req.user.organisation_id));
     },
     async callrailSync(req, res) {
         res.json(await integration_service_1.integrationService.callrailSync(req.user.organisation_id));
     },
     async callrailDisconnect(req, res) {
         res.json(await integration_service_1.integrationService.callrailDisconnect(req.user.organisation_id));
+    },
+    // --- CallRail companies (Task 4) ----------------------------------------
+    async callrailAccountCreate(req, res) {
+        // practiceId is the agency-controlled mapping field, same rule as
+        // ghlAccountUpdate's practice_id — a non-agency owner may still add
+        // an unmapped company, just not choose its practice.
+        if (req.body?.practiceId !== undefined && !(await isAgencyActor(req))) {
+            return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
+        }
+        const body = callrailAccountCreateSchema.parse(req.body);
+        res.json(await callrailService.addAccount(req.user.organisation_id, body));
+    },
+    async callrailAccountUpdate(req, res) {
+        if (req.body?.practiceId !== undefined && !(await isAgencyActor(req))) {
+            return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
+        }
+        const { id } = idParamSchema.parse(req.params);
+        const body = callrailAccountUpdateSchema.parse(req.body);
+        res.json(await callrailService.updateAccount(req.user.organisation_id, id, body));
+    },
+    async callrailAccountRemove(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await callrailService.removeAccount(req.user.organisation_id, id));
+    },
+    async callrailAccountSync(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await callrailService.syncAccount(req.user.organisation_id, id));
     },
     async list(req, res) {
         res.json(await integration_service_1.integrationService.list(req.user.organisation_id));

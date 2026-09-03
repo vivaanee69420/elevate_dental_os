@@ -59,3 +59,17 @@ export const ghlDashboardQuerySchema = zod_1.z.object({
     since: zod_1.z.string().datetime().optional(),
     until: zod_1.z.string().datetime().optional(),
 });
+// CallRail multi-company management schemas (Task 4). One company = one API
+// key, one practice — label is REQUIRED on create (unlike GHL's optional
+// label) per the frontend contract; practiceId is optional/nullable on both
+// and is an agency-actor-only field enforced in the controller, not here.
+export const callrailAccountCreateSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1),
+    callrailAccountId: zod_1.z.string().min(1),
+    label: zod_1.z.string().min(1).max(120),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+});
+export const callrailAccountUpdateSchema = zod_1.z.object({
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+    label: zod_1.z.string().min(1).max(120).optional(),
+});
