@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS public.callrail_calls (
   organisation_id        uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
   -- The CallRail company this call came from. Its practice_id is the call's
   -- practice; practice_id is denormalised here so a read never needs the join.
-  integration_account_id uuid REFERENCES integration_accounts(id) ON DELETE CASCADE,
+  integration_account_id uuid REFERENCES integration_accounts(id) ON DELETE SET NULL,
   practice_id            uuid REFERENCES practices(id) ON DELETE SET NULL,
   -- CallRail's own id: the idempotency key. A webhook and a pull describing
   -- the same call must produce one row.
@@ -375,7 +375,7 @@ Check CallRail's current documentation for whether the Post-Call webhook is sign
 
 - An unknown token is rejected — and the response must not reveal whether the token merely mismatched or the org has no CallRail connection.
 - The org is resolved from the TOKEN, never from anything in the payload. A payload claiming another `organisation_id` changes nothing.
-- The same call delivered twice produces one row.
+- The same call delivered twice produces one row. **Assert this through the real upsert, on the real conflict target `(organisation_id, callrail_id)`** — a unique constraint only delivers idempotency if the write actually upserts on it. This codebase has been burned by an identity key that looked sound on paper (`treatment_accepted`'s hash of mutable fields, corrected in `000149`); `callrail_id` is CallRail's own opaque id rather than a synthesised hash, so the risk is far lower, but "far lower" is not "tested".
 - A payload missing its call id or start time is rejected rather than stored half-formed.
 - `caller_phone10` and `caller_email_norm` are populated with the SHARED normalisers.
 
@@ -418,7 +418,7 @@ call arriving twice produces one row."
 - [ ] **Step 1: Write the failing tests**
 
 - The pull pages CallRail's API and stops correctly — assert the number of requests, not just the row total.
-- A call already ingested by webhook is not duplicated.
+- A call already ingested by webhook is not duplicated — same assertion as Task 5, through the same `(organisation_id, callrail_id)` conflict target, proving both paths share one identity.
 - One account failing does not stop the others, and a `failed` account is retried on the next run rather than frozen out.
 - Cross-org isolation: a call is written only to the org whose key fetched it, with that account's `practice_id`.
 
@@ -446,10 +446,20 @@ the webhook's write path and idempotency key."
 ### Task 7: Gates, docs, state log
 
 **Files:**
+- Modify: `db/01_schema.sql`
+- Modify: `db/02_rls.sql`
 - Modify: `docs/API.md`
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Run every gate and report each verbatim**
+- [ ] **Step 1: Sync the unmanaged schema mirrors**
+
+CLAUDE.md's rule is unconditional: `db/01_schema.sql` and `db/02_rls.sql` are source copies that are NOT what `supabase db reset` reads, and they must be kept in sync when the schema changes. Task 1 added a table and nothing has updated them.
+
+Add `callrail_calls` to `db/01_schema.sql` and its `ENABLE ROW LEVEL SECURITY` to `db/02_rls.sql`, matching the surrounding formatting exactly — read how a comparable recent table (`ghl_appointments`, `integration_accounts`) appears in each file and follow it. Copy the column list verbatim from `supabase/migrations/20260101000154_callrail.sql`, including the `ON DELETE SET NULL` on `integration_account_id`.
+
+**This blocks merge.** A drifted mirror is worse than an absent one: the next person to read it will believe it.
+
+- [ ] **Step 2: Run every gate and report each verbatim**
 
 ```
 cd backend  && npm test
@@ -462,19 +472,19 @@ ggshield secret scan commit-range origin/main..HEAD
 ```
 `npm run build` exits 1 on `/(auth)/forgot-password` only. Confirm no OTHER page fails.
 
-- [ ] **Step 2: Document the endpoints in `docs/API.md`**
+- [ ] **Step 3: Document the endpoints in `docs/API.md`**
 
 Every route in Task 2's contract plus the webhook, including: the organisation is taken from the session and never accepted as a parameter; the API key is never returned by any read; a company with no practice assigned attributes its calls to nothing.
 
-- [ ] **Step 3: Add ONE bullet to `CLAUDE.md`'s "Current state" section**
+- [ ] **Step 4: Add ONE bullet to `CLAUDE.md`'s "Current state" section**
 
 Read two neighbouring bullets and match their density. Record: the ONE new table `callrail_calls` and its reuse of `integration_accounts` for credentials; migration `20260101000154` and its applied-status stated ACCURATELY (the controller applies it after this task, so NOT applied as you write); that calls are stored separately from `leads` and why; that a call's practice comes from the key that fetched it, with no tracking-number map, and that an unassigned company attributes to nothing; both ingestion paths and the shared idempotency key; that the webhook resolves its org from the path token, never the payload; and whether CallRail signs its webhooks (from Task 5's finding).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docs/API.md CLAUDE.md
-git commit -m "docs(callrail): document the endpoints and record the integration"
+git add db/01_schema.sql db/02_rls.sql docs/API.md CLAUDE.md
+git commit -m "docs(callrail): sync the schema mirrors, document the endpoints"
 ```
 
 ---
