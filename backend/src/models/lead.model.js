@@ -46,6 +46,14 @@ export const leadFunnelQuerySchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid().optional(),
 });
 
+// CRM Reports scope. Same window semantics as the funnel.
+export const leadReportQuerySchema = zod_1.z.object({
+    since: zod_1.z.string().optional(),
+    until: zod_1.z.string().optional(),
+    practice_id: zod_1.z.string().uuid().optional(),
+    integration_account_id: zod_1.z.string().uuid().optional(),
+});
+
 export const leadListQuerySchema = zod_1.z.object({
     status: zod_1.z.enum(LEAD_STATUSES).optional(),
     practice_id: zod_1.z.string().uuid().optional(),

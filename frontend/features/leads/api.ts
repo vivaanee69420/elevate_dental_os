@@ -147,3 +147,48 @@ export function getLeadFunnel(opts: {
   const q = qs.toString();
   return api<LeadFunnel>(`/api/leads/funnel${q ? `?${q}` : ''}`);
 }
+
+// ---------------------------------------------------------------------------
+// CRM Reports — server-aggregated. Same rule as the funnel: every figure comes
+// from one SQL aggregate over one window, never from counting a page of leads.
+// ---------------------------------------------------------------------------
+export interface LeadReportGroup {
+  key: string;
+  keyId: string | null;
+  total: number;
+  contacted: number;
+  consultBooked: number;
+  consultAttended: number;
+  treatmentStarted: number;
+  notProceeding: number;
+  failedToAttend: number;
+  convertedValuePence: number;
+  pipelineValuePence: number;
+  /** null when there are no leads to divide by. */
+  conversionPct: number | null;
+}
+
+export interface LeadReport {
+  totals: LeadReportGroup & {
+    ftaPct: number | null;
+    avgFirstResponseMinutes: number | null;
+  };
+  funnel: { key: string; label: string; count: number }[];
+  bySource: LeadReportGroup[];
+  byPractice: LeadReportGroup[];
+}
+
+export function getLeadReport(opts: {
+  since?: string | null;
+  until?: string | null;
+  practiceId?: string | null;
+  accountId?: string | null;
+} = {}) {
+  const qs = new URLSearchParams();
+  if (opts.since) qs.set('since', opts.since);
+  if (opts.until) qs.set('until', opts.until);
+  if (opts.practiceId) qs.set('practice_id', opts.practiceId);
+  if (opts.accountId) qs.set('integration_account_id', opts.accountId);
+  const q = qs.toString();
+  return api<LeadReport>(`/api/leads/report${q ? `?${q}` : ''}`);
+}

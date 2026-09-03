@@ -215,6 +215,116 @@ describe('tenant and scope isolation', () => {
   });
 });
 
+// ============================================================================
+// CRM Reports — the same defect on a sibling screen, live at the time of the
+// fix. It fetched `useLeads({ limit: 1000 })` and counted rows in the browser.
+// 1000 is exactly PostgREST's cap, so it was a ceiling dressed as a choice.
+// ============================================================================
+describe('CRM Reports figures come from the aggregate, not a page of leads', () => {
+  // The real Plan4growth all-time shape, from lead_report_aggregate.
+  const REPORT_ROWS = [
+    { dimension: 'all', key_id: null, key: '', total: 22807, contacted: 4506,
+      consult_booked: 1200, consult_attended: 700, treatment_started: 494,
+      not_proceeding: 8000, failed_to_attend: 18,
+      converted_value_pence: 12_000_000, pipeline_value_pence: 646_081_311,
+      response_minutes_sum: 6000, response_minutes_count: 300 },
+    { dimension: 'source', key_id: null, key: 'gohighlevel', total: 22807,
+      contacted: 4506, consult_booked: 1200, consult_attended: 700,
+      treatment_started: 494, not_proceeding: 8000, failed_to_attend: 18,
+      converted_value_pence: 12_000_000, pipeline_value_pence: 646_081_311,
+      response_minutes_sum: 6000, response_minutes_count: 300 },
+    { dimension: 'practice', key_id: 'p-roch', key: 'Rochester', total: 6697,
+      contacted: 0, consult_booked: 0, consult_attended: 0,
+      treatment_started: 132, not_proceeding: 0, failed_to_attend: 0,
+      converted_value_pence: 0, pipeline_value_pence: 93_793_811,
+      response_minutes_sum: 0, response_minutes_count: 0 },
+    { dimension: 'practice', key_id: null, key: 'Unassigned', total: 3939,
+      contacted: 0, consult_booked: 0, consult_attended: 0,
+      treatment_started: 301, not_proceeding: 0, failed_to_attend: 0,
+      converted_value_pence: 0, pipeline_value_pence: 308_744_600,
+      response_minutes_sum: 0, response_minutes_count: 0 },
+  ];
+  const stubReport = (rows) =>
+    vi.spyOn(leadRepository, 'reportAggregate').mockResolvedValue(rows);
+
+  it('reports every lead, not the 1000-row page', async () => {
+    stubReport(REPORT_ROWS);
+    const r = await leadService.report(ORG_A);
+    expect(r.totals.total).toBe(22807); // page showed 1000
+    expect(r.funnel[0].count).toBe(22807);
+  });
+
+  it('the FTA rate is the real one, not the 0.00% truncation produced', async () => {
+    stubReport(REPORT_ROWS);
+    const r = await leadService.report(ORG_A);
+    expect(r.totals.ftaPct).toBe(0.1); // 18/22807 -> 0.08 -> 0.1 at 1dp
+    expect(r.totals.failedToAttend).toBe(18);
+  });
+
+  it('pipeline value is the full figure, not ~1/22 of it', async () => {
+    stubReport(REPORT_ROWS);
+    const r = await leadService.report(ORG_A);
+    expect(r.totals.pipelineValuePence).toBe(646_081_311);
+  });
+
+  // The by-practice table grouped on `l.practice?.name` and dropped falsy
+  // names, discarding 3,939 leads carrying 301 of the 494 conversions.
+  it('leads with no practice get their own row instead of vanishing', async () => {
+    stubReport(REPORT_ROWS);
+    const r = await leadService.report(ORG_A);
+    const unassigned = r.byPractice.find((p) => p.key === 'Unassigned');
+    expect(unassigned).toBeDefined();
+    expect(unassigned.total).toBe(3939);
+    expect(unassigned.treatmentStarted).toBe(301);
+  });
+
+  it('the funnel never widens as it descends', async () => {
+    stubReport(REPORT_ROWS);
+    const r = await leadService.report(ORG_A);
+    for (let i = 1; i < r.funnel.length; i++) {
+      expect(r.funnel[i].count).toBeLessThanOrEqual(r.funnel[i - 1].count);
+    }
+  });
+
+  it('average first response is a weighted mean, not an average of averages', async () => {
+    stubReport(REPORT_ROWS);
+    const r = await leadService.report(ORG_A);
+    expect(r.totals.avgFirstResponseMinutes).toBe(20); // 6000 / 300
+  });
+
+  it('no response data → null, not a confident 0 minutes', async () => {
+    stubReport([{ ...REPORT_ROWS[0], response_minutes_sum: 0, response_minutes_count: 0 }]);
+    const r = await leadService.report(ORG_A);
+    expect(r.totals.avgFirstResponseMinutes).toBeNull();
+  });
+
+  it('an empty org yields nulls and zeroes, never NaN', async () => {
+    stubReport([]);
+    const r = await leadService.report(ORG_A);
+    expect(r.totals.total).toBe(0);
+    expect(r.totals.conversionPct).toBeNull();
+    expect(r.totals.ftaPct).toBeNull();
+    expect(r.bySource).toEqual([]);
+    expect(Number.isNaN(r.totals.pipelineValuePence)).toBe(false);
+  });
+
+  it('uses the shared day window, so the report cannot lose its final day', async () => {
+    const spy = stubReport([]);
+    await leadService.report(ORG_A, { since: '2026-08-01', until: '2026-08-31' });
+    const args = spy.mock.calls[0][1];
+    expect(new Date(args.until).getTime())
+      .toBe(new Date(2026, 7, 31, 23, 59, 59, 999).getTime());
+  });
+
+  it('binds p_org server-side and scopes by ids, never names', async () => {
+    const spy = stubReport([]);
+    await leadService.report(ORG_B, { practiceId: 'p-1', accountId: 'a-1' });
+    expect(spy.mock.calls[0][0]).toBe(ORG_B);
+    expect(spy.mock.calls[0][1].practiceId).toBe('p-1');
+    expect(spy.mock.calls[0][1].accountId).toBe('a-1');
+  });
+});
+
 describe('the migration is safe for every tenant', () => {
   const migration = readFileSync(
     join(SRC, '..', '..', 'supabase', 'migrations', '20260101000151_lead_funnel_counts.sql'),
@@ -240,5 +350,27 @@ describe('the migration is safe for every tenant', () => {
   // silently reading a tenant's whole settled revenue as £0.
   it('closes the NULL-exclusion silent-zero on settled_receipts_by_day', () => {
     expect(migration).toMatch(/coalesce\(cardinality\(p_exclude_sources\), 0\) = 0/);
+  });
+
+  const report = readFileSync(
+    join(SRC, '..', '..', 'supabase', 'migrations', '20260101000152_lead_report_aggregate.sql'),
+    'utf8',
+  );
+
+  it('lead_report_aggregate is service_role only', () => {
+    expect(report).toMatch(/REVOKE ALL ON FUNCTION lead_report_aggregate\(uuid, timestamptz, timestamptz, uuid, uuid\)\s*\n\s*FROM PUBLIC, anon, authenticated/);
+    expect(report).toMatch(/GRANT EXECUTE ON FUNCTION lead_report_aggregate\(uuid, timestamptz, timestamptz, uuid, uuid\)\s*\n\s*TO service_role/);
+  });
+
+  it('lead_report_aggregate is org-scoped on its scan AND on its practice join', () => {
+    expect(report).toMatch(/l\.organisation_id = \$1/);
+    // The practice name join must carry the org predicate too — a join without
+    // one is how the PostgREST embed leak happened.
+    expect(report).toMatch(/LEFT JOIN practices pr ON pr\.id = a\.key_id AND pr\.organisation_id = \$1/);
+  });
+
+  it('lead_report_aggregate avoids the generic-plan trap', () => {
+    expect(report).toMatch(/LANGUAGE plpgsql STABLE SECURITY DEFINER/);
+    expect(report).toMatch(/USING p_org, p_since, p_until, p_practice, p_account/);
   });
 });
