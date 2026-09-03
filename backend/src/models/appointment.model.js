@@ -14,6 +14,14 @@ export const appointmentListQuerySchema = zod_1.z.object({
     // same convention as the occurred-appointment rollup (migration 000076). Pass
     // patients_only=false to include diary blocks.
     patients_only: zod_1.z.enum(['true', 'false']).optional().default('true'),
+    // Patient search — matches name, email or phone. THREE characters is the
+    // floor, and it is a performance boundary, not a preference: a trigram is
+    // three characters, so a shorter term cannot use the GIN index at all and
+    // falls back to scanning every contact in the org (measured 258ms, against
+    // 27ms for the worst indexed term). It matches most of the book anyway. An
+    // empty string is treated as "no search" rather than rejected, so a cleared
+    // search box does not 400.
+    search: zod_1.z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), zod_1.z.string().trim().min(3).max(80).optional()),
     // Pagination. Query params arrive as strings, so coerce; default 25/page.
     page: zod_1.z.coerce.number().int().min(1).optional().default(1),
     per_page: zod_1.z.coerce.number().int().min(1).max(100).optional().default(25),
