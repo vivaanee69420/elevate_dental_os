@@ -14,12 +14,29 @@ const SAFE_COLS =
   'value_pence, accepted_date, status, created_at, updated_at';
 
 export const treatmentAcceptedRepository = {
-    // Idempotent upsert on (organisation_id, source, external_id) — webhook and
-    // scheduled pull can't double-count. `row` must already carry organisation_id.
+    // Idempotent upsert on the NATURAL KEY (migration 000149), not on
+    // external_id. `row` must already carry organisation_id.
+    //
+    // The conflict target used to be (organisation_id, source, external_id),
+    // a hash over the raw Emergent fields. A trailing space in a patient name
+    // changed the hash, so the guard missed and the record inserted twice —
+    // 229 phantom rows and £1,014,647 of overstated accepted value on one
+    // tenant before this was found.
+    //
+    // patient_norm / treatment_norm are GENERATED columns, so they are not in
+    // the payload; Postgres infers the unique index from the target list. Two
+    // consequences worth knowing:
+    //   * a re-pull of a cosmetic variant UPDATES the existing row, which is
+    //     what makes a row whose external_id was computed the old way heal
+    //     itself on the next sync;
+    //   * a re-price UPDATES too, because amount is not part of the identity.
     async upsert(row) {
         const { data, error } = await supabase_1.serviceClient
             .from('treatment_accepted')
-            .upsert(row, { onConflict: 'organisation_id,source,external_id' })
+            .upsert(row, {
+                onConflict:
+                    'organisation_id,source,business_id,accepted_date,patient_norm,treatment_norm',
+            })
             .select(SAFE_COLS)
             .single();
         if (error) throw new Error(error.message);

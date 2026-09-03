@@ -32,15 +32,42 @@ const ENDPOINT = '/api/public/treatments-accepted';
 const CASHUP_ENDPOINT = '/api/public/daily-cashups';
 const MONTHLY_PL_ENDPOINT = '/api/public/monthly-pl';
 
+// Normalise a free-text identity field: collapse whitespace runs, trim, lower.
+// MUST stay byte-identical to the patient_norm / treatment_norm generated
+// columns in migration 000149 — test/emergent-natural-key.test.mjs pins the
+// pair. 'Craig  Attawater ' and 'craig attawater' are the same person.
+export const normaliseIdentityText = (s) =>
+    String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+
 // Emergent records carry no stable id, so we derive a deterministic external_id
-// from the immutable fields. Re-pulling the same record yields the same key, so
-// the upsert on (organisation_id, source, external_id) stays idempotent — no
-// double counting. Trade-off: two genuinely distinct rows with identical
-// business/date/patient/treatment/amount collapse to one (rare; acceptable).
+// from the identity fields.
+//
+// This hash used to be taken over the RAW field values INCLUDING `amount`, and
+// both choices caused live double-counting on Plan4growth (975 rows for 745
+// real records, £1,014,647 of accepted value overstated):
+//
+//   * raw text meant a trailing space minted a NEW identity, so the upsert's
+//     conflict guard missed and the same record inserted twice — 228 of 229
+//     duplicate pairs differed by nothing but whitespace;
+//   * `amount` in the identity meant a plan logged at £0 and priced later
+//     forked into two rows instead of correcting the one.
+//
+// So: text is normalised, and amount is NOT part of the identity — a re-price
+// updates the record. Verified safe across every tenant (no case exists where
+// one business/date/patient/treatment carries two distinct non-zero amounts).
+//
+// The real guarantee is the DB-side unique index on
+// (organisation_id, source, business_id, accepted_date, patient_norm,
+// treatment_norm) — see migration 000149. This function only has to agree with
+// it; if it ever disagrees the write fails loudly on the constraint instead of
+// silently inflating a tenant's revenue.
 export function externalId(rec) {
-    const parts = [rec.business_id, rec.date, rec.patient_name, rec.treatment_accepted, rec.amount]
-        .map((x) => (x == null ? '' : String(x)))
-        .join('|');
+    const parts = [
+        rec.business_id == null ? '' : String(rec.business_id),
+        rec.date == null ? '' : String(rec.date),
+        normaliseIdentityText(rec.patient_name),
+        normaliseIdentityText(rec.treatment_accepted),
+    ].join('|');
     return crypto.createHash('sha256').update(parts).digest('hex').slice(0, 32);
 }
 

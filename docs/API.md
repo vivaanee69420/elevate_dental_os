@@ -228,6 +228,18 @@ Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide (incl. 
 }
 ```
 
+## Emergent record identity
+
+`treatment_accepted` rows are identified by a **DB-enforced natural key** (migration `…000149`): `UNIQUE NULLS NOT DISTINCT (organisation_id, source, business_id, accepted_date, patient_norm, treatment_norm)`, where `patient_norm`/`treatment_norm` are generated columns (`lower(btrim(collapse-whitespace(...)))`).
+
+Identity lives in the database rather than in the sync because this is multi-tenant: the nightly pull, the real-time webhook, CSV import and any future importer all inherit the same guarantee, and none can opt out by forgetting to normalise. A path that computes an identity wrongly now fails loudly on the constraint instead of silently inflating a tenant's revenue.
+
+`organisation_id` leads the key, so tenants can never collide. **`amount` is excluded** — re-pricing a plan UPDATES the record rather than forking it (verified: no tenant has one business/date/patient/treatment carrying two distinct non-zero amounts). `business_id` is included, so the same patient reported by two Emergent businesses stays two rows; merging would corrupt per-practice P&L.
+
+The upsert's conflict target is this key, not `external_id`. `external_id` is still derived (`externalId()` in `lib/integrations/emergent-sync.js`, byte-identical to the SQL expression and pinned by `test/emergent-natural-key.test.mjs`) and still used by the `treatment.deleted` webhook.
+
+**Residual limitation:** a genuine correction to business/date/patient/treatment is a new identity and still orphans the old row — inherent without a stable upstream id.
+
 ## Appointments
 
 **Page-level grants (two-level).** A section key is the DEFAULT for every page in that section; an explicit **`page:<routeId>`** key overrides it for one page. Effective(page) = the page override if one is set, otherwise the section. A section grant with no overrides behaves exactly as before, so existing grants keep working and no migration is needed. `GET /api/admin/permissions` returns `{ catalog, roles, pages, overrides }` — `roles[role]` now carries a resolved `page:<id>` value for every page, `pages` maps page → its section key, and `overrides[role]` lists only the EXPLICIT page rows so the UI can offer "reset to section". `PUT /api/admin/permissions/role` accepts `allowed: null` to delete the row, which returns a page to inheriting (distinct from `false`, an explicit deny). Overrides are **enforced on the API** for pages that own their endpoint (`PAGE_OWNED` in `middleware/section-lock.js`: appointments, associates, staff, chair, treatments, pay, contacts, inbox, workflows, task-manager, p4g-ai, cockpit); for pages that share one endpoint with the rest of their section (Finance on `/analytics`, Growth on `/growth`, Training on `/training`) the override is **nav-only** and the matrix labels it as such.
