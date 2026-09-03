@@ -95,11 +95,23 @@ export const callrailService = {
     // so the owner can see it is unassigned rather than have its calls
     // silently attributed nowhere.
     async status(orgId) {
-        const [marker, accounts, sourceBreakdown] = await Promise.all([
+        const [marker, allAccounts, sourceBreakdown] = await Promise.all([
             integrationRepository.getByProvider(orgId, PROVIDER),
             integrationAccountRepository.list(orgId, PROVIDER),
             callrailRepository.sourceBreakdown(orgId),
         ]);
+
+        // A removed company is soft-revoked, not deleted: markRevoked nulls its
+        // secrets but keeps the row, so its calls keep their
+        // integration_account_id instead of being orphaned — the same reason
+        // the FK is ON DELETE SET NULL rather than CASCADE.
+        //
+        // It must not still be LISTED, though. An owner who clicks Disconnect
+        // and then sees the company sitting in the panel has been told the
+        // action failed. The row stays in the database; it leaves the screen.
+        // (sourceBreakdown is deliberately org-wide and still counts a revoked
+        // company's historical calls — those calls really did happen.)
+        const accounts = allAccounts.filter((a) => a.status !== 'revoked');
 
         const [counts, practiceNames] = await Promise.all([
             callrailRepository.callCountsByAccount(orgId, accounts.map((a) => a.id)),
