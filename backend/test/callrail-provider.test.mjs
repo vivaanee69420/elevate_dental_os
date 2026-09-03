@@ -139,41 +139,63 @@ describe('callrailProvider.verify', () => {
     });
 });
 
+// A single-page-of-data + one-empty-page-to-confirm-done response sequence —
+// the shape every successful listAccounts/listCompanies call makes under the
+// "stop on an empty page, never a short one" discipline (see
+// callrail-provider.js's fetchAllPages). Two requests for one page of real
+// data, always.
+function pageThenDone(items) {
+    return vi.fn()
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => (items) })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([]) });
+}
+
 describe('callrailProvider.listCompanies', () => {
-    it('lists every company under an account, from a bare-array response', async () => {
-        const fetchMock = vi.fn().mockResolvedValue({
-            ok: true, status: 200,
-            json: async () => ([{ id: 'COM1', name: 'Ashford' }, { id: 'COM2', name: 'Bexleyheath' }]),
-        });
+    it('lists every company under an account, from a bare-array response, paging until an EMPTY page — not a short one', async () => {
+        const fetchMock = pageThenDone([{ id: 'COM1', name: 'Ashford' }, { id: 'COM2', name: 'Bexleyheath' }]);
         vi.stubGlobal('fetch', fetchMock);
 
         const companies = await callrailProvider.listCompanies('key-good', 'ACC1');
         expect(companies).toEqual([{ id: 'COM1', name: 'Ashford' }, { id: 'COM2', name: 'Bexleyheath' }]);
 
-        const [url] = fetchMock.mock.calls[0];
-        expect(url).toBe('https://api.callrail.com/v3/a/ACC1/companies.json');
+        // REQUEST COUNT, not just the row total: one page of data + one empty
+        // page confirming there is no more — never stops on the first (full)
+        // page alone.
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const [firstUrl] = fetchMock.mock.calls[0];
+        expect(String(firstUrl)).toBe('https://api.callrail.com/v3/a/ACC1/companies.json?page=1&per_page=100');
+        const [secondUrl] = fetchMock.mock.calls[1];
+        expect(String(secondUrl)).toBe('https://api.callrail.com/v3/a/ACC1/companies.json?page=2&per_page=100');
+    });
+
+    it('follows real multi-page pagination: page 1 full, page 2 partial, page 3 empty — 3 requests, not 2', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ id: 'COM1', name: 'A' }, { id: 'COM2', name: 'B' }]) })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ id: 'COM3', name: 'C' }]) })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([]) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const companies = await callrailProvider.listCompanies('key-good', 'ACC1');
+        expect(companies.map((c) => c.id)).toEqual(['COM1', 'COM2', 'COM3']);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
     });
 
     it('tolerates a { companies: [...] } wrapper shape', async () => {
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-            ok: true, status: 200,
-            json: async () => ({ companies: [{ id: 'COM1', name: 'Ashford' }] }),
-        }));
+        vi.stubGlobal('fetch', pageThenDone({ companies: [{ id: 'COM1', name: 'Ashford' }] }));
         const companies = await callrailProvider.listCompanies('key-good', 'ACC1');
         expect(companies).toEqual([{ id: 'COM1', name: 'Ashford' }]);
     });
 
     it('a company with no name falls back to its id, never dropped', async () => {
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-            ok: true, status: 200, json: async () => ([{ id: 'COM1', name: '' }]),
-        }));
+        vi.stubGlobal('fetch', pageThenDone([{ id: 'COM1', name: '' }]));
         const companies = await callrailProvider.listCompanies('key-good', 'ACC1');
         expect(companies).toEqual([{ id: 'COM1', name: 'COM1' }]);
     });
 
-    it('rejects a 401 with a message that never contains the key', async () => {
+    it('rejects a 401 with a message that never contains the key, after exactly ONE request (no pagination past a failure)', async () => {
         const secretKey = 'sk-do-not-leak';
-        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }));
+        const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
+        vi.stubGlobal('fetch', fetchMock);
         let caught = null;
         try {
             await callrailProvider.listCompanies(secretKey, 'ACC1');
@@ -182,6 +204,13 @@ describe('callrailProvider.listCompanies', () => {
         }
         expect(caught).not.toBeNull();
         expect(caught.message).not.toContain(secretKey);
+        expect(caught.callrailStatus).toBe(401);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a 404 (account not found) distinctly from a 401', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) }));
+        await expect(callrailProvider.listCompanies('key-good', 'ACC-nope')).rejects.toThrow(/account ACC-nope was not found/i);
     });
 
     it('throws without an API key, and never calls CallRail', async () => {
@@ -189,6 +218,140 @@ describe('callrailProvider.listCompanies', () => {
         vi.stubGlobal('fetch', fetchMock);
         await expect(callrailProvider.listCompanies('', 'ACC1')).rejects.toThrow(/API key/i);
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+});
+
+describe('callrailProvider.listAccounts — the key-only discovery step', () => {
+    it('lists every account a key can see, from GET /v3/a.json, paging until an EMPTY page', async () => {
+        const fetchMock = pageThenDone([
+            { id: 'ACC1', name: 'Last Mile Metrics' },
+            { id: 'ACC2', name: 'Second Practice Group' },
+        ]);
+        vi.stubGlobal('fetch', fetchMock);
+
+        const accounts = await callrailProvider.listAccounts('key-good');
+        expect(accounts).toEqual([
+            { id: 'ACC1', name: 'Last Mile Metrics' },
+            { id: 'ACC2', name: 'Second Practice Group' },
+        ]);
+
+        // REQUEST COUNT: one page of data + one empty page confirming done.
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const [firstUrl, opts] = fetchMock.mock.calls[0];
+        expect(String(firstUrl)).toBe('https://api.callrail.com/v3/a.json?page=1&per_page=100');
+        expect(opts.headers.Authorization).toBe('Token token="key-good"');
+        const [secondUrl] = fetchMock.mock.calls[1];
+        expect(String(secondUrl)).toBe('https://api.callrail.com/v3/a.json?page=2&per_page=100');
+    });
+
+    it('follows real multi-page pagination across accounts: 2 full pages + 1 empty page = 3 requests', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ id: 'ACC1', name: 'A' }, { id: 'ACC2', name: 'B' }]) })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ id: 'ACC3', name: 'C' }, { id: 'ACC4', name: 'D' }]) })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([]) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const accounts = await callrailProvider.listAccounts('key-good');
+        expect(accounts.map((a) => a.id)).toEqual(['ACC1', 'ACC2', 'ACC3', 'ACC4']);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('an account with no name falls back to its id, never dropped', async () => {
+        vi.stubGlobal('fetch', pageThenDone([{ id: 'ACC1', name: '' }]));
+        const accounts = await callrailProvider.listAccounts('key-good');
+        expect(accounts).toEqual([{ id: 'ACC1', name: 'ACC1' }]);
+    });
+
+    it('an empty key never can see zero accounts is still a VALID (not thrown) empty result — a truly empty first page', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ([]) }));
+        const accounts = await callrailProvider.listAccounts('key-good');
+        expect(accounts).toEqual([]);
+    });
+
+    it('rejects a 401 with a message that never contains the key, and stamps callrailStatus for the caller to distinguish auth from an outage', async () => {
+        const secretKey = 'sk-super-secret-do-not-leak';
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }));
+        let caught = null;
+        try {
+            await callrailProvider.listAccounts(secretKey);
+        } catch (err) {
+            caught = err;
+        }
+        expect(caught).not.toBeNull();
+        expect(caught.message).not.toContain(secretKey);
+        expect(caught.message).toMatch(/rejected this API key/i);
+        expect(caught.callrailStatus).toBe(401);
+    });
+
+    it('a 5xx is reported distinctly from an auth failure (no "rejected this API key" wording) and still stamps callrailStatus', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) }));
+        let caught = null;
+        try {
+            await callrailProvider.listAccounts('key-good');
+        } catch (err) {
+            caught = err;
+        }
+        expect(caught).not.toBeNull();
+        expect(caught.message).not.toMatch(/rejected this API key/i);
+        expect(caught.callrailStatus).toBe(503);
+    });
+
+    it('a network failure surfaces a generic message, never the raw error, and carries no callrailStatus', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')));
+        let caught = null;
+        try {
+            await callrailProvider.listAccounts('key-good');
+        } catch (err) {
+            caught = err;
+        }
+        expect(caught).not.toBeNull();
+        expect(caught.message).toMatch(/Could not reach CallRail/i);
+        expect(caught.callrailStatus).toBeUndefined();
+    });
+
+    it('throws without an API key, and never calls CallRail', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        await expect(callrailProvider.listAccounts('')).rejects.toThrow(/API key/i);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+});
+
+// The 429-backoff loop callrail-sync.js's calls.json pull used to carry its
+// own copy of — now ONE shared implementation (fetchWithBackoff), exercised
+// here through listAccounts so a discovery-path retry is proven without a
+// second bespoke retry test harness. test/setup.js sets
+// CALLRAIL_RETRY_BASE_MS=1 so this does not sleep through real backoff.
+describe('callrailProvider — shared 429 backoff (fetchWithBackoff)', () => {
+    it('retries a 429 and succeeds on the next attempt, honouring no Retry-After header', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: () => null } })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([{ id: 'ACC1', name: 'Ashford' }]) })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([]) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const accounts = await callrailProvider.listAccounts('key-good');
+        expect(accounts).toEqual([{ id: 'ACC1', name: 'Ashford' }]);
+        expect(fetchMock).toHaveBeenCalledTimes(3); // 429, retry (success), empty page
+    });
+
+    it('honours a positive Retry-After header when CallRail sends one, rather than the base backoff', async () => {
+        // A tiny-but-positive value so this takes the Retry-After branch
+        // (retryAfter > 0) instead of the base-backoff fallback, without
+        // slowing the suite down.
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce({ ok: false, status: 429, headers: { get: (h) => (h === 'retry-after' ? '0.001' : null) } })
+            .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ([]) });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const accounts = await callrailProvider.listAccounts('key-good');
+        expect(accounts).toEqual([]);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('gives up after exhausting retries on a persistent 429', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, headers: { get: () => null } }));
+        await expect(callrailProvider.listAccounts('key-good')).rejects.toThrow(/exhausted 429 retries/i);
     });
 });
 

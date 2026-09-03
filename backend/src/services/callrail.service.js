@@ -49,6 +49,7 @@ import { encryptSecret, decryptSecret } from "../lib/crypto.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
 import { assertOrgOwns } from "../lib/tenant-guard.js";
 import { AppError } from "../middleware/errors.js";
+import { mapWithConcurrency } from "../lib/async-pool.js";
 
 const PROVIDER = 'callrail';
 
@@ -156,16 +157,105 @@ export const callrailService = {
         };
     },
 
-    // Step 1 of the Add-company flow: list every company under a CallRail
-    // ACCOUNT so the owner PICKS one instead of typing an opaque id. Never
-    // persists anything — a pure passthrough verification call, same
-    // failure-message discipline as addAccount below (never leaks the key).
-    async listCompanies(orgId, { apiKey, callrailAccountId } = {}) {
+    // Step 1 of the Add-company flow (key-only discovery): the owner pastes
+    // ONE API key — which may cover several CallRail accounts (an
+    // agency-style key) — and this resolves EVERY account and company it can
+    // reach, so the owner never types an account id at all (the old flow's
+    // blocker for an owner who genuinely does not have one to hand). Never
+    // persists anything — a pure passthrough discovery call.
+    //
+    // Fans out to companies.json PER account CallRail returned, bounded to a
+    // small concurrency (CallRail rate-limits at 1,000/hour and answers 429
+    // on it — callrail-provider.js's fetchWithBackoff already retries that;
+    // this does not add a second retry, only a fan-out width). ONE account's
+    // companies lookup failing is reported on THAT account (companies: [],
+    // error: <message>) rather than thrown — the owner still sees every
+    // other account discovery succeeded for.
+    async discoverAccounts(orgId, { apiKey } = {}) {
+        const key = apiKey == null ? '' : String(apiKey).trim();
+        if (!key) throw new AppError('apiKey is required', 400);
+
+        let accountList;
         try {
-            return await callrailProvider.listCompanies(apiKey, callrailAccountId);
+            accountList = await callrailProvider.listAccounts(key);
         } catch (err) {
-            throw new AppError(err.message, 400);
+            // Distinguish "this key is bad" (401/403 — the owner's mistake,
+            // fixable by them) from "CallRail itself is having trouble"
+            // (5xx/network — not their fault). callrailProvider stamps the
+            // real HTTP status it saw on err.callrailStatus for exactly this,
+            // so this never has to re-parse the message text.
+            const isAuthFailure = err.callrailStatus === 401 || err.callrailStatus === 403;
+            throw new AppError(err.message, isAuthFailure ? 400 : 502);
         }
+
+        // alreadyConnected: a NON-REVOKED integration_accounts row already
+        // exists for THIS org with that company id in external_account_id. A
+        // revoked (disconnected) company is NOT "already connected" —
+        // addAccount already treats it as reconnectable (see its own
+        // comment), and the owner must be able to pick it again here. Loaded
+        // ONCE, org-scoped, before the fan-out — never re-queried per company.
+        const existing = await integrationAccountRepository.list(orgId, PROVIDER);
+        const connectedCompanyIds = new Set(
+            existing.filter((a) => a.status !== 'revoked').map((a) => a.external_account_id),
+        );
+
+        const tasks = accountList.map((acc) => async () => {
+            try {
+                const companies = await callrailProvider.listCompanies(key, acc.id);
+                return {
+                    accountId: acc.id,
+                    accountName: acc.name,
+                    companies: companies.map((c) => ({
+                        id: c.id,
+                        name: c.name,
+                        alreadyConnected: connectedCompanyIds.has(c.id),
+                    })),
+                };
+            } catch (err) {
+                console.warn(`[callrail] discover: account ${acc.id} companies lookup failed: ${err.message}`);
+                return { accountId: acc.id, accountName: acc.name, companies: [], error: err.message };
+            }
+        });
+        // Bounded fan-out (3-4 at a time), matching the concurrency budget
+        // used across this codebase for a similar per-account fan-out (see
+        // async-pool.js's own header — the same discipline applies to a
+        // burst of CallRail requests as it does to a burst of DB queries).
+        const accounts = await mapWithConcurrency(tasks, 3);
+        return { accounts };
+    },
+
+    // Step 2 of the Add-company flow: connect several discovered companies in
+    // ONE request. Reuses addAccount PER ENTRY — never duplicates its verify/
+    // encrypt/webhook-token/reconnect logic — and never lets one bad entry
+    // abort the rest: a per-entry result is always returned, so the panel can
+    // show exactly which companies connected and why any others didn't.
+    // Bounded concurrency for the same reason as discoverAccounts above.
+    async bulkConnect(orgId, { apiKey, companies } = {}) {
+        const key = apiKey == null ? '' : String(apiKey).trim();
+        if (!key) throw new AppError('apiKey is required', 400);
+        const entries = Array.isArray(companies) ? companies : [];
+        if (entries.length === 0) throw new AppError('companies is required', 400);
+
+        const tasks = entries.map((entry) => async () => {
+            const companyId = entry?.companyId == null ? '' : String(entry.companyId).trim();
+            try {
+                const accountId = entry?.accountId == null ? '' : String(entry.accountId).trim();
+                if (!accountId) throw new AppError('accountId is required', 400);
+                if (!companyId) throw new AppError('companyId is required', 400);
+                const account = await this.addAccount(orgId, {
+                    apiKey: key,
+                    callrailAccountId: accountId,
+                    callrailCompanyId: companyId,
+                    label: entry?.label,
+                    practiceId: entry?.practiceId,
+                });
+                return { companyId, ok: true, account };
+            } catch (err) {
+                return { companyId: companyId || (entry?.companyId ?? null), ok: false, error: err.message };
+            }
+        });
+        const results = await mapWithConcurrency(tasks, 3);
+        return { results };
     },
 
     // Validates the key against CallRail FIRST — a bad key must never be
