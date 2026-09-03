@@ -242,6 +242,15 @@ GRANT EXECUTE ON FUNCTION public.ad_grain_replace_window(uuid, text, text[], jso
 REVOKE ALL ON FUNCTION public.ad_grain_restamp_practices(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.ad_grain_restamp_practices(uuid) TO service_role;
 
+-- These two are internal helpers, but `public` is the PostgREST-exposed schema
+-- and a newly created function there is anon-executable by default on this
+-- project (verified against the live database). Without this, anyone could
+-- call POST /rpc/_ad_grain_table unauthenticated and enumerate our table names.
+REVOKE ALL ON FUNCTION public._ad_grain_table(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._ad_grain_table(text) TO service_role;
+REVOKE ALL ON FUNCTION public._ad_grain_provider(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._ad_grain_provider(text) TO service_role;
+
 -- ---------------------------------------------------------------------------
 -- The ONLY read path for the deep-grain tables. No repository selects from
 -- them directly: PostgREST truncates at 1000 rows without saying so, and one
