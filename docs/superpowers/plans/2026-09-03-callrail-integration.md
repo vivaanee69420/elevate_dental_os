@@ -268,7 +268,7 @@ Expected: FAIL — module not found.
 
 Mirror `gohighlevel-provider.js`'s key-paste path. **Verify the key before persisting** by calling CallRail's own account endpoint — `GET https://api.callrail.com/v3/a/{accountId}.json` with `Authorization: Token token="<key>"`. A key that cannot read its own account is rejected now, with a clear message, rather than stored and failing every night.
 
-Add `'callrail'` to `WEBHOOK_PROVIDERS` in `integration.service.js` so the generic webhook-secret route serves it.
+**Do NOT add `'callrail'` to `WEBHOOK_PROVIDERS`.** An earlier draft of this plan said to; that was a mistake, corrected after Task 3's review. That set drives the ORG-LEVEL webhook routes — one shared signed URL plus one `config.webhook_secret` on the single `integrations` marker row, the Dentally/Emergent scheme. CallRail's credential is per COMPANY: each `integration_accounts` row already carries its own random `webhook_token`. An org-level signing secret has nothing to sign for it, and listing it there would show the owner a "configure your webhook" panel for a mechanism CallRail does not use.
 
 Routes, matching Emergent's shape:
 ```javascript
@@ -370,7 +370,9 @@ correction takes effect on history and not only on what arrives next."
 
 Check CallRail's current documentation for whether the Post-Call webhook is signed, and how. Report what you find.
 
-**The per-organisation random token in the URL path is the primary authentication either way** — the same pattern GoHighLevel's per-account `webhook_token` uses here (`getByWebhookToken`). If CallRail also supplies a signature, verify it as a second factor using the raw body, matching the Dentally and Emergent HMAC pattern. If it does not, say so plainly in your report and in a code comment, so nobody later assumes a signature is being checked when it is not.
+**The per-COMPANY random token in the URL path is the primary authentication either way** — the same pattern GoHighLevel's per-account `webhook_token` uses here (`getByWebhookToken`). If CallRail also supplies a signature, verify it as a second factor using the raw body, matching the Dentally and Emergent HMAC pattern — but store that signing secret **per account, in `integration_accounts.config`**, beside the token it authenticates. Do NOT use the org-level `config.webhook_secret` on the `integrations` marker row, and do NOT add `'callrail'` to `WEBHOOK_PROVIDERS`: with one key per company, an org-level secret would force every company to share one signature, which is exactly the coupling the per-account design removes.
+
+If CallRail does not sign, say so plainly in your report AND in a code comment, so nobody later assumes a signature is being checked when it is not.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -430,6 +432,8 @@ call arriving twice produces one row."
 **A webhook delivers once.** Anything arriving during a deploy or an outage is gone, and no webhook can reach calls from before connection. That is why this exists; say so in the header comment.
 
 Register the nightly job in `workers/index.js` beside the other sync jobs.
+
+**Replace the `callrailSync` stub.** Task 3 left `integrationService.callrailSync(orgId)` returning `{ ingested: 0 }` with a comment, because no puller existed yet. That was honest while no company could exist. It stops being honest the moment Task 4 ships: an owner clicks "Sync now" on a real, connected company and is told 0 calls were pulled, when in truth nothing ran. Wire it to fan out over that org's accounts via `syncAccount` and return the real total. Grep for the comment Task 3 left at the stub and delete it along with the stub body.
 
 - [ ] **Step 3: Run tests and the full suite; commit**
 

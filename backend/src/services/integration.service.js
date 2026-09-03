@@ -32,8 +32,19 @@ async function assertProviderFeature(orgId, provider) {
     }
 }
 
-// Providers that receive real-time webhooks (vs poll-only).
-const WEBHOOK_PROVIDERS = new Set(['dentally', 'emergent', 'callrail']);
+// Providers served by the ORG-LEVEL webhook routes: one shared signed URL
+// (signWebhookToken(orgId)) plus one config.webhook_secret on the single
+// `integrations` marker row.
+//
+// CallRail is deliberately NOT here even though it does receive real-time
+// webhooks. Its credential is per COMPANY, not per org: each
+// integration_accounts row already carries its own random webhook_token, the
+// GoHighLevel multi-subaccount scheme. An org-level signing secret has nothing
+// to sign for it, and listing it here would show the owner a "configure your
+// webhook" panel for a mechanism CallRail does not use. If CallRail turns out
+// to sign its deliveries, that signing secret belongs per-account in
+// integration_accounts.config, beside the token it authenticates.
+const WEBHOOK_PROVIDERS = new Set(['dentally', 'emergent']);
 
 // A long pull has legitimately-silent stretches (bulk upserts, the per-record
 // link loop, conversations) where the syncer emits NO progress for minutes. The
