@@ -35,6 +35,8 @@
 import { marketingRepository } from "../repositories/marketing.repository.js";
 import { adGrainRepository } from "../repositories/ad-grain.repository.js";
 import { isSupportedCurrency } from "../lib/integrations/ad-currency.js";
+import { londonDaysAgo, londonYmd } from "../lib/tz.js";
+import { DEEP_WINDOW_DAYS } from "../lib/integrations/google-ads-deep-sync.js";
 
 // A cost per nothing is unknowable, not free. Returning 0 would render as
 // "this campaign acquires patients at no cost".
@@ -136,22 +138,52 @@ function excludedAccountsOf(accounts) {
         }));
 }
 
+// The deep-grain tables hold a rolling 92-day window (their nightly replace
+// deletes an account's rows outright and reinserts the window), while
+// ad_metrics holds roughly fifteen months. So a caller may legitimately ask
+// for a year — and we must NOT answer it by dividing 92 days of ad-set spend
+// by a year of leads. Clamp the whole request to what the finest grain can
+// actually cover, apply the SAME window to the funnel, the rollups and the
+// campaign spend so all three agree, and report the clamp so the page can
+// say plainly what it is showing instead of quietly showing something else.
+//
+// The comparison below is a plain string compare on YYYY-MM-DD, which is
+// correct precisely because that format sorts lexicographically — do not
+// "fix" this into a Date construction, which would reintroduce a timezone.
+export function clampWindow(since, until) {
+    const floor = londonDaysAgo(DEEP_WINDOW_DAYS);
+    const effectiveSince = !since || since < floor ? floor : since;
+    return {
+        since: effectiveSince,
+        until: until || londonYmd(),
+        effectiveSince,
+        windowClamped: Boolean(since) && since < floor,
+    };
+}
+
 export const facebookReportService = {
     async campaigns(orgId, { since, until, practiceId = null } = {}) {
+        const win = clampWindow(since, until);
         const accounts = await metaAccounts(orgId);
         if (accounts.length === 0) {
-            return { state: 'not_connected', coverage: null, rows: [], excludedAccounts: [], totals: null, unmatchedLeads: null };
+            return {
+                state: 'not_connected', coverage: null, rows: [], excludedAccounts: [], totals: null, unmatchedLeads: null,
+                effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+            };
         }
         const excludedAccounts = excludedAccountsOf(accounts);
 
         const [spendRowsRaw, funnelRows] = await Promise.all([
-            marketingRepository.campaignSpendByProvider(orgId, since, until, 'meta_ads'),
-            marketingRepository.metaFunnel(orgId, since, until, practiceId),
+            marketingRepository.campaignSpendByProvider(orgId, win.since, win.until, 'meta_ads'),
+            marketingRepository.metaFunnel(orgId, win.since, win.until, practiceId),
         ]);
 
         const spendRows = collapseByCampaign(spendRowsRaw);
         if (spendRows.length === 0) {
-            return { state: 'never_synced', coverage: null, rows: [], excludedAccounts, totals: null, unmatchedLeads: null };
+            return {
+                state: 'never_synced', coverage: null, rows: [], excludedAccounts, totals: null, unmatchedLeads: null,
+                effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+            };
         }
 
         // ad_meta_funnel's Meta restriction is NOT date-scoped — provider
@@ -202,18 +234,25 @@ export const facebookReportService = {
         // were — do not simplify this guard away.
         const state = coverage.leadsTotal > 0 && coverage.leadsWithAdSet === 0
             ? 'no_ad_id_coverage' : 'ok';
-        return { state, coverage, rows, excludedAccounts, totals, unmatchedLeads };
+        return {
+            state, coverage, rows, excludedAccounts, totals, unmatchedLeads,
+            effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+        };
     },
 
     async adSets(orgId, campaignId, { since, until, practiceId = null } = {}) {
+        const win = clampWindow(since, until);
         const accounts = await metaAccounts(orgId);
         if (accounts.length === 0) {
-            return { state: 'not_connected', coverage: null, rows: [], notIdentified: null };
+            return {
+                state: 'not_connected', coverage: null, rows: [], notIdentified: null,
+                effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+            };
         }
 
         const [grainRows, funnelRows] = await Promise.all([
-            adGrainRepository.rollup(orgId, 'meta_adset', { since, until, practiceId, campaignId }),
-            marketingRepository.metaFunnel(orgId, since, until, practiceId),
+            adGrainRepository.rollup(orgId, 'meta_adset', { since: win.since, until: win.until, practiceId, campaignId }),
+            marketingRepository.metaFunnel(orgId, win.since, win.until, practiceId),
         ]);
 
         const forCampaign = (funnelRows ?? []).filter((r) => r.campaign_id === campaignId);
@@ -248,14 +287,18 @@ export const facebookReportService = {
         // leadsTotal > 0 check.
         const state = (grainRows ?? []).length === 0 ? 'never_synced'
             : coverage.leadsTotal > 0 && coverage.leadsWithAdSet === 0 ? 'no_ad_id_coverage' : 'ok';
-        return { state, coverage, rows, notIdentified };
+        return {
+            state, coverage, rows, notIdentified,
+            effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+        };
     },
 
     async ads(orgId, adSetId, { since, until, practiceId = null, cursor = null } = {}) {
         const PAGE = 50;
+        const win = clampWindow(since, until);
         const [grainRows, funnelRows] = await Promise.all([
-            adGrainRepository.rollup(orgId, 'meta_ad', { since, until, practiceId, parentId: adSetId }),
-            marketingRepository.metaFunnel(orgId, since, until, practiceId),
+            adGrainRepository.rollup(orgId, 'meta_ad', { since: win.since, until: win.until, practiceId, parentId: adSetId }),
+            marketingRepository.metaFunnel(orgId, win.since, win.until, practiceId),
         ]);
 
         const byAd = new Map();
@@ -288,7 +331,10 @@ export const facebookReportService = {
         const start = cursor ? Number(cursor) : 0;
         const page = all.slice(start, start + PAGE);
         const nextCursor = start + PAGE < all.length ? String(start + PAGE) : null;
-        return { rows: page, nextCursor };
+        return {
+            rows: page, nextCursor,
+            effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+        };
     },
 };
 
