@@ -15,6 +15,7 @@
 import { adChannelPipelineRepository } from "../repositories/ad-channel-pipeline.repository.js";
 import { adAttributionRepository } from "../repositories/ad-attribution.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
+import { adGrainRepository } from "../repositories/ad-grain.repository.js";
 import { buildAcceptedByKey, matchAcceptedValue } from "../lib/lead-emergent-match.js";
 import { AppError } from "../middleware/errors.js";
 
@@ -582,7 +583,23 @@ export const adAttributionService = {
         // practice-scoped spend figures reading the previous mapping for up to
         // a day, with nothing on screen to say so.
         const restamped = await adAttributionRepository.restampAdMetricsPractices(orgId);
-        return { ok: true, restamped };
+        // The SAME mapping change has to land on the deep-grain tables too. An
+        // account that has stopped syncing never gets re-stamped by a pull, so
+        // without this its ad-group/ad/keyword rows keep a stale or NULL
+        // practice_id for ever — the exact shape of the incident that had every
+        // practice-scoped ad-spend figure in the product reading £0 for months.
+        //
+        // Non-fatal, and deliberately AFTER the campaign restamp: campaign
+        // grain feeds every existing figure in the product, deep grain feeds
+        // two new pages. A failure here must not cost the campaign restamp
+        // that already succeeded.
+        let grainRestamped = 0;
+        try {
+            grainRestamped = await adGrainRepository.restampPractices(orgId);
+        } catch (err) {
+            console.error('[ad-attribution] deep-grain restamp failed:', err.message);
+        }
+        return { ok: true, restamped, grainRestamped };
     },
 
     async getPerformance(orgId, { since, until, practiceId }) {

@@ -21,7 +21,10 @@ import { integrationRepository } from "../../repositories/integration.repository
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
-import { syncMetaDeep } from "./meta-ads-deep-sync.js";
+// LEVEL_FIELDS comes from the SAME static import as syncMetaDeep. It used to
+// be pulled in by a per-call `await import(...)` of a module this file already
+// imports — a dynamic import on every insights request for a constant.
+import { syncMetaDeep, LEVEL_FIELDS } from "./meta-ads-deep-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
 // Shared window constant lives with the Google deep-sync module (its
 // sibling) so both providers' nightly wiring read the SAME value — see
@@ -151,7 +154,10 @@ async function queryAccount(accountId, accessToken, sinceDate) {
 // it shares the paging loop and the token; the parsing lives in the deep-sync
 // module.
 async function queryAccountLevel(accountId, accessToken, level, sinceDate, untilDate) {
-    const { INSIGHT_FIELDS: DEEP_FIELDS } = await import('./meta-ads-deep-sync.js');
+    // Per-LEVEL field list: the ad-set request must not ask for ad-level
+    // fields. See LEVEL_FIELDS in meta-ads-deep-sync.js.
+    const DEEP_FIELDS = LEVEL_FIELDS[level];
+    if (!DEEP_FIELDS) throw new Error(`queryAccountLevel: unknown level '${level}'`);
     const timeRange = encodeURIComponent(JSON.stringify({ since: sinceDate, until: untilDate }));
     let url = `${graphBase()}/${apiVersion()}/act_${accountId}/insights`
         + `?level=${level}&time_increment=1&time_range=${timeRange}`

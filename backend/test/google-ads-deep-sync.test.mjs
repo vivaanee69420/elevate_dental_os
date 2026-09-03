@@ -77,8 +77,13 @@ describe('parseAdGroups', () => {
 });
 
 describe('parseAds', () => {
+    // Asserted as a WHOLE row, like parseAdGroups above, not field by field.
+    // entity_name and entity_status are sourced from different places on an ad
+    // than on an ad group (`adGroupAd.ad.name` and `adGroupAd.status`, one
+    // level apart), which is exactly the sort of thing a refactor gets wrong —
+    // and a spot-check of four fields would not catch it.
     it('parents an ad on its AD GROUP, not its campaign', () => {
-        const [row] = __test.parseAds([{ results: [{
+        const rows = __test.parseAds([{ results: [{
             campaign: { id: 7, name: 'Implants' },
             adGroup: { id: 42 },
             adGroupAd: { ad: { id: 99, name: 'Headline A' }, status: 'ENABLED' },
@@ -86,10 +91,13 @@ describe('parseAds', () => {
             metrics: { costMicros: '5000000', impressions: '10', clicks: '1', conversions: 0 },
         }] }], { orgId: ORG, customerId: 'C1' });
 
-        expect(row.parent_id).toBe('42');
-        expect(row.entity_id).toBe('99');
-        expect(row.campaign_id).toBe('7');
-        expect(row.spend_pence).toBe(500);
+        expect(rows).toEqual([{
+            organisation_id: ORG, practice_id: null, provider: 'google_ads', customer_id: 'C1',
+            campaign_id: '7', campaign_name: 'Implants',
+            parent_id: '42', entity_id: '99', entity_name: 'Headline A', entity_status: 'ENABLED',
+            metric_date: '2026-08-01',
+            spend_pence: 500, impressions: 10, clicks: 1, conversions: 0,
+        }]);
     });
 });
 
@@ -142,6 +150,18 @@ describe('syncGoogleDeep', () => {
         expect(res.skipped.map((s) => s.grain)).toEqual(__test.STREAM_GRAINS);
         expect(res.skipped.every((s) => s.customerId === 'BAD')).toBe(true);
         expect(res.skipped.every((s) => s.error.includes('RESOURCE_EXHAUSTED'))).toBe(true);
-        expect(adGrainRepository.replaceWindow).toHaveBeenCalled();
+
+        // THE most dangerous property in this file, asserted on the third
+        // argument rather than on "was it called at all". replaceWindow DELETES
+        // every row it holds for the accounts it is given before reinserting
+        // the payload. An implementation that passed the full account list
+        // instead of only the accounts that actually returned rows would still
+        // satisfy `toHaveBeenCalled()` — and on the first night an account
+        // throttles it would wipe that account's entire 92-day history and
+        // write nothing back in its place. BAD must not appear.
+        const accountLists = adGrainRepository.replaceWindow.mock.calls.map((c) => c[2]);
+        expect(accountLists.length).toBeGreaterThan(0);
+        for (const cids of accountLists) expect(cids).toEqual(['C1']);
+        expect(accountLists.flat()).not.toContain('BAD');
     });
 });
