@@ -31,7 +31,17 @@ CREATE TABLE IF NOT EXISTS public.callrail_calls (
   organisation_id        uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
   -- The CallRail company this call came from. Its practice_id is the call's
   -- practice; practice_id is denormalised here so a read never needs the join.
-  integration_account_id uuid REFERENCES integration_accounts(id) ON DELETE CASCADE,
+  --
+  -- SET NULL, not CASCADE, and therefore nullable. Removing a company is a
+  -- routine act — a key rotation, a misconfiguration fixed, a reconnect after
+  -- a failure — and it is offered as a button in the panel. CASCADE would make
+  -- that button silently delete every call the company ever fetched, including
+  -- the `raw` payloads kept below for forensics, at exactly the moment someone
+  -- is troubleshooting that connection. Because practice_id is denormalised
+  -- onto the row, a call outlives its company with its attribution intact.
+  -- Deleting calls, if ever wanted, must be an explicit act with its own
+  -- confirmation, not a side effect of disconnecting.
+  integration_account_id uuid REFERENCES integration_accounts(id) ON DELETE SET NULL,
   practice_id            uuid REFERENCES practices(id) ON DELETE SET NULL,
   -- CallRail's own id: the idempotency key. A webhook and a pull describing
   -- the same call must produce one row.
