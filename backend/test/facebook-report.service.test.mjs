@@ -80,6 +80,17 @@ describe('multi-tenant states', () => {
         expect(out.coverage).toEqual({ leadsTotal: 40, leadsWithAdSet: 30, pct: 75 });
         expect(out.excludedAccounts).toEqual([]);
     });
+
+    // CRITICAL: leadsWithAdSet === 0 is ALSO true on a quiet week with zero
+    // leads, which is not the same fact as "leads exist but none resolve to
+    // an ad". A tenant with Meta connected, real synced spend, and simply no
+    // leads this window must not be told their CRM has a coverage problem.
+    it('reports ok, not no_ad_id_coverage, when there are simply no leads in the window', async () => {
+        marketingRepository.metaFunnel.mockResolvedValue([]);
+        const out = await facebookReportService.campaigns(ORG, WIN);
+        expect(out.state).toBe('ok');
+        expect(out.coverage).toEqual({ leadsTotal: 0, leadsWithAdSet: 0, pct: 0 });
+    });
 });
 
 describe('derived costs', () => {
@@ -174,7 +185,63 @@ describe('excluded accounts', () => {
     });
 });
 
+// IMPORTANT: ad_meta_funnel's Meta restriction is NOT date-scoped (provider
+// identity isn't a windowed question), while campaignSpendByProvider IS. So a
+// campaign that spent outside this window but produced a lead inside it
+// shows up in the funnel with no matching spend row here — its leads must
+// not inflate totals.leads while contributing nothing to totals.spendPence,
+// which would silently UNDERSTATE every cost-per-X figure.
+describe('campaign totals and coverage scope to campaigns with spend in this window', () => {
+    it('totals.leads equals the sum of rows[].leads; an orphan funnel row lands in unmatchedLeads instead', async () => {
+        // CMP1 has a spend row (from beforeEach). CMP2 has a funnel row (a
+        // lead inside this window) but no spend row here at all.
+        marketingRepository.metaFunnel.mockResolvedValue([
+            { campaign_id: 'CMP1', ad_set_id: 'AS1', ad_id: 'AD1', practice_id: null,
+              leads: 10, booked: 4, attended: 2, patients: 2, new_patients: 1 },
+            { campaign_id: 'CMP2', ad_set_id: 'AS9', ad_id: 'AD9', practice_id: null,
+              leads: 7, booked: 2, attended: 1, patients: 1, new_patients: 1 },
+        ]);
+        const out = await facebookReportService.campaigns(ORG, WIN);
+        const rowsLeadsSum = out.rows.reduce((n, r) => n + r.leads, 0);
+        expect(out.totals.leads).toBe(rowsLeadsSum);
+        expect(out.totals.leads).toBe(10);   // CMP2's 7 must NOT be folded in
+        expect(out.unmatchedLeads).toEqual({ leads: 7, booked: 2, attended: 1, patients: 1, newPatients: 1 });
+    });
+
+    it('returns unmatchedLeads: null when every funnel row matches a campaign with spend in this window', async () => {
+        const out = await facebookReportService.campaigns(ORG, WIN);
+        expect(out.unmatchedLeads).toBeNull();
+    });
+
+    it('coverage excludes leads whose campaign has no spend row in this window', async () => {
+        marketingRepository.metaFunnel.mockResolvedValue([
+            { campaign_id: 'CMP1', ad_set_id: 'AS1', ad_id: 'AD1', practice_id: null,
+              leads: 10, booked: 4, attended: 2, patients: 2, new_patients: 1 },
+            // CMP2 is not in spendRows — a huge unmatched lead count must not
+            // move coverage at all, in either direction.
+            { campaign_id: 'CMP2', ad_set_id: null, ad_id: null, practice_id: null,
+              leads: 100, booked: 0, attended: 0, patients: 0, new_patients: 0 },
+        ]);
+        const out = await facebookReportService.campaigns(ORG, WIN);
+        expect(out.coverage).toEqual({ leadsTotal: 10, leadsWithAdSet: 10, pct: 100 });
+    });
+});
+
 describe('ad sets', () => {
+    // Same guard as campaigns(): a quiet window with zero leads for this
+    // campaign is not evidence of missing ad-id coverage.
+    it('reports ok, not no_ad_id_coverage, when there are simply no leads for this campaign', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AS1', entity_name: 'Photos 35+', parent_id: 'CMP1',
+              campaign_id: 'CMP1', entity_status: null,
+              spend_pence: 60000, impressions: 3000, clicks: 150, conversions: 0 },
+        ]);
+        marketingRepository.metaFunnel.mockResolvedValue([]);
+        const out = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        expect(out.state).toBe('ok');
+        expect(out.coverage).toEqual({ leadsTotal: 0, leadsWithAdSet: 0, pct: 0 });
+    });
+
     it('separates the unidentified bucket from real ad sets', async () => {
         adGrainRepository.rollup.mockResolvedValue([
             { entity_id: 'AS1', entity_name: 'Photos 35+', parent_id: 'CMP1',
@@ -199,6 +266,67 @@ describe('ad sets', () => {
     });
 });
 
+// IMPORTANT: ads() had no tests at all, and its cursor paging rests on the
+// sort order being a TOTAL order. Spend descending alone leaves ties (several
+// zero-spend ads is a normal shape for a small practice) broken by whatever
+// order adGrainRepository.rollup happened to return — not guaranteed stable
+// across two calls, which paging depends on to avoid skipping/repeating rows.
+describe('ads() paging', () => {
+    function grainRow(id, spendPence) {
+        return {
+            entity_id: id, entity_name: `Ad ${id}`, parent_id: 'AS1',
+            campaign_id: 'CMP1', entity_status: 'ACTIVE',
+            spend_pence: spendPence, impressions: 100, clicks: 5, conversions: 0,
+        };
+    }
+
+    it('returns at most PAGE (50) rows with a nextCursor when more remain', async () => {
+        const rows = Array.from({ length: 120 }, (_, i) => grainRow(`AD${String(i).padStart(3, '0')}`, 1000 - i));
+        adGrainRepository.rollup.mockResolvedValue(rows);
+        const out = await facebookReportService.ads(ORG, 'AS1', WIN);
+        expect(out.rows).toHaveLength(50);
+        expect(out.nextCursor).toBe('50');
+    });
+
+    it('pages through with no overlap and no gap, ending on nextCursor: null', async () => {
+        const rows = Array.from({ length: 120 }, (_, i) => grainRow(`AD${String(i).padStart(3, '0')}`, 1000 - i));
+        adGrainRepository.rollup.mockResolvedValue(rows);
+
+        const page1 = await facebookReportService.ads(ORG, 'AS1', WIN);
+        const page2 = await facebookReportService.ads(ORG, 'AS1', { ...WIN, cursor: page1.nextCursor });
+        const page3 = await facebookReportService.ads(ORG, 'AS1', { ...WIN, cursor: page2.nextCursor });
+
+        const ids1 = page1.rows.map((r) => r.id);
+        const ids2 = page2.rows.map((r) => r.id);
+        const ids3 = page3.rows.map((r) => r.id);
+
+        expect(ids1).toHaveLength(50);
+        expect(ids2).toHaveLength(50);
+        expect(ids3).toHaveLength(20);
+        expect(page3.nextCursor).toBeNull();
+
+        expect(ids1.filter((id) => ids2.includes(id) || ids3.includes(id))).toEqual([]);
+        expect(ids2.filter((id) => ids3.includes(id))).toEqual([]);
+        expect(new Set([...ids1, ...ids2, ...ids3]).size).toBe(120);
+    });
+
+    it('breaks spend ties on entity_id so equal-spend ads come back in a stable, repeatable order', async () => {
+        // All zero spend — order depends entirely on the tiebreaker, not on
+        // whatever order the mocked repository call happens to return.
+        const rows = [
+            grainRow('AD_Z', 0), grainRow('AD_A', 0), grainRow('AD_M', 0),
+            grainRow('AD_B', 0), grainRow('AD_Y', 0),
+        ];
+        adGrainRepository.rollup.mockResolvedValue(rows);
+
+        const out1 = await facebookReportService.ads(ORG, 'AS1', WIN);
+        const out2 = await facebookReportService.ads(ORG, 'AS1', WIN);
+
+        expect(out1.rows.map((r) => r.id)).toEqual(['AD_A', 'AD_B', 'AD_M', 'AD_Y', 'AD_Z']);
+        expect(out2.rows.map((r) => r.id)).toEqual(out1.rows.map((r) => r.id));
+    });
+});
+
 describe('tenant isolation', () => {
     it('never reads without an organisation id', async () => {
         await facebookReportService.campaigns(ORG, WIN);
@@ -209,10 +337,23 @@ describe('tenant isolation', () => {
     });
 
     // M2: a CRM's own labels must never decide what counts as a Meta lead.
-    it('contains no attribution_source string test', async () => {
+    // This greps the STRIPPED source (block + line comments removed) so the
+    // header comment is free to name the two historical strings in prose —
+    // documenting what must never come back is not the same as reintroducing
+    // it. Patterns are case-insensitive and tolerant of the separator being
+    // absent (camelCase), an underscore, or a space, so a reintroduction as
+    // `PaidSocial`, `Attribution_Source` or `attributionSource` still trips
+    // it. This proves the two HISTORICAL strings never reappear in live
+    // code — it is not proof against every possible way of gating on a CRM's
+    // own vocabulary; the structural join (ad_meta_funnel resolving ad_id
+    // itself) is what actually guarantees that.
+    it("never gates on GoHighLevel's attribution_source / \"Paid Social\" vocabulary", async () => {
         const { readFileSync } = await import('node:fs');
-        const src = readFileSync('src/services/facebook-report.service.js', 'utf8');
-        expect(src).not.toMatch(/Paid Social/i);
-        expect(src).not.toMatch(/attribution_source/);
+        const raw = readFileSync('src/services/facebook-report.service.js', 'utf8');
+        const stripped = raw
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/^\s*\/\/.*$/gm, '');
+        expect(stripped).not.toMatch(/paid[_\s]?social/i);
+        expect(stripped).not.toMatch(/attribution[_\s]?source/i);
     });
 });
