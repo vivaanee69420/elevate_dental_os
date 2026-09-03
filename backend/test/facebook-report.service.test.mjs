@@ -25,7 +25,14 @@ const { adGrainRepository } = await import('../src/repositories/ad-grain.reposit
 const { DEEP_WINDOW_DAYS } = await import('../src/lib/integrations/google-ads-deep-sync.js');
 
 const ORG = '11111111-1111-1111-1111-111111111111';
-const WIN = { since: '2026-06-01', until: '2026-08-31', practiceId: null };
+// since is derived from the SAME floor the service clamps against, not a
+// literal date. A hardcoded 'since' sits still while DEEP_WINDOW_DAYS's floor
+// moves with the clock, so it eventually falls below the floor and every test
+// using WIN would silently start exercising only the clamped path (which is
+// exactly what happened here once before — see the dedicated clamp tests
+// below, which own that branch on purpose). Deriving it keeps WIN inside the
+// floor forever, so these ~20 tests keep covering the unclamped pass-through.
+const WIN = { since: londonDaysAgo(DEEP_WINDOW_DAYS - 10), until: '2026-08-31', practiceId: null };
 
 beforeEach(() => {
     // adAccountsForProvider(orgId, 'meta_ads') is already provider-scoped —
