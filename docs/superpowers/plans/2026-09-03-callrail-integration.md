@@ -366,13 +366,25 @@ correction takes effect on history and not only on what arrives next."
 **Interfaces:**
 - Produces: `POST /webhooks/callrail/:token`, and `parseCallPayload(body)` mapping CallRail's shape to a `callrail_calls` row.
 
-- [ ] **Step 1: Establish how CallRail authenticates its webhooks — do not assume**
+- [ ] **Step 1: Read the researched CallRail facts — this is already established, do not re-research**
 
-Check CallRail's current documentation for whether the Post-Call webhook is signed, and how. Report what you find.
+`.superpowers/sdd/2026-09-03-callrail-integration/callrail-api-findings.md` records what the official v3 docs say, read directly. Summary of what binds you:
 
-**The per-COMPANY random token in the URL path is the primary authentication either way** — the same pattern GoHighLevel's per-account `webhook_token` uses here (`getByWebhookToken`). If CallRail also supplies a signature, verify it as a second factor using the raw body, matching the Dentally and Emergent HMAC pattern — but store that signing secret **per account, in `integration_accounts.config`**, beside the token it authenticates. Do NOT use the org-level `config.webhook_secret` on the `integrations` marker row, and do NOT add `'callrail'` to `WEBHOOK_PROVIDERS`: with one key per company, an org-level secret would force every company to share one signature, which is exactly the coupling the per-account design removes.
+**CallRail DOES sign.** Header `Signature`. **HMAC-SHA1**, not SHA256 — do NOT copy the Dentally/Emergent SHA256 helper unchanged. Computed over the RAW body, then Base64 (strict). Node: `crypto.createHmac('sha1', key).update(rawBody).digest('base64')`. Compare with `crypto.timingSafeEqual`, never `===`.
 
-If CallRail does not sign, say so plainly in your report AND in a code comment, so nobody later assumes a signature is being checked when it is not.
+**The signing key is per COMPANY**, so it lives in `integration_accounts.config`, never org-level. The random path token remains the primary authentication; the signature is a second factor, checked only once a key has been configured for that account.
+
+**Use the docs' own test vector as the fixture** — signing key `072e77e426f92738a72fe23c4d1953b4` over the body quoted in their "Validating Payloads" section must produce `UZAHbUdfm3GqL7qzilGozGzWV64=`. A test built on that proves the implementation against the vendor rather than against itself. Do not invent a vector.
+
+**CallRail does not resend webhooks**, and repeated non-2xx responses can make CallRail automatically DISABLE the integration. So: do the cheap idempotent thing, return 2xx, and let the pull reconcile. Never fail the response because downstream work failed.
+
+**IDENTITY TRAP — the ruling below is not optional.** API v3 returns `id` as a string (`"CAL8154748ae…"`); the docs' own webhook example shows a legacy NUMERIC id (`766970532`). Store one form from the webhook and the other from the pull and `UNIQUE (organisation_id, callrail_id)` never fires — every call double-counts. This is the exact shape of the Emergent bug that overstated accepted value by about £1m.
+
+**The webhook is a TRIGGER, not the source of truth.** Verify the token, verify the signature, then re-fetch the canonical call from the API by its id (`GET /v3/a/{callrailAccountId}/calls/{id}.json?fields=…`) and upsert THAT. Both paths then write the identical id form from the same source. If the fetch fails, store nothing, still return 2xx, and let the nightly pull collect it. One extra API call per call, against a 1,000/hour limit and roughly 50 calls a month.
+
+**The per-COMPANY random token in the URL path is the primary authentication** — the same pattern GoHighLevel's per-account `webhook_token` uses here (`getByWebhookToken`). The `Signature` header is the second factor. Store the signing secret **per account, in `integration_accounts.config`**, beside the token it authenticates. Do NOT use the org-level `config.webhook_secret` on the `integrations` marker row, and do NOT add `'callrail'` to `WEBHOOK_PROVIDERS`: with one key per company, an org-level secret would force every company to share one signature, which is exactly the coupling the per-account design removes.
+
+Until an owner has pasted that company's signing key, accept on the path token alone and say so in the panel — an unverifiable signature must read as "not yet configured", never as silent acceptance dressed up as verification.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -427,7 +439,13 @@ call arriving twice produces one row."
 
 - [ ] **Step 2: Implement**
 
-`GET https://api.callrail.com/v3/a/{callrailAccountId}/calls.json` with `Authorization: Token token="<decrypted key>"`, paged, over a trailing window on the nightly run and a longer one on a manual reconnect — read `google-ads-sync.js` for the window idiom and follow it. Every row written carries the ACCOUNT's `organisation_id` and `practice_id`; never a value from the API response.
+`GET https://api.callrail.com/v3/a/{callrailAccountId}/calls.json` with `Authorization: Token token="<decrypted key>"`, plus `Request-From: elevate_dental_os` (the docs ask third-party integrations to identify themselves). Paged over a trailing window on the nightly run and a longer one on a manual reconnect — read `google-ads-sync.js` for the window idiom and follow it. Every row written carries the ACCOUNT's `organisation_id` and `practice_id`; never a value from the API response.
+
+**`?fields=` is mandatory.** The default `calls.json` response omits `gclid`, `keywords`, `campaign`, `source`, `first_call`, `medium` and every `utm_*` — which is every attribution field this feature exists for. Omit it and the sync stores rows that look fine and answer nothing. Define ONE shared field-list constant and use it for both the pull and the webhook's canonical re-fetch, so the two cannot drift.
+
+**Pagination:** the docs recommend RELATIVE pagination for the calls endpoint — `relative_pagination=true`, follow `next_page`, stop when `has_next_page` is false. `per_page` maxes at 250. Never mix relative and offset pagination in one traversal.
+
+**Rate limiting is HTTP 429** here (1,000/hour, 10,000/day) — back off on it. Note this differs from Dentally, which signals rate limiting as a 403; do not copy that connector's 403 handling into this one.
 
 **A webhook delivers once.** Anything arriving during a deploy or an outage is gone, and no webhook can reach calls from before connection. That is why this exists; say so in the header comment.
 
