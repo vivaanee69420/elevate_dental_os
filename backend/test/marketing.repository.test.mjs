@@ -248,14 +248,23 @@ describe('campaignSpendByProvider', () => {
 });
 
 describe('adAccountsForProvider', () => {
-    it('reads the three fields that decide deep-pull coverage, org- and provider-scoped', async () => {
+    it('reads the two fields that decide deep-pull coverage, org- and provider-scoped', async () => {
         await marketingRepository.adAccountsForProvider(ORG, 'meta_ads');
         expect(supaRec.last.table).toBe('ad_accounts');
         expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
         expect(supaRec.last.eqs).toContainEqual({ col: 'provider', val: 'meta_ads' });
-        for (const col of ['currency', 'status', 'is_selected']) {
+        for (const col of ['currency', 'status']) {
             expect(supaRec.last.select).toContain(col);
         }
+    });
+
+    // is_selected is NOT read, on purpose: neither sync consults it, so a
+    // deselected account still gets rows in ad_metrics and in the deep tables
+    // alike. Reading it here is what tempted the service into excluding it
+    // from one side only.
+    it('does not read is_selected, which partitions neither side', async () => {
+        await marketingRepository.adAccountsForProvider(ORG, 'google_ads');
+        expect(supaRec.last.select).not.toContain('is_selected');
     });
 
     it('surfaces a read error rather than reporting an empty account list', async () => {

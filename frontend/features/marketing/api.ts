@@ -256,11 +256,13 @@ export interface ReconciliationLevel {
 }
 
 /**
- * An ad account left out of BOTH sides of the comparison, and why. Not an
- * error — an excluded account is a fact to state calmly. `reason` is one of
- * `not_selected` | `unsupported_currency` | a platform status the nightly sync
- * skips on (`manager`, `not_enabled`); `description` is the server's own
- * ready-made prose for it, so the panel never has to re-derive the wording.
+ * An ad account the deep-grain pull cannot reach, and why — left out of BOTH
+ * figures so the two sides compare like with like. Not an error: an excluded
+ * account is a fact to state calmly. `reason` is `unsupported_currency` or a
+ * platform status the nightly sync permanently skips on (`manager`,
+ * `not_enabled`) — the only two things that keep an account out of the deep
+ * tables while its history stays in `ad_metrics`. `description` is the
+ * server's own ready-made prose, so the panel never re-derives the wording.
  */
 export interface ExcludedAdAccount {
   customerId: string;

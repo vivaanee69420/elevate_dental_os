@@ -56,24 +56,37 @@ function sumSpend(rows) {
 
 // Which accounts can BOTH sides of the comparison see?
 //
-// The campaign side is ad_metrics, which keeps its window for an account long
-// after that account stops being pulled. The deep side only ever holds
-// accounts the deep pull covers. Compare the two without reconciling the
-// account sets and a deactivated, deselected or non-GBP account contributes
-// its entire spend to one side only — a permanent red gap, on the one screen
-// whose whole job is to show that the numbers tally.
+// The DEEP side holds every account the deep sync writes, and there is no way
+// to narrow it: neither ad_grain_rollup nor ad_keyword_rollup takes an account
+// parameter. So the campaign side is narrowed to match it, and ONLY for the
+// two things that genuinely keep an account out of the deep tables while
+// leaving its history in ad_metrics:
 //
-// Reasons are ordered by what takes an account out of the pull FIRST: an
-// account the owner deselected never reaches the currency check at all.
+//   - unsupported currency — the deep sync filters on it
+//     (partitionAccountsByCurrency); the campaign sync does not. A USD
+//     account's rows really are in ad_metrics and really are absent from the
+//     deep tables.
+//   - a permanently-failed platform status — google-ads-sync drops those
+//     customers from customerIds entirely, so no new rows land anywhere, while
+//     the ad_metrics history already written persists.
+//
+// An exclusion is only ever correct if it PARTITIONS THE DATA. `is_selected`
+// deliberately is not one: grep it in google-ads-sync.js and meta-ads-sync.js
+// and there are no hits — neither sync consults it, both loop over every
+// configured account, so a deselected account keeps receiving fresh rows in
+// ad_metrics AND in the deep tables every night. Excluding it from the
+// campaign side alone made the deep total legitimately EXCEED the campaign
+// total: a negative gap past tolerance, rendering as a red "does not
+// reconcile" on the one panel whose only job is to be trustworthy. That is the
+// mirror image of the bug this function exists to fix. `is_selected` filters
+// read paths elsewhere; it does not belong here.
 function coverage(accounts) {
     const covered = [];
     const excluded = [];
     for (const a of accounts ?? []) {
         const customerId = String(a.customer_id);
         const name = a.name ?? null;
-        if (a.is_selected === false) {
-            excluded.push({ customerId, name, reason: 'not_selected', currency: a.currency ?? null });
-        } else if (a.status && SKIP_STATUSES.has(a.status)) {
+        if (a.status && SKIP_STATUSES.has(a.status)) {
             excluded.push({ customerId, name, reason: a.status, currency: a.currency ?? null });
         } else if (!isSupportedCurrency(a.currency)) {
             excluded.push({ customerId, name, reason: 'unsupported_currency', currency: a.currency ?? null });
@@ -85,7 +98,6 @@ function coverage(accounts) {
 }
 
 const EXCLUSION_PROSE = {
-    not_selected: 'not selected for reporting',
     unsupported_currency: 'billed in a currency we do not convert',
     manager: 'a manager account, which reports no metrics of its own',
     not_enabled: 'not enabled on the ad platform',
@@ -150,16 +162,19 @@ export const adReconciliationService = {
             campaignSpendPence,
             levels: out,
             reachNote: provider === 'meta_ads' ? REACH_NOTE : null,
-            // Both sides of every figure above cover exactly these accounts.
-            // When some are left out the totals are partial, and the payload
-            // says so rather than letting a partial total read as the whole.
+            // Every account listed as excluded is one the deep pull cannot
+            // reach, so its spend is missing from the deep side no matter what
+            // — leaving it on the campaign side would read as a gap. It is
+            // dropped from the campaign side to match, and named here so the
+            // partial cover is stated rather than passed off as the whole.
             coversAllAccounts: excluded.length === 0,
             coveredAccountCount: covered.length,
             excludedAccounts: excluded.map((e) => ({ ...e, description: describeExclusion(e) })),
             excludedNote: excluded.length === 0 ? null
                 : `These totals cover ${covered.length} of ${covered.length + excluded.length} connected `
                   + `${provider === 'meta_ads' ? 'Meta' : 'Google'} accounts. `
-                  + 'Spend on the remaining accounts is not counted on either side of this comparison.',
+                  + 'The accounts below are not reported at this level of detail, so their spend is '
+                  + 'left out of both figures here. It is still counted in full everywhere else in Marketing.',
         };
     },
 };

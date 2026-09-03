@@ -1688,16 +1688,24 @@ throughout.
   and its `note` says so ("does not reconcile").
 - **Both sides cover the same accounts.** `ad_metrics` keeps its window for
   an account long after the deep pull stops covering it, so the campaign side
-  is narrowed to the accounts the deep pull can actually reach: `is_selected`
-  true, currency supported (a null/absent currency counts as GBP by design),
-  and not carrying a platform status the nightly sync permanently skips
-  (`manager`, `not_enabled`). Without that narrowing a deactivated account's
-  spend appears on one side only and reads as a permanent red gap.
+  is narrowed to the accounts the deep pull can actually reach: currency
+  supported (a null/absent currency counts as GBP by design) and not carrying
+  a platform status the nightly sync permanently skips (`manager`,
+  `not_enabled`). Those are the only two conditions that PARTITION the data —
+  the deep sync filters on currency and Google drops permanently-failed
+  customers, while both leave the existing `ad_metrics` history in place.
+  Without that narrowing a deactivated account's spend appears on one side
+  only and reads as a permanent red gap.
+- `ad_accounts.is_selected` is deliberately **not** one of them. Neither sync
+  consults it, so a deselected account keeps receiving fresh rows in
+  `ad_metrics` **and** in the deep tables; excluding it from the campaign side
+  alone would make the deep total exceed the campaign total and render a red
+  "does not reconcile" for a discrepancy that does not exist.
 - `excludedAccounts` lists what was left out, as
   `{ customerId, name, reason, currency, description }`. `reason` is
-  `not_selected` | `unsupported_currency` | the platform status;
-  `description` is ready-made calm prose for the panel to render. An excluded
-  account is a fact to state, never an error.
+  `unsupported_currency` or the platform status; `description` is ready-made
+  calm prose for the panel to render. An excluded account is a fact to state,
+  never an error.
 - `coversAllAccounts` is `false` and `excludedNote` is set whenever that list
   is non-empty, saying in words that the totals are for the covered accounts
   only. When the org has NO `ad_accounts` rows at all no filter is applied —
