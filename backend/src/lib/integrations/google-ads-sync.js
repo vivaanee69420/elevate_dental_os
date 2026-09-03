@@ -22,6 +22,8 @@ import { apiBase, fetchWithApiVersion } from './google-ads-version.js';
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
+import { syncGoogleDeep, DEEP_WINDOW_DAYS } from "./google-ads-deep-sync.js";
+import { partitionAccountsByCurrency } from "./ad-currency.js";
 
 const INCREMENTAL_DAYS = 90;  // nightly cron window: trailing 3 months (product rule)
 const FULL_DAYS = 183;        // on-connect / reconnect backfill window: 6 months (product rule)
@@ -251,9 +253,35 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
             if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
         }
 
+        // Deep grain (ad group / ad / keyword) runs AFTER the campaign replace
+        // and is wrapped so it can never fail the campaign sync. Campaign grain
+        // feeds every existing marketing figure; deep grain feeds two new pages
+        // that tolerate being a day stale. A keyword pull that trips a 403
+        // throttle must not cost us the day's spend.
+        let deep = { counts: {}, skipped: [], unsupportedCurrency: [] };
+        try {
+            const known = await integrationRepository.listAdAccounts(orgId, 'google_ads').catch(() => []);
+            const byId = new Map((known ?? []).map((a) => [String(a.customer_id), a]));
+            const { supported, unsupported } = partitionAccountsByCurrency(
+                cidsWithRows.map((cid) => ({ customer_id: cid, currency: byId.get(String(cid))?.currency ?? null })),
+            );
+            const deepSince = daysAgo(DEEP_WINDOW_DAYS);
+            const r = await syncGoogleDeep(orgId, {
+                accessToken: access_token,
+                customerIds: supported,
+                since: deepSince,
+                until: untilDate,
+                queryCustomer: (cid, tok, gaql) => queryCustomer(cid, tok, gaql),
+            });
+            deep = { ...r, unsupportedCurrency: unsupported };
+        } catch (err) {
+            console.error('[google_ads] deep-grain sync failed:', err.message);
+            deep = { counts: {}, skipped: [], unsupportedCurrency: [], error: String(err.message).slice(0, 200) };
+        }
+
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'google_ads');
-        return { rows: all.length, customers: customerIds.length, skipped, permanentlySkipped: [...permanent] };
+        return { rows: all.length, customers: customerIds.length, skipped, permanentlySkipped: [...permanent], deep };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'google_ads', String(err.message).slice(0, 500));
         throw err;
