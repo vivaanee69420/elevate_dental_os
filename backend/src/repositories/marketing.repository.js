@@ -125,12 +125,12 @@ export const marketingRepository = {
         const rows = [];
         for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
             // Widened beyond spend_pence: the Facebook report's campaign tier
-            // (Task 3) reads campaign identity and platform metrics off this
-            // same paged read. Reconciliation only ever sums spend_pence and
-            // is unaffected by the extra columns.
+            // (Task 3) reads campaign identity, status and platform metrics
+            // off this same paged read. Reconciliation only ever sums
+            // spend_pence and is unaffected by the extra columns.
             let q = supabase_1.serviceClient
                 .from('ad_metrics')
-                .select('id, customer_id, campaign_id, campaign_name, impressions, clicks, spend_pence')
+                .select('id, customer_id, campaign_id, campaign_name, campaign_status, impressions, clicks, spend_pence')
                 .eq('organisation_id', orgId)
                 .eq('provider', provider)
                 .gte('metric_date', since)
@@ -325,7 +325,18 @@ export const marketingRepository = {
     // PAGED, and it must be: PostgREST caps a response at 1000 rows
     // server-side and reports nothing, and that cap applies to set-returning
     // RPCs exactly as it does to tables. Calling an RPC is not an escape from
-    // it. `ad_id` is the unique sort key — a lead resolves to at most one ad.
+    // it.
+    //
+    // ad_meta_funnel's GROUP BY is the four-column tuple
+    // (campaign_id, ad_set_id, ad_id, practice_id) — NONE of the four is
+    // unique alone, same hazard as campaignFunnel above. `ad_id` repeats: it
+    // is NULL for every "not identified" row (a lead whose ad set could not
+    // be resolved), and a single non-null ad_id repeats across several rows
+    // when the same Facebook ad runs group-wide across multiple practices
+    // (practice_id comes from the lead's own routing, not from ad
+    // targeting — entirely normal for a multi-practice dental chain). Sort by
+    // all four, in the RPC's own GROUP BY order, or a page boundary landing
+    // inside a tie can duplicate one row and drop another.
     async metaFunnel(orgId, since, until, practiceId = null) {
         const PAGE = 1000;
         const rows = [];
@@ -334,7 +345,10 @@ export const marketingRepository = {
                 .rpc('ad_meta_funnel', {
                     p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
                 })
+                .order('campaign_id', { ascending: true, nullsFirst: true })
+                .order('ad_set_id', { ascending: true, nullsFirst: true })
                 .order('ad_id', { ascending: true, nullsFirst: true })
+                .order('practice_id', { ascending: true, nullsFirst: true })
                 .range(from, from + PAGE - 1);
             if (error) throw new Error(`ad_meta_funnel: ${error.message}`);
             const page = data ?? [];
@@ -345,7 +359,20 @@ export const marketingRepository = {
             if (page.length === 0) break;
             from += page.length;
         }
-        return rows;
+        return rows.map((r) => ({
+            campaign_id: r.campaign_id ?? null,
+            ad_set_id: r.ad_set_id ?? null,
+            ad_id: r.ad_id ?? null,
+            practice_id: r.practice_id ?? null,
+            // PostgREST commonly serialises bigint as a JSON string to avoid
+            // precision loss — coerce, matching campaignFunnel/leadsByCampaign
+            // in this same file.
+            leads: Number(r.leads ?? 0),
+            booked: Number(r.booked ?? 0),
+            attended: Number(r.attended ?? 0),
+            patients: Number(r.patients ?? 0),
+            new_patients: Number(r.new_patients ?? 0),
+        }));
     },
 
     // Spend, leads and patients per month per channel.

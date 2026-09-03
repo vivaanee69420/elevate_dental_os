@@ -430,6 +430,29 @@ describe('metaFunnel', () => {
         });
     });
 
+    // ad_meta_funnel's GROUP BY is the four-column tuple (campaign_id,
+    // ad_set_id, ad_id, practice_id) — none of the four is unique alone.
+    // `ad_id` is NULL for every "not identified" row, and a single non-null
+    // ad_id repeats across several rows when one Facebook ad runs group-wide
+    // across multiple practices. A page boundary landing inside such a tie
+    // can duplicate one row and drop another unless all four are sorted, in
+    // the RPC's own GROUP BY order — same hazard campaignFunnel documents for
+    // its own three-column key. This test would fail if a column were
+    // dropped or reordered; the paging tests above do not read `.orders` at
+    // all and cannot catch that.
+    it('orders by all four group keys, in the RPC\'s own GROUP BY order', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = () => ({ data: [], error: null });
+        await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31', null);
+        const call = supaRec.rpcCalls.find((c) => c.fn === 'ad_meta_funnel');
+        expect(call.mods.orders).toEqual([
+            { col: 'campaign_id', opts: { ascending: true, nullsFirst: true } },
+            { col: 'ad_set_id', opts: { ascending: true, nullsFirst: true } },
+            { col: 'ad_id', opts: { ascending: true, nullsFirst: true } },
+            { col: 'practice_id', opts: { ascending: true, nullsFirst: true } },
+        ]);
+    });
+
     // Unlike the `.from()` mock (used by campaignSpendByProvider's paging
     // tests), the `.rpc()` mock in test/setup.js does NOT auto-slice by
     // `.range()` — only `.from()`'s settle() does that. An RPC provider must
@@ -476,6 +499,23 @@ describe('metaFunnel', () => {
         supaRec.rpcProvider = () => ({ data: null, error: { message: 'boom' } });
         await expect(marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31'))
             .rejects.toThrow(/ad_meta_funnel: boom/);
+    });
+
+    // PostgREST commonly serialises bigint as a JSON string to avoid precision
+    // loss, matching campaignFunnel/leadsByCampaign's convention in this same
+    // file. campaign_id/ad_set_id/ad_id/practice_id are text/uuid and must
+    // pass through untouched, including their nulls — coercing them would
+    // turn a legitimate null ad_set_id into the string "null" or similar.
+    it('coerces bigint aggregates that may arrive as strings, leaving ids untouched', async () => {
+        servePages([{
+            campaign_id: 'CMP', ad_set_id: null, ad_id: 'AD1', practice_id: 'p1',
+            leads: '12', booked: '3', attended: '1', patients: '2', new_patients: '1',
+        }], []);
+        const [row] = await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31');
+        expect(row).toEqual({
+            campaign_id: 'CMP', ad_set_id: null, ad_id: 'AD1', practice_id: 'p1',
+            leads: 12, booked: 3, attended: 1, patients: 2, new_patients: 1,
+        });
     });
 });
 
