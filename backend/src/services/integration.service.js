@@ -401,4 +401,28 @@ export const integrationService = {
     connect(orgId, input) {
         return this.startConnect(orgId, input.provider);
     },
+
+    // ------------------------------------------------------------------------
+    // One-off repair for Dentally payment statuses written by the OLD mapper.
+    //
+    // `unexplained` / `partially_explained` are money received, not debt, and
+    // used to be stored as 'pending'. The mapper was corrected; the rows it had
+    // already written were not, and the nightly sync only pulls a rolling
+    // recent window so it never revisits them. Takings therefore reads LOW for
+    // any window covering the affected period — silently, and on every tenant
+    // that synced before the fix.
+    //
+    // Re-pulls the window from Dentally and re-derives each row through the
+    // CURRENT mapper. Nothing is inferred from what we already hold, so a
+    // payment Dentally still reports as genuinely unpaid stays pending.
+    async repairDentallyPayments(orgId, { since, until }) {
+        const integration = await integration_repository_1.integrationRepository.get(orgId, 'dentally');
+        if (!integration || integration.status !== 'active') {
+            throw new errors_1.AppError('Dentally is not connected', 400);
+        }
+        const result = await (0, dentally_sync_1.repairPaymentStatuses)(orgId, integration, { since, until });
+        if (result?.error === 'no_auth') throw new errors_1.AppError('Dentally credentials are missing or unreadable', 400);
+        if (result?.error === 'no_window') throw new errors_1.AppError('since and until are required', 400);
+        return result;
+    },
 };
