@@ -54,9 +54,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   cockpit: 'finance.view',
   dashboard: 'finance.view',
   'business-hub': 'finance.view',
-  'deep-dive': 'finance.view',
   'ai-insights': 'finance.view',
-  day: 'finance.view',
   // The two Overview tabs that are not finance surfaces.
   'task-manager': 'overview.view',
   'p4g-ai': 'overview.view',
