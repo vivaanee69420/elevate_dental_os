@@ -68,6 +68,14 @@ beforeEach(() => {
 // PAGINATION — termination condition is has_next_page, never row count.
 // ============================================================================
 describe('fetchAllCalls — pagination', () => {
+  it('refuses to fetch without a date window — CallRail silently defaults to the last 7 DAYS', async () => {
+    // No date parameters at all does not mean "everything": CallRail applies
+    // date_range=recent, the previous seven days, and answers 200. A 90-day
+    // nightly sync would quietly become a 7-day one with nothing to notice.
+    await expect(fetchAllCalls('key', 'ACT1', {})).rejects.toThrow(/requires start_date and end_date/);
+    await expect(fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01' })).rejects.toThrow(/requires start_date and end_date/);
+  });
+
   it('follows next_page across a short-then-full-then-short run and stops the instant has_next_page is false (asserts REQUEST COUNT)', async () => {
     const pages = [
       page([{ id: 'C1' }], { hasNext: true, next: 'p2' }), // SHORT page, has_next_page true -> must continue
@@ -89,7 +97,7 @@ describe('fetchAllCalls — pagination', () => {
       ok: true, status: 200,
       json: async () => page(Array.from({ length: 250 }, (_, i) => ({ id: `C-${i}` })), { hasNext: false, next: null }),
     }));
-    const { calls, requests } = await fetchAllCalls('key', 'ACT1', {});
+    const { calls, requests } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
     expect(requests).toBe(1);
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(calls.length).toBe(250);
@@ -102,7 +110,7 @@ describe('fetchAllCalls — pagination', () => {
     ];
     let n = 0;
     global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => pages[n++] }));
-    const { calls, requests } = await fetchAllCalls('key', 'ACT1', {});
+    const { calls, requests } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
     expect(requests).toBe(2);
     expect(calls.length).toBe(1);
   });
