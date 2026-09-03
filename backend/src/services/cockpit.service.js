@@ -204,6 +204,16 @@ export const cockpitService = {
     async build(orgId, { since, until, practiceId } = {}) {
         let periodMonth = monthStartFrom(until);
         const month = monthBoundsFrom(until);
+        // since/until are OPTIONAL in cockpitQuerySchema, but several reads
+        // below interpolate them straight into a filter, so a call without a
+        // window sent the literal string 'undefined' as a date and 500'd the
+        // whole page (and the revenue-by-line RPC 404'd on a 1-arg signature).
+        // The ScopePeriod bar always sends a window, so this was only reachable
+        // by an API caller — but a 500 is the wrong answer to a legal request.
+        // Default to the month the cards are already anchored to, which is the
+        // only window consistent with what §1 shows.
+        if (!since) since = month.start;
+        if (!until) until = month.endExclusive;
         const [cashupRows, monthlyRowsForCurrent, leadRoi, acceptedRows, revenueLineRows,
                practices, costModels, costModelsToday, monthCashupRows] = await Promise.all([
             cockpitRepository.cashupRollup(orgId, since, until, practiceId),
