@@ -393,7 +393,7 @@ export function useCallRailStatus() {
 export function useAddCallRailAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { apiKey: string; callrailAccountId: string; label: string; practiceId: string | null }) =>
+    mutationFn: (body: { apiKey: string; callrailAccountId: string; label: string; practiceId?: string | null }) =>
       addCallRailAccount(body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
   });
