@@ -3,6 +3,7 @@
 // have zero ad-id coverage, a non-GBP account, or none of Meta connected at
 // all.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { londonDaysAgo, londonYmd } from '../src/lib/tz.js';
 
 vi.mock('../src/repositories/marketing.repository.js', () => ({
     marketingRepository: {
@@ -19,6 +20,9 @@ vi.mock('../src/repositories/ad-grain.repository.js', () => ({
 const { facebookReportService } = await import('../src/services/facebook-report.service.js');
 const { marketingRepository } = await import('../src/repositories/marketing.repository.js');
 const { adGrainRepository } = await import('../src/repositories/ad-grain.repository.js');
+// The SAME constant the service clamps against — see google-ads-deep-sync.js.
+// Not hardcoded here so this test never drifts from the service's own floor.
+const { DEEP_WINDOW_DAYS } = await import('../src/lib/integrations/google-ads-deep-sync.js');
 
 const ORG = '11111111-1111-1111-1111-111111111111';
 const WIN = { since: '2026-06-01', until: '2026-08-31', practiceId: null };
@@ -37,6 +41,77 @@ beforeEach(() => {
           leads: 10, booked: 4, attended: 2, patients: 2, new_patients: 1 },
     ]);
     adGrainRepository.rollup.mockResolvedValue([]);
+});
+
+// SPEC-LEVEL: the deep-grain tables (adGrainRepository.rollup) hold only a
+// rolling DEEP_WINDOW_DAYS window while ad_metrics/the funnel cover roughly
+// fifteen months. A caller asking for a year must not get campaign costs
+// computed over a year of spend/leads while the ad-set tier silently divides
+// 92 days of spend by a year of leads — the funnel window and the deep-grain
+// window must always agree. clampWindow() is the single place that decides
+// the window every downstream call actually uses.
+describe('window clamping', () => {
+    it('clamps a since before the deep-grain floor across all three methods, and every repository call receives the CLAMPED since — not the raw one', async () => {
+        const floor = londonDaysAgo(DEEP_WINDOW_DAYS);
+        const tooEarly = londonDaysAgo(DEEP_WINDOW_DAYS + 30);   // 30 days before the floor
+        const until = londonYmd();
+
+        const campOut = await facebookReportService.campaigns(ORG, { since: tooEarly, until, practiceId: null });
+        expect(campOut.effectiveSince).toBe(floor);
+        expect(campOut.windowClamped).toBe(true);
+
+        const adSetOut = await facebookReportService.adSets(ORG, 'CMP1', { since: tooEarly, until, practiceId: null });
+        expect(adSetOut.effectiveSince).toBe(floor);
+        expect(adSetOut.windowClamped).toBe(true);
+
+        const adsOut = await facebookReportService.ads(ORG, 'AS1', { since: tooEarly, until, practiceId: null });
+        expect(adsOut.effectiveSince).toBe(floor);
+        expect(adsOut.windowClamped).toBe(true);
+
+        // The payload could be right while a call underneath still used the
+        // raw value — assert directly on what each repository was actually
+        // called with, not just on what the service reported back.
+        expect(marketingRepository.metaFunnel.mock.calls.length).toBeGreaterThan(0);
+        for (const c of marketingRepository.metaFunnel.mock.calls) expect(c[1]).toBe(floor);
+        expect(marketingRepository.campaignSpendByProvider.mock.calls.length).toBeGreaterThan(0);
+        for (const c of marketingRepository.campaignSpendByProvider.mock.calls) expect(c[1]).toBe(floor);
+        expect(adGrainRepository.rollup.mock.calls.length).toBeGreaterThan(0);
+        for (const c of adGrainRepository.rollup.mock.calls) expect(c[2].since).toBe(floor);
+    });
+
+    it('passes a since inside the floor through untouched', async () => {
+        const withinFloor = londonDaysAgo(DEEP_WINDOW_DAYS - 10);
+        const until = londonYmd();
+        const out = await facebookReportService.campaigns(ORG, { since: withinFloor, until, practiceId: null });
+        expect(out.effectiveSince).toBe(withinFloor);
+        expect(out.windowClamped).toBe(false);
+        for (const c of marketingRepository.metaFunnel.mock.calls) expect(c[1]).toBe(withinFloor);
+    });
+
+    // Asking for nothing is not the same as asking for too much: an omitted
+    // since defaults to the floor but is not reported as a clamp.
+    it('defaults an omitted since to the floor, without reporting it as clamped', async () => {
+        const floor = londonDaysAgo(DEEP_WINDOW_DAYS);
+        const out = await facebookReportService.campaigns(ORG, { practiceId: null });
+        expect(out.effectiveSince).toBe(floor);
+        expect(out.windowClamped).toBe(false);
+    });
+
+    it('carries effectiveSince and windowClamped on the not_connected early return', async () => {
+        marketingRepository.adAccountsForProvider.mockResolvedValue([]);
+        const out = await facebookReportService.campaigns(ORG, WIN);
+        expect(out.state).toBe('not_connected');
+        expect(out).toHaveProperty('effectiveSince');
+        expect(out).toHaveProperty('windowClamped');
+    });
+
+    it('carries effectiveSince and windowClamped on the never_synced early return', async () => {
+        marketingRepository.campaignSpendByProvider.mockResolvedValue([]);
+        const out = await facebookReportService.campaigns(ORG, WIN);
+        expect(out.state).toBe('never_synced');
+        expect(out).toHaveProperty('effectiveSince');
+        expect(out).toHaveProperty('windowClamped');
+    });
 });
 
 describe('multi-tenant states', () => {
