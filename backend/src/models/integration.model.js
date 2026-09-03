@@ -102,3 +102,11 @@ export const callrailListCompaniesSchema = zod_1.z.object({
     apiKey: zod_1.z.string().min(1),
     callrailAccountId: zod_1.z.string().min(1),
 });
+
+// Window for the one-off Dentally payment-status repair. Both bounds required:
+// a lone bound would silently repair a different span than intended, and this
+// walks a remote API, so the caller must say exactly what it is asking for.
+export const dentallyPaymentRepairSchema = zod_1.z.object({
+    since: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'since must be YYYY-MM-DD'),
+    until: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'until must be YYYY-MM-DD'),
+}).refine((v) => v.since <= v.until, { message: 'since must not be after until' });
