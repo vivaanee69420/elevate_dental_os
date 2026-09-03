@@ -174,18 +174,27 @@ BEGIN
 
   -- DISTINCT ON guards against an exact duplicate in one payload, which would
   -- otherwise abort the whole INSERT ... ON CONFLICT.
+  --
+  -- provider is filtered (WHERE provider = $3), not trusted from the payload:
+  -- the DELETE above is scoped to the grain's own provider (prov), so a row
+  -- whose payload provider disagreed with the grain would land here but could
+  -- never be cleaned up by a later replace — a permanent orphan inflating
+  -- every rollup forever. provider is also folded into DISTINCT ON/ORDER BY
+  -- because it is part of the real conflict key; omitting it would let two
+  -- legitimately-distinct rows differing only by provider collide.
   EXECUTE format($q$
     WITH src AS (
-      SELECT DISTINCT ON (customer_id, parent_id, entity_id, metric_date) %4$s
+      SELECT DISTINCT ON (provider, customer_id, parent_id, entity_id, metric_date) %4$s
         FROM jsonb_populate_recordset(NULL::public.%1$I, $2)
        WHERE metric_date IS NOT NULL AND entity_id IS NOT NULL
          AND parent_id IS NOT NULL AND organisation_id = $1
-       ORDER BY customer_id, parent_id, entity_id, metric_date
+         AND provider = $3
+       ORDER BY provider, customer_id, parent_id, entity_id, metric_date
     )
     INSERT INTO public.%1$I (%2$s) SELECT %2$s FROM src
     ON CONFLICT (organisation_id, provider, customer_id, parent_id, entity_id, metric_date)
     DO UPDATE SET %3$s
-  $q$, tbl, cols, upd, sel) USING p_org, p_rows;
+  $q$, tbl, cols, upd, sel) USING p_org, p_rows, prov;
 
   GET DIAGNOSTICS n = ROW_COUNT;
 
