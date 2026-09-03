@@ -9,6 +9,7 @@
 
 import { useState } from 'react';
 import { Chip, type ChipColour } from '@/components/ui';
+import { useMe, isAgencyActor } from '@/hooks/useMe';
 import type { CallRailAccount, IntegrationStatus } from '../api';
 import {
   useCallRailStatus,
@@ -31,6 +32,12 @@ const STATUS_CHIP: Record<IntegrationStatus, ChipColour> = {
 };
 
 export default function CallRailPanel() {
+  const { data: me } = useMe();
+  // Practice mapping is an agency-actor power here, same rule as the GHL
+  // account's practice_id field — a non-agency owner still needs to SEE which
+  // practice each company is mapped to (it is their own attribution), just
+  // not change it.
+  const canMap = isAgencyActor(me);
   const { data, isLoading } = useCallRailStatus();
   const { data: practiceData } = usePractices();
   const practices = practiceData?.practices ?? [];
@@ -79,7 +86,11 @@ export default function CallRailPanel() {
         apiKey: apiKey.trim(),
         callrailAccountId: companyId.trim(),
         label: label.trim(),
-        practiceId: practiceId || null,
+        // Omitted, not sent as null, when the caller can't map: the backend
+        // 403s the whole request if practiceId is present at all for a
+        // non-agency actor. A non-agency owner's company is created unmapped
+        // — a state the panel already renders ("No practice assigned…").
+        ...(canMap ? { practiceId: practiceId || null } : {}),
       });
       resetAddForm();
       setShowAdd(false);
@@ -140,12 +151,19 @@ export default function CallRailPanel() {
       <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="CallRail API key" style={inp} />
       <input type="text" value={companyId} onChange={(e) => setCompanyId(e.target.value)} placeholder="CallRail company ID" style={inp} />
       <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Bexleyheath)" style={inp} />
-      <select value={practiceId} onChange={(e) => setPracticeId(e.target.value)} style={inp}>
-        <option value="">No practice yet — assign later</option>
-        {practices.map((p) => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </select>
+      {canMap ? (
+        <select value={practiceId} onChange={(e) => setPracticeId(e.target.value)} style={inp}>
+          <option value="">No practice yet — assign later</option>
+          {practices.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
+      ) : (
+        <span className="text-ink-muted" style={{ fontSize: 10 }}>
+          Practice mapping is managed by your agency admin. This company is added unmapped — its
+          calls won&rsquo;t be attributed until it&rsquo;s mapped.
+        </span>
+      )}
       {addErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{addErr}</span>}
       <button
         onClick={submitAdd}
@@ -255,21 +273,30 @@ export default function CallRailPanel() {
                     <div className="text-ink-muted" style={{ fontSize: 11, fontFamily: 'monospace' }}>{a.callrailAccountId}</div>
                   </td>
                   <td style={{ padding: '8px 4px', fontSize: 12 }}>
-                    <select
-                      value={a.practiceId ?? ''}
-                      disabled={mappingSavingId === a.id}
-                      onChange={(e) => onMapPractice(a.id, e.target.value)}
-                      style={{
-                        maxWidth: 180, padding: '4px 6px', fontSize: 12,
-                        border: '1px solid var(--border)', borderRadius: 6,
-                        color: a.practiceId ? 'inherit' : 'var(--ink-muted, #64748b)',
-                      }}
-                    >
-                      <option value="">Not mapped</option>
-                      {practices.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
+                    {canMap ? (
+                      <select
+                        value={a.practiceId ?? ''}
+                        disabled={mappingSavingId === a.id}
+                        onChange={(e) => onMapPractice(a.id, e.target.value)}
+                        style={{
+                          maxWidth: 180, padding: '4px 6px', fontSize: 12,
+                          border: '1px solid var(--border)', borderRadius: 6,
+                          color: a.practiceId ? 'inherit' : 'var(--ink-muted, #64748b)',
+                        }}
+                      >
+                        <option value="">Not mapped</option>
+                        {practices.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      // Visible and readable, not editable — a non-agency owner
+                      // still needs to see which practice a company is mapped
+                      // to, to understand their own numbers.
+                      <span style={{ color: a.practiceId ? 'inherit' : 'var(--ink-muted, #64748b)' }}>
+                        {a.practiceName || 'Not mapped'}
+                      </span>
+                    )}
                     {!a.practiceId && (
                       <div className="text-warning" style={{ fontSize: 10, marginTop: 2 }}>
                         No practice assigned — its calls are not attributed

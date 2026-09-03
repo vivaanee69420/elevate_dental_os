@@ -527,11 +527,15 @@ export function getCallRailStatus() {
   return api<CallRailStatus>('/api/integrations/callrail');
 }
 
+// practiceId is omitted, not just nulled, for a non-agency-actor caller: the
+// backend rejects practiceId on this body entirely unless the caller is an
+// agency actor (same rule as GHL account update's practice_id field), so the
+// key must not be present in the JSON at all — see CallRailPanel's submitAdd.
 export function addCallRailAccount(body: {
   apiKey: string;
   callrailAccountId: string;
   label: string;
-  practiceId: string | null;
+  practiceId?: string | null;
 }) {
   return api<CallRailAccount>('/api/integrations/callrail/accounts', {
     method: 'POST',
