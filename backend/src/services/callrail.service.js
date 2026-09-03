@@ -1,0 +1,240 @@
+// ============================================================================
+// CallRail companies — owner-only management of N CallRail companies per org,
+// one per practice, exactly like GoHighLevel multi-subaccount (see
+// ghl-account.service.js, the shape this mirrors): each company carries its
+// own encrypted API key on an integration_accounts row plus a random webhook
+// token, minted the same way (crypto.randomBytes(24).toString('hex')) and
+// decorated with the same webhook_url pattern
+// (${BACKEND_PUBLIC_URL||APP_URL}/webhooks/callrail/:token).
+//
+// UNLIKE GHL, a CallRail company's practice mapping is denormalised onto
+// every call it has already fetched (callrail_calls.practice_id) — there is
+// no join at read time. That means changing a company's practice is a real
+// UPDATE across its call history (restampPractice), not just a metadata
+// change; see updateAccount below.
+//
+// RISK FLAG: callrail.repository.js's sourceBreakdown() relies on PostgREST's
+// aggregate functions in `select` (`col.count()`), which no other repository
+// in this codebase uses yet — everywhere else groups+counts via a Postgres
+// RPC (a migration), or counts a single filtered query via
+// `{ count: 'exact' }` (this file's own callCountsByAccount, and the
+// well-established pattern this codebase otherwise uses). A migration/RPC
+// was deliberately avoided here — Task 4's file list does not include one —
+// on the strength that this project's Postgres 17 / Supabase CLI toolchain
+// is well past PostgREST v12.1 (Aug 2024), where the feature is enabled by
+// default. This could not be verified against the hosted project from this
+// worktree (no local Supabase/Docker available). RECOMMENDATION: before
+// Task 6 (the real CallRail pull) ships real call volume, sanity-check
+// `GET .../callrail_calls?select=source,count()` against the hosted project;
+// if it 400s, the fallback is a small `callrail_source_breakdown(p_org uuid)`
+// SQL function (mirrors ghl_dashboard_aggregate/000087) with GROUP BY done
+// server-side, called via `.rpc()` instead of the aggregate-select.
+// ============================================================================
+import crypto from "node:crypto";
+import * as supabase_1 from "../lib/supabase.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
+import { integrationRepository } from "../repositories/integration.repository.js";
+import { callrailRepository } from "../repositories/callrail.repository.js";
+import { callrailProvider } from "../lib/integrations/callrail-provider.js";
+import { encryptSecret } from "../lib/crypto.js";
+import { invalidate as invalidateGating } from "../lib/integration-gating.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
+import { AppError } from "../middleware/errors.js";
+
+const PROVIDER = 'callrail';
+
+function webhookUrlFor(token) {
+    if (!token) return null;
+    const base = process.env.BACKEND_PUBLIC_URL || process.env.APP_URL || 'http://localhost:8080';
+    return `${base}/webhooks/callrail/${token}`;
+}
+
+// Practice names for a bounded set of ids — never more than the number of
+// CallRail companies an org has. Not a callrail.repository.js method: that
+// file is scoped to callrail_calls only (see its header). A direct
+// serviceClient reference-data lookup from a service is already established
+// elsewhere (org-meta.service.js, features.service.js, notification.service.js,
+// comm.service.js, training.service.js, quickbooks-account.service.js).
+async function practiceNamesFor(orgId, practiceIds) {
+    const ids = [...new Set((practiceIds ?? []).filter((id) => id != null))];
+    const map = new Map();
+    if (ids.length === 0) return map;
+    const { data, error } = await supabase_1.serviceClient
+        .from('practices')
+        .select('id, name')
+        .eq('organisation_id', orgId)
+        .in('id', ids);
+    if (error) throw new AppError('Could not load practice names', 500);
+    for (const p of data ?? []) map.set(p.id, p.name);
+    return map;
+}
+
+async function countsFor(orgId, accountId) {
+    const [c] = await callrailRepository.callCountsByAccount(orgId, [accountId]);
+    return c ?? { integrationAccountId: accountId, callCount: 0, lastCallAt: null };
+}
+
+// The exact shape Task 2's panel (and its api.ts CallRailAccount type)
+// consumes. Never reads account.secrets — integrationAccountRepository's
+// SAFE_COLS doesn't select it in the first place.
+function toAccountDTO(account, counts, practiceName) {
+    return {
+        id: account.id,
+        label: account.label ?? null,
+        callrailAccountId: account.external_account_id,
+        practiceId: account.practice_id ?? null,
+        practiceName: practiceName ?? null,
+        status: account.status,
+        lastSyncedAt: account.last_sync_at ?? null,
+        lastError: account.last_error ?? null,
+        webhookUrl: webhookUrlFor(account.webhook_token),
+        callCount: counts?.callCount ?? 0,
+        lastCallAt: counts?.lastCallAt ?? null,
+    };
+}
+
+export const callrailService = {
+    // The payload GET /api/integrations/callrail returns — Task 2's panel's
+    // entire data source. A company connected but not yet mapped to a
+    // practice is listed (never hidden) with practiceId/practiceName null,
+    // so the owner can see it is unassigned rather than have its calls
+    // silently attributed nowhere.
+    async status(orgId) {
+        const [marker, accounts, sourceBreakdown] = await Promise.all([
+            integrationRepository.getByProvider(orgId, PROVIDER),
+            integrationAccountRepository.list(orgId, PROVIDER),
+            callrailRepository.sourceBreakdown(orgId),
+        ]);
+
+        const [counts, practiceNames] = await Promise.all([
+            callrailRepository.callCountsByAccount(orgId, accounts.map((a) => a.id)),
+            practiceNamesFor(orgId, accounts.map((a) => a.practice_id)),
+        ]);
+        const countsById = new Map(counts.map((c) => [c.integrationAccountId, c]));
+
+        return {
+            connected: marker?.status === 'active',
+            accounts: accounts.map((a) => toAccountDTO(
+                a,
+                countsById.get(a.id),
+                a.practice_id ? (practiceNames.get(a.practice_id) ?? null) : null,
+            )),
+            sourceBreakdown,
+        };
+    },
+
+    // Validates the key against CallRail FIRST — a bad key must never be
+    // stored, logged, or echoed. Only then encrypts it, creates the
+    // lightweight provider marker row if absent (mirrors GHL), and inserts
+    // the integration_accounts row with a fresh random webhook_token.
+    async addAccount(orgId, { apiKey, callrailAccountId, label, practiceId } = {}) {
+        if (!apiKey || !String(apiKey).trim()) throw new AppError('apiKey is required', 400);
+        const accountId = callrailAccountId == null ? '' : String(callrailAccountId).trim();
+        if (!accountId) throw new AppError('callrailAccountId is required', 400);
+
+        let verifiedName;
+        try {
+            verifiedName = await callrailProvider.verify(apiKey, accountId);
+        } catch (err) {
+            // verify()'s own message is already safe to show the owner (never
+            // contains the key, on any branch) — rethrown as a 400, not a 500.
+            throw new AppError(err.message, 400);
+        }
+        const name = (label && String(label).trim()) || verifiedName || 'CallRail';
+
+        if (practiceId) await assertOrgOwns(orgId, 'practices', practiceId, 'Practice');
+
+        const secrets = encryptSecret(JSON.stringify({ api_key: String(apiKey).trim() }));
+        const webhook_token = crypto.randomBytes(24).toString('hex');
+
+        await integrationRepository.upsert(orgId, PROVIDER, { status: 'active', last_error: null });
+
+        const account = await integrationAccountRepository.insert(orgId, {
+            provider: PROVIDER,
+            external_account_id: accountId,
+            practice_id: practiceId ?? null,
+            label: name,
+            secrets,
+            config: {},
+            status: 'active',
+            webhook_token,
+        });
+
+        invalidateGating(orgId);
+
+        const practiceName = practiceId
+            ? (await practiceNamesFor(orgId, [practiceId])).get(practiceId) ?? null
+            : null;
+        return toAccountDTO(account, { callCount: 0, lastCallAt: null }, practiceName);
+    },
+
+    // label is a normal owner power; practiceId is agency-actor-gated by the
+    // CONTROLLER (not here — see integration.controller.js), matching
+    // ghlAccountUpdate's practice_id rule. Changing the practice restamps
+    // every call already fetched by this company, so a correction takes
+    // effect on history and not only on what arrives next.
+    async updateAccount(orgId, id, { practiceId, label } = {}) {
+        const existing = await integrationAccountRepository.getById(orgId, id);
+        if (!existing) throw new AppError('account not found', 404);
+
+        const patch = {};
+        if (label !== undefined) patch.label = label;
+
+        let practiceChanged = false;
+        let normalisedPracticeId = existing.practice_id ?? null;
+        if (practiceId !== undefined) {
+            if (practiceId) await assertOrgOwns(orgId, 'practices', practiceId, 'Practice');
+            normalisedPracticeId = practiceId ?? null;
+            practiceChanged = (existing.practice_id ?? null) !== normalisedPracticeId;
+            patch.practice_id = normalisedPracticeId;
+        }
+
+        const updated = Object.keys(patch).length > 0
+            ? await integrationAccountRepository.update(orgId, id, patch)
+            : existing;
+
+        if (practiceChanged) {
+            // practice_id is denormalised onto callrail_calls (migration
+            // 000154) precisely so a read never needs the join — which means
+            // a mapping correction is a real UPDATE here, scoped by BOTH
+            // organisation_id and integration_account_id so it can never
+            // touch another company's — or another org's — calls.
+            await callrailRepository.restampPractice(orgId, id, normalisedPracticeId);
+        }
+
+        const counts = await countsFor(orgId, id);
+        const practiceName = updated.practice_id
+            ? (await practiceNamesFor(orgId, [updated.practice_id])).get(updated.practice_id) ?? null
+            : null;
+        return toAccountDTO(updated, counts, practiceName);
+    },
+
+    // Soft-revoke, matching every other multi-account provider in this
+    // codebase (GoHighLevel's ghlAccountService.removeAccount, QuickBooks's
+    // quickbooksAccountService.removeAccount) — the row stays, visible in the
+    // list as 'revoked', its secret nulled by markRevoked. callrail_calls is
+    // NEVER touched here: a call outlives the company that fetched it by
+    // design (migration 000154's ON DELETE SET NULL exists for exactly this —
+    // a key rotation or reconnect must not wipe call history).
+    async removeAccount(orgId, id) {
+        const existing = await integrationAccountRepository.getById(orgId, id);
+        if (!existing) throw new AppError('account not found', 404);
+        await integrationAccountRepository.markRevoked(orgId, id);
+        const remaining = await integrationAccountRepository.list(orgId, PROVIDER);
+        if (!remaining.some((a) => a.status === 'active')) {
+            await integrationRepository.markRevoked(orgId, PROVIDER);
+        }
+        invalidateGating(orgId);
+        return { removed: true };
+    },
+
+    // The actual CallRail pull is Task 6's callrail-sync.js, which does not
+    // exist yet. Answering { ingested: 0 } for a real, org-owned company
+    // keeps the route honest and safe to call at any point in the rollout —
+    // mirrors integrationService.callrailSync's provider-level stub.
+    async syncAccount(orgId, id) {
+        const existing = await integrationAccountRepository.getById(orgId, id);
+        if (!existing) throw new AppError('account not found', 404);
+        return { ingested: 0 };
+    },
+};
