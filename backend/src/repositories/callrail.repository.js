@@ -16,13 +16,20 @@
 // payment.repository.js, platform-admin.repository.js, ...) — so a company
 // with a large call history is never paged into Node to be counted.
 // sourceBreakdown has no such known key set (a CallRail company's `source`
-// values aren't enumerable up front), so it groups+counts in one round trip
-// using PostgREST's aggregate functions in `select` (`col.count()`, with an
-// implicit GROUP BY on the remaining plain column) — stable and enabled by
-// default since PostgREST v12.1 (Aug 2024); this project's Postgres 17
-// toolchain is well past that version. This is the one genuinely new
-// technique in this file (no other repository in the codebase uses it yet —
-// see callrail.service.js's header for the flagged risk + fallback note).
+// values aren't enumerable up front), so it groups+counts in ONE round trip
+// through the RPC callrail_source_breakdown (migration 000155).
+//
+// It does NOT use PostgREST's aggregate-select (`col.count()`). That was the
+// first implementation and it is broken on this project: the hosted REST
+// endpoint answers `PGRST123: Use of aggregate functions is not allowed`
+// with HTTP 400, verified live. The rejection is at parse time, BEFORE the
+// role check — the identical request without aggregates gets a 401 instead —
+// so service_role hits it exactly as anon does. Every other aggregate in this
+// codebase is an RPC for the same reason.
+//
+// The result is bounded by the number of DISTINCT source values an org's
+// calls carry (a handful of CallRail source names), never near PostgREST's
+// 1000-row cap, so this one read is deliberately not paged.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
 
@@ -92,10 +99,7 @@ export const callrailRepository = {
     // PostgREST aggregate-select dependency this relies on.
     async sourceBreakdown(orgId) {
         const { data, error } = await this._client()
-            .from(TABLE)
-            .select('source, call_count:callrail_id.count()')
-            .eq('organisation_id', orgId)
-            .order('call_count', { ascending: false });
+            .rpc('callrail_source_breakdown', { p_org: orgId });
         if (error) throw new Error(error.message);
         return (data ?? []).map((r) => ({
             source: r.source ?? null,

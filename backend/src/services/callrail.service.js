@@ -13,22 +13,17 @@
 // UPDATE across its call history (restampPractice), not just a metadata
 // change; see updateAccount below.
 //
-// RISK FLAG: callrail.repository.js's sourceBreakdown() relies on PostgREST's
-// aggregate functions in `select` (`col.count()`), which no other repository
-// in this codebase uses yet — everywhere else groups+counts via a Postgres
-// RPC (a migration), or counts a single filtered query via
-// `{ count: 'exact' }` (this file's own callCountsByAccount, and the
-// well-established pattern this codebase otherwise uses). A migration/RPC
-// was deliberately avoided here — Task 4's file list does not include one —
-// on the strength that this project's Postgres 17 / Supabase CLI toolchain
-// is well past PostgREST v12.1 (Aug 2024), where the feature is enabled by
-// default. This could not be verified against the hosted project from this
-// worktree (no local Supabase/Docker available). RECOMMENDATION: before
-// Task 6 (the real CallRail pull) ships real call volume, sanity-check
-// `GET .../callrail_calls?select=source,count()` against the hosted project;
-// if it 400s, the fallback is a small `callrail_source_breakdown(p_org uuid)`
-// SQL function (mirrors ghl_dashboard_aggregate/000087) with GROUP BY done
-// server-side, called via `.rpc()` instead of the aggregate-select.
+// RESOLVED (was a risk flag here): sourceBreakdown() first used PostgREST's
+// aggregate functions in `select` (`col.count()`), on the assumption that
+// PostgREST v12.1+ enables them by default. It does not on this project.
+// Checked against the hosted REST endpoint rather than argued from version
+// numbers: the aggregate request answers HTTP 400 `PGRST123: Use of
+// aggregate functions is not allowed`, while the identical request WITHOUT
+// aggregates answers 401 — so the rejection is at parse time, before the
+// role check, and service_role would have hit it exactly as anon did. In
+// production that was a 400 on the Integrations panel, not a slow query.
+// It is now the RPC callrail_source_breakdown (migration 000155), which is
+// what every other aggregate in this codebase does.
 // ============================================================================
 import crypto from "node:crypto";
 import * as supabase_1 from "../lib/supabase.js";

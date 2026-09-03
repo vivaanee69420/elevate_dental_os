@@ -154,26 +154,26 @@ describe('callrailRepository', () => {
     });
 
     describe('sourceBreakdown — grouped + counted in one query, org-wide', () => {
-        it('issues exactly ONE query regardless of how many distinct sources exist — the read count is 1, not one per source or one per call', async () => {
-            let queries = 0;
-            supaRec.resultProvider = (q) => {
-                if (q.table === 'callrail_calls') {
-                    queries += 1;
-                    return {
-                        data: [
-                            { source: 'google_ads', call_count: 512 },
-                            { source: 'organic', call_count: 40 },
-                            { source: null, call_count: 3 },
-                        ],
-                        error: null,
-                    };
-                }
-                return { data: [], error: null };
+        it('issues exactly ONE call, to the RPC, scoped to the org — not a table scan and not one read per source', async () => {
+            const calls = [];
+            supaRec.rpcProvider = (fn, args) => {
+                calls.push({ fn, args });
+                return {
+                    data: [
+                        { source: 'google_ads', call_count: 512 },
+                        { source: 'organic', call_count: 40 },
+                        { source: null, call_count: 3 },
+                    ],
+                    error: null,
+                };
             };
 
             const out = await callrailRepository.sourceBreakdown(ORG_A);
 
-            expect(queries).toBe(1); // TERMINATION: one grouped SQL query, not a scan
+            // TERMINATION: one grouped RPC. Aggregate-select is NOT usable here —
+            // PostgREST answers PGRST123 "Use of aggregate functions is not
+            // allowed" on this project, verified against the hosted endpoint.
+            expect(calls).toEqual([{ fn: 'callrail_source_breakdown', args: { p_org: ORG_A } }]);
             expect(out).toEqual([
                 { source: 'google_ads', callCount: 512 },
                 { source: 'organic', callCount: 40 },
@@ -182,12 +182,10 @@ describe('callrailRepository', () => {
         });
 
         it('reports what CallRail says even when it contradicts "every call is an ad call"', async () => {
-            supaRec.resultProvider = (q) => {
-                if (q.table === 'callrail_calls') {
-                    return { data: [{ source: 'organic_search', call_count: 900 }, { source: 'paid_search', call_count: 100 }], error: null };
-                }
-                return { data: [], error: null };
-            };
+            supaRec.rpcProvider = () => ({
+                data: [{ source: 'organic_search', call_count: 900 }, { source: 'paid_search', call_count: 100 }],
+                error: null,
+            });
             const out = await callrailRepository.sourceBreakdown(ORG_A);
             expect(out.find((s) => s.source === 'organic_search').callCount).toBe(900);
         });
