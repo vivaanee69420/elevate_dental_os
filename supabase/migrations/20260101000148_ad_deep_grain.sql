@@ -76,4 +76,142 @@ ALTER TABLE public.ad_google_keywords ADD COLUMN IF NOT EXISTS search_impression
 ALTER TABLE public.ad_google_keywords ADD COLUMN IF NOT EXISTS search_top_impression_share          numeric;
 ALTER TABLE public.ad_google_keywords ADD COLUMN IF NOT EXISTS search_absolute_top_impression_share numeric;
 
+-- ---------------------------------------------------------------------------
+-- Grain allowlist. p_grain is a LOOKUP KEY, never an interpolated identifier —
+-- no caller-supplied string reaches SQL as a table name.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public._ad_grain_table(p_grain text)
+RETURNS text LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  RETURN CASE p_grain
+    WHEN 'meta_adset'     THEN 'ad_meta_adsets'
+    WHEN 'meta_ad'        THEN 'ad_meta_ads'
+    WHEN 'google_adgroup' THEN 'ad_google_adgroups'
+    WHEN 'google_ad'      THEN 'ad_google_ads'
+    WHEN 'google_keyword' THEN 'ad_google_keywords'
+    ELSE NULL
+  END;
+END $$;
+
+CREATE OR REPLACE FUNCTION public._ad_grain_provider(p_grain text)
+RETURNS text LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  RETURN CASE
+    WHEN p_grain LIKE 'meta_%'   THEN 'meta_ads'
+    WHEN p_grain LIKE 'google_%' THEN 'google_ads'
+    ELSE NULL
+  END;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Replace one account-set's rows for a grain. Mirrors ad_metrics_replace_window
+-- (migration 000106) rather than inventing a second pattern.
+--
+-- DELETES EVERYTHING for those accounts, not just the window, then reinserts
+-- the window. That is what keeps these tables at exactly the last 92 days
+-- instead of growing without bound. Widening the window later needs a re-pull,
+-- which is safe: Google keeps full account history and Meta keeps 37 months.
+--
+-- The column list is read from information_schema so per-grain extras (reach,
+-- quality_score, impression share) are carried automatically and cannot fall
+-- out of sync with the table.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.ad_grain_replace_window(
+  p_org          uuid,
+  p_grain        text,
+  p_customer_ids text[],
+  p_rows         jsonb
+) RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  tbl text; prov text; cols text; upd text; n integer;
+BEGIN
+  tbl  := public._ad_grain_table(p_grain);
+  prov := public._ad_grain_provider(p_grain);
+  IF tbl IS NULL OR prov IS NULL THEN
+    RAISE EXCEPTION 'ad_grain_replace_window: unknown grain %', p_grain;
+  END IF;
+
+  -- Serialize concurrent replaces for the same (org, grain). Taken BEFORE any
+  -- row is touched so a second caller waits on the cheap advisory lock instead
+  -- of blocking mid-sequence on row locks held by the first.
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_org::text || ':' || p_grain, 0));
+  SET LOCAL lock_timeout = '15s';
+  SET LOCAL statement_timeout = '60s';
+
+  SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
+    INTO cols FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = tbl
+     AND column_name NOT IN ('id','created_at','updated_at');
+
+  SELECT string_agg(format('%I = EXCLUDED.%I', column_name, column_name), ', ')
+    INTO upd FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = tbl
+     AND column_name NOT IN ('id','created_at','updated_at','organisation_id',
+                             'provider','customer_id','parent_id','entity_id','metric_date');
+
+  EXECUTE format('DELETE FROM public.%I WHERE organisation_id = $1 AND provider = $2 AND customer_id = ANY($3)', tbl)
+    USING p_org, prov, p_customer_ids;
+
+  -- DISTINCT ON guards against an exact duplicate in one payload, which would
+  -- otherwise abort the whole INSERT ... ON CONFLICT.
+  EXECUTE format($q$
+    WITH src AS (
+      SELECT DISTINCT ON (customer_id, parent_id, entity_id, metric_date) %2$s
+        FROM jsonb_populate_recordset(NULL::public.%1$I, $2)
+       WHERE metric_date IS NOT NULL AND entity_id IS NOT NULL
+         AND parent_id IS NOT NULL AND organisation_id = $1
+       ORDER BY customer_id, parent_id, entity_id, metric_date
+    )
+    INSERT INTO public.%1$I (%2$s) SELECT %2$s FROM src
+    ON CONFLICT (organisation_id, provider, customer_id, parent_id, entity_id, metric_date)
+    DO UPDATE SET %3$s
+  $q$, tbl, cols, upd) USING p_org, p_rows;
+
+  GET DIAGNOSTICS n = ROW_COUNT;
+
+  -- Stamp practice at the write choke point, from the account mapping.
+  EXECUTE format($u$
+    UPDATE public.%I t SET practice_id = a.practice_id
+      FROM public.ad_accounts a
+     WHERE a.organisation_id = t.organisation_id
+       AND a.provider    = t.provider
+       AND a.customer_id = t.customer_id
+       AND t.organisation_id = $1
+       AND t.practice_id IS DISTINCT FROM a.practice_id
+  $u$, tbl) USING p_org;
+
+  RETURN n;
+END $$;
+
+-- Backfill practice_id across all five grains after a mapping change, mirroring
+-- restamp_ad_metrics_practices (migration 000140).
+CREATE OR REPLACE FUNCTION public.ad_grain_restamp_practices(p_org uuid)
+RETURNS integer
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE t text; n integer := 0; k integer;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['ad_meta_adsets','ad_meta_ads','ad_google_adgroups',
+                           'ad_google_ads','ad_google_keywords']
+  LOOP
+    EXECUTE format($u$
+      UPDATE public.%I t SET practice_id = a.practice_id
+        FROM public.ad_accounts a
+       WHERE a.organisation_id = t.organisation_id
+         AND a.provider    = t.provider
+         AND a.customer_id = t.customer_id
+         AND t.organisation_id = $1
+         AND t.practice_id IS DISTINCT FROM a.practice_id
+    $u$, t) USING p_org;
+    GET DIAGNOSTICS k = ROW_COUNT;
+    n := n + k;
+  END LOOP;
+  RETURN n;
+END $$;
+
+REVOKE ALL ON FUNCTION public.ad_grain_replace_window(uuid, text, text[], jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ad_grain_replace_window(uuid, text, text[], jsonb) TO service_role;
+REVOKE ALL ON FUNCTION public.ad_grain_restamp_practices(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ad_grain_restamp_practices(uuid) TO service_role;
+
 NOTIFY pgrst, 'reload schema';
