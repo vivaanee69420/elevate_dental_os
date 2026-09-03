@@ -135,10 +135,12 @@ describe('syncGoogleDeep', () => {
             accessToken: 'tok', customerIds: ['BAD', 'C1'],
             since: '2026-06-01', until: '2026-08-31', queryCustomer,
         });
-        // One entry per failing (customer, grain) — a keyword pull failing while
-        // ad groups succeed is the common case and must stay visible.
-        expect(res.skipped.map((s) => `${s.customerId}:${s.grain}`))
-            .toEqual(['BAD:google_adgroup', 'BAD:google_ad']);
+        // BAD's mock throws for every query, so it must be reported once per
+        // grain — the no-dedup behaviour that tells an owner exactly which
+        // part of the pull failed. Derived from STREAM_GRAINS rather than
+        // hardcoded, so adding a grain does not falsify this test.
+        expect(res.skipped.map((s) => s.grain)).toEqual(__test.STREAM_GRAINS);
+        expect(res.skipped.every((s) => s.customerId === 'BAD')).toBe(true);
         expect(res.skipped.every((s) => s.error.includes('RESOURCE_EXHAUSTED'))).toBe(true);
         expect(adGrainRepository.replaceWindow).toHaveBeenCalled();
     });
