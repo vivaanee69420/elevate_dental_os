@@ -7,7 +7,8 @@
 //   • Per-practice scorecard← GET /api/analytics/practice-summary (real
 //                              practices + settled payments; margin is the
 //                              group baseline margin, flagged group-derived)
-//   • Lead funnel           ← GET /api/leads (real)
+//   • Lead funnel           ← GET /api/leads/funnel (server-aggregated;
+//                              NEVER sliced from the capped /api/leads list)
 //   • Setup banner          ← GET /api/health (real setup_completed)
 // The editable P&L (break-even/target) stays a CLIENT what-if tool, seeded
 // from the real baseline. The range selector windows the chart only — KPIs
@@ -15,7 +16,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useHealth } from '@/features/health/hooks';
-import { useLeads } from '@/features/leads/hooks';
+import { useLeadFunnel } from '@/features/leads/hooks';
 import { useMarketingRoi } from '@/features/growth/hooks';
 import { formatPence as fmtPence } from '@/lib/format';
 import { usePractices } from '@/features/practices/hooks';
@@ -25,14 +26,12 @@ import {
   useRevenueSeries,
 } from '../hooks';
 import {
-  STAGES,
   DEFAULT_PL_TEMPLATE,
   calcPL,
   rangeLabel,
   ccPounds,
   ccPoundsFull,
   type DateRange,
-  type Lead,
   type PLModel,
 } from '../mock';
 import { Skeleton } from '@/components/ui';
@@ -102,15 +101,6 @@ function seededPL(
   };
 }
 
-function toLead(row: any): Lead {
-  return {
-    id: row.id,
-    practice: row.practice?.name ?? '—',
-    status: row.status,
-    created: row.created_at ?? row.created ?? new Date().toISOString(),
-  };
-}
-
 export default function DashboardScreen() {
   const { data: health } = useHealth();
   const healthComplete = !!health?.setup_completed;
@@ -150,13 +140,18 @@ export default function DashboardScreen() {
     label: periodLabel,
   }), [period, periodLabel]);
   const { data: hub, isLoading: hubLoading } = useBusinessHub(hubWin);
-  const { data: leadsResp, isLoading: leadsLoading } = useLeads();
+  // Funnel is aggregated server-side over the SAME window and practice as the
+  // rest of the page. It used to be computed in the browser from useLeads(),
+  // which returns at most 100 rows ordered newest-first: on a real org that
+  // reported "100 leads · 0.0% conv" against 1,388 leads and 3.5%, because the
+  // 100 newest leads are days old and none of them have converted yet.
+  // Practice scope is passed as an id, never matched on practice NAME.
+  const { data: funnelData, isLoading: leadsLoading } = useLeadFunnel({
+    since: period.from,
+    until: period.to,
+    practiceId: selectedId,
+  });
   const { data: roi } = useMarketingRoi();
-
-  const leads: Lead[] = useMemo(
-    () => (leadsResp?.leads ?? []).map(toLead),
-    [leadsResp],
-  );
 
   const noBaseline = !!summary?.error;
 
@@ -169,7 +164,18 @@ export default function DashboardScreen() {
 
   const v = useMemo(() => {
     const TM = targetMargin / 100;
-    const pl = seededPL(health?.baseline, targetMargin);
+    // Is there a real cost model behind the break-even panel at all? The
+    // template is a demo P&L (a £2,000,000 turnover and invented cost
+    // percentages). When the baseline is empty — as it is for any org that has
+    // not completed Business Health setup — seededPL returns that template
+    // unchanged, and the panel rendered "Break-even £871k/yr · covered 455%"
+    // as though it were this business's numbers. It was not: it was the
+    // template's. Render the panel only when the model is seeded from real
+    // baseline figures.
+    const baseline = health?.baseline ?? {};
+    const hasCostModel =
+      typeof baseline.revenue === 'number' && baseline.revenue > 0;
+    const pl = seededPL(baseline, targetMargin);
     const calc = calcPL(pl);
 
     // Real annual figures (whole pounds) from the baseline summary.
@@ -177,9 +183,13 @@ export default function DashboardScreen() {
     const profit = summary?.netProfit ?? 0;
     const cash = summary?.cashCollected ?? 0;
     const opEx = summary?.totalCosts ?? 0;
-    const cashflow = summary?.cashflow ?? 0;
-    const reserve = summary?.reserve ?? 0;
-    const excess = summary?.excessCash ?? 0;
+    // Nullable on purpose — `?? 0` here is what turned "we have no cost feed"
+    // into a confident £0 on three cash lines.
+    const cashflow = summary?.cashflow ?? null;
+    const reserve = summary?.reserve ?? null;
+    const excess = summary?.excessCash ?? null;
+    const bankBalance = summary?.bankBalance ?? null;
+    const monthsCovered = summary?.monthsCovered ?? 12;
     const margin = summary?.margin ?? 0;
     const targetProfit = rev * TM;
     const targetGap = targetProfit - profit;
@@ -192,7 +202,10 @@ export default function DashboardScreen() {
       profit: m.profit,
       cash: m.cash,
       target: Math.round(m.revenue * TM),
-      be: calc.breakeven / 12,
+      // Monthly break-even, only when it comes from a real cost model. Without
+      // one it is the demo template's £871k/12, and it both drew a false
+      // reference line and — via chartMax — rescaled the real bars against it.
+      be: hasCostModel ? calc.breakeven / 12 : 0,
     }));
     const chartMax = Math.max(
       1,
@@ -204,7 +217,14 @@ export default function DashboardScreen() {
     const dateLabel = win.length === 1 ? firstM : `${firstM} → ${lastM}`;
 
     // Break-even bar (group annualised, from the editable P&L).
-    const annualisedRev = rev;
+    //
+    // calc.breakeven is an ANNUAL figure. `rev` is the selected period's
+    // revenue, which on MTD is a few weeks. Comparing them directly — as this
+    // did, under a variable literally named `annualisedRev` that annualised
+    // nothing — made a healthy business read as far below break-even on any
+    // window shorter than a year. Scale the period up to a year so both sides
+    // of the comparison cover the same span.
+    const annualisedRev = monthsCovered > 0 ? (rev * 12) / monthsCovered : rev;
     const scaleMax =
       Math.max(calc.breakeven, calc.revAtTarget ?? 0, annualisedRev) * 1.05 ||
       1;
@@ -221,7 +241,17 @@ export default function DashboardScreen() {
         icon: '📈',
         label: 'Turnover',
         value: ccPounds(rev),
-        sub: `${periodLabel} · invoiced production`,
+        // The basis genuinely varies (accounting actuals > invoiced production
+        // > settled cash, in that precedence). Hardcoding "invoiced production"
+        // mislabelled the number on two of the three paths — and on the
+        // settled path it silently claimed accrual turnover while showing cash.
+        sub: `${periodLabel} · ${
+          summary?.turnoverBasis === 'actuals'
+            ? 'accounting actuals'
+            : summary?.turnoverBasis === 'billed'
+              ? 'invoiced production'
+              : 'settled payments'
+        }`,
         colour: POS,
         link: '/profit',
       },
@@ -249,19 +279,32 @@ export default function DashboardScreen() {
         link: '/profit',
       },
       {
+        // Was the bank balance under a label describing cash − costs. Now it
+        // IS cash − costs, and shows "—" when there is no cost feed to
+        // subtract rather than a bank figure dressed as a calculation.
         icon: '💧',
-        label: 'Cashflow',
-        value: ccPounds(cashflow),
-        sub: `Cash − costs · ${ccPounds(opEx)} costs`,
-        colour: cashflow > 0 ? POS : NEG,
+        label: 'Operating cashflow',
+        value: cashflow === null ? '—' : ccPounds(cashflow),
+        sub:
+          cashflow === null
+            ? 'Connect accounting for costs'
+            : `Cash in − costs · ${ccPounds(opEx)} costs`,
+        colour: cashflow === null ? AMB : cashflow > 0 ? POS : NEG,
         link: '/cashflow',
       },
       {
+        // Was a second copy of the bank balance. Now it is the bank position
+        // net of the reserve, and says so.
         icon: '🏦',
         label: 'Excess cash',
-        value: ccPounds(excess),
-        sub: `After ${ccPounds(reserve)} reserve`,
-        colour: POS,
+        value: excess === null ? '—' : ccPounds(excess),
+        sub:
+          excess === null
+            ? bankBalance === null
+              ? 'Connect a bank account'
+              : `${ccPounds(bankBalance)} at bank · reserve needs costs`
+            : `${ccPounds(bankBalance ?? 0)} at bank − ${ccPounds(reserve ?? 0)} reserve`,
+        colour: excess === null ? AMB : excess >= 0 ? POS : NEG,
         link: '/financial',
       },
       {
@@ -281,43 +324,44 @@ export default function DashboardScreen() {
     // billed turnover per practice (revenuePence), windowed to the dashboard
     // period. Dentally-mapped sites only — drop GoHighLevel pseudo-practices.
     // Margin is group-derived (no per-practice P&L feed), as on Business Hub.
+    // Turnover is genuinely per practice. Margin is NOT — there is no
+    // per-practice cost feed, so every tile used to print the identical group
+    // margin and an identical "✓ Target hit" / "Below target" verdict. Five
+    // tiles showing the same number look like five measurements; they are one
+    // number copied five times, and the verdict is a group verdict wearing a
+    // practice's name. Show each practice's share of group turnover instead —
+    // that is a real per-practice figure — and state the group margin once, in
+    // the panel header, where it belongs.
     const dentallyIds = new Set(allPractices.map((p) => p.id));
-    const scorecard = (hub?.practices ?? [])
-      .filter((p) => dentallyIds.has(p.practiceId))
-      .map((p) => ({
-        name: p.name,
-        turnover: Math.round(p.revenuePence / 100),
-        margin,
-        hit: margin / 100 >= TM,
-      }));
-
-    // Lead funnel — real leads, last 30 days, optional practice filter.
-    const cutoff30 = new Date(Date.now() - 30 * 86400000);
-    let recent = leads.filter((l) => new Date(l.created) >= cutoff30);
-    if (selected !== 'All practices')
-      recent = recent.filter((l) => l.practice === selected);
-    const totalLeads = recent.length;
-    const treatmentStarted = recent.filter((l) =>
-      ['treatment_started', 'treatment_completed'].includes(l.status),
-    ).length;
-    const convRate = totalLeads
-      ? ((treatmentStarted / totalLeads) * 100).toFixed(1)
-      : '0';
-    const allStages = [...STAGES.map((x) => x.key), 'treatment_completed'];
-    const funnel = STAGES.map((s, i) => ({
-      ...s,
-      count: recent.filter((l) => allStages.slice(i).includes(l.status)).length,
+    const scorecardRows = (hub?.practices ?? []).filter((p) => dentallyIds.has(p.practiceId));
+    const scorecardTotal = scorecardRows.reduce((t, p) => t + p.revenuePence, 0);
+    const scorecard = scorecardRows.map((p) => ({
+      name: p.name,
+      turnover: Math.round(p.revenuePence / 100),
+      sharePct: scorecardTotal ? (p.revenuePence / scorecardTotal) * 100 : 0,
     }));
+
+    // Lead funnel — server-aggregated over the page's window + practice. The
+    // stage maths (cumulative counts, lost leads kept at the stage they
+    // reached) lives in leadService.funnel so every funnel surface agrees.
+    const funnel = funnelData?.stages ?? [];
+    const totalLeads = funnelData?.total ?? 0;
+    const treatmentStarted = funnelData?.started ?? 0;
+    const lostLeads = funnelData?.lost ?? 0;
+    const convRate = funnelData?.conversionPct ?? null;
     const fmax = Math.max(...funnel.map((s) => s.count), 1);
 
     return {
       calc,
+      hasCostModel,
       rev,
       cash,
       opEx,
       cashflow,
       reserve,
       excess,
+      bankBalance,
+      monthsCovered,
       margin,
       rangeRev,
       dateLabel,
@@ -332,6 +376,7 @@ export default function DashboardScreen() {
       annualisedRev,
       totalLeads,
       treatmentStarted,
+      lostLeads,
       convRate,
       funnel,
       fmax,
@@ -342,7 +387,7 @@ export default function DashboardScreen() {
     seriesResp,
     hub,
     practicesData,
-    leads,
+    funnelData,
     health,
     selected,
     range,
@@ -676,7 +721,41 @@ export default function DashboardScreen() {
         </div>
       )}
 
-      {/* Break-even · Target · Actual */}
+      {/* Break-even · Target · Actual.
+          Rendered ONLY with a real cost model. Without a saved baseline,
+          seededPL falls back to a demo template (a £2,000,000 turnover and
+          invented cost percentages), and this panel presented those template
+          figures — break-even, contribution margin, revenue-to-target — as
+          precise facts about the practice group. An empty panel that says why
+          is worth more than four confident numbers about a business that is
+          not yours. */}
+      {!v.hasCostModel ? (
+        <div className="card card-padded mb-4" style={{ borderLeft: `4px solid ${AMB}` }}>
+          <h2 className="display font-bold" style={{ fontSize: 16 }}>
+            Break-even · Target · Actual
+          </h2>
+          <p className="text-ink-muted" style={{ fontSize: 12, marginTop: 6 }}>
+            Break-even needs your cost structure — turnover plus the cost lines
+            as a percentage of it. Add them in Business Health setup and this
+            panel fills in. Until then it would only show a worked example, not
+            your figures.
+          </p>
+          <Link
+            href="/health-setup"
+            className="font-bold inline-block"
+            style={{
+              marginTop: 10,
+              padding: '7px 12px',
+              borderRadius: 6,
+              fontSize: 11,
+              border: '1px solid var(--border)',
+              background: 'white',
+            }}
+          >
+            Set up cost baseline →
+          </Link>
+        </div>
+      ) : (
       <div className="card card-padded mb-4">
         <div className="flex justify-between items-end mb-3 flex-wrap gap-2">
           <div>
@@ -852,6 +931,7 @@ export default function DashboardScreen() {
           ))}
         </div>
       </div>
+      )}
 
       {/* Per-practice scorecard (real turnover; margin group-derived) */}
       <div className="card card-padded mb-4">
@@ -860,8 +940,8 @@ export default function DashboardScreen() {
             Per-practice scorecard
           </h2>
           <span className="text-ink-muted" style={{ fontSize: 11 }}>
-            Billed turnover ({periodLabel}) · margin = group baseline · target{' '}
-            {targetMargin}%
+            Billed turnover ({periodLabel}) · share of group ·{' '}
+            {v.margin ? `group margin ${v.margin.toFixed(1)}%` : 'no per-practice margin feed'}
           </span>
         </div>
         {hubLoading ? (
@@ -914,7 +994,7 @@ export default function DashboardScreen() {
                   className="text-ink-muted"
                   style={{ fontSize: 10, marginTop: 2 }}
                 >
-                  {p.margin.toFixed(1)}% margin
+                  {p.sharePct.toFixed(1)}% of group turnover
                 </div>
                 <div
                   className="bg-bg"
@@ -925,19 +1005,17 @@ export default function DashboardScreen() {
                     overflow: 'hidden',
                   }}
                 >
+                  {/* Share of group turnover — a real per-practice quantity.
+                      This bar previously encoded the group margin against the
+                      target, so every practice drew an identical bar and an
+                      identical verdict. */}
                   <div
                     style={{
                       height: '100%',
-                      width: `${Math.min(100, v.TM ? (p.margin / 100 / v.TM) * 100 : 0)}%`,
-                      background: p.hit ? POS : AMB,
+                      width: `${Math.min(100, p.sharePct)}%`,
+                      background: BRAND,
                     }}
                   />
-                </div>
-                <div
-                  className="font-bold uppercase"
-                  style={{ fontSize: 9, marginTop: 4, color: p.hit ? POS : AMB }}
-                >
-                  {p.hit ? '✓ Target hit' : 'Below target'}
                 </div>
               </button>
             ))}
@@ -950,17 +1028,21 @@ export default function DashboardScreen() {
         <div className="flex justify-between items-center mb-3.5">
           <div>
             <h2 className="display font-bold" style={{ fontSize: 16 }}>
-              Revenue · Cash · Profit — {periodLabel}
+              Cash collected — {periodLabel}
             </h2>
+            {/* The series is settled payments, so the chart is a CASH chart.
+                Calling it "Revenue · Cash · Profit" implied three series and
+                claimed the bars were turnover; revenueSeries returns
+                profit: 0 and cash: 0 unconditionally, so two of the three bars
+                were always zero-height with "£0" tooltips, and the one real
+                bar is cash, not the accrual turnover the KPI above shows. */}
             <p className="text-ink-muted" style={{ fontSize: 11 }}>
-              Real settled payments · {periodLabel} (profit/cash £0 until Xero)
+              Real settled payments per month · not the accrual turnover above
             </p>
           </div>
           <div className="flex gap-3" style={{ fontSize: 11 }}>
             {[
-              { c: BRAND, l: 'Revenue' },
-              { c: '#3B82F6', l: 'Cash' },
-              { c: POS, l: 'Profit' },
+              { c: BRAND, l: 'Cash collected' },
             ].map((x) => (
               <div key={x.l} className="flex items-center gap-1">
                 <div
@@ -978,10 +1060,12 @@ export default function DashboardScreen() {
               <div style={{ width: 14, height: 2, background: AMB }} />
               Target {targetMargin}%
             </div>
-            <div className="flex items-center gap-1">
-              <div style={{ width: 14, height: 2, background: NEG }} />
-              Break-even
-            </div>
+            {v.hasCostModel && (
+              <div className="flex items-center gap-1">
+                <div style={{ width: 14, height: 2, background: NEG }} />
+                Break-even
+              </div>
+            )}
           </div>
         </div>
         {seriesLoading ? (
@@ -1000,8 +1084,6 @@ export default function DashboardScreen() {
           >
             {v.chartSeries.map((s) => {
               const rh = (s.revenue / v.chartMax) * 100;
-              const ph = (s.profit / v.chartMax) * 100;
-              const ch = (s.cash / v.chartMax) * 100;
               const th = (s.target / v.chartMax) * 100;
               const bh = (s.be / v.chartMax) * 100;
               return (
@@ -1025,29 +1107,11 @@ export default function DashboardScreen() {
                     }}
                   >
                     <div
-                      title={`Revenue: ${ccPoundsFull(s.revenue)}`}
+                      title={`Cash collected: ${ccPoundsFull(s.revenue)}`}
                       style={{
-                        width: '28%',
+                        width: '60%',
                         height: `${rh}%`,
                         background: BRAND,
-                        borderRadius: '2px 2px 0 0',
-                      }}
-                    />
-                    <div
-                      title={`Cash: ${ccPoundsFull(s.cash)}`}
-                      style={{
-                        width: '28%',
-                        height: `${ch}%`,
-                        background: '#3B82F6',
-                        borderRadius: '2px 2px 0 0',
-                      }}
-                    />
-                    <div
-                      title={`Profit: ${ccPoundsFull(s.profit)}`}
-                      style={{
-                        width: '28%',
-                        height: `${ph}%`,
-                        background: POS,
                         borderRadius: '2px 2px 0 0',
                       }}
                     />
@@ -1094,7 +1158,7 @@ export default function DashboardScreen() {
             className="display font-bold"
             style={{ fontSize: 14, marginBottom: 4 }}
           >
-            Lead funnel — last 30 days
+            Lead funnel — {periodLabel}
           </h2>
           <p
             className="text-ink-muted"
@@ -1103,8 +1167,10 @@ export default function DashboardScreen() {
             {leadsLoading
               ? 'Loading leads…'
               : v.totalLeads === 0
-                ? 'No leads in the last 30 days'
-                : `${v.totalLeads} leads · ${v.convRate}% conv → ${v.treatmentStarted} started`}
+                ? `No leads in this period`
+                : `${v.totalLeads.toLocaleString('en-GB')} leads · ${
+                    v.convRate === null ? '—' : `${v.convRate}%`
+                  } conv → ${v.treatmentStarted} started · ${v.lostLeads.toLocaleString('en-GB')} lost`}
           </p>
           {v.funnel.map((s, i) => {
             const pct = (s.count / v.fmax) * 100;
@@ -1165,35 +1231,38 @@ export default function DashboardScreen() {
             className="text-ink-muted"
             style={{ fontSize: 11, marginBottom: 10 }}
           >
-            Group-wide · real settled payments (costs £0 until Xero)
+            {v.cashflow === null
+              ? 'Real settled payments · connect accounting for costs, cashflow and reserve'
+              : `Real settled payments less real costs · ${v.monthsCovered}-month window`}
           </p>
+          {/* Every row here is either computed from the row above it or
+              labelled as a separate figure. It previously read as a running
+              statement — cash − costs = operating cashflow − reserve = excess —
+              while "operating cashflow" and "excess cash" were both just the
+              bank balance, so the sums shown did not follow from the rows
+              shown. A blank is honest; a £0 on a cash line is not. */}
           <table style={{ width: '100%', fontSize: 12 }}>
             <tbody>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 0' }}>Turnover</td>
-                <td
-                  className="text-right font-bold"
-                  style={{ padding: '7px 0' }}
-                >
+                <td className="text-right font-bold" style={{ padding: '7px 0' }}>
                   {ccPoundsFull(v.rev)}
                 </td>
               </tr>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 0' }}>Cash collected</td>
-                <td
-                  className="text-right font-bold"
-                  style={{ padding: '7px 0', color: POS }}
-                >
+                <td className="text-right font-bold" style={{ padding: '7px 0', color: POS }}>
                   {ccPoundsFull(v.cash)}
                 </td>
               </tr>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={{ padding: '7px 0' }}>Less: costs</td>
-                <td
-                  className="text-right"
-                  style={{ padding: '7px 0', color: NEG }}
-                >
-                  ({ccPoundsFull(v.opEx)})
+                <td className="text-right" style={{ padding: '7px 0', color: v.opEx ? NEG : undefined }}>
+                  {v.cashflow === null ? (
+                    <span className="text-ink-muted">not connected</span>
+                  ) : (
+                    `(${ccPoundsFull(v.opEx)})`
+                  )}
                 </td>
               </tr>
               <tr style={{ borderBottom: '2px solid #1F2937' }}>
@@ -1202,32 +1271,57 @@ export default function DashboardScreen() {
                 </td>
                 <td
                   className="text-right font-bold"
-                  style={{ padding: '7px 0' }}
+                  style={{ padding: '7px 0', color: v.cashflow === null ? undefined : v.cashflow >= 0 ? POS : NEG }}
                 >
-                  {ccPoundsFull(v.cashflow)}
+                  {v.cashflow === null ? (
+                    <span className="text-ink-muted">—</span>
+                  ) : (
+                    ccPoundsFull(v.cashflow)
+                  )}
                 </td>
               </tr>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={{ padding: '7px 0' }}>Less: 2mo cost reserve</td>
-                <td
-                  className="text-right"
-                  style={{ padding: '7px 0', color: NEG }}
-                >
-                  ({ccPoundsFull(v.reserve)})
+                <td style={{ padding: '7px 0' }}>
+                  2mo cost reserve
+                  <span className="text-ink-muted" style={{ fontSize: 10 }}> · target</span>
+                </td>
+                <td className="text-right" style={{ padding: '7px 0' }}>
+                  {v.reserve === null ? (
+                    <span className="text-ink-muted">—</span>
+                  ) : (
+                    ccPoundsFull(v.reserve)
+                  )}
                 </td>
               </tr>
-              <tr style={{ background: `${POS}15` }}>
-                <td
-                  className="display font-bold"
-                  style={{ padding: '9px 8px', fontSize: 13 }}
-                >
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td style={{ padding: '7px 0' }}>
+                  Cash at bank
+                  <span className="text-ink-muted" style={{ fontSize: 10 }}> · indicative</span>
+                </td>
+                <td className="text-right font-bold" style={{ padding: '7px 0' }}>
+                  {v.bankBalance === null ? (
+                    <span className="text-ink-muted">—</span>
+                  ) : (
+                    ccPoundsFull(v.bankBalance)
+                  )}
+                </td>
+              </tr>
+              <tr style={{ background: v.excess === null ? undefined : `${POS}15` }}>
+                <td className="display font-bold" style={{ padding: '9px 8px', fontSize: 13 }}>
                   Excess cash
+                  <div className="text-ink-muted" style={{ fontSize: 10, fontWeight: 400 }}>
+                    Bank less the 2-month reserve
+                  </div>
                 </td>
                 <td
                   className="display font-bold text-right"
-                  style={{ padding: '9px 8px', fontSize: 17, color: POS }}
+                  style={{ padding: '9px 8px', fontSize: 17, color: v.excess === null ? undefined : v.excess >= 0 ? POS : NEG }}
                 >
-                  {ccPoundsFull(v.excess)}
+                  {v.excess === null ? (
+                    <span className="text-ink-muted" style={{ fontSize: 13 }}>—</span>
+                  ) : (
+                    ccPoundsFull(v.excess)
+                  )}
                 </td>
               </tr>
             </tbody>

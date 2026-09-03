@@ -111,3 +111,39 @@ export function updateLead(id: string, input: LeadUpdateInput) {
     body: JSON.stringify(input),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Lead funnel — server-aggregated.
+//
+// Counts MUST come from here, never from slicing a page of `listLeads`. That
+// list is capped (Zod default limit 100, ordered newest-first), so a funnel
+// derived from it silently reports whatever the newest page happens to
+// contain. On a real org that meant a permanent 0% conversion rate.
+// ---------------------------------------------------------------------------
+export interface LeadFunnelStage {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface LeadFunnel {
+  total: number;
+  started: number;
+  lost: number;
+  /** null when there are no leads to divide by — render "—", not "0%". */
+  conversionPct: number | null;
+  stages: LeadFunnelStage[];
+}
+
+export function getLeadFunnel(opts: {
+  since?: string | null;
+  until?: string | null;
+  practiceId?: string | null;
+} = {}) {
+  const qs = new URLSearchParams();
+  if (opts.since) qs.set('since', opts.since);
+  if (opts.until) qs.set('until', opts.until);
+  if (opts.practiceId) qs.set('practice_id', opts.practiceId);
+  const q = qs.toString();
+  return api<LeadFunnel>(`/api/leads/funnel${q ? `?${q}` : ''}`);
+}

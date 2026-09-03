@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listLeads, listPipelines, updateLead, type LeadsListFilters, type LeadUpdateInput } from './api';
+import { getLeadFunnel, listLeads, listPipelines, updateLead, type LeadsListFilters, type LeadUpdateInput } from './api';
 
 export function useLeads(filters: LeadsListFilters = {}) {
   return useQuery({
@@ -26,5 +26,19 @@ export function useUpdateLead() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['leads'] });
     },
+  });
+}
+
+// Server-aggregated funnel for a window. Never compute a funnel from useLeads()
+// — that list is capped and ordered newest-first.
+export function useLeadFunnel(opts: {
+  since?: string | null;
+  until?: string | null;
+  practiceId?: string | null;
+} = {}) {
+  return useQuery({
+    queryKey: ['lead-funnel', opts.since ?? null, opts.until ?? null, opts.practiceId ?? null],
+    queryFn: () => getLeadFunnel(opts),
+    staleTime: 30_000,
   });
 }

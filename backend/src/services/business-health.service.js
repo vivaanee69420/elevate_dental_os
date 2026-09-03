@@ -177,7 +177,9 @@ export const businessHealthService = {
         const latest = {
             revenue: round1(summary.revenuePence / 100),
             profit: round1(summary.netProfitPence / 100),
-            cash: round1(summary.cashflowPence / 100),
+            // Bank position, not operating cashflow — dashboardSummary now
+            // separates the two. Null-safe: no bank feed => hold the baseline.
+            cash: summary.bankBalancePence == null ? baseline.cash : round1(summary.bankBalancePence / 100),
             conversion: round1(hub.group.conversionRate),
             case_value: computed.avg_case_value ?? baseline.case_value,
             fta_rate: round1(hub.group.noShowRate),
@@ -249,7 +251,7 @@ export const businessHealthService = {
             annual_revenue:    { value: round1(summary.revenuePence / 100), source: summary.basis },
             net_profit:        { value: hasActualProfit ? round1(summary.netProfitPence / 100) : null, source: hasActualProfit ? summary.basis : 'no data' },
             net_profit_margin: { value: hasActualProfit ? round1(summary.marginPct) : null,           source: hasActualProfit ? summary.basis : 'no data' },
-            cash_at_bank:      { value: round1(summary.cashflowPence / 100), source: 'bank' },
+            cash_at_bank:      { value: summary.bankBalancePence == null ? null : round1(summary.bankBalancePence / 100), source: summary.bankBalancePence == null ? 'no data' : 'bank' },
             lead_to_treatment: { value: round1(hub.group.conversionRate), source: 'live' },
             fta_no_show_rate:  { value: round1(hub.group.noShowRate), source: 'live' },
         };
