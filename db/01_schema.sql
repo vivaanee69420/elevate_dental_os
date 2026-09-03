@@ -11,6 +11,7 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm"; -- for fuzzy search
+CREATE EXTENSION IF NOT EXISTS "btree_gin"; -- lets organisation_id lead a trigram GIN index
 
 -- Helper function: get current organisation_id from JWT
 CREATE OR REPLACE FUNCTION current_org_id()
@@ -223,7 +224,23 @@ CREATE INDEX idx_contacts_practice ON contacts(practice_id);
 CREATE INDEX idx_contacts_type ON contacts(type);
 CREATE INDEX idx_contacts_email ON contacts(email);
 CREATE INDEX idx_contacts_phone ON contacts(phone);
-CREATE INDEX idx_contacts_name_trgm ON contacts USING gin ((first_name || ' ' || last_name) gin_trgm_ops);
+-- Patient search (migration 000147). One blob per contact holding every
+-- searchable field, plus the phone's last 10 digits so a number stored as
+-- '+447700900123' is found by typing '07700 900123'. Replaces an
+-- idx_contacts_name_trgm on (first_name || ' ' || last_name), which was NULL
+-- for every contact missing either half and which no query ever matched.
+ALTER TABLE contacts
+  ADD COLUMN IF NOT EXISTS search_blob TEXT
+  GENERATED ALWAYS AS (
+    lower(
+      coalesce(first_name, '') || ' ' ||
+      coalesce(last_name, '')  || ' ' ||
+      coalesce(email, '')      || ' ' ||
+      coalesce(phone, '')      || ' ' ||
+      right(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g'), 10)
+    )
+  ) STORED;
+CREATE INDEX idx_contacts_org_search_trgm ON contacts USING gin (organisation_id, search_blob gin_trgm_ops);
 
 -- ============================================================================
 -- LEADS (CRM pipeline records linked to contacts)

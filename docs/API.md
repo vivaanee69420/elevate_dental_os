@@ -231,7 +231,13 @@ Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide (incl. 
 ## Appointments
 
 ### `GET /api/appointments?from=...&to=...&page=1&per_page=25`
-Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ appointments, total, page, per_page }`. Optional `practice_id` / `associate_id` filters. Defaults to real patient appointments only — patient-less Dentally diary blocks (lunch / not-working / nurse-cover / empty slots, no `pms_patient_id`) are excluded; pass `patients_only=false` to include them. Each appointment includes joined `contact`/`practice`/`associate`.
+Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ appointments, total, page, per_page }`. Optional `practice_id` / `associate_id` filters. Defaults to real patient appointments only — patient-less Dentally diary blocks (lunch / not-working / nurse-cover / empty slots, no `pms_patient_id`) are excluded; pass `patients_only=false` to include them. Each appointment includes joined `contact` (`id`, `first_name`, `last_name`, `email`, `phone`) / `practice` / `associate`.
+
+Optional `search=<3-80 chars>` filters by **patient name, email or phone** in one term (matched against a `contacts.search_blob` trigram index, migration `…000147`). A search **ignores `from`/`to` entirely** — it answers "find this patient's appointments", so running it from a date-bounded view must not hide their other visits — and returns `starts_at` **desc** (newest first) rather than asc. `practice_id` / `associate_id` / `patients_only` still apply.
+
+**Match rule:** text matches at **word starts only** — `smi` finds Smith and Smithson, `ann` finds Ann and Annabel but not Joanne or Hannah. This is a deliberate speed/precision trade: on the worst-case term it is 414 matching contacts instead of 1,559 and 27ms instead of 46ms. Searching the middle of a word (`mith` for Smith) therefore does not match. **Phone fragments are the exception and match anywhere**, since people quote the tail of a number: any run of 4+ digits is reduced to its last 10 and matched as a substring, so a contact stored as `+447700900123` is found by `07700 900123`, `900123`, or `+44 7700 900123` alike.
+
+`%` and `_` in the term are literal, not wildcards. Terms under **3** characters are rejected (400) — a trigram is three characters, so a shorter term cannot use the index and degrades to a full scan of the org's contacts (258ms); an empty/whitespace term reads as "no search". Served by the `appointments_search` RPC rather than a PostgREST embed filter — the embed plans as a nested loop over the org's appointments and measured 1,473ms/page against 27ms for the RPC.
 ### `POST /api/appointments` — create
 ### `PATCH /api/appointments/:id` — reschedule/cancel
 
