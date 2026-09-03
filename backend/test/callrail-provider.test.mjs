@@ -20,7 +20,7 @@ vi.mock('../src/repositories/integration-account.repository.js', () => ({
     },
 }));
 // Task 4's call-side repository. Stubbed here because this suite is about the
-// SESSION ORG ID, not about counting calls: callrailStatus fans out to it, and
+// SESSION ORG ID, not about counting calls: callrailService.status fans out to it, and
 // sourceBreakdown now goes through the RPC callrail_source_breakdown, which the
 // shared Supabase mock refuses unless explicitly stubbed. Task 4's own suite
 // covers what these return.
@@ -119,25 +119,6 @@ describe('callrailProvider.verify', () => {
     it('a network failure surfaces a generic message, never the raw error', async () => {
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')));
         await expect(callrailProvider.verify('key-good', 'ACT1')).rejects.toThrow(/Could not reach CallRail/i);
-    });
-});
-
-describe('integrationService.callrailStatus', () => {
-    it('returns connected:false with empty arrays for an org with no connection, without throwing', async () => {
-        integrationRepository.getByProvider.mockResolvedValueOnce(null);
-        const status = await integrationService.callrailStatus('org-no-conn');
-        expect(status).toEqual({ connected: false, accounts: [], sourceBreakdown: [] });
-    });
-
-    it('reads the marker row for the exact org id passed in', async () => {
-        await integrationService.callrailStatus('org-xyz');
-        expect(integrationRepository.getByProvider).toHaveBeenCalledWith('org-xyz', 'callrail');
-    });
-
-    it('reports connected:true once the marker row is active', async () => {
-        integrationRepository.getByProvider.mockResolvedValueOnce({ status: 'active' });
-        const status = await integrationService.callrailStatus('org-connected');
-        expect(status.connected).toBe(true);
     });
 });
 

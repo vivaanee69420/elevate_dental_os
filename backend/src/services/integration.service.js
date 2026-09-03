@@ -417,27 +417,7 @@ export const integrationService = {
     // integration_accounts row, one per CallRail company (Task 4's
     // callrail.service.js), mirroring GoHighLevel multi-subaccount. The
     // `integrations` row for 'callrail' is only ever the lightweight
-    // "connected" marker Task 4 flips on when the first company is added —
-    // exactly like GHL's own marker row.
-    //
-    // An org that has never connected a company has no marker row and no
-    // integration_accounts rows: this must read as connected:false with
-    // empty arrays, never throw (the panel's default view before Task 4 ships
-    // account creation, and every org's steady state until the owner adds a
-    // company).
-    async callrailStatus(orgId) {
-        const row = await integration_repository_1.integrationRepository.getByProvider(orgId, 'callrail');
-        return {
-            connected: row?.status === 'active',
-            // Task 4's callrail.service.js owns the real per-company rows
-            // (call counts, practice mapping, webhook URL) and the source
-            // breakdown aggregate — neither exists yet without an
-            // integration_accounts row to read.
-            accounts: [],
-            sourceBreakdown: [],
-        };
-    },
-    // "Sync every company, one call" (Task 2's contract). Fans out over
+     // "Sync every company, one call" (Task 2's contract). Fans out over
     // every syncable company of THIS org via callrail-sync.js's syncAccount
     // — status IN ('active','failed'), the same self-healing set
     // listAllSyncable uses for the nightly worker, so a company mid-recovery
