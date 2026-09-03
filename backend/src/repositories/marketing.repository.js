@@ -124,9 +124,13 @@ export const marketingRepository = {
         if (Array.isArray(customerIds) && customerIds.length === 0) return [];
         const rows = [];
         for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            // Widened beyond spend_pence: the Facebook report's campaign tier
+            // (Task 3) reads campaign identity and platform metrics off this
+            // same paged read. Reconciliation only ever sums spend_pence and
+            // is unaffected by the extra columns.
             let q = supabase_1.serviceClient
                 .from('ad_metrics')
-                .select('id, spend_pence')
+                .select('id, customer_id, campaign_id, campaign_name, impressions, clicks, spend_pence')
                 .eq('organisation_id', orgId)
                 .eq('provider', provider)
                 .gte('metric_date', since)
@@ -314,6 +318,34 @@ export const marketingRepository = {
             patients: Number(r.patients ?? 0),
             newPatients: Number(r.new_patients ?? 0),
         }));
+    },
+
+    // The Facebook report's funnel, at (campaign, ad set, ad) grain.
+    //
+    // PAGED, and it must be: PostgREST caps a response at 1000 rows
+    // server-side and reports nothing, and that cap applies to set-returning
+    // RPCs exactly as it does to tables. Calling an RPC is not an escape from
+    // it. `ad_id` is the unique sort key — a lead resolves to at most one ad.
+    async metaFunnel(orgId, since, until, practiceId = null) {
+        const PAGE = 1000;
+        const rows = [];
+        for (let from = 0; ; ) {
+            const { data, error } = await supabase_1.serviceClient
+                .rpc('ad_meta_funnel', {
+                    p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,
+                })
+                .order('ad_id', { ascending: true, nullsFirst: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(`ad_meta_funnel: ${error.message}`);
+            const page = data ?? [];
+            rows.push(...page);
+            // Stop on an EMPTY page, never a short one. The server's cap is its
+            // own setting; treating a short page as the last reintroduces the
+            // truncation at whatever that cap happens to be.
+            if (page.length === 0) break;
+            from += page.length;
+        }
+        return rows;
     },
 
     // Spend, leads and patients per month per channel.
