@@ -135,13 +135,21 @@ describe('no role loses a section its nav already shows it', () => {
 
 describe('cross-section pages keep working', () => {
   // Command Centre is a finance.view page that reads the lead funnel and the
-  // setup banner; Practice Deep Dive reads /api/growth. Locking those on their
-  // own section key alone would 403 a finance-only user mid-page.
-  it('a finance-only user can still load Command Centre and Deep Dive', () => {
+  // setup banner, so locking those on their own section key alone would 403 a
+  // finance-only user mid-page.
+  it('a finance-only user can still load Command Centre', () => {
     const financeOnly = { 'finance.view': true };
-    for (const p of ['/leads', '/health', '/growth', '/analytics/dashboard-summary']) {
+    for (const p of ['/leads', '/health', '/analytics/dashboard-summary']) {
       expect(allowed('GET', p, financeOnly, 'analyst'), `denied ${p}`).toBe(true);
     }
+  });
+
+  // /growth carried a finance.view crossover for Practice Deep Dive, the only
+  // finance-side reader of it. That page was removed, so the crossover went
+  // with it — a crossover outliving its page is how a section quietly widens.
+  it('/growth is back to its own key alone, now Deep Dive is gone', () => {
+    expect(allowed('GET', '/growth', { 'growth.view': true }, 'analyst')).toBe(true);
+    expect(allowed('GET', '/growth', { 'finance.view': true }, 'analyst')).toBe(false);
   });
 
   it('the CRM and Business Health owners of those routes still reach them', () => {

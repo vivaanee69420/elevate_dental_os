@@ -84,8 +84,10 @@ export const SECTIONS = [
   { prefix: '/leads', keys: ['crm.view', 'finance.view'] },
   { prefix: '/health', keys: ['businesshealth.manage', 'finance.view'] },
 
-  // CROSSOVER: Practice Deep Dive is a finance.view page reading /api/growth.
-  { prefix: '/growth', keys: ['growth.view', 'finance.view'] },
+  // finance.view used to open this too, for Practice Deep Dive — the only
+  // finance-side reader of /api/growth. That page has been removed, so the
+  // crossover is gone and /growth is back to its own section key alone.
+  { prefix: '/growth', keys: ['growth.view'] },
 
   { prefix: '/memberships', keys: ['growth.view'] },
   { prefix: '/contacts', keys: ['crm.view'] },
