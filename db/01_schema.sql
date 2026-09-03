@@ -1116,3 +1116,49 @@ CREATE TABLE IF NOT EXISTS public.org_features (
 );
 
 ALTER TABLE public.org_features ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- CALLRAIL (tracked phone calls; migrations 000154, 000155). One API key per
+-- CallRail COMPANY, one company per practice — practice_id is denormalised
+-- from the integration_accounts row that fetched the call, so there is no
+-- tracking-number map. Separate from `leads`: no pipeline/opportunity shape,
+-- and cross-source dedup against GoHighLevel is an explicit read-time step,
+-- not an implicit write. RLS enabled, no policies — serviceClient bypasses it.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.callrail_calls (
+  id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id        UUID NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  integration_account_id UUID REFERENCES integration_accounts(id) ON DELETE SET NULL,
+  practice_id            UUID REFERENCES practices(id) ON DELETE SET NULL,
+  callrail_id            TEXT NOT NULL,
+  tracking_number        TEXT,
+  caller_number          TEXT,
+  caller_phone10         TEXT,     -- normalised; the dedup and matching key
+  caller_name            TEXT,
+  caller_email           TEXT,
+  caller_email_norm      TEXT,     -- normalised
+  started_at             TIMESTAMPTZ NOT NULL,
+  duration_seconds       INTEGER,
+  answered               BOOLEAN,
+  first_call             BOOLEAN,  -- CallRail's own "first time this number called"
+  gclid                  TEXT,
+  keywords               TEXT,
+  campaign               TEXT,
+  source                 TEXT,     -- what CallRail itself attributes the call to
+  raw                    JSONB,    -- payload as received, for forensics
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (organisation_id, callrail_id)
+);
+CREATE TRIGGER callrail_calls_updated_at BEFORE UPDATE ON callrail_calls
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- The funnel reads one org's window; the matcher probes by phone; the panel
+-- counts per company.
+CREATE INDEX IF NOT EXISTS idx_callrail_calls_org_started
+  ON callrail_calls (organisation_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_callrail_calls_org_phone
+  ON callrail_calls (organisation_id, caller_phone10)
+  WHERE caller_phone10 IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_callrail_calls_account
+  ON callrail_calls (integration_account_id, started_at DESC);
