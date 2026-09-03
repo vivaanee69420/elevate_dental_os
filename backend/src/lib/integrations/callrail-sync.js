@@ -118,6 +118,7 @@ export async function fetchAllCalls(apiKey, callrailAccountId, { startDate, endD
     const calls = [];
     let page;
     let requests = 0;
+    let truncated = false;
     for (;;) {
         const data = await fetchCallsPage(apiKey, callrailAccountId, { page, startDate, endDate });
         requests += 1;
@@ -125,9 +126,18 @@ export async function fetchAllCalls(apiKey, callrailAccountId, { startDate, endD
         calls.push(...rows);
         if (!data?.has_next_page || !data?.next_page) break;
         page = data.next_page;
-        if (requests >= MAX_PAGES) break;
+        if (requests >= MAX_PAGES) {
+            // The cap was hit while CallRail was still saying has_next_page —
+            // there IS more data waiting, and it is being dropped silently
+            // unless something says so. At the owner's real volume (~50
+            // calls/month against a ~50k-call cap) this never fires; a much
+            // larger org would otherwise lose data with zero signal.
+            truncated = true;
+            console.warn(`[callrail] account ${callrailAccountId}: hit the ${MAX_PAGES}-page pagination cap with more data still waiting (has_next_page was still true) — this pull is truncated`);
+            break;
+        }
     }
-    return { calls, requests };
+    return { calls, requests, truncated };
 }
 
 // Sync ONE CallRail company. `account` is the FULL row — secrets included —
@@ -163,8 +173,8 @@ export async function syncAccount(orgId, account, onProgress = () => {}, opts = 
     const endDate = londonYmd();
 
     try {
-        const { calls, requests } = await fetchAllCalls(apiKey, callrailAccountId, { startDate, endDate });
-        onProgress({ phase: 'calls', count: calls.length, requests });
+        const { calls, requests, truncated } = await fetchAllCalls(apiKey, callrailAccountId, { startDate, endDate });
+        onProgress({ phase: 'calls', count: calls.length, requests, truncated });
 
         const rows = [];
         for (const call of calls) {
@@ -180,7 +190,7 @@ export async function syncAccount(orgId, account, onProgress = () => {}, opts = 
         }
         const { upserted } = await callrailRepository.upsertCalls(orgId, rows);
         await integrationAccountRepository.markSynced(orgId, account.id);
-        return { ingested: upserted, fetched: calls.length, requests };
+        return { ingested: upserted, fetched: calls.length, requests, truncated };
     } catch (err) {
         try {
             await integrationAccountRepository.markFailed(orgId, account.id, String(err.message).slice(0, 500));
@@ -224,5 +234,3 @@ export async function syncAllOrgs() {
     }
     return results;
 }
-
-export const __test = { fetchCallsPage, INCREMENTAL_DAYS, FULL_DAYS, PER_PAGE, MAX_PAGES };

@@ -480,6 +480,75 @@ describe('callrailService', () => {
         });
     });
 
+    // Closes the "signature verification is dead code" gap: there was no way
+    // to SET integration_accounts' signing key. signingKey is a credential
+    // (encrypted into the SAME secrets blob as api_key — the row has only one
+    // secrets column) but NOT agency-gated: a tenant owner pasting their own
+    // CallRail signing key is ordinary self-service, unlike practiceId.
+    describe('updateAccount — signingKey (a credential, not agency-gated)', () => {
+        it('is written into the encrypted secrets blob, preserving the existing api_key, and never appears on the returned DTO', async () => {
+            const { encryptSecret, decryptSecret } = await import('../src/lib/crypto.js');
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                secrets: encryptSecret(JSON.stringify({ api_key: 'real-api-key' })),
+            });
+
+            const result = await svc.updateAccount(ORG_A, 'acc-1', { signingKey: 'sig-key-value' });
+
+            expect(result.signingKey).toBeUndefined();
+            expect(JSON.stringify(result)).not.toContain('sig-key-value');
+
+            const row = accountsStore.find((a) => a.id === 'acc-1');
+            const decrypted = JSON.parse(decryptSecret(row.secrets));
+            expect(decrypted.api_key).toBe('real-api-key'); // NOT clobbered
+            expect(decrypted.signing_key).toBe('sig-key-value');
+        });
+
+        it('signingKey: null clears a previously-set key without touching api_key', async () => {
+            const { encryptSecret, decryptSecret } = await import('../src/lib/crypto.js');
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                secrets: encryptSecret(JSON.stringify({ api_key: 'real-api-key', signing_key: 'old-key' })),
+            });
+
+            await svc.updateAccount(ORG_A, 'acc-1', { signingKey: null });
+
+            const row = accountsStore.find((a) => a.id === 'acc-1');
+            const decrypted = JSON.parse(decryptSecret(row.secrets));
+            expect(decrypted.api_key).toBe('real-api-key');
+            expect(decrypted.signing_key).toBeUndefined();
+        });
+
+        it('does NOT touch secrets on a label/practiceId-only update (signingKey key absent)', async () => {
+            const { encryptSecret, decryptSecret } = await import('../src/lib/crypto.js');
+            const originalSecrets = encryptSecret(JSON.stringify({ api_key: 'real-api-key', signing_key: 'untouched-key' }));
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                secrets: originalSecrets,
+            });
+
+            await svc.updateAccount(ORG_A, 'acc-1', { label: 'Ashford Dental' });
+
+            const row = accountsStore.find((a) => a.id === 'acc-1');
+            expect(row.secrets).toBe(originalSecrets);
+            expect(JSON.parse(decryptSecret(row.secrets)).signing_key).toBe('untouched-key');
+        });
+
+        it("is never present on status()'s output — the field the reviewer asked to be proven absent", async () => {
+            const { encryptSecret } = await import('../src/lib/crypto.js');
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                secrets: encryptSecret(JSON.stringify({ api_key: 'k', signing_key: 'super-secret-signing-key' })),
+            });
+
+            const status = await svc.status(ORG_A);
+
+            expect(JSON.stringify(status)).not.toContain('super-secret-signing-key');
+            expect(status.accounts[0]).not.toHaveProperty('signingKey');
+            expect(status.accounts[0]).not.toHaveProperty('signing_key');
+        });
+    });
+
     describe('removeAccount — disconnecting a company must not delete its calls', () => {
         it('soft-revokes the company (status + secrets nulled) without ever touching callrail_calls', async () => {
             seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford', practice_id: 'practice-1' });

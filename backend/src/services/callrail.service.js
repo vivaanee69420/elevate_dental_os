@@ -32,7 +32,7 @@ import { integrationRepository } from "../repositories/integration.repository.js
 import { callrailRepository } from "../repositories/callrail.repository.js";
 import { callrailProvider } from "../lib/integrations/callrail-provider.js";
 import { syncAccount as pullCallrailAccount } from "../lib/integrations/callrail-sync.js";
-import { encryptSecret } from "../lib/crypto.js";
+import { encryptSecret, decryptSecret } from "../lib/crypto.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
 import { assertOrgOwns } from "../lib/tenant-guard.js";
 import { AppError } from "../middleware/errors.js";
@@ -72,7 +72,9 @@ async function countsFor(orgId, accountId) {
 
 // The exact shape Task 2's panel (and its api.ts CallRailAccount type)
 // consumes. Never reads account.secrets — integrationAccountRepository's
-// SAFE_COLS doesn't select it in the first place.
+// SAFE_COLS doesn't select it in the first place — which also means the
+// signing_key updateAccount stores inside that same encrypted blob is never
+// on this DTO either, on any read path.
 function toAccountDTO(account, counts, practiceName) {
     return {
         id: account.id,
@@ -181,7 +183,14 @@ export const callrailService = {
     // ghlAccountUpdate's practice_id rule. Changing the practice restamps
     // every call already fetched by this company, so a correction takes
     // effect on history and not only on what arrives next.
-    async updateAccount(orgId, id, { practiceId, label } = {}) {
+    //
+    // signingKey is a THIRD kind of field, distinct from both: a credential
+    // (encrypted, never returned — see toAccountDTO's own comment), but NOT
+    // agency-gated — pasting your own CallRail signing key is ordinary
+    // owner self-service, not a mapping decision (the controller's
+    // isAgencyActor check only inspects practiceId, so this flows through
+    // ungated by construction). `null` clears a previously-set key.
+    async updateAccount(orgId, id, { practiceId, label, signingKey } = {}) {
         const existing = await integrationAccountRepository.getById(orgId, id);
         if (!existing) throw new AppError('account not found', 404);
 
@@ -195,6 +204,28 @@ export const callrailService = {
             normalisedPracticeId = practiceId ?? null;
             practiceChanged = (existing.practice_id ?? null) !== normalisedPracticeId;
             patch.practice_id = normalisedPracticeId;
+        }
+
+        if (signingKey !== undefined) {
+            // integration_accounts has ONE `secrets` column — api_key and
+            // signing_key share it, so a re-encrypt must round-trip through
+            // the EXISTING blob rather than overwrite it, or a signing-key
+            // update would silently erase the API key. getById (SAFE_COLS)
+            // above never selects secrets, hence the separate fetch here —
+            // only when signingKey is actually being touched.
+            const withSecrets = await integrationAccountRepository.getByIdWithSecrets(orgId, id);
+            let current = {};
+            try {
+                current = JSON.parse(decryptSecret(withSecrets?.secrets)) ?? {};
+            } catch {
+                // Corrupt/missing secrets: proceed from an empty base rather
+                // than fail the whole update — the owner is trying to FIX
+                // credentials, not preserve an unreadable blob.
+            }
+            const next = { ...current };
+            if (signingKey === null) delete next.signing_key;
+            else next.signing_key = signingKey;
+            patch.secrets = encryptSecret(JSON.stringify(next));
         }
 
         const updated = Object.keys(patch).length > 0

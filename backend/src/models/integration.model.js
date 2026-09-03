@@ -72,4 +72,12 @@ export const callrailAccountCreateSchema = zod_1.z.object({
 export const callrailAccountUpdateSchema = zod_1.z.object({
     practiceId: zod_1.z.string().uuid().nullable().optional(),
     label: zod_1.z.string().min(1).max(120).optional(),
+    // Second-factor webhook signature verification (see
+    // callrail-webhook.js's file header). A credential, encrypted into the
+    // account's `secrets` blob — never config — so it is a plain string, not
+    // an agency-actor field: a tenant owner pasting their own CallRail
+    // signing key is ordinary self-service, not a practice-mapping decision
+    // (enforced by omission from the controller's isAgencyActor gate, which
+    // only checks practiceId). `null` clears a previously-set key.
+    signingKey: zod_1.z.string().min(1).max(200).nullable().optional(),
 });

@@ -122,6 +122,31 @@ describe('fetchAllCalls — pagination', () => {
     expect(calledUrl.searchParams.get('fields')).toBe(CALLRAIL_FIELDS);
     expect(calledUrl.searchParams.get('relative_pagination')).toBe('true');
   });
+
+  it('flags truncation and warns, naming the account, when the pagination cap is hit with more data still waiting', async () => {
+    // has_next_page is ALWAYS true here — this is the only way to reach the
+    // cap in a test without a real 50k-call account. 200 mocked round trips
+    // is still fast (no real network/timers).
+    global.fetch = vi.fn(async () => ({
+      ok: true, status: 200,
+      json: async () => page([{ id: 'C' }], { hasNext: true, next: 'still-more' }),
+    }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { requests, truncated } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+
+    expect(requests).toBe(200); // MAX_PAGES
+    expect(truncated).toBe(true);
+    const warned = warnSpy.mock.calls.some((args) => args.join(' ').includes('ACT1'));
+    expect(warned).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('does NOT flag truncation on a run that finishes naturally (has_next_page: false before the cap)', async () => {
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => page([]) }));
+    const { truncated } = await fetchAllCalls('key', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+    expect(truncated).toBe(false);
+  });
 });
 
 // ============================================================================
