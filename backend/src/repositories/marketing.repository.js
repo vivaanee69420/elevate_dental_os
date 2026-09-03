@@ -144,15 +144,18 @@ export const marketingRepository = {
         return rows;
     },
 
-    // One provider's ad accounts with the three fields that decide whether the
-    // deep pull covers an account: selection, platform status, and currency.
+    // One provider's ad accounts with the two fields that decide whether the
+    // deep pull can reach an account: platform status and currency. Those are
+    // the only two that PARTITION the data — is_selected is deliberately NOT
+    // read here, because neither sync consults it, so a deselected account
+    // still receives rows in ad_metrics and in the deep tables alike.
     // Deliberately separate from adAccounts() below, which answers a different
     // question (practice mapping) for a different screen — widening that
     // select would couple the two.
     async adAccountsForProvider(orgId, provider) {
         const { data, error } = await supabase_1.serviceClient
             .from('ad_accounts')
-            .select('customer_id, name, currency, status, is_selected')
+            .select('customer_id, name, currency, status')
             .eq('organisation_id', orgId)
             .eq('provider', provider);
         if (error) throw new Error(`ad_accounts read: ${error.message}`);

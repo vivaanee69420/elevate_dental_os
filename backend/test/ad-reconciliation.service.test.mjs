@@ -39,7 +39,7 @@ beforeEach(() => {
     ]);   // £448.00 of campaign spend
     // One healthy, fully covered account by default.
     marketingRepository.adAccountsForProvider.mockResolvedValue([
-        { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null, is_selected: true },
+        { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null },
     ]);
 });
 
@@ -96,10 +96,9 @@ describe('account coverage', () => {
 
     it('narrows the campaign side to the accounts the deep pull covers', async () => {
         marketingRepository.adAccountsForProvider.mockResolvedValue([
-            { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null, is_selected: true },
-            { customer_id: 'C2', name: 'Old', currency: 'GBP', status: 'not_enabled', is_selected: true },
-            { customer_id: 'C3', name: 'US', currency: 'USD', status: null, is_selected: true },
-            { customer_id: 'C4', name: 'Paused', currency: 'GBP', status: null, is_selected: false },
+            { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null },
+            { customer_id: 'C2', name: 'Old', currency: 'GBP', status: 'not_enabled' },
+            { customer_id: 'C3', name: 'US', currency: 'USD', status: null },
         ]);
         const out = await adReconciliationService.build(ORG, { ...RANGE, provider: 'google_ads' });
         expect(marketingRepository.campaignSpendByProvider).toHaveBeenCalledWith(
@@ -110,8 +109,66 @@ describe('account coverage', () => {
         expect(out.excludedAccounts.map((a) => [a.customerId, a.reason])).toEqual([
             ['C2', 'not_enabled'],
             ['C3', 'unsupported_currency'],
-            ['C4', 'not_selected'],
         ]);
+    });
+
+    // An exclusion is only correct if it PARTITIONS THE DATA, and is_selected
+    // does not: neither google-ads-sync.js nor meta-ads-sync.js so much as
+    // mentions it (grep returns nothing), so both loop over every configured
+    // account and a deselected one keeps receiving fresh rows in ad_metrics
+    // AND in the deep tables every night.
+    //
+    // Excluding it from the campaign side alone therefore removed spend that
+    // IS in the deep total, making the deep side legitimately exceed the
+    // campaign side — a negative gap past tolerance, rendering as a red "does
+    // not reconcile" on the one panel whose only job is to be trustworthy.
+    // The mirror image of the bug the coverage filter exists to fix.
+    //
+    // Reintroducing the filter fails this test twice over: on the campaign
+    // account list, and on the excludedAccounts list.
+    it('does NOT exclude a deselected account — is_selected partitions neither side', async () => {
+        marketingRepository.adAccountsForProvider.mockResolvedValue([
+            { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null, is_selected: true },
+            { customer_id: 'C4', name: 'Paused', currency: 'GBP', status: null, is_selected: false },
+        ]);
+        const out = await adReconciliationService.build(ORG, { ...RANGE, provider: 'google_ads' });
+
+        // The deselected account's spend is in the deep rollup, so it must
+        // stay on the campaign side too or the two totals cannot agree.
+        expect(marketingRepository.campaignSpendByProvider).toHaveBeenCalledWith(
+            ORG, RANGE.since, RANGE.until, 'google_ads', ['C1', 'C4'],
+        );
+        expect(out.excludedAccounts).toEqual([]);
+        expect(out.coversAllAccounts).toBe(true);
+        expect(out.coveredAccountCount).toBe(2);
+        expect(out.excludedNote).toBeNull();
+    });
+
+    // The end-to-end symptom, on real figures: equal spend on both sides must
+    // reconcile. With the is_selected filter in place the campaign side lost
+    // C4's £100 while the deep rollup kept it, giving gapPence -10000 and a
+    // red "does not reconcile" for a discrepancy that does not exist.
+    it('reconciles when a deselected account has spend on both sides', async () => {
+        marketingRepository.adAccountsForProvider.mockResolvedValue([
+            { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null, is_selected: true },
+            { customer_id: 'C4', name: 'Paused', currency: 'GBP', status: null, is_selected: false },
+        ]);
+        // £448.00 across both accounts on the campaign side. The mock HONOURS
+        // the customerIds argument — otherwise it would return the same total
+        // however the service filtered, and this test could not fail.
+        const spendByAccount = { C1: 34800, C4: 10000 };
+        marketingRepository.campaignSpendByProvider.mockImplementation(
+            async (_o, _s, _u, _p, customerIds) => (customerIds ?? Object.keys(spendByAccount))
+                .map((cid) => ({ id: cid, spend_pence: spendByAccount[cid] ?? 0 })),
+        );
+        // ...and the identical £448.00 in the deep tables.
+        adGrainRepository.rollup.mockResolvedValue([{ spend_pence: 44800 }]);
+
+        const out = await adReconciliationService.build(ORG, { ...RANGE, provider: 'google_ads' });
+        for (const level of out.levels) {
+            expect(level.gapPence).toBe(0);
+            expect(level.note).toBeNull();
+        }
     });
 
     // The currency guard's whole justification for treating a MISSING currency
@@ -120,8 +177,8 @@ describe('account coverage', () => {
     // was computed in both syncs and then dropped.
     it('describes each exclusion in calm prose, naming the currency', async () => {
         marketingRepository.adAccountsForProvider.mockResolvedValue([
-            { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null, is_selected: true },
-            { customer_id: 'C3', name: 'US Account', currency: 'USD', status: null, is_selected: true },
+            { customer_id: 'C1', name: 'Main', currency: 'GBP', status: null },
+            { customer_id: 'C3', name: 'US Account', currency: 'USD', status: null },
         ]);
         const out = await adReconciliationService.build(ORG, { ...RANGE, provider: 'google_ads' });
         expect(out.excludedAccounts[0].description)
@@ -142,7 +199,7 @@ describe('account coverage', () => {
     // worse error. They must NOT be excluded.
     it('covers an account with no recorded currency rather than dropping its spend', async () => {
         marketingRepository.adAccountsForProvider.mockResolvedValue([
-            { customer_id: 'C1', name: 'No currency', currency: null, status: null, is_selected: true },
+            { customer_id: 'C1', name: 'No currency', currency: null, status: null },
         ]);
         const out = await adReconciliationService.build(ORG, { ...RANGE, provider: 'google_ads' });
         expect(out.coversAllAccounts).toBe(true);
