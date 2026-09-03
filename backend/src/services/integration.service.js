@@ -3,6 +3,7 @@
 // the 5-layer architecture. Owner-only RBAC checked at route level.
 // ============================================================================
 import * as integration_repository_1 from "../repositories/integration.repository.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import "../lib/integrations/index.js";
 import { getProvider, listProviders } from "../lib/integrations/provider-interface.js";
 import * as errors_1 from "../middleware/errors.js";
@@ -32,7 +33,7 @@ async function assertProviderFeature(orgId, provider) {
 }
 
 // Providers that receive real-time webhooks (vs poll-only).
-const WEBHOOK_PROVIDERS = new Set(['dentally', 'emergent']);
+const WEBHOOK_PROVIDERS = new Set(['dentally', 'emergent', 'callrail']);
 
 // A long pull has legitimately-silent stretches (bulk upserts, the per-record
 // link loop, conversations) where the syncer emits NO progress for minutes. The
@@ -397,6 +398,58 @@ export const integrationService = {
         await integration_repository_1.integrationRepository.mergeConfig(orgId, provider, { webhook_secret: String(secret) });
         return { ok: true, configured: true };
     },
+
+    // ---- CallRail (multi-company call tracking) ----------------------------
+    // Provider-level status/sync/disconnect only. There is no singleton
+    // key-paste connect route: every credential lives on an
+    // integration_accounts row, one per CallRail company (Task 4's
+    // callrail.service.js), mirroring GoHighLevel multi-subaccount. The
+    // `integrations` row for 'callrail' is only ever the lightweight
+    // "connected" marker Task 4 flips on when the first company is added —
+    // exactly like GHL's own marker row.
+    //
+    // An org that has never connected a company has no marker row and no
+    // integration_accounts rows: this must read as connected:false with
+    // empty arrays, never throw (the panel's default view before Task 4 ships
+    // account creation, and every org's steady state until the owner adds a
+    // company).
+    async callrailStatus(orgId) {
+        const row = await integration_repository_1.integrationRepository.getByProvider(orgId, 'callrail');
+        return {
+            connected: row?.status === 'active',
+            // Task 4's callrail.service.js owns the real per-company rows
+            // (call counts, practice mapping, webhook URL) and the source
+            // breakdown aggregate — neither exists yet without an
+            // integration_accounts row to read.
+            accounts: [],
+            sourceBreakdown: [],
+        };
+    },
+    // "Sync every company, one call" (Task 2's contract). The pull itself is
+    // Task 6's callrail-sync.js, landing on top of Task 4's account rows —
+    // neither exists yet, so there is nothing to pull. Answering { ingested: 0 }
+    // rather than throwing keeps the route honest and safe to call at any
+    // point in the rollout, connected or not.
+    async callrailSync(_orgId) {
+        return { ingested: 0 };
+    },
+    // Disconnects the provider AND every company beneath it (api.ts's own
+    // words) — the marker row this method owns, plus every integration_accounts
+    // row of provider 'callrail' for this org, which is already available via
+    // the generic, secrets-safe integrationAccountRepository (Task 4 does not
+    // need to revisit this). markRevoked on a row that doesn't exist is a
+    // no-op UPDATE, so this is safe to call whether or not anything was ever
+    // connected.
+    async callrailDisconnect(orgId) {
+        const accounts = await integrationAccountRepository.list(orgId, 'callrail');
+        for (const account of accounts) {
+            await integrationAccountRepository.markRevoked(orgId, account.id);
+        }
+        await integration_repository_1.integrationRepository.markRevoked(orgId, 'callrail');
+        invalidateGating(orgId);
+        return { connected: false };
+    },
+
     // Back-compat shim for the original connect() signature.
     connect(orgId, input) {
         return this.startConnect(orgId, input.provider);

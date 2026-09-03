@@ -54,6 +54,17 @@ export const integrationController = {
             practiceId: body.practice_id,
         }));
     },
+    // ---- CallRail (multi-company call tracking) — provider-level status/
+    // sync/disconnect. Task 4 adds the per-company /accounts routes on top.
+    async callrailGet(req, res) {
+        res.json(await integration_service_1.integrationService.callrailStatus(req.user.organisation_id));
+    },
+    async callrailSync(req, res) {
+        res.json(await integration_service_1.integrationService.callrailSync(req.user.organisation_id));
+    },
+    async callrailDisconnect(req, res) {
+        res.json(await integration_service_1.integrationService.callrailDisconnect(req.user.organisation_id));
+    },
     async list(req, res) {
         res.json(await integration_service_1.integrationService.list(req.user.organisation_id));
     },

@@ -54,6 +54,13 @@ router.get('/quickbooks/accounts', (0, auth_1.requireRole)('owner'), (0, async_h
 router.post('/quickbooks/accounts/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountConnect));
 router.post('/quickbooks/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountSync));
 router.delete('/quickbooks/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountRemove));
+// CallRail — provider-level status/sync/disconnect (Task 3). Task 4 adds the
+// per-company /accounts routes beside these. STATIC paths: must stay above
+// the generic /:provider/* routes below, or '/callrail'/'/callrail/sync'
+// are swallowed by '/:id' and '/:provider/sync' respectively.
+router.get('/callrail', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailGet));
+router.post('/callrail/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailSync));
+router.delete('/callrail', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDisconnect));
 router.get('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
 router.post('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
 router.post('/:provider/refresh', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.refresh));
