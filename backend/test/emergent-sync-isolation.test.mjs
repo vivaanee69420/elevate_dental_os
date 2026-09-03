@@ -133,4 +133,23 @@ describe('the integrity detector is wired for every tenant', () => {
   it('it reports rather than deletes — advisory only', () => {
     expect(migration).not.toMatch(/\bDELETE\b|\bUPDATE\b|\bINSERT\b/i);
   });
+
+  // The check that would have caught the original incident on day one.
+  it('reconciles the two independent feeds against each other', () => {
+    expect(migration).toMatch(/feed_reconciliation/);
+    expect(migration).toMatch(/detail_patient_money_total_pence/);
+    expect(migration).toMatch(/FULL JOIN/);
+  });
+
+  it('scales reconciliation severity so a reporting lag stays quiet', () => {
+    const branch = migration.slice(migration.indexOf("'feed_reconciliation'"));
+    // 5% -> high, 1% -> medium, else low. The live £80-on-£517k lag must not
+    // cry wolf, while the 44% divergence the duplicates caused would be high.
+    expect(branch).toMatch(/x\.base \* 0\.05[\s\S]*?'high'/);
+    expect(branch).toMatch(/x\.base \* 0\.01[\s\S]*?'medium'/);
+  });
+
+  it('reconciliation is windowed, so it stays about current data', () => {
+    expect(migration).toMatch(/current_date - interval '12 months'/);
+  });
 });
