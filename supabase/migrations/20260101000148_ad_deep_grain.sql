@@ -242,4 +242,128 @@ GRANT EXECUTE ON FUNCTION public.ad_grain_replace_window(uuid, text, text[], jso
 REVOKE ALL ON FUNCTION public.ad_grain_restamp_practices(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.ad_grain_restamp_practices(uuid) TO service_role;
 
+-- ---------------------------------------------------------------------------
+-- The ONLY read path for the deep-grain tables. No repository selects from
+-- them directly: PostgREST truncates at 1000 rows without saying so, and one
+-- practice-month of keyword rows is well past that.
+--
+-- plpgsql + RETURN QUERY EXECUTE ... USING is load-bearing. A LANGUAGE sql
+-- function with SECURITY DEFINER + SET search_path cannot be inlined, so it is
+-- planned with p_org UNKNOWN — measured elsewhere in this codebase at 11.1s
+-- against 55ms for the plpgsql form.
+--
+-- GROUP BY (entity_id, parent_id), not entity_id alone: a Google ad or keyword
+-- can live under several ad groups and they are genuinely different rows.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.ad_grain_rollup(
+  p_org      uuid,
+  p_grain    text,
+  p_since    date,
+  p_until    date,
+  p_practice uuid DEFAULT NULL,
+  p_campaign text DEFAULT NULL,
+  p_parent   text DEFAULT NULL
+) RETURNS TABLE (
+  entity_id text, entity_name text, parent_id text,
+  campaign_id text, campaign_name text, entity_status text,
+  spend_pence bigint, impressions bigint, clicks bigint, conversions numeric
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE tbl text;
+BEGIN
+  tbl := public._ad_grain_table(p_grain);
+  IF tbl IS NULL THEN
+    RAISE EXCEPTION 'ad_grain_rollup: unknown grain %', p_grain;
+  END IF;
+
+  RETURN QUERY EXECUTE format($q$
+    SELECT g.entity_id,
+           max(g.entity_name)   AS entity_name,
+           g.parent_id,
+           max(g.campaign_id)   AS campaign_id,
+           max(g.campaign_name) AS campaign_name,
+           max(g.entity_status) AS entity_status,
+           sum(g.spend_pence)::bigint  AS spend_pence,
+           sum(g.impressions)::bigint  AS impressions,
+           sum(g.clicks)::bigint       AS clicks,
+           sum(g.conversions)::numeric AS conversions
+      FROM public.%I g
+     WHERE g.organisation_id = $1
+       AND g.metric_date >= $2
+       AND g.metric_date <= $3
+       AND ($4::uuid IS NULL OR g.practice_id  = $4)
+       AND ($5::text IS NULL OR g.campaign_id  = $5)
+       AND ($6::text IS NULL OR g.parent_id    = $6)
+     GROUP BY g.entity_id, g.parent_id
+  $q$, tbl) USING p_org, p_since, p_until, p_practice, p_campaign, p_parent;
+END $$;
+
+-- Keyword-specific read. Quality Score and impression share are point-in-time
+-- ratios, not sums.
+--
+-- KNOWN LIMITATION, carried deliberately: impression share is stored per day
+-- and aggregated here as an IMPRESSION-WEIGHTED AVERAGE. Google computes its
+-- own range figure from eligible impressions, which the API does not expose, so
+-- a multi-day impression share may differ slightly from Google's. It is
+-- labelled as approximate in the UI. Spend, clicks, impressions and conversions
+-- are exact; only these ratios are not.
+CREATE OR REPLACE FUNCTION public.ad_keyword_rollup(
+  p_org      uuid,
+  p_since    date,
+  p_until    date,
+  p_practice uuid DEFAULT NULL,
+  p_campaign text DEFAULT NULL,
+  p_parent   text DEFAULT NULL
+) RETURNS TABLE (
+  entity_id text, entity_name text, parent_id text,
+  campaign_id text, campaign_name text, entity_status text,
+  spend_pence bigint, impressions bigint, clicks bigint, conversions numeric,
+  match_type text, quality_score numeric,
+  search_impression_share numeric,
+  search_top_impression_share numeric,
+  search_absolute_top_impression_share numeric
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  RETURN QUERY EXECUTE $q$
+    SELECT g.entity_id,
+           max(g.entity_name)   AS entity_name,
+           g.parent_id,
+           max(g.campaign_id)   AS campaign_id,
+           max(g.campaign_name) AS campaign_name,
+           max(g.entity_status) AS entity_status,
+           sum(g.spend_pence)::bigint  AS spend_pence,
+           sum(g.impressions)::bigint  AS impressions,
+           sum(g.clicks)::bigint       AS clicks,
+           sum(g.conversions)::numeric AS conversions,
+           max(g.match_type)           AS match_type,
+           -- Latest non-null Quality Score in the range, not an average: it is
+           -- a 1-10 grade Google assigns, and averaging grades is meaningless.
+           (array_agg(g.quality_score ORDER BY g.metric_date DESC)
+              FILTER (WHERE g.quality_score IS NOT NULL))[1]::numeric AS quality_score,
+           CASE WHEN sum(g.impressions) > 0
+                THEN sum(g.search_impression_share * g.impressions) / sum(g.impressions)
+                END AS search_impression_share,
+           CASE WHEN sum(g.impressions) > 0
+                THEN sum(g.search_top_impression_share * g.impressions) / sum(g.impressions)
+                END AS search_top_impression_share,
+           CASE WHEN sum(g.impressions) > 0
+                THEN sum(g.search_absolute_top_impression_share * g.impressions) / sum(g.impressions)
+                END AS search_absolute_top_impression_share
+      FROM public.ad_google_keywords g
+     WHERE g.organisation_id = $1
+       AND g.metric_date >= $2
+       AND g.metric_date <= $3
+       AND ($4::uuid IS NULL OR g.practice_id = $4)
+       AND ($5::text IS NULL OR g.campaign_id = $5)
+       AND ($6::text IS NULL OR g.parent_id   = $6)
+     GROUP BY g.entity_id, g.parent_id
+  $q$ USING p_org, p_since, p_until, p_practice, p_campaign, p_parent;
+END $$;
+
+REVOKE ALL ON FUNCTION public.ad_grain_rollup(uuid, text, date, date, uuid, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ad_grain_rollup(uuid, text, date, date, uuid, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.ad_keyword_rollup(uuid, date, date, uuid, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.ad_keyword_rollup(uuid, date, date, uuid, text, text) TO service_role;
+
 NOTIFY pgrst, 'reload schema';
