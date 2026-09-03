@@ -84,11 +84,15 @@ describe('google deep wiring', () => {
     });
 
     it('runs the deep pull with the 92-day window after the campaign replace', async () => {
+        const expectedSince = londonDaysAgo(DEEP_WINDOW_DAYS);
         const res = await syncOneGoogleOrg(ORG);
         expect(syncGoogleDeep).toHaveBeenCalledTimes(1);
         const [orgArg, opts] = syncGoogleDeep.mock.calls[0];
         expect(orgArg).toBe(ORG);
         expect(opts.customerIds).toEqual(['C1']);
+        // Proves the wiring goes through the SHARED DEEP_WINDOW_DAYS constant
+        // (RULING D), not a per-provider hardcoded literal.
+        expect(opts.since).toBe(expectedSince);
         expect(res.deep.counts).toEqual({ google_adgroup: 3 });
     });
 
