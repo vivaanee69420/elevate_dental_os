@@ -15,6 +15,15 @@ export const leadController = {
             practiceId: q.practice_id ?? null,
         }));
     },
+    async report(req, res) {
+        const q = lead_model_1.leadReportQuerySchema.parse(req.query);
+        res.json(await lead_service_1.leadService.report(req.user.organisation_id, {
+            since: q.since ?? null,
+            until: q.until ?? null,
+            practiceId: q.practice_id ?? null,
+            accountId: q.integration_account_id ?? null,
+        }));
+    },
     async pipelines(req, res) {
         const q = lead_model_1.pipelinesQuerySchema.parse(req.query);
         res.json(await lead_service_1.leadService.pipelines(req.user.organisation_id, q));

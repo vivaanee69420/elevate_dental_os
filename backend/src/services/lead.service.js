@@ -138,6 +138,75 @@ export const leadService = {
     // `lost` is reported alongside rather than folded away: a stage count that
     // includes leads which have since died is honest only if the death toll is
     // visible next to it.
+    // ------------------------------------------------------------------------
+    // CRM Reports payload. Everything the screen draws, from ONE aggregate over
+    // ONE window, so the funnel, the KPI tiles and the two breakdown tables
+    // cannot disagree with each other.
+    //
+    // Two things the browser-side version got wrong beyond the row cap:
+    //   * it grouped practices by `l.practice?.name` and dropped falsy names,
+    //     which silently discarded every lead with no practice — 3,939 of
+    //     22,807 on Plan4growth, holding 301 of the 494 conversions. The
+    //     by-practice table was missing 61% of all conversions. Unmapped leads
+    //     are real leads; they get their own "Unassigned" row.
+    //   * it averaged first-response time over whatever rows it had. Averaging
+    //     is now done from a sum and a count, so a source with 3 leads cannot
+    //     weigh the same as one with 3,000.
+    async report(orgId, { since = null, until = null, practiceId = null, accountId = null } = {}) {
+        const bounds = (0, date_window_1.dayWindowISO)(since, until);
+        const rows = await lead_repository_1.leadRepository.reportAggregate(orgId, {
+            since: bounds.sinceISO ?? (0, date_window_1.startOfDayISO)(since),
+            until: bounds.untilISO ?? (0, date_window_1.endOfDayISO)(until),
+            practiceId,
+            accountId,
+        });
+
+        const num = (v) => Number(v || 0);
+        const shape = (r) => ({
+            key: r.key ?? '',
+            keyId: r.key_id ?? null,
+            total: num(r.total),
+            contacted: num(r.contacted),
+            consultBooked: num(r.consult_booked),
+            consultAttended: num(r.consult_attended),
+            treatmentStarted: num(r.treatment_started),
+            notProceeding: num(r.not_proceeding),
+            failedToAttend: num(r.failed_to_attend),
+            convertedValuePence: num(r.converted_value_pence),
+            pipelineValuePence: num(r.pipeline_value_pence),
+            // A rate over zero leads is not 0% — it is unknown.
+            conversionPct: num(r.total)
+                ? Math.round((num(r.treatment_started) / num(r.total)) * 1000) / 10
+                : null,
+        });
+
+        const totals = rows.find((r) => r.dimension === 'all');
+        const overall = shape(totals || {});
+        const respCount = num(totals?.response_minutes_count);
+
+        return {
+            totals: {
+                ...overall,
+                ftaPct: overall.total
+                    ? Math.round((overall.failedToAttend / overall.total) * 1000) / 10
+                    : null,
+                avgFirstResponseMinutes: respCount
+                    ? Math.round(num(totals.response_minutes_sum) / respCount)
+                    : null,
+            },
+            // The funnel is the same cumulative shape the Command Centre uses.
+            funnel: [
+                { key: 'received', label: 'Leads received', count: overall.total },
+                { key: 'contacted', label: 'Contacted', count: overall.contacted },
+                { key: 'consult_booked', label: 'Consultation booked', count: overall.consultBooked },
+                { key: 'consult_attended', label: 'Consultation attended', count: overall.consultAttended },
+                { key: 'treatment_started', label: 'Treatment started', count: overall.treatmentStarted },
+            ],
+            bySource: rows.filter((r) => r.dimension === 'source').map(shape),
+            byPractice: rows.filter((r) => r.dimension === 'practice').map(shape),
+        };
+    },
+
     async funnel(orgId, { since = null, until = null, practiceId = null } = {}) {
         // 3. USE THE SAME WINDOW AS THE REST OF THE PAGE. `until` arrives as a
         //    calendar day (YYYY-MM-DD), which a timestamptz parameter parses as
