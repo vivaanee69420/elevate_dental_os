@@ -1,11 +1,16 @@
 // ============================================================================
-// Google Ads deep-grain sync — ad group and ad (keywords live in Task 7, same
-// file). Separate from google-ads-sync.js, which owns campaign grain and is
-// already long enough; this file adds three GAQL streams per account.
+// Google Ads deep-grain sync — ad group, ad, and keyword. Separate from
+// google-ads-sync.js, which owns campaign grain and is already long enough;
+// this file adds three GAQL streams per account.
 //
 // HIERARCHY: Campaign -> Ad Group -> { Ads, Keywords }. Ads and keywords are
-// SIBLINGS under an ad group, not parent and child. So an ad's parent_id is
-// its ad group id, never its campaign id.
+// SIBLINGS under an ad group, not parent and child. So an ad's (or a
+// keyword's) parent_id is its ad group id, never its campaign id.
+//
+// Google removed average position in September 2019. The impression-share
+// metrics (search, top, absolute top) plus Quality Score and its three
+// components are the ranking signals that replaced it — pulled on the
+// keyword stream only, since Quality Score is a keyword-level concept.
 //
 // cost_micros is account-currency micros: pence = micros / 10,000. Guarded by
 // ad-currency.js — a non-GBP account never reaches here.
@@ -113,12 +118,74 @@ export function parseAds(batches, ctx) {
     return out;
 }
 
+// Google's impression-share metrics replaced average position, which was
+// removed in September 2019. They are ratios in 0..1; Google caps the reported
+// value for very high shares, so treat them as indicative rather than exact.
+function ratio(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+
+function intOrNull(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+export function buildKeywordGaql(since, until) {
+    return [
+        'SELECT campaign.id, campaign.name, ad_group.id,',
+        'ad_group_criterion.criterion_id, ad_group_criterion.status,',
+        'ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type,',
+        'ad_group_criterion.quality_info.quality_score,',
+        'ad_group_criterion.quality_info.creative_quality_score,',
+        'ad_group_criterion.quality_info.post_click_quality_score,',
+        'ad_group_criterion.quality_info.search_predicted_ctr,',
+        'segments.date,', METRICS + ',',
+        'metrics.search_impression_share, metrics.search_top_impression_share,',
+        'metrics.search_absolute_top_impression_share',
+        `FROM keyword_view WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+    ].join(' ');
+}
+
+export function parseKeywords(batches, ctx) {
+    const out = [];
+    for (const r of streamRows(batches)) {
+        const crit = r.adGroupCriterion ?? {};
+        const id = crit.criterionId;
+        const adGroupId = r.adGroup?.id;
+        if (!id || !adGroupId || !r.campaign?.id || !r.segments?.date) continue;
+        const { campaign_id, campaign_name, metric_date, spend_pence, impressions, clicks, conversions: cv,
+                organisation_id, practice_id, provider, customer_id } = core(r, ctx);
+        const q = crit.qualityInfo ?? {};
+        const m = r.metrics ?? {};
+        out.push({
+            organisation_id, practice_id, provider, customer_id,
+            campaign_id, campaign_name,
+            parent_id: String(adGroupId),      // a keyword hangs off its AD GROUP
+            entity_id: String(id),
+            entity_name: crit.keyword?.text ?? null,
+            entity_status: crit.status ?? null,
+            metric_date, spend_pence, impressions, clicks, conversions: cv,
+            match_type: crit.keyword?.matchType ?? null,
+            quality_score: intOrNull(q.qualityScore),
+            creative_quality_score: q.creativeQualityScore ?? null,
+            post_click_quality_score: q.postClickQualityScore ?? null,
+            search_predicted_ctr: q.searchPredictedCtr ?? null,
+            search_impression_share: ratio(m.searchImpressionShare),
+            search_top_impression_share: ratio(m.searchTopImpressionShare),
+            search_absolute_top_impression_share: ratio(m.searchAbsoluteTopImpressionShare),
+        });
+    }
+    return out;
+}
+
 // One pull per grain per account. `queryCustomer` is injected so the caller
 // owns the HTTP concern (headers, API-version self-healing, 403 backoff) and
 // tests need no network.
 const STREAMS = [
     { grain: 'google_adgroup', gaql: buildAdGroupGaql, parse: parseAdGroups },
     { grain: 'google_ad',      gaql: buildAdGaql,      parse: parseAds },
+    { grain: 'google_keyword', gaql: buildKeywordGaql, parse: parseKeywords },
 ];
 
 export async function syncGoogleDeep(orgId, { accessToken, customerIds, since, until, queryCustomer }) {
@@ -167,4 +234,8 @@ export async function syncGoogleDeep(orgId, { accessToken, customerIds, since, u
     return { counts, skipped };
 }
 
-export const __test = { microsToPence, conversions, buildAdGroupGaql, buildAdGaql, parseAdGroups, parseAds, DEEP_WINDOW_DAYS };
+export const __test = {
+    microsToPence, conversions, buildAdGroupGaql, buildAdGaql, buildKeywordGaql,
+    parseAdGroups, parseAds, parseKeywords, DEEP_WINDOW_DAYS,
+    STREAM_GRAINS: STREAMS.map((s) => s.grain),
+};
