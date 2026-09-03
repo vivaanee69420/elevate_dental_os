@@ -30,6 +30,10 @@ router.delete('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0,
 router.post('/gohighlevel/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountSync));
 router.get('/gohighlevel/accounts/:id/pipelines', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountPipelines));
 router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountStageMappings));
+// One-off historical repair: re-pull a payment-date window from Dentally and
+// re-apply the corrected status mapper. Owner-only — it walks a remote API and
+// rewrites financial rows.
+router.post('/dentally/repair-payments', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyRepairPayments));
 router.get('/emergent', emergentFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentGet));
 router.post('/emergent', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentConnect));
 router.post('/emergent/sync', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSync));

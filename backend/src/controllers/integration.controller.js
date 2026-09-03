@@ -41,6 +41,12 @@ export const integrationController = {
         const full = req.body?.full === true || req.query?.full === 'true';
         res.json(await emergentService.sync(req.user.organisation_id, { full }));
     },
+    async dentallyRepairPayments(req, res) {
+        const body = integration_model_1.dentallyPaymentRepairSchema.parse(req.body);
+        res.json(await integration_service_1.integrationService.repairDentallyPayments(
+            req.user.organisation_id, { since: body.since, until: body.until },
+        ));
+    },
     async emergentDisconnect(req, res) {
         res.json(await emergentService.disconnect(req.user.organisation_id));
     },
