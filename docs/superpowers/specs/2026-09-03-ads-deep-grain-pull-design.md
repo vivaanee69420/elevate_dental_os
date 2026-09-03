@@ -25,7 +25,15 @@ first**.
    group / keyword grain. No new pages.
 2. **Facebook Reporting page** — campaign → ad set → ad drill-down.
 3. **CallRail integration** — call ingestion, keyword attribution, phone →
-   Dentally matching.
+   Dentally matching. Verified 2026-09-03: CallRail fires a **Post-Call
+   webhook** on call completion whose payload carries `keywords`, `gclid` and
+   `fbclid`, and exposes an API v3 `calls` endpoint (auth
+   `Authorization: Token token="..."`). Ingestion must use **both** — webhook
+   for real time, scheduled pull for backfill and for gaps left by any delivery
+   missed during a deploy or outage — matching the two-path shape already used
+   for Dentally, Emergent and GoHighLevel. Note that CallRail returns the
+   `gclid` of *most value* for a call rather than strictly first touch, which
+   will shape what "keyword-attributed booking" is defined to mean.
 4. **Google Reporting page** — campaign / ad group / ad / keyword, with calls
    from (3) as the lead layer.
 
