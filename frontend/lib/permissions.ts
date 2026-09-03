@@ -9,7 +9,7 @@
 //   finance.view, valuation.view, businesshealth.manage, operations.view,
 //   intelligence.view, growth.view, crm.view, crm.manage, wealth.view,
 //   training.view, system.manage, users.invite, users.manage,
-//   permissions.manage, data.export
+//   permissions.manage, data.export, payrun.manage, overview.view
 //
 // A route/item is visible only when permissions[key] === true. Overview has
 // no key (always visible to any signed-in user). Items that name a more
@@ -22,6 +22,7 @@ export type PermissionKey =
   | 'valuation.view'
   | 'businesshealth.manage'
   | 'operations.view'
+  | 'overview.view'
   | 'intelligence.view'
   | 'growth.view'
   | 'marketing.view'
@@ -33,7 +34,8 @@ export type PermissionKey =
   | 'users.invite'
   | 'users.manage'
   | 'permissions.manage'
-  | 'data.export';
+  | 'data.export'
+  | 'payrun.manage';
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>;
 
@@ -43,8 +45,21 @@ export type Permissions = Partial<Record<PermissionKey, boolean>>;
  * visible to any authenticated user).
  */
 export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
-  // Overview — intentionally NOT listed (always visible):
-  //   dashboard, ai-insights, p4g-ai, mobile
+  // Overview. These used to be absent from this map, which made them visible
+  // to EVERY role — including an analyst who had been granted nothing. Six of
+  // them are finance surfaces: /analytics/dashboard-summary, business-hub,
+  // practice-summary, ai-insights and /api/cockpit are all requirePermission
+  // ('finance.view') on the backend, so naming any other key here would put a
+  // tab in the nav that 403s the moment it is opened.
+  cockpit: 'finance.view',
+  dashboard: 'finance.view',
+  'business-hub': 'finance.view',
+  'deep-dive': 'finance.view',
+  'ai-insights': 'finance.view',
+  day: 'finance.view',
+  // The two Overview tabs that are not finance surfaces.
+  'task-manager': 'overview.view',
+  'p4g-ai': 'overview.view',
 
   // Finance
   cashflow: 'finance.view',
@@ -65,8 +80,12 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // Operations
   appointments: 'operations.view',
   associates: 'operations.view',
+  // Was unmapped, so it showed to every role including reception (CRM-only).
+  clinicians: 'operations.view',
   staff: 'operations.view',
-  pay: 'operations.view',
+  // Payroll has its own key: approving a pay run moves money, so it is not
+  // bundled into operations.view. Owner-only by default.
+  pay: 'payrun.manage',
   chair: 'operations.view',
   treatments: 'operations.view',
   uda: 'operations.view',
@@ -213,25 +232,20 @@ export function canAccessRoute(
   return permissions?.[key] === true;
 }
 
-/** The six Data Room route ids — the ONLY routes an analyst may see. */
-export const DATA_ROOM_ROUTES = [
-  'data-summaries',
-  'data-dentally',
-  'data-google-ads',
-  'data-meta-ads',
-  'data-gohighlevel',
-  'data-emergent',
-] as const;
-
-export function isDataRoomRoute(routeId: string): boolean {
-  return (DATA_ROOM_ROUTES as readonly string[]).includes(routeId);
-}
-
 /**
  * Nav sections (with their items already filtered) visible to a user.
- * Overview items have no permission key and normally show for everyone, so
- * the `analyst` role is handled explicitly: it sees the Data Room section and
- * nothing else. Every other role gets the per-item canAccessRoute filter.
+ *
+ * Every role, analyst included, is driven purely by its effective permissions.
+ * The analyst used to be hard-coded here to Data Room routes and nothing else,
+ * which made the Team Permissions matrix inert for that role: an owner could
+ * grant operations.view to an analyst and nothing appeared, because the grant
+ * was filtered out before canAccessRoute ever saw it. Access is the matrix's
+ * job — if a role should not reach a section, revoke the key.
+ *
+ * Overview items carry no permission key and so remain visible to every role
+ * (Business Hub included). That is the existing product decision, not an
+ * analyst special case: give a section a key in ROUTE_PERMISSION and it
+ * becomes revocable here for everyone.
  */
 export function visibleNavSections(
   role: string | undefined,
@@ -242,12 +256,21 @@ export function visibleNavSections(
   for (const section of NAV) {
     // A module the org does not have hides its whole section.
     if (!featureAllowsSection(section.label, features)) continue;
-    const items = section.items.filter((i) =>
-      (role === 'analyst'
-        ? isDataRoomRoute(i.id) && canAccessRoute(i.id, permissions)
-        : canAccessRoute(i.id, permissions)) && featureAllowsRoute(i.id, features),
+    const items = section.items.filter(
+      (i) => canAccessRoute(i.id, permissions) && featureAllowsRoute(i.id, features),
     );
     if (items.length > 0) out.push({ ...section, items });
   }
   return out;
+}
+
+/** Flat list of the route ids a user may open, in nav order. */
+export function accessibleRouteIds(
+  role: string | undefined,
+  permissions: Permissions | null | undefined,
+  features?: string[] | null,
+): string[] {
+  return visibleNavSections(role, permissions, features).flatMap((s) =>
+    s.items.map((i) => i.id),
+  );
 }

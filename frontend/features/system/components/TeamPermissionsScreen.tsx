@@ -467,7 +467,9 @@ const KEY_SECTION: Record<string, string> = {
   'finance.view': 'Finance',
   'valuation.view': 'Finance',
   'businesshealth.manage': 'Business Health',
+  'overview.view': 'Overview',
   'operations.view': 'Operations',
+  'payrun.manage': 'Operations',
   'intelligence.view': 'Intelligence',
   'growth.view': 'Growth',
   'crm.view': 'Elevate CRM',
@@ -481,6 +483,8 @@ const KEY_SECTION: Record<string, string> = {
 };
 
 const SECTION_ORDER = [
+  // Overview first, matching the sidebar order.
+  'Overview',
   'Finance',
   'Business Health',
   'Operations',
