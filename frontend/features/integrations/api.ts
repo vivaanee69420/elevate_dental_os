@@ -495,16 +495,28 @@ export function getSheetsWriterActivity() {
 // first company added IS the connection; there is no separate singleton
 // key-paste route, and there is no owner-maintained tracking-number map — a
 // call's practice follows from the company (API key) that fetched it.
+//
+// CallRail's hierarchy is Account -> Company -> Calls: callrailAccountId is
+// the CallRail ACCOUNT id, callrailCompanyId is the CallRail COMPANY id —
+// deliberately both surfaced rather than conflated (that conflation was the
+// root defect an earlier version of this integration shipped with). The
+// Add-company flow is two steps for the same reason: paste the API key +
+// account id, then PICK a company from a list — see listCallRailCompanies.
 export interface CallRailAccount {
   id: string;
   label: string | null;
   callrailAccountId: string;
+  callrailCompanyId: string;
   practiceId: string | null;
   practiceName: string | null;
   status: IntegrationStatus;
   lastSyncedAt: string | null;
   lastError: string | null;
   webhookUrl: string | null;
+  // Never the key itself — just whether one is on file, so the panel can say
+  // honestly whether webhook signature verification is active for this
+  // company or deliveries are accepted on the URL token alone.
+  signingKeyConfigured: boolean;
   callCount: number;
   lastCallAt: string | null;
 }
@@ -512,8 +524,10 @@ export interface CallRailAccount {
 // What CallRail itself attributes a call to (e.g. a Google Ads campaign vs.
 // organic/direct) — shown so the "every tracked call is an ad call" working
 // assumption is checkable against real data rather than permanent and invisible.
+// `source` is genuinely nullable — CallRail returns null for some calls, and
+// the backend passes that through unchanged (see callrailRepository.sourceBreakdown).
 export interface CallRailSourceBreakdown {
-  source: string;
+  source: string | null;
   callCount: number;
 }
 
@@ -527,6 +541,16 @@ export function getCallRailStatus() {
   return api<CallRailStatus>('/api/integrations/callrail');
 }
 
+// Add-company step 1: every company under a CallRail account, so the owner
+// PICKS one instead of typing an opaque id. POST (never GET+query) — the API
+// key belongs in a body, not a URL. Nothing is persisted by this call.
+export function listCallRailCompanies(body: { apiKey: string; callrailAccountId: string }) {
+  return api<{ companies: { id: string; name: string }[] }>('/api/integrations/callrail/companies', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
 // practiceId is omitted, not just nulled, for a non-agency-actor caller: the
 // backend rejects practiceId on this body entirely unless the caller is an
 // agency actor (same rule as GHL account update's practice_id field), so the
@@ -534,6 +558,7 @@ export function getCallRailStatus() {
 export function addCallRailAccount(body: {
   apiKey: string;
   callrailAccountId: string;
+  callrailCompanyId: string;
   label: string;
   practiceId?: string | null;
 }) {
@@ -543,7 +568,15 @@ export function addCallRailAccount(body: {
   });
 }
 
-export function updateCallRailAccount(id: string, body: { practiceId?: string | null; label?: string }) {
+// apiKey (rotation) and signingKey are both ordinary owner self-service, NOT
+// agency-gated — only practiceId is. `signingKey: null` clears a
+// previously-set key; omit it entirely to leave it untouched.
+export function updateCallRailAccount(id: string, body: {
+  practiceId?: string | null;
+  label?: string;
+  apiKey?: string;
+  signingKey?: string | null;
+}) {
   return api<CallRailAccount>(`/api/integrations/callrail/accounts/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
@@ -554,11 +587,14 @@ export function removeCallRailAccount(id: string) {
   return api<{ removed: true }>(`/api/integrations/callrail/accounts/${id}`, { method: 'DELETE' });
 }
 
+// Manual per-company sync — pulls the wide (183-day) window, not the
+// incremental nightly one. `truncated` is true only if the pagination safety
+// cap was hit with more data still waiting (effectively never in practice).
 export function syncCallRailAccount(id: string) {
-  return api<{ ingested: number }>(`/api/integrations/callrail/accounts/${id}/sync`, { method: 'POST' });
+  return api<{ ingested: number; truncated: boolean }>(`/api/integrations/callrail/accounts/${id}/sync`, { method: 'POST' });
 }
 
-// Every company, one call.
+// Every company, one call, each over the incremental window.
 export function syncAllCallRail() {
   return api<{ ingested: number }>('/api/integrations/callrail/sync', { method: 'POST' });
 }

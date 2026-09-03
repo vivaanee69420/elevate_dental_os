@@ -6,13 +6,20 @@
 // here: the first company added IS the connection, there is no separate
 // singleton key-paste route, and there is no owner-maintained tracking-number
 // map — a call's practice follows from the company that fetched it.
+//
+// CallRail's hierarchy is Account -> Company -> Calls. Add-company is
+// therefore two steps: paste the API key + CallRail ACCOUNT id, then PICK a
+// company from the list CallRail itself returns — the owner never types an
+// opaque company id by hand, which removes the whole class of
+// paste-the-wrong-id error this integration originally shipped with.
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Chip, type ChipColour } from '@/components/ui';
 import { useMe, isAgencyActor } from '@/hooks/useMe';
 import type { CallRailAccount, IntegrationStatus } from '../api';
 import {
   useCallRailStatus,
+  useLookupCallRailCompanies,
   useAddCallRailAccount,
   useUpdateCallRailAccount,
   useRemoveCallRailAccount,
@@ -42,6 +49,7 @@ export default function CallRailPanel() {
   const { data: practiceData } = usePractices();
   const practices = practiceData?.practices ?? [];
 
+  const lookup = useLookupCallRailCompanies();
   const add = useAddCallRailAccount();
   const update = useUpdateCallRailAccount();
   const remove = useRemoveCallRailAccount();
@@ -50,11 +58,18 @@ export default function CallRailPanel() {
   const disconnectAll = useDisconnectCallRail();
 
   const [showAdd, setShowAdd] = useState(false);
+  // Add-company step 1 (account) fields.
   const [apiKey, setApiKey] = useState('');
+  const [accountId, setAccountId] = useState('');
+  const [lookupErr, setLookupErr] = useState<string | null>(null);
+  // Add-company step 2 (pick a company) fields.
+  const [stage, setStage] = useState<'account' | 'company'>('account');
+  const [companies, setCompanies] = useState<{ id: string; name: string }[]>([]);
   const [companyId, setCompanyId] = useState('');
   const [label, setLabel] = useState('');
   const [practiceId, setPracticeId] = useState('');
   const [addErr, setAddErr] = useState<string | null>(null);
+
   const [rowErr, setRowErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -63,28 +78,80 @@ export default function CallRailPanel() {
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
 
+  // Per-company credentials panel — rotate the API key without disconnecting,
+  // and paste/replace/clear the webhook signing key.
+  const [credsOpenId, setCredsOpenId] = useState<string | null>(null);
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [signingKeyDraft, setSigningKeyDraft] = useState('');
+  const [credsErr, setCredsErr] = useState<string | null>(null);
+  const [credsSavingId, setCredsSavingId] = useState<string | null>(null);
+
   if (isLoading) return null;
 
   const accounts: CallRailAccount[] = data?.accounts ?? [];
   const sourceBreakdown = data?.sourceBreakdown ?? [];
   const connected = !!data?.connected && accounts.length > 0;
-  const totalCalls = accounts.reduce((n, a) => n + (a.callCount || 0), 0);
+  // sourceBreakdown is org-WIDE and still counts a revoked company's
+  // historical calls (see callrailService.status). accounts, by contrast,
+  // already excludes revoked companies — summing callCount from accounts
+  // alone means an org whose only call-bearing company was disconnected
+  // reads as "no calls have arrived yet" while its real history (visible in
+  // sourceBreakdown) sits hidden. Use the org-wide total for both the empty
+  // state and the breakdown's own visibility.
+  const orgCallCount = sourceBreakdown.reduce((n, s) => n + (s.callCount || 0), 0);
   const hasFailed = accounts.some((a) => a.status === 'failed');
 
   function resetAddForm() {
     setApiKey('');
+    setAccountId('');
+    setCompanies([]);
     setCompanyId('');
     setLabel('');
     setPracticeId('');
+    setStage('account');
+    setLookupErr(null);
+    setAddErr(null);
+  }
+
+  async function submitLookup() {
+    setLookupErr(null);
+    if (!apiKey.trim() || !accountId.trim()) return;
+    try {
+      const res = await lookup.mutateAsync({ apiKey: apiKey.trim(), callrailAccountId: accountId.trim() });
+      if (res.companies.length === 0) {
+        setLookupErr('CallRail returned no companies for this account.');
+        return;
+      }
+      setCompanies(res.companies);
+      setCompanyId(res.companies[0].id);
+      setLabel(res.companies[0].name);
+      setStage('company');
+    } catch (e) {
+      setLookupErr((e as Error).message);
+    }
+  }
+
+  function backToAccount() {
+    setStage('account');
+    setCompanies([]);
+    setCompanyId('');
+    setLookupErr(null);
+  }
+
+  function onPickCompany(id: string) {
+    setCompanyId(id);
+    const found = companies.find((c) => c.id === id);
+    if (found) setLabel(found.name);
   }
 
   async function submitAdd() {
     setAddErr(null);
-    if (!apiKey.trim() || !companyId.trim() || !label.trim()) return;
+    if (!apiKey.trim() || !accountId.trim() || !companyId.trim() || !label.trim()) return;
     try {
       await add.mutateAsync({
         apiKey: apiKey.trim(),
-        callrailAccountId: companyId.trim(),
+        callrailAccountId: accountId.trim(),
+        callrailCompanyId: companyId.trim(),
         label: label.trim(),
         // Omitted, not sent as null, when the caller can't map: the backend
         // 403s the whole request if practiceId is present at all for a
@@ -94,7 +161,7 @@ export default function CallRailPanel() {
       });
       resetAddForm();
       setShowAdd(false);
-      setNotice('Company connected. The first pull runs tonight — use Sync now to pull immediately.');
+      setNotice('Company connected — pulling recent call history now. Refresh in a moment, or use Sync now.');
     } catch (e) {
       setAddErr((e as Error).message);
     }
@@ -111,7 +178,7 @@ export default function CallRailPanel() {
     setSyncingId(id);
     try {
       const res = await sync.mutateAsync(id);
-      setNotice(`Pulled ${res.ingested} call${res.ingested === 1 ? '' : 's'}.`);
+      setNotice(`Pulled ${res.ingested} call${res.ingested === 1 ? '' : 's'}.${res.truncated ? ' More were waiting than this pull could fetch — sync again to continue.' : ''}`);
     } catch (e) {
       setRowErr((e as Error).message);
     } finally {
@@ -141,6 +208,56 @@ export default function CallRailPanel() {
     }
   }
 
+  function toggleCreds(id: string) {
+    setCredsErr(null);
+    setApiKeyDraft('');
+    setSigningKeyDraft('');
+    setCredsOpenId((cur) => (cur === id ? null : id));
+  }
+
+  async function saveApiKey(id: string) {
+    if (!apiKeyDraft.trim()) return;
+    setCredsErr(null);
+    setCredsSavingId(id);
+    try {
+      await update.mutateAsync({ id, apiKey: apiKeyDraft.trim() });
+      setApiKeyDraft('');
+      setNotice('API key updated. This company will resume syncing on the next pull.');
+    } catch (e) {
+      setCredsErr((e as Error).message);
+    } finally {
+      setCredsSavingId(null);
+    }
+  }
+
+  async function saveSigningKey(id: string) {
+    if (!signingKeyDraft.trim()) return;
+    setCredsErr(null);
+    setCredsSavingId(id);
+    try {
+      await update.mutateAsync({ id, signingKey: signingKeyDraft.trim() });
+      setSigningKeyDraft('');
+      setNotice('Signing key saved. Signature checking is now active for this company.');
+    } catch (e) {
+      setCredsErr((e as Error).message);
+    } finally {
+      setCredsSavingId(null);
+    }
+  }
+
+  async function clearSigningKey(id: string) {
+    setCredsErr(null);
+    setCredsSavingId(id);
+    try {
+      await update.mutateAsync({ id, signingKey: null });
+      setNotice('Signing key cleared. Deliveries are now accepted on the URL token alone.');
+    } catch (e) {
+      setCredsErr((e as Error).message);
+    } finally {
+      setCredsSavingId(null);
+    }
+  }
+
   const addForm = (
     <div
       style={{
@@ -148,34 +265,70 @@ export default function CallRailPanel() {
         display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460,
       }}
     >
-      <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="CallRail API key" style={inp} />
-      <input type="text" value={companyId} onChange={(e) => setCompanyId(e.target.value)} placeholder="CallRail company ID" style={inp} />
-      <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Bexleyheath)" style={inp} />
-      {canMap ? (
-        <select value={practiceId} onChange={(e) => setPracticeId(e.target.value)} style={inp}>
-          <option value="">No practice yet — assign later</option>
-          {practices.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
+      {stage === 'account' ? (
+        <>
+          <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="CallRail API key" style={inp} />
+          <input type="text" value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder="CallRail account ID (e.g. ACC8154748ae…)" style={inp} />
+          {lookupErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{lookupErr}</span>}
+          <button
+            onClick={submitLookup}
+            disabled={lookup.isPending || !apiKey.trim() || !accountId.trim()}
+            style={{
+              alignSelf: 'flex-start', padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+              border: 'none', background: 'var(--brand)', color: 'white',
+              cursor: 'pointer', opacity: (lookup.isPending || !apiKey.trim() || !accountId.trim()) ? 0.5 : 1,
+            }}
+          >
+            {lookup.isPending ? 'Looking up…' : 'Look up companies'}
+          </button>
+          <span className="text-ink-muted" style={{ fontSize: 10 }}>
+            The account holds every company underneath it — the next step lets you pick the right one.
+          </span>
+        </>
       ) : (
-        <span className="text-ink-muted" style={{ fontSize: 10 }}>
-          Practice mapping is managed by your agency admin. This company is added unmapped — its
-          calls won&rsquo;t be attributed until it&rsquo;s mapped.
-        </span>
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span className="text-ink-muted" style={{ fontSize: 11 }}>Account: <code style={{ fontFamily: 'monospace' }}>{accountId}</code></span>
+            <button
+              onClick={backToAccount}
+              style={{ padding: '3px 8px', fontSize: 11, border: '1px solid var(--border)', borderRadius: 6, background: 'white', cursor: 'pointer' }}
+            >
+              Change
+            </button>
+          </div>
+          <select value={companyId} onChange={(e) => onPickCompany(e.target.value)} style={inp}>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
+            ))}
+          </select>
+          <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Bexleyheath)" style={inp} />
+          {canMap ? (
+            <select value={practiceId} onChange={(e) => setPracticeId(e.target.value)} style={inp}>
+              <option value="">No practice yet — assign later</option>
+              {practices.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="text-ink-muted" style={{ fontSize: 10 }}>
+              Practice mapping is managed by your agency admin. This company is added unmapped — its
+              calls won&rsquo;t be attributed until it&rsquo;s mapped.
+            </span>
+          )}
+          {addErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{addErr}</span>}
+          <button
+            onClick={submitAdd}
+            disabled={add.isPending || !companyId.trim() || !label.trim()}
+            style={{
+              alignSelf: 'flex-start', padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+              border: 'none', background: 'var(--brand)', color: 'white',
+              cursor: 'pointer', opacity: (add.isPending || !companyId.trim() || !label.trim()) ? 0.5 : 1,
+            }}
+          >
+            {add.isPending ? 'Connecting…' : 'Connect company'}
+          </button>
+        </>
       )}
-      {addErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{addErr}</span>}
-      <button
-        onClick={submitAdd}
-        disabled={add.isPending || !apiKey.trim() || !companyId.trim() || !label.trim()}
-        style={{
-          alignSelf: 'flex-start', padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-          border: 'none', background: 'var(--brand)', color: 'white',
-          cursor: 'pointer', opacity: (add.isPending || !apiKey.trim() || !companyId.trim() || !label.trim()) ? 0.5 : 1,
-        }}
-      >
-        {add.isPending ? 'Connecting…' : 'Connect company'}
-      </button>
       <span className="text-ink-muted" style={{ fontSize: 10 }}>Stored encrypted at rest. Never displayed again.</span>
     </div>
   );
@@ -185,7 +338,7 @@ export default function CallRailPanel() {
       title="CallRail — call tracking"
       actions={connected ? (
         <button
-          onClick={() => setShowAdd((v) => !v)}
+          onClick={() => { setShowAdd((v) => !v); if (showAdd) resetAddForm(); }}
           style={{ padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'white', cursor: 'pointer' }}
         >
           {showAdd ? 'Cancel' : 'Add company'}
@@ -215,7 +368,7 @@ export default function CallRailPanel() {
         <>
           {showAdd && <div style={{ marginBottom: 16 }}>{addForm}</div>}
 
-          {totalCalls === 0 && (
+          {orgCallCount === 0 && (
             <div
               style={{
                 marginBottom: 12, padding: '8px 10px', borderRadius: 6, fontSize: 11,
@@ -235,8 +388,9 @@ export default function CallRailPanel() {
                 background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B',
               }}
             >
-              One or more companies failed to sync — see the reason below each. Disconnect that
-              company and add it again with a corrected API key to reconnect it.
+              One or more companies failed to sync — see the reason below each. Open
+              Credentials on that row to paste a corrected API key directly (no disconnect
+              needed) — or disconnect and add it again; both now work.
             </div>
           )}
 
@@ -267,66 +421,143 @@ export default function CallRailPanel() {
             </thead>
             <tbody>
               {accounts.map((a) => (
-                <tr key={a.id} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ padding: '8px 4px', fontSize: 13 }}>
-                    <div style={{ fontWeight: 600 }}>{a.label || 'CallRail'}</div>
-                    <div className="text-ink-muted" style={{ fontSize: 11, fontFamily: 'monospace' }}>{a.callrailAccountId}</div>
-                  </td>
-                  <td style={{ padding: '8px 4px', fontSize: 12 }}>
-                    {canMap ? (
-                      <select
-                        value={a.practiceId ?? ''}
-                        disabled={mappingSavingId === a.id}
-                        onChange={(e) => onMapPractice(a.id, e.target.value)}
-                        style={{
-                          maxWidth: 180, padding: '4px 6px', fontSize: 12,
-                          border: '1px solid var(--border)', borderRadius: 6,
-                          color: a.practiceId ? 'inherit' : 'var(--ink-muted, #64748b)',
-                        }}
-                      >
-                        <option value="">Not mapped</option>
-                        {practices.map((p) => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      // Visible and readable, not editable — a non-agency owner
-                      // still needs to see which practice a company is mapped
-                      // to, to understand their own numbers.
-                      <span style={{ color: a.practiceId ? 'inherit' : 'var(--ink-muted, #64748b)' }}>
-                        {a.practiceName || 'Not mapped'}
-                      </span>
-                    )}
-                    {!a.practiceId && (
-                      <div className="text-warning" style={{ fontSize: 10, marginTop: 2 }}>
-                        No practice assigned — its calls are not attributed
+                <Fragment key={a.id}>
+                  <tr style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '8px 4px', fontSize: 13 }}>
+                      <div style={{ fontWeight: 600 }}>{a.label || 'CallRail'}</div>
+                      <div className="text-ink-muted" style={{ fontSize: 10, fontFamily: 'monospace' }}>company {a.callrailCompanyId}</div>
+                      <div className="text-ink-muted" style={{ fontSize: 10, fontFamily: 'monospace' }}>account {a.callrailAccountId ?? '—'}</div>
+                    </td>
+                    <td style={{ padding: '8px 4px', fontSize: 12 }}>
+                      {canMap ? (
+                        <select
+                          value={a.practiceId ?? ''}
+                          disabled={mappingSavingId === a.id}
+                          onChange={(e) => onMapPractice(a.id, e.target.value)}
+                          style={{
+                            maxWidth: 180, padding: '4px 6px', fontSize: 12,
+                            border: '1px solid var(--border)', borderRadius: 6,
+                            color: a.practiceId ? 'inherit' : 'var(--ink-muted, #64748b)',
+                          }}
+                        >
+                          <option value="">Not mapped</option>
+                          {practices.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        // Visible and readable, not editable — a non-agency owner
+                        // still needs to see which practice a company is mapped
+                        // to, to understand their own numbers.
+                        <span style={{ color: a.practiceId ? 'inherit' : 'var(--ink-muted, #64748b)' }}>
+                          {a.practiceName || 'Not mapped'}
+                        </span>
+                      )}
+                      {!a.practiceId && (
+                        <div className="text-warning" style={{ fontSize: 10, marginTop: 2 }}>
+                          No practice assigned — its calls are not attributed
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ padding: '8px 4px', fontSize: 13 }}>{a.callCount.toLocaleString('en-GB')}</td>
+                    <td className="text-ink-muted" style={{ padding: '8px 4px', fontSize: 11 }}>
+                      {a.lastCallAt ? new Date(a.lastCallAt).toLocaleString('en-GB') : 'none yet'}
+                    </td>
+                    <td style={{ padding: '8px 4px', fontSize: 12 }}>
+                      <Chip colour={STATUS_CHIP[a.status]}>{a.status}</Chip>
+                      <div className="text-ink-muted" style={{ fontSize: 10, marginTop: 2 }}>
+                        {a.lastSyncedAt ? `synced ${new Date(a.lastSyncedAt).toLocaleDateString('en-GB')}` : 'never synced'}
                       </div>
-                    )}
-                  </td>
-                  <td style={{ padding: '8px 4px', fontSize: 13 }}>{a.callCount.toLocaleString('en-GB')}</td>
-                  <td className="text-ink-muted" style={{ padding: '8px 4px', fontSize: 11 }}>
-                    {a.lastCallAt ? new Date(a.lastCallAt).toLocaleString('en-GB') : 'none yet'}
-                  </td>
-                  <td style={{ padding: '8px 4px', fontSize: 12 }}>
-                    <Chip colour={STATUS_CHIP[a.status]}>{a.status}</Chip>
-                    <div className="text-ink-muted" style={{ fontSize: 10, marginTop: 2 }}>
-                      {a.lastSyncedAt ? `synced ${new Date(a.lastSyncedAt).toLocaleDateString('en-GB')}` : 'never synced'}
-                    </div>
-                    {a.status === 'failed' && a.lastError && (
-                      <div style={{ fontSize: 10, marginTop: 2, color: 'var(--danger, #b91c1c)' }}>{a.lastError.slice(0, 80)}</div>
-                    )}
-                  </td>
-                  <td style={{ padding: '8px 4px', whiteSpace: 'nowrap' }}>
-                    <button onClick={() => onSyncOne(a.id)} disabled={syncingId === a.id} style={btn('white')}>
-                      {syncingId === a.id ? 'Syncing…' : 'Sync'}
-                    </button>{' '}
-                    {confirmRemoveId === a.id ? (
-                      <button onClick={() => { remove.mutate(a.id); setConfirmRemoveId(null); }} style={btn('var(--danger)', 'white')}>Confirm</button>
-                    ) : (
-                      <button onClick={() => setConfirmRemoveId(a.id)} style={btn('white')}>Disconnect</button>
-                    )}
-                  </td>
-                </tr>
+                      <div className="text-ink-muted" style={{ fontSize: 10, marginTop: 2 }}>
+                        {a.signingKeyConfigured ? 'Signature checking active' : 'Signature: URL token only'}
+                      </div>
+                      {a.status === 'failed' && a.lastError && (
+                        <div style={{ fontSize: 10, marginTop: 2, color: 'var(--danger, #b91c1c)' }}>{a.lastError.slice(0, 80)}</div>
+                      )}
+                    </td>
+                    <td style={{ padding: '8px 4px', whiteSpace: 'nowrap' }}>
+                      <button onClick={() => onSyncOne(a.id)} disabled={syncingId === a.id} style={btn('white')}>
+                        {syncingId === a.id ? 'Syncing…' : 'Sync'}
+                      </button>{' '}
+                      <button onClick={() => toggleCreds(a.id)} style={btn('white')}>
+                        {credsOpenId === a.id ? 'Close' : 'Credentials'}
+                      </button>{' '}
+                      {confirmRemoveId === a.id ? (
+                        <button onClick={() => { remove.mutate(a.id); setConfirmRemoveId(null); }} style={btn('var(--danger)', 'white')}>Confirm</button>
+                      ) : (
+                        <button onClick={() => setConfirmRemoveId(a.id)} style={btn('white')}>Disconnect</button>
+                      )}
+                    </td>
+                  </tr>
+                  {credsOpenId === a.id && (
+                    <tr style={{ borderTop: '1px solid var(--border)' }}>
+                      <td colSpan={6} style={{ padding: '10px 4px', background: '#F8FAFC' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 460 }}>
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4 }}>Replace API key</div>
+                            <p className="text-ink-muted" style={{ fontSize: 10, marginBottom: 6 }}>
+                              A key rotated at CallRail&rsquo;s end can be pasted here directly — no need
+                              to disconnect this company first.
+                            </p>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <input
+                                type="password"
+                                value={apiKeyDraft}
+                                onChange={(e) => setApiKeyDraft(e.target.value)}
+                                placeholder="New CallRail API key"
+                                style={{ ...inp, flex: 1 }}
+                              />
+                              <button
+                                onClick={() => saveApiKey(a.id)}
+                                disabled={credsSavingId === a.id || !apiKeyDraft.trim()}
+                                style={{ ...btn('var(--brand)', 'white'), opacity: (credsSavingId === a.id || !apiKeyDraft.trim()) ? 0.5 : 1 }}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 4 }}>Webhook signing key</div>
+                            <p className="text-ink-muted" style={{ fontSize: 10, marginBottom: 6 }}>
+                              {a.signingKeyConfigured
+                                ? 'Signature checking active — deliveries are verified against this key.'
+                                : 'Not configured — deliveries accepted on the URL token alone.'}
+                              {' '}Paste the signing key from this company&rsquo;s Webhooks page in CallRail
+                              to turn signature checking on.
+                            </p>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <input
+                                type="password"
+                                value={signingKeyDraft}
+                                onChange={(e) => setSigningKeyDraft(e.target.value)}
+                                placeholder="CallRail signing key"
+                                style={{ ...inp, flex: 1 }}
+                              />
+                              <button
+                                onClick={() => saveSigningKey(a.id)}
+                                disabled={credsSavingId === a.id || !signingKeyDraft.trim()}
+                                style={{ ...btn('var(--brand)', 'white'), opacity: (credsSavingId === a.id || !signingKeyDraft.trim()) ? 0.5 : 1 }}
+                              >
+                                Save
+                              </button>
+                              {a.signingKeyConfigured && (
+                                <button
+                                  onClick={() => clearSigningKey(a.id)}
+                                  disabled={credsSavingId === a.id}
+                                  style={btn('white')}
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {credsErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{credsErr}</span>}
+                          <span className="text-ink-muted" style={{ fontSize: 10 }}>Stored encrypted at rest. Never displayed again.</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -362,7 +593,7 @@ export default function CallRailPanel() {
             </div>
           )}
 
-          {totalCalls > 0 && sourceBreakdown.length > 0 && (
+          {sourceBreakdown.length > 0 && (
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>What CallRail attributes these calls to</div>
               <p className="text-ink-muted" style={{ fontSize: 11, marginBottom: 8 }}>

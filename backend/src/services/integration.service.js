@@ -414,16 +414,21 @@ export const integrationService = {
     // ---- CallRail (multi-company call tracking) ----------------------------
     // Provider-level status/sync/disconnect only. There is no singleton
     // key-paste connect route: every credential lives on an
-    // integration_accounts row, one per CallRail company (Task 4's
-    // callrail.service.js), mirroring GoHighLevel multi-subaccount. The
-    // `integrations` row for 'callrail' is only ever the lightweight
-     // "Sync every company, one call" (Task 2's contract). Fans out over
-    // every syncable company of THIS org via callrail-sync.js's syncAccount
-    // — status IN ('active','failed'), the same self-healing set
-    // listAllSyncable uses for the nightly worker, so a company mid-recovery
-    // from a transient failure is still included in a manual "Sync now"
-    // rather than waiting for tomorrow's cron. One company failing must not
-    // stop the rest; each result (success or error) is kept per-account.
+    // integration_accounts row, one per CallRail company (callrail.service.js),
+    // mirroring GoHighLevel multi-subaccount. The `integrations` row for
+    // 'callrail' is only ever the lightweight connected marker; the real
+    // per-company rows live on integration_accounts.
+    //
+    // "Sync every company, one call" (the panel's "Sync now — every
+    // company"). Fans out over every syncable company of THIS org via
+    // callrail-sync.js's syncAccount — status IN ('active','failed'), the
+    // same self-healing set listAllSyncable uses for the nightly worker, so a
+    // company mid-recovery from a transient failure is still included in a
+    // manual "Sync now" rather than waiting for tomorrow's cron. One company
+    // failing must not stop the rest; each result (success or error) is kept
+    // per-account. Deliberately the INCREMENTAL window, not opts.full — the
+    // per-company "Sync" button and the first pull after adding a company
+    // are the two places a manual full pull happens (callrail.service.js).
     async callrailSync(orgId) {
         const accounts = (await integrationAccountRepository.list(orgId, 'callrail'))
             .filter((a) => a.status === 'active' || a.status === 'failed');
@@ -431,8 +436,8 @@ export const integrationService = {
         const results = [];
         for (const a of accounts) {
             try {
-                const full = await integrationAccountRepository.getByIdWithSecrets(orgId, a.id);
-                const r = await callrail_sync_1.syncAccount(orgId, full);
+                const fullAccount = await integrationAccountRepository.getByIdWithSecrets(orgId, a.id);
+                const r = await callrail_sync_1.syncAccount(orgId, fullAccount);
                 ingested += r.ingested ?? 0;
                 results.push({ accountId: a.id, ...r });
             } catch (err) {

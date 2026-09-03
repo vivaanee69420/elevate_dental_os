@@ -247,6 +247,7 @@ describe('callrailService', () => {
     let svc;
     let accountsStore;
     let verifyMock;
+    let listCompaniesMock;
     let callrailRepoMock;
     let pullMock;
 
@@ -275,6 +276,13 @@ describe('callrailService', () => {
                 // needs the encrypted API key.
                 getByIdWithSecrets: vi.fn(async (org, id) =>
                     accountsStore.find((a) => a.organisation_id === org && a.id === id) ?? null),
+                // FULL row (mirrors the real repo's select('*')) — used by
+                // addAccount's dup-check ahead of a live 409 vs a revoked-row
+                // reconnect. Deliberately NOT status-filtered here — the real
+                // getByLocation returns whatever exists, live or revoked; the
+                // SERVICE is what decides what to do with it.
+                getByLocation: vi.fn(async (org, provider, externalId) =>
+                    accountsStore.find((a) => a.organisation_id === org && a.provider === provider && a.external_account_id === externalId) ?? null),
                 insert: vi.fn(async (org, fields) => {
                     const row = { id: `acc-${accountsStore.length + 1}`, organisation_id: org, ...fields };
                     accountsStore.push(row);
@@ -286,6 +294,15 @@ describe('callrailService', () => {
                     Object.assign(row, patch);
                     const { secrets, ...safe } = row;
                     return safe;
+                }),
+                // Shallow-merges into config (mirrors the real repo) — used by
+                // updateAccount to flip the non-secret has_signing_key flag
+                // without clobbering config.account_id.
+                mergeConfig: vi.fn(async (org, id, patch) => {
+                    const row = accountsStore.find((a) => a.organisation_id === org && a.id === id);
+                    if (!row) return patch;
+                    row.config = { ...(row.config ?? {}), ...patch };
+                    return row.config;
                 }),
                 markRevoked: vi.fn(async (org, id) => {
                     const row = accountsStore.find((a) => a.organisation_id === org && a.id === id);
@@ -311,8 +328,9 @@ describe('callrailService', () => {
             },
         }));
 
+        listCompaniesMock = vi.fn(async () => ([{ id: 'CR-1', name: 'CallRail Company Name' }]));
         vi.doMock('../src/lib/integrations/callrail-provider.js', () => ({
-            callrailProvider: { verify: verifyMock },
+            callrailProvider: { verify: verifyMock, listCompanies: listCompaniesMock },
         }));
 
         // The actual HTTP pull is Task 6's own suite (callrail-sync.test.mjs) —
@@ -414,15 +432,26 @@ describe('callrailService', () => {
 
     describe('addAccount', () => {
         it('verifies the key with CallRail BEFORE persisting anything', async () => {
-            verifyMock.mockRejectedValueOnce(new Error('CallRail rejected this API key for account CR-1. Check the key and account ID and try again.'));
-            await expect(svc.addAccount(ORG_A, { apiKey: 'bad', callrailAccountId: 'CR-1', label: 'Ashford' }))
+            verifyMock.mockRejectedValueOnce(new Error('CallRail rejected this API key for account ACC-1. Check the key and account ID and try again.'));
+            await expect(svc.addAccount(ORG_A, { apiKey: 'bad', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' }))
                 .rejects.toThrow(/rejected this API key/i);
             expect(accountsStore).toHaveLength(0);
         });
 
+        it('rejects when callrailCompanyId is missing, and never calls verify', async () => {
+            await expect(svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1', label: 'Ashford' }))
+                .rejects.toThrow(/callrailCompanyId/i);
+            expect(verifyMock).not.toHaveBeenCalled();
+            expect(accountsStore).toHaveLength(0);
+        });
+
+        it('verifies against BOTH the CallRail account id and the company id — never conflated', async () => {
+            await svc.addAccount(ORG_A, { apiKey: 'super-secret-key', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' });
+            expect(verifyMock).toHaveBeenCalledWith('super-secret-key', 'ACC-1', 'CR-1');
+        });
+
         it('encrypts the key, never returns it, and mints a fresh random webhook token', async () => {
-            const out = await svc.addAccount(ORG_A, { apiKey: 'super-secret-key', callrailAccountId: 'CR-1', label: 'Ashford' });
-            expect(verifyMock).toHaveBeenCalledWith('super-secret-key', 'CR-1');
+            const out = await svc.addAccount(ORG_A, { apiKey: 'super-secret-key', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' });
             expect(out).not.toHaveProperty('secrets');
             expect(JSON.stringify(out)).not.toContain('super-secret-key');
 
@@ -433,16 +462,90 @@ describe('callrailService', () => {
             expect(out.webhookUrl).toContain(row.webhook_token);
         });
 
+        it('stores the COMPANY id on external_account_id and the ACCOUNT id on config.account_id — both surfaced on the DTO, never conflated', async () => {
+            const out = await svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' });
+            expect(out.callrailAccountId).toBe('ACC-1');
+            expect(out.callrailCompanyId).toBe('CR-1');
+
+            const row = accountsStore.find((a) => a.id === out.id);
+            expect(row.external_account_id).toBe('CR-1');
+            expect(row.config.account_id).toBe('ACC-1');
+        });
+
         it('adds an unmapped company when practiceId is omitted', async () => {
-            const out = await svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'CR-2', label: 'Bexleyheath' });
+            const out = await svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-2', label: 'Bexleyheath' });
             expect(out.practiceId).toBeNull();
             expect(out.practiceName).toBeNull();
         });
 
         it('rejects a practiceId that does not belong to the org', async () => {
-            await expect(svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'CR-3', label: 'X', practiceId: 'practice-nope' }))
+            await expect(svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-3', label: 'X', practiceId: 'practice-nope' }))
                 .rejects.toThrow(/not found/i);
             expect(accountsStore).toHaveLength(0);
+        });
+
+        // FIX for "a rotated API key can never be replaced": the old flow's
+        // only advertised recovery was disconnect-and-reconnect, which used
+        // to 500 (a bare Error on the DB's unique-violation, masked by
+        // errorHandler) because the revoked row still held the unique
+        // (org, provider, company) slot. Mirrors ghl-account.service.js's
+        // addAccount exactly: a LIVE duplicate 409s; a REVOKED one reconnects.
+        describe('reconnect / duplicate handling (the "disconnect and add it again" fix)', () => {
+            it('rejects with a clear 409 when the SAME company is already connected and NOT revoked', async () => {
+                seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford', config: { account_id: 'ACC-1' } });
+                await expect(svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford again' }))
+                    .rejects.toMatchObject({ statusCode: 409 });
+                expect(accountsStore).toHaveLength(1); // no second row inserted
+            });
+
+            it('reconnects (UPDATES) a REVOKED row for the same company instead of inserting a second one', async () => {
+                seedAccount({
+                    organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-old', label: 'Ashford',
+                    status: 'revoked', secrets: null, config: { account_id: 'ACC-1' },
+                });
+
+                const out = await svc.addAccount(ORG_A, { apiKey: 'new-key', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' });
+
+                expect(out.id).toBe('acc-1'); // the SAME row — call history keeps its integration_account_id
+                expect(accountsStore).toHaveLength(1); // never a second row
+                const row = accountsStore.find((a) => a.id === 'acc-1');
+                expect(row.status).toBe('active');
+                expect(row.secrets).toBeTruthy();
+                expect(row.webhook_token).not.toBe('tok-old'); // rotated on reconnect, mirrors GHL
+            });
+
+            it('a different company reconnecting is unaffected by another org\'s revoked row with the same company id', async () => {
+                seedAccount({ organisation_id: ORG_B, id: 'acc-b1', external_account_id: 'CR-1', webhook_token: 'tok-b', label: 'B', status: 'revoked', config: { account_id: 'ACC-1' } });
+                const out = await svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' });
+                expect(out.id).not.toBe('acc-b1');
+                expect(accountsStore.filter((a) => a.organisation_id === ORG_A)).toHaveLength(1);
+                expect(accountsStore.find((a) => a.id === 'acc-b1').status).toBe('revoked'); // untouched
+            });
+        });
+
+        it('kicks off a FULL (opts.full: true) pull in the background right after connecting — the owner does not wait for tonight\'s cron', async () => {
+            const out = await svc.addAccount(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' });
+            await vi.waitFor(() => expect(pullMock).toHaveBeenCalledTimes(1));
+            const [passedOrg, passedAccount, , passedOpts] = pullMock.mock.calls[0];
+            expect(passedOrg).toBe(ORG_A);
+            expect(passedAccount).toMatchObject({ id: out.id, secrets: expect.any(String) }); // the FULL row, secrets included
+            expect(passedOpts).toEqual({ full: true });
+        });
+    });
+
+    describe('listCompanies', () => {
+        it('passes the key + account id through to the provider and returns its list, without persisting anything', async () => {
+            listCompaniesMock.mockResolvedValueOnce([{ id: 'CR-1', name: 'Ashford' }, { id: 'CR-2', name: 'Bexleyheath' }]);
+            const out = await svc.listCompanies(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1' });
+            expect(listCompaniesMock).toHaveBeenCalledWith('k', 'ACC-1');
+            expect(out).toEqual([{ id: 'CR-1', name: 'Ashford' }, { id: 'CR-2', name: 'Bexleyheath' }]);
+            expect(accountsStore).toHaveLength(0);
+        });
+
+        it('rethrows a provider failure as a 400 with its own (key-safe) message', async () => {
+            listCompaniesMock.mockRejectedValueOnce(new Error('CallRail account ACC-1 was not found. Check the account ID and try again.'));
+            await expect(svc.listCompanies(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1' }))
+                .rejects.toMatchObject({ statusCode: 400 });
         });
     });
 
@@ -547,6 +650,100 @@ describe('callrailService', () => {
             expect(status.accounts[0]).not.toHaveProperty('signingKey');
             expect(status.accounts[0]).not.toHaveProperty('signing_key');
         });
+
+        // FIX for "signature checking is dead code by omission": the panel
+        // must be able to say HONESTLY whether a signing key is on file —
+        // signingKeyConfigured is a plain (non-secret) flag for exactly that,
+        // never the key itself.
+        it('signingKeyConfigured flips true after a key is set, and false again after it is cleared', async () => {
+            seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford' });
+
+            const before = await svc.status(ORG_A);
+            expect(before.accounts[0].signingKeyConfigured).toBe(false);
+
+            const afterSet = await svc.updateAccount(ORG_A, 'acc-1', { signingKey: 'a-real-signing-key' });
+            expect(afterSet.signingKeyConfigured).toBe(true);
+
+            const afterClear = await svc.updateAccount(ORG_A, 'acc-1', { signingKey: null });
+            expect(afterClear.signingKeyConfigured).toBe(false);
+        });
+    });
+
+    // FIX for "a rotated API key can never be replaced": before this, the
+    // only advertised recovery from a key rotated at CallRail's end was
+    // disconnect-and-reconnect (CallRailPanel.tsx's own banner copy). apiKey
+    // is a FOURTH kind of updateAccount field — a credential like signingKey
+    // (encrypted, never returned) but re-VERIFIED against CallRail first,
+    // like addAccount — and NOT agency-gated, ordinary owner self-service.
+    describe('updateAccount — apiKey rotation (no disconnect required)', () => {
+        it('re-verifies the new key against THIS company\'s existing account/company ids before persisting, and clears a stale failure', async () => {
+            const { encryptSecret, decryptSecret } = await import('../src/lib/crypto.js');
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                config: { account_id: 'ACC-1' }, status: 'failed', last_error: 'CallRail calls fetch failed: HTTP 401',
+                secrets: encryptSecret(JSON.stringify({ api_key: 'stale-key' })),
+            });
+
+            const result = await svc.updateAccount(ORG_A, 'acc-1', { apiKey: 'rotated-key' });
+
+            expect(verifyMock).toHaveBeenCalledWith('rotated-key', 'ACC-1', 'CR-1');
+            expect(result.status).toBe('active');
+            expect(result.lastError).toBeNull();
+            expect(JSON.stringify(result)).not.toContain('rotated-key');
+
+            const row = accountsStore.find((a) => a.id === 'acc-1');
+            const decrypted = JSON.parse(decryptSecret(row.secrets));
+            expect(decrypted.api_key).toBe('rotated-key');
+        });
+
+        it('rejects (400) a key CallRail does not accept, and never persists it', async () => {
+            const { encryptSecret } = await import('../src/lib/crypto.js');
+            const originalSecrets = encryptSecret(JSON.stringify({ api_key: 'old-key' }));
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                config: { account_id: 'ACC-1' }, secrets: originalSecrets,
+            });
+            verifyMock.mockRejectedValueOnce(new Error('CallRail rejected this API key for account ACC-1. Check the key and account ID and try again.'));
+
+            await expect(svc.updateAccount(ORG_A, 'acc-1', { apiKey: 'bad-key' })).rejects.toMatchObject({ statusCode: 400 });
+
+            const row = accountsStore.find((a) => a.id === 'acc-1');
+            expect(row.secrets).toBe(originalSecrets); // untouched
+        });
+
+        it('preserves an existing signing key when rotating only the api key', async () => {
+            const { encryptSecret, decryptSecret } = await import('../src/lib/crypto.js');
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                config: { account_id: 'ACC-1' },
+                secrets: encryptSecret(JSON.stringify({ api_key: 'old-key', signing_key: 'keep-me' })),
+            });
+
+            await svc.updateAccount(ORG_A, 'acc-1', { apiKey: 'new-key' });
+
+            const row = accountsStore.find((a) => a.id === 'acc-1');
+            const decrypted = JSON.parse(decryptSecret(row.secrets));
+            expect(decrypted.api_key).toBe('new-key');
+            expect(decrypted.signing_key).toBe('keep-me');
+        });
+
+        it('rejects (400) rather than rotating against a wrong URL when the row has no CallRail account id on file', async () => {
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                config: {},
+            });
+            await expect(svc.updateAccount(ORG_A, 'acc-1', { apiKey: 'new-key' })).rejects.toMatchObject({ statusCode: 400 });
+            expect(verifyMock).not.toHaveBeenCalled();
+        });
+
+        it('rejects an empty apiKey rather than silently no-op-ing', async () => {
+            seedAccount({
+                organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford',
+                config: { account_id: 'ACC-1' },
+            });
+            await expect(svc.updateAccount(ORG_A, 'acc-1', { apiKey: '   ' })).rejects.toMatchObject({ statusCode: 400 });
+            expect(verifyMock).not.toHaveBeenCalled();
+        });
     });
 
     describe('removeAccount — disconnecting a company must not delete its calls', () => {
@@ -574,18 +771,32 @@ describe('callrailService', () => {
         });
     });
 
-    describe('syncAccount — delegates to callrail-sync.js\'s real pull (Task 6)', () => {
-        it('resolves the FULL account (secrets included) and passes it to the pull, returning its real ingested count', async () => {
+    // FIX for "opts.full is dead code": a manual per-company sync is exactly
+    // the moment a wide catch-up is worth it, so this always passes
+    // { full: true } — previously unreachable, since nothing ever passed it.
+    describe('syncAccount — delegates to callrail-sync.js\'s real pull, always FULL', () => {
+        it('resolves the FULL account (secrets included) and passes it to the pull with opts.full:true, returning ingested AND truncated', async () => {
             seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford', secrets: 'enc:api-key' });
-            pullMock.mockResolvedValueOnce({ ingested: 7, fetched: 7, requests: 1 });
+            pullMock.mockResolvedValueOnce({ ingested: 7, fetched: 7, requests: 1, truncated: true });
 
             const result = await svc.syncAccount(ORG_A, 'acc-1');
 
-            expect(result).toEqual({ ingested: 7 });
+            // FIX for "truncated is silently dropped": it now reaches the
+            // panel instead of being clamped away between the pull and the
+            // controller response.
+            expect(result).toEqual({ ingested: 7, truncated: true });
             expect(pullMock).toHaveBeenCalledTimes(1);
-            const [passedOrg, passedAccount] = pullMock.mock.calls[0];
+            const [passedOrg, passedAccount, , passedOpts] = pullMock.mock.calls[0];
             expect(passedOrg).toBe(ORG_A);
             expect(passedAccount).toMatchObject({ id: 'acc-1', secrets: 'enc:api-key' }); // the FULL row, not the SAFE_COLS shape getById returns
+            expect(passedOpts).toEqual({ full: true });
+        });
+
+        it('defaults truncated to false when the pull omits it', async () => {
+            seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford', secrets: 'enc:api-key' });
+            pullMock.mockResolvedValueOnce({ ingested: 3 });
+            const result = await svc.syncAccount(ORG_A, 'acc-1');
+            expect(result).toEqual({ ingested: 3, truncated: false });
         });
 
         it('404s for an unknown company rather than silently no-op-ing, and never calls the pull', async () => {
@@ -616,10 +827,11 @@ describe('integrationController — CallRail accounts', () => {
     beforeEach(async () => {
         vi.resetModules();
         serviceMock = {
+            listCompanies: vi.fn(async () => ([{ id: 'CR-1', name: 'Ashford' }])),
             addAccount: vi.fn(async (orgId, body) => ({ id: 'acc-1', ...body })),
             updateAccount: vi.fn(async (orgId, id, body) => ({ id, ...body })),
             removeAccount: vi.fn(async () => ({ removed: true })),
-            syncAccount: vi.fn(async () => ({ ingested: 0 })),
+            syncAccount: vi.fn(async () => ({ ingested: 0, truncated: false })),
             status: vi.fn(async () => ({ connected: false, accounts: [], sourceBreakdown: [] })),
         };
         vi.doMock('../src/services/callrail.service.js', () => ({ callrailService: serviceMock }));
@@ -633,11 +845,21 @@ describe('integrationController — CallRail accounts', () => {
         expect(res.json).toHaveBeenCalledWith({ connected: false, accounts: [], sourceBreakdown: [] });
     });
 
+    it('callrailListCompanies passes the session org id and body through, wrapped in { companies }', async () => {
+        const res = mockRes();
+        await controller.callrailListCompanies({
+            user: { organisation_id: 'org-real' },
+            body: { apiKey: 'k', callrailAccountId: 'ACC-1' },
+        }, res);
+        expect(serviceMock.listCompanies).toHaveBeenCalledWith('org-real', { apiKey: 'k', callrailAccountId: 'ACC-1' });
+        expect(res.json).toHaveBeenCalledWith({ companies: [{ id: 'CR-1', name: 'Ashford' }] });
+    });
+
     it('callrailAccountCreate: a non-agency owner sending a practiceId is rejected with 403, and the service is never called', async () => {
         const res = mockRes();
         await controller.callrailAccountCreate({
             user: { organisation_id: 'org-1', is_agency_admin: false },
-            body: { apiKey: 'k', callrailAccountId: 'CR-1', label: 'Ashford', practiceId: 'practice-1' },
+            body: { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford', practiceId: 'practice-1' },
         }, res);
         expect(res.status).toHaveBeenCalledWith(403);
         expect(serviceMock.addAccount).not.toHaveBeenCalled();
@@ -647,7 +869,7 @@ describe('integrationController — CallRail accounts', () => {
         const res = mockRes();
         await controller.callrailAccountCreate({
             user: { organisation_id: 'org-1', is_agency_admin: true },
-            body: { apiKey: 'k', callrailAccountId: 'CR-1', label: 'Ashford', practiceId: '22222222-2222-4222-8222-222222222222' },
+            body: { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford', practiceId: '22222222-2222-4222-8222-222222222222' },
         }, res);
         expect(serviceMock.addAccount).toHaveBeenCalledWith('org-1', expect.objectContaining({ practiceId: '22222222-2222-4222-8222-222222222222' }));
     });
@@ -656,7 +878,7 @@ describe('integrationController — CallRail accounts', () => {
         const res = mockRes();
         await controller.callrailAccountCreate({
             user: { organisation_id: 'org-1', is_agency_admin: false },
-            body: { apiKey: 'k', callrailAccountId: 'CR-1', label: 'Ashford' },
+            body: { apiKey: 'k', callrailAccountId: 'ACC-1', callrailCompanyId: 'CR-1', label: 'Ashford' },
         }, res);
         expect(serviceMock.addAccount).toHaveBeenCalled();
         expect(res.status).not.toHaveBeenCalledWith(403);

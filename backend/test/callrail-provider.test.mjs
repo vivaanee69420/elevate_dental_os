@@ -55,20 +55,25 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
+// CallRail's hierarchy is Account -> Company -> Calls: verify() now proves a
+// key against a SPECIFIC COMPANY under a SPECIFIC ACCOUNT
+// (GET /v3/a/{accountId}/companies/{companyId}.json), not the account alone
+// — the earlier account-only check is exactly what let a pasted account id
+// pass verification while a genuine company id 404'd.
 describe('callrailProvider.verify', () => {
-    it('accepts a good key and returns the account name', async () => {
+    it('accepts a good key and returns the company name', async () => {
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true,
             status: 200,
-            json: async () => ({ id: 'ACT1', name: 'Ashford Dental' }),
+            json: async () => ({ id: 'COM1', name: 'Ashford Dental' }),
         });
         vi.stubGlobal('fetch', fetchMock);
 
-        const name = await callrailProvider.verify('key-good', 'ACT1');
+        const name = await callrailProvider.verify('key-good', 'ACC1', 'COM1');
         expect(name).toBe('Ashford Dental');
 
         const [url, opts] = fetchMock.mock.calls[0];
-        expect(url).toBe('https://api.callrail.com/v3/a/ACT1.json');
+        expect(url).toBe('https://api.callrail.com/v3/a/ACC1/companies/COM1.json');
         expect(opts.headers.Authorization).toBe('Token token="key-good"');
     });
 
@@ -76,11 +81,11 @@ describe('callrailProvider.verify', () => {
         const secretKey = 'sk-super-secret-do-not-leak-777';
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }));
 
-        await expect(callrailProvider.verify(secretKey, 'ACT1')).rejects.toThrow();
+        await expect(callrailProvider.verify(secretKey, 'ACC1', 'COM1')).rejects.toThrow();
 
         let caught = null;
         try {
-            await callrailProvider.verify(secretKey, 'ACT1');
+            await callrailProvider.verify(secretKey, 'ACC1', 'COM1');
         } catch (err) {
             caught = err;
         }
@@ -94,7 +99,84 @@ describe('callrailProvider.verify', () => {
 
         let caught = null;
         try {
-            await callrailProvider.verify(secretKey, 'ACT1');
+            await callrailProvider.verify(secretKey, 'ACC1', 'COM1');
+        } catch (err) {
+            caught = err;
+        }
+        expect(caught).not.toBeNull();
+        expect(caught.message).not.toContain(secretKey);
+    });
+
+    it('rejects a 404 (e.g. a valid account id but a company id that does not belong to it)', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) }));
+        await expect(callrailProvider.verify('key-good', 'ACC1', 'COM-nope')).rejects.toThrow(/company/i);
+    });
+
+    it('throws without an API key, and never calls CallRail', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        await expect(callrailProvider.verify('', 'ACC1', 'COM1')).rejects.toThrow(/API key/i);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('throws without an account id, and never calls CallRail', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        await expect(callrailProvider.verify('key-good', '', 'COM1')).rejects.toThrow(/account/i);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('throws without a company id, and never calls CallRail', async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal('fetch', fetchMock);
+        await expect(callrailProvider.verify('key-good', 'ACC1', '')).rejects.toThrow(/company/i);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('a network failure surfaces a generic message, never the raw error', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')));
+        await expect(callrailProvider.verify('key-good', 'ACC1', 'COM1')).rejects.toThrow(/Could not reach CallRail/i);
+    });
+});
+
+describe('callrailProvider.listCompanies', () => {
+    it('lists every company under an account, from a bare-array response', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ([{ id: 'COM1', name: 'Ashford' }, { id: 'COM2', name: 'Bexleyheath' }]),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const companies = await callrailProvider.listCompanies('key-good', 'ACC1');
+        expect(companies).toEqual([{ id: 'COM1', name: 'Ashford' }, { id: 'COM2', name: 'Bexleyheath' }]);
+
+        const [url] = fetchMock.mock.calls[0];
+        expect(url).toBe('https://api.callrail.com/v3/a/ACC1/companies.json');
+    });
+
+    it('tolerates a { companies: [...] } wrapper shape', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 200,
+            json: async () => ({ companies: [{ id: 'COM1', name: 'Ashford' }] }),
+        }));
+        const companies = await callrailProvider.listCompanies('key-good', 'ACC1');
+        expect(companies).toEqual([{ id: 'COM1', name: 'Ashford' }]);
+    });
+
+    it('a company with no name falls back to its id, never dropped', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, status: 200, json: async () => ([{ id: 'COM1', name: '' }]),
+        }));
+        const companies = await callrailProvider.listCompanies('key-good', 'ACC1');
+        expect(companies).toEqual([{ id: 'COM1', name: 'COM1' }]);
+    });
+
+    it('rejects a 401 with a message that never contains the key', async () => {
+        const secretKey = 'sk-do-not-leak';
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }));
+        let caught = null;
+        try {
+            await callrailProvider.listCompanies(secretKey, 'ACC1');
         } catch (err) {
             caught = err;
         }
@@ -105,20 +187,8 @@ describe('callrailProvider.verify', () => {
     it('throws without an API key, and never calls CallRail', async () => {
         const fetchMock = vi.fn();
         vi.stubGlobal('fetch', fetchMock);
-        await expect(callrailProvider.verify('', 'ACT1')).rejects.toThrow(/API key/i);
+        await expect(callrailProvider.listCompanies('', 'ACC1')).rejects.toThrow(/API key/i);
         expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('throws without an account id, and never calls CallRail', async () => {
-        const fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock);
-        await expect(callrailProvider.verify('key-good', '')).rejects.toThrow(/account/i);
-        expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it('a network failure surfaces a generic message, never the raw error', async () => {
-        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')));
-        await expect(callrailProvider.verify('key-good', 'ACT1')).rejects.toThrow(/Could not reach CallRail/i);
     });
 });
 

@@ -3,8 +3,8 @@
 //
 // CallRail sends its Post-Call webhook ONCE per call and never resends it
 // ("CallRail does not resend webhooks" — see
-// .superpowers/sdd/2026-09-03-callrail-integration/callrail-api-findings.md,
-// researched against the official v3 docs). Repeated failed deliveries can
+// docs/superpowers/specs/2026-09-04-callrail-api-facts.md, researched
+// against the official v3 docs). Repeated failed deliveries can
 // make CallRail auto-disable the integration, so once a delivery has passed
 // authentication this handler ALWAYS answers 2xx — a downstream failure (a
 // dead re-fetch, a DB error) is logged and swallowed here, never turned into
@@ -94,6 +94,13 @@ export function callrailHeaders(apiKey) {
 // Re-fetch ONE call, canonical shape, by CallRail's own id — the webhook's
 // half of the shared identity contract (see file header). The pull never
 // calls this; it pages the list endpoint directly (callrail-sync.js).
+//
+// `callrailAccountId` here is the CallRail ACCOUNT id (config.account_id on
+// the integration_accounts row) — CallRail has no company-scoped single-call
+// endpoint, only `/v3/a/{accountId}/calls/{id}.json`. This re-fetch is
+// therefore scoped to the whole account, not just the company whose webhook
+// delivered it; ingestDelivery is what confirms the returned call actually
+// belongs to THIS company before it is stamped with this company's practice.
 export async function fetchCanonicalCall(apiKey, callrailAccountId, callId) {
     const url = `${API_BASE}/a/${encodeURIComponent(callrailAccountId)}/calls/${encodeURIComponent(callId)}.json?fields=${CALLRAIL_FIELDS}`;
     const res = await fetch(url, { headers: callrailHeaders(apiKey) });
@@ -110,6 +117,13 @@ export async function fetchCanonicalCall(apiKey, callrailAccountId, callId) {
 // from anything in the API response (rule 3 / the multi-tenant boundary).
 // Returns null when the call is missing its id or start_time: rejected
 // rather than stored half-formed.
+//
+// `company_id` IS surfaced here (CALLRAIL_FIELDS already requests it) so a
+// caller can check which CallRail company a call actually belongs to before
+// writing it — see callrail-sync.js's defence-in-depth drop. It is NOT a
+// callrail_calls column: every caller that builds a row for
+// callrailRepository.upsertCalls must strip it back off first, or the write
+// fails against a column that doesn't exist.
 export function parseCallPayload(call) {
     if (!call || typeof call !== 'object') return null;
     const callrail_id = call.id == null ? null : String(call.id);
@@ -118,15 +132,17 @@ export function parseCallPayload(call) {
     const phone = normalisePhone(call.customer_phone_number);
     return {
         callrail_id,
+        company_id: call.company_id == null ? null : String(call.company_id),
         tracking_number: call.tracking_phone_number ?? null,
         caller_number: call.customer_phone_number ?? null,
         caller_phone10: phone?.canonical ?? null,
         caller_name: call.customer_name ?? null,
         // CallRail carries no email for a phone call — always null, on every
         // row, from both ingest paths. Not a sync bug: see
-        // callrail-api-findings.md §5. The cross-source dedup against
-        // GoHighLevel therefore keys calls on phone10 alone; the email
-        // branch of that matcher can never fire for a call.
+        // docs/superpowers/specs/2026-09-04-callrail-api-facts.md §5. The
+        // cross-source dedup against GoHighLevel therefore keys calls on
+        // phone10 alone; the email branch of that matcher can never fire for
+        // a call.
         caller_email: null,
         caller_email_norm: null,
         started_at,
@@ -226,9 +242,18 @@ async function ingestDelivery(account, secrets, rawBody) {
         return { received: true, stored: false, reason: 'no_credentials' };
     }
 
+    // The account-scoped re-fetch (see fetchCanonicalCall's own comment) has
+    // no company-scoped endpoint to call instead — account.config.account_id
+    // is the CallRail ACCOUNT id, distinct from account.external_account_id
+    // (the COMPANY id this row is mapped to a practice by).
+    const callrailAccountId = account.config?.account_id;
+    if (!callrailAccountId) {
+        return { received: true, stored: false, reason: 'no_credentials' };
+    }
+
     let call;
     try {
-        call = await fetchCanonicalCall(apiKey, account.external_account_id, callId);
+        call = await fetchCanonicalCall(apiKey, callrailAccountId, callId);
     } catch (err) {
         // The RULING (file header): never store the payload's own id shape.
         // If the re-fetch fails, store nothing and let the pull collect it.
@@ -246,9 +271,26 @@ async function ingestDelivery(account, secrets, rawBody) {
         return { received: true, stored: false, reason: 'incomplete_call' };
     }
 
+    // Defence in depth: the re-fetch above is scoped to the whole ACCOUNT
+    // (CallRail has no company-scoped single-call endpoint), so confirm the
+    // call CallRail actually returned belongs to THIS company before it is
+    // stamped with this company's practice. Only enforced when CallRail
+    // asserts a company_id that disagrees — a call carrying none is trusted,
+    // same as before this field was surfaced.
+    const expectedCompanyId = account.external_account_id == null ? null : String(account.external_account_id);
+    if (expectedCompanyId && row.company_id != null && row.company_id !== expectedCompanyId) {
+        console.warn('[callrail-webhook] canonical call belongs to a different CallRail company — dropped', {
+            accountId: account.id, expectedCompanyId, gotCompanyId: row.company_id,
+        });
+        return { received: true, stored: false, reason: 'company_mismatch' };
+    }
+    // company_id is not a callrail_calls column (see parseCallPayload's own
+    // comment) — strip it before writing.
+    const { company_id: _company_id, ...rowForDb } = row;
+
     try {
         await callrailRepository.upsertCalls(account.organisation_id, [{
-            ...row,
+            ...rowForDb,
             practice_id: account.practice_id ?? null,
             integration_account_id: account.id,
         }]);
