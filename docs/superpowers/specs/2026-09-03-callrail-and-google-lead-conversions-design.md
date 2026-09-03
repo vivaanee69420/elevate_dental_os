@@ -58,7 +58,9 @@ The Facebook page's existing `patients` figure uses the looser definition. It ga
 
 Writing calls into `leads` would reuse the existing machinery, but it pollutes a GoHighLevel-shaped table with rows that have no pipeline, no opportunity and no GHL id — and it makes the cross-source dedup implicit at write time, where it is invisible and unfixable. A separate table keeps the sources distinct and makes the dedup an explicit, testable step at read time.
 
-Columns: `organisation_id`, `practice_id`, CallRail's own call id (unique per org, for idempotent re-ingestion), the tracking number called, the caller's number and its `phone10`, `email` and `email_norm` where supplied, `started_at`, duration, answered/missed, `gclid`, `keyword`, `campaign`, `source`, and the raw payload for forensics.
+Columns: `organisation_id`, `integration_account_id` (the CallRail company whose key fetched it), `practice_id` (denormalised from that company), CallRail's own call id (unique per org, for idempotent re-ingestion), the tracking number called, the caller's number and its `phone10`, `email` and `email_norm` where supplied, `started_at`, duration, answered/missed, `gclid`, `keyword`, `campaign`, `source`, and the raw payload for forensics.
+
+**Credentials do not live here.** One CallRail company per practice, each with its own API key, is one `integration_accounts` row per company — the same shape GoHighLevel multi-subaccount already uses: encrypted key, `practice_id`, random `webhook_token`, per-account status. The single `integrations` row is a lightweight "connected" marker holding no key.
 
 ## The surface
 
@@ -96,13 +98,13 @@ Both paths, as every other integration here does — a webhook alone loses anyth
 
 Idempotent on CallRail's own call id, so a webhook and a pull describing the same call produce one row.
 
-**Which calls count as Google leads — resolved by mapping, not by assumption.**
+**Which practice a call belongs to — the key that fetched it, not a mapping.**
 
-The obvious rule, "every tracked call is a Google Ads lead", is right only if the account uses a Google-Ads-specific tracking number. With one pool covering all practice calls it would sweep in organic and referral callers and inflate every figure. Rather than depend on the answer, ingestion stores EVERY call together with the tracking number it came in on and CallRail's own `source` / `campaign` fields, and the classification happens at READ time against an owner-controlled map.
+An earlier draft classified calls against an owner-maintained tracking-number map. That is unnecessary here: the owner holds **one CallRail API key per company and one company per practice** — "we have 4 companies like we have 4 practices and i will give you keys for all". A call's practice therefore follows from the `integration_accounts` row whose key fetched it. No mapping step means nothing to maintain and nothing to drift out of agreement with reality, and it reuses the pattern GoHighLevel multi-subaccount already established here.
 
-New `callrail_number_map`: `organisation_id` + tracking number, unique, mapping to a `channel` (`google_ads` | `meta_ads` | other) and optionally a `practice_id`. A number with no row is UNMAPPED and counts toward nothing — visible in the panel as a number awaiting a decision, never silently folded into a channel.
+A connected company with no `practice_id` yet is UNASSIGNED: its calls are still stored, attributed to no practice, and shown in the panel as awaiting a decision — never silently folded into a practice.
 
-This mirrors `ad_channel_pipelines`, which the owner already uses and understands, and `emergent_practice_map` before it. It is correct under either account setup, it makes adding a number later a mapping change rather than a code change, and — as with the pipeline mapping — an unmapped source is stated rather than guessed.
+The tracking number and CallRail's own `source` / `campaign` are still stored, not to classify with, but so the first sync can SHOW what CallRail actually reports. The working assumption is the owner's — "if they see the ad then only they call" — which is very likely right for a CallRail set up solely for Google Ads. Storing the source makes that assumption checkable against real data rather than permanent and invisible; the panel surfaces the breakdown once calls exist.
 
 Note also that CallRail returns the `gclid` of **most value** for a call rather than strictly first touch, which will matter when keyword-level attribution is added.
 
@@ -118,13 +120,16 @@ Note also that CallRail returns the `gclid` of **most value** for a call rather 
 
 ## Migration
 
-One migration, `20260101000150_callrail_calls.sql`: the table, its indexes, the funnel RPC, grants following the mandatory revoke idiom, and `NOTIFY pgrst, 'reload schema';`.
+One migration, `20260101000154_callrail.sql`: the `callrail_calls` table and its indexes, RLS enabled with no policy, and `NOTIFY pgrst, 'reload schema';`. No new table for credentials — `integration_accounts` already holds them. The read-path funnel RPC belongs to Phase A and ships with that plan's own migration; any RPC either plan adds follows the mandatory revoke idiom (`REVOKE ALL … FROM PUBLIC, anon, authenticated; GRANT EXECUTE … TO service_role;`) and is `LANGUAGE plpgsql` with `RETURN QUERY EXECUTE … USING`.
+
+The number is `000154` because `main` landed `000149`–`000152` and `feat/facebook-reporting` holds `000153`.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| A single-pool tracking number makes every call look like a Google lead | Classification is an owner-controlled tracking-number map, not an assumption; an unmapped number counts toward nothing and is shown as awaiting a decision |
+| A company's calls are not all ad calls, so every call counting as a Google lead inflates the figures | CallRail's own `source` breakdown is stored and shown in the panel, so the "every tracked call came from the ad" assumption is checkable against real data instead of invisible |
+| A CallRail company is connected but never assigned a practice | It is listed as "No practice assigned — its calls are not attributed"; its calls are stored and counted toward no practice, never folded into one |
 | Repeat callers inflate the lead count | Dedup on `phone10`, first touch |
 | Spend covers accounts whose leads are unmapped, inflating all costs | Stated on the page with the mapped pipelines shown |
 | A call and a form fill from one person double-count | Explicit cross-source dedup at read time, with a test |

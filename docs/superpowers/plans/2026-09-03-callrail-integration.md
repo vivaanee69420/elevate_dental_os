@@ -18,7 +18,7 @@
 - **A call is only ever matched or mapped within its own organisation.** `serviceClient` bypasses RLS, so the explicit `organisation_id` filter IS the tenant boundary.
 - **Credentials are encrypted** via `encryptSecret` / `decryptSecret` from `backend/src/lib/crypto.js`, exactly as every other provider does. An API key must never be returned by any read endpoint, logged, or included in an error message.
 - **Ingestion is idempotent on CallRail's own call id.** A webhook and a pull describing the same call produce ONE row. Re-running a pull changes nothing.
-- **Every call is stored; classification happens at read time.** A tracking number with no mapping row is UNMAPPED and counts toward nothing — shown in the panel as awaiting a decision, never silently folded into a channel.
+- **Every call is stored; a call's practice is the practice of the company that fetched it.** There is no tracking-number map. A connected CallRail company with no `practice_id` is UNASSIGNED: its calls are stored, attributed to no practice, and shown in the panel as awaiting a decision — never silently folded into a practice.
 - **Reuse `normaliseEmail` / `normalisePhone`** from `backend/src/lib/sheet-export/normalise.js`. Do NOT write a second normaliser: two normalisation rules would silently disagree about who is the same person, which is the one thing the dedup rule cannot survive.
 - **Paged reads:** order on a unique key, `.range()`, and STOP ON AN EMPTY PAGE, NEVER A SHORT ONE. PostgREST caps responses at 1000 rows silently and that applies to set-returning RPCs identically.
 - **Mandatory grant idiom on every RPC:** `REVOKE ALL ON FUNCTION ... FROM PUBLIC, anon, authenticated; GRANT EXECUTE ON FUNCTION ... TO service_role;` — a newly created function in `public` IS anon-executable by default on this project.
@@ -26,7 +26,7 @@
 - Routes live under `/api/integrations/callrail/*` and are `requireRole('owner')`, except the read-only status which also allows `practice_manager` — matching how Emergent does it.
 - **NO DARK MODE** (rule 1). **BRITISH ENGLISH** in all UI copy (rule 4). **No emojis** (rule 7).
 - Native ESM: `import`/`export`, `.js` extensions on relative imports, never `require`/`module.exports`.
-- **Migration number:** `20260101000150_callrail.sql`. Do not renumber.
+- **Migration number:** `20260101000154_callrail.sql`. Do not renumber.
 - **Verification:** Docker and the `supabase` CLI are NOT installed. Do not attempt `supabase start` or `db reset`. The controller verifies SQL against the hosted database inside `BEGIN … ROLLBACK`.
 
 ---
@@ -34,7 +34,7 @@
 ### Task 1: Migration — `callrail_calls`
 
 **Files:**
-- Create: `supabase/migrations/20260101000150_callrail.sql`
+- Create: `supabase/migrations/20260101000154_callrail.sql`
 
 **Interfaces:**
 - Produces the table `callrail_calls`, scoped to an `integration_accounts` row.
@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS public.callrail_calls (
   UNIQUE (organisation_id, callrail_id)
 );
 
+DROP TRIGGER IF EXISTS callrail_calls_updated_at ON public.callrail_calls;
 CREATE TRIGGER callrail_calls_updated_at BEFORE UPDATE ON public.callrail_calls
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ALTER TABLE public.callrail_calls ENABLE ROW LEVEL SECURITY;
@@ -125,7 +126,7 @@ You cannot run SQL here. Confirm and report:
 - `set_updated_at()` exists: `grep -rn "FUNCTION set_updated_at" supabase/migrations | head -3`
 - `uuid_generate_v4()` is in use by existing migrations: `grep -rln "uuid_generate_v4" supabase/migrations | head -3`
 - `organisations(id)` and `practices(id)` are the FK targets other tables use: `grep -rn "REFERENCES organisations(id)" supabase/migrations | head -3`
-- `20260101000150_callrail.sql` does not already exist and 000150 is free.
+- `20260101000154_callrail.sql` does not already exist and 000154 is free.
 
 - [ ] **Step 3: Put the controller's assertion SQL in your report**
 
@@ -143,17 +144,17 @@ SELECT c.relname, c.relrowsecurity AS rls_on,
 - [ ] **Step 4: Commit**
 
 ```bash
-git add supabase/migrations/20260101000150_callrail.sql
-git commit -m "feat(callrail): calls table and the owner's tracking-number map
+git add supabase/migrations/20260101000154_callrail.sql
+git commit -m "feat(callrail): calls table, scoped to the CallRail company
 
 Calls get their own table rather than rows in leads: writing them there
 would make the cross-source dedup implicit at write time, where it is
 invisible and unfixable.
 
-Every call is stored and classified at read time against an owner-controlled
-map, because whether a call is a Google Ads lead depends on which tracking
-number it came in on — the owner's knowledge, not ours. An unmapped number
-counts toward nothing and is shown as awaiting a decision."
+A call's practice follows from the key that fetched it — one API key per
+CallRail company, one company per practice — so there is no tracking-number
+map to drift. A company with no practice assigned is attributed to nothing
+and shown as awaiting a decision."
 ```
 
 ---
@@ -162,17 +163,23 @@ counts toward nothing and is shown as awaiting a decision."
 
 **Files:**
 - Create: `frontend/features/integrations/components/CallRailPanel.tsx`
-- Create: `frontend/features/integrations/callrail-api.ts`
-- Create: `frontend/features/integrations/callrail-hooks.ts`
+- Modify: `frontend/features/integrations/api.ts` (append the CallRail types and fetchers)
+- Modify: `frontend/features/integrations/hooks.ts` (append the CallRail React Query hooks)
 - Modify: `frontend/features/system/components/IntegrationsScreen.tsx`
+
+**Do NOT create `callrail-api.ts` / `callrail-hooks.ts`.** Every provider in this directory — GoHighLevel, QuickBooks, Emergent, Google Sheets, Google Sheets Writer — shares the single `api.ts` and `hooks.ts`. A per-provider file here would be the only one of its kind.
 
 **Interfaces:**
 - Consumes endpoints from Tasks 3 and 4 (not yet built — you write against this contract, and Task 3 implements it):
-  - `GET /api/integrations/callrail` → `{ connected: boolean, status: string | null, lastSyncedAt: string | null, webhookUrl: string | null, numbers: Array<{ trackingNumber, channel, practiceId, callCount, lastCallAt }> }`
-  - `POST /api/integrations/callrail` body `{ apiKey, accountId }` → `{ connected: true }`
-  - `POST /api/integrations/callrail/sync` → `{ ingested: number }`
-  - `POST /api/integrations/callrail/accounts`, `PATCH /api/integrations/callrail/accounts/:id`, `DELETE /api/integrations/callrail/accounts/:id`, `POST /api/integrations/callrail/accounts/:id/sync` body `{ channel, practiceId }` → the updated row
-  - `DELETE /api/integrations/callrail` → `{ connected: false }`
+  - `GET /api/integrations/callrail` → `{ connected: boolean, accounts: Array<{ id, label, callrailAccountId, practiceId, practiceName, status, lastSyncedAt, lastError, webhookUrl, callCount, lastCallAt }>, sourceBreakdown: Array<{ source, callCount }> }`
+  - `POST /api/integrations/callrail/accounts` body `{ apiKey, callrailAccountId, label, practiceId }` → the created row (no key echoed back)
+  - `PATCH /api/integrations/callrail/accounts/:id` body `{ practiceId?, label? }` → the updated row
+  - `POST /api/integrations/callrail/accounts/:id/sync` → `{ ingested: number }`
+  - `DELETE /api/integrations/callrail/accounts/:id` → `{ removed: true }`
+  - `POST /api/integrations/callrail/sync` → `{ ingested: number }` (every company)
+  - `DELETE /api/integrations/callrail` → `{ connected: false }` (disconnect the provider and all its companies)
+
+**There is deliberately NO singleton `POST /api/integrations/callrail` key-paste route.** The first company added IS the connection — exactly as GoHighLevel multi-subaccount works here, where the single `integrations` row is only a lightweight "connected" marker and every credential lives on an `integration_accounts` row. A second key-holding path would be a second place for a credential to live.
 
 - [ ] **Step 1: Read the conventions you must match — do not invent**
 
@@ -193,9 +200,9 @@ Four states, each with its own copy — a generic empty panel would leave an own
 
 | State | What it shows |
 |---|---|
-| Not connected | The API key + account id form, and what CallRail is for here |
+| Not connected | The Add company form (API key + CallRail company id + label + practice), and what CallRail is for here |
 | Connected, no calls yet | The webhook URL to paste into CallRail, and that the first pull runs nightly |
-| Connected with calls | The number map, call counts per number, last call time, a Sync now control |
+| Connected with calls | The company list, call counts per company, last call time, a Sync now control |
 | Failed | The stored failure reason and a reconnect prompt |
 
 **The company list is the substance of this panel.** One row per connected CallRail company: its label, the practice it is mapped to, how many calls it has produced, when the last one arrived, and its sync status — plus Add company (API key + CallRail company id + practice), Sync now, and Disconnect. Mirror `GoHighLevelPanel.tsx`, which is exactly this shape for GHL subaccounts; read it first.
@@ -218,15 +225,15 @@ The panel will show its not-connected state until Task 3 lands; that is expected
 - [ ] **Step 5: Commit**
 
 ```bash
-git add frontend/features/integrations/components/CallRailPanel.tsx frontend/features/integrations/callrail-api.ts frontend/features/integrations/callrail-hooks.ts frontend/features/system/components/IntegrationsScreen.tsx
-git commit -m "feat(callrail): integration panel with the tracking-number map
+git add frontend/features/integrations/components/CallRailPanel.tsx frontend/features/integrations/api.ts frontend/features/integrations/hooks.ts frontend/features/system/components/IntegrationsScreen.tsx
+git commit -m "feat(callrail): integration panel listing the connected companies
 
 Four states with distinct copy, because an owner must be able to tell 'not
 connected' from 'connected but nothing has arrived'.
 
-The number map is the substance: a number with no mapping reads 'Not yet
-mapped — its calls count toward nothing', so a gap in classification is
-visible rather than silently folded into a channel."
+The company list is the substance: a company with no practice assigned reads
+'No practice assigned — its calls are not attributed', so an unassigned
+company is visible rather than silently counting nowhere."
 ```
 
 ---
@@ -242,11 +249,12 @@ visible rather than silently folded into a channel."
 
 **Interfaces:**
 - Consumes: `encryptSecret`/`decryptSecret` (`lib/crypto.js`), `integrationRepository`.
-- Produces: `CallRailProvider` with `callback({ apiKey, accountId })` and `verify(apiKey, accountId)`; the four connection endpoints from Task 2's contract.
+- Produces: `callrailProvider.verify(apiKey, callrailAccountId)` — resolves the key against CallRail and returns the account's own name, or throws a message safe to show the owner. Task 4 calls this before persisting a key.
+- Produces: `GET /api/integrations/callrail`, `POST /api/integrations/callrail/sync`, `DELETE /api/integrations/callrail`. **Not** a key-paste `POST /api/integrations/callrail` — see Task 2's contract for why.
 
 - [ ] **Step 1: Write the failing tests**
 
-Cover: a pasted key is encrypted before storage and never returned by the status read; an invalid key is rejected at connect time rather than stored and failing silently every night afterwards; the org id comes from the session; and a second org's connection is untouched by the first's.
+Cover: `verify` accepts a good key and returns the account name; `verify` rejects a 401 with a message that does NOT contain the key; the status read for an org with no connection returns `connected: false` rather than throwing; the org id comes from the session; and a second org's connection is untouched by the first's disconnect.
 
 Read `backend/test/` for an existing provider test to match — the GoHighLevel and Emergent ones are the closest.
 
@@ -263,11 +271,12 @@ Add `'callrail'` to `WEBHOOK_PROVIDERS` in `integration.service.js` so the gener
 
 Routes, matching Emergent's shape:
 ```javascript
-router.get('/callrail',    requireRole('owner', 'practice_manager'), asyncHandler(integrationController.callrailGet));
-router.post('/callrail',   requireRole('owner'), asyncHandler(integrationController.callrailConnect));
+router.get('/callrail',       requireRole('owner', 'practice_manager'), asyncHandler(integrationController.callrailGet));
 router.post('/callrail/sync', requireRole('owner'), asyncHandler(integrationController.callrailSync));
-router.delete('/callrail', requireRole('owner'), asyncHandler(integrationController.callrailDisconnect));
+router.delete('/callrail',    requireRole('owner'), asyncHandler(integrationController.callrailDisconnect));
 ```
+
+**These are STATIC paths and must be registered BEFORE the generic `/:provider` routes** in `integrations.routes.js`, or `/callrail` is swallowed by the generic handler. Read where the GoHighLevel and Google Sheets static routes sit and put these beside them.
 
 - [ ] **Step 4: Run tests, then the full suite**
 
@@ -278,13 +287,16 @@ Report the totals.
 
 ```bash
 git add backend/src/lib/integrations/callrail-provider.js backend/src/services/integration.service.js backend/src/controllers/integration.controller.js backend/src/routes/integrations.routes.js backend/test/callrail-provider.test.mjs
-git commit -m "feat(callrail): provider and connection routes
+git commit -m "feat(callrail): provider verification and the status routes
 
-The key is verified against CallRail's own account endpoint before it is
+A key is verified against CallRail's own account endpoint before it is ever
 stored, so a bad key is rejected at connect time with a clear message rather
-than stored and failing silently every night.
+than stored and failing silently every night. The failure message never
+contains the key.
 
-It is encrypted at rest and never returned by any read endpoint."
+There is no key-paste route on the provider itself: every credential lives on
+an integration_accounts row, one per CallRail company, so there is exactly one
+place a key can be."
 ```
 
 ---
@@ -296,7 +308,7 @@ It is encrypted at rest and never returned by any read endpoint."
 - Create: `backend/src/services/callrail.service.js`
 - Modify: `backend/src/controllers/integration.controller.js`
 - Modify: `backend/src/routes/integrations.routes.js`
-- Test: `backend/test/callrail.number-map.test.mjs`
+- Test: `backend/test/callrail.accounts.test.mjs`
 
 **Interfaces:**
 - Produces:
@@ -304,6 +316,8 @@ It is encrypted at rest and never returned by any read endpoint."
   - `callrailRepository.accountsWithCounts(orgId)` — every connected CallRail company, its practice, call count, last call, status
   - `callrailRepository.sourceBreakdown(orgId)` — what CallRail itself attributes calls to, so the "every call is an ad call" assumption is checkable
   - `callrailService.status(orgId)` — the payload Task 2's panel consumes
+  - `callrailService.addAccount(orgId, { apiKey, callrailAccountId, label, practiceId })` — calls Task 3's `verify` FIRST, then encrypts the key, creates the provider marker row if absent, and inserts the `integration_accounts` row with a fresh random `webhook_token`
+  - `callrailService.updateAccount(orgId, id, { practiceId, label })` — restamps `callrail_calls.practice_id` for that account when the practice changes
   - `POST /api/integrations/callrail/accounts`, `PATCH /api/integrations/callrail/accounts/:id`, `DELETE /api/integrations/callrail/accounts/:id`, `POST /api/integrations/callrail/accounts/:id/sync`
 
 - [ ] **Step 1: Write the failing tests**
@@ -317,22 +331,24 @@ The tests that matter here:
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `cd backend && npx vitest run test/callrail.number-map.test.mjs`
+Run: `cd backend && npx vitest run test/callrail.accounts.test.mjs`
 
 - [ ] **Step 3: Implement**
 
-Repository is "queries in, rows out". `numbersWithCounts` aggregates in SQL, not in JS — a tenant with many calls must not have them paged into memory to be counted. Page any read that can exceed 1000 rows, stopping on an EMPTY page.
+Repository is "queries in, rows out". `accountsWithCounts` aggregates in SQL, not in JS — a tenant with many calls must not have them paged into memory to be counted. Page any read that can exceed 1000 rows, stopping on an EMPTY page.
 
 - [ ] **Step 4: Run tests and the full suite; commit**
 
 ```bash
-git add backend/src/repositories/callrail.repository.js backend/src/services/callrail.service.js backend/src/controllers/integration.controller.js backend/src/routes/integrations.routes.js backend/test/callrail.number-map.test.mjs
-git commit -m "feat(callrail): tracking-number map, counts and status
+git add backend/src/repositories/callrail.repository.js backend/src/services/callrail.service.js backend/src/controllers/integration.controller.js backend/src/routes/integrations.routes.js backend/test/callrail.accounts.test.mjs
+git commit -m "feat(callrail): companies, counts and status
 
-A number seen in calls but never mapped appears in the list with a null
-channel, so a classification gap is visible. Mapping is a read-time
-decision and alters no stored call, so a remap takes effect immediately
-with no re-ingestion."
+One CallRail company per practice, each with its own key: a call's practice
+follows from the key that fetched it, so there is no mapping step to drift.
+
+A company with no practice assigned is listed with a null practice rather
+than hidden, and reassigning one restamps its existing calls, so a
+correction takes effect on history and not only on what arrives next."
 ```
 
 ---
@@ -397,18 +413,18 @@ call arriving twice produces one row."
 - Test: `backend/test/callrail-sync.test.mjs`
 
 **Interfaces:**
-- Produces: `syncOneOrg(orgId, integration, onProgress, opts)` and `syncAllOrgs()`, matching the shape every other connector here uses.
+- Produces: `syncAccount(orgId, account, onProgress, opts)` and `syncAllOrgs()`. **Per-ACCOUNT, not per-org** — credentials live on `integration_accounts`, one row per CallRail company, so there is no org-level key to sync with. Read `gohighlevel-sync.js`'s `syncAccount`/`syncAllOrgs` pair: `syncAllOrgs` fans out over every active account of every org. That connector's own lesson applies here: select accounts by `status IN ('active','failed')`, never `status = 'active'` alone, or one transient error freezes a company forever.
 
 - [ ] **Step 1: Write the failing tests**
 
 - The pull pages CallRail's API and stops correctly — assert the number of requests, not just the row total.
 - A call already ingested by webhook is not duplicated.
-- One org failing does not stop the others.
-- Cross-org isolation: a call is written only to the org whose key fetched it.
+- One account failing does not stop the others, and a `failed` account is retried on the next run rather than frozen out.
+- Cross-org isolation: a call is written only to the org whose key fetched it, with that account's `practice_id`.
 
 - [ ] **Step 2: Implement**
 
-`GET https://api.callrail.com/v3/a/{accountId}/calls.json` with `Authorization: Token token="<key>"`, paged, over a trailing window on the nightly run and a longer one on a manual reconnect — read `google-ads-sync.js` for the window idiom and follow it.
+`GET https://api.callrail.com/v3/a/{callrailAccountId}/calls.json` with `Authorization: Token token="<decrypted key>"`, paged, over a trailing window on the nightly run and a longer one on a manual reconnect — read `google-ads-sync.js` for the window idiom and follow it. Every row written carries the ACCOUNT's `organisation_id` and `practice_id`; never a value from the API response.
 
 **A webhook delivers once.** Anything arriving during a deploy or an outage is gone, and no webhook can reach calls from before connection. That is why this exists; say so in the header comment.
 
@@ -448,11 +464,11 @@ ggshield secret scan commit-range origin/main..HEAD
 
 - [ ] **Step 2: Document the endpoints in `docs/API.md`**
 
-All five connection/mapping routes plus the webhook, including: the organisation is taken from the session and never accepted as a parameter; the API key is never returned; an unmapped tracking number counts toward nothing.
+Every route in Task 2's contract plus the webhook, including: the organisation is taken from the session and never accepted as a parameter; the API key is never returned by any read; a company with no practice assigned attributes its calls to nothing.
 
 - [ ] **Step 3: Add ONE bullet to `CLAUDE.md`'s "Current state" section**
 
-Read two neighbouring bullets and match their density. Record: the two tables; migration `20260101000150` and its applied-status stated ACCURATELY (the controller applies it after this task, so NOT applied as you write); that calls are stored separately from `leads` and why; that classification is an owner-controlled tracking-number map with unmapped numbers counting toward nothing; both ingestion paths and the shared idempotency key; that the webhook resolves its org from the path token, never the payload; and whether CallRail signs its webhooks (from Task 5's finding).
+Read two neighbouring bullets and match their density. Record: the ONE new table `callrail_calls` and its reuse of `integration_accounts` for credentials; migration `20260101000154` and its applied-status stated ACCURATELY (the controller applies it after this task, so NOT applied as you write); that calls are stored separately from `leads` and why; that a call's practice comes from the key that fetched it, with no tracking-number map, and that an unassigned company attributes to nothing; both ingestion paths and the shared idempotency key; that the webhook resolves its org from the path token, never the payload; and whether CallRail signs its webhooks (from Task 5's finding).
 
 - [ ] **Step 4: Commit**
 
