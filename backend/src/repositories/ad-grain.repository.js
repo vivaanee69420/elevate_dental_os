@@ -7,6 +7,11 @@
 // rows is comfortably past that. Every read goes through a rollup RPC that
 // aggregates in SQL.
 //
+// Aggregating in SQL is NOT on its own a defence against that cap — the cap
+// applies to a set-returning function exactly as it does to a table, and the
+// rollups' own ENTITY count runs to thousands. So every read here is also
+// PAGED; see pagedRpc below.
+//
 // MULTI-TENANT: serviceClient bypasses RLS, so p_org IS the isolation.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
@@ -30,6 +35,54 @@ function filterParams({ practiceId = null, campaignId = null, parentId = null } 
     return { p_practice: practiceId ?? null, p_campaign: campaignId ?? null, p_parent: parentId ?? null };
 }
 
+const PAGE = 1000;
+
+// Read a set-returning RPC in full.
+//
+// PostgREST caps a response at 1000 rows server-side and reports NOTHING, and
+// that cap applies to a set-returning FUNCTION exactly as it does to a table —
+// the result is exposed as a relation, so calling an RPC is no escape from it.
+// Aggregating in SQL does not help here either: ad_grain_rollup collapses day
+// rows into ENTITY rows, and the entity count is itself what blows past 1000.
+// One Google account's keyword/ad-group pairs over 92 days run to thousands.
+//
+// The failure this prevents is not a visibly missing table row: the
+// reconciliation service SUMS these rows, so a truncated read renders as a
+// fabricated spend gap — an 80% shortfall on ~5,000 keyword pairs against
+// £176,795 of real spend — and, because the keyword grain is whitelisted as an
+// expected shortfall, that invented gap is explained to the owner in calm
+// prose. At ad/ad-group grain the same truncation reads as a red "does not
+// reconcile" for a discrepancy that never existed.
+//
+// Same idiom as leadsByCampaign in marketing.repository.js: advance by what the
+// server actually RETURNED and stop only on an EMPTY page, never a short one —
+// the cap is the server's own setting, and treating a short page as the last
+// would reintroduce the identical truncation at whatever number that happens
+// to be.
+//
+// The sort key is (entity_id, parent_id), both ascending, and BOTH are
+// required. entity_id alone is NOT unique — that is precisely why parent_id
+// sits in the tables' unique key: Google reuses a keyword's criterion id
+// across ad groups, and the rollup groups by (entity_id, parent_id). OFFSET
+// paging on a non-unique sort key duplicates and skips rows at every page
+// boundary.
+async function pagedRpc(fn, params) {
+    const rows = [];
+    for (let from = 0; ;) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc(fn, params)
+            .order('entity_id', { ascending: true })
+            .order('parent_id', { ascending: true })
+            .range(from, from + PAGE - 1);
+        if (error) throw new Error(`${fn}: ${error.message}`);
+        const page = Array.isArray(data) ? data : [];
+        rows.push(...page);
+        if (page.length === 0) break;
+        from += page.length;
+    }
+    return rows;
+}
+
 export const adGrainRepository = {
     async replaceWindow(orgId, grain, customerIds, rows) {
         assertGrain(grain);
@@ -46,19 +99,15 @@ export const adGrainRepository = {
 
     async rollup(orgId, grain, { since, until, ...filters } = {}) {
         assertGrain(grain);
-        const { data, error } = await supabase_1.serviceClient.rpc('ad_grain_rollup', {
+        return pagedRpc('ad_grain_rollup', {
             p_org: orgId, p_grain: grain, p_since: since, p_until: until, ...filterParams(filters),
         });
-        if (error) throw new Error(`ad_grain_rollup: ${error.message}`);
-        return Array.isArray(data) ? data : [];
     },
 
     async keywordRollup(orgId, { since, until, ...filters } = {}) {
-        const { data, error } = await supabase_1.serviceClient.rpc('ad_keyword_rollup', {
+        return pagedRpc('ad_keyword_rollup', {
             p_org: orgId, p_since: since, p_until: until, ...filterParams(filters),
         });
-        if (error) throw new Error(`ad_keyword_rollup: ${error.message}`);
-        return Array.isArray(data) ? data : [];
     },
 
     async restampPractices(orgId) {
