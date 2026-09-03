@@ -271,7 +271,14 @@ export const cockpitRepository = {
         // treatment_name), which is unique, so ordering on that pair makes the
         // pages stable and non-overlapping.
         return fetchAllPages(() => supabase_1.serviceClient
-            .rpc('treatment_revenue_matrix', { p_org: orgId, p_since: since, p_until: until })
+            // `?? null`, not the raw value: the supabase client STRIPS undefined
+            // keys from the body, so a call with no window sent only { p_org }
+            // and PostgREST 404'd looking for a 1-arg overload — 500ing the
+            // whole cockpit. since/until are optional in cockpitQuerySchema, so
+            // that path is reachable. null resolves the 3-arg signature.
+            .rpc('treatment_revenue_matrix', {
+                p_org: orgId, p_since: since ?? null, p_until: until ?? null,
+            })
             .order('practice_id', { ascending: true })
             .order('treatment_name', { ascending: true }));
     },
