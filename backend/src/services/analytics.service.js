@@ -18,13 +18,14 @@ import { boardReportRepository } from "../repositories/boardReport.repository.js
 import { orgSettingsRepository } from "../repositories/orgSettings.repository.js";
 import { businessHealthRepository } from "../repositories/business-health.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
-import { bucketsByPeriod, accountLinesByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
+import { bucketsByPeriod, accountLinesByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow, countBucketPeriodsInWindow } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
 import { checkBudget, recordUsage } from "../lib/ai/guardrails.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonParts, londonMonthKey } from "../lib/tz.js";
+import { dayWindowISO } from "../lib/date-window.js";
 import * as async_pool_1 from "../lib/async-pool.js";
 import * as dashboard_cache_1 from "../lib/dashboard-cache.js";
 import { createTtlCache } from "../lib/ttl-cache.js";
@@ -1722,14 +1723,10 @@ export const analyticsService = {
     async dashboardSummary(orgId, { now = () => new Date(), from = null, to = null, practiceId = null } = {}) {
         // Period: a custom [from,to] range (MTD/QTD/6M/YTD from the UI) overrides
         // the trailing 12-month window. Revenue/cash are scoped to the period.
-        let sinceISO, untilISO, ranged = false;
-        if (from && to) {
-            const [fy, fm, fd] = from.split('-').map(Number);
-            const [ty, tm, td] = to.split('-').map(Number);
-            sinceISO = new Date(fy, fm - 1, fd).toISOString();
-            untilISO = new Date(ty, tm - 1, td, 23, 59, 59).toISOString();
-            ranged = true;
-        } else {
+        // Day bounds come from lib/date-window so this window and the lead
+        // funnel's window are constructed by the SAME code and cannot drift.
+        let { ranged, sinceISO, untilISO } = dayWindowISO(from, to);
+        if (!ranged) {
             const since = new Date(now());
             since.setMonth(since.getMonth() - 12);
             sinceISO = since.toISOString();
@@ -1802,16 +1799,30 @@ export const analyticsService = {
         // actuals basis. A Dentally-only org with no cost feed gets nulls —
         // which is the truth, and is why "Less: 2mo cost reserve (£0)" was
         // misleading rather than merely empty.
-        const monthsCovered = ranged
-            ? Math.max(1, (Number(to.slice(0, 4)) * 12 + Number(to.slice(5, 7)))
-                - (Number(from.slice(0, 4)) * 12 + Number(from.slice(5, 7))) + 1)
-            : 12;
+        //
+        // The reserve divisor must be the number of months that ACTUALLY
+        // CONTRIBUTED COSTS, not the number of calendar months the window
+        // spans. A 9-month window holding 3 months of ledger would otherwise
+        // divide by 9 and understate the monthly run-rate by two thirds — an
+        // under-stated reserve overstates excess cash, which is the direction
+        // that gets a business into trouble.
+        const monthsCovered = countBucketPeriodsInWindow(
+            actuals.byPeriod, ranged ? from : null, ranged ? to : null,
+        ) || (ranged ? 1 : 12);
         const haveCosts = useActuals && totalCostsPence > 0;
         const operatingCashflowPence = haveCosts ? periodRevenue - totalCostsPence : null;
         const reservePence = haveCosts ? Math.round((totalCostsPence / monthsCovered) * 2) : null;
-        // Bank is org-level, so a practice-scoped request has no bank figure at
-        // all — null, not the £0 that a practice filter used to produce.
-        const bankKnown = !practiceId;
+        // A bank figure exists only when there is an org-level bank connection
+        // to read. Two distinct cases both used to collapse to £0:
+        //   * practice scope — bank is org-level, so there is no per-practice
+        //     figure at all;
+        //   * no bank accounts connected — bankSummary sums an empty list to 0.
+        // Treating the second as a real £0 balance would make excess cash
+        // `0 - reserve`, i.e. a confident NEGATIVE excess-cash figure for an
+        // org that simply has not connected a bank. `count` distinguishes an
+        // empty feed from a genuine zero balance.
+        const bankKnown = !practiceId && (bank.count || 0) > 0;
+        const bankBalancePence = bankKnown ? bankPence : null;
         const excessCashPence = bankKnown && reservePence !== null ? bankPence - reservePence : null;
 
         return {
@@ -1827,7 +1838,7 @@ export const analyticsService = {
             cashflowPence: operatingCashflowPence,
             // The bank position itself — a different thing from cashflow, and
             // indicative only (it includes card/clearing accounts).
-            bankBalancePence: bankKnown ? bankPence : null,
+            bankBalancePence,
             reservePence,
             excessCashPence,
         };
@@ -1865,7 +1876,10 @@ export const analyticsService = {
             return {
                 keys,
                 sinceISO: new Date(fy, fm - 1, 1).toISOString(),
-                untilISO: new Date(ty, tm, 0, 23, 59, 59).toISOString(), // last day of `to` month
+                // Last instant of the `to` month. The .999 matters: without it
+                // anything timestamped in the final second of the month falls
+                // outside a `<= until` filter.
+                untilISO: new Date(ty, tm, 0, 23, 59, 59, 999).toISOString(),
             };
         }
         const keys = [];
@@ -1986,7 +2000,11 @@ export const analyticsService = {
             const endMs = new Date(ty, tm - 1, td).getTime() + DAY;
             weeks = Math.min(53, Math.max(1, Math.ceil((endMs - startMs) / WEEK)));
             windowEnd = startMs + weeks * WEEK;
-            untilISO = new Date(endMs).toISOString();
+            // endMs is the EXCLUSIVE end (start of the day after `to`), but the
+            // RPC filters `processed_at <= p_until` — inclusive. Step back one
+            // millisecond so a receipt timestamped exactly at midnight on the
+            // day AFTER the window does not fall inside it.
+            untilISO = new Date(endMs - 1).toISOString();
         } else {
             const todayLocal = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
             windowEnd = todayLocal + DAY; // include all of today
@@ -2287,13 +2305,10 @@ export const analyticsService = {
     // other line is 0 until a real accounting source exists. Nothing is flagged
     // `estimated` because nothing is estimated — it is real or zero.
     async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null, now = () => new Date(), from = null, to = null } = {}) {
-        let sinceISO, untilISO;
-        if (from && to) {
-            const [fy, fm, fd] = from.split('-').map(Number);
-            const [ty, tm, td] = to.split('-').map(Number);
-            sinceISO = new Date(fy, fm - 1, fd).toISOString();
-            untilISO = new Date(ty, tm - 1, td, 23, 59, 59).toISOString();
-        } else {
+        // Same shared day bounds as dashboardSummary — this was a verbatim
+        // copy of that logic, which is how the two drift.
+        let { ranged, sinceISO, untilISO } = dayWindowISO(from, to);
+        if (!ranged) {
             const since = new Date(now());
             since.setMonth(since.getMonth() - 12);
             sinceISO = since.toISOString();
