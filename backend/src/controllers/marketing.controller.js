@@ -107,7 +107,19 @@ export const FacebookQuerySchema = z.object({
     since: z.string().regex(YMD_RE, 'since must be YYYY-MM-DD').optional(),
     until: z.string().regex(YMD_RE, 'until must be YYYY-MM-DD').optional(),
     cursor: z.string().regex(/^\d{1,9}$/).optional(),
-}).strip();
+}).strip().refine(
+    // Only applies when BOTH are present — either one alone is filled in
+    // server-side by windowFrom() and is never inverted against itself. An
+    // inverted range (since > until) would otherwise reach
+    // campaignSpendByProvider's .gte(since).lte(until), match nothing, and
+    // get reported as state: 'never_synced' — telling a fully synced tenant
+    // they have never connected Meta. A plain string compare is correct here
+    // because YYYY-MM-DD sorts lexicographically (same reasoning as
+    // clampWindow in facebook-report.service.js) — equal since/until (a
+    // single-day selection) is a legitimate request and must be accepted.
+    (q) => !q.since || !q.until || q.since <= q.until,
+    { message: 'since must not be after until', path: ['since'] },
+);
 
 function windowFrom(q) {
     return {
