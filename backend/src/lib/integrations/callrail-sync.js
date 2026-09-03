@@ -57,7 +57,9 @@ const API_BASE = 'https://api.callrail.com/v3';
 const PER_PAGE = 250;             // CallRail's documented max per_page for calls.json
 const MAX_PAGES = 200;            // safety cap (~50k calls/account) — never hit in practice
 const INCREMENTAL_DAYS = 90;      // nightly cron window: trailing 3 months
-const FULL_DAYS = 183;            // manual reconnect / full pull window: trailing 6 months
+// Manual reconnect / full pull. Well inside CallRail's 25-month retention —
+// a request reaching past that is refused outright, not silently truncated.
+const FULL_DAYS = 183;
 const RETRY_BASE_MS = Number(process.env.CALLRAIL_RETRY_BASE_MS ?? 1000);
 const MAX_RETRIES = 3;
 
@@ -67,8 +69,25 @@ async function fetchCallsPage(apiKey, callrailAccountId, { page, startDate, endD
     url.searchParams.set('per_page', String(PER_PAGE));
     url.searchParams.set('fields', CALLRAIL_FIELDS);
     if (page) url.searchParams.set('page', String(page));
-    if (startDate) url.searchParams.set('start_date', startDate);
-    if (endDate) url.searchParams.set('end_date', endDate);
+
+    // start_date/end_date are REQUIRED, not optional-with-a-guard. When a
+    // request carries no date parameters at all, CallRail does not return
+    // everything — it silently applies `date_range=recent`, the previous SEVEN
+    // days. A refactor that let either of these go undefined would turn the
+    // 90-day nightly window into a 7-day one, with a 200 and no error to
+    // notice. Fail loudly instead.
+    //
+    // Both bounds are INCLUSIVE per the vendor docs: start_date=YYYY-MM-DD
+    // means from midnight that day, end_date=YYYY-MM-DD means up to 23:59:59
+    // that day. Interpreted in the CallRail account's own time zone, which is
+    // harmless here — the window is trailing and generous, re-pulls are
+    // idempotent, and every stored timestamp comes from the payload's
+    // start_time rather than from this bucketing.
+    if (!startDate || !endDate) {
+        throw new Error('CallRail calls fetch requires start_date and end_date');
+    }
+    url.searchParams.set('start_date', startDate);
+    url.searchParams.set('end_date', endDate);
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         const res = await fetch(url, { headers: callrailHeaders(apiKey) });

@@ -10,23 +10,32 @@
 // idempotency test in callrail.accounts.test.mjs's "upserting the same call
 // twice yields one stored row").
 //
-// SIGNATURE VECTOR NOTE (see task-5-6-report.md for the full account): the
-// vendor docs (apidocs.callrail.com, "Webhooks -> Validating Payloads") ship
-// a published HMAC-SHA1 test vector — signing key
-// `072e77e426f92738a72fe23c4d1953b4` over a documented JSON body must
-// produce base64 signature `UZAHbUdfm3GqL7qzilGozGzWV64=`
-// (callrail-api-findings.md §1). That exact JSON body could not be retrieved
-// through any tool available in this environment (the doc page truncates
-// before the Webhooks section on every fetch path tried, including a raw
-// text-extraction proxy; guessed sub-paths 404; the support-site mirror
-// 403s). The tests below use the PUBLISHED KEY verbatim, and compute the
-// expected signature independently (SHA1, raw body, base64, exactly the
-// vendor's own documented formula) over a body authored here — this proves
-// the implementation's algorithm/encoding/key-handling are wired correctly,
-// but is NOT a byte-identical replay of the vendor's own example. Flagged
-// here so nobody mistakes it for the literal vendor vector.
+// SIGNATURE VECTOR: the vendor's own published test vector, replayed
+// byte-for-byte. `test/fixtures/callrail-signature-vector.json` is the exact
+// JSON body from apidocs.callrail.com "Webhooks -> Validating Payloads",
+// which with the published signing key `072e77e426f92738a72fe23c4d1953b4`
+// must produce `UZAHbUdfm3GqL7qzilGozGzWV64=`.
+//
+// The expected signature below is HARDCODED, not recomputed with the same
+// formula the implementation uses. That distinction is the whole point: a
+// test that derives its expectation from `createHmac('sha1', ...)` passes
+// even when both sides are wrong in the same way (SHA256 in both places, or
+// hex instead of base64). Asserting the vendor's literal output makes the
+// test an independent check against CallRail rather than against ourselves.
+//
+// The fixture has NO trailing newline, deliberately. The signature is over
+// the raw request bytes, so one stray `\n` changes it — verified: the same
+// body with a trailing newline hashes to `slJqKZkCtpJp2y989jy0zSM7tz4=`
+// instead. Anything that re-serialises the body (JSON.parse then stringify)
+// breaks verification, which is why app.js mounts the raw body for this route.
+//
+// Note also what the vendor's real payload proves: its `id` is `766970532`,
+// a NUMBER — not the `CAL…` string the v3 API returns. That is the identity
+// trap this integration is built around, confirmed from CallRail's own
+// example rather than inferred.
 // ============================================================================
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
@@ -217,14 +226,39 @@ describe('re-fetch (IDENTITY ruling) failure', () => {
 });
 
 describe('Signature header — HMAC-SHA1, second factor, per-account key', () => {
-  // The docs' own published key (callrail-api-findings.md §1). See the file
-  // header for why the BODY here is self-authored rather than the literal
-  // vendor example.
+  // The vendor's own published key and body (callrail-api-findings.md §1).
   const VENDOR_KEY = '072e77e426f92738a72fe23c4d1953b4';
+  const VENDOR_BODY = readFileSync(
+    new URL('./fixtures/callrail-signature-vector.json', import.meta.url),
+  );
+  const VENDOR_SIGNATURE = 'UZAHbUdfm3GqL7qzilGozGzWV64=';
 
   function sign(key, rawBuf) {
     return crypto.createHmac('sha1', key).update(rawBuf).digest('base64');
   }
+
+  it("reproduces the vendor's published signature exactly, from their own example body", () => {
+    // Hardcoded expectation, not a recomputation — see the file header. This
+    // is the one assertion that would catch SHA256-for-SHA1, hex-for-base64,
+    // or a body that got re-serialised somewhere in the chain.
+    expect(sign(VENDOR_KEY, VENDOR_BODY)).toBe(VENDOR_SIGNATURE);
+  });
+
+  it("accepts the vendor's own example delivery end to end", async () => {
+    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    const res = await handleWebhook(TOKEN_A, VENDOR_BODY, VENDOR_SIGNATURE);
+    expect(res.stored).toBe(true);
+  });
+
+  it('rejects the vendor body when a single byte is appended — the signature is over the RAW bytes', async () => {
+    accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
+    // One trailing newline moves the digest to slJqKZkCtpJp2y989jy0zSM7tz4=.
+    // Anything that re-serialises the body would fail here the same way, which
+    // is what makes this an assertion about the raw-body mount, not just HMAC.
+    await expect(
+      handleWebhook(TOKEN_A, Buffer.concat([VENDOR_BODY, Buffer.from('\n')]), VENDOR_SIGNATURE),
+    ).rejects.toThrow(/invalid signature/i);
+  });
 
   it('accepts a correctly HMAC-SHA1-signed delivery when a signing key is on file', async () => {
     accounts = [makeAccount({ config: { signing_key: VENDOR_KEY } })];
