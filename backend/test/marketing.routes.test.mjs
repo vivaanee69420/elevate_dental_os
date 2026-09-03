@@ -102,3 +102,65 @@ describe('leads query validation', () => {
         expect(parsed.campaignId).toBeUndefined();
     });
 });
+
+describe('reconciliation query validation', () => {
+    it('rejects a missing since', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => ReconciliationQuerySchema.parse({
+            until: '2026-08-31',
+        })).toThrow();
+    });
+
+    it('rejects a missing until', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => ReconciliationQuerySchema.parse({
+            since: '2026-06-01',
+        })).toThrow();
+    });
+
+    it('rejects a malformed since (single-digit month/day, not zero-padded)', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => ReconciliationQuerySchema.parse({
+            since: '2026-8-1', until: '2026-08-31',
+        })).toThrow();
+    });
+
+    it('rejects a malformed until (not a date at all)', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => ReconciliationQuerySchema.parse({
+            since: '2026-06-01', until: 'not-a-date',
+        })).toThrow();
+    });
+
+    it('rejects an unknown provider', async () => {
+        // Only google_ads and meta_ads have a deep-grain pull (Task 4) to
+        // reconcile against — any other value must fail before it reaches
+        // the service's LEVELS[provider] lookup.
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => ReconciliationQuerySchema.parse({
+            since: '2026-06-01', until: '2026-08-31', provider: 'tiktok_ads',
+        })).toThrow();
+    });
+
+    it('accepts a well-formed google_ads query', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = ReconciliationQuerySchema.parse({
+            since: '2026-06-01', until: '2026-08-31', provider: 'google_ads',
+        });
+        expect(parsed).toEqual({ since: '2026-06-01', until: '2026-08-31', provider: 'google_ads' });
+    });
+
+    it('accepts a well-formed meta_ads query', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = ReconciliationQuerySchema.parse({
+            since: '2026-06-01', until: '2026-08-31', provider: 'meta_ads',
+        });
+        expect(parsed).toEqual({ since: '2026-06-01', until: '2026-08-31', provider: 'meta_ads' });
+    });
+
+    it('defaults provider to google_ads when omitted', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = ReconciliationQuerySchema.parse({ since: '2026-06-01', until: '2026-08-31' });
+        expect(parsed.provider).toBe('google_ads');
+    });
+});
