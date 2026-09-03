@@ -138,6 +138,8 @@ export function buildApp() {
     app.use('/webhooks/ses-events', express_1.default.raw({ type: '*/*', limit: '1mb' }));
     // Emergent webhook needs the raw body for HMAC signature verification.
     app.use('/webhooks/emergent', express_1.default.raw({ type: '*/*', limit: '1mb' }));
+    // CallRail webhook needs the raw body for signature verification.
+    app.use('/webhooks/callrail', express_1.default.raw({ type: '*/*', limit: '1mb' }));
     // Global JSON parser for everything else.
     app.use(express_1.default.json({ limit: '10mb' }));
     app.use(express_1.default.urlencoded({ extended: true }));
