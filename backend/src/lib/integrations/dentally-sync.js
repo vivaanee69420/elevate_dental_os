@@ -1111,6 +1111,95 @@ export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, un
     return { deleted, remote: remoteIds.size, scanned: ourRows.length };
 }
 
+// ============================================================================
+// Historical payment-status repair.
+//
+// WHY. mapPaymentStatus once sent Dentally's `unexplained` /
+// `partially_explained` states to 'pending'. They are money RECEIVED but not
+// yet allocated to an invoice line, so the correct mapping is 'settled' — the
+// code above now does that. The MAPPER was fixed; the ROWS it had already
+// written never were, because the nightly sync pulls a rolling recent window
+// and never revisits old dates.
+//
+// The result is a silent, permanent understatement of Takings for any window
+// covering the affected period. Live today on BOTH orgs on this instance:
+//   Plan4growth  5,418 rows / £830,468  (all dated <= 2024-10-01)
+//   developer    5,422 rows / £843,310
+// with 2,713 of Plan4growth's being CARD or CASH payments — money handed over
+// at the desk, which is never "pending". Anyone reconciling those years
+// against Dentally would find us low and have no way to see why.
+//
+// HOW. Re-pull the window from Dentally and upsert on
+// (organisation_id, source, external_id) — the same key the nightly sync uses.
+// Every row is re-derived through the CURRENT mapper from the authoritative
+// remote record, so nothing is inferred or guessed from what we already hold.
+// A row Dentally still reports as genuinely unpaid stays pending, correctly.
+//
+// Idempotent: re-running it re-derives the same values. Read-then-upsert only —
+// it never deletes (reconcileDeletedPayments owns that, deliberately separate).
+// ============================================================================
+export async function repairPaymentStatuses(orgId, integration, { since, until, maxPages = MAX_PAGES } = {}) {
+    const base = integration?.config?.base_url ?? DEFAULT_BASE;
+    const auth = await resolveDentallyAuth(orgId, integration);
+    if (!auth) return { error: 'no_auth' };
+    if (!since || !until) return { error: 'no_window' };
+
+    // Status mix BEFORE, so the caller can report what actually changed rather
+    // than claiming success on a no-op.
+    const before = await countPaymentStatuses(orgId, since, until);
+
+    const siteMap = await loadSiteMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    // /payments filters on dated_on (a DATE) via dated_after/dated_before.
+    const params = {
+        dated_after: String(since).slice(0, 10),
+        dated_before: String(until).slice(0, 10),
+    };
+    const { synced, skipped } = await pullPayments(
+        orgId, base, auth, params, siteMap, contactMap, null, maxPages,
+    );
+    const after = await countPaymentStatuses(orgId, since, until);
+    return {
+        window: params,
+        synced,
+        skipped,
+        before,
+        after,
+        // The number this repair exists to move.
+        pendingCleared: Math.max(0, (before.pending || 0) - (after.pending || 0)),
+        pencePendingCleared: Math.max(0, (before.pendingPence || 0) - (after.pendingPence || 0)),
+    };
+}
+
+// Status mix for dentally-sourced payments in a window. Paged — a wide repair
+// window can hold far more than the 1000-row read cap, and a capped count would
+// misreport how much the repair moved.
+export async function countPaymentStatuses(orgId, sinceISO, untilISO) {
+    const out = { settled: 0, pending: 0, other: 0, pendingPence: 0 };
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('payments')
+            .select('status, amount_pence')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .gte('processed_at', sinceISO)
+            .lte('processed_at', untilISO)
+            .range(from, from + PAGE - 1);
+        if (error) return out;
+        const rows = data ?? [];
+        for (const r of rows) {
+            if (r.status === 'settled') out.settled++;
+            else if (r.status === 'pending') {
+                out.pending++;
+                out.pendingPence += r.amount_pence || 0;
+            } else out.other++;
+        }
+        if (rows.length < PAGE) break;
+    }
+    return out;
+}
+
 async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPage, maxPages) {
     let synced = 0;
     let skipped = 0;

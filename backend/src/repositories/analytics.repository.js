@@ -3,6 +3,7 @@
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
 import { revokedProviders, groupReceiptExcludedSources, pmsHidden, crmHidden, emergentConnected } from "../lib/integration-gating.js";
+import { fetchAllRpc } from "../lib/paged-rpc.js";
 
 // Max rows we read for an in-Node aggregate. Realistic per-org practice +
 // settled-payment counts sit far below this; if it ever trips, the service
@@ -286,14 +287,18 @@ export const analyticsRepository = {
         if (error) throw new Error(error.message);
         return (data || []).reduce((s, r) => s + (Number(r.amount_pence) || 0), 0);
     },
+    // One row per day, so a long window can exceed PostgREST's 1000-row cap —
+    // 947 days on the live org today and climbing ~81 per 90 days, against a
+    // date picker that reaches back to 2020. A capped read here would quietly
+    // shrink Turnover and Takings with no error, so it is paged.
     async settledReceiptsByDay(orgId, sinceISO, practiceId = null, untilISO = null) {
-        const { data, error } = await supabase_1.serviceClient.rpc('settled_receipts_by_day', {
+        const { data, error } = await fetchAllRpc(supabase_1.serviceClient, 'settled_receipts_by_day', {
             p_org: orgId,
             p_since: sinceISO,
             p_practice: practiceId ?? null,
             p_until: untilISO ?? null,
             p_exclude_sources: await groupReceiptExcludedSources(orgId),
-        });
+        }, { orderBy: 'day' });
         if (error)
             throw new Error(error.message);
         return Array.isArray(data) ? data : [];
@@ -610,9 +615,11 @@ export const analyticsRepository = {
     // Rows: { practice_id, treatment_name, fee_pence, item_count }.
     async treatmentRevenueMatrix(orgId, sinceISO, untilISO = null) {
         if (await pmsHidden(orgId)) return [];
-        const { data, error } = await supabase_1.serviceClient.rpc('treatment_revenue_matrix', {
+        // practice x treatment_name — 901 rows on the live org and growing with
+        // every new treatment name, so this is paged for the same reason.
+        const { data, error } = await fetchAllRpc(supabase_1.serviceClient, 'treatment_revenue_matrix', {
             p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
-        });
+        }, { orderBy: 'fee_pence', ascending: false });
         if (!error && Array.isArray(data)) {
             return data.map((r) => ({
                 practice_id: r.practice_id,
