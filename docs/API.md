@@ -1871,7 +1871,16 @@ extra code, while accepting an org id from the request would let any
 authenticated user read another tenant's ad spend.
 
 **Query (all three routes):** `since`, `until` (`YYYY-MM-DD`, both
-**optional**). Omitting them is the intended use: the server defaults to
+**optional**). **Both bounds are INCLUSIVE**: `since=2026-08-01&until=2026-08-31`
+means the whole of August, and `since=2026-08-24&until=2026-08-24` is a
+legitimate single-day request for the whole of 24 August. That is the same
+convention the reconciliation endpoint above uses, because both compare
+against `ad_metrics.metric_date`, a plain DATE column. The lead funnel
+underneath bounds on a `timestamptz` and is therefore half-open internally;
+the service converts the inclusive `until` to the exclusive one the funnel
+needs (`funnelUntil` in `facebook-report.service.js`) so a client never has to
+know, and so the last day's leads are not dropped. Omitting them is the
+intended use: the server defaults to
 `londonDaysAgo(DEEP_WINDOW_DAYS)` (92 days) through `londonYmd()`, the exact
 window and helpers the deep sync itself uses, so the client and the sync
 never compute the window on different clocks — between 00:00 and 01:00
@@ -1890,12 +1899,22 @@ an org with no Dentally connection rather than being omitted.
 
 `state` is one of:
 - `not_connected` — no Meta ad account on this org.
-- `never_synced` — a Meta account is connected but the deep sync has not
-  produced a campaign-level spend row yet.
-- `no_ad_id_coverage` — this window has leads attributed to Meta but not one
-  of them carries an ad set id, so an ad-set/ad tier cannot be built (a quiet
-  window with zero leads is never reported as this — it is not evidence of
-  missing coverage).
+- `never_synced` — a Meta account is connected but **no Meta metric row has
+  ever landed for this organisation**. Established by probing outside the
+  requested window, not inferred from an empty window: a tenant who paused
+  their campaigns, picked a quiet day, or filtered to a practice whose mapped
+  account did not buy this campaign has synced perfectly well and must not be
+  told otherwise.
+- `no_spend_in_window` — Meta has delivered data before, but there is no spend
+  in the selected period/practice/campaign. The honest empty-window state.
+- `no_ad_id_coverage` — the leads **this payload measured** are attributed to
+  Meta but not one of them carries an ad set id, so an ad-set/ad tier cannot
+  be built (a quiet window with zero leads is never reported as this — it is
+  not evidence of missing coverage). **Scope matters**: on `/campaigns` it is
+  measured over the organisation, narrowed by any `practice_id`; on
+  `/campaigns/:campaignId/adsets` it is measured over **that one campaign**.
+  The UI words the notice for what was measured rather than making an
+  organisation-wide claim from a per-campaign computation.
 - `ok` — normal.
 
 ### `GET /api/marketing/facebook/campaigns`
@@ -1903,7 +1922,7 @@ an org with no Dentally connection rather than being omitted.
 Facebook report, campaign tier.
 
 **Response:** `{ state, coverage, rows[], excludedAccounts[], totals,
-unmatchedLeads }`.
+unmatchedLeads, effectiveSince, windowClamped }`.
 
 - `coverage` is `{ leadsTotal, leadsWithAdSet, pct }` — **this organisation's
   own figure**, computed from this window's rows, never a global assumption.
@@ -1913,7 +1932,10 @@ unmatchedLeads }`.
 - Each row: `{ id, name, status, spendPence, impressions, clicks, ctr,
   cpcPence, leads, booked, attended, patients, newPatients, cplPence,
   cpbPence, cpaPence }`. `totals` is the same shape with `id`/`name`/`status`
-  null.
+  null. `status` is Meta's own campaign status (`ACTIVE`, `PAUSED`, …) as it
+  stood on the **latest day in the window** — `ad_metrics` stamps it per
+  campaign-day, so a campaign paused mid-period reads `PAUSED`. `null` when
+  the feed carried none.
 - `excludedAccounts` lists connected Meta accounts excluded for an
   unsupported currency (`{ customerId, name, currency, reason:
   'unsupported_currency' }`) — informational, telling the owner why an
@@ -1925,22 +1947,41 @@ unmatchedLeads }`.
   exclude, because folding them in would inflate lead counts while
   contributing nothing to spend and silently understate every cost figure.
   `null` when there are none.
+- `effectiveSince` / `windowClamped` — **present on all three payloads,
+  including the early returns.** The deep-grain tables hold a rolling 92-day
+  window while `ad_metrics` holds roughly fifteen months, so a longer request
+  is clamped to what the finest grain can actually cover, and the same clamped
+  window is applied to the funnel, the rollups and the campaign spend so all
+  three agree. `effectiveSince` is the `YYYY-MM-DD` actually used;
+  `windowClamped` is `true` only when the *requested* `since` was earlier than
+  that floor (an omitted `since` defaults to the floor and is **not** reported
+  as clamped). The page uses them to say what it is showing rather than
+  quietly showing less than the period pill claims.
 
 ### `GET /api/marketing/facebook/campaigns/:campaignId/adsets`
 
 As above, for one campaign's ad sets.
 
-**Response:** `{ state, coverage, rows[], notIdentified }` — no
-`excludedAccounts`/`totals` at this tier.
+**Response:** `{ state, coverage, rows[], notIdentified, unmatchedLeads,
+effectiveSince, windowClamped }` — no `excludedAccounts`/`totals` at this
+tier.
 
-- Each row adds `reach` to the same cost/funnel shape as the campaign tier.
-  **`reach` is non-additive** — a count of unique people — and is carried
-  per ad set only; it is never summed to a total and never appears at the
-  campaign tier.
-- `notIdentified` is a summed funnel object (same shape as
-  `unmatchedLeads`) for leads attributed to this campaign whose ad set could
-  not be resolved. They carry no spend, so they carry no cost either —
-  `null` when coverage is complete.
+- Each row is the **same shape as the campaign tier's**. There is deliberately
+  **no `reach` field**: the value is stored on `ad_meta_adsets`, but
+  `ad_grain_rollup` does not return it, so the column was empty on every row
+  for every tenant. Surfacing it needs a new RPC and a migration; it is not
+  shipped half-done.
+- `notIdentified` is a summed funnel object (same shape as `unmatchedLeads`)
+  for leads attributed to this campaign whose ad set could **not be resolved
+  at all**. They carry no spend, so they carry no cost either — `null` when
+  there are none.
+- `unmatchedLeads` is the same shape, for leads whose ad set **did** resolve
+  but which is not among `rows` — it had no delivery in this window, or its
+  spend sits under a different practice mapping than the current filter.
+  Without it those leads would appear in no row and in no bucket, so this tier
+  could sum to less than the campaign row above it. `rows` + `notIdentified` +
+  `unmatchedLeads` reconciles exactly to the campaign tier's row for the same
+  campaign. `null` when there are none.
 
 ### `GET /api/marketing/facebook/adsets/:adSetId/ads`
 
@@ -1950,6 +1991,7 @@ stable paging), 50 per page.
 **Query:** adds `cursor` (optional, opaque — pass back the previous
 response's `nextCursor` verbatim).
 
-**Response:** `{ rows[], nextCursor }`. Each row is the same cost/funnel
-shape as the campaign tier (no `reach` at this tier). `nextCursor` is `null`
-on the last page.
+**Response:** `{ rows[], nextCursor, effectiveSince, windowClamped }`. Each
+row is the same cost/funnel shape as the campaign tier. `nextCursor` is `null`
+on the last page. `effectiveSince`/`windowClamped` are as documented on the
+campaign tier.

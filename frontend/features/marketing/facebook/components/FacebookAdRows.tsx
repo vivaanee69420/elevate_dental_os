@@ -20,10 +20,10 @@ const ctrPct = (ctr: number | null) => (ctr === null ? '—' : `${(ctr * 100).to
 const num = (n: number) => n.toLocaleString('en-GB');
 
 const TD = 'px-4 py-2.5 text-right tabular-nums';
-// Name, Spend, Impressions, Clicks, CTR, CPC, Reach(blank at this tier),
-// Leads, Booked, Attended, Patients, CPL, CPB, CPA — same 14 columns as the
-// ad-set table this renders inside, so every row lines up under its header.
-const COLS = 14;
+// Name, Spend, Impressions, Clicks, CTR, CPC, Leads, Booked, Attended,
+// Patients, CPL, CPB, CPA — the same 13 columns as the ad-set table this
+// renders inside, so every row lines up under its header.
+const COLS = 13;
 
 function AdRow({ ad }: { ad: FacebookRow }) {
   return (
@@ -34,8 +34,6 @@ function AdRow({ ad }: { ad: FacebookRow }) {
       <td className={TD}>{num(ad.clicks)}</td>
       <td className={TD}>{ctrPct(ad.ctr)}</td>
       <td className={TD}>{money(ad.cpcPence)}</td>
-      {/* No reach at ad tier — Meta does not return it below ad set. */}
-      <td className={TD}>—</td>
       <td className={TD}>{num(ad.leads)}</td>
       <td className={TD}>{num(ad.booked)}</td>
       <td className={TD}>{num(ad.attended)}</td>
