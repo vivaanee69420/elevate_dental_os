@@ -141,8 +141,15 @@ GRANT EXECUTE ON FUNCTION ad_lead_conversions(uuid, timestamptz, timestamptz, uu
 -- grain. A second copy at ad grain would be two definitions of "booked" that
 -- can silently disagree.
 --
--- MULTI-TENANT (M2): a lead is a Meta lead because its ad_id resolves inside
--- THIS org's ad_meta_ads rows — a structural test. It is deliberately NOT
+-- MULTI-TENANT (M2): a lead is a Meta lead because its ad_campaign_id
+-- resolves inside THIS org's own Meta ad_metrics rows — a structural test,
+-- applied via the `IN` clause in the WHERE below. That clause decides
+-- whether a lead enters this funnel AT ALL; the ad_meta_ads LEFT JOIN
+-- further down does a DIFFERENT job — naming which ad set a Meta lead
+-- belongs to. Both tests are doing work: removing the `IN` clause on the
+-- assumption "the join already restricts to Meta" is wrong, because a LEFT
+-- JOIN cannot exclude rows — every lead carrying ANY campaign id, Google
+-- included, would re-enter the funnel. It is deliberately NOT
 -- `attribution_source = 'Paid Social'`, which is a GoHighLevel label: another
 -- tenant's CRM may label it differently, or not at all, and the report would
 -- render nothing while appearing to work.
@@ -189,6 +196,19 @@ BEGIN
          ORDER BY entity_id, metric_date DESC
       ) a ON a.entity_id = f.ad_id
      WHERE f.ad_campaign_id IS NOT NULL
+       -- M2, the structural Meta test. Without this, the LEFT JOIN to
+       -- ad_meta_ads cannot exclude anything and every lead carrying ANY
+       -- campaign id enters this funnel: measured on live data, 11 Google
+       -- campaigns and 50 campaigns from no known feed were being counted as
+       -- Meta, diluting the coverage figure the page shows the tenant.
+       -- Deliberately NOT scoped by date: whether a campaign is Meta is a
+       -- question of provider identity, not of the reporting window.
+       AND f.ad_campaign_id IN (
+         SELECT m.campaign_id FROM ad_metrics m
+          WHERE m.organisation_id = $1
+            AND m.provider = 'meta_ads'
+            AND m.campaign_id IS NOT NULL
+       )
      GROUP BY f.ad_campaign_id, a.parent_id, f.ad_id, f.practice_id
   $q$ USING p_org, p_since, p_until, p_practice;
 END;
