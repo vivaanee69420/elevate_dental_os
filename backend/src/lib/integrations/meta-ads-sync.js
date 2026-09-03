@@ -21,6 +21,13 @@ import { integrationRepository } from "../../repositories/integration.repository
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
+import { syncMetaDeep } from "./meta-ads-deep-sync.js";
+import { partitionAccountsByCurrency } from "./ad-currency.js";
+// Shared window constant lives with the Google deep-sync module (its
+// sibling) so both providers' nightly wiring read the SAME value — see
+// google-ads-sync.js for the matching import. Two providers must not drift
+// apart when this changes.
+import { DEEP_WINDOW_DAYS } from "./google-ads-deep-sync.js";
 
 const INSIGHT_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,reach,frequency,actions';
 // Incremental window (nightly cron) = trailing 3 months; a full backfill
@@ -133,6 +140,28 @@ async function queryAccount(accountId, accessToken, sinceDate) {
         const res = await fetch(url, { headers: { Accept: 'application/json' } });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body?.error?.message || `insights HTTP ${res.status}`);
+        for (const r of body.data ?? []) rows.push(r);
+        url = body.paging?.next || null;
+        guard++;
+    }
+    return rows;
+}
+
+// Same insights edge as queryAccount, at ad-set or ad level. Kept here because
+// it shares the paging loop and the token; the parsing lives in the deep-sync
+// module.
+async function queryAccountLevel(accountId, accessToken, level, sinceDate, untilDate) {
+    const { INSIGHT_FIELDS: DEEP_FIELDS } = await import('./meta-ads-deep-sync.js');
+    const timeRange = encodeURIComponent(JSON.stringify({ since: sinceDate, until: untilDate }));
+    let url = `${graphBase()}/${apiVersion()}/act_${accountId}/insights`
+        + `?level=${level}&time_increment=1&time_range=${timeRange}`
+        + `&fields=${DEEP_FIELDS}&limit=500&access_token=${encodeURIComponent(accessToken)}`;
+    const rows = [];
+    let guard = 0;
+    while (url && guard < 400) {
+        const res = await fetch(url, { headers: { Accept: 'application/json' } });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body?.error?.message || `insights ${level} HTTP ${res.status}`);
         for (const r of body.data ?? []) rows.push(r);
         url = body.paging?.next || null;
         guard++;
@@ -285,9 +314,30 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
             if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
         }
 
+        // See google-ads-sync.js: deep grain must never fail the campaign sync.
+        let deep = { counts: {}, skipped: [], unsupportedCurrency: [] };
+        try {
+            const known = await integrationRepository.listAdAccounts(orgId, 'meta_ads').catch(() => []);
+            const byId = new Map((known ?? []).map((a) => [String(a.customer_id), a]));
+            const { supported, unsupported } = partitionAccountsByCurrency(
+                aidsWithRows.map((aid) => ({ customer_id: aid, currency: byId.get(String(aid))?.currency ?? null })),
+            );
+            const r = await syncMetaDeep(orgId, {
+                accessToken: access_token,
+                accountIds: supported,
+                since: daysAgo(DEEP_WINDOW_DAYS),
+                until,
+                fetchLevel: (accountId, token, level, s, u) => queryAccountLevel(accountId, token, level, s, u),
+            });
+            deep = { ...r, unsupportedCurrency: unsupported };
+        } catch (err) {
+            console.error('[meta_ads] deep-grain sync failed:', err.message);
+            deep = { counts: {}, skipped: [], unsupportedCurrency: [], error: String(err.message).slice(0, 200) };
+        }
+
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'meta_ads');
-        return { rows: all.length, accounts: accountIds.length, skipped };
+        return { rows: all.length, accounts: accountIds.length, skipped, deep };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'meta_ads', String(err.message).slice(0, 500));
         throw err;
