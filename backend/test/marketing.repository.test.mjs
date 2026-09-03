@@ -419,6 +419,66 @@ describe('campaignFunnel', () => {
     });
 });
 
+describe('metaFunnel', () => {
+    it('passes org, window and practice through to the RPC', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = () => ({ data: [], error: null });
+        await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31', null);
+        const call = supaRec.rpcCalls.find((c) => c.fn === 'ad_meta_funnel');
+        expect(call.params).toEqual({
+            p_org: ORG, p_since: '2026-06-01', p_until: '2026-08-31', p_practice: null,
+        });
+    });
+
+    // Unlike the `.from()` mock (used by campaignSpendByProvider's paging
+    // tests), the `.rpc()` mock in test/setup.js does NOT auto-slice by
+    // `.range()` — only `.from()`'s settle() does that. An RPC provider must
+    // slice by `mods.range` itself, exactly as leadsByCampaign's pagedLeads()
+    // helper above already does; returning the same fixed array unconditionally
+    // never yields an empty page and the pager would loop forever.
+    //
+    // The row total CANNOT discriminate a correct pager from one that stops on
+    // a short page — both return every row once slicing is correct. The READ
+    // COUNT can: 1064 rows is 1000 + 64 + a confirming empty read.
+    function pagedMetaRows(total) {
+        const all = Array.from({ length: total }, (_, i) => ({
+            campaign_id: 'CMP', ad_set_id: i % 2 === 0 ? 'AS1' : null, ad_id: `AD${String(i).padStart(5, '0')}`,
+            practice_id: null, leads: 1, booked: 0, attended: 0,
+            patients: 0, new_patients: 0,
+        }));
+        const CAP = 1000;   // what the server enforces, whatever we ask for
+        return (_fn, _params, mods) => {
+            const from = mods.range?.from ?? 0;
+            const to = mods.range?.to ?? all.length - 1;
+            return { data: all.slice(from, Math.min(to + 1, from + CAP)), error: null };
+        };
+    }
+
+    it('reads every page and makes the confirming empty read', async () => {
+        let reads = 0;
+        const paged = pagedMetaRows(1064);
+        supaRec.rpcProvider = (fn, params, mods) => { reads += 1; return paged(fn, params, mods); };
+        const out = await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31');
+        expect(out).toHaveLength(1064);
+        expect(reads).toBe(3);
+    });
+
+    it('does not mistake a short-but-nonempty page for the last one', async () => {
+        let reads = 0;
+        const paged = pagedMetaRows(700);
+        supaRec.rpcProvider = (fn, params, mods) => { reads += 1; return paged(fn, params, mods); };
+        const out = await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31');
+        expect(out).toHaveLength(700);
+        expect(reads).toBe(2);
+    });
+
+    it('surfaces an RPC error rather than returning an empty list', async () => {
+        supaRec.rpcProvider = () => ({ data: null, error: { message: 'boom' } });
+        await expect(marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31'))
+            .rejects.toThrow(/ad_meta_funnel: boom/);
+    });
+});
+
 describe('leadsByCampaign booking fields', () => {
     beforeEach(() => { supaRec.rpcCalls = []; });
 
