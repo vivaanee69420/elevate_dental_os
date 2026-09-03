@@ -34,6 +34,7 @@ import GoogleSheetsWriterPanel from '@/features/integrations/components/GoogleSh
 import EmergentPracticeMapping from '@/features/integrations/components/EmergentPracticeMapping';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
 import { useSyncToast } from '@/features/integrations/sync-toast';
+import { AdReconciliationPanel } from '@/features/marketing/components/AdReconciliationPanel';
 
 // Map an OAuth callback error code to a human title + message. Known codes get
 // specific guidance; anything else falls back to the raw message.
@@ -127,6 +128,10 @@ export default function IntegrationsScreen() {
   const ghlPanelVisible = !!ghlRow && ghlRow.status !== 'revoked';
   const googleAdsConnected = statusOf('google_ads', integrations) === 'active';
   const metaAdsConnected = statusOf('meta_ads', integrations) === 'active';
+  // Fixed 92-day reconciliation window — this panel isn't windowed by the
+  // dashboard's ScopePeriod bar (Integrations has no scope selector).
+  const reconciliationUntil = new Date().toISOString().slice(0, 10);
+  const reconciliationSince = new Date(Date.now() - 92 * 86_400_000).toISOString().slice(0, 10);
 
   // Group providers by category, preserving registration order.
   const groups: { category: string; items: ProviderMeta[] }[] = [];
@@ -223,6 +228,28 @@ export default function IntegrationsScreen() {
       {hasFeature('sheet_export') && <GoogleSheetsWriterPanel />}
       {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
       {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
+
+      {/* Reconciliation only makes sense once a provider is actually
+          connected — an unconnected provider has no campaign total to compare
+          against, so its card would show nothing but misleading zeroes. */}
+      {(googleAdsConnected || metaAdsConnected) && (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          {googleAdsConnected && (
+            <AdReconciliationPanel
+              provider="google_ads"
+              since={reconciliationSince}
+              until={reconciliationUntil}
+            />
+          )}
+          {metaAdsConnected && (
+            <AdReconciliationPanel
+              provider="meta_ads"
+              since={reconciliationSince}
+              until={reconciliationUntil}
+            />
+          )}
+        </div>
+      )}
 
       {groups.map((g) => (
         <div key={g.category} style={{ marginBottom: 20 }}>
