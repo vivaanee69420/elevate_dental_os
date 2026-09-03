@@ -96,7 +96,13 @@ Both paths, as every other integration here does — a webhook alone loses anyth
 
 Idempotent on CallRail's own call id, so a webhook and a pull describing the same call produce one row.
 
-**OPEN QUESTION, blocking Phase B only.** Does this CallRail account use a **Google-Ads-specific tracking number**, or one pool for all practice calls? If it is a single pool, "every call is a Google lead" would sweep in organic and referral callers, and ingestion must instead key off CallRail's own source field per call. Phase A does not depend on the answer.
+**Which calls count as Google leads — resolved by mapping, not by assumption.**
+
+The obvious rule, "every tracked call is a Google Ads lead", is right only if the account uses a Google-Ads-specific tracking number. With one pool covering all practice calls it would sweep in organic and referral callers and inflate every figure. Rather than depend on the answer, ingestion stores EVERY call together with the tracking number it came in on and CallRail's own `source` / `campaign` fields, and the classification happens at READ time against an owner-controlled map.
+
+New `callrail_number_map`: `organisation_id` + tracking number, unique, mapping to a `channel` (`google_ads` | `meta_ads` | other) and optionally a `practice_id`. A number with no row is UNMAPPED and counts toward nothing — visible in the panel as a number awaiting a decision, never silently folded into a channel.
+
+This mirrors `ad_channel_pipelines`, which the owner already uses and understands, and `emergent_practice_map` before it. It is correct under either account setup, it makes adding a number later a mapping change rather than a code change, and — as with the pipeline mapping — an unmapped source is stated rather than guessed.
 
 Note also that CallRail returns the `gclid` of **most value** for a call rather than strictly first touch, which will matter when keyword-level attribution is added.
 
@@ -118,7 +124,7 @@ One migration, `20260101000150_callrail_calls.sql`: the table, its indexes, the 
 
 | Risk | Mitigation |
 |---|---|
-| A single-pool tracking number makes every call look like a Google lead | Open question above, resolved before Phase B; Phase A unaffected |
+| A single-pool tracking number makes every call look like a Google lead | Classification is an owner-controlled tracking-number map, not an assumption; an unmapped number counts toward nothing and is shown as awaiting a decision |
 | Repeat callers inflate the lead count | Dedup on `phone10`, first touch |
 | Spend covers accounts whose leads are unmapped, inflating all costs | Stated on the page with the mapped pipelines shown |
 | A call and a form fill from one person double-count | Explicit cross-source dedup at read time, with a test |
