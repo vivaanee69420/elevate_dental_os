@@ -55,7 +55,10 @@
 //
 // RATE LIMIT. 1,000/hour and 10,000/day, signalled as HTTP 429 — NOT 403
 // (Dentally's scheme; do not copy that connector's handling here). Bounded
-// retry with backoff, honouring Retry-After when CallRail sends one.
+// retry with backoff, honouring Retry-After when CallRail sends one — via
+// callrail-provider.js's fetchWithBackoff, SHARED with that file's discovery
+// endpoints (listAccounts/listCompanies) rather than a second copy of the
+// same retry loop living here.
 //
 // WINDOW. Trailing INCREMENTAL_DAYS on the nightly cron; trailing FULL_DAYS
 // (opts.full) on a manual per-company "Sync now" and on the one-off pull
@@ -65,6 +68,7 @@ import { integrationAccountRepository } from '../../repositories/integration-acc
 import { callrailRepository } from '../../repositories/callrail.repository.js';
 import { decryptSecret } from '../crypto.js';
 import { CALLRAIL_FIELDS, callrailHeaders, parseCallPayload } from './callrail-webhook.js';
+import { fetchWithBackoff } from './callrail-provider.js';
 import { londonDaysAgo, londonYmd } from '../tz.js';
 // Capture is a no-op when Sentry was never init'd (no SENTRY_DSN, e.g. local
 // and tests), so this is safe to import unconditionally (mirrors
@@ -78,8 +82,9 @@ const INCREMENTAL_DAYS = 90;      // nightly cron window: trailing 3 months
 // Manual reconnect / full pull. Well inside CallRail's 25-month retention —
 // a request reaching past that is refused outright, not silently truncated.
 const FULL_DAYS = 183;
-const RETRY_BASE_MS = Number(process.env.CALLRAIL_RETRY_BASE_MS ?? 1000);
-const MAX_RETRIES = 3;
+// RETRY_BASE_MS / MAX_RETRIES / the 429-backoff loop itself now live in
+// callrail-provider.js's fetchWithBackoff (shared — see the RATE LIMIT note
+// above), so they are no longer duplicated here.
 
 // `callrailAccountId` is the CallRail ACCOUNT id (config.account_id);
 // `companyId` is the CallRail COMPANY id (external_account_id) this
@@ -117,22 +122,11 @@ async function fetchCallsPage(apiKey, callrailAccountId, companyId, { page, star
     url.searchParams.set('start_date', startDate);
     url.searchParams.set('end_date', endDate);
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        const res = await fetch(url, { headers: callrailHeaders(apiKey) });
-        if (res.status === 429 && attempt < MAX_RETRIES) {
-            const retryAfter = Number(res.headers?.get?.('retry-after'));
-            const wait = Number.isFinite(retryAfter) && retryAfter > 0
-                ? retryAfter * 1000
-                : RETRY_BASE_MS * 2 ** attempt;
-            await new Promise((resolve) => { setTimeout(resolve, wait); });
-            continue;
-        }
-        if (!res.ok) {
-            throw new Error(`CallRail calls fetch failed: HTTP ${res.status}`);
-        }
-        return res.json();
+    const res = await fetchWithBackoff(url, callrailHeaders(apiKey));
+    if (!res.ok) {
+        throw new Error(`CallRail calls fetch failed: HTTP ${res.status}`);
     }
-    throw new Error('CallRail calls fetch failed: exhausted 429 retries');
+    return res.json();
 }
 
 // Pages calls.json for ONE company over [startDate, endDate] (London
