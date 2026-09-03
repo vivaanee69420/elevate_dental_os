@@ -51,6 +51,15 @@ BEGIN
                    'idx_'||t||'_org_acct_date', t);
     EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON public.%I (organisation_id, campaign_id, metric_date)',
                    'idx_'||t||'_org_camp_date', t);
+    -- The rollups' ACTUAL predicate. Both RPCs filter organisation_id +
+    -- metric_date and leave account and campaign as optional NULLs, so the
+    -- common read — the whole org over a window, which is what the
+    -- reconciliation panel and the deep-grain pages issue — matches neither
+    -- index above: both lead with a second column the query does not
+    -- constrain. Without this the rollup falls back to a sequential scan over
+    -- every grain row the org has.
+    EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON public.%I (organisation_id, metric_date)',
+                   'idx_'||t||'_org_date', t);
     EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', t||'_updated_at', t);
     EXECUTE format('CREATE TRIGGER %I BEFORE UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION set_updated_at()',
                    t||'_updated_at', t);
@@ -350,14 +359,26 @@ BEGIN
            -- a 1-10 grade Google assigns, and averaging grades is meaningless.
            (array_agg(g.quality_score ORDER BY g.metric_date DESC)
               FILTER (WHERE g.quality_score IS NOT NULL))[1]::numeric AS quality_score,
-           CASE WHEN sum(g.impressions) > 0
-                THEN sum(g.search_impression_share * g.impressions) / sum(g.impressions)
+           -- The denominator is FILTERED to the same days as the numerator.
+           -- Google reports no impression share on a day a keyword was not
+           -- eligible to compete (Display/Video traffic, a paused day), and
+           -- sum() skips those NULLs in the numerator. Dividing by the
+           -- UNFILTERED impression total would then weight the average by days
+           -- that contributed nothing to it, dragging every figure downward —
+           -- a keyword with a true 80% share on its one eligible day out of
+           -- four would read far lower, and the owner would tune bids against
+           -- an invented number.
+           CASE WHEN sum(g.impressions) FILTER (WHERE g.search_impression_share IS NOT NULL) > 0
+                THEN sum(g.search_impression_share * g.impressions)
+                     / sum(g.impressions) FILTER (WHERE g.search_impression_share IS NOT NULL)
                 END AS search_impression_share,
-           CASE WHEN sum(g.impressions) > 0
-                THEN sum(g.search_top_impression_share * g.impressions) / sum(g.impressions)
+           CASE WHEN sum(g.impressions) FILTER (WHERE g.search_top_impression_share IS NOT NULL) > 0
+                THEN sum(g.search_top_impression_share * g.impressions)
+                     / sum(g.impressions) FILTER (WHERE g.search_top_impression_share IS NOT NULL)
                 END AS search_top_impression_share,
-           CASE WHEN sum(g.impressions) > 0
-                THEN sum(g.search_absolute_top_impression_share * g.impressions) / sum(g.impressions)
+           CASE WHEN sum(g.impressions) FILTER (WHERE g.search_absolute_top_impression_share IS NOT NULL) > 0
+                THEN sum(g.search_absolute_top_impression_share * g.impressions)
+                     / sum(g.impressions) FILTER (WHERE g.search_absolute_top_impression_share IS NOT NULL)
                 END AS search_absolute_top_impression_share
       FROM public.ad_google_keywords g
      WHERE g.organisation_id = $1

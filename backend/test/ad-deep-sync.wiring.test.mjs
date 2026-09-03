@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
-import { londonDaysAgo } from '../src/lib/tz.js';
+import { londonDaysAgo, londonYmd } from '../src/lib/tz.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: {
@@ -29,6 +29,9 @@ vi.mock('../src/lib/integrations/google-ads-deep-sync.js', () => ({
     syncGoogleDeep: vi.fn(async () => ({ counts: { google_adgroup: 3 }, skipped: [] })),
 }));
 vi.mock('../src/lib/integrations/meta-ads-deep-sync.js', () => ({
+    // LEVEL_FIELDS is statically imported by meta-ads-sync.js (it used to be a
+    // per-call dynamic import), so the mock must supply it too.
+    LEVEL_FIELDS: { adset: 'campaign_id,adset_id', ad: 'campaign_id,adset_id,ad_id' },
     syncMetaDeep: vi.fn(async () => ({ counts: { meta_adset: 4 }, skipped: [] })),
 }));
 
@@ -93,7 +96,30 @@ describe('google deep wiring', () => {
         // Proves the wiring goes through the SHARED DEEP_WINDOW_DAYS constant
         // (RULING D), not a per-provider hardcoded literal.
         expect(opts.since).toBe(expectedSince);
+        // The upper bound matters as much as the lower one: it is the same
+        // londonYmd() the campaign replace used, so the two grains cover the
+        // identical window and the reconciliation panel cannot report a gap
+        // that is really just a mismatched end date.
+        expect(opts.until).toBe(londonYmd());
+
         expect(res.deep.counts).toEqual({ google_adgroup: 3 });
+    });
+
+    // "AFTER the campaign replace" was in the title above but asserted
+    // nowhere — running the deep pull FIRST would have passed. Ordering is
+    // load-bearing: the deep pull is wrapped so it can never fail the campaign
+    // sync, and that wrapping only protects the day's spend if the campaign
+    // replace has already committed by the time deep grain runs. Captured from
+    // INSIDE the deep mock, which is the only place that can see what had
+    // already happened at the moment it was called.
+    it('runs the deep pull only once the campaign replace has already happened', async () => {
+        let rpcsAtDeepTime = null;
+        syncGoogleDeep.mockImplementationOnce(async () => {
+            rpcsAtDeepTime = supaRec.rpcCalls.map((c) => c.fn);
+            return { counts: { google_adgroup: 3 }, skipped: [] };
+        });
+        await syncOneGoogleOrg(ORG);
+        expect(rpcsAtDeepTime).toContain('ad_metrics_replace_window');
     });
 
     it('does not fail the campaign sync when the deep pull throws', async () => {
@@ -104,15 +130,33 @@ describe('google deep wiring', () => {
         expect(integrationRepository.markSynced).toHaveBeenCalled();
     });
 
-    // RULING E: google-ads-sync.js calls listAdAccounts TWICE — once for the
-    // permanent-skip list near the top, once in the new deep block. A
-    // mockResolvedValueOnce here would only satisfy the FIRST call, leaving
-    // the deep block's currency lookup reading the default (empty) list and
-    // testing nothing. mockResolvedValue (no `Once`) answers BOTH calls.
+    // Currency comes from the LIVE Google stream (customer.currency_code), not
+    // from a re-read of ad_accounts — so the fixture that drives this case is
+    // the stream, exactly as in production. The re-read it replaced was
+    // wrapped in `.catch(() => [])`, which made a database hiccup read every
+    // currency as null; a null currency is deliberately treated as GBP, so the
+    // guard FAILED OPEN on the very fault it exists to survive.
     it('skips a non-GBP account and reports it rather than converting', async () => {
-        integrationRepository.listAdAccounts.mockResolvedValue([
-            { customer_id: 'C1', currency: 'USD', status: null },
-        ]);
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => [{ results: [{
+            campaign: { id: 7, name: 'Implants' }, segments: { date: '2026-08-01' },
+            customer: { descriptiveName: 'US Acct', currencyCode: 'USD' },
+            metrics: { costMicros: '1000000', impressions: '10', clicks: '1', conversions: 1 },
+        }] }] }));
+        const res = await syncOneGoogleOrg(ORG);
+        expect(res.deep.unsupportedCurrency).toEqual([{ customer_id: 'C1', currency: 'USD' }]);
+        expect(syncGoogleDeep.mock.calls[0][1].customerIds).toEqual([]);
+    });
+
+    // The regression this pins directly: ad_accounts being unreadable must not
+    // turn a USD account into a GBP one. listAdAccounts is made to REJECT, and
+    // the guard must still refuse the account on the strength of the stream.
+    it('still refuses a non-GBP account when the ad_accounts read fails', async () => {
+        integrationRepository.listAdAccounts.mockRejectedValue(new Error('statement timeout'));
+        globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => [{ results: [{
+            campaign: { id: 7, name: 'Implants' }, segments: { date: '2026-08-01' },
+            customer: { descriptiveName: 'US Acct', currencyCode: 'USD' },
+            metrics: { costMicros: '1000000', impressions: '10', clicks: '1', conversions: 1 },
+        }] }] }));
         const res = await syncOneGoogleOrg(ORG);
         expect(res.deep.unsupportedCurrency).toEqual([{ customer_id: 'C1', currency: 'USD' }]);
         expect(syncGoogleDeep.mock.calls[0][1].customerIds).toEqual([]);

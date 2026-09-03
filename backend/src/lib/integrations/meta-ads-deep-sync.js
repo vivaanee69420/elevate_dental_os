@@ -16,8 +16,26 @@
 // ============================================================================
 import { adGrainRepository } from "../../repositories/ad-grain.repository.js";
 
-export const INSIGHT_FIELDS =
-    'campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,reach,frequency';
+// ONE FIELD LIST PER LEVEL, not a single list shared by both requests.
+//
+// A single list meant the level=adset request also asked for ad_id and
+// ad_name — fields that do not exist at ad-set level. Meta is documented to
+// ignore out-of-level fields, but it is not guaranteed to, and it is not
+// something we can verify from here. If it were ever to reject them instead,
+// the ad-set pull would 400 EVERY NIGHT, land silently in `skipped` (the pull
+// is deliberately non-fatal), and ad_meta_adsets would simply never receive a
+// row — a table that is empty for a reason nobody is told. Asking each level
+// only for its own fields removes the question entirely.
+//
+// The ad level DOES legitimately ask for adset_id: that is the ad's parent,
+// and it is a real ad-level field.
+const COMMON_FIELDS = 'campaign_id,campaign_name,spend,impressions,clicks,reach,frequency';
+export const ADSET_FIELDS = `${COMMON_FIELDS},adset_id,adset_name`;
+export const AD_FIELDS = `${COMMON_FIELDS},adset_id,ad_id,ad_name`;
+
+// Keyed by the level string the insights edge takes, so the caller looks the
+// list up rather than choosing between two constants.
+export const LEVEL_FIELDS = Object.freeze({ adset: ADSET_FIELDS, ad: AD_FIELDS });
 
 function spendToPence(spend) {
     const n = Number(spend);
@@ -108,4 +126,4 @@ export async function syncMetaDeep(orgId, { accessToken, accountIds, since, unti
     return { counts, skipped };
 }
 
-export const __test = { spendToPence, parseMetaLevel, INSIGHT_FIELDS };
+export const __test = { spendToPence, parseMetaLevel, ADSET_FIELDS, AD_FIELDS, LEVEL_FIELDS };
