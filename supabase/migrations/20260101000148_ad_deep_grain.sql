@@ -124,7 +124,7 @@ CREATE OR REPLACE FUNCTION public.ad_grain_replace_window(
 ) RETURNS integer
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
-  tbl text; prov text; cols text; upd text; n integer;
+  tbl text; prov text; cols text; upd text; sel text; n integer;
 BEGIN
   tbl  := public._ad_grain_table(p_grain);
   prov := public._ad_grain_provider(p_grain);
@@ -150,6 +150,25 @@ BEGIN
      AND column_name NOT IN ('id','created_at','updated_at','organisation_id',
                              'provider','customer_id','parent_id','entity_id','metric_date');
 
+  -- A payload row can legitimately omit a metric column (a keyword with no
+  -- spend yet, a connector field gap). Restoring the table's own column
+  -- default for any such NOT NULL column lets that one row degrade to its
+  -- default instead of violating the NOT NULL constraint and aborting the
+  -- whole INSERT — which would cost the account its entire grain for the
+  -- night over one partial row. Columns that are NOT NULL with NO default
+  -- (provider, customer_id, campaign_id, parent_id, entity_id, metric_date)
+  -- are deliberately left unwrapped: a row missing one of those SHOULD be
+  -- rejected, not defaulted. column_default comes from the system catalogue,
+  -- never from a caller, so interpolating it here is safe.
+  SELECT string_agg(
+           CASE WHEN is_nullable = 'NO' AND column_default IS NOT NULL
+                THEN format('COALESCE(%I, %s) AS %I', column_name, column_default, column_name)
+                ELSE quote_ident(column_name) END,
+           ', ' ORDER BY ordinal_position)
+    INTO sel FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = tbl
+     AND column_name NOT IN ('id','created_at','updated_at');
+
   EXECUTE format('DELETE FROM public.%I WHERE organisation_id = $1 AND provider = $2 AND customer_id = ANY($3)', tbl)
     USING p_org, prov, p_customer_ids;
 
@@ -157,7 +176,7 @@ BEGIN
   -- otherwise abort the whole INSERT ... ON CONFLICT.
   EXECUTE format($q$
     WITH src AS (
-      SELECT DISTINCT ON (customer_id, parent_id, entity_id, metric_date) %2$s
+      SELECT DISTINCT ON (customer_id, parent_id, entity_id, metric_date) %4$s
         FROM jsonb_populate_recordset(NULL::public.%1$I, $2)
        WHERE metric_date IS NOT NULL AND entity_id IS NOT NULL
          AND parent_id IS NOT NULL AND organisation_id = $1
@@ -166,7 +185,7 @@ BEGIN
     INSERT INTO public.%1$I (%2$s) SELECT %2$s FROM src
     ON CONFLICT (organisation_id, provider, customer_id, parent_id, entity_id, metric_date)
     DO UPDATE SET %3$s
-  $q$, tbl, cols, upd) USING p_org, p_rows;
+  $q$, tbl, cols, upd, sel) USING p_org, p_rows;
 
   GET DIAGNOSTICS n = ROW_COUNT;
 
