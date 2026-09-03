@@ -31,6 +31,13 @@ export const PERMISSION_CATALOG = {
   'valuation.edit': 'Edit valuation inputs (EBITDA, drivers, sale plan)',
   'businesshealth.manage': 'Manage Business Health setup & targets',
   'operations.view': 'View operations (associates, staff, chair, UDA)',
+  // The Overview tabs that are NOT finance surfaces (Task Manager,
+  // Mastermind AI). The finance-backed Overview tabs (Command Centre,
+  // Business Hub, Daily Cockpit, Practice Deep Dive, AI Analyst, Day)
+  // are gated on finance.view, because that is what their endpoints
+  // require — nav and API must name the same key or a tab appears and
+  // then 403s.
+  'overview.view': 'View the Overview section (Task Manager, Mastermind AI)',
   'intelligence.view': 'View intelligence (scenarios, tax, debt, alerts)',
   'growth.view': 'View growth (marketing, loyalty, reviews, booking)',
   'marketing.view': 'View marketing (campaigns, ad spend, cost per lead)',
@@ -43,6 +50,11 @@ export const PERMISSION_CATALOG = {
   'users.manage': 'Edit/remove team members',
   'permissions.manage': 'Edit the role-permission matrix',
   'data.export': 'View & export raw source data (Data Room)',
+  // Payroll sits inside Operations but is deliberately NOT covered by
+  // operations.view: approving a pay run moves money. It gets its own key so
+  // an owner can hand out the rest of Operations without handing out payroll.
+  // Owner-only by default (owner holds every key; no other role lists it).
+  'payrun.manage': 'View & approve pay runs (payroll)',
 };
 
 export const PERMISSION_KEYS = Object.keys(PERMISSION_CATALOG);
@@ -61,6 +73,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   owner: PERMISSION_KEYS.reduce((m, k) => ((m[k] = true), m), {}),
   practice_manager: {
     'operations.view': true,
+    'overview.view': true,
     'growth.view': true,
     'marketing.view': true,
     'crm.view': true,
@@ -69,6 +82,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   },
   reception: {
     'crm.view': true,
+    'overview.view': true,
   },
   analyst: {
     'data.export': true,

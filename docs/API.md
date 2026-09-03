@@ -230,6 +230,8 @@ Optional `practice_id` (UUID) scopes to one practice; omitted = org-wide (incl. 
 
 ## Appointments
 
+All Operations endpoints (`/appointments`, `/associates`, `/staff`, `/chair-utilisation`, `/treatments`) are gated on the **`operations.view`** permission, not on a role list. A role list made the Team Permissions matrix decorative — granting the key to another role did nothing, and revoking it from a practice manager was ignored. Owner and practice_manager hold the key by default in every org, so this is behaviour-preserving for them. **`/pay-runs` is the exception**: payroll has its own **`payrun.manage`** key (owner-only by default), so an owner can hand out the rest of Operations without handing out payroll.
+
 ### `GET /api/appointments?from=...&to=...&page=1&per_page=25`
 Paginated (default 25/page, max 100), ordered by `starts_at` asc. Returns `{ appointments, total, page, per_page }`. Optional `practice_id` / `associate_id` filters. Defaults to real patient appointments only — patient-less Dentally diary blocks (lunch / not-working / nurse-cover / empty slots, no `pms_patient_id`) are excluded; pass `patients_only=false` to include them. Each appointment includes joined `contact` (`id`, `first_name`, `last_name`, `email`, `phone`) / `practice` / `associate`.
 
