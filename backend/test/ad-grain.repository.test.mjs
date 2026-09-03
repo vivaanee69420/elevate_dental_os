@@ -60,6 +60,80 @@ describe('rollup', () => {
     });
 });
 
+// The bug these pin: PostgREST caps a response at 1000 rows server-side and
+// says NOTHING, and that cap applies to a set-returning RPC exactly as it does
+// to a table. ad_grain_rollup collapses day rows into entity rows, but the
+// ENTITY count is itself past the cap — ~5,000 keyword/ad-group pairs over 92
+// days. A truncated read does not show up as missing rows on a screen: the
+// reconciliation service SUMS these rows, so it renders as a fabricated 80%
+// spend gap, explained to the owner as normal because the keyword grain is
+// whitelisted as an expected shortfall.
+//
+// READ COUNT, not row total, is the assertion that discriminates. On this
+// harness a `page.length < PAGE` reader and a `page.length === 0` reader
+// return the SAME rows (both push a page before deciding to stop), so a
+// row-count assertion cannot tell a correct pager from a broken one. What
+// differs is that the correct reader makes a THIRD, confirming, empty read.
+// Do not "simplify" these back to a row-count-only check — same reasoning as
+// campaignSpendByProvider in marketing.repository.test.mjs.
+describe('rollup paging', () => {
+    // A server that caps at CAP rows regardless of the range asked for.
+    function pagedRollup(total, cap = 1000) {
+        const all = Array.from({ length: total }, (_, i) => ({
+            entity_id: `kw-${String(i).padStart(5, '0')}`,
+            parent_id: `ag-${i % 7}`,
+            spend_pence: 100,
+        }));
+        return (_fn, _params, mods) => {
+            const from = mods.range?.from ?? 0;
+            const to = mods.range?.to ?? all.length - 1;
+            return { data: all.slice(from, Math.min(to + 1, from + cap)), error: null };
+        };
+    }
+
+    it('returns EVERY row when the window exceeds one page, making the confirming empty-page read', async () => {
+        supaRec.rpcProvider = pagedRollup(1064);
+        const rows = await adGrainRepository.rollup(ORG, 'google_keyword', { since: '2026-06-01', until: '2026-08-31' });
+        expect(rows).toHaveLength(1064);
+        expect(new Set(rows.map((r) => r.entity_id)).size).toBe(1064);
+        // 1000 + 64 + a confirming empty page. A `page.length < PAGE` reader
+        // stops right after the 64-row page and this reads 2, not 3.
+        expect(supaRec.rpcCalls).toHaveLength(3);
+    });
+
+    it('does not mistake a short-but-nonempty first page for the last one', async () => {
+        supaRec.rpcProvider = pagedRollup(700);
+        const rows = await adGrainRepository.keywordRollup(ORG, { since: '2026-06-01', until: '2026-08-31' });
+        expect(rows).toHaveLength(700);
+        // The 700-row page plus a confirming empty one. A `page.length < PAGE`
+        // reader stops after the first page and this reads 1, not 2.
+        expect(supaRec.rpcCalls).toHaveLength(2);
+    });
+
+    it('keeps paging when the server caps below our page size', async () => {
+        supaRec.rpcProvider = pagedRollup(1200, 400);   // every page comes back short
+        const rows = await adGrainRepository.rollup(ORG, 'google_ad', { since: '2026-06-01', until: '2026-08-31' });
+        expect(rows).toHaveLength(1200);
+    });
+
+    // entity_id alone is NOT unique — Google reuses a keyword's criterion id
+    // across ad groups, which is exactly why parent_id is in the tables' unique
+    // key and in the rollup's GROUP BY. OFFSET paging on a non-unique sort key
+    // duplicates and skips rows at every page boundary.
+    it('orders by entity_id AND parent_id, both ascending, on every page', async () => {
+        supaRec.rpcProvider = pagedRollup(1064);
+        await adGrainRepository.rollup(ORG, 'google_keyword', { since: '2026-06-01', until: '2026-08-31' });
+        expect(supaRec.rpcCalls.length).toBeGreaterThan(1);
+        for (const call of supaRec.rpcCalls) {
+            expect(call.mods.orders).toEqual([
+                { col: 'entity_id', opts: { ascending: true } },
+                { col: 'parent_id', opts: { ascending: true } },
+            ]);
+            expect(call.mods.range).toBeDefined();
+        }
+    });
+});
+
 describe('keywordRollup', () => {
     it('calls the keyword-specific RPC, which carries no grain parameter', async () => {
         await adGrainRepository.keywordRollup(ORG, { since: '2026-08-01', until: '2026-08-31', campaignId: 'CMP1' });
