@@ -155,24 +155,58 @@ describe('campaignSpendByProvider', () => {
 
     // The bug this pins: PostgREST caps a table read at 1000 rows server-side
     // and says nothing about it (see allForOrg in monthlyFinancial.repository.js).
-    it('returns EVERY row when the window exceeds one page, not just the first 1000', async () => {
-        supaRec.resultProvider = () => ({
-            data: Array.from({ length: 1064 }, (_, i) => ({ id: `r${i}`, spend_pence: 100 })),
-            error: null,
-        });
+    //
+    // The ROW TOTAL alone cannot separate a correct `page.length === 0`
+    // reader from a buggy `page.length < PAGE` one: both push a page before
+    // deciding whether to stop, so the trailing 64-row ("short") page is
+    // captured by EITHER implementation and the totals come out identical
+    // (1064 either way, on this harness). What differs is the READ COUNT —
+    // the correct reader makes a THIRD, confirming read (range 1064-2063)
+    // that comes back empty before it will stop; the buggy reader treats the
+    // 64-row page as the last and never makes that read. Counting reads is
+    // therefore the only assertion that actually pins page.length === 0 over
+    // page.length < PAGE — do not "simplify" this back to a row-count-only
+    // check, it would stop discriminating the bug it exists to catch.
+    it('returns EVERY row when the window exceeds one page, making the confirming empty-page read', async () => {
+        let reads = 0;
+        supaRec.resultProvider = () => {
+            reads += 1;
+            return {
+                data: Array.from({ length: 1064 }, (_, i) => ({ id: `r${i}`, spend_pence: 100 })),
+                error: null,
+            };
+        };
         const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
         expect(rows).toHaveLength(1064);
+        // 1000 + 64 + a confirming empty page. A `page.length < PAGE` reader
+        // would stop right after the 64-row page and this would read 2, not 3.
+        expect(reads).toBe(3);
     });
 
-    it('does not stop on a SHORT page, only an empty one', async () => {
-        // The server's cap is its own setting; treating a short page as the
-        // last would reintroduce the truncation at whatever number that is.
-        supaRec.resultProvider = () => ({
-            data: Array.from({ length: 700 }, (_, i) => ({ id: `r${i}`, spend_pence: 1 })),
-            error: null,
-        });
+    // Renamed from "does not stop on a SHORT page, only an empty one" — that
+    // name made a claim about read behaviour the test never actually checked
+    // (it only asserted the final row total, which is identical under the
+    // buggy implementation too — see the comment above). Same blind spot, on
+    // the fixture that lands the FIRST page short (700 < 1000, with no
+    // second page of data behind it at all): a `page.length < PAGE` reader
+    // stops immediately and a `page.length === 0` reader makes one more,
+    // confirming, empty read — both return the same 700 rows. Only the read
+    // count tells them apart.
+    it('does not mistake a short-but-nonempty page for the last one — pinned by read count, not row total', async () => {
+        let reads = 0;
+        supaRec.resultProvider = () => {
+            reads += 1;
+            return {
+                data: Array.from({ length: 700 }, (_, i) => ({ id: `r${i}`, spend_pence: 1 })),
+                error: null,
+            };
+        };
         const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
         expect(rows).toHaveLength(700);
+        // The single 700-row page, plus a confirming empty page. A
+        // `page.length < PAGE` reader would stop after the first page and
+        // this would read 1, not 2.
+        expect(reads).toBe(2);
     });
 
     it('orders by id, the table\'s unique key, so OFFSET paging cannot duplicate or skip a row', async () => {

@@ -39,7 +39,7 @@ const practiceOf = (scope) => (scope && UUID_RE.test(scope) ? scope : null);
 // endpoint is exactly how a false gap would reach the reconciliation screen.
 const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-const ReconciliationQuerySchema = z.object({
+export const ReconciliationQuerySchema = z.object({
     since: z.string().regex(YMD_RE, 'since must be YYYY-MM-DD'),
     until: z.string().regex(YMD_RE, 'until must be YYYY-MM-DD'),
     provider: z.enum(['google_ads', 'meta_ads']).default('google_ads'),
