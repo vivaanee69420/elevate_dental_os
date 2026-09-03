@@ -5,19 +5,14 @@
 // so React's hook-order rule holds and a collapsed row still fires no request
 // (Task 5's hook gates the query on `enabled`, not this component).
 //
-// Task 5's hook only ever fetches the FIRST page: its query key carries no
-// cursor, so it cannot itself page through "Show more" clicks. Those extra
-// pages are fetched directly via `fetchFacebookAds`, built with a since/until
-// qs that mirrors hooks.ts's private `facebookWindowParams` (not exported —
-// and hooks.ts is under a concurrent read-only review this session, so it
-// cannot be touched to export it). Duplicating the handful of lines of pure,
-// deterministic London-date math below is the contained cost of that; a
-// follow-up should export the helper instead of two copies existing.
-import { useState } from 'react';
-import { formatPence } from '@/lib/format';
-import { useScopePeriod } from '@/features/_shared/scope-context';
+// One data path, not two: `useFacebookAds` is a useInfiniteQuery (hooks.ts) —
+// it owns paging, cursor, and the since/until/practice_id query string
+// end to end. This component never builds a query string or calls the API
+// directly, so there is exactly one copy of the DST-correct London-date
+// conversion in this feature (hooks.ts), not a second one drifting here.
 import { useFacebookAds } from '../hooks';
-import { fetchFacebookAds, type FacebookRow } from '../api';
+import type { FacebookRow } from '../api';
+import { formatPence } from '@/lib/format';
 
 const money = (p: number | null) => (p === null ? '—' : formatPence(p));
 // null when there were no impressions/clicks to divide by — unknowable, not zero.
@@ -29,31 +24,6 @@ const TD = 'px-4 py-2.5 text-right tabular-nums';
 // Leads, Booked, Attended, Patients, CPL, CPB, CPA — same 14 columns as the
 // ad-set table this renders inside, so every row lines up under its header.
 const COLS = 14;
-
-// Duplicated from hooks.ts (see file header) — kept private to this file.
-const LONDON_DATE = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
-});
-function londonDateOf(iso: string): string {
-  return LONDON_DATE.format(new Date(iso));
-}
-function lastInclusiveLondonDay(exclusiveUntilIso: string): string {
-  const [y, m, d] = londonDateOf(exclusiveUntilIso).split('-').map(Number);
-  const prev = new Date(Date.UTC(y, m - 1, d - 1));
-  return prev.toISOString().slice(0, 10);
-}
-function practiceOf(scope: string | null | undefined): string | null {
-  return scope && scope !== 'all' ? scope : null;
-}
-function adsQs(scope: string, win: { since: string; until: string }, cursor: string): string {
-  const sp = new URLSearchParams();
-  sp.set('since', londonDateOf(win.since));
-  sp.set('until', lastInclusiveLondonDay(win.until));
-  const practiceId = practiceOf(scope);
-  if (practiceId) sp.set('practice_id', practiceId);
-  sp.set('cursor', cursor);
-  return sp.toString();
-}
 
 function AdRow({ ad }: { ad: FacebookRow }) {
   return (
@@ -78,22 +48,9 @@ function AdRow({ ad }: { ad: FacebookRow }) {
 }
 
 export function FacebookAdRows({ adSetId, expanded }: { adSetId: string; expanded: boolean }) {
-  const { scope, win } = useScopePeriod();
-  const { data, isLoading, isError, error } = useFacebookAds(adSetId, expanded);
-
-  // Extra ("Show more") pages live outside react-query, keyed to the ad set +
-  // scope/window this render is for. When that key changes — a different row
-  // opened, or the shared scope/period bar moved — reset synchronously so a
-  // stale accumulated page never gets attached to a new window's first page.
-  const key = `${adSetId}:${scope}:${win.since}:${win.until}`;
-  const [pageState, setPageState] = useState<{ key: string; extra: FacebookRow[]; cursor: string | null }>({
-    key, extra: [], cursor: null,
-  });
-  if (pageState.key !== key) {
-    setPageState({ key, extra: [], cursor: null });
-  }
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [moreError, setMoreError] = useState<string | null>(null);
+  const {
+    data, isLoading, isError, error, hasNextPage, isFetchingNextPage, fetchNextPage,
+  } = useFacebookAds(adSetId, expanded);
 
   if (!expanded) return null;
 
@@ -114,29 +71,9 @@ export function FacebookAdRows({ adSetId, expanded }: { adSetId: string; expande
     );
   }
 
-  const firstPage = data?.rows ?? [];
-  const ads = [...firstPage, ...pageState.extra];
-  // The cursor for the NEXT fetch: once we've paged at least once, it's the
-  // cursor the last manual fetch returned; before that, it's the hook's own
-  // first-page cursor (still stale-safe — `key` resets `extra`/`cursor`
-  // together whenever the window/scope this cursor was issued for changes).
-  const nextCursor = pageState.extra.length > 0 ? pageState.cursor : (data?.nextCursor ?? null);
+  const ads = data?.pages.flatMap((p) => p.rows) ?? [];
 
-  async function loadMore() {
-    if (!nextCursor) return;
-    setLoadingMore(true);
-    setMoreError(null);
-    try {
-      const page = await fetchFacebookAds(adSetId, adsQs(scope, win, nextCursor));
-      setPageState((prev) => ({ key: prev.key, extra: [...prev.extra, ...page.rows], cursor: page.nextCursor }));
-    } catch (e) {
-      setMoreError((e as Error)?.message ?? 'unknown error');
-    } finally {
-      setLoadingMore(false);
-    }
-  }
-
-  if (ads.length === 0 && !nextCursor) {
+  if (ads.length === 0 && !hasNextPage) {
     return (
       <tr className="border-t border-border bg-bg">
         <td colSpan={COLS} className="px-4 py-2.5 pl-10 text-[13px] text-ink-muted">
@@ -149,23 +86,16 @@ export function FacebookAdRows({ adSetId, expanded }: { adSetId: string; expande
   return (
     <>
       {ads.map((ad, i) => <AdRow key={ad.id ?? `${adSetId}-ad-${i}`} ad={ad} />)}
-      {moreError && (
-        <tr className="border-t border-border bg-bg">
-          <td colSpan={COLS} className="px-4 py-2.5 pl-10 text-[13px] text-danger">
-            {`Couldn't load more ads: ${moreError}`}
-          </td>
-        </tr>
-      )}
-      {nextCursor && (
+      {hasNextPage && (
         <tr className="border-t border-border bg-bg">
           <td colSpan={COLS} className="px-4 py-2.5 pl-10">
             <button
               type="button"
-              onClick={loadMore}
-              disabled={loadingMore}
+              onClick={() => fetchNextPage()}
+              disabled={isFetchingNextPage}
               className="rounded-lg border border-border bg-surface px-3 py-1 text-[12.5px] text-ink-muted hover:bg-bg disabled:opacity-50"
             >
-              {loadingMore ? 'Loading…' : 'Show more ads'}
+              {isFetchingNextPage ? 'Loading…' : 'Show more ads'}
             </button>
           </td>
         </tr>
