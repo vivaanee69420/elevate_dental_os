@@ -704,6 +704,48 @@ are the reconciliation backstop). Business is auto-discovered into
 `emergent_practice_map` on every delivery so it shows up in the mapping UI
 immediately.
 
+### `POST /webhooks/callrail/:token`
+Real-time CallRail Post-Call webhook. `:token` is a random per-COMPANY token
+(`integration_accounts.webhook_token`, minted when the company is added via
+`POST /api/integrations/callrail/accounts`) — the organisation (and the
+call's practice) are resolved from THIS token alone, never from anything in
+the payload. Raw body (`express.raw` mounted on `/webhooks/callrail` in
+`app.js`) for the optional second factor: CallRail's own `Signature` header,
+HMAC-**SHA1** (not SHA256, unlike the Dentally/Emergent webhooks) over the
+raw body, base64-encoded, keyed by a per-company signing key set via
+`PATCH /api/integrations/callrail/accounts/:id { signingKey }` — verified
+only when a signing key has been set for that company; the path token remains
+the primary (and, until a signing key is set, the sole) authentication.
+
+The handler is a TRIGGER, not the source of truth. CallRail's v3 API returns
+a call `id` as a string (`"CAL8154748ae…"`) but its webhook's own published
+example payload carries the legacy NUMERIC form (`766970532`) on the same
+field — see `backend/test/fixtures/callrail-signature-vector.json`. Storing
+whichever shape a given delivery happens to carry would fork
+`UNIQUE (organisation_id, callrail_id)` and double-count every call, so the
+handler trusts only the payload's `id`, re-fetches the canonical call from
+CallRail's API by that id — `GET /v3/a/{accountId}/calls/{id}.json` (CallRail
+has no company-scoped single-call endpoint, only an account-scoped one; the
+account id comes from `config.account_id`, never `external_account_id`,
+which holds the company id — see the account-vs-company note above), the
+same `?fields=` list the pull uses — and upserts THAT: one identity form, one
+write path, shared with the nightly pull. Because that re-fetch is
+account-scoped rather than company-scoped, the canonical call's own
+`company_id` is checked against this row's company before it is written; a
+mismatch is dropped (never stamped with the wrong company's practice) —
+opportunistic, not required (a call carrying no `company_id` is trusted, as
+before this check existed).
+
+CallRail never resends a dropped webhook, and repeated non-2xx deliveries can
+make it auto-disable the integration — so once a delivery has authenticated,
+every downstream failure (a failed re-fetch, a DB error) still answers 2xx
+and is logged rather than raised. Only an authentication failure is a real
+HTTP error: an unknown or revoked token answers 404 (indistinguishable from
+each other, so a client can't probe which tokens ever existed); a wrong
+signature on a known token answers 401. The nightly pull
+(`lib/integrations/callrail-sync.js`) is the reconciliation backstop for
+anything swallowed here.
+
 ### `POST /webhooks/postmark/inbound`
 Records inbound email as communication.
 
@@ -1012,6 +1054,83 @@ same day the 18:00 cron would report on — without sending it. Returns
 
 ### `POST /api/integrations/gohighlevel/daily-report/send`
 Owner only. Triggers an immediate manual send to the configured webhook. Rate-limited in-memory to 6 sends/hour/org (429 `{ error }` beyond that — a double-click guard, not a security control). Returns `{ sent, status, reason? }`.
+
+### CallRail (multi-company call tracking)
+One CallRail API key per CallRail COMPANY, one company per practice — the
+same pattern as GoHighLevel multi-subaccount above. There is no singleton
+key-paste connect route: the first company added via `POST .../accounts`, below,
+IS the connection. A call's practice comes from the `integration_accounts`
+row whose key fetched it (denormalised onto `callrail_calls.practice_id`);
+there is deliberately no separate tracking-number map. A company with no
+practice assigned attributes its calls to nothing — surfaced as
+`practiceId: null` on every read, never hidden. The organisation is always
+taken from the authenticated session (`req.user.organisation_id`) and is
+never accepted as a request parameter on any of these routes. Neither the
+CallRail API key nor the optional webhook signing key is ever returned by any
+read — the account DTO omits the encrypted `secrets` column entirely.
+
+**Account vs company.** CallRail's hierarchy is Account -> Company -> Calls
+(see `docs/superpowers/specs/2026-09-04-callrail-api-facts.md` §0, read
+against the official v3 docs). Every `/v3/a/{...}` URL takes the CallRail
+**ACCOUNT** id; a company only exists underneath one. Each
+`integration_accounts` row here is one COMPANY:
+`external_account_id` holds the CallRail **company** id (what
+`UNIQUE (organisation_id, provider, external_account_id)` correctly dedupes N
+companies on, and what `calls.json`'s `company_id` filter and practice
+mapping key off), and `config.account_id` holds the CallRail **account** id
+that company lives under. The Add-company flow is two steps precisely to
+keep these separate: paste the API key + account id, then PICK a company
+from a list — an owner never types an opaque company id by hand.
+
+- `POST /api/integrations/callrail/companies` (owner) — Add-company step 1. Body `{ apiKey, callrailAccountId }` → `{ companies: [{ id, name }] }`, every company under that CallRail account. POST, not GET+query: the API key never belongs in a URL. Verifies nothing is persisted by this call — it's a pure passthrough lookup.
+- `GET /api/integrations/callrail` (owner | practice_manager) → `{ connected, accounts: [{ id, label, callrailAccountId, callrailCompanyId, practiceId, practiceName, status, lastSyncedAt, lastError, webhookUrl, signingKeyConfigured, callCount, lastCallAt }], sourceBreakdown: [{ source, callCount }] }`. `callrailAccountId` is the CallRail account id (`config.account_id`); `callrailCompanyId` is the CallRail company id (`external_account_id`) — both surfaced, never conflated. `signingKeyConfigured` is a plain boolean (never the key itself) so the panel can honestly say whether webhook signature verification is active for that company. `connected` reflects the lightweight per-org marker row (flips `active` when the first company is added). `accounts` excludes soft-revoked companies (see `DELETE .../accounts/:id` below); `sourceBreakdown` stays org-wide and still counts a revoked company's historical calls.
+- `POST /api/integrations/callrail/sync` (owner) — syncs every active/failed company in one call (the panel's "Sync now — every company"), each over the INCREMENTAL (90-day) window. One company failing does not stop the rest. Returns `{ ingested, accounts, results: [{ accountId, ingested? , error? }] }`.
+- `DELETE /api/integrations/callrail` (owner) — disconnects the provider AND every company beneath it (soft-revokes each `integration_accounts` row, then the marker row). Returns `{ connected: false }`.
+- `POST /api/integrations/callrail/accounts` (owner) — body `{ apiKey, callrailAccountId, callrailCompanyId, label, practiceId? }`. Verifies the key against CallRail's company endpoint BEFORE storing anything — a bad key or a mismatched account/company pair is never persisted, logged, or echoed back. `practiceId` is agency-actor-gated (a non-agency owner may still add an unmapped company, just not choose its practice — 403 `{ error, code: 'AGENCY_ONLY' }` otherwise). Encrypts the key, mints a random per-company `webhook_token`, and returns the created account (same DTO shape as the `GET` list). A revoked row for the SAME company is reconnected in place (its call history keeps its `integration_account_id`) rather than racing the unique constraint; a row that is still live 409s with `{ error: 'That CallRail company is already connected' }`. Fires a one-off FULL-window (183-day) pull in the background immediately after connecting — the panel does not need to wait for tonight's cron or a manual sync to see recent history.
+- `PATCH /api/integrations/callrail/accounts/:id` (owner) — body `{ apiKey?, practiceId?, label?, signingKey? }`. `practiceId` is agency-actor-gated like create; changing it is a real UPDATE across every call the company has already fetched, scoped to that one company (`callrail_calls.practice_id` is denormalised, not joined at read time — a mapping change never touches another company's, or another org's, calls). `signingKey` is an ordinary owner credential (NOT agency-gated) — the optional CallRail webhook signing key, stored encrypted alongside the API key in the same `secrets` blob; `null` clears a previously-set key. `apiKey` (also NOT agency-gated) is the fix for a rotated key: re-verified against this company's existing account/company ids before it is persisted, exactly like create, so a key rotated at CallRail's end no longer requires disconnecting and re-adding the company (which used to 409/500 against the still-occupied unique slot).
+- `DELETE /api/integrations/callrail/accounts/:id` (owner) — soft-revoke: the row survives (so its calls keep their `integration_account_id` — the FK is `ON DELETE SET NULL`, never `CASCADE`) but the company is filtered out of every subsequent `GET`. Returns `{ removed: true }`. `POST .../accounts` reconnects this same row on re-add (see above) rather than requiring a fresh one.
+- `POST /api/integrations/callrail/accounts/:id/sync` (owner) — pulls just this one company now, over the FULL (183-day) window — a manual sync is exactly the moment a wider catch-up is worth it. Returns `{ ingested, truncated }`; `truncated` (previously silently dropped) is `true` only if the 200-page pagination safety cap was hit with more data still waiting — effectively never at this integration's real call volumes.
+
+Pull side (`lib/integrations/callrail-sync.js`), against CallRail's v3 API
+with header `Authorization: Token token="<apiKey>"`:
+`GET /v3/a/{accountId}/calls.json?company_id={companyId}`, always with an
+explicit `?fields=` list (`gclid, keywords, campaign, source, first_call`,
+every `utm_*`, …) — CallRail's default response omits every one of them, so
+an integration that forgets `?fields=` looks healthy and answers nothing.
+`start_date`/`end_date` are always sent explicitly for the same reason: an
+unbounded request silently gets CallRail's own `date_range=recent` (the
+trailing seven days only) with a 200, not an error. Rate limiting is HTTP 429
+(1,000 calls/hour, 10,000/day) — unlike Dentally, which signals its rate
+limit as a 403. `company_id` is sent explicitly rather than relying on the
+key being company-scoped (CallRail keys are user-scoped, and a key belonging
+to a user with account-wide access would otherwise return every company's
+calls); as defence in depth, every returned call is also checked client-side
+against the company's own id before it is written — a mismatch is dropped
+and counted, logged once per sync run with the drop count, never written
+under the wrong company's practice.
+
+The window is `INCREMENTAL_DAYS` (90, trailing) on the nightly cron and on
+the panel's "Sync now — every company"; `FULL_DAYS` (183, trailing) on a
+manual per-company "Sync" and on the one-off pull fired right after a
+company is added — both plumbed through `syncAccount`'s `opts.full`.
+
+Calls are stored in their own `callrail_calls` table (migration `000154`,
+applied on hosted), never in `leads`: a call has no pipeline or opportunity
+shape, and folding it into a GoHighLevel-shaped table would make cross-source
+dedup an invisible write-time decision instead of an explicit read-time one.
+Idempotency key: `UNIQUE (organisation_id, callrail_id)`, upserted by both
+this pull and the webhook (below) through the same
+`callrailRepository.upsertCalls`. A CallRail call carries no caller email, so
+`caller_email`/`caller_email_norm` are always null — phone (`caller_phone10`)
+is the only dedup key against GoHighLevel. `callrail_source_breakdown`
+(migration `000155`, applied on hosted) is a Postgres RPC rather than a
+PostgREST aggregate `select`: aggregate functions are disabled on this
+project (`PGRST123: Use of aggregate functions is not allowed`).
+
+Env: the per-company webhook URL renders from `BACKEND_PUBLIC_URL` (falling
+back to `APP_URL`). Unlike Emergent, no `OAUTH_STATE_SECRET` is needed —
+CallRail authenticates by the random per-company path token, not a signed
+org token.
 
 ## Notifications
 

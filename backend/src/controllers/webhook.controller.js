@@ -1,6 +1,16 @@
 import * as webhook_service_1 from "../services/webhook.service.js";
+import * as callrail_webhook_1 from "../lib/integrations/callrail-webhook.js";
 import { verifyWebhookToken } from "../lib/webhook-token.js";
 export const webhookController = {
+    async callrail(req, res) {
+        // app.js mounts express.raw on /webhooks/callrail, so req.body is a
+        // Buffer — needed both for the HMAC-SHA1 signature and to preserve the
+        // exact bytes CallRail signed. Header name is `Signature` exactly
+        // (Express lower-cases header keys, so `req.headers['signature']` is
+        // the correct lookup regardless of the case CallRail sends it in).
+        const sig = req.headers['signature'];
+        res.json(await callrail_webhook_1.handleWebhook(req.params.token, req.body, sig));
+    },
     // Emergent (Treatments Accepted). app.js mounts express.raw on
     // /webhooks/emergent, so req.body is a Buffer (needed for HMAC). The signed
     // URL token resolves the org; the secret verifies the payload.

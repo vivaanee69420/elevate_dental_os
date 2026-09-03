@@ -6,6 +6,7 @@
 // on the serviceClient path).
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { AppError } from "../middleware/errors.js";
 
 // Columns safe to return to the API (no secrets).
 const SAFE_COLS = 'id, provider, external_account_id, practice_id, label, status, last_sync_at, last_error, config, webhook_token, created_at, updated_at';
@@ -101,7 +102,20 @@ export const integrationAccountRepository = {
             .insert(row)
             .select(SAFE_COLS)
             .single();
-        if (error) throw new Error(error.message);
+        if (error) {
+            // 23505 = unique_violation. Callers are expected to pre-check for
+            // a live duplicate (getByLocation) before ever reaching here, but
+            // a race between that check and this insert is still possible —
+            // and a bare Error on a duplicate is masked by errorHandler as an
+            // opaque "Internal server error", which is exactly what happened
+            // before addAccount had a pre-check at all (CallRail's
+            // "disconnect and reconnect" flow hit this). Surface it as
+            // something the owner can act on instead.
+            if (error.code === '23505') {
+                throw new AppError('That account is already connected', 409);
+            }
+            throw new Error(error.message);
+        }
         return data;
     },
 

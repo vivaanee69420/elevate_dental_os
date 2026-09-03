@@ -59,6 +59,49 @@ export const ghlDashboardQuerySchema = zod_1.z.object({
     since: zod_1.z.string().datetime().optional(),
     until: zod_1.z.string().datetime().optional(),
 });
+// CallRail multi-company management schemas. CallRail's hierarchy is
+// Account -> Company -> Calls: callrailAccountId is the CallRail ACCOUNT id
+// (shaped "ACC8154748ae…", stored on config.account_id — every
+// `/v3/a/{...}` URL needs it), callrailCompanyId is the CallRail COMPANY id
+// (stored on integration_accounts.external_account_id — the value the
+// unique-per-org constraint dedupes on, and what calls.json's company_id
+// filter and practice mapping key off). One company = one API key, one
+// practice — label is REQUIRED on create (unlike GHL's optional label) per
+// the frontend contract; practiceId is optional/nullable on both and is an
+// agency-actor-only field enforced in the controller, not here.
+export const callrailAccountCreateSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1),
+    callrailAccountId: zod_1.z.string().min(1),
+    callrailCompanyId: zod_1.z.string().min(1),
+    label: zod_1.z.string().min(1).max(120),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+});
+// apiKey is optional here (unlike create) — the FIX for "a rotated API key
+// can never be replaced": updateAccount re-verifies it against THIS
+// company's EXISTING account/company ids (already on file, not re-supplied
+// here — rotating the key is not the same operation as re-pointing a row at
+// a different CallRail company, which this schema deliberately does not
+// support) before persisting, same discipline as addAccount.
+export const callrailAccountUpdateSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1).optional(),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+    label: zod_1.z.string().min(1).max(120).optional(),
+    // Second-factor webhook signature verification (see
+    // callrail-webhook.js's file header). A credential, encrypted into the
+    // account's `secrets` blob — never config — so it is a plain string, not
+    // an agency-actor field: a tenant owner pasting their own CallRail
+    // signing key is ordinary self-service, not a practice-mapping decision
+    // (enforced by omission from the controller's isAgencyActor gate, which
+    // only checks practiceId). `null` clears a previously-set key.
+    signingKey: zod_1.z.string().min(1).max(200).nullable().optional(),
+});
+// Add-company step 1: list every company under a CallRail account, so the
+// owner PICKS a company instead of typing an opaque id (removes the whole
+// class of paste-the-wrong-id error the original flow shipped with).
+export const callrailListCompaniesSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1),
+    callrailAccountId: zod_1.z.string().min(1),
+});
 
 // Window for the one-off Dentally payment-status repair. Both bounds required:
 // a lone bound would silently repair a different span than intended, and this
