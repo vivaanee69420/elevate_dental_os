@@ -18,6 +18,14 @@ router.post('/gohighlevel/:token', (0, async_handler_1.asyncHandler)(webhook_con
 // /webhooks/emergent in app.js) for HMAC-SHA256 signature verification. Token
 // resolves the org; the service verifies X-Webhook-Signature and ingests.
 router.post('/emergent/:token', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.emergent));
+// CallRail real-time webhook. :token is the per-COMPANY random webhook_token
+// (integration_accounts.webhook_token, minted by callrail.service.js) — the
+// org resolves from THIS, never from anything in the payload. Raw body
+// (express.raw mounted on /webhooks/callrail in app.js) for the optional
+// HMAC-SHA1 Signature header. The handler is a TRIGGER, not the source of
+// truth: it re-fetches the canonical call from CallRail's API rather than
+// trusting the payload's own id shape — see callrail-webhook.js.
+router.post('/callrail/:token', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.callrail));
 router.post('/postmark/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.postmarkInbound));
 router.post('/twilio/inbound', (0, async_handler_1.asyncHandler)(webhook_controller_1.webhookController.twilioInbound));
 router.post('/ses-events', (0, async_handler_1.asyncHandler)(ses_event_controller_1.sesEventController.handle));
