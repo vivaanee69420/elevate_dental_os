@@ -4,15 +4,17 @@
 // follows the sibling Campaigns screen's table idiom rather than inventing
 // a new one.
 //
-// Four states rather than one generic empty table — see FacebookStateNotice.
-// For 'not_connected'/'never_synced' the notice replaces the table entirely.
-// For 'no_ad_id_coverage' the table STILL renders: spend/impressions/clicks
-// are real, only the funnel is unavailable below campaign level.
+// Five states rather than one generic empty table — see FacebookStateNotice.
+// For 'not_connected'/'never_synced'/'no_spend_in_window' the notice replaces
+// the table entirely. For 'no_ad_id_coverage' the table STILL renders:
+// spend/impressions/clicks are real, only the funnel is unavailable below
+// campaign level.
 import Link from 'next/link';
 import { PageHeader, EmptyState, SkeletonTable } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { formatPence, formatDate } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { useScopePeriod } from '@/features/_shared/scope-context';
 import { useFacebookCampaigns } from '../hooks';
 import { FacebookStateNotice } from './FacebookStateNotice';
 import type { FacebookRow, FacebookFunnelTotals } from '../api';
@@ -22,6 +24,26 @@ const money = (p: number | null) => (p === null ? '—' : formatPence(p));
 // unknowable, not zero.
 const ctrPct = (ctr: number | null) => (ctr === null ? '—' : `${(ctr * 100).toFixed(2)}%`);
 const num = (n: number) => n.toLocaleString('en-GB');
+
+// Meta's own campaign status, as the sync stamped it on the latest day in the
+// window — ACTIVE, PAUSED, ARCHIVED, DELETED and so on. Only the not-running
+// ones are worth a chip: labelling every live campaign "Active" is noise, but
+// a campaign whose spend stopped because it was paused explains a falling row
+// that otherwise looks like a performance problem. Title-cased for a British
+// UI rather than shouted back in Meta's enum casing, and rendered verbatim for
+// anything unrecognised so a new Meta status is never silently swallowed.
+function StatusChip({ status }: { status: string | null }) {
+  if (!status || status.toUpperCase() === 'ACTIVE') return null;
+  const label = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
+  return (
+    <span
+      className="ml-2 rounded-full border border-border bg-bg px-2 py-0.5 align-middle text-[11px] font-normal text-ink-muted"
+      title="Campaign status reported by Meta on the most recent day in this period."
+    >
+      {label}
+    </span>
+  );
+}
 
 const TH = 'px-4 py-3 text-right font-medium text-ink-muted';
 const TD = 'px-4 py-3 text-right tabular-nums';
@@ -44,12 +66,15 @@ function Row({ row, isTotals = false }: { row: FacebookRow; isTotals?: boolean }
         {isTotals || !row.id ? (
           <span className="text-ink">Total</span>
         ) : (
-          <Link
-            href={`/marketing-facebook/${encodeURIComponent(row.id)}`}
-            className="font-medium text-brand hover:underline"
-          >
-            {row.name ?? row.id}
-          </Link>
+          <>
+            <Link
+              href={`/marketing-facebook/${encodeURIComponent(row.id)}`}
+              className="font-medium text-brand hover:underline"
+            >
+              {row.name ?? row.id}
+            </Link>
+            <StatusChip status={row.status} />
+          </>
         )}
       </td>
       <td className={TD}>{money(row.spendPence)}</td>
@@ -81,9 +106,17 @@ function unmatchedLeadsNote(funnel: FacebookFunnelTotals) {
 
 export default function FacebookCampaignsScreen() {
   const { data, isLoading, isError, error } = useFacebookCampaigns();
+  // What this payload's coverage was actually measured over. Org-wide by
+  // default, but the scope bar can narrow it to one practice — and a notice
+  // that says "this organisation" over a one-practice measurement is a claim
+  // the data does not support.
+  const { scope } = useScopePeriod();
+  const noticeScope = scope && scope !== 'all' ? 'selection' : 'organisation';
   const rows = data?.rows ?? [];
-  // Platform metrics stand on their own even without ad-id coverage; only
-  // 'not_connected'/'never_synced' have literally nothing to show.
+  // Platform metrics stand on their own even without ad-id coverage. The
+  // three remaining states all return zero rows from the service, so the
+  // notice replaces the table entirely: 'not_connected', 'never_synced' and
+  // 'no_spend_in_window' each have literally nothing to tabulate.
   const showTable = data && (data.state === 'ok' || data.state === 'no_ad_id_coverage');
 
   return (
@@ -100,7 +133,7 @@ export default function FacebookCampaignsScreen() {
         <SkeletonTable rows={8} cols={13} />
       ) : data ? (
         <>
-          <FacebookStateNotice state={data.state} coverage={data.coverage} />
+          <FacebookStateNotice state={data.state} coverage={data.coverage} scope={noticeScope} />
 
           {data.windowClamped && (
             <Note>

@@ -15,20 +15,24 @@ import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useFacebookAdSets, useFacebookCampaigns } from '../hooks';
 import { FacebookStateNotice } from './FacebookStateNotice';
 import { FacebookAdRows } from './FacebookAdRows';
-import type { FacebookAdSetRow, FacebookFunnelTotals } from '../api';
+import type { FacebookRow, FacebookFunnelTotals } from '../api';
 
 const money = (p: number | null) => (p === null ? '—' : formatPence(p));
 // null when there were no impressions/clicks to divide by — unknowable, not zero.
 const ctrPct = (ctr: number | null) => (ctr === null ? '—' : `${(ctr * 100).toFixed(2)}%`);
 const num = (n: number) => n.toLocaleString('en-GB');
-// Reach is a headcount, not money — its own formatter, still null-safe.
-const reachNum = (n: number | null) => (n === null ? '—' : n.toLocaleString('en-GB'));
 
 const TH = 'px-4 py-3 text-right font-medium text-ink-muted';
 const TD = 'px-4 py-3 text-right tabular-nums';
-// Ad set, Spend, Impressions, Clicks, CTR, CPC, Reach, Leads, Booked,
-// Attended, Patients, CPL, CPB, CPA.
-const COLS = 14;
+// Ad set, Spend, Impressions, Clicks, CTR, CPC, Leads, Booked, Attended,
+// Patients, CPL, CPB, CPA.
+//
+// There is no Reach column. ad_grain_rollup's RETURNS TABLE does not include
+// reach — the value IS stored on ad_meta_adsets, but the rollup never returns
+// it, so the column rendered an em dash on every row, under a header tooltip
+// and a footnote explaining a number that never appeared. Restoring it needs a
+// new RPC and a migration; an always-empty column is worse than no column.
+const COLS = 13;
 
 // Calm, factual prose — never an error/warning colour. Matches
 // FacebookCampaignsScreen's Note: these are facts about the data, not
@@ -42,7 +46,7 @@ function Note({ children }: { children: React.ReactNode }) {
 }
 
 function AdSetRow({ row, isOpen, onToggle }: {
-  row: FacebookAdSetRow; isOpen: boolean; onToggle: () => void;
+  row: FacebookRow; isOpen: boolean; onToggle: () => void;
 }) {
   return (
     <tr className="border-t border-border cursor-pointer hover:bg-bg" onClick={onToggle}>
@@ -57,7 +61,6 @@ function AdSetRow({ row, isOpen, onToggle }: {
       <td className={TD}>{num(row.clicks)}</td>
       <td className={TD}>{ctrPct(row.ctr)}</td>
       <td className={TD}>{money(row.cpcPence)}</td>
-      <td className={TD}>{reachNum(row.reach)}</td>
       <td className={TD}>{num(row.leads)}</td>
       <td className={TD}>{num(row.booked)}</td>
       <td className={TD}>{num(row.attended)}</td>
@@ -69,24 +72,29 @@ function AdSetRow({ row, isOpen, onToggle }: {
   );
 }
 
-// Leads attributed to the campaign whose ad set Meta did not report. Their
-// spend is spread across the real ad sets above and cannot be pulled back
-// out individually, so spend and every cost column are em dashes rather than
-// an invented number — and, since there is no ad set behind this row, none
-// of the platform metrics (impressions/clicks/CTR/CPC/reach) exist for it
-// either, so those are dashes too rather than a misleading zero.
-function NotIdentifiedRow({ funnel }: { funnel: FacebookFunnelTotals }) {
+// TWO bucket rows, not one, because there are two distinct ways a lead of
+// this campaign can fail to sit in an ad-set row above — and folding them
+// together, or omitting either, loses leads outright: the campaign tier would
+// say 100 while this table summed to 80.
+//
+//  - "Ad set not identified": Meta never told us which ad set the lead came
+//    from (ad_set_id null).
+//  - "Ad set not shown here": the ad set resolved, but has no spend row in
+//    this window — no delivery, or its spend sits under a different practice
+//    mapping than the current filter.
+//
+// Both carry leads and no spend, so spend and every cost column are em dashes
+// rather than an invented number, and so are the platform metrics
+// (impressions/clicks/CTR/CPC) — there is no ad-set row behind them to read
+// those from, and a zero would read as "this ad set was shown to nobody".
+function BucketRow({ label, title, funnel }: {
+  label: string; title: string; funnel: FacebookFunnelTotals;
+}) {
   return (
     <tr className="border-t border-border bg-bg">
       <td className="px-4 py-3">
-        <span
-          className="italic text-ink-muted"
-          title="Leads attributed to this campaign whose ad set Meta did not report. Their spend cannot be split back out from the real ad sets above, so no cost is shown for them."
-        >
-          Ad set not identified
-        </span>
+        <span className="italic text-ink-muted" title={title}>{label}</span>
       </td>
-      <td className={TD}>—</td>
       <td className={TD}>—</td>
       <td className={TD}>—</td>
       <td className={TD}>—</td>
@@ -124,8 +132,15 @@ export default function FacebookAdSetsScreen() {
 
   const rows = data?.rows ?? [];
   // Platform metrics stand on their own even without ad-id coverage; only
-  // 'not_connected'/'never_synced' have literally nothing to show.
-  const showTable = data && (data.state === 'ok' || data.state === 'no_ad_id_coverage');
+  // 'not_connected'/'never_synced' have literally nothing to show. An empty
+  // window ('no_spend_in_window') still shows the table when there are
+  // unplaceable leads to account for — that is exactly the case where the
+  // campaign tier reports leads and this tier must not silently show none.
+  const showTable = data && (
+    data.state === 'ok'
+    || data.state === 'no_ad_id_coverage'
+    || (data.state === 'no_spend_in_window' && Boolean(data.notIdentified || data.unmatchedLeads))
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -146,7 +161,10 @@ export default function FacebookAdSetsScreen() {
         <SkeletonTable rows={8} cols={COLS} />
       ) : data ? (
         <>
-          <FacebookStateNotice state={data.state} coverage={data.coverage} />
+          {/* scope="campaign": everything on this screen is measured over ONE
+              campaign, so the coverage notice must say so rather than make a
+              claim about the whole organisation. */}
+          <FacebookStateNotice state={data.state} coverage={data.coverage} scope="campaign" />
 
           {data.windowClamped && (
             <Note>
@@ -157,7 +175,7 @@ export default function FacebookAdSetsScreen() {
           )}
 
           {showTable && (
-            rows.length === 0 && !data.notIdentified ? (
+            rows.length === 0 && !data.notIdentified && !data.unmatchedLeads ? (
               <EmptyState message="No Facebook ad set spend in this window." />
             ) : (
               <DeferUntilVisible minHeight={360}>
@@ -171,19 +189,13 @@ export default function FacebookAdSetsScreen() {
                         <th className={TH}>Clicks</th>
                         <th className={TH}>CTR</th>
                         <th className={TH}>CPC</th>
-                        <th
-                          className={TH}
-                          title="Unique people reached. Reach overlaps between ad sets, so this column is never added into a total."
-                        >
-                          Reach*
-                        </th>
                         <th className={TH}>Leads</th>
                         <th className={TH}>Booked</th>
                         <th
                           className={TH}
                           title="Dentally-only: a GoHighLevel booking cannot say whether someone turned up."
                         >
-                          Attended**
+                          Attended*
                         </th>
                         <th className={TH}>Patients</th>
                         <th className={TH}>CPL</th>
@@ -202,14 +214,26 @@ export default function FacebookAdSetsScreen() {
                           </Fragment>
                         );
                       })}
-                      {data.notIdentified && <NotIdentifiedRow funnel={data.notIdentified} />}
+                      {data.notIdentified && (
+                        <BucketRow
+                          label="Ad set not identified"
+                          title="Leads attributed to this campaign whose ad set Meta did not report. Their spend cannot be split back out from the real ad sets above, so no cost is shown for them."
+                          funnel={data.notIdentified}
+                        />
+                      )}
+                      {data.unmatchedLeads && (
+                        <BucketRow
+                          label="Ad set not shown here"
+                          title="Leads whose ad set is known but has no spend in this period — either it was not delivering, or its spend belongs to a practice outside the current filter. Counted here so this table still adds up to the campaign total."
+                          funnel={data.unmatchedLeads}
+                        />
+                      )}
                     </tbody>
                   </table>
                 </div>
                 <p className="mt-2 text-[12px] text-ink-muted">
-                  * Reach counts unique people and overlaps between ad sets, so it is never summed into a total.
-                  <br />
-                  ** Attended is Dentally-only — a GoHighLevel booking alone cannot say whether someone turned up.
+                  * Attended is Dentally-only — a GoHighLevel booking alone cannot say whether
+                  someone turned up.
                 </p>
               </DeferUntilVisible>
             )

@@ -19,7 +19,21 @@
 // as unscoped server-side (`practiceOf` in marketing.controller.js).
 import { api } from '@/lib/api';
 
-export type FacebookState = 'not_connected' | 'never_synced' | 'no_ad_id_coverage' | 'ok';
+export type FacebookState =
+  | 'not_connected'
+  | 'never_synced'
+  | 'no_spend_in_window'
+  | 'no_ad_id_coverage'
+  | 'ok';
+
+/**
+ * What the state/coverage figures on a payload were actually measured over.
+ * The campaign tier measures the whole organisation (or, under a practice
+ * filter, that selection); the ad-set tier measures ONE campaign. Saying
+ * "this organisation" over a per-campaign computation tells an org with 90%
+ * coverage that its whole CRM sends no ad ids.
+ */
+export type FacebookNoticeScope = 'organisation' | 'selection' | 'campaign';
 
 export interface FacebookCoverage {
   leadsTotal: number;
@@ -55,11 +69,6 @@ export interface FacebookRow {
   cpbPence: number | null;
   /** null when the denominator (patients) is zero. */
   cpaPence: number | null;
-}
-
-export interface FacebookAdSetRow extends FacebookRow {
-  /** Unique people. NEVER additive — do not sum this column. Ad-set tier only. */
-  reach: number | null;
 }
 
 export interface FacebookFunnelTotals {
@@ -102,9 +111,18 @@ export interface FacebookCampaignsPayload {
 export interface FacebookAdSetsPayload {
   state: FacebookState;
   coverage: FacebookCoverage | null;
-  rows: FacebookAdSetRow[];
-  /** Leads attributed to this campaign whose ad set could not be resolved. null when coverage is complete. */
+  /** Same shape as the campaign tier — there is no `reach` column: ad_grain_rollup does not return it. */
+  rows: FacebookRow[];
+  /** Leads attributed to this campaign whose ad set could not be resolved at all. null when there are none. */
   notIdentified: FacebookFunnelTotals | null;
+  /**
+   * Leads whose ad set DID resolve but which is not among `rows` — no delivery
+   * in this window, or its spend sits under a different practice mapping.
+   * Without this bucket those leads appeared in no row and in no bucket, so
+   * the ad-set tier could sum to less than the campaign row above it. null
+   * when there are none.
+   */
+  unmatchedLeads: FacebookFunnelTotals | null;
   /** The window actually used. The deep-grain tables keep 92 days, so a
    *  longer request is clamped to what the finest grain can cover. */
   effectiveSince: string;
