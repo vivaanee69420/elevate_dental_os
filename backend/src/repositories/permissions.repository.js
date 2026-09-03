@@ -28,6 +28,20 @@ export const permissionsRepository = {
     return data || [];
   },
 
+  // Removes the row entirely, so the key falls back to the code default (for a
+  // section) or to its section (for a page override). Distinct from writing
+  // `false`, which is an explicit deny.
+  async clearRolePermission(orgId, role, permissionKey) {
+    const { error } = await serviceClient
+      .from('role_permissions')
+      .delete()
+      .eq('organisation_id', orgId)
+      .eq('role', role)
+      .eq('permission_key', permissionKey);
+    if (error) throw error;
+    return { success: true };
+  },
+
   /** Upsert one (org, role, key) -> allowed. */
   async setRolePermission(orgId, role, permissionKey, allowed) {
     const { error } = await serviceClient
