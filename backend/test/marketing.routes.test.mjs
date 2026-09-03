@@ -183,3 +183,38 @@ describe('reconciliation query validation', () => {
         expect(parsed.provider).toBe('google_ads');
     });
 });
+
+// Same optional-window idiom as reconciliation (Task 4's brief): the Facebook
+// report windows since/until server-side from the SAME londonDaysAgo/
+// londonYmd helpers the sync uses, so the client and server can never
+// compute the window on different clocks.
+describe('facebook query validation', () => {
+    it('accepts an omitted window and lets the server default it', async () => {
+        const { FacebookQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = FacebookQuerySchema.parse({});
+        expect(parsed.since).toBeUndefined();
+        expect(parsed.until).toBeUndefined();
+    });
+
+    it('still rejects a malformed date when one IS supplied', async () => {
+        const { FacebookQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => FacebookQuerySchema.parse({ since: '2026-8-1' })).toThrow();
+        expect(() => FacebookQuerySchema.parse({ until: 'not-a-date' })).toThrow();
+    });
+
+    it('accepts a well-formed window and an optional cursor', async () => {
+        const { FacebookQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = FacebookQuerySchema.parse({ since: '2026-06-01', until: '2026-08-31', cursor: '50' });
+        expect(parsed).toEqual({ since: '2026-06-01', until: '2026-08-31', cursor: '50' });
+    });
+
+    // M1: an org id must never be accepted from the request. Under an agency
+    // switch req.user.organisation_id is already the sub-account's id;
+    // accepting one from the query string would let any authenticated user
+    // read another tenant's ad spend.
+    it('has no organisation field', async () => {
+        const { FacebookQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = FacebookQuerySchema.parse({ organisation_id: 'other-org' });
+        expect(parsed.organisation_id).toBeUndefined();
+    });
+});
