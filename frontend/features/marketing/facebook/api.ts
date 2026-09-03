@@ -5,12 +5,18 @@
 // which under an agency switch is already the sub-account — sending one would
 // be a cross-tenant request.
 //
-// since/until are never sent either: the server defaults them from the same
-// londonDaysAgo(DEEP_WINDOW_DAYS)/londonYmd() helpers the Meta deep sync
-// itself uses, so the client and the sync can never compute the window on
-// different clocks (see docs/API.md — Facebook report). practice_id IS sent,
-// from the shared scope bar; the server treats anything that isn't a UUID as
-// unscoped (backend's own `practiceOf` guard), same as `/leads`.
+// This page sits under the shared scope bar, whose period pills must move
+// these numbers, so the fetchers here take a pre-built query string (`qs`)
+// rather than individual arguments — mirroring fetchMarketingPerformance(qs)
+// in ../api.ts. The hooks in ./hooks.ts build that string; see the long
+// comment there for why it CANNOT be the shared windowParams(scope, win)
+// every sibling marketing hook uses. Short version: FacebookQuerySchema
+// (backend/src/controllers/marketing.controller.js) requires plain
+// `YYYY-MM-DD`, both ends INCLUSIVE — not windowParams' ISO-datetime,
+// half-open [since, until) — because campaignSpendByProvider() compares
+// against a plain DATE column with `.gte(...).lte(...)`. `practice_id` is
+// sent the same way `/leads` sends it; anything that isn't a UUID is treated
+// as unscoped server-side (`practiceOf` in marketing.controller.js).
 import { api } from '@/lib/api';
 
 export type FacebookState = 'not_connected' | 'never_synced' | 'no_ad_id_coverage' | 'ok';
@@ -84,6 +90,13 @@ export interface FacebookCampaignsPayload {
    * silently understate every cost figure. null when there are none.
    */
   unmatchedLeads: FacebookFunnelTotals | null;
+  /** The window actually used. The deep-grain tables keep 92 days, so a
+   *  longer request is clamped to what the finest grain can cover. */
+  effectiveSince: string;
+  /** True when the requested window started before that 92-day floor, so the
+   *  page can say what it is showing instead of quietly showing something
+   *  other than what was asked for. */
+  windowClamped: boolean;
 }
 
 export interface FacebookAdSetsPayload {
@@ -92,6 +105,13 @@ export interface FacebookAdSetsPayload {
   rows: FacebookAdSetRow[];
   /** Leads attributed to this campaign whose ad set could not be resolved. null when coverage is complete. */
   notIdentified: FacebookFunnelTotals | null;
+  /** The window actually used. The deep-grain tables keep 92 days, so a
+   *  longer request is clamped to what the finest grain can cover. */
+  effectiveSince: string;
+  /** True when the requested window started before that 92-day floor, so the
+   *  page can say what it is showing instead of quietly showing something
+   *  other than what was asked for. */
+  windowClamped: boolean;
 }
 
 export interface FacebookAdsPage {
@@ -99,28 +119,28 @@ export interface FacebookAdsPage {
   rows: FacebookRow[];
   /** Opaque; pass back verbatim as `cursor`. null on the last page. */
   nextCursor: string | null;
+  /** The window actually used. The deep-grain tables keep 92 days, so a
+   *  longer request is clamped to what the finest grain can cover. */
+  effectiveSince: string;
+  /** True when the requested window started before that 92-day floor, so the
+   *  page can say what it is showing instead of quietly showing something
+   *  other than what was asked for. */
+  windowClamped: boolean;
 }
 
-export function fetchFacebookCampaigns(practiceId?: string | null) {
-  const qs = new URLSearchParams();
-  if (practiceId) qs.set('practice_id', practiceId);
-  const suffix = qs.toString() ? `?${qs}` : '';
+export function fetchFacebookCampaigns(qs: string) {
+  const suffix = qs ? `?${qs}` : '';
   return api<FacebookCampaignsPayload>(`/api/marketing/facebook/campaigns${suffix}`);
 }
 
-export function fetchFacebookAdSets(campaignId: string, practiceId?: string | null) {
-  const qs = new URLSearchParams();
-  if (practiceId) qs.set('practice_id', practiceId);
-  const suffix = qs.toString() ? `?${qs}` : '';
+export function fetchFacebookAdSets(campaignId: string, qs: string) {
+  const suffix = qs ? `?${qs}` : '';
   return api<FacebookAdSetsPayload>(
     `/api/marketing/facebook/campaigns/${encodeURIComponent(campaignId)}/adsets${suffix}`,
   );
 }
 
-export function fetchFacebookAds(adSetId: string, cursor?: string | null, practiceId?: string | null) {
-  const qs = new URLSearchParams();
-  if (cursor) qs.set('cursor', cursor);
-  if (practiceId) qs.set('practice_id', practiceId);
-  const suffix = qs.toString() ? `?${qs}` : '';
+export function fetchFacebookAds(adSetId: string, qs: string) {
+  const suffix = qs ? `?${qs}` : '';
   return api<FacebookAdsPage>(`/api/marketing/facebook/adsets/${encodeURIComponent(adSetId)}/ads${suffix}`);
 }
