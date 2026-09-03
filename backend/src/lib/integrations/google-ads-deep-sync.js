@@ -124,7 +124,6 @@ const STREAMS = [
 export async function syncGoogleDeep(orgId, { accessToken, customerIds, since, until, queryCustomer }) {
     const collected = new Map(STREAMS.map((s) => [s.grain, []]));
     const skipped = [];
-    const skippedCustomers = new Set();
     const withRows = new Map(STREAMS.map((s) => [s.grain, new Set()]));
 
     for (const customerId of customerIds ?? []) {
@@ -141,12 +140,15 @@ export async function syncGoogleDeep(orgId, { accessToken, customerIds, since, u
                 // rest — each stream is tried independently, so a bad
                 // ad_group_ad query doesn't stop ad_group from being pulled.
                 // Google reports rate limiting as HTTP 403, so this is
-                // frequently transient and retried tomorrow. Report the
-                // account once, not once per failing grain.
-                if (!skippedCustomers.has(customerId)) {
-                    skippedCustomers.add(customerId);
-                    skipped.push({ customerId, error: String(err.message).slice(0, 200) });
-                }
+                // frequently transient and retried tomorrow.
+                //
+                // NOT deduped per customer: the grain identifies which part of
+                // the pull failed, and keyword pulls (the biggest row count)
+                // trip the 403 throttle far more often than ad group/ad ones.
+                // "Keywords failed for account X" tells the owner their
+                // keyword page is stale while ad groups are fine; collapsing
+                // to one entry per account would throw that away.
+                skipped.push({ customerId, grain: stream.grain, error: String(err.message).slice(0, 200) });
             }
         }
     }

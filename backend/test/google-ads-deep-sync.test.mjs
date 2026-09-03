@@ -125,7 +125,7 @@ describe('syncGoogleDeep', () => {
         expect(adGrainRepository.replaceWindow).not.toHaveBeenCalled();
     });
 
-    it('keeps going when one account fails, and reports it', async () => {
+    it('keeps going when one account fails, and reports which grain failed', async () => {
         const queryCustomer = vi.fn(async (cid) => {
             if (cid === 'BAD') throw new Error('RESOURCE_EXHAUSTED');
             return batches([{ campaign: { id: 7 }, adGroup: { id: 42 },
@@ -135,7 +135,11 @@ describe('syncGoogleDeep', () => {
             accessToken: 'tok', customerIds: ['BAD', 'C1'],
             since: '2026-06-01', until: '2026-08-31', queryCustomer,
         });
-        expect(res.skipped).toEqual([{ customerId: 'BAD', error: expect.stringContaining('RESOURCE_EXHAUSTED') }]);
+        // One entry per failing (customer, grain) — a keyword pull failing while
+        // ad groups succeed is the common case and must stay visible.
+        expect(res.skipped.map((s) => `${s.customerId}:${s.grain}`))
+            .toEqual(['BAD:google_adgroup', 'BAD:google_ad']);
+        expect(res.skipped.every((s) => s.error.includes('RESOURCE_EXHAUSTED'))).toBe(true);
         expect(adGrainRepository.replaceWindow).toHaveBeenCalled();
     });
 });
