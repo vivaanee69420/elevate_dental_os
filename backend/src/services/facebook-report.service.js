@@ -9,9 +9,17 @@
 //
 //  2. Nothing here tests a CRM's own vocabulary. A lead is a Meta lead
 //     because ad_meta_funnel resolved its ad_id inside this org's ad_meta_ads
-//     rows. An earlier design keyed a lead's channel off a GoHighLevel-specific
-//     field and label pair — a tenant whose CRM names that channel differently
-//     would have seen an empty report that looked perfectly healthy.
+//     rows — never because a CRM field said so. An earlier design keyed a
+//     lead's channel off GoHighLevel's own attribution_source column holding
+//     the literal label "Paid Social" — a tenant whose CRM names that channel
+//     differently, or isn't GoHighLevel at all, would have seen an empty
+//     report that looked perfectly healthy. That field/label pair must never
+//     reappear here as a gate on what counts as a Meta lead. (The vocabulary
+//     guard test strips comments before it greps the source, precisely so
+//     this paragraph is allowed to name them. It catches reintroducing these
+//     two historical strings, not every possible way of coupling to a CRM's
+//     vocabulary — the structural join above is what actually guarantees the
+//     behaviour.)
 //
 //  3. A non-GBP Meta account is refused, not converted, using the SAME guard
 //     the sync itself applies (isSupportedCurrency) — so this page reports
@@ -22,8 +30,7 @@
 //     account they connected shows no data here.
 //
 // Every coverage figure is computed from THIS org's rows and returned for
-// display. None is assumed — the figures gathered while designing (86%
-// ad-id coverage) describe one organisation and must never be hardcoded here.
+// display — each tenant's own coverage, never a hardcoded or assumed one.
 // ============================================================================
 import { marketingRepository } from "../repositories/marketing.repository.js";
 import { adGrainRepository } from "../repositories/ad-grain.repository.js";
@@ -133,7 +140,7 @@ export const facebookReportService = {
     async campaigns(orgId, { since, until, practiceId = null } = {}) {
         const accounts = await metaAccounts(orgId);
         if (accounts.length === 0) {
-            return { state: 'not_connected', coverage: null, rows: [], excludedAccounts: [], totals: null };
+            return { state: 'not_connected', coverage: null, rows: [], excludedAccounts: [], totals: null, unmatchedLeads: null };
         }
         const excludedAccounts = excludedAccountsOf(accounts);
 
@@ -144,12 +151,31 @@ export const facebookReportService = {
 
         const spendRows = collapseByCampaign(spendRowsRaw);
         if (spendRows.length === 0) {
-            return { state: 'never_synced', coverage: null, rows: [], excludedAccounts, totals: null };
+            return { state: 'never_synced', coverage: null, rows: [], excludedAccounts, totals: null, unmatchedLeads: null };
         }
 
-        const coverage = coverageOf(funnelRows ?? []);
+        // ad_meta_funnel's Meta restriction is NOT date-scoped — provider
+        // identity isn't a windowed question — while campaignSpendByProvider
+        // IS. So a Meta campaign that spent outside this window but produced
+        // a lead inside it shows up in funnelRows with no matching row in
+        // spendRows. Folding that lead into totals would inflate
+        // totals.leads while contributing nothing to totals.spendPence,
+        // silently UNDERSTATING every cost-per-X figure. Coverage and totals
+        // are therefore scoped to campaigns this window actually has spend
+        // for — the campaigns actually on screen — and the remainder is
+        // stated as unmatchedLeads rather than dropped or silently folded
+        // in. Same idiom as adSets()'s notIdentified bucket, and the correct
+        // scope for coverage too: it answers "what share of THIS WINDOW's
+        // attributable Meta leads reached an ad set", and a lead whose
+        // campaign has no spend in the window is not part of that question.
+        const matchedCampaignIds = new Set(spendRows.map((s) => s.campaign_id));
+        const matchedFunnelRows = (funnelRows ?? []).filter((r) => matchedCampaignIds.has(r.campaign_id));
+        const unmatchedFunnel = sumFunnel((funnelRows ?? []).filter((r) => !matchedCampaignIds.has(r.campaign_id)));
+        const unmatchedLeads = unmatchedFunnel.leads > 0 ? unmatchedFunnel : null;
+
+        const coverage = coverageOf(matchedFunnelRows);
         const byCampaign = new Map();
-        for (const r of funnelRows ?? []) {
+        for (const r of matchedFunnelRows) {
             const list = byCampaign.get(r.campaign_id) ?? [];
             list.push(r);
             byCampaign.set(r.campaign_id, list);
@@ -166,13 +192,17 @@ export const facebookReportService = {
             rows.reduce((n, r) => n + r.spendPence, 0),
             rows.reduce((n, r) => n + r.impressions, 0),
             rows.reduce((n, r) => n + r.clicks, 0),
-            sumFunnel(funnelRows ?? []),
+            sumFunnel(matchedFunnelRows),
         );
 
         // A tenant whose CRM sends no ad ids cannot have an ad-set tier. Say so
         // and show the platform metrics, rather than render one useless row.
-        const state = coverage.leadsWithAdSet === 0 ? 'no_ad_id_coverage' : 'ok';
-        return { state, coverage, rows, excludedAccounts, totals };
+        // Guarded on leadsTotal > 0: a quiet week with zero leads is not
+        // evidence about ad-id coverage and must never be reported as if it
+        // were — do not simplify this guard away.
+        const state = coverage.leadsTotal > 0 && coverage.leadsWithAdSet === 0
+            ? 'no_ad_id_coverage' : 'ok';
+        return { state, coverage, rows, excludedAccounts, totals, unmatchedLeads };
     },
 
     async adSets(orgId, campaignId, { since, until, practiceId = null } = {}) {
@@ -213,8 +243,11 @@ export const facebookReportService = {
         const orphan = sumFunnel(forCampaign.filter((r) => !r.ad_set_id));
         const notIdentified = orphan.leads > 0 ? orphan : null;
 
+        // Same guard as campaigns(): zero leads in the window is not evidence
+        // of missing ad-id coverage, only a quiet window. Do not drop the
+        // leadsTotal > 0 check.
         const state = (grainRows ?? []).length === 0 ? 'never_synced'
-            : coverage.leadsWithAdSet === 0 ? 'no_ad_id_coverage' : 'ok';
+            : coverage.leadsTotal > 0 && coverage.leadsWithAdSet === 0 ? 'no_ad_id_coverage' : 'ok';
         return { state, coverage, rows, notIdentified };
     },
 
@@ -233,9 +266,17 @@ export const facebookReportService = {
             byAd.set(r.ad_id, list);
         }
 
+        // Sorted primarily by spend descending, but spend alone is not a
+        // TOTAL order — several zero-spend ads is an entirely normal shape
+        // for a small practice, and a tie left to whatever order the
+        // repository happened to return would not be guaranteed stable
+        // across two calls. Cursor paging depends on exactly that stability:
+        // an unstable order across calls can skip or repeat a row at the
+        // page boundary. entity_id ascending breaks every tie deterministically.
         const all = (grainRows ?? [])
             .slice()
-            .sort((a, b) => Number(b.spend_pence ?? 0) - Number(a.spend_pence ?? 0))
+            .sort((a, b) => (Number(b.spend_pence ?? 0) - Number(a.spend_pence ?? 0))
+                || String(a.entity_id).localeCompare(String(b.entity_id)))
             .map((g) => withCosts(
                 { id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null },
                 Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0),
