@@ -128,10 +128,6 @@ export default function IntegrationsScreen() {
   const ghlPanelVisible = !!ghlRow && ghlRow.status !== 'revoked';
   const googleAdsConnected = statusOf('google_ads', integrations) === 'active';
   const metaAdsConnected = statusOf('meta_ads', integrations) === 'active';
-  // Fixed 92-day reconciliation window — this panel isn't windowed by the
-  // dashboard's ScopePeriod bar (Integrations has no scope selector).
-  const reconciliationUntil = new Date().toISOString().slice(0, 10);
-  const reconciliationSince = new Date(Date.now() - 92 * 86_400_000).toISOString().slice(0, 10);
 
   // Group providers by category, preserving registration order.
   const groups: { category: string; items: ProviderMeta[] }[] = [];
@@ -231,22 +227,20 @@ export default function IntegrationsScreen() {
 
       {/* Reconciliation only makes sense once a provider is actually
           connected — an unconnected provider has no campaign total to compare
-          against, so its card would show nothing but misleading zeroes. */}
+          against, so its card would show nothing but misleading zeroes.
+
+          No window is passed to the panel. It used to be computed here from
+          Date.now() in UTC while the sync computes its own in LONDON, so
+          through BST the two disagreed for the hour after midnight and the
+          panel asked for a day that could not yet exist in the deep tables.
+          The server now supplies the window on the sync's own clock. */}
       {(googleAdsConnected || metaAdsConnected) && (
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           {googleAdsConnected && (
-            <AdReconciliationPanel
-              provider="google_ads"
-              since={reconciliationSince}
-              until={reconciliationUntil}
-            />
+            <AdReconciliationPanel provider="google_ads" />
           )}
           {metaAdsConnected && (
-            <AdReconciliationPanel
-              provider="meta_ads"
-              since={reconciliationSince}
-              until={reconciliationUntil}
-            />
+            <AdReconciliationPanel provider="meta_ads" />
           )}
         </div>
       )}

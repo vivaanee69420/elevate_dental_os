@@ -219,6 +219,53 @@ describe('campaignSpendByProvider', () => {
         await expect(marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads'))
             .rejects.toThrow(/statement timeout/);
     });
+
+    // Without an account filter this read spans EVERY ad_metrics row the org
+    // has for the provider — including accounts the deep pull no longer covers
+    // (deactivated, deselected, non-GBP), whose 92 days of history still sit
+    // in the table. Comparing that against a deep total that cannot contain
+    // them turns their spend into a permanent unexplained gap.
+    it('narrows to the given accounts when the caller supplies a set', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads', ['C1', 'C2']);
+        expect(supaRec.last.ins).toContainEqual({ col: 'customer_id', vals: ['C1', 'C2'] });
+    });
+
+    it('applies no account filter when the caller passes null', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads', null);
+        expect(supaRec.last.ins ?? []).toEqual([]);
+    });
+
+    // An EMPTY set means "no account is covered", which is a real answer (a
+    // zero campaign total to sit beside a zero deep total) — not "no filter".
+    // Falling through to an unfiltered read here would compare the org's
+    // entire spend against nothing.
+    it('returns nothing, without reading, for an empty account set', async () => {
+        supaRec.last = undefined;
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads', []);
+        expect(rows).toEqual([]);
+        expect(supaRec.last).toBeUndefined();
+    });
+});
+
+describe('adAccountsForProvider', () => {
+    it('reads the three fields that decide deep-pull coverage, org- and provider-scoped', async () => {
+        await marketingRepository.adAccountsForProvider(ORG, 'meta_ads');
+        expect(supaRec.last.table).toBe('ad_accounts');
+        expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+        expect(supaRec.last.eqs).toContainEqual({ col: 'provider', val: 'meta_ads' });
+        for (const col of ['currency', 'status', 'is_selected']) {
+            expect(supaRec.last.select).toContain(col);
+        }
+    });
+
+    it('surfaces a read error rather than reporting an empty account list', async () => {
+        // An empty list is meaningful here — it means "no account dimension",
+        // which makes the service skip account filtering entirely. Swallowing
+        // an error into that shape would silently widen the comparison.
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'boom' } });
+        await expect(marketingRepository.adAccountsForProvider(ORG, 'google_ads'))
+            .rejects.toThrow(/ad_accounts read: boom/);
+    });
 });
 
 describe('leadsByCampaign', () => {

@@ -1646,24 +1646,39 @@ than a manual check.
 
 **Permission:** `marketing.view`.
 
-**Query:** `since` (`YYYY-MM-DD`, required), `until` (`YYYY-MM-DD`, required),
-`provider` (`google_ads` | `meta_ads`, default `google_ads`). These are PLAIN
-dates, not the shared ScopePeriod bar's ISO datetime — both `ad_grain_rollup`
-and the campaign-spend read this compares against filter a plain DATE column
-inclusive on both ends (`metric_date >= since AND metric_date <= until`), and
-the two sides of the comparison must use the identical bound or the panel
-would show a discrepancy that is really just a mismatched window.
+**Query:** `since` (`YYYY-MM-DD`, **optional**), `until` (`YYYY-MM-DD`,
+**optional**), `provider` (`google_ads` | `meta_ads`, default `google_ads`).
+These are PLAIN dates, not the shared ScopePeriod bar's ISO datetime — both
+`ad_grain_rollup` and the campaign-spend read this compares against filter a
+plain DATE column inclusive on both ends (`metric_date >= since AND
+metric_date <= until`), and the two sides of the comparison must use the
+identical bound or the panel would show a discrepancy that is really just a
+mismatched window.
+
+Omitting both is the intended use, and the panel does. When absent the server
+computes the window with the SAME helpers and the SAME constant the deep sync
+uses — `londonDaysAgo(DEEP_WINDOW_DAYS)` to `londonYmd()`, in **Europe/London**
+— so both sides run on one clock. A caller deriving the same window from its
+own UTC clock disagrees with the sync for the hour after midnight London
+throughout BST, and asks for a day that exists in `ad_metrics` but cannot yet
+exist in the deep tables: a full day of campaign spend on one side of the
+comparison only. A present-but-malformed bound is still rejected; optional does
+not mean unvalidated. The response always reports the dates actually used.
 
 **Response:** `{ provider, since, until, campaignSpendPence,
 levels: [{ grain, label, spendPence, campaignSpendPence, gapPence, gapPct,
-additive, note }], reachNote }`. `levels` is `[ad groups, ads, keywords]` for
+additive, note }], reachNote, coversAllAccounts, coveredAccountCount,
+excludedAccounts, excludedNote }`. `levels` is `[ad groups, ads, keywords]` for
 `google_ads` and `[ad sets, ads]` for `meta_ads`. Money is integer pence
 throughout.
 
 - `gapPence` is `campaignSpendPence - spendPence` for that grain, zeroed out
   under a £1.00 tolerance (rounding, not a discrepancy worth reporting).
-- `gapPct` is `null`, never `0`, when `campaignSpendPence` is zero — a
-  percentage of no spend is unknowable, not zero.
+- `gapPct` is derived from the `gapPence` actually reported, not from the raw
+  difference, so a sub-tolerance gap reads as `0` alongside `gapPence: 0`
+  rather than as a fraction of a percent beside "Reconciles". It is `null`,
+  never `0`, when `campaignSpendPence` is zero — a percentage of no spend is
+  unknowable, not zero.
 - The Google **keyword** level is EXPECTED to fall short of the campaign
   total: Dynamic Search Ads traffic carries no keyword, and Display/Video
   campaigns have none at all, so keyword cost is always a subset of campaign
@@ -1671,6 +1686,22 @@ throughout.
   rather than flagging it as a fault. Any OTHER level failing to reconcile
   (ad groups/ads for Google, ad sets/ads for Meta) is a genuine discrepancy
   and its `note` says so ("does not reconcile").
+- **Both sides cover the same accounts.** `ad_metrics` keeps its window for
+  an account long after the deep pull stops covering it, so the campaign side
+  is narrowed to the accounts the deep pull can actually reach: `is_selected`
+  true, currency supported (a null/absent currency counts as GBP by design),
+  and not carrying a platform status the nightly sync permanently skips
+  (`manager`, `not_enabled`). Without that narrowing a deactivated account's
+  spend appears on one side only and reads as a permanent red gap.
+- `excludedAccounts` lists what was left out, as
+  `{ customerId, name, reason, currency, description }`. `reason` is
+  `not_selected` | `unsupported_currency` | the platform status;
+  `description` is ready-made calm prose for the panel to render. An excluded
+  account is a fact to state, never an error.
+- `coversAllAccounts` is `false` and `excludedNote` is set whenever that list
+  is non-empty, saying in words that the totals are for the covered accounts
+  only. When the org has NO `ad_accounts` rows at all no filter is applied —
+  "no account dimension" is not "no account covered".
 - `additive` is `true` on every level — spend sums correctly across the
   grain. `reachNote` (set only for `meta_ads`) is a standing caveat that
   Meta's `reach` is a count of unique people and must never be summed across

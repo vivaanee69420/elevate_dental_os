@@ -108,12 +108,23 @@ export const marketingRepository = {
     // short one — the server's cap is its own setting, and treating a short page
     // as the last would reintroduce the same truncation at whatever that number
     // happens to be.
-    async campaignSpendByProvider(orgId, since, until, provider) {
+    // `customerIds`, when given, narrows the read to those accounts. The
+    // reconciliation service passes the accounts the DEEP pull can actually
+    // cover, because otherwise the two sides of the comparison span different
+    // account sets: ad_metrics keeps 92 days of history for an account that has
+    // since been deactivated, deselected, or found to bill in a currency we
+    // refuse to convert, while the deep tables hold nothing for it. That
+    // account's whole spend would then read as a permanent unexplained red gap
+    // on the one screen built to prove the numbers tally. An EMPTY array means
+    // "no account is covered" and is honoured as such (a zero campaign total,
+    // matching a zero deep total); null/undefined means "no filter".
+    async campaignSpendByProvider(orgId, since, until, provider, customerIds = null) {
         const PAGE = 1000;
         const MAX_PAGES = 500;   // a bound against a faulty server, not real data
+        if (Array.isArray(customerIds) && customerIds.length === 0) return [];
         const rows = [];
         for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
-            const { data, error } = await supabase_1.serviceClient
+            let q = supabase_1.serviceClient
                 .from('ad_metrics')
                 .select('id, spend_pence')
                 .eq('organisation_id', orgId)
@@ -122,6 +133,8 @@ export const marketingRepository = {
                 .lte('metric_date', until)
                 .order('id', { ascending: true })
                 .range(from, from + PAGE - 1);
+            if (Array.isArray(customerIds)) q = q.in('customer_id', customerIds.map(String));
+            const { data, error } = await q;
             if (error) throw new Error(`ad_metrics read: ${error.message}`);
             const page = Array.isArray(data) ? data : [];
             rows.push(...page);
@@ -129,6 +142,21 @@ export const marketingRepository = {
             from += page.length;
         }
         return rows;
+    },
+
+    // One provider's ad accounts with the three fields that decide whether the
+    // deep pull covers an account: selection, platform status, and currency.
+    // Deliberately separate from adAccounts() below, which answers a different
+    // question (practice mapping) for a different screen — widening that
+    // select would couple the two.
+    async adAccountsForProvider(orgId, provider) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('ad_accounts')
+            .select('customer_id, name, currency, status, is_selected')
+            .eq('organisation_id', orgId)
+            .eq('provider', provider);
+        if (error) throw new Error(`ad_accounts read: ${error.message}`);
+        return data ?? [];
     },
 
     // The org's ad accounts and which practice each is mapped to. Read so the
