@@ -27,6 +27,17 @@
 // Europe/London instead — the same technique backend/src/lib/tz.js uses
 // server-side — so this agrees with the server regardless of DST.
 //
+// Deriving the last inclusive day from win.until by subtracting a fixed 24h
+// (86_400_000ms) is a DIFFERENT, subtler DST bug: on the UK spring-forward
+// Sunday the clocks skip an hour, so that calendar day is only 23 real hours
+// end to end, and a 24h instant-subtraction lands a day early. For a
+// single-day selection on that Sunday it produces since > until — an
+// inverted range matching zero rows, which campaigns() cannot tell apart
+// from "never synced" — so a fully synced tenant would be told they have
+// never connected Meta. lastInclusiveLondonDay() below does CALENDAR
+// arithmetic (subtract 1 from the day field, via Date.UTC) instead of
+// INSTANT arithmetic, so it is immune to how many real hours the day was.
+//
 // The server does not stop at this window either: the deep-grain tables only
 // hold a rolling 92 days, so a "year" request is clamped there
 // (facebook-report.service.js's clampWindow) and the clamp is reported back
@@ -59,6 +70,22 @@ function londonDateOf(iso: string): string {
   return LONDON_DATE.format(new Date(iso));
 }
 
+// The last inclusive day, derived from London CALENDAR parts rather than by
+// subtracting 24h from an instant. A fixed 86_400_000ms subtraction is wrong
+// on the UK spring-forward Sunday, which is only 23 real hours long: it lands
+// a day early, and for a single-day selection on that Sunday it produces an
+// inverted range (since > until) that matches no rows at all — which the
+// service cannot distinguish from "never synced", so a fully synced tenant
+// would be told they have never connected Meta. Date.UTC handles a day-0
+// rollover into the previous month/year correctly, and slicing a
+// UTC-constructed midnight is safe — the danger was only ever slicing a
+// LONDON instant, which londonDateOf already handles via Intl.
+function lastInclusiveLondonDay(exclusiveUntilIso: string): string {
+  const [y, m, d] = londonDateOf(exclusiveUntilIso).split('-').map(Number);
+  const prev = new Date(Date.UTC(y, m - 1, d - 1));
+  return prev.toISOString().slice(0, 10);
+}
+
 /**
  * Builds the query string every Facebook fetcher takes: plain YYYY-MM-DD
  * since/until (both inclusive) plus practice_id. See the file header for why
@@ -67,9 +94,8 @@ function londonDateOf(iso: string): string {
 function facebookWindowParams(scope: string, win: ResolvedWindow): string {
   const sp = new URLSearchParams();
   sp.set('since', londonDateOf(win.since));
-  // win.until is the exclusive start of the day AFTER the period — step back
-  // 24h before reading the calendar date, to land on the last INCLUSIVE day.
-  sp.set('until', londonDateOf(new Date(new Date(win.until).getTime() - 86_400_000).toISOString()));
+  // win.until is the exclusive start of the day AFTER the period.
+  sp.set('until', lastInclusiveLondonDay(win.until));
   const practiceId = practiceOf(scope);
   if (practiceId) sp.set('practice_id', practiceId);
   return sp.toString();
@@ -83,6 +109,8 @@ export function useFacebookCampaigns() {
     queryFn: () => fetchFacebookCampaigns(qs),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -94,6 +122,8 @@ export function useFacebookAdSets(campaignId: string) {
     queryFn: () => fetchFacebookAdSets(campaignId, qs),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
     enabled: Boolean(campaignId),
   });
 }
@@ -105,6 +135,8 @@ export function useFacebookAds(adSetId: string, enabled: boolean) {
     queryKey: ['marketing', 'facebook', 'ads', adSetId, scopeKey({ scope, win })],
     queryFn: () => fetchFacebookAds(adSetId, qs),
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
     enabled: enabled && Boolean(adSetId),
   });
 }
