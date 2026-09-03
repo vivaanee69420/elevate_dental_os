@@ -16,7 +16,7 @@ import * as agency_1 from "./middleware/agency.js";
 import * as features_1 from "./middleware/features.js";
 import * as audit_1 from "./middleware/audit.js";
 import * as errors_1 from "./middleware/errors.js";
-import { analystLock } from "./middleware/analyst-lock.js";
+import { sectionLock } from "./middleware/section-lock.js";
 import * as Sentry from "@sentry/node";
 // Route modules (each default-exports an express.Router)
 import * as health_routes_1 from "./routes/health.routes.js";
@@ -215,10 +215,13 @@ export function buildApp() {
     // ---- Authenticated routes ----
     const api = express_1.default.Router();
     api.use(auth_1.authenticate);
-    // Confines the `analyst` role (data.export only) to the Data Room
-    // server-side — several legacy feature routers below carry no
-    // requirePermission gate, so nav hiding alone is not a boundary.
-    api.use(analystLock);
+    // Section lock: one map of API prefix -> permission key(s), enforced for
+    // EVERY role, mirroring the frontend's ROUTE_PERMISSION. Without it the nav
+    // and the API each decided access on their own and drifted — ungated
+    // routers served a section the matrix had revoked, and role-gated routers
+    // refused a section the matrix had granted (a tab that renders, then 403s).
+    // Routers keep their own gates as defence in depth.
+    api.use(sectionLock);
     // Per-user API rate limit: 300 requests / minute, keyed by the VERIFIED
     // user id (authenticate ran above, so req.user is trusted — unlike the
     // coarse global limiter keyed by a spoofable header). Falls back to IP if
