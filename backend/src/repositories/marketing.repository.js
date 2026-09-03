@@ -118,7 +118,13 @@ export const marketingRepository = {
     // on the one screen built to prove the numbers tally. An EMPTY array means
     // "no account is covered" and is honoured as such (a zero campaign total,
     // matching a zero deep total); null/undefined means "no filter".
-    async campaignSpendByProvider(orgId, since, until, provider, customerIds = null) {
+    // `practiceId` is LAST on purpose: the reconciliation call site passes four
+    // positional arguments plus customerIds and must keep working untouched.
+    // When given it narrows to one practice exactly as campaignSpend() does —
+    // the Facebook report's campaign tier needs it, because its funnel is
+    // practice-scoped and dividing group-wide spend by one practice's leads
+    // makes every cost figure wrong by the number of practices.
+    async campaignSpendByProvider(orgId, since, until, provider, customerIds = null, practiceId = null) {
         const PAGE = 1000;
         const MAX_PAGES = 500;   // a bound against a faulty server, not real data
         if (Array.isArray(customerIds) && customerIds.length === 0) return [];
@@ -128,9 +134,17 @@ export const marketingRepository = {
             // (Task 3) reads campaign identity, status and platform metrics
             // off this same paged read. Reconciliation only ever sums
             // spend_pence and is unaffected by the extra columns.
+            //
+            // metric_date is selected as well as filtered on, because the
+            // report collapses campaign x day to campaign and campaign_status
+            // is stamped per day (the sync writes the status as it stood when
+            // that day's row was written). Picking the status off the LATEST
+            // day is the only way to report the status a campaign is in now;
+            // `id` cannot do that job — it is a random uuid, so ordering by it
+            // says nothing about time.
             let q = supabase_1.serviceClient
                 .from('ad_metrics')
-                .select('id, customer_id, campaign_id, campaign_name, campaign_status, impressions, clicks, spend_pence')
+                .select('id, customer_id, campaign_id, campaign_name, campaign_status, metric_date, impressions, clicks, spend_pence')
                 .eq('organisation_id', orgId)
                 .eq('provider', provider)
                 .gte('metric_date', since)
@@ -138,6 +152,7 @@ export const marketingRepository = {
                 .order('id', { ascending: true })
                 .range(from, from + PAGE - 1);
             if (Array.isArray(customerIds)) q = q.in('customer_id', customerIds.map(String));
+            if (practiceId) q = q.eq('practice_id', practiceId);
             const { data, error } = await q;
             if (error) throw new Error(`ad_metrics read: ${error.message}`);
             const page = Array.isArray(data) ? data : [];
@@ -146,6 +161,25 @@ export const marketingRepository = {
             from += page.length;
         }
         return rows;
+    },
+
+    // Has ANY metric row for this provider ever landed for this org?
+    //
+    // A single indexed probe, deliberately UNBOUNDED BY DATE: it exists to
+    // tell "this tenant has never synced" apart from "this tenant synced fine
+    // but bought nothing in the window you are looking at" — two facts that
+    // both render as an empty window and must not share one message. Reading
+    // ad_metrics is the only trustworthy signal; ad_accounts.period_synced_at
+    // records that a sync RAN, not what came back (migration 000116).
+    async hasProviderMetrics(orgId, provider) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('ad_metrics')
+            .select('id')
+            .eq('organisation_id', orgId)
+            .eq('provider', provider)
+            .limit(1);
+        if (error) throw new Error(`ad_metrics probe: ${error.message}`);
+        return (data ?? []).length > 0;
     },
 
     // One provider's ad accounts with the two fields that decide whether the
@@ -337,10 +371,18 @@ export const marketingRepository = {
     // targeting — entirely normal for a multi-practice dental chain). Sort by
     // all four, in the RPC's own GROUP BY order, or a page boundary landing
     // inside a tie can duplicate one row and drop another.
+    //
+    // `until` is EXCLUSIVE here, unlike campaignSpendByProvider's inclusive
+    // `until` — ad_lead_conversions bounds leads with `created_at < $3`
+    // because a lead carries a time, not a date. Callers converting between
+    // the two conventions must do it at the call site (see funnelUntil in
+    // facebook-report.service.js); passing an inclusive date straight through
+    // loses the whole last day's leads.
     async metaFunnel(orgId, since, until, practiceId = null) {
         const PAGE = 1000;
+        const MAX_PAGES = 500;   // a bound against a faulty server, not real data
         const rows = [];
-        for (let from = 0; ; ) {
+        for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
             const { data, error } = await supabase_1.serviceClient
                 .rpc('ad_meta_funnel', {
                     p_org: orgId, p_since: since, p_until: until, p_practice: practiceId,

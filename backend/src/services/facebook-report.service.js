@@ -37,6 +37,65 @@ import { adGrainRepository } from "../repositories/ad-grain.repository.js";
 import { isSupportedCurrency } from "../lib/integrations/ad-currency.js";
 import { londonDaysAgo, londonYmd } from "../lib/tz.js";
 import { DEEP_WINDOW_DAYS } from "../lib/integrations/google-ads-deep-sync.js";
+import { createTtlCache } from "../lib/ttl-cache.js";
+
+// ---------------------------------------------------------------------------
+// The funnel and the spend readers disagree about `until` ON PURPOSE, and the
+// conversion belongs here rather than in either of them.
+//
+// ad_meta_funnel bounds leads with `l.created_at >= $2 AND l.created_at < $3`
+// — a half-open timestamptz range — because a lead carries a time, not a date.
+// campaignSpendByProvider and ad_grain_rollup bound with `<= until` because
+// metric_date IS a date, and that inclusive convention is the one the
+// reconciliation endpoint documents and depends on; changing either of them
+// would break it.
+//
+// Handing the same inclusive YYYY-MM-DD to both loses the last day's leads:
+// measured on live data, an August view returned 1,295 leads against a true
+// 1,336 (3.1% lost, every month, permanently inflating every CPL/CPB/CPA),
+// and a single-day selection — which FacebookQuerySchema explicitly accepts
+// and the period bar can produce in two clicks — returned ZERO leads beside
+// that day's real spend, with no caveat on screen.
+//
+// EVERY metaFunnel call in this file must go through this. The spend readers
+// must NOT.
+function funnelUntil(inclusiveUntil) {
+    const [y, m, d] = inclusiveUntil.split('-').map(Number);
+    // Day-field arithmetic through Date.UTC, never a milliseconds addition:
+    // a fixed 86_400_000 is wrong on the UK spring-forward day. Date.UTC also
+    // rolls a day past the end of the month/year over correctly.
+    return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
+// The funnel is the expensive read on this page: ad_meta_funnel runs through
+// ad_lead_conversions, documented at 2.8s for 10,429 rows, and it is
+// org-wide — neither campaign nor ad set narrows what it computes, because
+// the cost is in resolving every lead in the window, not in the grouping.
+//
+// Without this cache, expanding five ad sets on the ad-set screen fires five
+// `ads()` calls, each re-running that whole computation for the SAME
+// org+window+practice. This codebase has already taken a statement timeout
+// from fan-out rather than volume (see the Business Hub cache in
+// analytics.service.js, whose 60s TTL and reasoning this mirrors).
+//
+// The key leads with the org id, so an entry can never be read by another
+// tenant, and 60s is short enough that a finished sync shows up promptly.
+const funnelCache = createTtlCache({ ttlMs: 60_000, max: 300 });
+
+async function loadFunnel(orgId, since, inclusiveUntil, practiceId) {
+    const key = `${orgId}|${since}|${inclusiveUntil}|${practiceId ?? ''}`;
+    const hit = funnelCache.get(key);
+    if (hit) return hit;
+    return funnelCache.set(
+        key,
+        await marketingRepository.metaFunnel(orgId, since, funnelUntil(inclusiveUntil), practiceId),
+    );
+}
+
+// Test seam and sync hook: drop one org's cached funnels (or all of them).
+export function invalidateFunnelCache(orgId) {
+    funnelCache.invalidate(orgId ? `${orgId}|` : undefined);
+}
 
 // A cost per nothing is unknowable, not free. Returning 0 would render as
 // "this campaign acquires patients at no cost".
@@ -105,6 +164,8 @@ function collapseByCampaign(spendRows) {
         const acc = byCampaign.get(id) ?? {
             campaign_id: id,
             campaign_name: r.campaign_name ?? null,
+            campaign_status: null,
+            _statusDate: null,
             spend_pence: 0,
             impressions: 0,
             clicks: 0,
@@ -113,6 +174,23 @@ function collapseByCampaign(spendRows) {
         acc.impressions += Number(r.impressions ?? 0);
         acc.clicks += Number(r.clicks ?? 0);
         if (!acc.campaign_name && r.campaign_name) acc.campaign_name = r.campaign_name;
+        // campaign_status is stamped PER DAY: the sync writes each day's row
+        // with the campaign's status as it stood when that sync ran, so a
+        // campaign paused on the 12th reads ACTIVE on days before it and
+        // PAUSED after. Collapsing the window therefore has to pick one, and
+        // the only defensible pick is the LATEST day's — the status the
+        // campaign is in now, which is what a status column means on a report.
+        //
+        // Explicitly by metric_date, never by row order: ad_metrics.id is a
+        // random uuid, so "the last row we happened to read" is arbitrary and
+        // would flip between reads. Dropping the field entirely (the previous
+        // behaviour) left `status` null on every row, which is the whole
+        // reason the repository's select carries it.
+        const d = r.metric_date ?? null;
+        if (r.campaign_status && (acc._statusDate === null || (d !== null && d >= acc._statusDate))) {
+            acc.campaign_status = r.campaign_status;
+            acc._statusDate = d;
+        }
         byCampaign.set(id, acc);
     }
     return [...byCampaign.values()];
@@ -125,6 +203,23 @@ function collapseByCampaign(spendRows) {
 // IS "no Meta account", no extra filtering required.
 async function metaAccounts(orgId) {
     return marketingRepository.adAccountsForProvider(orgId, 'meta_ads');
+}
+
+// "No spend rows in THIS WINDOW" is not evidence that a sync has never
+// happened, and telling a synced tenant "no performance data has arrived yet"
+// when they simply paused their campaigns two months ago, picked a quiet day,
+// or filtered to a practice whose mapped account did not buy this campaign is
+// a plain untruth.
+//
+// So probe OUTSIDE the window: has ANY Meta metric row ever landed for this
+// org? That is the only trustworthy signal — deliberately not
+// ad_accounts.period_synced_at, which records that a sync RAN and the window
+// it ASKED for, not what came back (migration 000116's header documents a live
+// account showing a clean sync through June 2026 with zero metric rows ever).
+// Called only on the empty-window path, so the normal path pays nothing.
+async function emptyWindowState(orgId) {
+    return (await marketingRepository.hasProviderMetrics(orgId, 'meta_ads'))
+        ? 'no_spend_in_window' : 'never_synced';
 }
 
 function excludedAccountsOf(accounts) {
@@ -173,15 +268,32 @@ export const facebookReportService = {
         }
         const excludedAccounts = excludedAccountsOf(accounts);
 
+        // PRACTICE SCOPE, BOTH SIDES. campaignSpendByProvider used to take no
+        // practice at all while the funnel beside it took one, so a
+        // five-practice group filtering to ONE practice divided the whole
+        // group's Meta spend by that practice's leads — every cost figure
+        // roughly 5x the truth, a group-wide Total under a practice-specific
+        // heading, and an ad-set tier (which always did filter) contradicting
+        // the campaign tier above it.
+        //
+        // SEMANTIC ASYMMETRY, deliberate and not reconcilable: ad_metrics' and
+        // the deep tables' practice_id is stamped from the AD ACCOUNT's
+        // practice mapping, while the funnel's practice_id is the LEAD's own
+        // routing. A practice-scoped row can therefore legitimately show spend
+        // with no leads (an account mapped here whose leads routed elsewhere)
+        // or leads with no spend (leads routed here from an unmapped or
+        // differently-mapped account). Do not try to make the two agree — they
+        // answer different questions; just know that is why they can differ.
         const [spendRowsRaw, funnelRows] = await Promise.all([
-            marketingRepository.campaignSpendByProvider(orgId, win.since, win.until, 'meta_ads'),
-            marketingRepository.metaFunnel(orgId, win.since, win.until, practiceId),
+            marketingRepository.campaignSpendByProvider(orgId, win.since, win.until, 'meta_ads', null, practiceId),
+            loadFunnel(orgId, win.since, win.until, practiceId),
         ]);
 
         const spendRows = collapseByCampaign(spendRowsRaw);
         if (spendRows.length === 0) {
             return {
-                state: 'never_synced', coverage: null, rows: [], excludedAccounts, totals: null, unmatchedLeads: null,
+                state: await emptyWindowState(orgId), coverage: null, rows: [], excludedAccounts,
+                totals: null, unmatchedLeads: null,
                 effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
             };
         }
@@ -245,14 +357,14 @@ export const facebookReportService = {
         const accounts = await metaAccounts(orgId);
         if (accounts.length === 0) {
             return {
-                state: 'not_connected', coverage: null, rows: [], notIdentified: null,
+                state: 'not_connected', coverage: null, rows: [], notIdentified: null, unmatchedLeads: null,
                 effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
             };
         }
 
         const [grainRows, funnelRows] = await Promise.all([
             adGrainRepository.rollup(orgId, 'meta_adset', { since: win.since, until: win.until, practiceId, campaignId }),
-            marketingRepository.metaFunnel(orgId, win.since, win.until, practiceId),
+            loadFunnel(orgId, win.since, win.until, practiceId),
         ]);
 
         const forCampaign = (funnelRows ?? []).filter((r) => r.campaign_id === campaignId);
@@ -266,29 +378,48 @@ export const facebookReportService = {
             byAdSet.set(r.ad_set_id, list);
         }
 
-        const rows = (grainRows ?? []).map((g) => ({
-            ...withCosts(
-                { id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null },
-                Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0),
-                sumFunnel(byAdSet.get(g.entity_id) ?? []),
-            ),
-            // Reach counts unique PEOPLE, so it is never additive. Carried
-            // per ad set and never summed into a total.
-            reach: g.reach ?? null,
-        }));
+        // No `reach` here. ad_grain_rollup's RETURNS TABLE does not include
+        // it — the column IS stored on ad_meta_adsets, but the rollup never
+        // returns it, so `g.reach` was permanently undefined and every ad set
+        // rendered an em dash under a header explaining a number that never
+        // appeared. Surfacing it properly needs a new RPC and a migration; an
+        // always-empty column is worse than no column, so the column is gone
+        // until that exists.
+        const rows = (grainRows ?? []).map((g) => withCosts(
+            { id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null },
+            Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0),
+            sumFunnel(byAdSet.get(g.entity_id) ?? []),
+        ));
 
-        // Leads whose ad set we could not determine. They carry no spend, so
-        // they carry no cost either — inventing one would be a fiction.
+        // TWO buckets, because there are two distinct ways a lead can fail to
+        // land in a row above, and collapsing them loses leads outright.
+        //
+        //  - notIdentified: the ad set could not be resolved at all (ad_set_id
+        //    null). Meta never told us which ad set the lead came from.
+        //  - unmatchedLeads: the ad set RESOLVED, but is not among the rows on
+        //    screen — it had no delivery in this window, or its spend sits
+        //    under a different practice mapping than the current filter.
+        //
+        // Before the second bucket existed those leads appeared in no row and
+        // in no bucket: a campaign row saying 100 leads could render as 60 in
+        // the table plus a 20-lead "not identified" row, with 20 simply gone.
+        // rows + notIdentified + unmatchedLeads now reconciles exactly to the
+        // campaign tier's row for this campaign — there is a test pinning that.
+        const shownAdSetIds = new Set((grainRows ?? []).map((g) => g.entity_id));
         const orphan = sumFunnel(forCampaign.filter((r) => !r.ad_set_id));
         const notIdentified = orphan.leads > 0 ? orphan : null;
+        const unmatched = sumFunnel(
+            forCampaign.filter((r) => r.ad_set_id && !shownAdSetIds.has(r.ad_set_id)));
+        const unmatchedLeads = unmatched.leads > 0 ? unmatched : null;
 
         // Same guard as campaigns(): zero leads in the window is not evidence
         // of missing ad-id coverage, only a quiet window. Do not drop the
-        // leadsTotal > 0 check.
-        const state = (grainRows ?? []).length === 0 ? 'never_synced'
+        // leadsTotal > 0 check. And an empty rollup is not evidence of a
+        // missing sync either — see emptyWindowState.
+        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId)
             : coverage.leadsTotal > 0 && coverage.leadsWithAdSet === 0 ? 'no_ad_id_coverage' : 'ok';
         return {
-            state, coverage, rows, notIdentified,
+            state, coverage, rows, notIdentified, unmatchedLeads,
             effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
         };
     },
@@ -298,7 +429,9 @@ export const facebookReportService = {
         const win = clampWindow(since, until);
         const [grainRows, funnelRows] = await Promise.all([
             adGrainRepository.rollup(orgId, 'meta_ad', { since: win.since, until: win.until, practiceId, parentId: adSetId }),
-            marketingRepository.metaFunnel(orgId, win.since, win.until, practiceId),
+            // Cached: this is the call every ad-set expansion used to re-run
+            // in full. See loadFunnel.
+            loadFunnel(orgId, win.since, win.until, practiceId),
         ]);
 
         const byAd = new Map();
@@ -338,4 +471,6 @@ export const facebookReportService = {
     },
 };
 
-export const __test = { perUnitPence, ratio, coverageOf, sumFunnel, collapseByCampaign, excludedAccountsOf };
+export const __test = {
+    perUnitPence, ratio, coverageOf, sumFunnel, collapseByCampaign, excludedAccountsOf, funnelUntil,
+};

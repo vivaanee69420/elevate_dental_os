@@ -245,6 +245,57 @@ describe('campaignSpendByProvider', () => {
         expect(rows).toEqual([]);
         expect(supaRec.last).toBeUndefined();
     });
+
+    // The Facebook report's campaign tier needs a practice filter here, because
+    // its funnel is already practice-scoped: without one, a five-practice group
+    // filtering to ONE practice divided the whole group's Meta spend by that
+    // practice's leads. practiceId is the SIXTH argument so the reconciliation
+    // service's five-argument call site keeps working untouched.
+    it('narrows to one practice when given one', async () => {
+        await marketingRepository.campaignSpendByProvider(
+            ORG, '2026-08-01', '2026-08-31', 'meta_ads', null, 'prac-1');
+        expect(supaRec.last.eqs).toContainEqual({ col: 'practice_id', val: 'prac-1' });
+    });
+
+    it('applies no practice filter when the argument is omitted', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'meta_ads');
+        expect(supaRec.last.eqs.some((x) => x.col === 'practice_id')).toBe(false);
+    });
+});
+
+// Distinguishes "this tenant has never synced Meta" from "this tenant synced
+// fine but bought nothing in the window you are looking at" — two facts that
+// both render as an empty window and must not share one message.
+describe('hasProviderMetrics', () => {
+    it('is org- and provider-scoped, and asks for at most one row', async () => {
+        supaRec.resultProvider = () => ({ data: [{ id: 1 }], error: null });
+        const has = await marketingRepository.hasProviderMetrics(ORG, 'meta_ads');
+        expect(has).toBe(true);
+        expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+        expect(supaRec.last.eqs).toContainEqual({ col: 'provider', val: 'meta_ads' });
+        expect(supaRec.last.limitN).toBe(1);
+    });
+
+    // Deliberately UNBOUNDED BY DATE: a probe inside the window is just the
+    // empty window asked a second time, and would answer "never synced" for
+    // every quiet period.
+    it('applies no date bound — that is the whole point of the probe', async () => {
+        await marketingRepository.hasProviderMetrics(ORG, 'meta_ads');
+        expect(supaRec.last.gtes ?? []).toEqual([]);
+        expect(supaRec.last.ltes ?? []).toEqual([]);
+        expect(supaRec.last.lts ?? []).toEqual([]);
+    });
+
+    it('reports false when no row has ever landed', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        expect(await marketingRepository.hasProviderMetrics(ORG, 'meta_ads')).toBe(false);
+    });
+
+    it('surfaces a read error rather than answering "never synced"', async () => {
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'statement timeout' } });
+        await expect(marketingRepository.hasProviderMetrics(ORG, 'meta_ads'))
+            .rejects.toThrow(/statement timeout/);
+    });
 });
 
 describe('adAccountsForProvider', () => {
