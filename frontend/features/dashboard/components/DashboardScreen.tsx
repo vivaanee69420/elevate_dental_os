@@ -173,8 +173,20 @@ export default function DashboardScreen() {
     // template's. Render the panel only when the model is seeded from real
     // baseline figures.
     const baseline = health?.baseline ?? {};
+    // Break-even is a function of the FIXED/VARIABLE COST SPLIT, not of
+    // turnover. A baseline carrying revenue but no cost_* fields still leaves
+    // seededPL using the template's invented percentages, so scaling them to a
+    // real turnover yields a real-looking break-even built on fictional costs —
+    // the same defect, harder to spot. Require turnover AND at least one real
+    // cost input before the panel claims to describe this business.
+    const COST_KEYS = [
+      'cost_associates', 'cost_lab', 'cost_materials',
+      'cost_staff', 'cost_property', 'cost_marketing',
+    ] as const;
     const hasCostModel =
-      typeof baseline.revenue === 'number' && baseline.revenue > 0;
+      typeof baseline.revenue === 'number' &&
+      baseline.revenue > 0 &&
+      COST_KEYS.some((k) => typeof baseline[k] === 'number' && baseline[k] > 0);
     const pl = seededPL(baseline, targetMargin);
     const calc = calcPL(pl);
 
@@ -1126,17 +1138,23 @@ export default function DashboardScreen() {
                         opacity: 0.8,
                       }}
                     />
-                    <div
-                      style={{
-                        position: 'absolute',
-                        bottom: `${bh}%`,
-                        left: '5%',
-                        right: '5%',
-                        height: 2,
-                        background: NEG,
-                        opacity: 0.8,
-                      }}
-                    />
+                    {/* Break-even reference line. Gated: without a real cost
+                        model `be` is 0, which would draw a red "break-even"
+                        rule flat along the axis — a fabricated line claiming
+                        this group breaks even at £0. */}
+                    {v.hasCostModel && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          bottom: `${bh}%`,
+                          left: '5%',
+                          right: '5%',
+                          height: 2,
+                          background: NEG,
+                          opacity: 0.8,
+                        }}
+                      />
+                    )}
                   </div>
                   <div
                     className="text-ink-muted"

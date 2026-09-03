@@ -5,6 +5,7 @@
 import * as lead_repository_1 from "../repositories/lead.repository.js";
 import * as errors_1 from "../middleware/errors.js";
 import * as lead_model_1 from "../models/lead.model.js";
+import * as date_window_1 from "../lib/date-window.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { assertOrgOwns } from "../lib/tenant-guard.js";
@@ -138,7 +139,19 @@ export const leadService = {
     // includes leads which have since died is honest only if the death toll is
     // visible next to it.
     async funnel(orgId, { since = null, until = null, practiceId = null } = {}) {
-        const rows = await lead_repository_1.leadRepository.funnelCounts(orgId, { since, until, practiceId });
+        // 3. USE THE SAME WINDOW AS THE REST OF THE PAGE. `until` arrives as a
+        //    calendar day (YYYY-MM-DD), which a timestamptz parameter parses as
+        //    MIDNIGHT AT THE START of that day — so a bare bound silently drops
+        //    the whole final day (44 of 1,429 August leads; on day one of an
+        //    MTD window, every lead there is). lib/date-window builds both
+        //    bounds for every screen, so the funnel and the KPI cards beside it
+        //    can never describe different periods.
+        const bounds = (0, date_window_1.dayWindowISO)(since, until);
+        const rows = await lead_repository_1.leadRepository.funnelCounts(orgId, {
+            since: bounds.sinceISO ?? (0, date_window_1.startOfDayISO)(since),
+            until: bounds.untilISO ?? (0, date_window_1.endOfDayISO)(until),
+            practiceId,
+        });
 
         const byStatus = {};
         for (const status of lead_model_1.LEAD_STATUSES)

@@ -163,14 +163,36 @@ describe('empty and edge windows are honest', () => {
 });
 
 describe('tenant and scope isolation', () => {
-  it('passes the caller org, window and practice straight to the RPC', async () => {
+  it('passes the caller org and practice through, with the window normalised', async () => {
     const spy = stubCounts([]);
     await leadService.funnel(ORG_A, {
       since: '2026-01-01', until: '2026-09-03', practiceId: 'p-1',
     });
-    expect(spy).toHaveBeenCalledWith(ORG_A, {
-      since: '2026-01-01', until: '2026-09-03', practiceId: 'p-1',
-    });
+    const [org, args] = spy.mock.calls[0];
+    expect(org).toBe(ORG_A);
+    expect(args.practiceId).toBe('p-1');
+    // The upper bound must be the END of 3 September. Passing the bare
+    // 'YYYY-MM-DD' made it midnight at the START of that day, silently losing a
+    // whole day of leads (44 of 1,429 for August; all of them on an MTD day 1).
+    expect(new Date(args.until).getTime())
+      .toBe(new Date(2026, 8, 3, 23, 59, 59, 999).getTime());
+    expect(new Date(args.since).getTime())
+      .toBe(new Date(2026, 0, 1, 0, 0, 0, 0).getTime());
+  });
+
+  it('a single-day window still covers that whole day', async () => {
+    const spy = stubCounts([]);
+    await leadService.funnel(ORG_A, { since: '2026-09-01', until: '2026-09-01' });
+    const { since, until } = spy.mock.calls[0][1];
+    expect(new Date(until).getTime() - new Date(since).getTime()).toBe(86_400_000 - 1);
+  });
+
+  it('no window at all stays unbounded rather than becoming an empty one', async () => {
+    const spy = stubCounts([]);
+    await leadService.funnel(ORG_A);
+    const { since, until } = spy.mock.calls[0][1];
+    expect(since).toBeNull();
+    expect(until).toBeNull();
   });
 
   it('one org cannot be asked for another org’s funnel', async () => {

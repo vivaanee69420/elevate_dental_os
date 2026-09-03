@@ -251,9 +251,71 @@ describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
     // The identity the UI draws must hold on the numbers the UI is given.
     expect(r.cashflowPence).toBe(r.cashCollectedPence - r.totalCostsPence);
     expect(r.cashflowPence).toBe(-4_000_000);   // and it is legitimately negative
-    // 2 months of the window's cost run-rate (24m over a trailing-12 window).
-    expect(r.reservePence).toBe(Math.round((24_000_000 / 12) * 2));
+    // The run-rate divides by the months that ACTUALLY carry ledger (one here),
+    // not by the 12 months the trailing window spans. Dividing by 12 would
+    // understate the monthly cost twelvefold, understate the reserve, and so
+    // OVERSTATE excess cash — the dangerous direction.
+    expect(r.monthsCovered).toBe(1);
+    expect(r.reservePence).toBe(24_000_000 * 2);
     expect(r.excessCashPence).toBe(r.bankBalancePence - r.reservePence);
+  });
+
+  it('run-rate divides by months with ledger, not months in the window', async () => {
+    // 3 months of costs inside a 9-month window must give a 3-month run-rate.
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials'
+        ? { data: ['2026-01', '2026-02', '2026-03'].flatMap((period) => [
+            { period, dental_bucket: 'revenue', amount_pence: 10_000_000, source: 'xero' },
+            { period, dental_bucket: 'staff', amount_pence: 3_000_000, source: 'xero' },
+          ]), error: null }
+        : q.table === 'bank_accounts' ? { data: [{ balance_pence: 1_000_000 }], error: null }
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-02-01', pence: 1_000_000 }]);
+    const r = await svc.dashboardSummary(ORG_A, { now, from: '2026-01-01', to: '2026-09-30' });
+    expect(r.monthsCovered).toBe(3);
+    expect(r.reservePence).toBe(Math.round((9_000_000 / 3) * 2)); // not / 9
+  });
+
+  // An org that has connected no bank account is not an org with £0 in the
+  // bank. Summing an empty list gives 0, and `0 - reserve` would render a
+  // confident NEGATIVE excess-cash figure for a tenant that simply has not
+  // linked a bank — precisely the fabricated-number class being fixed.
+  it('no bank accounts connected → bank and excess are null, never a negative excess', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials'
+        ? { data: [
+            { period: '2026-01', dental_bucket: 'revenue', amount_pence: 60_000_000, source: 'xero' },
+            { period: '2026-01', dental_bucket: 'staff', amount_pence: 24_000_000, source: 'xero' },
+          ], error: null }
+        : q.table === 'bank_accounts' ? { data: [], error: null } // none connected
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-03-01', pence: 20_000_000 }]);
+    const r = await svc.dashboardSummary(ORG_A, { now });
+    expect(r.bankBalancePence).toBeNull();
+    expect(r.excessCashPence).toBeNull();
+    expect(r.reservePence).not.toBeNull(); // the reserve is still knowable
+  });
+
+  it('a connected bank genuinely holding £0 is reported as £0, not as unknown', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'bank_accounts' ? { data: [{ balance_pence: 0 }], error: null }
+      : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-03-01', pence: 1_000 }]);
+    const r = await svc.dashboardSummary(ORG_A, { now });
+    expect(r.bankBalancePence).toBe(0); // a real zero, distinct from "no feed"
+  });
+
+  // The window the KPI cards use and the window the lead funnel uses must be
+  // built by the same code, or the two halves of the page describe different
+  // periods. The funnel silently lost its entire final day when they diverged.
+  it('an inclusive end-of-day upper bound reaches the RPC', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
+    supaRec.rpcCalls = [];
+    await svc.dashboardSummary(ORG_A, { now, from: '2026-05-01', to: '2026-05-25' });
+    const call = supaRec.rpcCalls.find((c) => c.fn === 'settled_receipts_by_day');
+    expect(new Date(call.params.p_until).getTime())
+      .toBe(new Date(2026, 4, 25, 23, 59, 59, 999).getTime());
   });
 
   // Bank is org-level, so a practice-scoped request has no bank figure at all.

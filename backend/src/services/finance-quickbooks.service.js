@@ -78,7 +78,9 @@ export const financeQuickbooksService = {
         const sinceIso = new Date(`${fromPeriod}-01T00:00:00Z`).toISOString();
         // end of the toPeriod month
         const [ey, em] = toPeriod.split('-').map(Number);
-        const untilIso = new Date(Date.UTC(ey, em, 0, 23, 59, 59)).toISOString();
+        // .999 — without it the final second of the month falls outside a
+        // `<= until` filter.
+        const untilIso = new Date(Date.UTC(ey, em, 0, 23, 59, 59, 999)).toISOString();
 
         const [pnlRows, bankRows, bankSnapRows, receivableRows, receiptRows, accountRows] = await Promise.all([
             quickbooksFinanceRepository.pnlRows(orgId, { accountId, fromPeriod, toPeriod, accountingMethod: method }),
