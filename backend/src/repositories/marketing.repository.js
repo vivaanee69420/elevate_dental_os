@@ -89,6 +89,48 @@ export const marketingRepository = {
         };
     },
 
+    // Raw ad_metrics rows for ONE provider over a window, for the reconciliation
+    // service to sum. Deliberately NOT campaignSpend(): that method resolves its
+    // window to LONDON calendar dates for the shared ScopePeriod bar and bounds
+    // it HALF-OPEN (`gte`/`lt`), while the ad_grain_rollup RPC this feeds
+    // compares plain dates INCLUSIVE on both ends (`>= since AND <= until`).
+    // Reusing campaignSpend would silently drop the final day's spend from one
+    // side of every comparison and report a permanent false gap on the very
+    // feature built to prove the numbers tally — so `since`/`until` here are
+    // taken as plain YYYY-MM-DD strings, never routed through londonYmd, and
+    // bounded with `.gte()`/`.lte()` to match the RPC exactly.
+    //
+    // PAGED, and it must be: PostgREST caps a response at 1000 rows server-side
+    // and says nothing about it (see allForOrg in monthlyFinancial.repository.js,
+    // which documents this bug after it silently wrecked every QuickBooks-derived
+    // figure in the product). Ordered on `id`, the table's own unique key, so
+    // OFFSET paging cannot repeat or skip a row; stops on an EMPTY page, never a
+    // short one — the server's cap is its own setting, and treating a short page
+    // as the last would reintroduce the same truncation at whatever that number
+    // happens to be.
+    async campaignSpendByProvider(orgId, since, until, provider) {
+        const PAGE = 1000;
+        const MAX_PAGES = 500;   // a bound against a faulty server, not real data
+        const rows = [];
+        for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            const { data, error } = await supabase_1.serviceClient
+                .from('ad_metrics')
+                .select('id, spend_pence')
+                .eq('organisation_id', orgId)
+                .eq('provider', provider)
+                .gte('metric_date', since)
+                .lte('metric_date', until)
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(`ad_metrics read: ${error.message}`);
+            const page = Array.isArray(data) ? data : [];
+            rows.push(...page);
+            if (page.length === 0) break;
+            from += page.length;
+        }
+        return rows;
+    },
+
     // The org's ad accounts and which practice each is mapped to. Read so the
     // screen can distinguish "this practice spent nothing" from "no ad account
     // is mapped to this practice, so we cannot attribute any spend to it" —

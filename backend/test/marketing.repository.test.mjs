@@ -117,6 +117,76 @@ describe('campaignSpend window', () => {
     });
 });
 
+// campaignSpendByProvider feeds the reconciliation service, which compares it
+// directly against ad_grain_rollup — a plpgsql RPC that filters
+// `metric_date >= p_since AND metric_date <= p_until` on PLAIN date strings.
+// Any divergence from that (a London-resolved date, or a half-open bound)
+// reintroduces the false permanent gap RULING B exists to prevent.
+describe('campaignSpendByProvider', () => {
+    const lte = (col) => supaRec.last.ltes.find((x) => x.col === col)?.val;
+
+    it('takes since/until as plain strings, verbatim — no londonYmd resolution', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(gte('metric_date')).toBe('2026-08-01');
+        expect(lte('metric_date')).toBe('2026-08-31');
+    });
+
+    it('bounds INCLUSIVE on both ends (gte/lte), matching ad_grain_rollup — never lt', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(supaRec.last.ltes?.some((x) => x.col === 'metric_date')).toBe(true);
+        expect(supaRec.last.lts ?? []).toEqual([]);
+    });
+
+    it('scopes to the organisation and the requested provider', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'meta_ads');
+        expect(supaRec.last.table).toBe('ad_metrics');
+        expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+        expect(supaRec.last.eqs).toContainEqual({ col: 'provider', val: 'meta_ads' });
+    });
+
+    it('returns rows carrying spend_pence for the caller to sum', async () => {
+        supaRec.resultProvider = () => ({
+            data: [{ id: 'a', spend_pence: 1200 }, { id: 'b', spend_pence: 3400 }],
+            error: null,
+        });
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(rows.reduce((n, r) => n + r.spend_pence, 0)).toBe(4600);
+    });
+
+    // The bug this pins: PostgREST caps a table read at 1000 rows server-side
+    // and says nothing about it (see allForOrg in monthlyFinancial.repository.js).
+    it('returns EVERY row when the window exceeds one page, not just the first 1000', async () => {
+        supaRec.resultProvider = () => ({
+            data: Array.from({ length: 1064 }, (_, i) => ({ id: `r${i}`, spend_pence: 100 })),
+            error: null,
+        });
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(rows).toHaveLength(1064);
+    });
+
+    it('does not stop on a SHORT page, only an empty one', async () => {
+        // The server's cap is its own setting; treating a short page as the
+        // last would reintroduce the truncation at whatever number that is.
+        supaRec.resultProvider = () => ({
+            data: Array.from({ length: 700 }, (_, i) => ({ id: `r${i}`, spend_pence: 1 })),
+            error: null,
+        });
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(rows).toHaveLength(700);
+    });
+
+    it('orders by id, the table\'s unique key, so OFFSET paging cannot duplicate or skip a row', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(supaRec.last.orders?.some((o) => o.col === 'id')).toBe(true);
+    });
+
+    it('surfaces a read error rather than returning a short result', async () => {
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'statement timeout' } });
+        await expect(marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads'))
+            .rejects.toThrow(/statement timeout/);
+    });
+});
+
 describe('leadsByCampaign', () => {
     it('passes the raw timestamptz bounds through to the RPC, org-scoped', async () => {
         supaRec.rpcCalls = [];
