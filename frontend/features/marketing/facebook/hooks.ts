@@ -44,7 +44,7 @@
 // as effectiveSince/windowClamped on every payload — that is what lets a
 // future component say "showing from X" rather than quietly showing less
 // than what the period pill claims.
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, keepPreviousData } from '@tanstack/react-query';
 import { useScopePeriod, scopeKey, type ResolvedWindow } from '@/features/_shared/scope-context';
 import {
   fetchFacebookCampaigns, fetchFacebookAdSets, fetchFacebookAds,
@@ -128,12 +128,26 @@ export function useFacebookAdSets(campaignId: string) {
   });
 }
 
+// Ads for one ad set, one page at a time (Task 7's "Show more" — a tenant
+// with many times this org's ad count must not be rendered in one response).
+// useInfiniteQuery, not repeated useQuery calls with cursor in the key: the
+// cursor is a page PARAMETER react-query threads through queryFn/
+// getNextPageParam itself, not a cache-key dimension — putting it in the key
+// would give every page its own cache entry instead of one growing list.
+// Matches the shape of useTreatmentsCompletedLines (clinicians-hooks.ts).
 export function useFacebookAds(adSetId: string, enabled: boolean) {
   const { scope, win } = useScopePeriod();
   const qs = facebookWindowParams(scope, win);
-  return useQuery<FacebookAdsPage>({
+  return useInfiniteQuery<FacebookAdsPage>({
     queryKey: ['marketing', 'facebook', 'ads', adSetId, scopeKey({ scope, win })],
-    queryFn: () => fetchFacebookAds(adSetId, qs),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const cursor = pageParam as string | null;
+      return fetchFacebookAds(adSetId, cursor ? `${qs}&cursor=${encodeURIComponent(cursor)}` : qs);
+    },
+    // undefined (not null) tells react-query there is no next page — the
+    // contract getNextPageParam must follow.
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
