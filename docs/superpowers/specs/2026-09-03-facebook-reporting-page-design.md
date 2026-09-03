@@ -229,7 +229,7 @@ patients, CPL, CPB, CPA.
 
 ## Migration
 
-One migration, `20260101000149_ad_meta_funnel.sql`: widen
+One migration, `20260101000153_ad_meta_funnel.sql`: widen
 `ad_lead_conversions` with `ad_id`, add `ad_meta_funnel`, grants, and
 `NOTIFY pgrst, 'reload schema';`. Idempotent and additive.
 

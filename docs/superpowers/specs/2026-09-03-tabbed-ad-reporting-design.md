@@ -22,7 +22,7 @@ Google has not been built yet, so it costs nothing to get right first time.
 2. The routes become query-parameter filters rather than nested paths.
 3. The two Facebook screens are replaced by one tabbed page.
 
-**No migration is needed for any of this.** `ad_grain_rollup` and `ad_keyword_rollup` already exist and are applied (`000148`), and `ad_meta_funnel` is applied (`000149`). This piece is entirely application code.
+**No migration is needed for any of this.** `ad_grain_rollup` and `ad_keyword_rollup` already exist and are applied (`000148`), and `ad_meta_funnel` is applied (`000153`). This piece is entirely application code.
 
 ## The shared pattern
 
