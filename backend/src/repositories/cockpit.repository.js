@@ -263,13 +263,17 @@ export const cockpitRepository = {
     // has no practice param; it returns practice_id per row, so the caller
     // filters. organisation_id is passed as p_org — the RPC filters on it.
     async revenueByLine(orgId, since, until) {
-        const { data, error } = await supabase_1.serviceClient.rpc('treatment_revenue_matrix', {
-            p_org: orgId,
-            p_since: since,
-            p_until: until,
-        });
-        if (error) throw new Error(`treatment_revenue_matrix: ${error.message}`);
-        return data ?? [];
+        // PAGED. The 1000-row cap applies to set-returning RPCs exactly as it
+        // does to table reads, and this one was a single unbounded call sitting
+        // at 850 rows for a 12-month window — 85% of the cap, after which §7
+        // Revenue by line would have started undercounting silently, with no
+        // error to notice. The RPC returns one row per (practice_id,
+        // treatment_name), which is unique, so ordering on that pair makes the
+        // pages stable and non-overlapping.
+        return fetchAllPages(() => supabase_1.serviceClient
+            .rpc('treatment_revenue_matrix', { p_org: orgId, p_since: since, p_until: until })
+            .order('practice_id', { ascending: true })
+            .order('treatment_name', { ascending: true }));
     },
 
     // Every active practice, so §6 can show a practice that is REPORTING NOTHING
