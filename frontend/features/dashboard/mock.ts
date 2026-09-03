@@ -1,28 +1,18 @@
-// Command Centre — client-side helpers ONLY.
+// Command Centre — client-side helpers ONLY. Despite the filename, nothing in
+// here is mock DATA; it is the editable what-if P&L model plus pure
+// formatters. (The synthetic dataset this file was named for was deleted.)
 //
 // All data now comes from real backend endpoints (see ./api.ts):
-//   dashboard-summary, revenue-series, practice-summary, /api/leads,
+//   dashboard-summary, revenue-series, business-hub, /api/leads/funnel,
 //   /api/health. The synthetic DATASET, fabricated PRACTICE_WEIGHTS and
 //   per-practice financial generator were deleted — they invented numbers
 //   with no real source. What remains here is genuinely client-side: the
 //   editable P&L what-if model + pure formatters/labels.
 
-export const STAGES = [
-  { key: 'new', label: 'New' },
-  { key: 'contact_attempted', label: 'Contact attempted' },
-  { key: 'contact_made', label: 'Contact made' },
-  { key: 'consultation_booked', label: 'Consult booked' },
-  { key: 'consultation_attended', label: 'Consult attended' },
-  { key: 'treatment_started', label: 'Treatment started' },
-] as const;
-
-// Shape the lead funnel/conversion math expects (mapped from real /api/leads).
-export type Lead = {
-  id: number | string;
-  practice: string;
-  status: string;
-  created: string;
-};
+// NOTE: the funnel STAGES list and the client-side `Lead` shape used to live
+// here. Both are gone: stage ordering and the cumulative counts are now owned
+// by the server (leadService.funnel), so there is exactly one definition of
+// what the funnel means rather than one per screen.
 
 export type PLLine = {
   id: string;

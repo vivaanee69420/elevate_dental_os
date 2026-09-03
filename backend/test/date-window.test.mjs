@@ -121,3 +121,49 @@ describe('both callers share the helper, so they cannot drift again', () => {
     }
   });
 });
+
+// ============================================================================
+// businessHub's ad window. `until` reaches it in three different shapes
+// depending on the caller — an exclusive next-day-midnight (the Business Hub
+// scope bar), an inclusive end-of-day, or a UTC midnight — and the ad
+// date-range has to derive the same last calendar DAY from all three.
+//
+// It used to subtract a fixed 86,400,000ms and slice the UTC string, which is
+// only correct when `until` is exactly UTC midnight. A window built in a
+// browser carries the user's offset, so for a UK user in BST `until` arrives
+// as 23:00Z and minus-24h lands on the PREVIOUS day — the ad window silently
+// lost its final day for the ~7 months of the year Britain is on BST.
+//
+// `until - 1ms` is the last instant inside the window under every convention.
+// ============================================================================
+describe('the ad window keeps its final day under every until convention', () => {
+  const lastDay = (untilISO) =>
+    new Date(new Date(untilISO).getTime() - 1).toISOString().slice(0, 10);
+
+  it('exclusive next-day midnight in UTC', () => {
+    expect(lastDay('2026-08-01T00:00:00.000Z')).toBe('2026-07-31');
+  });
+
+  it('exclusive next-day midnight from a BST browser (the broken case)', () => {
+    // 2026-08-01T00:00:00+01:00
+    expect(lastDay('2026-07-31T23:00:00.000Z')).toBe('2026-07-31');
+    // The old arithmetic gave 2026-07-30 here.
+    const old = new Date(new Date('2026-07-31T23:00:00.000Z').getTime() - 86400000)
+      .toISOString().slice(0, 10);
+    expect(old).toBe('2026-07-30');
+  });
+
+  it('inclusive end-of-day', () => {
+    expect(lastDay('2026-07-31T23:59:59.999Z')).toBe('2026-07-31');
+  });
+
+  it('a single-day window resolves to that day', () => {
+    expect(lastDay('2026-09-02T00:00:00.000Z')).toBe('2026-09-01');
+  });
+
+  it('the service uses the convention-agnostic form', () => {
+    const analytics = readFileSync(join(SRC, 'services', 'analytics.service.js'), 'utf8');
+    expect(analytics).toMatch(/new Date\(untilISO\)\.getTime\(\) - 1\)/);
+    expect(analytics).not.toMatch(/new Date\(untilISO\)\.getTime\(\) - 86400000/);
+  });
+});

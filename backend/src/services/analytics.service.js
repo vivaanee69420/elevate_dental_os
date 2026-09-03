@@ -2708,7 +2708,17 @@ export const analyticsService = {
         // Ad-platform lead window as YYYY-MM-DD (ad_metrics.metric_date is a date).
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
         const adFromDate = sinceISO.slice(0, 10);
-        const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 86400000) : now()).toISOString().slice(0, 10);
+        // The last calendar DAY inside the window. Derived as `until - 1ms`,
+        // which is correct whichever convention the caller used — an exclusive
+        // next-day-midnight, an inclusive end-of-day, or a UTC-midnight bound.
+        //
+        // It used to subtract a fixed 86400000ms and slice the UTC string. That
+        // is only right when `until` is exactly UTC midnight. Windows built in
+        // a browser carry the user's offset, so for a UK user in BST `until`
+        // arrives as 23:00Z; minus 24h lands on the previous day and the ad
+        // window silently lost its final day for most of the year.
+        const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 1) : now())
+            .toISOString().slice(0, 10);
         // Bounded fan-out. These are 16 heavy aggregates; firing them all at
         // once starved individual statements past the 8s statement_timeout
         // (panels failed while their neighbours on the same page loaded).

@@ -29,12 +29,6 @@ export interface SeriesMonth {
   cash: number;
 }
 
-export interface PracticeRow {
-  name: string;
-  turnover: number;
-  margin: number;
-}
-
 const p = (pence: number) => Math.round((pence || 0) / 100);
 // Null-preserving variant — `p()` would collapse a null into a real-looking £0.
 const pn = (pence: number | null | undefined) =>
@@ -80,23 +74,6 @@ export async function getRevenueSeries(range?: PeriodRange, practiceId?: string 
       revenue: p(m.revenue),
       profit: p(m.profit),
       cash: p(m.cash),
-    })),
-  };
-}
-
-export async function getPracticeSummary(): Promise<{
-  groupDerived: boolean;
-  truncated: boolean;
-  practices: PracticeRow[];
-}> {
-  const r = await api('/api/analytics/practice-summary');
-  return {
-    groupDerived: !!r?.groupDerived,
-    truncated: !!r?.truncated,
-    practices: (r?.practices ?? []).map((x: any) => ({
-      name: x.name,
-      turnover: p(x.turnoverPence),
-      margin: x.marginPct ?? 0,
     })),
   };
 }

@@ -4,9 +4,11 @@
 //   • KPIs + cash position  ← GET /api/analytics/dashboard-summary (baseline)
 //   • 12-month chart        ← GET /api/analytics/revenue-series (baseline
 //                              projection — derived, NOT live history)
-//   • Per-practice scorecard← GET /api/analytics/practice-summary (real
-//                              practices + settled payments; margin is the
-//                              group baseline margin, flagged group-derived)
+//   • Per-practice scorecard← GET /api/analytics/business-hub (the same
+//                              rollup the Business Hub page renders, so the
+//                              two screens cannot disagree). Turnover is real
+//                              per practice; there is no per-practice cost
+//                              feed, so no per-practice margin is shown.
 //   • Lead funnel           ← GET /api/leads/funnel (server-aggregated;
 //                              NEVER sliced from the capped /api/leads list)
 //   • Setup banner          ← GET /api/health (real setup_completed)
@@ -52,6 +54,24 @@ const RANGES: { k: DateRange; l: string }[] = [
 // whole dashboard (KPIs + chart), not just a client-side chart slice.
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+// Local-time day bounds, matching the backend's lib/date-window. Every window
+// this page derives goes through these two so none of them can drift apart.
+const startOfDay = (ymdStr: string) => {
+  const [y, m, d] = ymdStr.split('-').map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0);
+};
+const endOfDay = (ymdStr: string) => {
+  const [y, m, d] = ymdStr.split('-').map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59, 999);
+};
+// Business Hub's `until` is EXCLUSIVE — the start of the day after `to`. Built
+// by calendar arithmetic, not `+ 86_400_000`: adding a fixed day of
+// milliseconds lands on 23:00 or 01:00 across a DST boundary, not midnight.
+const startOfNextDay = (ymdStr: string) => {
+  const [y, m, d] = ymdStr.split('-').map(Number);
+  return new Date(y, m - 1, d + 1, 0, 0, 0, 0);
+};
+
 function rangeToDates(range: DateRange): { from: string; to: string } {
   const now = new Date();
   const y = now.getFullYear();
@@ -109,7 +129,14 @@ export default function DashboardScreen() {
   // A custom [from,to] window overrides the preset chips and drives the whole
   // dashboard (KPIs + chart). null = follow the active MTD/QTD/6M/YTD chip.
   const [custom, setCustom] = useState<{ from: string; to: string } | null>(null);
-  const [selected, setSelected] = useState<string>('All practices');
+  // Selection is held as a practice ID, never a name. Resolving a name back to
+  // an id (`practices.find(p => p.name === selected)`) breaks silently the
+  // moment two sources spell a practice differently — the lookup returns
+  // undefined, selectedId falls back to null, and the page quietly shows GROUP
+  // figures while the tile still looks selected. The scorecard's names come
+  // from the Business Hub rollup and the selector's from /api/practices, so
+  // that was two independent spellings feeding one string comparison.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const period = useMemo(
     () => custom ?? rangeToDates(range),
     [range, custom],
@@ -125,18 +152,24 @@ export default function DashboardScreen() {
   const allPractices: { id: string; name: string }[] = (practicesData?.practices ?? []).filter(
     (p) => p.pms_site_id != null,
   );
-  const selectedId = selected === 'All practices'
-    ? null
-    : allPractices.find((p) => p.name === selected)?.id ?? null;
+  // Display name for the current selection, derived FROM the id.
+  const selected =
+    allPractices.find((p) => p.id === selectedId)?.name ?? 'All practices';
 
   const { data: summary, isLoading: sumLoading } = useDashboardSummary(period, selectedId);
   const { data: seriesResp, isLoading: seriesLoading } = useRevenueSeries(period, selectedId);
   // Per-practice scorecard is sourced from the Business Hub rollup (single source
   // of truth) windowed to the dashboard period — billed turnover per practice,
   // same logic the Business Hub page renders. UTC day bounds match ScopePeriod.
+  // Built on the SAME basis as every other window on this page. It used to
+  // parse the day as UTC (`${from}T00:00:00Z`) and end at `to + 1 day`, while
+  // the KPI window is built in local time and ends at the last instant of
+  // `to` — so the per-practice turnover in the scorecard covered a different
+  // period from the Turnover KPI directly above it, by up to a day.
   const hubWin = useMemo(() => ({
-    since: new Date(`${period.from}T00:00:00Z`).toISOString(),
-    until: new Date(new Date(`${period.to}T00:00:00Z`).getTime() + 86_400_000).toISOString(),
+    since: startOfDay(period.from).toISOString(),
+    // Exclusive, per businessHub's convention.
+    until: startOfNextDay(period.to).toISOString(),
     label: periodLabel,
   }), [period, periodLabel]);
   const { data: hub, isLoading: hubLoading } = useBusinessHub(hubWin);
@@ -151,16 +184,32 @@ export default function DashboardScreen() {
     until: period.to,
     practiceId: selectedId,
   });
-  const { data: roi } = useMarketingRoi();
+  // Scoped to the page's window and practice. With no arguments these three
+  // cards silently described a DIFFERENT scope from every other card on the
+  // page: group-wide, over the backend's default calendar month, while the
+  // user had a practice selected and YTD chosen. They were also labelled
+  // "(30d)", which was not the window the backend actually used either.
+  const { data: roi } = useMarketingRoi(selectedId, period);
 
-  const noBaseline = !!summary?.error;
+  // dashboardSummary returns real-or-zero and no longer sets `error`, so this
+  // flag was permanently false and the empty state it guards became
+  // unreachable — a brand-new org with nothing connected saw a confident grid
+  // of £0 cards instead of "connect your data". Drive it off the actual
+  // condition: the summary loaded and there is genuinely nothing in it.
+  const noBaseline =
+    !!summary?.error ||
+    (!!summary && !sumLoading && !summary.revenue && !summary.cashCollected);
 
   const [targetMargin, setTargetMargin] = useState<number>(
     DEFAULT_PL_TEMPLATE.targetMargin,
   );
 
   const practiceNames = useMemo(() => allPractices.map((p) => p.name), [allPractices]);
-  const practiceList = ['All practices', ...practiceNames];
+  // id-keyed, so the selector and the scorecard tiles select the same thing.
+  const practiceList = useMemo(
+    () => [{ id: null as string | null, name: 'All practices' }, ...allPractices],
+    [allPractices],
+  );
 
   const v = useMemo(() => {
     const TM = targetMargin / 100;
@@ -213,7 +262,6 @@ export default function DashboardScreen() {
       revenue: m.revenue,
       profit: m.profit,
       cash: m.cash,
-      target: Math.round(m.revenue * TM),
       // Monthly break-even, only when it comes from a real cost model. Without
       // one it is the demo template's £871k/12, and it both drew a false
       // reference line and — via chartMax — rescaled the real bars against it.
@@ -223,7 +271,6 @@ export default function DashboardScreen() {
       1,
       ...chartSeries.map((s) => Math.max(s.revenue, s.be)),
     );
-    const rangeRev = win.reduce((s, m) => s + m.revenue, 0);
     const firstM = win[0]?.month ?? '';
     const lastM = win[win.length - 1]?.month ?? '';
     const dateLabel = win.length === 1 ? firstM : `${firstM} → ${lastM}`;
@@ -348,6 +395,7 @@ export default function DashboardScreen() {
     const scorecardRows = (hub?.practices ?? []).filter((p) => dentallyIds.has(p.practiceId));
     const scorecardTotal = scorecardRows.reduce((t, p) => t + p.revenuePence, 0);
     const scorecard = scorecardRows.map((p) => ({
+      practiceId: p.practiceId,
       name: p.name,
       turnover: Math.round(p.revenuePence / 100),
       sharePct: scorecardTotal ? (p.revenuePence / scorecardTotal) * 100 : 0,
@@ -375,7 +423,6 @@ export default function DashboardScreen() {
       bankBalance,
       monthsCovered,
       margin,
-      rangeRev,
       dateLabel,
       kpis,
       scorecard,
@@ -450,7 +497,7 @@ export default function DashboardScreen() {
               Command Centre
             </h1>
             <p className="text-ink-muted" style={{ fontSize: 13 }}>
-              Group · {practiceNames.length || 0} practices · {periodLabel}{' '}
+              Group · {practiceNames.length || 0} reporting practices · {periodLabel}{' '}
               ({v.dateLabel || '—'})
             </p>
           </div>
@@ -476,12 +523,33 @@ export default function DashboardScreen() {
           className="card card-padded mb-4"
           style={{ borderLeft: `4px solid ${AMB}` }}
         >
+          {/* The old copy said "No baseline set" and sent the user to Business
+              Health. That was wrong twice over: these KPIs read from settled
+              payments and the accounting ledger, not the baseline, and the flag
+              never fired at all. Name the real cause, and separate "nothing
+              connected" from "nothing in this window". */}
           <div className="font-bold" style={{ fontSize: 13 }}>
-            No baseline set
+            {selectedId || custom || range !== 'ytd'
+              ? 'No figures for this selection'
+              : 'No financial data yet'}
           </div>
           <div className="text-ink-muted" style={{ fontSize: 12 }}>
-            Financial KPIs, the projection chart and the cash position read
-            from your Business Health baseline. Complete setup to populate them.
+            {selectedId || custom || range !== 'ytd' ? (
+              <>
+                No settled payments or accounting actuals fall inside{' '}
+                {selected === 'All practices' ? 'this period' : `${selected} for this period`}.
+                Try a wider window or All practices.
+              </>
+            ) : (
+              <>
+                Turnover, takings and profit come from your practice-management
+                and accounting feeds. Connect Dentally, QuickBooks or Xero on{' '}
+                <Link href="/integrations" className="font-bold text-brand">
+                  Integrations
+                </Link>{' '}
+                to populate them.
+              </>
+            )}
           </div>
         </div>
       )}
@@ -500,19 +568,19 @@ export default function DashboardScreen() {
           </span>
           {practiceList.map((p) => (
             <button
-              key={p}
-              onClick={() => setSelected(p)}
+              key={p.id ?? 'all'}
+              onClick={() => setSelectedId(p.id)}
               className="font-bold"
               style={{
                 padding: '6px 11px',
                 borderRadius: 5,
                 fontSize: 11,
-                border: `1px solid ${selected === p ? BRAND : 'var(--border)'}`,
-                background: selected === p ? BRAND : 'white',
-                color: selected === p ? 'white' : '#1F2937',
+                border: `1px solid ${selectedId === p.id ? BRAND : 'var(--border)'}`,
+                background: selectedId === p.id ? BRAND : 'white',
+                color: selectedId === p.id ? 'white' : '#1F2937',
               }}
             >
-              {p === 'All practices' ? 'All' : p}
+              {p.id === null ? 'All' : p.name}
             </button>
           ))}
         </div>
@@ -720,7 +788,7 @@ export default function DashboardScreen() {
       {roi?.connected && (
         <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
           {[
-            { label: 'Ad spend (30d)', value: fmtPence(roi.spend_pence), sub: `${roi.clicks.toLocaleString('en-GB')} clicks`, colour: BRAND },
+            { label: `Ad spend · ${periodLabel}`, value: fmtPence(roi.spend_pence), sub: `${roi.clicks.toLocaleString('en-GB')} clicks`, colour: BRAND },
             { label: 'ROAS', value: roi.roas ? `${roi.roas.toFixed(2)}x` : '—', sub: 'settled revenue / spend', colour: roi.roas >= 1 ? POS : NEG },
             { label: 'Cost / lead', value: roi.cpl_pence ? fmtPence(roi.cpl_pence) : '—', sub: `${roi.leads_from_ads.toLocaleString('en-GB')} ad leads`, colour: AMB },
           ].map((k) => (
@@ -775,8 +843,10 @@ export default function DashboardScreen() {
               Break-even · Target · Actual
             </h2>
             <p className="text-ink-muted" style={{ fontSize: 11 }}>
-              Group annualised · derived from your editable P&amp;L (seeded from
-              baseline)
+              Group · <strong>annualised</strong> from {periodLabel.toLowerCase()} (so it
+              compares like-for-like against an annual break-even — it will not
+              match the period Turnover above) · cost split from your Business
+              Health baseline
             </p>
           </div>
           <Link
@@ -817,7 +887,7 @@ export default function DashboardScreen() {
               borderRadius: '8px 0 0 8px',
             }}
           >
-            ACTUAL {ccPounds(v.annualisedRev)}
+            ACTUAL {ccPounds(v.annualisedRev)}/yr
           </div>
           <div
             style={{
@@ -975,12 +1045,12 @@ export default function DashboardScreen() {
           >
             {v.scorecard.map((p) => (
               <button
-                key={p.name}
-                onClick={() => setSelected(p.name)}
+                key={p.practiceId}
+                onClick={() => setSelectedId(p.practiceId)}
                 className="text-left"
                 style={{
                   padding: 12,
-                  border: `1px solid ${selected === p.name ? BRAND : 'var(--border)'}`,
+                  border: `1px solid ${selectedId === p.practiceId ? BRAND : 'var(--border)'}`,
                   borderRadius: 8,
                   background: 'white',
                 }}
@@ -1068,10 +1138,6 @@ export default function DashboardScreen() {
                 {x.l}
               </div>
             ))}
-            <div className="flex items-center gap-1">
-              <div style={{ width: 14, height: 2, background: AMB }} />
-              Target {targetMargin}%
-            </div>
             {v.hasCostModel && (
               <div className="flex items-center gap-1">
                 <div style={{ width: 14, height: 2, background: NEG }} />
@@ -1096,7 +1162,6 @@ export default function DashboardScreen() {
           >
             {v.chartSeries.map((s) => {
               const rh = (s.revenue / v.chartMax) * 100;
-              const th = (s.target / v.chartMax) * 100;
               const bh = (s.be / v.chartMax) * 100;
               return (
                 <div
@@ -1127,17 +1192,9 @@ export default function DashboardScreen() {
                         borderRadius: '2px 2px 0 0',
                       }}
                     />
-                    <div
-                      style={{
-                        position: 'absolute',
-                        bottom: `${th}%`,
-                        left: '5%',
-                        right: '5%',
-                        height: 2,
-                        background: AMB,
-                        opacity: 0.8,
-                      }}
-                    />
+                    {/* The margin-target overlay was removed with the revenue framing:
+                        this chart plots settled CASH, and a line at 25% of each
+                        month's cash is not a target of anything. */}
                     {/* Break-even reference line. Gated: without a real cost
                         model `be` is 0, which would draw a red "break-even"
                         rule flat along the axis — a fabricated line claiming
