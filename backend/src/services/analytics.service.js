@@ -3118,10 +3118,11 @@ export const analyticsService = {
     // scored — it is null on every synced Dentally appt (data wall), so scoring
     // it would crater every practice. RAG: green >=90, amber >=70, else red.
     async dataQuality(orgId, { now = () => new Date() } = {}) {
-        const [practices, dqRows, connectors] = await Promise.all([
+        const [practices, dqRows, connectors, integrity] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.dataQualityByPractice(orgId),
             analytics_repository_1.analyticsRepository.connectorStates(orgId),
+            analytics_repository_1.analyticsRepository.dataIntegrityAlerts(orgId),
         ]);
         const num = (v) => Number(v || 0);
         const nameBy = new Map(practices.map((p) => [p.id, p.name]));
@@ -3159,7 +3160,22 @@ export const analyticsService = {
         }, { totalAppts: 0, uncodedAppts: 0, unlinkedAppts: 0, unassignedAppts: 0, totalInvoices: 0, unmatchedInvoices: 0, invoicedPence: 0, outstandingPence: 0 });
 
         const connectorHealth = scoreConnectors(connectors, now());
-        const alerts = buildDataQualityAlerts(practiceScores, totals, connectorHealth);
+        // Integrity findings sit alongside the cleanliness/connector alerts so a
+        // tenant sees "your data is double-counted" in the same place it already
+        // looks for "your data is incomplete". These are the problems a unique
+        // index is not entitled to judge — see migration 000150.
+        const integrityAlerts = (integrity || []).map((f) => ({
+            severity: f.severity,
+            area: 'integrity',
+            key: `integrity:${f.kind}:${f.subject}`,
+            text: Number(f.value_pence) > 0
+                ? `${f.subject} — ${f.detail} (£${(Number(f.value_pence) / 100).toLocaleString('en-GB')} affected)`
+                : `${f.subject} — ${f.detail}`,
+        }));
+        const alerts = [
+            ...buildDataQualityAlerts(practiceScores, totals, connectorHealth),
+            ...integrityAlerts,
+        ].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
         return {
             orgScore,
             rag: ragBand(orgScore),
