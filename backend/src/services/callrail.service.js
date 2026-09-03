@@ -31,6 +31,7 @@ import { integrationAccountRepository } from "../repositories/integration-accoun
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { callrailRepository } from "../repositories/callrail.repository.js";
 import { callrailProvider } from "../lib/integrations/callrail-provider.js";
+import { syncAccount as pullCallrailAccount } from "../lib/integrations/callrail-sync.js";
 import { encryptSecret } from "../lib/crypto.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
 import { assertOrgOwns } from "../lib/tenant-guard.js";
@@ -235,13 +236,14 @@ export const callrailService = {
         return { removed: true };
     },
 
-    // The actual CallRail pull is Task 6's callrail-sync.js, which does not
-    // exist yet. Answering { ingested: 0 } for a real, org-owned company
-    // keeps the route honest and safe to call at any point in the rollout —
-    // mirrors integrationService.callrailSync's provider-level stub.
+    // "Sync" for one company (Task 2's per-row button). getByIdWithSecrets,
+    // not getById: the pull needs the encrypted API key, and callrail-sync's
+    // syncAccount(orgId, account, ...) takes the FULL account row, never an
+    // id it would have to re-resolve.
     async syncAccount(orgId, id) {
-        const existing = await integrationAccountRepository.getById(orgId, id);
+        const existing = await integrationAccountRepository.getByIdWithSecrets(orgId, id);
         if (!existing) throw new AppError('account not found', 404);
-        return { ingested: 0 };
+        const result = await pullCallrailAccount(orgId, existing);
+        return { ingested: result.ingested ?? 0 };
     },
 };

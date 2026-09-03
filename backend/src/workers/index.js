@@ -24,6 +24,7 @@ import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 import * as reviews_sync_1 from "../lib/integrations/reviews-sync.js";
 import * as emergent_sync_1 from "../lib/integrations/emergent-sync.js";
+import * as callrail_sync_1 from "../lib/integrations/callrail-sync.js";
 import * as google_sheets_sync_1 from "../lib/integrations/google-sheets-sync.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
 import * as aws_sns_1 from "../lib/aws-sns.js";
@@ -339,6 +340,20 @@ scheduleMonitored('emergent-sync', '20 3 * * *', async () => {
         if (results.length > 0) console.log(`[worker] Emergent sync: ${results.length} orgs`);
     } catch (err) {
         console.error('[worker] Emergent sync failed', err);
+    }
+}, { maxRuntime: 30 });
+// CallRail call-tracking pull — daily 03:30, per company (status IN
+// ('active','failed'), so one transient failure self-heals next run — see
+// callrail-sync.js's own header). This is the load-bearing path, not
+// belt-and-braces: CallRail never resends a webhook delivery, so anything
+// lost to a deploy/outage — or predating a company's connection — is only
+// ever recovered here.
+scheduleMonitored('callrail-sync', '30 3 * * *', async () => {
+    try {
+        const results = await callrail_sync_1.syncAllOrgs();
+        if (results.length > 0) console.log(`[worker] CallRail sync: ${results.length} companies`);
+    } catch (err) {
+        console.error('[worker] CallRail sync failed', err);
     }
 }, { maxRuntime: 30 });
 // Google Sheets (Call Reporting) sync — daily 03:40, full re-read of every

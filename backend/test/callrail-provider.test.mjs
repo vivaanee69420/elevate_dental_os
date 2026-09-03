@@ -159,9 +159,9 @@ describe('integrationController.callrailGet — org id comes from the session', 
 });
 
 describe('integrationService.callrailSync', () => {
-    it('returns { ingested } without throwing when there is nothing to sync yet', async () => {
+    it('returns { ingested: 0 } without throwing when there is nothing to sync yet (no companies)', async () => {
         const result = await integrationService.callrailSync('org-1');
-        expect(result).toEqual({ ingested: 0 });
+        expect(result).toEqual({ ingested: 0, accounts: 0, results: [] });
     });
 });
 

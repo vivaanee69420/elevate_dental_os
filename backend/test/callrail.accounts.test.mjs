@@ -248,6 +248,7 @@ describe('callrailService', () => {
     let accountsStore;
     let verifyMock;
     let callrailRepoMock;
+    let pullMock;
 
     function seedAccount(fields) {
         accountsStore.push({ provider: 'callrail', status: 'active', practice_id: null, label: null, ...fields });
@@ -269,6 +270,11 @@ describe('callrailService', () => {
                     const { secrets, ...safe } = row;
                     return safe;
                 }),
+                // FULL row, secrets included — callrailService.syncAccount uses
+                // this (not getById) because callrail-sync.js's syncAccount
+                // needs the encrypted API key.
+                getByIdWithSecrets: vi.fn(async (org, id) =>
+                    accountsStore.find((a) => a.organisation_id === org && a.id === id) ?? null),
                 insert: vi.fn(async (org, fields) => {
                     const row = { id: `acc-${accountsStore.length + 1}`, organisation_id: org, ...fields };
                     accountsStore.push(row);
@@ -308,6 +314,13 @@ describe('callrailService', () => {
         vi.doMock('../src/lib/integrations/callrail-provider.js', () => ({
             callrailProvider: { verify: verifyMock },
         }));
+
+        // The actual HTTP pull is Task 6's own suite (callrail-sync.test.mjs) —
+        // stubbed here so this file stays about callrailService's
+        // ORCHESTRATION (does it resolve the right account, pass it through,
+        // shape the response), not about pagination/upsert mechanics.
+        pullMock = vi.fn(async () => ({ ingested: 0 }));
+        vi.doMock('../src/lib/integrations/callrail-sync.js', () => ({ syncAccount: pullMock }));
 
         vi.doMock('../src/lib/integration-gating.js', () => ({ invalidate: vi.fn() }));
 
@@ -492,14 +505,23 @@ describe('callrailService', () => {
         });
     });
 
-    describe('syncAccount — the real CallRail pull is Task 6, this is a safe stub', () => {
-        it('answers { ingested: 0 } for a real, org-owned company', async () => {
-            seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford' });
-            await expect(svc.syncAccount(ORG_A, 'acc-1')).resolves.toEqual({ ingested: 0 });
+    describe('syncAccount — delegates to callrail-sync.js\'s real pull (Task 6)', () => {
+        it('resolves the FULL account (secrets included) and passes it to the pull, returning its real ingested count', async () => {
+            seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford', secrets: 'enc:api-key' });
+            pullMock.mockResolvedValueOnce({ ingested: 7, fetched: 7, requests: 1 });
+
+            const result = await svc.syncAccount(ORG_A, 'acc-1');
+
+            expect(result).toEqual({ ingested: 7 });
+            expect(pullMock).toHaveBeenCalledTimes(1);
+            const [passedOrg, passedAccount] = pullMock.mock.calls[0];
+            expect(passedOrg).toBe(ORG_A);
+            expect(passedAccount).toMatchObject({ id: 'acc-1', secrets: 'enc:api-key' }); // the FULL row, not the SAFE_COLS shape getById returns
         });
 
-        it('404s for an unknown company rather than silently no-op-ing', async () => {
+        it('404s for an unknown company rather than silently no-op-ing, and never calls the pull', async () => {
             await expect(svc.syncAccount(ORG_A, 'nope')).rejects.toThrow(/not found/i);
+            expect(pullMock).not.toHaveBeenCalled();
         });
     });
 });

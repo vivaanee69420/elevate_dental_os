@@ -13,6 +13,7 @@ import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
+import * as callrail_sync_1 from "../lib/integrations/callrail-sync.js";
 import { signWebhookToken } from "../lib/webhook-token.js";
 import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
@@ -436,13 +437,29 @@ export const integrationService = {
             sourceBreakdown: [],
         };
     },
-    // "Sync every company, one call" (Task 2's contract). The pull itself is
-    // Task 6's callrail-sync.js, landing on top of Task 4's account rows —
-    // neither exists yet, so there is nothing to pull. Answering { ingested: 0 }
-    // rather than throwing keeps the route honest and safe to call at any
-    // point in the rollout, connected or not.
-    async callrailSync(_orgId) {
-        return { ingested: 0 };
+    // "Sync every company, one call" (Task 2's contract). Fans out over
+    // every syncable company of THIS org via callrail-sync.js's syncAccount
+    // — status IN ('active','failed'), the same self-healing set
+    // listAllSyncable uses for the nightly worker, so a company mid-recovery
+    // from a transient failure is still included in a manual "Sync now"
+    // rather than waiting for tomorrow's cron. One company failing must not
+    // stop the rest; each result (success or error) is kept per-account.
+    async callrailSync(orgId) {
+        const accounts = (await integrationAccountRepository.list(orgId, 'callrail'))
+            .filter((a) => a.status === 'active' || a.status === 'failed');
+        let ingested = 0;
+        const results = [];
+        for (const a of accounts) {
+            try {
+                const full = await integrationAccountRepository.getByIdWithSecrets(orgId, a.id);
+                const r = await callrail_sync_1.syncAccount(orgId, full);
+                ingested += r.ingested ?? 0;
+                results.push({ accountId: a.id, ...r });
+            } catch (err) {
+                results.push({ accountId: a.id, error: err.message });
+            }
+        }
+        return { ingested, accounts: accounts.length, results };
     },
     // Disconnects the provider AND every company beneath it (api.ts's own
     // words) — the marker row this method owns, plus every integration_accounts
