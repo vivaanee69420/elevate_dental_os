@@ -75,9 +75,9 @@ function Note({ tone, children }: { tone: 'info' | 'warn'; children: React.React
 }
 
 export function AdReconciliationPanel({
-  provider, since, until,
-}: { provider: 'google_ads' | 'meta_ads'; since: string; until: string }) {
-  const { data, isLoading, isError, error } = useAdReconciliation(provider, since, until);
+  provider,
+}: { provider: 'google_ads' | 'meta_ads' }) {
+  const { data, isLoading, isError, error } = useAdReconciliation(provider);
   const providerLabel = PROVIDER_LABEL[provider];
 
   if (isLoading) {
@@ -150,6 +150,24 @@ export function AdReconciliationPanel({
           {l.note}
         </Note>
       ))}
+
+      {/* Accounts left out of BOTH sides. Stated as fact, in the calm info
+          tone — an account the owner deselected, or one billing in a currency
+          we deliberately refuse to convert rather than guess at, is not a
+          fault. Without this the totals above would silently be partial: the
+          justification for treating a missing currency as sterling is that the
+          accounts it affects are named here. */}
+      {data.excludedNote && (
+        <Note tone="info">
+          <span className="font-medium">Accounts not counted: </span>
+          {data.excludedNote}
+          <ul className="mt-1.5 list-disc space-y-0.5 pl-4">
+            {data.excludedAccounts.map((a) => (
+              <li key={`${a.customerId}-${a.reason}`}>{a.description}</li>
+            ))}
+          </ul>
+        </Note>
+      )}
 
       {data.reachNote && <Note tone="info">{data.reachNote}</Note>}
     </section>

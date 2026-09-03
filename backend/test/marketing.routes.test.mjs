@@ -104,20 +104,39 @@ describe('leads query validation', () => {
 });
 
 describe('reconciliation query validation', () => {
-    it('rejects a missing since', async () => {
+    // since/until are OPTIONAL, and omitting them is the intended use: the
+    // panel used to compute this window from its own UTC clock while the sync
+    // computes it in LONDON, so through BST the two disagreed for the hour
+    // after midnight and the panel asked for a day that existed in ad_metrics
+    // but could not yet exist in the deep tables — a whole day of campaign
+    // spend on one side of the comparison only. The server now fills the
+    // window in with the same londonDaysAgo(DEEP_WINDOW_DAYS)/londonYmd() the
+    // sync uses. Parsing must therefore SUCCEED with neither present, and the
+    // schema must leave them undefined rather than inventing a value.
+    it('accepts a query with neither since nor until — the server supplies the London window', async () => {
         const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
-        expect(() => ReconciliationQuerySchema.parse({
-            until: '2026-08-31',
-        })).toThrow();
+        const parsed = ReconciliationQuerySchema.parse({ provider: 'meta_ads' });
+        expect(parsed).toEqual({ provider: 'meta_ads' });
+        expect(parsed.since).toBeUndefined();
+        expect(parsed.until).toBeUndefined();
     });
 
-    it('rejects a missing until', async () => {
+    it('accepts an entirely empty query, defaulting the provider', async () => {
         const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
-        expect(() => ReconciliationQuerySchema.parse({
-            since: '2026-06-01',
-        })).toThrow();
+        const parsed = ReconciliationQuerySchema.parse({});
+        expect(parsed.provider).toBe('google_ads');
+        expect(parsed.since).toBeUndefined();
     });
 
+    it('accepts one bound without the other', async () => {
+        const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(ReconciliationQuerySchema.parse({ until: '2026-08-31' }).until).toBe('2026-08-31');
+        expect(ReconciliationQuerySchema.parse({ since: '2026-06-01' }).since).toBe('2026-06-01');
+    });
+
+    // Optional does NOT mean unvalidated: a present-but-malformed bound is
+    // still a client bug and must fail loudly rather than fall back to the
+    // default window, which would silently answer a different question.
     it('rejects a malformed since (single-digit month/day, not zero-padded)', async () => {
         const { ReconciliationQuerySchema } = await import('../src/controllers/marketing.controller.js');
         expect(() => ReconciliationQuerySchema.parse({

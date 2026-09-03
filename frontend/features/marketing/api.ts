@@ -255,6 +255,21 @@ export interface ReconciliationLevel {
   note: string | null;
 }
 
+/**
+ * An ad account left out of BOTH sides of the comparison, and why. Not an
+ * error — an excluded account is a fact to state calmly. `reason` is one of
+ * `not_selected` | `unsupported_currency` | a platform status the nightly sync
+ * skips on (`manager`, `not_enabled`); `description` is the server's own
+ * ready-made prose for it, so the panel never has to re-derive the wording.
+ */
+export interface ExcludedAdAccount {
+  customerId: string;
+  name: string | null;
+  reason: string;
+  currency: string | null;
+  description: string;
+}
+
 export interface Reconciliation {
   provider: 'google_ads' | 'meta_ads';
   since: string;
@@ -263,6 +278,12 @@ export interface Reconciliation {
   levels: ReconciliationLevel[];
   /** Meta only: reach is unique people, never additive across ad sets. */
   reachNote: string | null;
+  /** False when the totals cover only some of the connected accounts. */
+  coversAllAccounts: boolean;
+  coveredAccountCount: number;
+  excludedAccounts: ExcludedAdAccount[];
+  /** Set only when `excludedAccounts` is non-empty; states the partial cover. */
+  excludedNote: string | null;
 }
 
 export async function fetchMarketingPerformance(qs: string): Promise<MarketingPerformance> {
@@ -278,17 +299,22 @@ export async function fetchMarketingLeads(qs: string): Promise<MarketingLeadPage
 }
 
 /**
- * The reconciliation endpoint takes plain YYYY-MM-DD bounds (Task 10's
- * contract — both sides of the comparison filter a plain DATE column
- * inclusive), not the shared ScopePeriod ISO-datetime window `windowParams()`
- * builds for the rest of Marketing, so this builds its own query string.
+ * No window is sent, deliberately.
+ *
+ * The endpoint accepts optional plain YYYY-MM-DD bounds, but the window this
+ * panel wants is exactly the deep pull's own — `londonDaysAgo(92)` to today in
+ * LONDON — and only the server can compute that on the same clock the sync
+ * uses. Deriving it here from `Date.now()` in UTC put the two an hour apart
+ * for the whole of BST between 00:00 and 01:00 London, so the panel asked for
+ * a day that existed in `ad_metrics` but could not yet exist in the deep
+ * tables: a full day of campaign spend on one side of the comparison only, and
+ * both non-keyword levels red. The server fills the window in; the response
+ * reports the dates it used.
  */
 export async function fetchReconciliation(
   provider: 'google_ads' | 'meta_ads',
-  since: string,
-  until: string,
 ): Promise<Reconciliation> {
-  const qs = new URLSearchParams({ provider, since, until });
+  const qs = new URLSearchParams({ provider });
   // NOTE the /api prefix: api() only prepends the /api/backend proxy base,
   // not the Express mount point — the Express backend mounts this route
   // under /api, so the path here still has to start with /api/... or the
