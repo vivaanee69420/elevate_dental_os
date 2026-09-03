@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Connect CallRail per organisation with an API key, ingest every call by webhook and by scheduled pull, and let the owner map each tracking number to an ad channel — so Google Ads phone calls become countable leads.
+**Goal:** Connect one CallRail company per practice with its own API key, and ingest every call by webhook and by scheduled pull — so Google Ads phone calls become countable leads attributed to the right practice.
 
-**Architecture:** Mirrors the Emergent integration, which is the closest existing analogue: a pasted API key encrypted into `integrations.secrets`, a raw-body webhook authenticated by a per-organisation random token in the URL, a scheduled pull for backfill and gaps, and an owner-controlled mapping table. Calls land in their own table; nothing is written into `leads`.
+**Architecture:** Mirrors the **GoHighLevel multi-subaccount** pattern, because the owner has one CallRail key per company and four companies, one per practice. Each key becomes an `integration_accounts` row — provider `callrail`, the CallRail company id, its own encrypted key, its own random `webhook_token`, mapped 1:1 to a practice. A call's practice therefore comes from **the key that fetched it**, which needs no mapping step and cannot drift. Calls land in their own table; nothing is written into `leads`.
 
 **Tech Stack:** Postgres/Supabase, native-ESM Node backend, vitest, Next.js 14 App Router, React Query, Tailwind.
 
@@ -31,63 +31,72 @@
 
 ---
 
-### Task 1: Migration — `callrail_calls` and `callrail_number_map`
+### Task 1: Migration — `callrail_calls`
 
 **Files:**
 - Create: `supabase/migrations/20260101000150_callrail.sql`
 
 **Interfaces:**
-- Produces tables `callrail_calls` and `callrail_number_map`.
+- Produces the table `callrail_calls`, scoped to an `integration_accounts` row.
 
 - [ ] **Step 1: Write the migration**
 
 ```sql
 -- ============================================================================
--- CallRail — tracked phone calls, and the owner's map from tracking number to
--- ad channel.
+-- CallRail — tracked phone calls, one row per call, scoped to the CallRail
+-- COMPANY (an integration_accounts row) that fetched it.
 --
--- WHY CALLS ARE NOT ROWS IN `leads`: writing them there would reuse more
--- machinery, but it puts rows with no pipeline, no opportunity and no GHL id
--- into a GoHighLevel-shaped table, and it makes the cross-source dedup
--- implicit at write time — where it is invisible and unfixable. A separate
--- table keeps the sources distinct and makes dedup an explicit, testable step
--- at read time.
+-- WHY NO TRACKING-NUMBER MAP: the owner holds one API key per CallRail
+-- company and one company per practice. A call's practice therefore follows
+-- from the key that fetched it — integration_accounts.practice_id — which
+-- needs no mapping step, cannot drift, and reuses the pattern GoHighLevel
+-- multi-subaccount already established here.
 --
--- WHY EVERY CALL IS STORED: whether a call is a Google Ads lead depends on
--- which tracking number it came in on, and that is the owner's knowledge, not
--- ours. Storing everything and classifying at read time is correct whether the
--- account uses a Google-specific number or one pool for the whole practice.
+-- tracking_number and source are still stored. Not to classify with, but so
+-- the first sync can SHOW what CallRail actually reports. The owner's
+-- position is that every tracked call came from the ad — "if they see the ad
+-- then only they call" — and that is very likely right for a CallRail set up
+-- solely for Google Ads. Storing the source means that assumption is
+-- checkable against real data rather than permanent and invisible.
+--
+-- WHY CALLS ARE NOT ROWS IN `leads`: writing them there puts rows with no
+-- pipeline, no opportunity and no GHL id into a GoHighLevel-shaped table, and
+-- makes the cross-source dedup implicit at write time — where it is invisible
+-- and unfixable. A separate table makes dedup an explicit, testable read-time
+-- step.
 --
 -- MULTI-TENANT: every row carries organisation_id; serviceClient bypasses RLS
--- so that filter IS the isolation. RLS on with no policy: anon and
--- authenticated get nothing, service_role bypasses.
+-- so that filter IS the isolation. RLS on with no policy.
 -- Idempotent + additive. After applying on hosted: NOTIFY pgrst,'reload schema';
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS public.callrail_calls (
-  id                uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  organisation_id   uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
-  practice_id       uuid REFERENCES practices(id) ON DELETE SET NULL,
-  -- CallRail's own id. The idempotency key: a webhook and a pull describing
-  -- the same call must produce one row, not two.
-  callrail_id       text NOT NULL,
-  tracking_number   text,          -- the number DIALLED; what classification keys on
-  caller_number     text,          -- the number that CALLED
-  caller_phone10    text,          -- normalised, for matching and dedup
-  caller_name       text,
-  caller_email      text,
-  caller_email_norm text,
-  started_at        timestamptz NOT NULL,
-  duration_seconds  integer,
-  answered          boolean,
-  first_call        boolean,       -- CallRail's own "first time this number called"
-  gclid             text,
-  keywords          text,
-  campaign          text,
-  source            text,          -- CallRail's own source attribution
-  raw               jsonb,         -- the payload as received, for forensics
-  created_at        timestamptz DEFAULT now(),
-  updated_at        timestamptz DEFAULT now(),
+  id                     uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+  organisation_id        uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  -- The CallRail company this call came from. Its practice_id is the call's
+  -- practice; practice_id is denormalised here so a read never needs the join.
+  integration_account_id uuid REFERENCES integration_accounts(id) ON DELETE CASCADE,
+  practice_id            uuid REFERENCES practices(id) ON DELETE SET NULL,
+  -- CallRail's own id: the idempotency key. A webhook and a pull describing
+  -- the same call must produce one row.
+  callrail_id            text NOT NULL,
+  tracking_number        text,
+  caller_number          text,
+  caller_phone10         text,     -- normalised; the dedup and matching key
+  caller_name            text,
+  caller_email           text,
+  caller_email_norm      text,     -- normalised
+  started_at             timestamptz NOT NULL,
+  duration_seconds       integer,
+  answered               boolean,
+  first_call             boolean,  -- CallRail's own "first time this number called"
+  gclid                  text,
+  keywords               text,
+  campaign               text,
+  source                 text,     -- what CallRail itself attributes the call to
+  raw                    jsonb,    -- payload as received, for forensics
+  created_at             timestamptz DEFAULT now(),
+  updated_at             timestamptz DEFAULT now(),
   UNIQUE (organisation_id, callrail_id)
 );
 
@@ -95,38 +104,20 @@ CREATE TRIGGER callrail_calls_updated_at BEFORE UPDATE ON public.callrail_calls
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ALTER TABLE public.callrail_calls ENABLE ROW LEVEL SECURITY;
 
--- The funnel reads a window of one org's calls; the matcher probes by phone.
+-- The funnel reads one org's window; the matcher probes by phone; the panel
+-- counts per company.
 CREATE INDEX IF NOT EXISTS idx_callrail_calls_org_started
   ON public.callrail_calls (organisation_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_callrail_calls_org_phone
   ON public.callrail_calls (organisation_id, caller_phone10)
   WHERE caller_phone10 IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_callrail_calls_org_number
-  ON public.callrail_calls (organisation_id, tracking_number);
-
--- ---------------------------------------------------------------------------
--- The owner's classification. A number with NO row here is unmapped and counts
--- toward nothing — the panel shows it as awaiting a decision. Mirrors
--- ad_channel_pipelines and emergent_practice_map: an unmapped source is stated,
--- never guessed.
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.callrail_number_map (
-  id              uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
-  organisation_id uuid NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
-  tracking_number text NOT NULL,
-  channel         text,           -- 'google_ads' | 'meta_ads' | other; NULL = deliberately unmapped
-  practice_id     uuid REFERENCES practices(id) ON DELETE SET NULL,
-  created_at      timestamptz DEFAULT now(),
-  updated_at      timestamptz DEFAULT now(),
-  UNIQUE (organisation_id, tracking_number)
-);
-
-CREATE TRIGGER callrail_number_map_updated_at BEFORE UPDATE ON public.callrail_number_map
-  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-ALTER TABLE public.callrail_number_map ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_callrail_calls_account
+  ON public.callrail_calls (integration_account_id, started_at DESC);
 
 NOTIFY pgrst, 'reload schema';
 ```
+
+**No `callrail_number_map` table.** An earlier draft had one; the owner's one-key-per-practice setup makes it unnecessary, and an unnecessary mapping step is a place for the data to drift out of agreement with reality.
 
 - [ ] **Step 2: Static self-checks — report each**
 
@@ -145,9 +136,8 @@ SELECT c.relname, c.relrowsecurity AS rls_on,
        (SELECT count(*) FROM pg_indexes i
          WHERE i.schemaname='public' AND i.tablename=c.relname) AS indexes
   FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
- WHERE n.nspname='public' AND c.relname IN ('callrail_calls','callrail_number_map')
- ORDER BY 1;
--- Expect: 2 rows, rls_on true, policies 0 on both.
+ WHERE n.nspname='public' AND c.relname = 'callrail_calls';
+-- Expect: 1 row, rls_on true, policies 0.
 ```
 
 - [ ] **Step 4: Commit**
@@ -181,7 +171,7 @@ counts toward nothing and is shown as awaiting a decision."
   - `GET /api/integrations/callrail` → `{ connected: boolean, status: string | null, lastSyncedAt: string | null, webhookUrl: string | null, numbers: Array<{ trackingNumber, channel, practiceId, callCount, lastCallAt }> }`
   - `POST /api/integrations/callrail` body `{ apiKey, accountId }` → `{ connected: true }`
   - `POST /api/integrations/callrail/sync` → `{ ingested: number }`
-  - `PATCH /api/integrations/callrail/numbers/:trackingNumber` body `{ channel, practiceId }` → the updated row
+  - `POST /api/integrations/callrail/accounts`, `PATCH /api/integrations/callrail/accounts/:id`, `DELETE /api/integrations/callrail/accounts/:id`, `POST /api/integrations/callrail/accounts/:id/sync` body `{ channel, practiceId }` → the updated row
   - `DELETE /api/integrations/callrail` → `{ connected: false }`
 
 - [ ] **Step 1: Read the conventions you must match — do not invent**
@@ -208,7 +198,11 @@ Four states, each with its own copy — a generic empty panel would leave an own
 | Connected with calls | The number map, call counts per number, last call time, a Sync now control |
 | Failed | The stored failure reason and a reconnect prompt |
 
-**The number map is the substance of this panel.** One row per tracking number CallRail has sent, with the number, how many calls it has produced, when the last one arrived, and a channel selector (Google Ads / Meta Ads / Not an ad channel). A number with no mapping shows as **"Not yet mapped — its calls count toward nothing"**, so a gap is visible rather than silent.
+**The company list is the substance of this panel.** One row per connected CallRail company: its label, the practice it is mapped to, how many calls it has produced, when the last one arrived, and its sync status — plus Add company (API key + CallRail company id + practice), Sync now, and Disconnect. Mirror `GoHighLevelPanel.tsx`, which is exactly this shape for GHL subaccounts; read it first.
+
+A company connected but not yet mapped to a practice shows as **"No practice assigned — its calls are not attributed"**, so an unassigned company is visible rather than silently counting nowhere.
+
+Also show, once calls exist, **what CallRail itself attributes them to**. The working assumption is that every tracked call came from the ad; this is where that assumption becomes checkable against real data rather than permanent and invisible.
 
 Never render the API key, not even masked — the backend does not return it.
 
@@ -295,7 +289,7 @@ It is encrypted at rest and never returned by any read endpoint."
 
 ---
 
-### Task 4: The number map — repository, service, routes
+### Task 4: CallRail companies — repository, service, routes
 
 **Files:**
 - Create: `backend/src/repositories/callrail.repository.js`
@@ -307,18 +301,19 @@ It is encrypted at rest and never returned by any read endpoint."
 **Interfaces:**
 - Produces:
   - `callrailRepository.upsertCalls(orgId, rows)` — idempotent on `(organisation_id, callrail_id)`
-  - `callrailRepository.numbersWithCounts(orgId)` — every tracking number seen, its call count, last call, and its mapping if any
-  - `callrailRepository.upsertNumberMap(orgId, trackingNumber, { channel, practiceId })`
+  - `callrailRepository.accountsWithCounts(orgId)` — every connected CallRail company, its practice, call count, last call, status
+  - `callrailRepository.sourceBreakdown(orgId)` — what CallRail itself attributes calls to, so the "every call is an ad call" assumption is checkable
   - `callrailService.status(orgId)` — the payload Task 2's panel consumes
-  - `PATCH /api/integrations/callrail/numbers/:trackingNumber`
+  - `POST /api/integrations/callrail/accounts`, `PATCH /api/integrations/callrail/accounts/:id`, `DELETE /api/integrations/callrail/accounts/:id`, `POST /api/integrations/callrail/accounts/:id/sync`
 
 - [ ] **Step 1: Write the failing tests**
 
 The tests that matter here:
-- **A number seen in calls but never mapped appears in the list, with a null channel.** That is the whole point of showing gaps.
-- **Mapping a number does not alter any stored call** — classification is a read-time decision, so a remap changes the numbers immediately with no re-ingestion.
-- **Cross-org isolation:** one org's numbers and mappings never appear in another's list. Assert `organisation_id` on every call.
+- **A company connected but not yet mapped to a practice is listed, with a null practice** — the owner must see it is unassigned rather than have its calls silently attributed nowhere.
+- **Changing a company's practice restamps its existing calls**, so a correction takes effect on history rather than only on calls arriving afterwards. (`practice_id` is denormalised onto `callrail_calls`, so this is a real update, not a join.)
+- **Cross-org isolation:** one org's companies and calls never appear in another's list. Assert `organisation_id` on every call.
 - `upsertCalls` is idempotent: the same call twice yields one row.
+- **The source breakdown reports what CallRail says**, so if a company's calls are not all ad calls the owner can see it rather than discovering it in a wrong CPL.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -475,8 +470,8 @@ git commit -m "docs(callrail): document the endpoints and record the integration
 | Spec requirement | Task |
 |---|---|
 | `callrail_calls`, separate from `leads` | 1 |
-| `callrail_number_map`, unmapped counts toward nothing | 1, 4 |
-| Panel with four states and the number map | 2 |
+| One key per company, practice from the key that fetched the call | 1, 3, 4 |
+| Panel with four states and the company list | 2 |
 | API key connect, encrypted, verified before storing | 3 |
 | Webhook ingestion, org from token | 5 |
 | Scheduled pull for backfill and gaps | 6 |
