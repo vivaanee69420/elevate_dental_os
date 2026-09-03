@@ -149,6 +149,8 @@ export const SECTION_COLOURS: Record<
   'Elevate CRM': { colour: '#0891B2', bg: '#CFFAFE' },
   Wealth: { colour: '#CA8A04', bg: '#FEF3C7' },
   Training: { colour: '#9333EA', bg: '#F3E8FF' },
+  Marketing: { colour: '#C2410C', bg: '#FFEDD5' },
+  'Data Room': { colour: '#475569', bg: '#E2E8F0' },
   System: { colour: '#6B7280', bg: '#F3F4F6' },
 };
 

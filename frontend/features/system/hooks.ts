@@ -33,7 +33,10 @@ export function useSetRolePermission() {
             ...prev.roles,
             [vars.role]: {
               ...prev.roles[vars.role],
-              [vars.permission_key]: vars.allowed,
+              // A null (clear) has no single optimistic value — the row goes
+              // back to inheriting — so leave the cache alone and let the
+              // refetch in onSettled report the resolved state.
+              ...(vars.allowed === null ? {} : { [vars.permission_key]: vars.allowed }),
             },
           },
         });

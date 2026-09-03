@@ -26,6 +26,27 @@
 // listed nor recorded in UNLISTED_BY_DESIGN, so this cannot silently drift.
 // ============================================================================
 
+import { canAccessPage } from '../lib/permissions.js';
+
+// Prefixes owned by exactly ONE nav page. These are the mounts where a
+// per-page override can be enforced for real, not merely hidden in the nav:
+// the request itself identifies the page. Everything else stays section-level
+// because several pages share the endpoint and the API cannot tell them apart.
+export const PAGE_OWNED = {
+  '/appointments': 'appointments',
+  '/associates': 'associates',
+  '/staff': 'staff',
+  '/chair-utilisation': 'chair',
+  '/treatments': 'treatments',
+  '/pay-runs': 'pay',
+  '/contacts': 'contacts',
+  '/comms': 'inbox',
+  '/workflows': 'workflows',
+  '/tasks': 'task-manager',
+  '/p4g-ai': 'p4g-ai',
+  '/cockpit': 'cockpit',
+};
+
 // Infrastructure every signed-in user needs regardless of section: the app
 // shell cannot render without it, and it carries no section data.
 export const OPEN = [
@@ -122,7 +143,14 @@ function allowed(method, path, permissions, role) {
   const rule = SECTIONS
     .filter((r) => matches(path, r.prefix))
     .sort((a, b) => b.prefix.length - a.prefix.length)[0];
-  if (rule) return rule.keys.some((k) => permissions?.[k] === true);
+  if (rule) {
+    // A prefix owned by one page follows that page, so an owner who grants the
+    // section but switches this page off is obeyed by the API and not just by
+    // the nav. canAccessPage falls back to the section when no override is set.
+    const pageId = PAGE_OWNED[rule.prefix];
+    if (pageId) return canAccessPage(permissions, pageId);
+    return rule.keys.some((k) => permissions?.[k] === true);
+  }
 
   // Unlisted. The analyst is a scoped, often external account and several
   // routers still carry no gate of their own, so it stays deny-by-default.

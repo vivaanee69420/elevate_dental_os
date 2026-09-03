@@ -15,9 +15,10 @@
 import { permissionsRepository } from '../repositories/permissions.repository.js';
 import {
   PERMISSION_CATALOG,
-  DEFAULT_ROLE_PERMISSIONS,
   isValidPermission,
   resolveEffectivePermissions,
+  pageIdOf,
+  PAGE_SECTION,
   ROLES,
 } from '../lib/permissions.js';
 import { AppError } from '../middleware/errors.js';
@@ -48,21 +49,22 @@ const permissionsService = {
     } catch {
       rows = [];
     }
-    const roles = Object.fromEntries(ROLES.map((r) => [r, {}]));
-    // Base each role on its CODE defaults so the admin UI shows the true
-    // effective baseline even before/without any DB rows.
-    for (const role of Object.keys(roles)) {
-      for (const key of Object.keys(PERMISSION_CATALOG)) {
-        roles[role][key] = !!(DEFAULT_ROLE_PERMISSIONS[role] || {})[key];
-      }
+    // Resolve each role exactly the way a request does, so the matrix shows the
+    // real effective state — including a `page:<id>` value for every page,
+    // inherited from its section unless explicitly overridden.
+    const roles = {};
+    const overrides = {};
+    for (const role of ROLES) {
+      const mine = rows.filter((r) => r.role === role && isValidPermission(r.permission_key));
+      roles[role] = resolveEffectivePermissions(mine, {}, role);
+      // Which page keys are EXPLICIT rather than inherited. The UI needs the
+      // difference to offer "reset to section" and to show inherited cells as
+      // following their section rather than pinned.
+      overrides[role] = Object.fromEntries(
+        mine.filter((r) => pageIdOf(r.permission_key)).map((r) => [r.permission_key, !!r.allowed]),
+      );
     }
-    // DB rows override the code defaults.
-    for (const r of rows) {
-      if (roles[r.role] && isValidPermission(r.permission_key)) {
-        roles[r.role][r.permission_key] = !!r.allowed;
-      }
-    }
-    return { catalog: PERMISSION_CATALOG, roles };
+    return { catalog: PERMISSION_CATALOG, roles, pages: PAGE_SECTION, overrides };
   },
 
   /** Owner sets a role's default for one permission key. */
@@ -72,6 +74,12 @@ const permissionsService = {
     }
     if (!isValidPermission(permissionKey)) {
       throw new AppError(`Unknown permission: ${permissionKey}`, 400);
+    }
+    // null clears the row: a page override goes back to inheriting its section,
+    // a section key goes back to its code default. `false` stays an explicit deny.
+    if (allowed === null) {
+      await permissionsRepository.clearRolePermission(orgId, role, permissionKey);
+      return { success: true };
     }
     await permissionsRepository.setRolePermission(orgId, role, permissionKey, !!allowed);
     return { success: true };

@@ -223,12 +223,37 @@ export function featureAllowsRoute(
  * A null/undefined permissions object (e.g. /auth/me failed) yields visible
  * only for unmapped Overview routes.
  */
+/**
+ * Pages whose API endpoint belongs to them alone, so a per-page override is
+ * enforced by the backend and not merely hidden in the nav. Mirrors PAGE_OWNED
+ * in backend/src/middleware/section-lock.js.
+ *
+ * Every other page shares one endpoint with the rest of its section (Finance's
+ * screens all read /api/analytics, Growth's all read /api/growth, Training's
+ * all read /api/training), so the API cannot tell them apart. Turning one of
+ * those off hides the page; it does not block the data. The matrix labels them
+ * "nav only" rather than implying a boundary that is not there.
+ */
+export const PAGE_ENFORCED = new Set([
+  'appointments', 'associates', 'staff', 'chair', 'treatments', 'pay',
+  'contacts', 'inbox', 'workflows', 'task-manager', 'p4g-ai', 'cockpit',
+]);
+
+/** 'appointments' -> 'page:appointments' (the per-page override key). */
+export const pageKey = (routeId: string) => `page:${routeId}`;
+
 export function canAccessRoute(
   routeId: string,
   permissions: Permissions | null | undefined,
 ): boolean {
   const key = ROUTE_PERMISSION[routeId];
   if (!key) return true; // Overview-level
+  // Two-level: an explicit per-page override wins over the section it belongs
+  // to. The backend resolves a page:<id> value for every page, so this is
+  // normally just a lookup; the section fallback covers an older backend that
+  // does not send page keys yet.
+  const override = (permissions as Record<string, boolean> | null | undefined)?.[pageKey(routeId)];
+  if (typeof override === 'boolean') return override;
   return permissions?.[key] === true;
 }
 

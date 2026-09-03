@@ -4,9 +4,15 @@ import pkg from '../src/lib/permissions.js';
 const {
   PERMISSION_CATALOG,
   PERMISSION_KEYS,
+  PAGE_IDS,
+  pageKey,
   isValidPermission,
   resolveEffectivePermissions,
 } = pkg;
+
+// Every catalog key, plus the page:<id> value the resolver now writes for
+// each page (two-level grants: a page inherits its section unless overridden).
+const ALL_KEYS = [...PERMISSION_KEYS, ...PAGE_IDS.map(pageKey)];
 
 describe('isValidPermission', () => {
   it('is true for every catalog key', () => {
@@ -26,7 +32,7 @@ describe('isValidPermission', () => {
 describe('resolveEffectivePermissions', () => {
   it('catalog default denies everything when no rows / no overrides', () => {
     const eff = resolveEffectivePermissions([], {});
-    expect(Object.keys(eff).sort()).toEqual([...PERMISSION_KEYS].sort());
+    expect(Object.keys(eff).sort()).toEqual(ALL_KEYS.sort());
     for (const key of PERMISSION_KEYS) expect(eff[key]).toBe(false);
   });
 
@@ -79,7 +85,7 @@ describe('resolveEffectivePermissions', () => {
     expect(eff['also.fake']).toBeUndefined();
     expect(eff['finance.view']).toBe(true);
     expect(eff['crm.view']).toBe(true);
-    expect(Object.keys(eff).sort()).toEqual([...PERMISSION_KEYS].sort());
+    expect(Object.keys(eff).sort()).toEqual(ALL_KEYS.sort());
   });
 
   it('handles null / undefined / non-object inputs without throwing', () => {
@@ -87,7 +93,7 @@ describe('resolveEffectivePermissions', () => {
     const b = resolveEffectivePermissions(undefined, undefined);
     const c = resolveEffectivePermissions([], 'not-an-object');
     for (const eff of [a, b, c]) {
-      expect(Object.keys(eff).sort()).toEqual([...PERMISSION_KEYS].sort());
+      expect(Object.keys(eff).sort()).toEqual(ALL_KEYS.sort());
       for (const key of PERMISSION_KEYS) expect(eff[key]).toBe(false);
     }
   });
