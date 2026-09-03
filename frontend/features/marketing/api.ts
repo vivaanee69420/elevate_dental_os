@@ -235,6 +235,36 @@ export const CHANNEL_COLOUR: Record<string, string> = {
   other: '#9ca3af',
 };
 
+/**
+ * One grain's spend measured against the campaign-level total for the same
+ * window (ad group/ad/keyword for Google, ad set/ad for Meta — the "ads deep
+ * grain pull"). `gapPence` is zeroed under a rounding tolerance server-side;
+ * `gapPct` is `null`, never `0`, when there is no campaign spend to divide
+ * by — a percentage of nothing is unknowable, not zero. `note` explains an
+ * EXPECTED shortfall (Google keywords) in calm terms, or flags a genuine
+ * mismatch — see docs/API.md "Marketing reconciliation".
+ */
+export interface ReconciliationLevel {
+  grain: string;
+  label: string;
+  spendPence: number;
+  campaignSpendPence: number;
+  gapPence: number;
+  gapPct: number | null;
+  additive: boolean;
+  note: string | null;
+}
+
+export interface Reconciliation {
+  provider: 'google_ads' | 'meta_ads';
+  since: string;
+  until: string;
+  campaignSpendPence: number;
+  levels: ReconciliationLevel[];
+  /** Meta only: reach is unique people, never additive across ad sets. */
+  reachNote: string | null;
+}
+
 export async function fetchMarketingPerformance(qs: string): Promise<MarketingPerformance> {
   return api(`/api/marketing/performance?${qs}`);
 }
@@ -245,4 +275,23 @@ export async function fetchMarketingTrend(qs: string): Promise<{ months: TrendMo
 
 export async function fetchMarketingLeads(qs: string): Promise<MarketingLeadPage> {
   return api(`/api/marketing/leads?${qs}`);
+}
+
+/**
+ * The reconciliation endpoint takes plain YYYY-MM-DD bounds (Task 10's
+ * contract — both sides of the comparison filter a plain DATE column
+ * inclusive), not the shared ScopePeriod ISO-datetime window `windowParams()`
+ * builds for the rest of Marketing, so this builds its own query string.
+ */
+export async function fetchReconciliation(
+  provider: 'google_ads' | 'meta_ads',
+  since: string,
+  until: string,
+): Promise<Reconciliation> {
+  const qs = new URLSearchParams({ provider, since, until });
+  // NOTE the /api prefix: api() only prepends the /api/backend proxy base,
+  // not the Express mount point — the Express backend mounts this route
+  // under /api, so the path here still has to start with /api/... or the
+  // request 404s SILENTLY into an empty state (see file header).
+  return api(`/api/marketing/reconciliation?${qs}`);
 }
