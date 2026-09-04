@@ -245,6 +245,57 @@ describe('campaignSpendByProvider', () => {
         expect(rows).toEqual([]);
         expect(supaRec.last).toBeUndefined();
     });
+
+    // The Facebook report's campaign tier needs a practice filter here, because
+    // its funnel is already practice-scoped: without one, a five-practice group
+    // filtering to ONE practice divided the whole group's Meta spend by that
+    // practice's leads. practiceId is the SIXTH argument so the reconciliation
+    // service's five-argument call site keeps working untouched.
+    it('narrows to one practice when given one', async () => {
+        await marketingRepository.campaignSpendByProvider(
+            ORG, '2026-08-01', '2026-08-31', 'meta_ads', null, 'prac-1');
+        expect(supaRec.last.eqs).toContainEqual({ col: 'practice_id', val: 'prac-1' });
+    });
+
+    it('applies no practice filter when the argument is omitted', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'meta_ads');
+        expect(supaRec.last.eqs.some((x) => x.col === 'practice_id')).toBe(false);
+    });
+});
+
+// Distinguishes "this tenant has never synced Meta" from "this tenant synced
+// fine but bought nothing in the window you are looking at" — two facts that
+// both render as an empty window and must not share one message.
+describe('hasProviderMetrics', () => {
+    it('is org- and provider-scoped, and asks for at most one row', async () => {
+        supaRec.resultProvider = () => ({ data: [{ id: 1 }], error: null });
+        const has = await marketingRepository.hasProviderMetrics(ORG, 'meta_ads');
+        expect(has).toBe(true);
+        expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+        expect(supaRec.last.eqs).toContainEqual({ col: 'provider', val: 'meta_ads' });
+        expect(supaRec.last.limitN).toBe(1);
+    });
+
+    // Deliberately UNBOUNDED BY DATE: a probe inside the window is just the
+    // empty window asked a second time, and would answer "never synced" for
+    // every quiet period.
+    it('applies no date bound — that is the whole point of the probe', async () => {
+        await marketingRepository.hasProviderMetrics(ORG, 'meta_ads');
+        expect(supaRec.last.gtes ?? []).toEqual([]);
+        expect(supaRec.last.ltes ?? []).toEqual([]);
+        expect(supaRec.last.lts ?? []).toEqual([]);
+    });
+
+    it('reports false when no row has ever landed', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        expect(await marketingRepository.hasProviderMetrics(ORG, 'meta_ads')).toBe(false);
+    });
+
+    it('surfaces a read error rather than answering "never synced"', async () => {
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'statement timeout' } });
+        await expect(marketingRepository.hasProviderMetrics(ORG, 'meta_ads'))
+            .rejects.toThrow(/statement timeout/);
+    });
 });
 
 describe('adAccountsForProvider', () => {
@@ -416,6 +467,106 @@ describe('campaignFunnel', () => {
             { col: 'attribution_source', opts: { ascending: true, nullsFirst: true } },
             { col: 'practice_id', opts: { ascending: true, nullsFirst: true } },
         ]);
+    });
+});
+
+describe('metaFunnel', () => {
+    it('passes org, window and practice through to the RPC', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = () => ({ data: [], error: null });
+        await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31', null);
+        const call = supaRec.rpcCalls.find((c) => c.fn === 'ad_meta_funnel');
+        expect(call.params).toEqual({
+            p_org: ORG, p_since: '2026-06-01', p_until: '2026-08-31', p_practice: null,
+        });
+    });
+
+    // ad_meta_funnel's GROUP BY is the four-column tuple (campaign_id,
+    // ad_set_id, ad_id, practice_id) — none of the four is unique alone.
+    // `ad_id` is NULL for every "not identified" row, and a single non-null
+    // ad_id repeats across several rows when one Facebook ad runs group-wide
+    // across multiple practices. A page boundary landing inside such a tie
+    // can duplicate one row and drop another unless all four are sorted, in
+    // the RPC's own GROUP BY order — same hazard campaignFunnel documents for
+    // its own three-column key. This test would fail if a column were
+    // dropped or reordered; the paging tests above do not read `.orders` at
+    // all and cannot catch that.
+    it('orders by all four group keys, in the RPC\'s own GROUP BY order', async () => {
+        supaRec.rpcCalls = [];
+        supaRec.rpcProvider = () => ({ data: [], error: null });
+        await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31', null);
+        const call = supaRec.rpcCalls.find((c) => c.fn === 'ad_meta_funnel');
+        expect(call.mods.orders).toEqual([
+            { col: 'campaign_id', opts: { ascending: true, nullsFirst: true } },
+            { col: 'ad_set_id', opts: { ascending: true, nullsFirst: true } },
+            { col: 'ad_id', opts: { ascending: true, nullsFirst: true } },
+            { col: 'practice_id', opts: { ascending: true, nullsFirst: true } },
+        ]);
+    });
+
+    // Unlike the `.from()` mock (used by campaignSpendByProvider's paging
+    // tests), the `.rpc()` mock in test/setup.js does NOT auto-slice by
+    // `.range()` — only `.from()`'s settle() does that. An RPC provider must
+    // slice by `mods.range` itself, exactly as leadsByCampaign's pagedLeads()
+    // helper above already does; returning the same fixed array unconditionally
+    // never yields an empty page and the pager would loop forever.
+    //
+    // The row total CANNOT discriminate a correct pager from one that stops on
+    // a short page — both return every row once slicing is correct. The READ
+    // COUNT can: 1064 rows is 1000 + 64 + a confirming empty read.
+    function pagedMetaRows(total) {
+        const all = Array.from({ length: total }, (_, i) => ({
+            campaign_id: 'CMP', ad_set_id: i % 2 === 0 ? 'AS1' : null, ad_id: `AD${String(i).padStart(5, '0')}`,
+            practice_id: null, leads: 1, booked: 0, attended: 0,
+            patients: 0, new_patients: 0,
+        }));
+        const CAP = 1000;   // what the server enforces, whatever we ask for
+        return (_fn, _params, mods) => {
+            const from = mods.range?.from ?? 0;
+            const to = mods.range?.to ?? all.length - 1;
+            return { data: all.slice(from, Math.min(to + 1, from + CAP)), error: null };
+        };
+    }
+
+    it('reads every page and makes the confirming empty read', async () => {
+        let reads = 0;
+        const paged = pagedMetaRows(1064);
+        supaRec.rpcProvider = (fn, params, mods) => { reads += 1; return paged(fn, params, mods); };
+        const out = await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31');
+        expect(out).toHaveLength(1064);
+        expect(reads).toBe(3);
+    });
+
+    it('does not mistake a short-but-nonempty page for the last one', async () => {
+        let reads = 0;
+        const paged = pagedMetaRows(700);
+        supaRec.rpcProvider = (fn, params, mods) => { reads += 1; return paged(fn, params, mods); };
+        const out = await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31');
+        expect(out).toHaveLength(700);
+        expect(reads).toBe(2);
+    });
+
+    it('surfaces an RPC error rather than returning an empty list', async () => {
+        supaRec.rpcProvider = () => ({ data: null, error: { message: 'boom' } });
+        await expect(marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31'))
+            .rejects.toThrow(/ad_meta_funnel: boom/);
+    });
+
+    // PostgREST commonly serialises bigint as a JSON string to avoid precision
+    // loss, matching campaignFunnel/leadsByCampaign's convention in this same
+    // file. campaign_id/ad_set_id/ad_id/practice_id are text/uuid and must
+    // pass through untouched, including their nulls — coercing them would
+    // turn a legitimate null ad_set_id into the string "null" or similar.
+    it('coerces bigint aggregates that may arrive as strings, leaving ids untouched', async () => {
+        servePages([{
+            campaign_id: 'CMP', ad_set_id: null, ad_id: 'AD1', practice_id: 'p1',
+            leads: '12', booked: '3', attended: '1', patients: '2', new_patients: '1',
+        }], []);
+        const [row] = await marketingRepository.metaFunnel(ORG, '2026-06-01', '2026-08-31');
+        expect(row).toEqual({
+            campaign_id: 'CMP', ad_set_id: null, ad_id: 'AD1', practice_id: 'p1',
+            leads: 12, booked: 3, attended: 1, patients: 2, new_patients: 1,
+        });
     });
 });
 

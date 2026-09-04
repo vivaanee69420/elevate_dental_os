@@ -28,7 +28,7 @@
 - **Do NOT invent Tailwind classes.** This project has its own tokens (`ink`, `ink-muted`, `border`, `surface`, `bg`, `success`, `danger`, `warning`, `rounded-panel`). Read `frontend/tailwind.config.ts` and two sibling components in `frontend/features/marketing/components/` before writing any markup. A previous plan's invented `slate`/`emerald` classes do not exist here.
 - **Native ESM backend:** `import`/`export`, `.js` extensions on relative imports, never `require`/`module.exports`.
 - **Strict layering:** `routes/ → controllers/ → services/ → repositories/`. Controllers parse and shape HTTP only.
-- **Migration number:** `20260101000149_ad_meta_funnel.sql`. `000148` is applied on hosted.
+- **Migration number:** `20260101000156_ad_meta_funnel.sql`. `000148` is applied on hosted.
 - **Verification note:** Docker and the `supabase` CLI are NOT installed on this machine. Do not attempt `supabase start` or `supabase db reset`. The controller verifies SQL against the hosted database inside `BEGIN … ROLLBACK`.
 
 ---
@@ -36,7 +36,7 @@
 ### Task 1: Migration — widen `ad_lead_conversions`, add `ad_meta_funnel`
 
 **Files:**
-- Create: `supabase/migrations/20260101000149_ad_meta_funnel.sql`
+- Create: `supabase/migrations/20260101000156_ad_meta_funnel.sql`
 
 **Interfaces:**
 - Consumes: `ad_lead_conversions` (migration `000146`), `ad_meta_ads` (migration `000148`).
@@ -173,15 +173,15 @@ NOTIFY pgrst, 'reload schema';
 - [ ] **Step 4: Static self-checks (you cannot run SQL here)**
 
 Report the result of each:
-- `grep -c "ad_id" supabase/migrations/20260101000149_ad_meta_funnel.sql` — expect at least 4 (the CTE select, the final select, the RETURNS TABLE entry, the funnel join).
+- `grep -c "ad_id" supabase/migrations/20260101000156_ad_meta_funnel.sql` — expect at least 4 (the CTE select, the final select, the RETURNS TABLE entry, the funnel join).
 - Every dollar-quote tag opened is closed: `$fn$`, `$q$`, and any in the copied body.
-- The copied `ad_lead_conversions` body differs from `000146`'s ONLY by the two additions. Prove it: `diff <(sed -n '/CREATE FUNCTION ad_lead_conversions/,/^\$fn\$;/p' supabase/migrations/20260101000146_ad_lead_conversions_pipeline.sql) <(sed -n '/CREATE FUNCTION ad_lead_conversions/,/^\$fn\$;/p' supabase/migrations/20260101000149_ad_meta_funnel.sql)` and paste the diff — it must show only your two additions.
+- The copied `ad_lead_conversions` body differs from `000146`'s ONLY by the two additions. Prove it: `diff <(sed -n '/CREATE FUNCTION ad_lead_conversions/,/^\$fn\$;/p' supabase/migrations/20260101000146_ad_lead_conversions_pipeline.sql) <(sed -n '/CREATE FUNCTION ad_lead_conversions/,/^\$fn\$;/p' supabase/migrations/20260101000156_ad_meta_funnel.sql)` and paste the diff — it must show only your two additions.
 - The file ends with `NOTIFY pgrst, 'reload schema';`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/migrations/20260101000149_ad_meta_funnel.sql
+git add supabase/migrations/20260101000156_ad_meta_funnel.sql
 git commit -m "feat(marketing): ad_meta_funnel, and carry ad_id on ad_lead_conversions
 
 Reads through ad_lead_conversions so booked/attended/converted keep one
@@ -1328,13 +1328,13 @@ ggshield secret scan commit-range origin/main..HEAD
 
 - [ ] **Step 2: Hand the migration to the controller**
 
-Do NOT apply it. Put the assertion SQL from Task 1 Step 2 in your report; the controller applies `000149` on hosted and runs those checks. Docker and the `supabase` CLI are absent here.
+Do NOT apply it. Put the assertion SQL from Task 1 Step 2 in your report; the controller applies `000156` on hosted and runs those checks. Docker and the `supabase` CLI are absent here.
 
 - [ ] **Step 3: Update the state log**
 
 Add ONE bullet to the "Current state (working session)" section of `CLAUDE.md`. Read two neighbouring bullets first and match their density. It must record:
 - the two new page routes and the nav entry;
-- `ad_lead_conversions` widened with `ad_id` appended last, and `ad_meta_funnel` added by migration `20260101000149_ad_meta_funnel.sql`, with its applied-status stated accurately;
+- `ad_lead_conversions` widened with `ad_id` appended last, and `ad_meta_funnel` added by migration `20260101000156_ad_meta_funnel.sql`, with its applied-status stated accurately;
 - ad set resolved by id (`ad_id` → `ad_meta_ads.entity_id` → `parent_id`), NOT by name, and that `contacts.ad_set_id` is null on every GoHighLevel row;
 - that the name fallback for leads without an ad id is deliberately NOT built, because the claim that `utm_medium` matches ad-set names is unverified until the first sync;
 - the four tenant states and that coverage is computed per tenant;
