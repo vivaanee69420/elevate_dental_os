@@ -16,7 +16,11 @@ router.get('/trend', requirePermission('marketing.view'), getTrend);
 router.get('/leads', requirePermission('marketing.view'), getLeads);
 router.get('/reconciliation', requirePermission('marketing.view'), getReconciliation);
 router.get('/facebook/campaigns', requirePermission('marketing.view'), getFacebookCampaigns);
-router.get('/facebook/campaigns/:campaignId/adsets', requirePermission('marketing.view'), getFacebookAdSets);
-router.get('/facebook/adsets/:adSetId/ads', requirePermission('marketing.view'), getFacebookAds);
+// Flat, query-filtered routes rather than nested drill-down paths: a
+// standalone tab lists every ad set, or every ad, across the whole window
+// with no parent id at all (?campaignId=/?adSetId= narrow it, same as
+// practice_id does on all three).
+router.get('/facebook/ad-sets', requirePermission('marketing.view'), getFacebookAdSets);   // ?campaignId=
+router.get('/facebook/ads', requirePermission('marketing.view'), getFacebookAds);          // ?adSetId=
 
 export default router;

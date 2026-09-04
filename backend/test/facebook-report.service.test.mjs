@@ -77,11 +77,11 @@ describe('window clamping', () => {
         expect(campOut.effectiveSince).toBe(floor);
         expect(campOut.windowClamped).toBe(true);
 
-        const adSetOut = await facebookReportService.adSets(ORG, 'CMP1', { since: tooEarly, until, practiceId: null });
+        const adSetOut = await facebookReportService.adSets(ORG, { since: tooEarly, until, practiceId: null, campaignId: 'CMP1' });
         expect(adSetOut.effectiveSince).toBe(floor);
         expect(adSetOut.windowClamped).toBe(true);
 
-        const adsOut = await facebookReportService.ads(ORG, 'AS1', { since: tooEarly, until, practiceId: null });
+        const adsOut = await facebookReportService.ads(ORG, { since: tooEarly, until, practiceId: null, adSetId: 'AS1' });
         expect(adsOut.effectiveSince).toBe(floor);
         expect(adsOut.windowClamped).toBe(true);
 
@@ -168,12 +168,12 @@ describe('multi-tenant states', () => {
     it('applies the same distinction at the ad-set tier, where a practice filter can empty the rollup', async () => {
         adGrainRepository.rollup.mockResolvedValue([]);
         marketingRepository.hasProviderMetrics.mockResolvedValue(true);
-        const quiet = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const quiet = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(quiet.state).toBe('no_spend_in_window');
 
         invalidateFunnelCache();
         marketingRepository.hasProviderMetrics.mockResolvedValue(false);
-        const fresh = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const fresh = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(fresh.state).toBe('never_synced');
     });
 
@@ -372,7 +372,7 @@ describe('funnel/spend date semantics', () => {
 
         await facebookReportService.campaigns(ORG, win);
         invalidateFunnelCache();
-        await facebookReportService.adSets(ORG, 'CMP1', win);
+        await facebookReportService.adSets(ORG, { ...win, campaignId: 'CMP1' });
 
         // The funnel: one day LATER, so 31 August's leads are inside the range.
         expect(marketingRepository.metaFunnel.mock.calls.length).toBeGreaterThan(0);
@@ -443,9 +443,9 @@ describe('practice scope reaches every reader', () => {
     it('forwards practiceId to all three readers across all three tiers', async () => {
         await facebookReportService.campaigns(ORG, { ...WIN, practiceId: PRACTICE });
         invalidateFunnelCache();
-        await facebookReportService.adSets(ORG, 'CMP1', { ...WIN, practiceId: PRACTICE });
+        await facebookReportService.adSets(ORG, { ...WIN, practiceId: PRACTICE, campaignId: 'CMP1' });
         invalidateFunnelCache();
-        await facebookReportService.ads(ORG, 'AS1', { ...WIN, practiceId: PRACTICE });
+        await facebookReportService.ads(ORG, { ...WIN, practiceId: PRACTICE, adSetId: 'AS1' });
 
         for (const c of marketingRepository.campaignSpendByProvider.mock.calls) expect(c[5]).toBe(PRACTICE);
         for (const c of marketingRepository.metaFunnel.mock.calls) expect(c[3]).toBe(PRACTICE);
@@ -462,6 +462,135 @@ describe('practice scope reaches every reader', () => {
     });
 });
 
+// ===========================================================================
+// Task 2 — the case that did not exist before this change: adSets/ads run
+// with NO parent id at all. Both methods only ever ran inside a drill-down
+// (campaignId/adSetId was a required positional argument), so a standalone
+// tab that must list EVERY ad set, or EVERY ad, across the whole window had
+// no way to call them. campaignId/adSetId are now optional keys on the
+// options object — filterParams in ad-grain.repository.js already defaults
+// both to null, so the unfiltered case needed no repository change, only the
+// service no longer forcing a value through.
+// ===========================================================================
+describe('parent id is an optional filter, not a required drill-down', () => {
+    it('adSets with no campaignId returns every ad set in the window, across campaigns', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AS1', entity_name: 'Photos 35+', parent_id: 'CMP1',
+              campaign_id: 'CMP1', entity_status: null,
+              spend_pence: 60000, impressions: 3000, clicks: 150, conversions: 0 },
+            { entity_id: 'AS2', entity_name: 'Video 25-34', parent_id: 'CMP2',
+              campaign_id: 'CMP2', entity_status: null,
+              spend_pence: 40000, impressions: 2000, clicks: 100, conversions: 0 },
+        ]);
+        marketingRepository.metaFunnel.mockResolvedValue([
+            { campaign_id: 'CMP1', ad_set_id: 'AS1', ad_id: 'AD1', practice_id: null,
+              leads: 6, booked: 3, attended: 1, patients: 1, new_patients: 1 },
+            { campaign_id: 'CMP2', ad_set_id: 'AS2', ad_id: 'AD2', practice_id: null,
+              leads: 4, booked: 1, attended: 0, patients: 0, new_patients: 0 },
+        ]);
+        // No campaignId key at all — WIN alone, exactly what a standalone
+        // "Ad sets" tab would call.
+        const out = await facebookReportService.adSets(ORG, WIN);
+        expect(out.rows.map((r) => r.id).sort()).toEqual(['AS1', 'AS2']);
+        // The repository itself must have been asked with no campaign filter —
+        // not, say, silently defaulted to the first campaign it saw.
+        expect(adGrainRepository.rollup).toHaveBeenCalledWith(
+            ORG, 'meta_adset', expect.objectContaining({ campaignId: null }),
+        );
+        // Coverage is computed over BOTH campaigns' leads, not just one — the
+        // whole point of the funnel no longer being filtered to one campaign.
+        expect(out.coverage.leadsTotal).toBe(10);
+    });
+
+    it('adSets with a campaignId still returns only that campaign’s ad sets — existing behaviour, unchanged', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AS1', entity_name: 'Photos 35+', parent_id: 'CMP1',
+              campaign_id: 'CMP1', entity_status: null,
+              spend_pence: 60000, impressions: 3000, clicks: 150, conversions: 0 },
+        ]);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
+        expect(adGrainRepository.rollup).toHaveBeenCalledWith(
+            ORG, 'meta_adset', expect.objectContaining({ campaignId: 'CMP1' }),
+        );
+        expect(out.rows.map((r) => r.id)).toEqual(['AS1']);
+    });
+
+    it('ads with no adSetId returns every ad in the window, across ad sets', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AD1', entity_name: 'Ad one', parent_id: 'AS1',
+              campaign_id: 'CMP1', entity_status: 'ACTIVE',
+              spend_pence: 3000, impressions: 100, clicks: 5, conversions: 0 },
+            { entity_id: 'AD2', entity_name: 'Ad two', parent_id: 'AS2',
+              campaign_id: 'CMP1', entity_status: 'ACTIVE',
+              spend_pence: 2000, impressions: 80, clicks: 3, conversions: 0 },
+        ]);
+        // No adSetId key at all — WIN alone.
+        const out = await facebookReportService.ads(ORG, WIN);
+        expect(out.rows.map((r) => r.id).sort()).toEqual(['AD1', 'AD2']);
+        expect(adGrainRepository.rollup).toHaveBeenCalledWith(
+            ORG, 'meta_ad', expect.objectContaining({ parentId: null }),
+        );
+    });
+
+    it('ads with an adSetId still returns only that ad set’s ads — existing behaviour, unchanged', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AD1', entity_name: 'Ad one', parent_id: 'AS1',
+              campaign_id: 'CMP1', entity_status: 'ACTIVE',
+              spend_pence: 3000, impressions: 100, clicks: 5, conversions: 0 },
+        ]);
+        const out = await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
+        expect(adGrainRepository.rollup).toHaveBeenCalledWith(
+            ORG, 'meta_ad', expect.objectContaining({ parentId: 'AS1' }),
+        );
+        expect(out.rows.map((r) => r.id)).toEqual(['AD1']);
+    });
+
+    // Costs stay null, not 0, on the unfiltered path too — perUnitPence is
+    // untouched by this change, but the unfiltered list is a new call shape
+    // and deserves its own assertion rather than trusting it by inference.
+    it('returns null costs, not 0, for a listed ad set with spend but no leads', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AS1', entity_name: 'Photos 35+', parent_id: 'CMP1',
+              campaign_id: 'CMP1', entity_status: null,
+              spend_pence: 60000, impressions: 3000, clicks: 150, conversions: 0 },
+        ]);
+        marketingRepository.metaFunnel.mockResolvedValue([]);
+        const out = await facebookReportService.adSets(ORG, WIN);
+        const row = out.rows.find((r) => r.id === 'AS1');
+        expect(row.cplPence).toBeNull();
+        expect(row.cpbPence).toBeNull();
+        expect(row.cpaPence).toBeNull();
+    });
+
+    // The service call itself is mocked here (the repository's own p_org
+    // scoping and cross-org proof live in marketing.isolation.test.mjs); this
+    // pins that the SERVICE forwards exactly the org it was given on the
+    // unfiltered call, and renders only what that call returns — an
+    // unfiltered listing is the one shape that did not exist before this
+    // task, so it gets its own isolation check rather than inheriting the
+    // filtered-path one by assumption.
+    it('never returns another org’s ad sets when listing unfiltered', async () => {
+        const OTHER_ORG = '99999999-9999-9999-9999-999999999999';
+        adGrainRepository.rollup.mockImplementation(async (orgId) => (
+            orgId === ORG
+                ? [{ entity_id: 'AS1', entity_name: 'Mine', parent_id: 'CMP1',
+                     campaign_id: 'CMP1', entity_status: null,
+                     spend_pence: 1000, impressions: 10, clicks: 1, conversions: 0 }]
+                : [{ entity_id: 'AS_OTHER', entity_name: 'Not mine', parent_id: 'CMP9',
+                     campaign_id: 'CMP9', entity_status: null,
+                     spend_pence: 1000, impressions: 10, clicks: 1, conversions: 0 }]
+        ));
+        const mine = await facebookReportService.adSets(ORG, WIN);
+        expect(mine.rows.map((r) => r.id)).toEqual(['AS1']);
+        expect(mine.rows.map((r) => r.id)).not.toContain('AS_OTHER');
+
+        invalidateFunnelCache();
+        const theirs = await facebookReportService.adSets(OTHER_ORG, WIN);
+        expect(theirs.rows.map((r) => r.id)).toEqual(['AS_OTHER']);
+        expect(theirs.rows.map((r) => r.id)).not.toContain('AS1');
+    });
+});
+
 describe('ad sets', () => {
     // Same guard as campaigns(): a quiet window with zero leads for this
     // campaign is not evidence of missing ad-id coverage.
@@ -472,7 +601,7 @@ describe('ad sets', () => {
               spend_pence: 60000, impressions: 3000, clicks: 150, conversions: 0 },
         ]);
         marketingRepository.metaFunnel.mockResolvedValue([]);
-        const out = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(out.state).toBe('ok');
         expect(out.coverage).toEqual({ leadsTotal: 0, leadsWithAdSet: 0, pct: 0 });
     });
@@ -489,14 +618,14 @@ describe('ad sets', () => {
             { campaign_id: 'CMP1', ad_set_id: null, ad_id: null, practice_id: null,
               leads: 4, booked: 1, attended: 0, patients: 0, new_patients: 0 },
         ]);
-        const out = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(out.rows.map((r) => r.id)).toEqual(['AS1']);
         // Leads we could not place: counted, but never given spend or a cost.
         expect(out.notIdentified).toEqual({ leads: 4, booked: 1, attended: 0, patients: 0, newPatients: 0 });
     });
 
     it('omits the unidentified bucket entirely when coverage is complete', async () => {
-        const out = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(out.notIdentified).toBeNull();
     });
 
@@ -520,7 +649,7 @@ describe('ad sets', () => {
             { campaign_id: 'CMP1', ad_set_id: null, ad_id: null, practice_id: null,
               leads: 4, booked: 1, attended: 0, patients: 0, new_patients: 0 },
         ]);
-        const out = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(out.rows.map((r) => r.id)).toEqual(['AS1']);
         expect(out.unmatchedLeads).toEqual({ leads: 5, booked: 2, attended: 1, patients: 1, newPatients: 0 });
         expect(out.notIdentified).toEqual({ leads: 4, booked: 1, attended: 0, patients: 0, newPatients: 0 });
@@ -532,7 +661,7 @@ describe('ad sets', () => {
               campaign_id: 'CMP1', entity_status: null,
               spend_pence: 60000, impressions: 3000, clicks: 150, conversions: 0 },
         ]);
-        const out = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(out.unmatchedLeads).toBeNull();
     });
 
@@ -558,7 +687,7 @@ describe('ad sets', () => {
 
         const campaigns = await facebookReportService.campaigns(ORG, WIN);
         const campaignRow = campaigns.rows.find((r) => r.id === 'CMP1');
-        const adSets = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const adSets = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
 
         const shown = adSets.rows.reduce((n, r) => n + r.leads, 0);
         const buckets = (adSets.notIdentified?.leads ?? 0) + (adSets.unmatchedLeads?.leads ?? 0);
@@ -581,7 +710,7 @@ describe('ad sets', () => {
               campaign_id: 'CMP1', entity_status: null,
               spend_pence: 60000, impressions: 3000, clicks: 150, conversions: 0 },
         ]);
-        const out = await facebookReportService.adSets(ORG, 'CMP1', WIN);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(out.rows[0]).not.toHaveProperty('reach');
     });
 });
@@ -638,7 +767,7 @@ describe('ads() paging', () => {
     it('returns at most PAGE (50) rows with a nextCursor when more remain', async () => {
         const rows = Array.from({ length: 120 }, (_, i) => grainRow(`AD${String(i).padStart(3, '0')}`, 1000 - i));
         adGrainRepository.rollup.mockResolvedValue(rows);
-        const out = await facebookReportService.ads(ORG, 'AS1', WIN);
+        const out = await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
         expect(out.rows).toHaveLength(50);
         expect(out.nextCursor).toBe('50');
     });
@@ -647,9 +776,9 @@ describe('ads() paging', () => {
         const rows = Array.from({ length: 120 }, (_, i) => grainRow(`AD${String(i).padStart(3, '0')}`, 1000 - i));
         adGrainRepository.rollup.mockResolvedValue(rows);
 
-        const page1 = await facebookReportService.ads(ORG, 'AS1', WIN);
-        const page2 = await facebookReportService.ads(ORG, 'AS1', { ...WIN, cursor: page1.nextCursor });
-        const page3 = await facebookReportService.ads(ORG, 'AS1', { ...WIN, cursor: page2.nextCursor });
+        const page1 = await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
+        const page2 = await facebookReportService.ads(ORG, { ...WIN, cursor: page1.nextCursor, adSetId: 'AS1' });
+        const page3 = await facebookReportService.ads(ORG, { ...WIN, cursor: page2.nextCursor, adSetId: 'AS1' });
 
         const ids1 = page1.rows.map((r) => r.id);
         const ids2 = page2.rows.map((r) => r.id);
@@ -674,8 +803,8 @@ describe('ads() paging', () => {
         ];
         adGrainRepository.rollup.mockResolvedValue(rows);
 
-        const out1 = await facebookReportService.ads(ORG, 'AS1', WIN);
-        const out2 = await facebookReportService.ads(ORG, 'AS1', WIN);
+        const out1 = await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
+        const out2 = await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
 
         expect(out1.rows.map((r) => r.id)).toEqual(['AD_A', 'AD_B', 'AD_M', 'AD_Y', 'AD_Z']);
         expect(out2.rows.map((r) => r.id)).toEqual(out1.rows.map((r) => r.id));
@@ -693,7 +822,7 @@ describe('ads() paging', () => {
 describe('funnel is computed once per org+window, not once per expansion', () => {
     it('serves five ad-set expansions from one funnel computation', async () => {
         for (const adSetId of ['AS1', 'AS2', 'AS3', 'AS4', 'AS5']) {
-            await facebookReportService.ads(ORG, adSetId, WIN);
+            await facebookReportService.ads(ORG, { ...WIN, adSetId });
         }
         expect(marketingRepository.metaFunnel).toHaveBeenCalledTimes(1);
         // The rollup is per ad set and correctly still runs each time.
@@ -705,10 +834,10 @@ describe('funnel is computed once per org+window, not once per expansion', () =>
     it('never serves one org, window or practice from another’s entry', async () => {
         const OTHER_ORG = '99999999-9999-9999-9999-999999999999';
         const PRACTICE = '22222222-2222-2222-2222-222222222222';
-        await facebookReportService.ads(ORG, 'AS1', WIN);
-        await facebookReportService.ads(OTHER_ORG, 'AS1', WIN);
-        await facebookReportService.ads(ORG, 'AS1', { ...WIN, practiceId: PRACTICE });
-        await facebookReportService.ads(ORG, 'AS1', { ...WIN, until: '2026-08-30' });
+        await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
+        await facebookReportService.ads(OTHER_ORG, { ...WIN, adSetId: 'AS1' });
+        await facebookReportService.ads(ORG, { ...WIN, practiceId: PRACTICE, adSetId: 'AS1' });
+        await facebookReportService.ads(ORG, { ...WIN, until: '2026-08-30', adSetId: 'AS1' });
         expect(marketingRepository.metaFunnel).toHaveBeenCalledTimes(4);
     });
 });
@@ -716,6 +845,30 @@ describe('funnel is computed once per org+window, not once per expansion', () =>
 describe('tenant isolation', () => {
     it('never reads without an organisation id', async () => {
         await facebookReportService.campaigns(ORG, WIN);
+        for (const c of marketingRepository.adAccountsForProvider.mock.calls) expect(c[0]).toBe(ORG);
+        for (const c of marketingRepository.metaFunnel.mock.calls) expect(c[0]).toBe(ORG);
+        for (const c of marketingRepository.campaignSpendByProvider.mock.calls) expect(c[0]).toBe(ORG);
+        for (const c of adGrainRepository.rollup.mock.calls) expect(c[0]).toBe(ORG);
+    });
+
+    // M1, service-level analogue: the controller strips a submitted
+    // organisation_id off the query before this is ever called (pinned in
+    // marketing.isolation.test.mjs's "has no organisation field" test), but
+    // that guard is only as good as this function actually honouring it — a
+    // service that read an org id out of ITS options bag would reopen the
+    // hole from underneath a perfectly good controller. orgId is only ever
+    // the first positional argument; an organisation-shaped field smuggled
+    // into the options object (the closest a caller can get to a spoofed
+    // query.organisation_id / body.organisation_id at this layer) must be
+    // inert.
+    it('ignores any organisation-shaped field inside the options object — the org id is only ever the first positional argument', async () => {
+        const spoofed = { ...WIN, organisation_id: 'evil-org', organisationId: 'evil-org' };
+        await facebookReportService.campaigns(ORG, spoofed);
+        invalidateFunnelCache();
+        await facebookReportService.adSets(ORG, spoofed);
+        invalidateFunnelCache();
+        await facebookReportService.ads(ORG, spoofed);
+
         for (const c of marketingRepository.adAccountsForProvider.mock.calls) expect(c[0]).toBe(ORG);
         for (const c of marketingRepository.metaFunnel.mock.calls) expect(c[0]).toBe(ORG);
         for (const c of marketingRepository.campaignSpendByProvider.mock.calls) expect(c[0]).toBe(ORG);
