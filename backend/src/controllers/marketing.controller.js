@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { marketingService } from '../services/marketing.service.js';
 import { adReconciliationService } from '../services/ad-reconciliation.service.js';
 import { facebookReportService } from '../services/facebook-report.service.js';
+import { googleReportService } from '../services/google-report.service.js';
 import { londonDaysAgo, londonYmd } from '../lib/tz.js';
 import { DEEP_WINDOW_DAYS } from '../lib/integrations/google-ads-deep-sync.js';
 
@@ -162,6 +163,72 @@ export async function getFacebookAds(req, res, next) {
         const q = FacebookQuerySchema.parse(req.query);
         const data = await facebookReportService.ads(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), adSetId: q.adSetId ?? null, cursor: q.cursor ?? null,
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+// Google's hierarchy is Campaign -> Ad Group -> { Ads, Keywords } — ads and
+// keywords are SIBLINGS under an ad group, not parent and child, which is why
+// there are four routes here where Facebook has three. `campaignId` and
+// `parentId` are both OPTIONAL query filters, same shape/reasoning as
+// FacebookQuerySchema's campaignId/adSetId above: `parentId` is an ad
+// GROUP's own id (never a campaign id) when it narrows /ads or /keywords.
+// Omitting either lists everything in scope; supplying it narrows to one
+// parent. Same deliberately-shared schema across all four routes as
+// FacebookQuerySchema — a given route only ever reads the keys it needs.
+export const GoogleQuerySchema = z.object({
+    since: z.string().regex(YMD_RE, 'since must be YYYY-MM-DD').optional(),
+    until: z.string().regex(YMD_RE, 'until must be YYYY-MM-DD').optional(),
+    campaignId: z.string().min(1).max(128).optional(),
+    parentId: z.string().min(1).max(128).optional(),
+    cursor: z.string().regex(/^\d{1,9}$/).optional(),
+}).strip().refine(
+    // Same reasoning as FacebookQuerySchema's refine: an inverted range would
+    // otherwise reach campaignSpendByProvider's .gte(since).lte(until) /
+    // ad_grain_rollup's date bounds, match nothing, and get reported as
+    // state: 'never_synced' to a fully synced tenant.
+    (q) => !q.since || !q.until || q.since <= q.until,
+    { message: 'since must not be after until', path: ['since'] },
+);
+
+export async function getGoogleCampaigns(req, res, next) {
+    try {
+        const q = GoogleQuerySchema.parse(req.query);
+        const data = await googleReportService.campaigns(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+export async function getGoogleAdGroups(req, res, next) {
+    try {
+        const q = GoogleQuerySchema.parse(req.query);
+        const data = await googleReportService.adGroups(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), campaignId: q.campaignId ?? null,
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+export async function getGoogleAds(req, res, next) {
+    try {
+        const q = GoogleQuerySchema.parse(req.query);
+        const data = await googleReportService.ads(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+            campaignId: q.campaignId ?? null, parentId: q.parentId ?? null, cursor: q.cursor ?? null,
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+export async function getGoogleKeywords(req, res, next) {
+    try {
+        const q = GoogleQuerySchema.parse(req.query);
+        const data = await googleReportService.keywords(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+            campaignId: q.campaignId ?? null, parentId: q.parentId ?? null, cursor: q.cursor ?? null,
         });
         res.json(data);
     } catch (err) { next(err); }

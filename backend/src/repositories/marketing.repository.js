@@ -142,9 +142,23 @@ export const marketingRepository = {
             // day is the only way to report the status a campaign is in now;
             // `id` cannot do that job — it is a random uuid, so ordering by it
             // says nothing about time.
+            //
+            // conversions widened in for the Google report's campaign tier
+            // (Task 4): google-ads-sync.js writes metrics.conversions to
+            // every google_ads row here. meta-ads-sync.js also writes a real
+            // (non-zero) value at THIS grain, summed from Meta's own
+            // `actions` breakdown — unlike ad set/ad grain, where `actions`
+            // is never requested and the deep tables' conversions column is a
+            // permanent zero. The Facebook report still never reads this
+            // column at campaign grain either: it reports Google's own
+            // conversions here, but the CRM funnel (leads/booked/attended/
+            // patients) everywhere on the Facebook page, by design — not
+            // because the figure is meaningless, but to keep one consistent
+            // "cost of a patient" story across all three Facebook tiers.
+            // Reconciliation still only sums spend_pence and is unaffected.
             let q = supabase_1.serviceClient
                 .from('ad_metrics')
-                .select('id, customer_id, campaign_id, campaign_name, campaign_status, metric_date, impressions, clicks, spend_pence')
+                .select('id, customer_id, campaign_id, campaign_name, campaign_status, metric_date, impressions, clicks, spend_pence, conversions')
                 .eq('organisation_id', orgId)
                 .eq('provider', provider)
                 .gte('metric_date', since)

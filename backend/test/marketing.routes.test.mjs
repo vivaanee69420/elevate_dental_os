@@ -244,3 +244,99 @@ describe('facebook query validation', () => {
         expect(() => FacebookQuerySchema.parse({ until: '2026-06-01' })).not.toThrow();
     });
 });
+
+// Same shared-schema idiom as FacebookQuerySchema above (Task 4's brief):
+// campaignId and parentId are both optional filters used by different Google
+// routes (parentId is an ad GROUP's own id — never a campaign id — when it
+// narrows /ads or /keywords, which are SIBLINGS under an ad group).
+describe('google query validation', () => {
+    it('accepts an omitted window and lets the server default it', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = GoogleQuerySchema.parse({});
+        expect(parsed.since).toBeUndefined();
+        expect(parsed.until).toBeUndefined();
+    });
+
+    it('still rejects a malformed date when one IS supplied', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => GoogleQuerySchema.parse({ since: '2026-8-1' })).toThrow();
+        expect(() => GoogleQuerySchema.parse({ until: 'not-a-date' })).toThrow();
+    });
+
+    it('accepts a well-formed window plus campaignId, parentId and cursor', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = GoogleQuerySchema.parse({
+            since: '2026-06-01', until: '2026-08-31', campaignId: 'CMP1', parentId: 'AG1', cursor: '50',
+        });
+        expect(parsed).toEqual({
+            since: '2026-06-01', until: '2026-08-31', campaignId: 'CMP1', parentId: 'AG1', cursor: '50',
+        });
+    });
+
+    // M1: an org id must never be accepted from the request — same reasoning
+    // as FacebookQuerySchema's identical test.
+    it('has no organisation field', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = GoogleQuerySchema.parse({ organisation_id: 'other-org' });
+        expect(parsed.organisation_id).toBeUndefined();
+    });
+
+    it('rejects an inverted range (since after until)', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => GoogleQuerySchema.parse({ since: '2026-08-31', until: '2026-06-01' })).toThrow();
+    });
+
+    it('accepts an equal since and until (a single-day selection)', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        const parsed = GoogleQuerySchema.parse({ since: '2026-07-15', until: '2026-07-15' });
+        expect(parsed).toEqual({ since: '2026-07-15', until: '2026-07-15' });
+    });
+
+    it('does not require until when since is present alone, and vice versa', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => GoogleQuerySchema.parse({ since: '2026-08-31' })).not.toThrow();
+        expect(() => GoogleQuerySchema.parse({ until: '2026-06-01' })).not.toThrow();
+    });
+
+    it('rejects an over-long campaignId or parentId', async () => {
+        const { GoogleQuerySchema } = await import('../src/controllers/marketing.controller.js');
+        expect(() => GoogleQuerySchema.parse({ campaignId: 'x'.repeat(129) })).toThrow();
+        expect(() => GoogleQuerySchema.parse({ parentId: 'x'.repeat(129) })).toThrow();
+    });
+});
+
+// Google routes: four flat, query-filtered routes (campaigns/ad-groups/ads/
+// keywords) under the same marketing.view permission as the Facebook routes.
+describe('google routes are registered and permission-gated', () => {
+    it('registers all four Google routes', () => {
+        const paths = marketingRouter.stack.filter((l) => l.route).map((l) => l.route.path);
+        expect(paths).toEqual(expect.arrayContaining([
+            '/google/campaigns', '/google/ad-groups', '/google/ads', '/google/keywords',
+        ]));
+    });
+
+    it('denies a practice_manager with no marketing.view permission on every Google route', () => {
+        for (const path of ['/google/campaigns', '/google/ad-groups', '/google/ads', '/google/keywords']) {
+            const layer = marketingRouter.stack.find((l) => l.route?.path === path);
+            const guard = layer.route.stack[0].handle;
+            const req = { user: { role: 'practice_manager', permissions: {} } };
+            const res = mockRes();
+            let nextCalled = false;
+            guard(req, res, () => { nextCalled = true; });
+            expect(nextCalled).toBe(false);
+            expect(res.statusCode).toBe(403);
+        }
+    });
+
+    it('grants a user carrying marketing.view on every Google route', () => {
+        for (const path of ['/google/campaigns', '/google/ad-groups', '/google/ads', '/google/keywords']) {
+            const layer = marketingRouter.stack.find((l) => l.route?.path === path);
+            const guard = layer.route.stack[0].handle;
+            const req = { user: { role: 'practice_manager', permissions: { 'marketing.view': true } } };
+            const res = mockRes();
+            let nextCalled = false;
+            guard(req, res, () => { nextCalled = true; });
+            expect(nextCalled).toBe(true);
+        }
+    });
+});
