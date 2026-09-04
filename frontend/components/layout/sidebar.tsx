@@ -29,6 +29,7 @@ const SECTION_ICONS: Record<string, string> = {
   'Business Health': 'M3 12h4l2 5 4-12 2 7h6',
   Operations: 'M8 2v4M16 2v4M3 9h18M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z',
   Growth: 'M3 17l6-6 4 4 7-7M14 8h7v7',
+  Marketing: 'M3 11l18-5v12L3 14v-3zM11.6 16.8a3 3 0 1 1-5.8-1.6',
   'Elevate CRM': 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
   Wealth: 'M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6',
   Training: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5',
@@ -38,7 +39,19 @@ const SECTION_ICONS: Record<string, string> = {
 
 function SectionIcon({ label }: { label: string }) {
   const d = SECTION_ICONS[label];
-  if (!d) return null;
+  // No silent null: the icon is the only visual anchor on a flat section row,
+  // so a section missing from the map above still occupies the slot rather
+  // than leaving its label out of line with every other row.
+  if (!d) {
+    return (
+      <span
+        className="flex h-[15px] w-[15px] shrink-0 items-center justify-center"
+        aria-hidden="true"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-50" />
+      </span>
+    );
+  }
   return (
     <svg
       width="15"
