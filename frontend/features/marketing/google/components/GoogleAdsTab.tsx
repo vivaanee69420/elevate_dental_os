@@ -76,16 +76,21 @@ export function GoogleAdsTab({ parentId }: {
     <div className="flex flex-col gap-4">
       <GoogleStateNotice state={firstPage.state} />
 
+      {/* MINOR 4: outside the showTable gate, matching GoogleCampaignsTab.tsx —
+          a request clamped to 92 days that then lands on an empty state must
+          still say so. Buried inside showTable, a user who picked twelve
+          months, landed on an empty state, and was told to "try a wider
+          period" was never told the window was already clamped. */}
+      {firstPage.windowClamped && (
+        <Note>
+          Ad group, ad and keyword detail is kept for 92 days. This period reaches further back
+          than that, so figures below are shown from {formatDate(firstPage.effectiveSince)}
+          {' '}onward rather than the whole period.
+        </Note>
+      )}
+
       {showTable && (
         <>
-          {firstPage.windowClamped && (
-            <Note>
-              Ad group, ad and keyword detail is kept for 92 days. This period reaches further back
-              than that, so figures below are shown from {formatDate(firstPage.effectiveSince)}
-              {' '}onward rather than the whole period.
-            </Note>
-          )}
-
           <DeferUntilVisible minHeight={360}>
             <AdMetricTable
               columns={COLUMNS}
