@@ -66,6 +66,14 @@ export interface GoogleRow {
   campaignName?: string | null;
   /** Present on ad/keyword rows only: the parent AD GROUP's id. */
   parentId?: string | null;
+  /** Present on ad/keyword rows only: the parent AD GROUP's name. `null` when
+   *  it could not be resolved (see google-report.service.js's
+   *  parentAdGroupNames). MINOR 5: shown alongside campaignName in a row's
+   *  subtitle — ad_grain_rollup groups by (entity_id, parent_id), and Google
+   *  reuses a keyword's criterion id across ad groups, so the SAME id (and,
+   *  for keywords, the same keyword text) can legitimately appear more than
+   *  once under the SAME campaign; only the ad group tells those rows apart. */
+  parentName?: string | null;
 }
 
 // Keyword rows additionally carry match type, Quality Score and the three

@@ -160,6 +160,33 @@ function excludedAccountsOf(accounts) {
         }));
 }
 
+// MINOR 5: an ad/keyword row's subtitle carried campaignName but not its
+// actual PARENT — the ad group. ad_grain_rollup groups by (entity_id,
+// parent_id), and Google reuses a keyword's criterion id across ad groups, so
+// an unfiltered Ads/Keywords tab can legitimately render the same entity_id
+// (and, for keywords, the same keyword text) several times under the SAME
+// campaign with different numbers — the ad group is the only thing that
+// disambiguates them, and it was missing entirely.
+//
+// ads()/keywords() themselves never carry the ad group's name (their own
+// rows' parent_id IS the ad group id, but entity_name on those tiers is the
+// AD's or KEYWORD's own name) — the ad group's name lives on the
+// 'google_adgroup' grain, keyed by that grain's own entity_id. So this is a
+// second, small rollup call: 'google_adgroup' rows for the SAME
+// practice/campaign scope, reduced to entity_id -> entity_name. Deliberately
+// NOT passed `parentId`: on that grain, parent_id means an ad group's own
+// PARENT (the campaign), a different id from the ad/keyword-tier `parentId`
+// argument (an ad group id) — passing it through would filter ad groups by
+// campaign parentage using an ad-group id, which matches nothing.
+async function parentAdGroupNames(orgId, win, practiceId, campaignId) {
+    const groupRows = await adGrainRepository.rollup(orgId, 'google_adgroup', {
+        since: win.since, until: win.until, practiceId, campaignId,
+    });
+    const names = new Map();
+    for (const g of groupRows ?? []) names.set(g.entity_id, g.entity_name ?? null);
+    return names;
+}
+
 // "No rows in THIS WINDOW" is not evidence a sync has never happened — a
 // tenant may have paused every campaign, picked a quiet day, or filtered to a
 // practice/campaign/ad group with nothing in it. THREE distinct facts can
@@ -310,6 +337,11 @@ export const googleReportService = {
             };
         }
 
+        // MINOR 5: the ad group's own name, keyed by parent_id — see
+        // parentAdGroupNames. Fetched only now (after the empty-window early
+        // return above), so a genuinely empty tab pays no extra query.
+        const groupNames = await parentAdGroupNames(orgId, win, practiceId, campaignId);
+
         // Same tiebreak as facebook-report.service.js's ads(): spend
         // descending is not a TOTAL order (several zero-spend ads is a normal
         // shape), so entity_id ascending breaks every tie deterministically —
@@ -323,6 +355,7 @@ export const googleReportService = {
                     id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null,
                     campaignId: g.campaign_id ?? null, campaignName: g.campaign_name ?? null,
                     parentId: g.parent_id ?? null,
+                    parentName: groupNames.get(g.parent_id) ?? null,
                 },
                 Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
             ));
@@ -354,6 +387,9 @@ export const googleReportService = {
             };
         }
 
+        // MINOR 5: same as ads() — see parentAdGroupNames.
+        const groupNames = await parentAdGroupNames(orgId, win, practiceId, campaignId);
+
         const all = grainRows
             .slice()
             .sort((a, b) => (Number(b.spend_pence ?? 0) - Number(a.spend_pence ?? 0))
@@ -364,6 +400,7 @@ export const googleReportService = {
                         id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null,
                         campaignId: g.campaign_id ?? null, campaignName: g.campaign_name ?? null,
                         parentId: g.parent_id ?? null,
+                        parentName: groupNames.get(g.parent_id) ?? null,
                     },
                     Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
                 ),

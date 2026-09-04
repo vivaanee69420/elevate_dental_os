@@ -38,8 +38,14 @@ const COLUMNS: Column<GoogleRow>[] = [
     render: (r) => (
       <span className="font-medium text-brand">
         {r.name ?? r.id ?? 'Unnamed ad'}
-        {r.campaignName && (
-          <span className="block text-[11px] font-normal text-ink-muted">{r.campaignName}</span>
+        {/* MINOR 5: campaign AND ad group, not campaign alone. An unfiltered
+            listing can legitimately show the same ad id under the same
+            campaign more than once when it belongs to a different ad group —
+            the ad group is what tells those rows apart. */}
+        {(r.campaignName || r.parentName) && (
+          <span className="block text-[11px] font-normal text-ink-muted">
+            {[r.campaignName, r.parentName].filter(Boolean).join(' · ')}
+          </span>
         )}
       </span>
     ),
