@@ -28,6 +28,7 @@ import DentallyPracticeMapping from '@/features/integrations/components/Dentally
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
 import QuickBooksPanel from '@/features/integrations/components/QuickBooksPanel';
+import CallRailPanel from '@/features/integrations/components/CallRailPanel';
 import EmergentPanel from '@/features/integrations/components/EmergentPanel';
 import GoogleSheetsPanel from '@/features/integrations/components/GoogleSheetsPanel';
 import GoogleSheetsWriterPanel from '@/features/integrations/components/GoogleSheetsWriterPanel';
@@ -218,6 +219,7 @@ export default function IntegrationsScreen() {
       {dentallyConnected && <DentallyWebhookPanel />}
       {ghlPanelVisible && <GoHighLevelPanel />}
       <QuickBooksPanel />
+      <CallRailPanel />
       {hasFeature('emergent') && <EmergentPracticeMapping />}
       {hasFeature('emergent') && <EmergentPanel />}
       {hasFeature('call_reporting') && <GoogleSheetsPanel />}

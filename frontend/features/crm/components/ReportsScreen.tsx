@@ -5,92 +5,64 @@
 // by-treatment value grid.
 //
 // Data flow:
-//   LEADS -> status counts -> conversion / funnel
-//         -> group by source  -> source ROI rows
-//         -> group by practice-> practice rows
-//         -> group by treatment-> treatment value cards
+//   GET /api/leads/report -> one SQL aggregate over one window, returning
+//        headline totals + the by-source and by-practice groupings, so the
+//        funnel and both tables always agree with each other.
 
 import { useMemo, useState } from 'react';
-import { useLeads } from '@/features/leads/hooks';
-import type { Lead } from '@/features/leads/api';
+import { useLeadReport } from '@/features/leads/hooks';
 import { useTreatmentBreakdown } from '@/features/crm/treatment-api';
 import { formatPence as formatCurrency } from '@/lib/format';
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
-/** CRM Reports screen — live, derived from GET /api/leads. The "By treatment"
+/** CRM Reports screen — live, derived from GET /api/leads/report. The "By treatment"
  *  card is backed by REAL Dentally invoiced fees (GET /api/analytics/treatment-breakdown),
  *  not the lead pipeline (leads carry GHL opp.name, not a real treatment). */
 export default function ReportsScreen() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const { data: ghlData } = useGhlAccounts();
 
-  const { data, isLoading } = useLeads({
-    limit: 1000,
-    ...(accountId ? { integration_account_id: accountId } : {}),
-  });
-  const leads: Lead[] = data?.leads ?? [];
+  // Every figure below is server-aggregated (GET /api/leads/report). It used
+  // to be counted in the browser from `useLeads({ limit: 1000 })` — and 1000 is
+  // exactly PostgREST's row cap, so that bound was a ceiling dressed as a
+  // choice. On 22,807 leads the page rendered "1,000 leads received" (22x out),
+  // an FTA rate of 0.00% against a real 0.08%, and a pipeline value ~1/22 of
+  // the truth. The conversion RATE happened to look right, which is what made
+  // it hard to notice — a number that is right by luck is not right.
+  const { data: report, isLoading } = useLeadReport({ accountId });
   const { data: treatmentData } = useTreatmentBreakdown(24);
   const treatmentBreakdown = treatmentData?.treatments ?? [];
 
   const model = useMemo(() => {
-    const val = (l: Lead) => l.estimated_value_pence ?? 0;
-    const totalLeads = leads.length;
-    const contacted = leads.filter((l) => l.status !== 'new').length;
-    const consultBooked = leads.filter((l) =>
-      ['consultation_booked', 'consultation_attended', 'treatment_started'].includes(l.status),
-    ).length;
-    const consultAttended = leads.filter((l) =>
-      ['consultation_attended', 'treatment_started'].includes(l.status),
-    ).length;
-    const treatmentStarted = leads.filter((l) => l.status === 'treatment_started').length;
-
-    const sources = [...new Set(leads.map((l) => l.source).filter(Boolean))] as string[];
-    const sourceBreakdown = sources.map((s) => {
-      const sl = leads.filter((l) => l.source === s);
-      const converted = sl.filter((l) => l.status === 'treatment_started');
-      return {
-        name: s,
-        leads: sl.length,
-        conversionRate: sl.length ? (converted.length / sl.length) * 100 : 0,
-        value: converted.reduce((sum, l) => sum + val(l), 0),
-      };
-    }).sort((a, b) => b.leads - a.leads);
-
-    const practices = [...new Set(leads.map((l) => l.practice?.name).filter(Boolean))] as string[];
-    const practiceBreakdown = practices.map((p) => {
-      const pl = leads.filter((l) => l.practice?.name === p);
-      const converted = pl.filter((l) => l.status === 'treatment_started').length;
-      return { name: p, leads: pl.length, conversionRate: pl.length ? (converted / pl.length) * 100 : 0 };
-    }).sort((a, b) => b.leads - a.leads);
-
-    const funnel = [
-      { label: 'Leads received', value: totalLeads, colour: '#3B82F6' },
-      { label: 'Contacted', value: contacted, colour: '#7C3AED' },
-      { label: 'Consultation booked', value: consultBooked, colour: '#6366F1' },
-      { label: 'Consultation attended', value: consultAttended, colour: '#0891B2' },
-      { label: 'Treatment started', value: treatmentStarted, colour: 'var(--success)' },
-    ];
-
-    const pipelineValue = leads
-      .filter((l) => l.status !== 'not_proceeding')
-      .reduce((s, l) => s + val(l), 0);
-
-    const contactTimes = leads
-      .map((l) => l.last_response_minutes)
-      .filter((m): m is number => typeof m === 'number');
-    const avgFirstContact = contactTimes.length
-      ? Math.round(contactTimes.reduce((a, b) => a + b, 0) / contactTimes.length)
-      : null;
-    const ftaRate = totalLeads
-      ? (leads.filter((l) => l.status === 'failed_to_attend').length / totalLeads) * 100
-      : 0;
-
+    const t = report?.totals;
+    const COLOURS = ['#3B82F6', '#7C3AED', '#6366F1', '#0891B2', 'var(--success)'];
     return {
-      totalLeads, treatmentStarted, sourceBreakdown, practiceBreakdown,
-      funnel, pipelineValue, avgFirstContact, ftaRate,
+      totalLeads: t?.total ?? 0,
+      treatmentStarted: t?.treatmentStarted ?? 0,
+      pipelineValue: t?.pipelineValuePence ?? 0,
+      avgFirstContact: t?.avgFirstResponseMinutes ?? null,
+      ftaRate: t?.ftaPct ?? null,
+      funnel: (report?.funnel ?? []).map((f, i) => ({
+        label: f.label, value: f.count, colour: COLOURS[i] ?? COLOURS[0],
+      })),
+      sourceBreakdown: (report?.bySource ?? []).map((r) => ({
+        name: r.key,
+        leads: r.total,
+        conversionRate: r.conversionPct ?? 0,
+        value: r.convertedValuePence,
+      })),
+      // Includes the "Unassigned" bucket. The old client code grouped on
+      // `l.practice?.name` and dropped falsy names, discarding every lead with
+      // no practice — 3,939 of 22,807, holding 301 of the 494 conversions, so
+      // this table was missing 61% of all conversions.
+      practiceBreakdown: (report?.byPractice ?? []).map((r) => ({
+        name: r.key,
+        leads: r.total,
+        conversionRate: r.conversionPct ?? 0,
+      })),
     };
-  }, [leads]);
+  }, [report]);
 
   const maxFunnel = model.totalLeads || 1;
 
@@ -175,7 +147,7 @@ export default function ReportsScreen() {
             className="display font-bold"
             style={{ fontSize: 28, color: 'var(--warning)', marginTop: 4 }}
           >
-            {model.ftaRate.toFixed(1)}%
+            {model.ftaRate === null ? '—' : `${model.ftaRate.toFixed(1)}%`}
           </div>
           <div className="text-ink-muted" style={{ fontSize: 10 }}>
             UK avg 8% · target under 5%

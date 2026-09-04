@@ -11,9 +11,15 @@ export interface DashboardSummary {
   margin: number; // percentage points
   totalCosts: number;
   cashCollected: number;
-  cashflow: number;
-  reserve: number;
-  excessCash: number;
+  monthsCovered: number;
+  // The cash figures below are NULLABLE on purpose. Operating cashflow needs a
+  // cost feed and the bank position needs an open-banking connection; when
+  // either is absent the honest answer is "we don't know", not £0. A £0 on a
+  // cash line reads as a real zero and is worse than a blank.
+  cashflow: number | null;
+  bankBalance: number | null;
+  reserve: number | null;
+  excessCash: number | null;
 }
 
 export interface SeriesMonth {
@@ -23,13 +29,10 @@ export interface SeriesMonth {
   cash: number;
 }
 
-export interface PracticeRow {
-  name: string;
-  turnover: number;
-  margin: number;
-}
-
 const p = (pence: number) => Math.round((pence || 0) / 100);
+// Null-preserving variant — `p()` would collapse a null into a real-looking £0.
+const pn = (pence: number | null | undefined) =>
+  pence === null || pence === undefined ? null : Math.round(pence / 100);
 
 export interface PeriodRange { from: string | null; to: string | null }
 // from/to only take effect when BOTH are set (else default trailing window).
@@ -49,9 +52,11 @@ export async function getDashboardSummary(range?: PeriodRange, practiceId?: stri
     margin: r.marginPct ?? 0,
     totalCosts: p(r.totalCostsPence),
     cashCollected: p(r.cashCollectedPence),
-    cashflow: p(r.cashflowPence),
-    reserve: p(r.reservePence),
-    excessCash: p(r.excessCashPence),
+    monthsCovered: r.monthsCovered ?? 12,
+    cashflow: pn(r.cashflowPence),
+    bankBalance: pn(r.bankBalancePence),
+    reserve: pn(r.reservePence),
+    excessCash: pn(r.excessCashPence),
   };
 }
 
@@ -69,23 +74,6 @@ export async function getRevenueSeries(range?: PeriodRange, practiceId?: string 
       revenue: p(m.revenue),
       profit: p(m.profit),
       cash: p(m.cash),
-    })),
-  };
-}
-
-export async function getPracticeSummary(): Promise<{
-  groupDerived: boolean;
-  truncated: boolean;
-  practices: PracticeRow[];
-}> {
-  const r = await api('/api/analytics/practice-summary');
-  return {
-    groupDerived: !!r?.groupDerived,
-    truncated: !!r?.truncated,
-    practices: (r?.practices ?? []).map((x: any) => ({
-      name: x.name,
-      turnover: p(x.turnoverPence),
-      margin: x.marginPct ?? 0,
     })),
   };
 }

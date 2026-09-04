@@ -32,15 +32,42 @@ const ENDPOINT = '/api/public/treatments-accepted';
 const CASHUP_ENDPOINT = '/api/public/daily-cashups';
 const MONTHLY_PL_ENDPOINT = '/api/public/monthly-pl';
 
+// Normalise a free-text identity field: collapse whitespace runs, trim, lower.
+// MUST stay byte-identical to the patient_norm / treatment_norm generated
+// columns in migration 000149 — test/emergent-natural-key.test.mjs pins the
+// pair. 'Craig  Attawater ' and 'craig attawater' are the same person.
+export const normaliseIdentityText = (s) =>
+    String(s ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+
 // Emergent records carry no stable id, so we derive a deterministic external_id
-// from the immutable fields. Re-pulling the same record yields the same key, so
-// the upsert on (organisation_id, source, external_id) stays idempotent — no
-// double counting. Trade-off: two genuinely distinct rows with identical
-// business/date/patient/treatment/amount collapse to one (rare; acceptable).
+// from the identity fields.
+//
+// This hash used to be taken over the RAW field values INCLUDING `amount`, and
+// both choices caused live double-counting on Plan4growth (975 rows for 745
+// real records, £1,014,647 of accepted value overstated):
+//
+//   * raw text meant a trailing space minted a NEW identity, so the upsert's
+//     conflict guard missed and the same record inserted twice — 228 of 229
+//     duplicate pairs differed by nothing but whitespace;
+//   * `amount` in the identity meant a plan logged at £0 and priced later
+//     forked into two rows instead of correcting the one.
+//
+// So: text is normalised, and amount is NOT part of the identity — a re-price
+// updates the record. Verified safe across every tenant (no case exists where
+// one business/date/patient/treatment carries two distinct non-zero amounts).
+//
+// The real guarantee is the DB-side unique index on
+// (organisation_id, source, business_id, accepted_date, patient_norm,
+// treatment_norm) — see migration 000149. This function only has to agree with
+// it; if it ever disagrees the write fails loudly on the constraint instead of
+// silently inflating a tenant's revenue.
 export function externalId(rec) {
-    const parts = [rec.business_id, rec.date, rec.patient_name, rec.treatment_accepted, rec.amount]
-        .map((x) => (x == null ? '' : String(x)))
-        .join('|');
+    const parts = [
+        rec.business_id == null ? '' : String(rec.business_id),
+        rec.date == null ? '' : String(rec.date),
+        normaliseIdentityText(rec.patient_name),
+        normaliseIdentityText(rec.treatment_accepted),
+    ].join('|');
     return crypto.createHash('sha256').update(parts).digest('hex').slice(0, 32);
 }
 
@@ -422,10 +449,31 @@ export async function syncOrg(orgId, { full = false } = {}) {
             orgId,
             records.map((r) => ({ business_id: r.business_id, business_name: r.business_name })),
         );
+        // PER-RECORD FAULT ISOLATION. This loop used to be bare inside the
+        // outer try, so ONE unwritable record aborted the whole run: the
+        // tenant lost its treatments AND its cash-ups AND its monthly P&L for
+        // that night, and the integration was marked failed. In a multi-tenant
+        // product that is the wrong blast radius — one practice's malformed row
+        // must cost that row, not a tenant's entire night of data.
+        //
+        // Failures are counted and reported rather than swallowed: `rejected`
+        // rides in the return value so the worker log and the integration
+        // status show that something needs attention, instead of a silent
+        // partial sync that looks like success.
         let synced = 0;
+        const rejected = [];
         for (const rec of records) {
-            await treatmentAcceptedRepository.upsert(mapRecord(rec, orgId, maps));
-            synced += 1;
+            try {
+                await treatmentAcceptedRepository.upsert(mapRecord(rec, orgId, maps));
+                synced += 1;
+            } catch (recErr) {
+                rejected.push({
+                    external_id: externalId(rec),
+                    patient: rec.patient_name ?? null,
+                    date: rec.date ?? null,
+                    error: recErr.message,
+                });
+            }
         }
 
         const today = new Date().toISOString().slice(0, 10);
@@ -438,17 +486,47 @@ export async function syncOrg(orgId, { full = false } = {}) {
             orgId,
             cashups.map((r) => ({ business_id: r.business_id, business_name: r.business_name })),
         );
+        // Same isolation per cash-up sheet and per P&L month: a single bad
+        // sheet must not take the rest of the window with it.
         for (const sheet of cashups) {
-            const { row, patients } = mapCashup(sheet, orgId, maps);
-            await emergentDailyCashupRepository.upsert(row);
-            for (const p of patients) await treatmentAcceptedRepository.upsert(p);
+            try {
+                const { row, patients } = mapCashup(sheet, orgId, maps);
+                await emergentDailyCashupRepository.upsert(row);
+                for (const p of patients) {
+                    try {
+                        await treatmentAcceptedRepository.upsert(p);
+                    } catch (pErr) {
+                        rejected.push({ cashup_date: sheet.date ?? null, patient: p.patient_name ?? null, error: pErr.message });
+                    }
+                }
+            } catch (sheetErr) {
+                rejected.push({ cashup_date: sheet.date ?? null, error: sheetErr.message });
+            }
         }
         for (const plRow of plRows) {
-            await emergentMonthlyPlRepository.upsert(mapMonthlyPl(plRow, orgId, maps));
+            try {
+                await emergentMonthlyPlRepository.upsert(mapMonthlyPl(plRow, orgId, maps));
+            } catch (plErr) {
+                rejected.push({ period_month: plRow.period_month ?? plRow.month ?? null, error: plErr.message });
+            }
         }
 
+        // A run that wrote nothing at all while having records to write is a
+        // real failure, not a quiet success — surface it on the integration so
+        // the tenant's Integrations page shows it rather than a stale
+        // "last synced" timestamp implying all is well.
+        if (synced === 0 && records.length > 0) {
+            const reason = `every record rejected (${rejected.length}); first: ${rejected[0]?.error ?? 'unknown'}`;
+            await integrationRepository.markFailed(orgId, PROVIDER, reason).catch(() => {});
+            return { synced: 0, cashups: 0, monthlyPl: 0, rejected: rejected.length, failed: reason };
+        }
         await integrationRepository.setSyncTime(orgId, PROVIDER);
-        return { synced, cashups: cashups.length, monthlyPl: plRows.length };
+        return {
+            synced,
+            cashups: cashups.length,
+            monthlyPl: plRows.length,
+            ...(rejected.length ? { rejected: rejected.length, rejectedSample: rejected.slice(0, 5) } : {}),
+        };
     } catch (err) {
         await integrationRepository.markFailed(orgId, PROVIDER, err.message).catch(() => {});
         throw err;

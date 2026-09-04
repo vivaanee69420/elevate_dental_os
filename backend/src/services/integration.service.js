@@ -3,6 +3,7 @@
 // the 5-layer architecture. Owner-only RBAC checked at route level.
 // ============================================================================
 import * as integration_repository_1 from "../repositories/integration.repository.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import "../lib/integrations/index.js";
 import { getProvider, listProviders } from "../lib/integrations/provider-interface.js";
 import * as errors_1 from "../middleware/errors.js";
@@ -12,6 +13,7 @@ import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
 import * as meta_ads_sync_1 from "../lib/integrations/meta-ads-sync.js";
 import * as gohighlevel_sync_1 from "../lib/integrations/gohighlevel-sync.js";
+import * as callrail_sync_1 from "../lib/integrations/callrail-sync.js";
 import { signWebhookToken } from "../lib/webhook-token.js";
 import { setProgress, getProgress } from "../lib/integrations/sync-progress.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
@@ -31,7 +33,18 @@ async function assertProviderFeature(orgId, provider) {
     }
 }
 
-// Providers that receive real-time webhooks (vs poll-only).
+// Providers served by the ORG-LEVEL webhook routes: one shared signed URL
+// (signWebhookToken(orgId)) plus one config.webhook_secret on the single
+// `integrations` marker row.
+//
+// CallRail is deliberately NOT here even though it does receive real-time
+// webhooks. Its credential is per COMPANY, not per org: each
+// integration_accounts row already carries its own random webhook_token, the
+// GoHighLevel multi-subaccount scheme. An org-level signing secret has nothing
+// to sign for it, and listing it here would show the owner a "configure your
+// webhook" panel for a mechanism CallRail does not use. If CallRail turns out
+// to sign its deliveries, that signing secret belongs per-account in
+// integration_accounts.config, beside the token it authenticates.
 const WEBHOOK_PROVIDERS = new Set(['dentally', 'emergent']);
 
 // A long pull has legitimately-silent stretches (bulk upserts, the per-record
@@ -397,8 +410,85 @@ export const integrationService = {
         await integration_repository_1.integrationRepository.mergeConfig(orgId, provider, { webhook_secret: String(secret) });
         return { ok: true, configured: true };
     },
+
+    // ---- CallRail (multi-company call tracking) ----------------------------
+    // Provider-level status/sync/disconnect only. There is no singleton
+    // key-paste connect route: every credential lives on an
+    // integration_accounts row, one per CallRail company (callrail.service.js),
+    // mirroring GoHighLevel multi-subaccount. The `integrations` row for
+    // 'callrail' is only ever the lightweight connected marker; the real
+    // per-company rows live on integration_accounts.
+    //
+    // "Sync every company, one call" (the panel's "Sync now — every
+    // company"). Fans out over every syncable company of THIS org via
+    // callrail-sync.js's syncAccount — status IN ('active','failed'), the
+    // same self-healing set listAllSyncable uses for the nightly worker, so a
+    // company mid-recovery from a transient failure is still included in a
+    // manual "Sync now" rather than waiting for tomorrow's cron. One company
+    // failing must not stop the rest; each result (success or error) is kept
+    // per-account. Deliberately the INCREMENTAL window, not opts.full — the
+    // per-company "Sync" button and the first pull after adding a company
+    // are the two places a manual full pull happens (callrail.service.js).
+    async callrailSync(orgId) {
+        const accounts = (await integrationAccountRepository.list(orgId, 'callrail'))
+            .filter((a) => a.status === 'active' || a.status === 'failed');
+        let ingested = 0;
+        const results = [];
+        for (const a of accounts) {
+            try {
+                const fullAccount = await integrationAccountRepository.getByIdWithSecrets(orgId, a.id);
+                const r = await callrail_sync_1.syncAccount(orgId, fullAccount);
+                ingested += r.ingested ?? 0;
+                results.push({ accountId: a.id, ...r });
+            } catch (err) {
+                results.push({ accountId: a.id, error: err.message });
+            }
+        }
+        return { ingested, accounts: accounts.length, results };
+    },
+    // Disconnects the provider AND every company beneath it (api.ts's own
+    // words) — the marker row this method owns, plus every integration_accounts
+    // row of provider 'callrail' for this org, which is already available via
+    // the generic, secrets-safe integrationAccountRepository (Task 4 does not
+    // need to revisit this). markRevoked on a row that doesn't exist is a
+    // no-op UPDATE, so this is safe to call whether or not anything was ever
+    // connected.
+    async callrailDisconnect(orgId) {
+        const accounts = await integrationAccountRepository.list(orgId, 'callrail');
+        for (const account of accounts) {
+            await integrationAccountRepository.markRevoked(orgId, account.id);
+        }
+        await integration_repository_1.integrationRepository.markRevoked(orgId, 'callrail');
+        invalidateGating(orgId);
+        return { connected: false };
+    },
+
     // Back-compat shim for the original connect() signature.
     connect(orgId, input) {
         return this.startConnect(orgId, input.provider);
+    },
+
+    // ------------------------------------------------------------------------
+    // One-off repair for Dentally payment statuses written by the OLD mapper.
+    //
+    // `unexplained` / `partially_explained` are money received, not debt, and
+    // used to be stored as 'pending'. The mapper was corrected; the rows it had
+    // already written were not, and the nightly sync only pulls a rolling
+    // recent window so it never revisits them. Takings therefore reads LOW for
+    // any window covering the affected period — silently, and on every tenant
+    // that synced before the fix.
+    //
+    // Re-pulls the window from Dentally and re-derives each row through the
+    // CURRENT mapper. Nothing is inferred from what we already hold, so a
+    // payment Dentally still reports as genuinely unpaid stays pending.
+    async repairDentallyPayments(orgId, { since, until }) {
+        const integration = await integration_repository_1.integrationRepository.get(orgId, 'dentally');
+        if (!integration || integration.status !== 'active') {
+            throw new errors_1.AppError('Dentally is not connected', 400);
+        }
+        const result = await (0, dentally_sync_1.repairPaymentStatuses)(orgId, integration, { since, until });
+        if (result?.error === 'no_auth') throw new errors_1.AppError('Dentally credentials are missing or unreadable', 400);
+        if (result?.error === 'no_window') throw new errors_1.AppError('since and until are required', 400);
+        return result;
     },
 };

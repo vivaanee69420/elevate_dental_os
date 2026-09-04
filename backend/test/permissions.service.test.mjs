@@ -8,7 +8,7 @@ const { permissionsService } = await import(
   '../src/services/permissions.service.js'
 );
 const permPkg = await import('../src/lib/permissions.js');
-const { PERMISSION_KEYS } = permPkg.default;
+const { PERMISSION_KEYS, PAGE_IDS, pageKey } = permPkg.default;
 // NOTE: we assert on .statusCode/.name rather than `instanceof AppError`.
 // The service requires its own copy of middleware/errors; under vitest's
 // module graph an `await import()` here can yield a distinct class identity,
@@ -33,7 +33,12 @@ describe('getEffectiveForUser', () => {
     });
     expect(eff['finance.view']).toBe(true);
     expect(eff['crm.view']).toBe(false); // override wins over role default
-    expect(Object.keys(eff).sort()).toEqual([...PERMISSION_KEYS].sort());
+    // The map carries every catalog key PLUS a resolved page:<id> value for
+    // every page (two-level grants: a page inherits its section unless an
+    // explicit override says otherwise).
+    expect(Object.keys(eff).sort()).toEqual(
+      [...PERMISSION_KEYS, ...PAGE_IDS.map(pageKey)].sort(),
+    );
     // Read was scoped by (org, role).
     expect(supaRec.last.eqs).toContainEqual({
       col: 'organisation_id',

@@ -5,6 +5,7 @@
 import * as lead_repository_1 from "../repositories/lead.repository.js";
 import * as errors_1 from "../middleware/errors.js";
 import * as lead_model_1 from "../models/lead.model.js";
+import * as date_window_1 from "../lib/date-window.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { assertOrgOwns } from "../lib/tenant-guard.js";
@@ -112,15 +113,150 @@ export const leadService = {
             throw new errors_1.AppError(error.message, 400);
         return { success: true };
     },
-    async funnel(orgId) {
-        const rows = await lead_repository_1.leadRepository.funnelRows(orgId);
-        const funnel = {};
+    // ------------------------------------------------------------------------
+    // Lead funnel for a window — the source of truth for every funnel surface.
+    //
+    // Two correctness rules live here rather than in the browser, because the
+    // browser got both of them wrong:
+    //
+    // 1. COUNT EVERY LEAD, INCLUDING LOST ONES. The stages are cumulative
+    //    ("reached this stage or beyond"), so a lead's furthest point decides
+    //    which stages it counts in. A lead that reached `consultation_attended`
+    //    and then went `not_proceeding` still reached consultation — it must
+    //    count at every stage up to there. The old client-side version tested
+    //    `allStages.slice(i).includes(status)`, and since `not_proceeding` is
+    //    not a stage it matched nothing, dropping such leads out of EVERY
+    //    stage including "New". On Plan4growth that hid 415 of 1,388 leads
+    //    (30%), so the funnel's top bar read 973 directly beside a header that
+    //    said 1,388. `furthestStageOf` maps a terminal status back to the
+    //    stage it died at, so lost leads stay in the funnel — which is the
+    //    entire point of a funnel.
+    //
+    // 2. NEVER DERIVE THE FUNNEL FROM A PAGE OF ROWS. Counts come from the
+    //    aggregate RPC, so no row cap can distort them.
+    //
+    // `lost` is reported alongside rather than folded away: a stage count that
+    // includes leads which have since died is honest only if the death toll is
+    // visible next to it.
+    // ------------------------------------------------------------------------
+    // CRM Reports payload. Everything the screen draws, from ONE aggregate over
+    // ONE window, so the funnel, the KPI tiles and the two breakdown tables
+    // cannot disagree with each other.
+    //
+    // Two things the browser-side version got wrong beyond the row cap:
+    //   * it grouped practices by `l.practice?.name` and dropped falsy names,
+    //     which silently discarded every lead with no practice — 3,939 of
+    //     22,807 on Plan4growth, holding 301 of the 494 conversions. The
+    //     by-practice table was missing 61% of all conversions. Unmapped leads
+    //     are real leads; they get their own "Unassigned" row.
+    //   * it averaged first-response time over whatever rows it had. Averaging
+    //     is now done from a sum and a count, so a source with 3 leads cannot
+    //     weigh the same as one with 3,000.
+    async report(orgId, { since = null, until = null, practiceId = null, accountId = null } = {}) {
+        const bounds = (0, date_window_1.dayWindowISO)(since, until);
+        const rows = await lead_repository_1.leadRepository.reportAggregate(orgId, {
+            since: bounds.sinceISO ?? (0, date_window_1.startOfDayISO)(since),
+            until: bounds.untilISO ?? (0, date_window_1.endOfDayISO)(until),
+            practiceId,
+            accountId,
+        });
+
+        const num = (v) => Number(v || 0);
+        const shape = (r) => ({
+            key: r.key ?? '',
+            keyId: r.key_id ?? null,
+            total: num(r.total),
+            contacted: num(r.contacted),
+            consultBooked: num(r.consult_booked),
+            consultAttended: num(r.consult_attended),
+            treatmentStarted: num(r.treatment_started),
+            notProceeding: num(r.not_proceeding),
+            failedToAttend: num(r.failed_to_attend),
+            convertedValuePence: num(r.converted_value_pence),
+            pipelineValuePence: num(r.pipeline_value_pence),
+            // A rate over zero leads is not 0% — it is unknown.
+            conversionPct: num(r.total)
+                ? Math.round((num(r.treatment_started) / num(r.total)) * 1000) / 10
+                : null,
+        });
+
+        const totals = rows.find((r) => r.dimension === 'all');
+        const overall = shape(totals || {});
+        const respCount = num(totals?.response_minutes_count);
+
+        return {
+            totals: {
+                ...overall,
+                ftaPct: overall.total
+                    ? Math.round((overall.failedToAttend / overall.total) * 1000) / 10
+                    : null,
+                avgFirstResponseMinutes: respCount
+                    ? Math.round(num(totals.response_minutes_sum) / respCount)
+                    : null,
+            },
+            // The funnel is the same cumulative shape the Command Centre uses.
+            funnel: [
+                { key: 'received', label: 'Leads received', count: overall.total },
+                { key: 'contacted', label: 'Contacted', count: overall.contacted },
+                { key: 'consult_booked', label: 'Consultation booked', count: overall.consultBooked },
+                { key: 'consult_attended', label: 'Consultation attended', count: overall.consultAttended },
+                { key: 'treatment_started', label: 'Treatment started', count: overall.treatmentStarted },
+            ],
+            bySource: rows.filter((r) => r.dimension === 'source').map(shape),
+            byPractice: rows.filter((r) => r.dimension === 'practice').map(shape),
+        };
+    },
+
+    async funnel(orgId, { since = null, until = null, practiceId = null } = {}) {
+        // 3. USE THE SAME WINDOW AS THE REST OF THE PAGE. `until` arrives as a
+        //    calendar day (YYYY-MM-DD), which a timestamptz parameter parses as
+        //    MIDNIGHT AT THE START of that day — so a bare bound silently drops
+        //    the whole final day (44 of 1,429 August leads; on day one of an
+        //    MTD window, every lead there is). lib/date-window builds both
+        //    bounds for every screen, so the funnel and the KPI cards beside it
+        //    can never describe different periods.
+        const bounds = (0, date_window_1.dayWindowISO)(since, until);
+        const rows = await lead_repository_1.leadRepository.funnelCounts(orgId, {
+            since: bounds.sinceISO ?? (0, date_window_1.startOfDayISO)(since),
+            until: bounds.untilISO ?? (0, date_window_1.endOfDayISO)(until),
+            practiceId,
+        });
+
+        const byStatus = {};
         for (const status of lead_model_1.LEAD_STATUSES)
-            funnel[status] = { count: 0, value: 0 };
-        for (const lead of rows || []) {
-            funnel[lead.status].count++;
-            funnel[lead.status].value += lead.estimated_value_pence;
+            byStatus[status] = { count: 0, valuePence: 0 };
+        let total = 0;
+        for (const r of rows) {
+            const status = r.status;
+            if (!byStatus[status]) continue; // unknown status: counted in total only
+            byStatus[status].count += Number(r.n || 0);
+            byStatus[status].valuePence += Number(r.value_pence || 0);
         }
-        return { funnel };
+        for (const r of rows) total += Number(r.n || 0);
+
+        // Cumulative stage counts: a lead counts at its furthest stage and at
+        // every stage before it.
+        const stages = lead_model_1.FUNNEL_STAGES.map((s, i) => {
+            let count = 0;
+            for (const status of lead_model_1.LEAD_STATUSES) {
+                const reached = lead_model_1.furthestStageIndex(status);
+                if (reached >= i) count += byStatus[status].count;
+            }
+            return { key: s.key, label: s.label, count };
+        });
+
+        const started = byStatus.treatment_started.count + byStatus.treatment_completed.count;
+        const lost = byStatus.not_proceeding.count + byStatus.failed_to_attend.count;
+
+        return {
+            total,
+            started,
+            lost,
+            // One decimal place, and null (not 0) when there is nothing to
+            // divide by — a 0% conversion on zero leads is not a real zero.
+            conversionPct: total ? Math.round((started / total) * 1000) / 10 : null,
+            stages,
+            byStatus,
+        };
     },
 };

@@ -12,7 +12,9 @@ import { ROLES } from '../lib/permissions.js';
 const roleDefaultSchema = z.object({
   role: z.enum(ROLES),
   permission_key: z.string().min(1),
-  allowed: z.boolean(),
+  // null clears the row (inherit) — used to reset a page override back to its
+  // section. false is an explicit deny and is NOT the same thing.
+  allowed: z.boolean().nullable(),
 });
 
 const userOverrideSchema = z.object({

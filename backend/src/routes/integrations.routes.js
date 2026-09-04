@@ -30,6 +30,10 @@ router.delete('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0,
 router.post('/gohighlevel/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountSync));
 router.get('/gohighlevel/accounts/:id/pipelines', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountPipelines));
 router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountStageMappings));
+// One-off historical repair: re-pull a payment-date window from Dentally and
+// re-apply the corrected status mapper. Owner-only — it walks a remote API and
+// rewrites financial rows.
+router.post('/dentally/repair-payments', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyRepairPayments));
 router.get('/emergent', emergentFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentGet));
 router.post('/emergent', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentConnect));
 router.post('/emergent/sync', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSync));
@@ -54,6 +58,26 @@ router.get('/quickbooks/accounts', (0, auth_1.requireRole)('owner'), (0, async_h
 router.post('/quickbooks/accounts/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountConnect));
 router.post('/quickbooks/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountSync));
 router.delete('/quickbooks/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountRemove));
+// CallRail — provider-level status/sync/disconnect (Task 3) plus the
+// per-company /accounts routes (Task 4). STATIC paths: must stay above the
+// generic /:provider/* routes below, or '/callrail'/'/callrail/sync'
+// are swallowed by '/:id' and '/:provider/sync' respectively. practiceId on
+// create/update is agency-actor-gated in the CONTROLLER (not here) — the
+// route itself stays requireRole('owner') so a non-agency owner can still
+// add/update an (unmapped) company.
+router.get('/callrail', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailGet));
+router.post('/callrail/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailSync));
+router.delete('/callrail', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDisconnect));
+// Add-company step 1 (key-only discovery) — ONE API key reveals every
+// account and company it can reach; no account id typed by hand. POST (not
+// GET+query): the API key belongs in a body, never a URL.
+router.post('/callrail/discover', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDiscover));
+// Add-company step 2 — connect several discovered companies in one request.
+router.post('/callrail/accounts/bulk', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailBulkConnect));
+router.post('/callrail/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountCreate));
+router.patch('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountUpdate));
+router.delete('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountRemove));
+router.post('/callrail/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountSync));
 router.get('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
 router.post('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
 router.post('/:provider/refresh', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.refresh));

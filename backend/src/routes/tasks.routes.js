@@ -10,6 +10,12 @@ import * as async_handler_1 from "../middleware/async-handler.js";
 import * as auth_1 from "../middleware/auth.js";
 import * as task_controller_1 from "../controllers/task.controller.js";
 const router = (0, express_1.Router)();
+// Gated on `overview.view`. Both of these were completely ungated: any
+// authenticated user could reach them, and the Mastermind AI answers over the
+// organisation's business context. overview.view is held by owner, practice
+// manager and reception by default, so this is strictly tighter than before
+// and changes nothing for them.
+router.use((0, auth_1.requirePermission)('overview.view'));
 
 const ownerOnly = auth_1.requireRole('owner');
 

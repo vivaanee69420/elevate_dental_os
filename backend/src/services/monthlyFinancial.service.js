@@ -96,6 +96,27 @@ export function sumBucketsInWindow(byPeriod, fromYmd, toYmd) {
     return out;
 }
 
+// How many periods inside [fromYmd,toYmd] actually carry data. The companion to
+// sumBucketsInWindow: summing a window tells you the total, but turning that
+// total into a monthly run-rate needs the number of months that contributed,
+// which is NOT the number of calendar months the window spans. Dividing a
+// 3-month ledger by a 9-month window understates the run-rate threefold.
+// Null bounds mean "no window" — count everything.
+export function countBucketPeriodsInWindow(byPeriod, fromYmd, toYmd) {
+    const lo = (fromYmd || '').slice(0, 7);
+    const hi = (toYmd || '').slice(0, 7);
+    const entries = byPeriod instanceof Map ? byPeriod.entries() : Object.entries(byPeriod || {});
+    let n = 0;
+    for (const [period, buckets] of entries) {
+        if (lo && period < lo) continue;
+        if (hi && period > hi) continue;
+        // A period of all-zero buckets contributed nothing and must not dilute
+        // the run-rate.
+        if (Object.values(buckets || {}).some((v) => Number(v) !== 0)) n++;
+    }
+    return n;
+}
+
 // Map a resolved bucket set -> { revenue, costs } shaped for formulas.calculatePL.
 // 'associates' is fee-earning clinician pay split out of the ledger by the sync
 // heuristic (account names like "Associate/Principal salary", "hygienist") — 0

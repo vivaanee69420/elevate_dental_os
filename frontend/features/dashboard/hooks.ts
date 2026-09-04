@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import {
   getDashboardSummary,
   getRevenueSeries,
-  getPracticeSummary,
 } from './api';
 
 export interface PeriodRange { from: string | null; to: string | null }
@@ -18,12 +17,5 @@ export function useRevenueSeries(range?: PeriodRange, practiceId: string | null 
   return useQuery({
     queryKey: ['revenue-series', range?.from ?? null, range?.to ?? null, practiceId],
     queryFn: () => getRevenueSeries(range, practiceId),
-  });
-}
-
-export function usePracticeSummary() {
-  return useQuery({
-    queryKey: ['practice-summary'],
-    queryFn: getPracticeSummary,
   });
 }
