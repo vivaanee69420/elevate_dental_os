@@ -4,6 +4,7 @@
 // explicit .eq('organisation_id', orgId) (rule 3).
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { assertNotDuplicatePracticeMapping } from "../middleware/errors.js";
 
 export const emergentPracticeMapRepository = {
     // All mapped businesses for an org, with the practice name embedded for the
@@ -57,6 +58,7 @@ export const emergentPracticeMapRepository = {
         const { error } = await supabase_1.serviceClient
             .from('emergent_practice_map')
             .upsert(row, { onConflict: 'organisation_id,business_id' });
+        assertNotDuplicatePracticeMapping(error, 'Emergent business');
         if (error) throw new Error(error.message);
     },
 

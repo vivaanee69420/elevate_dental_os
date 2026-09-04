@@ -6,7 +6,7 @@
 // on the serviceClient path).
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
-import { AppError } from "../middleware/errors.js";
+import { AppError, assertNotDuplicatePracticeMapping } from "../middleware/errors.js";
 
 // Columns safe to return to the API (no secrets).
 const SAFE_COLS = 'id, provider, external_account_id, practice_id, label, status, last_sync_at, last_error, config, webhook_token, created_at, updated_at';
@@ -127,6 +127,7 @@ export const integrationAccountRepository = {
             .eq('id', id)
             .select(SAFE_COLS)
             .single();
+        assertNotDuplicatePracticeMapping(error, 'GoHighLevel or CallRail account');
         if (error) throw new Error(error.message);
         return data;
     },
