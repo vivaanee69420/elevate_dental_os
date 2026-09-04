@@ -82,7 +82,14 @@ function parseSearchStream(batches) {
                 frequency: null,
                 campaign_status: campaign.status ?? null,
                 objective: campaign.advertisingChannelType ?? null,
-                conversions: Math.round(Number(metrics.conversions ?? 0)),
+                // FRACTIONAL, never rounded — Google reports modelled
+                // conversions as decimals (3.5 is a real value in its own
+                // interface). ad_metrics.conversions is numeric(14,2)
+                // (migration 000157); rounding here would silently drift
+                // this campaign tier's own tracked figure away from the
+                // ad-group/ad/keyword deep-grain tiers, which already store
+                // it exact (google-ads-deep-sync.js's `conversions()`).
+                conversions: Number(metrics.conversions ?? 0),
             });
         }
     }

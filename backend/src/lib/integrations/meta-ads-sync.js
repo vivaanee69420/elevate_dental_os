@@ -47,7 +47,13 @@ function spendToPence(spend) {
 }
 
 // Sum the value of every action whose type looks like a conversion. Meta's
-// `actions` is an array of { action_type, value } where value is a string.
+// `actions` is an array of { action_type, value } where value is a string —
+// and, like Google's modelled conversions, that value is not guaranteed to
+// be a whole number (de-duplicated/attributed action counts can be
+// fractional). FRACTIONAL, never rounded: ad_metrics.conversions is
+// numeric(14,2) (migration 000157) precisely so this figure need not be
+// forced to an integer before storage — see google-ads-sync.js for the twin
+// fix on the Google side of the same column.
 function conversionsFromActions(actions) {
     if (!Array.isArray(actions)) return 0;
     let total = 0;
@@ -57,7 +63,7 @@ function conversionsFromActions(actions) {
             if (Number.isFinite(v)) total += v;
         }
     }
-    return Math.round(total);
+    return total;
 }
 
 // Flatten insight rows to ad_metrics shape; drop rows missing campaign/date.

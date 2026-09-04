@@ -52,6 +52,18 @@ describe('conversionsFromActions', () => {
         expect(__test.conversionsFromActions(undefined)).toBe(0);
         expect(__test.conversionsFromActions([])).toBe(0);
     });
+
+    // MAJOR 1 (Google side of this same fix): ad_metrics.conversions is
+    // numeric(14,2) (migration 000157), and a de-duplicated/attributed
+    // action value from Meta is not guaranteed to be a whole number either
+    // — this must survive the sync path exactly, never Math.round()ed away.
+    it('preserves a fractional summed value exactly, never rounding it', () => {
+        const actions = [
+            { action_type: 'lead', value: '1.5' },
+            { action_type: 'purchase', value: '0.8' },
+        ];
+        expect(__test.conversionsFromActions(actions)).toBe(2.3);
+    });
 });
 
 describe('parseInsights', () => {

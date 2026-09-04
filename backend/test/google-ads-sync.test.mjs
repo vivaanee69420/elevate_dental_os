@@ -59,15 +59,34 @@ describe('parseSearchStream', () => {
                 { campaign_id: '1', campaign_name: 'Implants', metric_date: '2026-05-01', spend_pence: 500,
                   impressions: 1200, clicks: 40, reach: null, frequency: null,
                   campaign_status: 'ENABLED', objective: 'SEARCH', conversions: 3 },
+                // FRACTIONAL, not rounded to 2: Google reports modelled
+                // conversions as decimals, and ad_metrics.conversions is
+                // numeric(14,2) (migration 000157) precisely so this figure
+                // need not be forced to an integer before storage. Before
+                // that fix this read Math.round(1.6) === 2, silently
+                // disagreeing with the SAME campaign's conversions at
+                // ad-group/ad/keyword grain, which were always stored exact.
                 { campaign_id: '2', campaign_name: 'Whitening', metric_date: '2026-05-02', spend_pence: 250,
                   impressions: 800, clicks: 25, reach: null, frequency: null,
-                  campaign_status: 'PAUSED', objective: 'DISPLAY', conversions: 2 },
+                  campaign_status: 'PAUSED', objective: 'DISPLAY', conversions: 1.6 },
             ],
         });
     });
     it('handles empty / non-array input', () => {
         expect(__test.parseSearchStream(undefined)).toEqual({ rows: [], account: null });
         expect(__test.parseSearchStream([])).toEqual({ rows: [], account: null });
+    });
+
+    // MAJOR 1: the sync path must never round Google's modelled conversions.
+    // Pinned as its own test (not just the fixture above) so a regression
+    // here fails with an unambiguous name rather than getting lost inside a
+    // larger object-equality assertion.
+    it('preserves a fractional conversions value exactly, never rounding it', () => {
+        const batches = [{ results: [
+            { campaign: { id: 9 }, segments: { date: '2026-06-01' },
+              metrics: { costMicros: 1_000_000, impressions: 10, clicks: 1, conversions: 0.3 } },
+        ] }];
+        expect(__test.parseSearchStream(batches).rows[0].conversions).toBe(0.3);
     });
 });
 
