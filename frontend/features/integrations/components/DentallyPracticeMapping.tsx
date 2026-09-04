@@ -17,7 +17,7 @@ import {
 } from '../hooks';
 import type { DentallySyncResource } from '../api';
 import { useSyncToast } from '../sync-toast';
-import CollapsibleCard from './CollapsibleCard';
+import PanelCard from './PanelCard';
 import { useMe, isAgencyActor } from '@/hooks/useMe';
 
 // Selectable Dentally collections for a scoped backfill. Order = pull order.
@@ -109,7 +109,7 @@ export default function DentallyPracticeMapping() {
   if (!isAgencyActor(me)) return null;
 
   return (
-    <CollapsibleCard
+    <PanelCard
       title="Dentally practice mapping"
       badge={unmapped > 0 ? (
         <span style={{ color: 'var(--danger)', fontSize: 12, fontWeight: 600 }}>{unmapped} unmapped</span>
@@ -183,6 +183,6 @@ export default function DentallyPracticeMapping() {
           </tbody>
         </table>
       )}
-    </CollapsibleCard>
+    </PanelCard>
   );
 }

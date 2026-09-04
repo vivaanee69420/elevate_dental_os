@@ -74,7 +74,6 @@ const WIDTH_KEY = 'sidebar:w';
 export function Sidebar() {
   const pathname = usePathname();
   const { data: me } = useMe();
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
 
   const { collapsed, toggle: toggleCollapsed } = useSidebar();
 
@@ -121,14 +120,6 @@ export function Sidebar() {
   // Effective permissions from /auth/me. If the call failed (me === null),
   // permissions is null and only Overview routes resolve as visible.
   const permissions: Permissions | null = me?.permissions ?? null;
-
-  // Resolve a section's open/closed state: explicit toggle wins, else open
-  // if it contains the active route, else open Overview + CRM by default.
-  function sectionOpen(label: string, hasActive: boolean): boolean {
-    if (label in openSections) return openSections[label];
-    if (hasActive) return true;
-    return label === 'Overview' || label === 'Elevate CRM';
-  }
 
   const displayName = me?.full_name || me?.email || '';
 
@@ -185,77 +176,40 @@ export function Sidebar() {
         </div>
       )}
 
-      {/* Nav */}
+      {/* Nav — one row per section. The section's screens are not listed here;
+          they are the tab strip at the top of the content area (SectionTabs),
+          so this list stays one level deep however many screens a section
+          grows. A row lands on the section's first VISIBLE item, so RBAC
+          still decides where the click goes. */}
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
         {visibleNavSections(me?.role, permissions, me?.features).map((section) => {
-          const items = section.items;
-          const hasActive = items.some((i) => pathname === `/${i.id}`);
-          const open = sectionOpen(section.label, hasActive);
+          const active = section.items.some((i) => pathname === `/${i.id}`);
+          const hasNew = section.items.some((i) => i.isNew);
           return (
-            <div key={section.label} className="pb-1">
-              <button
-                onClick={() => setOpenSections((s) => ({ ...s, [section.label]: !open }))}
-                className={`group w-full text-left text-[11px] uppercase tracking-wider font-semibold px-3 py-2 flex items-center gap-2 rounded-lg transition ${
-                  hasActive ? 'text-brand' : 'text-ink-muted hover:text-ink hover:bg-bg'
+            <Link
+              key={section.label}
+              href={`/${section.items[0].id}`}
+              aria-current={active ? 'page' : undefined}
+              className={`group relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors duration-150 ${
+                active
+                  ? 'bg-brand-50 font-semibold text-brand'
+                  : 'font-medium text-ink-muted hover:bg-bg hover:text-ink'
+              }`}
+            >
+              {/* active rail */}
+              <span
+                className={`absolute left-0 top-1/2 w-0.5 -translate-y-1/2 rounded-full bg-brand transition-all duration-150 ${
+                  active ? 'h-5 opacity-100' : 'h-0 opacity-0 group-hover:h-3 group-hover:opacity-40'
                 }`}
-              >
-                <SectionIcon label={section.label} />
-                <span className="flex-1">{section.label}</span>
-                <svg
-                  width="11"
-                  height="11"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="shrink-0 transition-transform duration-200"
-                  style={{ transform: open ? 'rotate(90deg)' : 'none' }}
-                  aria-hidden="true"
-                >
-                  <path d="M9 6l6 6-6 6" />
-                </svg>
-              </button>
-              <div
-                className="overflow-hidden transition-all duration-200"
-                style={{ maxHeight: open ? `${items.length * 44 + 8}px` : '0px' }}
-              >
-                <div className="mt-0.5 space-y-0.5">
-                  {items.map((item) => {
-                    const active = pathname === `/${item.id}`;
-                    return (
-                      <Link
-                        key={item.id}
-                        href={`/${item.id}`}
-                        aria-current={active ? 'page' : undefined}
-                        className={`group relative flex items-center gap-2 pl-7 pr-3 py-2 text-[13px] rounded-lg mx-1 transition ${
-                          active
-                            ? 'bg-brand-50 text-brand font-semibold'
-                            : 'text-ink-muted hover:bg-bg hover:text-ink'
-                        }`}
-                      >
-                        {/* active rail */}
-                        <span
-                          className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-1 rounded-full bg-brand transition-all ${
-                            active ? 'h-4 opacity-100' : 'h-0 opacity-0 group-hover:h-2 group-hover:opacity-40'
-                          }`}
-                        />
-                        <span className="truncate">{item.label}</span>
-                        {item.isNew && (
-                          <span className="ml-auto shrink-0 text-[9px] font-bold uppercase tracking-wide text-emerald-600 bg-emerald-50 rounded px-1 py-0.5">
-                            New
-                          </span>
-                        )}
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
+              />
+              <SectionIcon label={section.label} />
+              <span className="min-w-0 flex-1 truncate">{section.label}</span>
+              {hasNew && !active && (
+                <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+              )}
+            </Link>
           );
         })}
-
       </nav>
 
       {/* Drag handle — stretch sidebar width */}

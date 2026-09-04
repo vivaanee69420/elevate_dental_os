@@ -24,6 +24,7 @@ import {
   removeGhlAccount,
   syncGhlAccount,
   getEmergentPractices,
+  getEmergentStatus,
   setEmergentPractice,
   getDailyReportSettings,
   saveDailyReportSettings,
@@ -459,5 +460,18 @@ export function useDisconnectCallRail() {
   return useMutation({
     mutationFn: () => disconnectCallRail(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+// --- Emergent (Treatments Accepted) ----------------------------------------
+// Connected state for the Emergent tile. The panel inside the dialog manages
+// its own form, but the tile has to show status before the dialog is ever
+// opened, so the status read is a shared cached query rather than a fetch
+// living inside the panel.
+export function useEmergentStatus() {
+  return useQuery({
+    queryKey: ['emergent-status'],
+    queryFn: getEmergentStatus,
+    staleTime: 30_000,
   });
 }

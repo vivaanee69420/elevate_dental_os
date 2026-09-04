@@ -7,7 +7,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listQboAccounts, connectQboAccount, syncQboAccount, removeQboAccount, type QboAccount } from '../api';
-import CollapsibleCard from './CollapsibleCard';
+import PanelCard from './PanelCard';
 
 export default function QuickBooksPanel() {
   const qc = useQueryClient();
@@ -47,7 +47,7 @@ export default function QuickBooksPanel() {
   }
 
   return (
-    <CollapsibleCard
+    <PanelCard
       title="QuickBooks companies"
       actions={(
         <button onClick={onConnect} disabled={busy} style={{ padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'white', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>
@@ -107,7 +107,7 @@ export default function QuickBooksPanel() {
           </tbody>
         </table>
       )}
-    </CollapsibleCard>
+    </PanelCard>
   );
 }
 

@@ -646,3 +646,20 @@ export function syncAllCallRail() {
 export function disconnectCallRail() {
   return api<{ connected: false }>('/api/integrations/callrail', { method: 'DELETE' });
 }
+
+// --- Emergent (Treatments Accepted) ----------------------------------------
+// The Emergent panel loads this same endpoint for its own form state; the
+// tile needs it too, so the shape lives here and both read one cached query.
+export interface EmergentStatus {
+  connected: boolean;
+  status: string | null;
+  baseUrl: string | null;
+  keyHint: string | null;
+  webhookUrl: string | null;
+  webhookSecretSet: boolean;
+  lastSyncAt: string | null;
+}
+
+export function getEmergentStatus() {
+  return api<EmergentStatus>('/api/integrations/emergent');
+}

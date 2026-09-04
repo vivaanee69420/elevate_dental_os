@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { useWebhookInfo, useSetWebhookSecret } from '../hooks';
-import CollapsibleCard from './CollapsibleCard';
+import PanelCard from './PanelCard';
 
 // Compact British relative time ("12s ago", "4m ago", "2h ago", "3d ago").
 function relTime(iso: string): string {
@@ -96,7 +96,7 @@ export default function DentallyWebhookPanel() {
   })();
 
   return (
-    <CollapsibleCard
+    <PanelCard
       title="Real-time webhook"
       badge={<span style={{ fontSize: 11, color: badge.dot }}>• {badge.text}</span>}
     >
@@ -166,6 +166,6 @@ export default function DentallyWebhookPanel() {
       <p className="text-ink-muted" style={{ fontSize: 10, marginTop: 10 }}>
         Stored server-side; used only to verify the HMAC signature on inbound events.
       </p>
-    </CollapsibleCard>
+    </PanelCard>
   );
 }

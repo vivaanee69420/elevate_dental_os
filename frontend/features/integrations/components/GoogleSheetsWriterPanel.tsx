@@ -10,7 +10,7 @@
 
 import { useState } from 'react';
 import { Chip } from '@/components/ui';
-import CollapsibleCard from './CollapsibleCard';
+import PanelCard from './PanelCard';
 import { useStartConnect } from '../hooks';
 import {
   useDisconnectSheetsWriter,
@@ -96,7 +96,7 @@ export default function GoogleSheetsWriterPanel() {
         : <Chip colour="amber">Setup incomplete</Chip>;
 
   return (
-    <CollapsibleCard title="Google Sheets — Conversion Export" style={{ marginBottom: 12 }} actions={badge}>
+    <PanelCard title="Export destination" style={{ marginBottom: 12 }} badge={badge}>
       <div className="space-y-3 text-[13px] text-slate-600">
         {err && (
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-rose-700">{err}</div>
@@ -287,6 +287,6 @@ export default function GoogleSheetsWriterPanel() {
           </div>
         )}
       </div>
-    </CollapsibleCard>
+    </PanelCard>
   );
 }

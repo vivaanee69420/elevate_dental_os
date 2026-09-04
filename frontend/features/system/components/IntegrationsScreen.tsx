@@ -1,13 +1,23 @@
 'use client';
 // System → Integrations — wired to /api/integrations.
 //
-// Lists available providers from backend registry + current connected rows.
+// One tile per integration in a flat, searchable grid. A tile's Manage button
+// opens a dialog holding that integration's configuration panels, so a
+// provider with several panels (Dentally: practice mapping + webhook) reads as
+// one integration rather than several loose cards on the page.
+//
+// Google is ONE tile over THREE backend connections (Ads, Sheets Call
+// Reporting, Sheets Conversion Export). They stay separate server-side on
+// purpose — each holds a different OAuth scope, and the read-only Call
+// Reporting grant must never be widened by the read/write export grant — so
+// the Google dialog offers three connections rather than one "Connect Google".
+//
 // Connect flow:
 //   OAuth  : POST /api/integrations/connect → { redirectUrl } → window.location
 //   Broker : POST /api/integrations/connect → { requiresKeyPaste } → modal
 //            → POST /api/integrations/:provider/callback { apiKey }
 
-import { useEffect, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { Chip } from '@/components/ui';
 import { useMe } from '@/hooks/useMe';
 import {
@@ -16,6 +26,8 @@ import {
   useSubmitBrokerKey,
   useRevoke,
   useSyncIntegration,
+  useCallRailStatus,
+  useEmergentStatus,
 } from '@/features/integrations/hooks';
 
 // Providers with a real on-demand pull (Refresh button + first-connect sync).
@@ -34,8 +46,33 @@ import GoogleSheetsPanel from '@/features/integrations/components/GoogleSheetsPa
 import GoogleSheetsWriterPanel from '@/features/integrations/components/GoogleSheetsWriterPanel';
 import EmergentPracticeMapping from '@/features/integrations/components/EmergentPracticeMapping';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
+import IntegrationTile, { type TileMenuItem } from '@/features/integrations/components/IntegrationTile';
+import IntegrationModal from '@/features/integrations/components/IntegrationModal';
+import ProviderIcon from '@/features/integrations/components/ProviderIcon';
+import PanelCard from '@/features/integrations/components/PanelCard';
+import {
+  copyFor,
+  GOOGLE_SERVICE_IDS,
+  GOOGLE_SERVICE_LABELS,
+  PROVIDER_COPY,
+} from '@/features/integrations/provider-copy';
 import { useSyncToast } from '@/features/integrations/sync-toast';
 import { AdReconciliationPanel } from '@/features/marketing/components/AdReconciliationPanel';
+
+// Registry providers folded into the single Google tile — they must not also
+// appear as tiles of their own.
+const GOOGLE_MEMBERS = new Set<string>(GOOGLE_SERVICE_IDS);
+
+// Integrations that are not registry providers: they own their connect flow
+// inside their panel, so they get a tile but never a generic Connect button.
+const STANDALONE_IDS = ['callrail', 'emergent'] as const;
+
+// Internal-feature key that must be enabled for a tile or section to show.
+const FEATURE_KEY: Record<string, string> = {
+  emergent: 'emergent',
+  google_sheets: 'call_reporting',
+  google_sheets_writer: 'sheet_export',
+};
 
 // Map an OAuth callback error code to a human title + message. Known codes get
 // specific guidance; anything else falls back to the raw message.
@@ -73,6 +110,30 @@ function relTime(iso: string | null): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
+function authLabel(style: ProviderMeta['authStyle']): string {
+  if (style === 'oauth') return 'OAuth';
+  if (style === 'oauth_or_key') return 'OAuth / API key';
+  return 'API key';
+}
+
+// What the page renders for one integration. `body` is the dialog content;
+// a tile with no body has nothing to manage and offers Connect only.
+interface Tile {
+  id: string;
+  label: string;
+  description: string;
+  connected: boolean;
+  status: string;
+  tone: 'connected' | 'attention' | 'idle';
+  error?: string | null;
+  primaryLabel: string;
+  primaryDisabled?: boolean;
+  onPrimary: () => void;
+  menu: TileMenuItem[];
+  body?: ReactNode;
+  dialogSubtitle?: string;
+}
+
 export default function IntegrationsScreen() {
   const { data: me } = useMe();
   // undefined = backend predates features (allow); [] = nothing enabled.
@@ -82,6 +143,8 @@ export default function IntegrationsScreen() {
   const submitKey = useSubmitBrokerKey();
   const revoke = useRevoke();
   const sync = useSyncIntegration();
+  const { data: callRail } = useCallRailStatus();
+  const { data: emergent } = useEmergentStatus();
   // Global sync toast — survives navigation; per-provider button state via active.
   const { start: startSyncToast, active } = useSyncToast();
   const [brokerModal, setBrokerModal] = useState<{
@@ -91,6 +154,9 @@ export default function IntegrationsScreen() {
   } | null>(null);
   const [keyInput, setKeyInput] = useState('');
   const [locInput, setLocInput] = useState('');
+  // Tile whose Manage dialog is open (tile id), and the search filter.
+  const [openTile, setOpenTile] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   // Provider awaiting disconnect confirmation (disconnect hides its data).
   const [confirmDisconnect, setConfirmDisconnect] = useState<string | null>(null);
   const [notice, setNotice] = useState<{
@@ -117,35 +183,22 @@ export default function IntegrationsScreen() {
     }
   }, []);
 
-  const integrations = data?.integrations ?? [];
-  const providers = data?.available ?? [];
-  const connectedCount = integrations.filter((i) => i.status === 'active').length;
+  const integrations = useMemo(() => data?.integrations ?? [], [data]);
+  const providers = useMemo(() => data?.available ?? [], [data]);
+
   const dentallyConnected = statusOf('dentally', integrations) === 'active';
   // For GHL we show the panel as long as the integration row exists (any status except
   // 'revoked'), because the multi-subaccount model stores secrets in integration_accounts,
   // not the main integrations row, so 'failed' on the main row should not hide the panel.
   const ghlRow = integrations.find((i) => i.provider === 'gohighlevel');
-  const ghlConnected = statusOf('gohighlevel', integrations) === 'active';
   const ghlPanelVisible = !!ghlRow && ghlRow.status !== 'revoked';
-  const googleAdsConnected = statusOf('google_ads', integrations) === 'active';
   const metaAdsConnected = statusOf('meta_ads', integrations) === 'active';
 
-  // Group providers by category, preserving registration order.
-  const groups: { category: string; items: ProviderMeta[] }[] = [];
-  for (const p of providers) {
-    let g = groups.find((x) => x.category === p.category);
-    if (!g) { g = { category: p.category, items: [] }; groups.push(g); }
-    g.items.push(p);
-  }
-
-  async function handleConnect(p: ProviderMeta) {
-    console.log(`[IntegrationsScreen] handleConnect: initiating connection for provider=${p.id}`);
+  async function handleConnect(p: { id: string }) {
     const res = await startConnect.mutateAsync({ provider: p.id });
     if (res.redirectUrl) {
-      console.log(`[IntegrationsScreen] handleConnect: redirecting to ${res.redirectUrl}`);
       window.location.href = res.redirectUrl;
     } else if (res.requiresKeyPaste) {
-      console.log(`[IntegrationsScreen] handleConnect: requiring key paste for provider=${p.id}`);
       setBrokerModal({
         provider: p.id,
         hint: res.pasteHint ?? 'Paste your API key.',
@@ -172,7 +225,6 @@ export default function IntegrationsScreen() {
   async function handleBrokerSubmit() {
     if (!brokerModal) return;
     const provider = brokerModal.provider;
-    console.log(`[IntegrationsScreen] handleBrokerSubmit: submitting key for provider=${provider}`);
     // submitBrokerKey persists the key; the backend then runs the first pull
     // automatically (Dentally: detect sites → map practices → pull; GHL: pull
     // contacts + opportunities). Show the progress overlay so the user sees it
@@ -182,7 +234,6 @@ export default function IntegrationsScreen() {
       apiKey: keyInput,
       locationId: brokerModal.requiresLocationId ? locInput : undefined,
     });
-    console.log(`[IntegrationsScreen] handleBrokerSubmit: key submitted successfully for provider=${provider}`);
     setBrokerModal(null);
     setKeyInput('');
     setLocInput('');
@@ -190,23 +241,429 @@ export default function IntegrationsScreen() {
   }
 
   async function handleRefresh(provider: string) {
-    console.log(`[IntegrationsScreen] handleRefresh: refreshing data for provider=${provider}`);
     startSyncToast(provider);
     // Fire-and-forget on the server (returns immediately); the overlay polls
     // progress and clears itself via onDone. Incremental pull (latest changes
     // since the last sync) — full history is the separate button on the
     // Dentally mapping panel.
     await sync.mutateAsync({ provider, full: false });
-    console.log(`[IntegrationsScreen] handleRefresh: refresh initiated for provider=${provider}`);
   }
+
+  // Secondary actions shared by every registry-backed connection.
+  function providerMenu(id: string, meta?: ProviderMeta): TileMenuItem[] {
+    const connected = statusOf(id, integrations) === 'active';
+    const items: TileMenuItem[] = [];
+    if (connected && SYNCABLE.has(id)) {
+      items.push({
+        label: active.has(id) ? 'Refreshing…' : 'Refresh data',
+        disabled: active.has(id),
+        onSelect: () => handleRefresh(id),
+      });
+    }
+    if (!connected && meta?.authStyle === 'oauth_or_key') {
+      items.push({ label: 'Connect with API key', onSelect: () => handleConnectWithKey(meta) });
+    }
+    if (connected) {
+      items.push({ label: 'Disconnect', danger: true, onSelect: () => setConfirmDisconnect(id) });
+    }
+    return items;
+  }
+
+  // Status line + colour for a registry connection.
+  function providerStatus(id: string): { text: string; tone: Tile['tone'] } {
+    const row = rowOf(id, integrations);
+    if (!row || row.status === 'revoked') return { text: 'Not connected', tone: 'idle' };
+    if (row.status !== 'active') return { text: 'Needs attention', tone: 'attention' };
+    return { text: `Synced ${relTime(row.last_sync_at)}`, tone: 'connected' };
+  }
+
+  // A connected provider with no bespoke panel still needs something to manage,
+  // so it gets this: what the connection is, when it last pulled, and the same
+  // refresh/disconnect controls the tile menu offers.
+  function genericBody(meta: ProviderMeta) {
+    const row = rowOf(meta.id, integrations);
+    const connected = row?.status === 'active';
+    return (
+      <PanelCard
+        title={`${meta.label} connection`}
+        badge={connected
+          ? <Chip colour="emerald">Connected</Chip>
+          : <Chip colour="amber">Not connected</Chip>}
+      >
+        <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', fontSize: 12, margin: 0 }}>
+          <dt className="text-ink-muted">Sign-in</dt>
+          <dd style={{ margin: 0 }}>{authLabel(meta.authStyle)}</dd>
+          <dt className="text-ink-muted">Category</dt>
+          <dd style={{ margin: 0, textTransform: 'capitalize' }}>{meta.category}</dd>
+          <dt className="text-ink-muted">Last sync</dt>
+          <dd style={{ margin: 0 }}>{relTime(row?.last_sync_at ?? null)}</dd>
+        </dl>
+        {row?.last_error && (
+          <p style={{ fontSize: 11, marginTop: 10, marginBottom: 0, color: 'var(--danger, #b91c1c)' }}>
+            {row.last_error}
+          </p>
+        )}
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          {connected && SYNCABLE.has(meta.id) && (
+            <button
+              type="button"
+              onClick={() => handleRefresh(meta.id)}
+              disabled={active.has(meta.id)}
+              style={{
+                padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+                border: '1px solid var(--border)', background: 'white',
+                cursor: active.has(meta.id) ? 'default' : 'pointer',
+              }}
+            >
+              {active.has(meta.id) ? 'Refreshing…' : 'Refresh data'}
+            </button>
+          )}
+          {connected ? (
+            <button
+              type="button"
+              onClick={() => { setOpenTile(null); setConfirmDisconnect(meta.id); }}
+              style={{
+                padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+                border: '1px solid var(--border)', background: 'white',
+                color: 'var(--danger, #b91c1c)', cursor: 'pointer',
+              }}
+            >
+              Disconnect
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleConnect(meta)}
+              disabled={startConnect.isPending}
+              style={{
+                padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+                border: 'none', background: 'var(--brand)', color: 'white',
+                cursor: startConnect.isPending ? 'default' : 'pointer',
+              }}
+            >
+              {startConnect.isPending ? 'Redirecting…' : `Connect ${meta.label}`}
+            </button>
+          )}
+        </div>
+      </PanelCard>
+    );
+  }
+
+  // One of the three Google connections, as a section inside the Google dialog.
+  // Each carries its own connect/disconnect because each is its own OAuth grant.
+  function googleService(id: string, panels: ReactNode) {
+    const meta = providers.find((p) => p.id === id);
+    const row = rowOf(id, integrations);
+    const connected = row?.status === 'active';
+    return (
+      <div key={id} style={{ marginBottom: 18 }}>
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 12, marginBottom: 8,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <h3 className="display" style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>
+              {GOOGLE_SERVICE_LABELS[id] ?? meta?.label ?? id}
+            </h3>
+            {connected
+              ? <Chip colour="emerald">Connected</Chip>
+              : <Chip colour="amber">Not connected</Chip>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            {connected && SYNCABLE.has(id) && (
+              <button
+                type="button"
+                onClick={() => handleRefresh(id)}
+                disabled={active.has(id)}
+                style={{
+                  padding: '5px 10px', fontSize: 11, borderRadius: 6,
+                  border: '1px solid var(--border)', background: 'white',
+                  cursor: active.has(id) ? 'default' : 'pointer',
+                }}
+              >
+                {active.has(id) ? 'Refreshing…' : 'Refresh data'}
+              </button>
+            )}
+            {connected ? (
+              <button
+                type="button"
+                onClick={() => { setOpenTile(null); setConfirmDisconnect(id); }}
+                style={{
+                  padding: '5px 10px', fontSize: 11, borderRadius: 6,
+                  border: '1px solid var(--border)', background: 'white',
+                  color: 'var(--danger, #b91c1c)', cursor: 'pointer',
+                }}
+              >
+                Disconnect
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleConnect({ id })}
+                disabled={startConnect.isPending}
+                style={{
+                  padding: '5px 10px', fontSize: 11, fontWeight: 700, borderRadius: 6,
+                  border: 'none', background: 'var(--brand)', color: 'white',
+                  cursor: startConnect.isPending ? 'default' : 'pointer',
+                }}
+              >
+                {startConnect.isPending ? '…' : 'Connect'}
+              </button>
+            )}
+          </div>
+        </div>
+        {row?.last_error && (
+          <p style={{ fontSize: 11, marginBottom: 8, color: 'var(--danger, #b91c1c)' }}>
+            {row.last_error}
+          </p>
+        )}
+        {panels}
+      </div>
+    );
+  }
+
+  // --- Tiles ---------------------------------------------------------------
+  const tiles: Tile[] = [];
+
+  // Google — one tile, three connections. Hidden only if every service it
+  // covers is feature-disabled for this organisation.
+  {
+    const googleServices = GOOGLE_SERVICE_IDS.filter(
+      (id) => !FEATURE_KEY[id] || hasFeature(FEATURE_KEY[id]),
+    );
+    if (googleServices.length > 0) {
+      const liveCount = googleServices.filter((id) => statusOf(id, integrations) === 'active').length;
+      const copy = PROVIDER_COPY.google;
+      tiles.push({
+        id: 'google',
+        label: copy.label,
+        description: copy.description,
+        connected: liveCount > 0,
+        status: liveCount === 0
+          ? 'Not connected'
+          : `${liveCount} of ${googleServices.length} services connected`,
+        tone: liveCount === 0 ? 'idle' : liveCount === googleServices.length ? 'connected' : 'attention',
+        primaryLabel: 'Manage',
+        onPrimary: () => setOpenTile('google'),
+        // Disconnect is per-service inside the dialog: a tile-level Disconnect
+        // would be ambiguous across three separate grants.
+        menu: [],
+        dialogSubtitle: 'Three separate Google connections, each with its own permissions.',
+        body: (
+          <>
+            {googleServices.includes('google_ads') && googleService('google_ads', (
+              <>
+                {statusOf('google_ads', integrations) === 'active' && (
+                  <>
+                    <AdAccountSelector provider="google_ads" label="Google Ads" />
+                    <AdReconciliationPanel provider="google_ads" />
+                  </>
+                )}
+              </>
+            ))}
+            {googleServices.includes('google_sheets') && googleService('google_sheets', <GoogleSheetsPanel />)}
+            {googleServices.includes('google_sheets_writer') && googleService('google_sheets_writer', <GoogleSheetsWriterPanel />)}
+          </>
+        ),
+      });
+    }
+  }
+
+  // Dentally
+  {
+    const meta = providers.find((p) => p.id === 'dentally');
+    if (meta) {
+      const s = providerStatus('dentally');
+      tiles.push({
+        id: 'dentally',
+        label: copyFor('dentally', meta.label).label,
+        description: copyFor('dentally', meta.label).description,
+        connected: dentallyConnected,
+        status: s.text,
+        tone: s.tone,
+        error: rowOf('dentally', integrations)?.last_error ?? null,
+        primaryLabel: dentallyConnected ? 'Manage' : 'Connect',
+        primaryDisabled: !dentallyConnected && startConnect.isPending,
+        onPrimary: () => (dentallyConnected ? setOpenTile('dentally') : handleConnect(meta)),
+        menu: providerMenu('dentally', meta),
+        body: dentallyConnected ? (
+          <>
+            <DentallyPracticeMapping />
+            <DentallyWebhookPanel />
+          </>
+        ) : undefined,
+      });
+    }
+  }
+
+  // GoHighLevel
+  {
+    const meta = providers.find((p) => p.id === 'gohighlevel');
+    if (meta) {
+      const s = providerStatus('gohighlevel');
+      tiles.push({
+        id: 'gohighlevel',
+        label: copyFor('gohighlevel', meta.label).label,
+        description: copyFor('gohighlevel', meta.label).description,
+        connected: ghlPanelVisible,
+        status: s.text,
+        tone: s.tone,
+        error: ghlRow?.last_error ?? null,
+        primaryLabel: ghlPanelVisible ? 'Manage' : 'Connect',
+        primaryDisabled: !ghlPanelVisible && startConnect.isPending,
+        onPrimary: () => (ghlPanelVisible ? setOpenTile('gohighlevel') : handleConnect(meta)),
+        menu: providerMenu('gohighlevel', meta),
+        body: ghlPanelVisible ? <GoHighLevelPanel /> : undefined,
+      });
+    }
+  }
+
+  // Meta Ads
+  {
+    const meta = providers.find((p) => p.id === 'meta_ads');
+    if (meta) {
+      const s = providerStatus('meta_ads');
+      tiles.push({
+        id: 'meta_ads',
+        label: copyFor('meta_ads', meta.label).label,
+        description: copyFor('meta_ads', meta.label).description,
+        connected: metaAdsConnected,
+        status: s.text,
+        tone: s.tone,
+        error: rowOf('meta_ads', integrations)?.last_error ?? null,
+        primaryLabel: metaAdsConnected ? 'Manage' : 'Connect',
+        primaryDisabled: !metaAdsConnected && startConnect.isPending,
+        onPrimary: () => (metaAdsConnected ? setOpenTile('meta_ads') : handleConnect(meta)),
+        menu: providerMenu('meta_ads', meta),
+        // Reconciliation only makes sense once the provider is actually
+        // connected — an unconnected provider has no campaign total to compare
+        // against, so its panel would show nothing but misleading zeroes.
+        //
+        // No window is passed to the panel. It used to be computed here from
+        // Date.now() in UTC while the sync computes its own in LONDON, so
+        // through BST the two disagreed for the hour after midnight and the
+        // panel asked for a day that could not yet exist in the deep tables.
+        // The server now supplies the window on the sync's own clock.
+        body: metaAdsConnected ? (
+          <>
+            <AdAccountSelector provider="meta_ads" label="Meta Ads" />
+            <AdReconciliationPanel provider="meta_ads" />
+          </>
+        ) : undefined,
+      });
+    }
+  }
+
+  // QuickBooks — the panel manages N companies and owns its own connect
+  // button, so Manage is always the right primary action.
+  {
+    const meta = providers.find((p) => p.id === 'quickbooks');
+    if (meta) {
+      const s = providerStatus('quickbooks');
+      tiles.push({
+        id: 'quickbooks',
+        label: copyFor('quickbooks', meta.label).label,
+        description: copyFor('quickbooks', meta.label).description,
+        connected: statusOf('quickbooks', integrations) === 'active',
+        status: s.text,
+        tone: s.tone,
+        error: rowOf('quickbooks', integrations)?.last_error ?? null,
+        primaryLabel: 'Manage',
+        onPrimary: () => setOpenTile('quickbooks'),
+        menu: providerMenu('quickbooks', meta),
+        body: <QuickBooksPanel />,
+      });
+    }
+  }
+
+  // The remaining registry providers have no bespoke panel — Xero, SOE and
+  // anything registered later all land here rather than dropping off the grid.
+  for (const meta of providers) {
+    if (GOOGLE_MEMBERS.has(meta.id)) continue;
+    if (['dentally', 'gohighlevel', 'meta_ads', 'quickbooks'].includes(meta.id)) continue;
+    if (FEATURE_KEY[meta.id] && !hasFeature(FEATURE_KEY[meta.id])) continue;
+    const connected = statusOf(meta.id, integrations) === 'active';
+    const s = providerStatus(meta.id);
+    const copy = copyFor(meta.id, meta.label);
+    tiles.push({
+      id: meta.id,
+      label: copy.label,
+      description: copy.description || `${authLabel(meta.authStyle)} · ${meta.category}`,
+      connected,
+      status: s.text,
+      tone: s.tone,
+      error: rowOf(meta.id, integrations)?.last_error ?? null,
+      primaryLabel: connected ? 'Manage' : 'Connect',
+      primaryDisabled: !connected && startConnect.isPending,
+      onPrimary: () => (connected ? setOpenTile(meta.id) : handleConnect(meta)),
+      menu: providerMenu(meta.id, meta),
+      body: connected ? genericBody(meta) : undefined,
+    });
+  }
+
+  // CallRail and Emergent are not registry providers: each panel owns its own
+  // connect flow, so the tile always opens the panel rather than offering a
+  // generic Connect that no backend route would serve.
+  for (const id of STANDALONE_IDS) {
+    if (FEATURE_KEY[id] && !hasFeature(FEATURE_KEY[id])) continue;
+    const copy = PROVIDER_COPY[id];
+    const connected = id === 'callrail' ? !!callRail?.connected : !!emergent?.connected;
+    const detail = id === 'callrail' && connected
+      ? `${callRail?.accounts?.length ?? 0} companies connected`
+      : id === 'emergent' && connected
+        ? `Synced ${relTime(emergent?.lastSyncAt ?? null)}`
+        : 'Not connected';
+    tiles.push({
+      id,
+      label: copy.label,
+      description: copy.description,
+      connected,
+      status: detail,
+      tone: connected ? 'connected' : 'idle',
+      primaryLabel: connected ? 'Manage' : 'Set up',
+      onPrimary: () => setOpenTile(id),
+      menu: [],
+      body: id === 'callrail'
+        ? <CallRailPanel />
+        : <><EmergentPanel /><EmergentPracticeMapping /></>,
+    });
+  }
+
+  // Connected first, then alphabetically — the integrations a practice already
+  // relies on are the ones it comes back to.
+  const q = query.trim().toLowerCase();
+  const visible = tiles
+    .filter((t) => !q || t.label.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+    .sort((a, b) => (Number(b.connected) - Number(a.connected)) || a.label.localeCompare(b.label));
+
+  const connectedCount = tiles.filter((t) => t.connected).length;
+  const open = tiles.find((t) => t.id === openTile);
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1280 }}>
-      <div className="mb-6">
-        <h1 className="display font-bold" style={{ fontSize: 28 }}>Integrations</h1>
-        <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          {isLoading ? 'Loading…' : `${connectedCount} of ${providers.length} connected`}
-        </p>
+      <div
+        className="mb-6"
+        style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}
+      >
+        <div>
+          <h1 className="display font-bold" style={{ fontSize: 28 }}>Integrations</h1>
+          <p className="text-ink-muted" style={{ fontSize: 13 }}>
+            {isLoading ? 'Loading…' : `${connectedCount} of ${tiles.length} connected`}
+          </p>
+        </div>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search integrations"
+          aria-label="Search integrations"
+          style={{
+            width: 280, maxWidth: '100%', padding: '8px 12px', fontSize: 13,
+            border: '1px solid var(--border)', borderRadius: 8, background: 'white',
+          }}
+        />
       </div>
 
       {error && (
@@ -215,143 +672,52 @@ export default function IntegrationsScreen() {
         </div>
       )}
 
-      {dentallyConnected && <DentallyPracticeMapping />}
-      {dentallyConnected && <DentallyWebhookPanel />}
-      {ghlPanelVisible && <GoHighLevelPanel />}
-      <QuickBooksPanel />
-      <CallRailPanel />
-      {hasFeature('emergent') && <EmergentPracticeMapping />}
-      {hasFeature('emergent') && <EmergentPanel />}
-      {hasFeature('call_reporting') && <GoogleSheetsPanel />}
-      {hasFeature('sheet_export') && <GoogleSheetsWriterPanel />}
-      {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
-      {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
-
-      {/* Reconciliation only makes sense once a provider is actually
-          connected — an unconnected provider has no campaign total to compare
-          against, so its card would show nothing but misleading zeroes.
-
-          No window is passed to the panel. It used to be computed here from
-          Date.now() in UTC while the sync computes its own in LONDON, so
-          through BST the two disagreed for the hour after midnight and the
-          panel asked for a day that could not yet exist in the deep tables.
-          The server now supplies the window on the sync's own clock. */}
-      {(googleAdsConnected || metaAdsConnected) && (
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {googleAdsConnected && (
-            <AdReconciliationPanel provider="google_ads" />
-          )}
-          {metaAdsConnected && (
-            <AdReconciliationPanel provider="meta_ads" />
-          )}
-        </div>
+      {!isLoading && visible.length === 0 && (
+        <p className="text-ink-muted" style={{ fontSize: 13 }}>
+          No integrations match &ldquo;{query}&rdquo;.
+        </p>
       )}
 
-      {groups.map((g) => (
-        <div key={g.category} style={{ marginBottom: 20 }}>
-          <h2 className="display text-ink-muted" style={{ fontSize: 16, fontWeight: 600, marginBottom: 10, textTransform: 'capitalize' }}>
-            {g.category}
-          </h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            {g.items.map((p) => {
-              const status = statusOf(p.id, integrations);
-              const connected = status === 'active';
-              const row = rowOf(p.id, integrations);
-              return (
-                <div key={p.id} className="card-padded" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>{p.label}</div>
-                    <div className="text-ink-muted" style={{ fontSize: 11 }}>
-                      {p.authStyle === 'oauth' ? 'OAuth' : p.authStyle === 'oauth_or_key' ? 'OAuth / API key' : 'API key'} · {p.category}
-                    </div>
-                    {connected && (
-                      <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 2 }}>
-                        Synced {relTime(row?.last_sync_at ?? null)}
-                      </div>
-                    )}
-                    {row?.last_error && (
-                      <div style={{ fontSize: 11, marginTop: 2, color: 'var(--danger)' }}>
-                        {row.last_error.slice(0, 80)}
-                      </div>
-                    )}
-                  </div>
-                  {connected ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {SYNCABLE.has(p.id) && (
-                        <button
-                          onClick={() => handleRefresh(p.id)}
-                          disabled={active.has(p.id)}
-                          style={{
-                            background: 'none', border: '1px solid var(--border)',
-                            borderRadius: 6, padding: '4px 8px', fontSize: 11,
-                            cursor: active.has(p.id) ? 'default' : 'pointer',
-                          }}
-                          title="Pull latest data now"
-                        >
-                          {active.has(p.id) ? 'Refreshing…' : 'Refresh data'}
-                        </button>
-                      )}
-                      <Chip colour="emerald">Connected</Chip>
-                      <button
-                        onClick={() => setConfirmDisconnect(p.id)}
-                        disabled={revoke.isPending}
-                        style={{
-                          background: 'none', border: '1px solid var(--border)',
-                          borderRadius: 6, padding: '4px 8px', fontSize: 11,
-                          color: 'var(--danger, #b91c1c)',
-                          cursor: revoke.isPending ? 'default' : 'pointer',
-                        }}
-                        title="Disconnect and hide this integration's data"
-                      >
-                        Disconnect
-                      </button>
-                    </div>
-                  ) : p.authStyle === 'oauth_or_key' ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <button
-                        onClick={() => handleConnect(p)}
-                        disabled={startConnect.isPending}
-                        style={{ background: 'none', border: 'none', padding: 0, cursor: startConnect.isPending ? 'default' : 'pointer' }}
-                        title={`Connect securely via ${p.label} OAuth`}
-                      >
-                        <Chip colour="amber">{startConnect.isPending ? '…' : 'Connect with OAuth'}</Chip>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleConnectWithKey(p)}
-                        disabled={startConnect.isPending}
-                        style={{
-                          background: 'none', border: '1px solid var(--border)',
-                          borderRadius: 6, padding: '4px 8px', fontSize: 11,
-                          color: 'var(--ink-muted, #64748b)',
-                          cursor: startConnect.isPending ? 'default' : 'pointer',
-                        }}
-                        title={`Connect with a ${p.label} API key instead`}
-                      >
-                        API key
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => handleConnect(p)}
-                      disabled={startConnect.isPending}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                    >
-                      <Chip colour="amber">{startConnect.isPending ? '…' : 'Connect'}</Chip>
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: 14,
+        }}
+      >
+        {visible.map((t) => (
+          <IntegrationTile
+            key={t.id}
+            id={t.id}
+            label={t.label}
+            description={t.description}
+            status={t.status}
+            tone={t.tone}
+            error={t.error}
+            primaryLabel={t.primaryLabel}
+            primaryDisabled={t.primaryDisabled}
+            onPrimary={t.onPrimary}
+            menu={t.menu}
+          />
+        ))}
+      </div>
+
+      {open?.body && (
+        <IntegrationModal
+          title={open.label}
+          subtitle={open.dialogSubtitle ?? open.status}
+          icon={<ProviderIcon id={open.id} label={open.label} size={28} />}
+          onClose={() => setOpenTile(null)}
+        >
+          {open.body}
+        </IntegrationModal>
+      )}
 
       {notice && (
         <div
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
           }}
           onClick={() => setNotice(null)}
         >
@@ -389,7 +755,7 @@ export default function IntegrationsScreen() {
         <div
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
           }}
           onClick={() => setConfirmDisconnect(null)}
         >
@@ -419,7 +785,6 @@ export default function IntegrationsScreen() {
               <button
                 onClick={() => {
                   const provider = confirmDisconnect;
-                  console.log(`[IntegrationsScreen] Disconnecting provider=${provider}`);
                   setConfirmDisconnect(null);
                   revoke.mutate(provider);
                 }}
@@ -440,7 +805,7 @@ export default function IntegrationsScreen() {
         <div
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
           }}
           onClick={() => setBrokerModal(null)}
         >
