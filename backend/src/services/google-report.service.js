@@ -67,6 +67,13 @@
 import { marketingRepository } from "../repositories/marketing.repository.js";
 import { adGrainRepository } from "../repositories/ad-grain.repository.js";
 import { isSupportedCurrency } from "../lib/integrations/ad-currency.js";
+// Reused, not re-queried: this is the SAME org-scoped map /settings/
+// ad-attribution reads and writes (ad-attribution.service.js). leadPerformance
+// needs only "has this org mapped ANY pipeline to google_ads at all" — a
+// tenant with zero mappings must be told that plainly, not shown a silent
+// zero that looks like a quiet period. See leadPerformance's own comment.
+import { adChannelPipelineRepository } from "../repositories/ad-channel-pipeline.repository.js";
+import { createTtlCache } from "../lib/ttl-cache.js";
 // Same clamp, same constant, same file — not a re-derived copy that could
 // drift. See clampWindow's own comment in facebook-report.service.js for why
 // the window must be clamped to what the deep-grain tables can cover at all.
@@ -84,6 +91,112 @@ function perUnitPence(totalPence, units) {
 function ratio(numerator, denominator) {
     const d = Number(denominator ?? 0);
     return d > 0 ? Number(numerator ?? 0) / d : null;
+}
+
+// leadPerformance()'s window conversion. Same idiom as facebook-report
+// .service.js's funnelUntil — kept as a local copy rather than imported
+// (that file is a live, separately-owned module) because the shape is
+// trivial and the two must never accidentally drift into sharing state:
+// ad_provider_spend_by_practice bounds with `<= until` (metric_date IS a
+// date, same convention campaignSpendByProvider/ad_grain_rollup use), while
+// ad_google_lead_ledger bounds with `< until` (a lead/call carries a time,
+// not a date) — so the inclusive `until` a client sends must become
+// exclusive ONLY for the ledger call. Handing the same inclusive date to
+// both would drop the last day's leads/calls, exactly the bug
+// facebook-report.service.js's header documents finding and fixing there.
+function leadLedgerUntil(inclusiveUntil) {
+    const [y, m, d] = inclusiveUntil.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+}
+
+// The acceptance floor for CPA (000162): a lead counts as an accepted
+// patient once the money it has paid EXCEEDS this, not merely reaches it.
+//
+// £40 is roughly what an appointment costs at this group, and that is the
+// whole point of having a floor at all — without one, every routine exam
+// fee reads as a treatment acceptance. Measured live (Plan4growth, Google,
+// Jun-Aug 2026, new patients only): 62 of 64 booked leads had paid
+// SOMETHING, so a "paid anything" rule reports a 97% acceptance rate and
+// tells the reader nothing. At £40 it is 46.
+//
+// It is a named constant, and a parameter of the RPC beneath it, because
+// £40 is THIS group's consultation fee — another tenant's differs. When a
+// per-practice fee becomes configurable this is the single place that
+// reads it; until then no tenant is silently assumed to charge £40 by a
+// literal buried in SQL.
+const ACCEPTANCE_MIN_PAID_PENCE = 4000;
+
+// A cost per nothing is unknowable, not free — same guard as withCosts/
+// perUnitPence above, applied to the blended lead figures instead of
+// Google's own tracked conversions.
+function withLeadCosts(row) {
+    return {
+        ...row,
+        cplPence: perUnitPence(row.spendPence, row.leads),
+        cpbPence: perUnitPence(row.spendPence, row.booked),
+        cpaPence: perUnitPence(row.spendPence, row.accepted),
+    };
+}
+
+// Merge the spend-by-practice rows and the deduplicated lead ledger into ONE
+// row per practice (plus one practice_id:null "unmapped" bucket for spend on
+// an account with no practice mapping, or a lead whose practice could not be
+// resolved) — a LEFT-join-shaped merge, not an inner one: a practice can
+// legitimately have spend with zero leads in a quiet window, or leads with
+// zero spend if its account is unmapped/paused. Exported for tests; also the
+// function that turns raw rows into what the front end's cards need.
+// includeExisting: false (the default, and the owner's own definition of
+// CPB/CPA — "consider only new patients, no existing patients in Dentally")
+// counts booked/accepted ONLY for leads ad_google_lead_ledger marked
+// is_new_patient. true is the toggle the owner asked for after doubting a
+// suspiciously low booked count: it counts every match regardless, so the
+// two figures can be compared side by side without a second, differently-
+// computed query — both read the SAME booked/accepted/is_new_patient
+// columns from ONE ledger call, they just gate on is_new_patient differently.
+function practiceLeadPerformance(spendRows, ledgerRows, includeExisting = false) {
+    const byPractice = new Map();
+    const touch = (id, name) => {
+        const key = id ?? '__unmapped__';
+        let row = byPractice.get(key);
+        if (!row) {
+            row = {
+                practiceId: id ?? null, practiceName: name ?? null,
+                spendPence: 0, impressions: 0, clicks: 0,
+                leads: 0, booked: 0, accepted: 0,
+            };
+            byPractice.set(key, row);
+        }
+        // A practice's name can arrive on either side (spend row or ledger
+        // row) first — never let a later null overwrite an earlier real one.
+        if (!row.practiceName && name) row.practiceName = name;
+        return row;
+    };
+    for (const s of spendRows ?? []) {
+        const row = touch(s.practice_id, s.practice_name);
+        row.spendPence += Number(s.spend_pence ?? 0);
+        row.impressions += Number(s.impressions ?? 0);
+        row.clicks += Number(s.clicks ?? 0);
+    }
+    for (const l of ledgerRows ?? []) {
+        const row = touch(l.practice_id, l.practice_name);
+        row.leads += 1;
+        const eligible = includeExisting || l.is_new_patient;
+        if (l.booked && eligible) row.booked += 1;
+        if (l.accepted && eligible) row.accepted += 1;
+    }
+    return [...byPractice.values()].map(withLeadCosts);
+}
+
+function sumPracticeRows(rows) {
+    const base = (rows ?? []).reduce((acc, r) => ({
+        spendPence: acc.spendPence + r.spendPence,
+        impressions: acc.impressions + r.impressions,
+        clicks: acc.clicks + r.clicks,
+        leads: acc.leads + r.leads,
+        booked: acc.booked + r.booked,
+        accepted: acc.accepted + r.accepted,
+    }), { spendPence: 0, impressions: 0, clicks: 0, leads: 0, booked: 0, accepted: 0 });
+    return withLeadCosts(base);
 }
 
 // Shared cost shape for all four grains. conversions stays fractional
@@ -241,6 +354,46 @@ function notConnected(win, extra = {}) {
 // NaN.
 function numOrNull(v) {
     return v === null || v === undefined ? null : Number(v);
+}
+
+// leadPerformance's own spend + ledger fetch, cached — measured live at
+// ~0.9-1.2s for a 3-month/org window (ad_google_lead_ledger walks leads,
+// callrail_calls, contacts, appointments and invoice_items). The owner
+// asked for this to be faster; the query itself is already using every
+// index available (checked via EXPLAIN ANALYZE — a LATERAL/bool_or rewrite
+// to halve the appointments scans was tried and measured SLOWER, 1.2s vs
+// 0.9s, because it turns a short-circuiting EXISTS semi-join into a full
+// aggregate over every matching row — reverted). The real win is not
+// re-running it at all for the same org+window+practice within a short
+// window: switching the "include existing patients" toggle no longer
+// re-fetches (see leadPerformance, below — both figures are computed from
+// ONE fetch), but re-opening the tab, or two components requesting the same
+// window, still would without this. Same 60s TTL and reasoning as
+// facebook-report.service.js's funnelCache/loadFunnel, which this mirrors.
+const leadPerformanceCache = createTtlCache({ ttlMs: 60_000, max: 300 });
+
+async function loadLeadPerformanceData(orgId, since, until) {
+    // The acceptance floor is part of the key, not just of the query. It is
+    // a constant today, so this changes nothing today — but the moment it
+    // becomes per-tenant, a key without it serves one org's cached rows for
+    // another org's threshold, and a wrong `accepted` from a warm cache
+    // looks exactly like a right one.
+    const key = `${orgId}|${since}|${until}|${ACCEPTANCE_MIN_PAID_PENCE}`;
+    const hit = leadPerformanceCache.get(key);
+    if (hit) return hit;
+    return leadPerformanceCache.set(key, await Promise.all([
+        marketingRepository.adSpendByPractice(orgId, PROVIDER, since, until),
+        marketingRepository.googleLeadLedger(
+            orgId, since, leadLedgerUntil(until), ACCEPTANCE_MIN_PAID_PENCE,
+        ),
+    ]));
+}
+
+// Test seam and sync hook: drop one org's cached lead-performance data (or
+// all of them) — same shape as facebook-report.service.js's
+// invalidateFunnelCache.
+export function invalidateLeadPerformanceCache(orgId) {
+    leadPerformanceCache.invalidate(orgId ? `${orgId}|` : undefined);
 }
 
 // The two approximations keywords() carries, stated so the UI can print them
@@ -421,6 +574,138 @@ export const googleReportService = {
             effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
         };
     },
+
+    // Blended CPL/CPB/CPA cards, PRACTICE grain — not per-campaign/ad-group.
+    // Google carries no CRM lead funnel of its own (unlike Meta, which gets
+    // one via GoHighLevel's ad_id), and CallRail calls carry no ad/campaign
+    // linkage at all, so a per-campaign Google CPL cannot be built from what
+    // is stored. What CAN: this practice's Google spend (already stamped by
+    // account mapping) divided by every lead (GoHighLevel OR CallRail,
+    // phone-deduplicated, Dentally-matched) that landed for that SAME
+    // practice in the window — see migration 000158's header for the full
+    // reasoning.
+    //
+    // "Accepted" means the lead has PAID more than ACCEPTANCE_MIN_PAID_PENCE
+    // (000162), counting settled payments from the lead's own day onward.
+    // It used to mean "the first treatment-plan invoice is marked paid",
+    // which missed anyone who handed over money before their plan was
+    // invoiced and counted others whose money never reached `payments` at
+    // all — see 000162's header for the measurements.
+    //
+    // `leads` on the response carries every deduplicated lead in scope —
+    // name/email/treatment plus its own booked/accepted flags — so the front
+    // end's card click-through can list the people behind a number without a
+    // second request or a second, potentially-drifted computation.
+    async leadPerformance(orgId, { since, until, practiceId = null } = {}) {
+        const win = clampWindow(since, until);
+        // clampWindow's 92-day floor exists for the DEEP-GRAIN tables only.
+        // ad_metrics (spend) holds ~15 months and leads/calls/appointments/
+        // invoices have no such cap, so this method takes the RAW requested
+        // window (defaulted the same way windowFrom() defaults every other
+        // marketing route), not the clamped one — a year-wide request here
+        // must not be silently cut to 92 days the way the deep-grain tiers
+        // are.
+        const rawSince = since ?? win.effectiveSince;
+        const rawUntil = until ?? win.until;
+
+        const [accounts, pipelineRows] = await Promise.all([
+            googleAccounts(orgId),
+            // Fetched unconditionally, including on the not_connected path,
+            // so `googlePipelinesMapped` is present on EVERY payload shape —
+            // same "present on all three, including the early returns"
+            // discipline effectiveSince/windowClamped already follow.
+            adChannelPipelineRepository.list(orgId),
+        ]);
+        // MULTI-TENANT GOTCHA, found live on Plan4growth and worth guarding
+        // against for every OTHER tenant too: a org that has never mapped any
+        // GoHighLevel pipeline to the google_ads channel (a brand-new tenant,
+        // or one that only just connected GoHighLevel) will get leads=0 from
+        // ad_google_lead_ledger — correctly, since nothing IS mapped — but
+        // that reads identically to "genuinely no leads this period" unless
+        // the page is told which one it is. Same class of ambiguity
+        // never_synced vs no_spend_in_window exists to resolve elsewhere in
+        // this file; this is that same discipline applied to attribution
+        // rather than to the sync.
+        const googlePipelinesMapped = pipelineRows.some((r) => r.channel === 'google_ads');
+
+        if (accounts.length === 0) {
+            return {
+                state: 'not_connected', practices: [], total: null, practicesAll: [], totalAll: null, leads: [],
+                googlePipelinesMapped,
+                acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
+                effectiveSince: rawSince, windowClamped: false,
+            };
+        }
+
+        // Cached: the owner asked for this to be faster, and the same
+        // org+window is fetched again on every navigation back to this page
+        // within a minute (or by a second component asking for the same
+        // window) — see loadLeadPerformanceData's own comment for what was
+        // tried and measured on the query itself.
+        const [spendRowsAll, ledgerRowsAll] = await loadLeadPerformanceData(orgId, rawSince, rawUntil);
+
+        // practiceId is an OPTIONAL narrowing filter — omitted (the default,
+        // "All practices") returns every practice's own row plus a total
+        // summed across all of them; supplied narrows both the breakdown and
+        // the total to that one practice, same shape as the campaign/ad-set
+        // tiers' own practiceId handling elsewhere in this file.
+        const spendRows = practiceId ? spendRowsAll.filter((r) => r.practice_id === practiceId) : spendRowsAll;
+        const ledgerRows = practiceId ? ledgerRowsAll.filter((r) => r.practice_id === practiceId) : ledgerRowsAll;
+
+        if (spendRows.length === 0 && ledgerRows.length === 0) {
+            return {
+                state: await emptyWindowState(orgId), practices: [], total: null, practicesAll: [], totalAll: null, leads: [],
+                googlePipelinesMapped,
+                acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
+                effectiveSince: rawSince, windowClamped: false,
+            };
+        }
+
+        // BOTH figures computed from the SAME fetch, in ONE response — the
+        // owner-requested "include existing patients" toggle is then a pure
+        // client-side read of practicesAll/totalAll instead of practices/
+        // total, with NO second network request. Toggling used to re-fetch
+        // the whole ~1s query for a decision (new vs including-existing)
+        // that never depended on the SQL at all, only on how the already-
+        // fetched rows are summed (practiceLeadPerformance's `eligible`
+        // gate) — that was the single biggest speed problem here, bigger
+        // than anything in the query itself.
+        const practices = practiceLeadPerformance(spendRows, ledgerRows, false)
+            .sort((a, b) => b.spendPence - a.spendPence);
+        const practicesAll = practiceLeadPerformance(spendRows, ledgerRows, true)
+            .sort((a, b) => b.spendPence - a.spendPence);
+
+        return {
+            state: 'ok',
+            practices, total: sumPracticeRows(practices),
+            practicesAll, totalAll: sumPracticeRows(practicesAll),
+            leads: ledgerRows.map((l) => ({
+                practiceId: l.practice_id, practiceName: l.practice_name,
+                source: l.source, leadAt: l.lead_at,
+                // phone10 is the last-10-digits matching key (right(digits,
+                // 10) — see the migration), not a display format. UK-centric
+                // display: prepend the national trunk '0' this codebase's
+                // own convention drops. Never fabricated when null.
+                phone: l.phone10 ? `0${l.phone10}` : null,
+                name: l.name, email: l.email, treatment: l.treatment,
+                booked: l.booked, accepted: l.accepted, isNewPatient: l.is_new_patient,
+                // What `accepted` is actually claiming, in money. Shown in
+                // the drill-down so the threshold is visible rather than
+                // implied — £43 and £4,300 are both "Yes" without it.
+                paidPence: l.paid_pence,
+            })),
+            googlePipelinesMapped,
+            // The floor the `accepted` column was computed against, so the
+            // front end labels the card with the REAL threshold instead of
+            // hardcoding its own copy of £40 that can drift out of step.
+            acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
+            effectiveSince: rawSince, windowClamped: false,
+        };
+    },
 };
 
-export const __test = { perUnitPence, ratio, collapseByCampaign, excludedAccountsOf, numOrNull };
+export const __test = {
+    perUnitPence, ratio, collapseByCampaign, excludedAccountsOf, numOrNull,
+    leadLedgerUntil, practiceLeadPerformance, sumPracticeRows, withLeadCosts,
+    ACCEPTANCE_MIN_PAID_PENCE,
+};

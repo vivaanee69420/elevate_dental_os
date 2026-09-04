@@ -17,11 +17,13 @@ import { analyticsRepository } from '../src/repositories/analytics.repository.js
 
 // Route a fake query result per table. `integrations` returns the seeded
 // connection rows; everything else returns the seeded data rows.
-function harness({ integrations = [], rows = {} }) {
+function harness({ integrations = [], rows = {}, rpcs = {} }) {
   supaRec.resultProvider = (q) => {
     if (q.table === 'integrations') return { data: integrations, error: null };
     return { data: rows[q.table] ?? [], error: null };
   };
+  // Reads that aggregate in SQL arrive as RPCs, not table selects.
+  supaRec.rpcProvider = (fn) => ({ data: rpcs[fn] ?? [], error: null });
 }
 
 describe('integration-gating helper', () => {
@@ -64,9 +66,12 @@ describe('gated reads drop a revoked provider', () => {
     invalidate('org-ads');
     harness({
       integrations: [{ provider: 'google_ads', status: 'revoked' }],
-      rows: { ad_metrics: [
-        { provider: 'google_ads', customer_id: 'g1', spend_pence: 500 },
-        { provider: 'meta_ads', customer_id: 'm1', spend_pence: 300 },
+      // adMetricsInWindow now sums in SQL (ad_metrics_rollup) rather than
+      // reading ad_metrics row by row past PostgREST's silent row ceiling. The
+      // revoked-provider filter still runs in JS over the aggregated rows.
+      rpcs: { ad_metrics_rollup: [
+        { provider: 'google_ads', customer_id: 'g1', practice_id: null, spend_pence: 500 },
+        { provider: 'meta_ads', customer_id: 'm1', practice_id: null, spend_pence: 300 },
       ] },
     });
     const out = await analyticsRepository.adMetricsInWindow('org-ads', '2026-01-01', '2026-02-01');

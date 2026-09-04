@@ -41,6 +41,7 @@ import { GoogleCampaignsTab } from './GoogleCampaignsTab';
 import { GoogleAdGroupsTab } from './GoogleAdGroupsTab';
 import { GoogleAdsTab } from './GoogleAdsTab';
 import { GoogleKeywordsTab } from './GoogleKeywordsTab';
+import { GoogleLeadPerformanceCards } from './GoogleLeadPerformanceCards';
 
 const TABS: AdReportTab[] = [
   { id: 'campaigns', label: 'Campaigns' },
@@ -155,17 +156,25 @@ export default function GoogleReportScreen() {
       />
       <ScopePeriodBar />
 
-      {/* MINOR 3: the spec requires the page to say, not just a code comment,
-          why there is no cost-per-lead here — an owner who just read a
-          cost-per-patient on the Facebook page and then finds the column
-          gone on Google, with no explanation, could reasonably conclude the
-          page is broken or that Google produced no patients. True on every
-          tab, so it sits above the tab strip rather than inside one table's
-          own Notes. */}
+      {/* Blended CPL/CPB/CPA cards (migration 000158) — PRACTICE grain, not
+          per-campaign, and NOT itself a tab: visible above the tab strip
+          regardless of which of the four grain tabs is active. See
+          GoogleLeadPerformanceCards.tsx's header for why this exists instead
+          of a per-row CPL/CPB/CPA column on the grain tabs below (Google has
+          no CRM lead funnel of its own, and CallRail calls carry no
+          ad/campaign linkage at all — a per-campaign figure is not
+          buildable from what is stored). */}
+      <GoogleLeadPerformanceCards />
+
+      {/* True on every tab below: Google's OWN tracked conversions
+          (campaigns()/adGroups()/ads()/keywords()) still carry no
+          CPL/CPB/CPA — that figure lives in the cards above, at practice
+          grain, not here at campaign/ad-group/ad/keyword grain. */}
       <Note>
-        Cost per lead, per booking and per patient are not shown on any tab here. Google&apos;s clicks
-        cannot yet be tied to a lead without call tracking (CallRail) — those columns will appear once
-        that connection lands. Spend, clicks and Google&apos;s own tracked conversions are shown in full below.
+        Cost per lead, per booking and per accepted patient are shown above, blended across GoHighLevel
+        and CallRail at practice level — Google&apos;s own click data cannot be tied to an individual lead
+        below campaign level. The tabs below show spend, clicks and Google&apos;s own tracked conversions
+        per campaign, ad group, ad and keyword.
       </Note>
 
       <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />

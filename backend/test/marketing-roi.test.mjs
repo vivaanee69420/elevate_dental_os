@@ -43,13 +43,18 @@ beforeEach(() => {
 
 function stub({ ad = AD_ROWS, leads = LEADS, rev = REV } = {}) {
   supaRec.resultProvider = (q) => {
-    if (q.table === 'ad_metrics') return { data: ad, error: null };
     if (q.table === 'leads') return { data: leads, error: null };
     if (q.table === 'practices') return { data: PRACTICES, error: null };
     return { data: [], error: null };
   };
+  // Ad spend is SUMMED IN SQL now (ad_metrics_rollup) rather than read row by
+  // row: the live org holds 3,899 ad_metrics rows in a 90-day window and 1,079
+  // in 30 days, both past PostgREST's silent row ceiling, so spend — and the
+  // ROAS built on it — were partial sums shown as totals.
   supaRec.rpcProvider = (fn) =>
-    fn === 'settled_revenue_by_practice' ? { data: rev, error: null } : { data: [], error: null };
+    fn === 'settled_revenue_by_practice' ? { data: rev, error: null }
+    : fn === 'ad_metrics_rollup' ? { data: ad, error: null }
+    : { data: [], error: null };
 }
 
 describe('marketingRoi', () => {
@@ -100,14 +105,15 @@ describe('marketingRoi', () => {
       { provider: 'meta_ads', customer_id: 'm1', name: 'Barnet Ads', currency: 'GBP', status: 'active', is_selected: true, practice_id: 'p2' },
     ];
     supaRec.resultProvider = (q) => {
-      if (q.table === 'ad_metrics') return { data: ad, error: null };
       if (q.table === 'leads') return { data: LEADS, error: null };
       if (q.table === 'practices') return { data: PRACTICES, error: null };
       if (q.table === 'ad_accounts') return { data: accounts, error: null };
       return { data: [], error: null };
     };
     supaRec.rpcProvider = (fn) =>
-      fn === 'settled_revenue_by_practice' ? { data: REV, error: null } : { data: [], error: null };
+      fn === 'settled_revenue_by_practice' ? { data: REV, error: null }
+      : fn === 'ad_metrics_rollup' ? { data: ad, error: null }
+      : { data: [], error: null };
 
     const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
     expect(r.adSpendPerPracticeAvailable).toBe(true);

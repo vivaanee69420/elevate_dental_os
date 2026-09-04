@@ -2702,9 +2702,15 @@ export const analyticsService = {
         // otherwise fall back to the trailing N-day window (until open).
         const sinceISO = since || new Date(now().getTime() - days * 86400000).toISOString();
         const untilISO = until || null;
-        // Leads are windowed only when an upper bound is set (month/day mode); in
-        // the trailing-days mode they stay all-time, as before.
-        const leadSinceISO = untilISO ? sinceISO : null;
+        // Leads are windowed like everything else. This used to be
+        // `untilISO ? sinceISO : null` — in trailing-days mode the lead rollup
+        // ran ALL-TIME while revenue, appointments and payments beside it covered
+        // the last N days, so the conversion rate divided a windowed numerator by
+        // an unbounded denominator and fell as a tenant accumulated history. The
+        // frontend always sends an explicit window today, which is the only
+        // reason this has not been visible; a direct API call to
+        // /api/analytics/business-hub?days=90 still takes that path.
+        const leadSinceISO = sinceISO;
         // Ad-platform lead window as YYYY-MM-DD (ad_metrics.metric_date is a date).
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
         const adFromDate = sinceISO.slice(0, 10);
@@ -2782,6 +2788,13 @@ export const analyticsService = {
             adLeadsBy = new Map();
         }
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
+        // A rate with no denominator is UNKNOWABLE, not zero. `rate()` returns 0
+        // there, and a 0 renders as a confident "0%" — a practice with no leads
+        // showed a red "0% conversion" chip as though it were converting badly,
+        // and an org whose PMS never synced a no-show state showed a green "0%
+        // no-show" as though it never missed an appointment. Null survives to the
+        // UI, which renders an em dash.
+        const rateOrNull = (n, d) => (d ? rate(n, d) : null);
         const num = (v) => Number(v || 0);
         // Per-practice new patients (Dentally registration date) -> map by practice.
         // null-practice rows (unassigned patients) fold into the group total only.
@@ -2818,6 +2831,13 @@ export const analyticsService = {
         // aren't lost by the per-practice attribution.
         const completedTotalCount = (completedRows || []).reduce((s, r) => s + num(r.completed_count), 0);
         const completedTotalValuePence = (completedRows || []).reduce((s, r) => s + num(r.value_pence), 0);
+        // Is a no-show rate knowable for this org at all? `noShowTracked` is a
+        // separate probe of the appointments table; the rollup is the figure we
+        // actually divide. If the rollup found no-shows then tracking plainly
+        // works, whatever the probe said — trusting the probe alone would null a
+        // rate the data right here supports. Either source proving it is enough.
+        const rollupNoShows = (apptRows || []).reduce((s, r) => s + num(r.no_shows), 0);
+        const noShowKnown = noShowTracked || rollupNoShows > 0;
         const revBy = new Map(revRows.map((r) => [r.practice_id, num(r.pence)]));
         const apBy = new Map(apptRows.map((r) => [r.practice_id, r]));
         const ldBy = new Map(leadRows.map((r) => [r.practice_id, r]));
@@ -2843,9 +2863,25 @@ export const analyticsService = {
                 appointments,
                 completed: num(ap.completed),
                 noShows,
-                noShowRate: rate(noShows, appointments),
+                // Null when this practice booked nothing in the window, and null
+                // when the org's PMS has never synced a no-show state at all —
+                // zero no-shows out of zero known no-shows is not a 0% rate.
+                noShowRate: noShowKnown ? rateOrNull(noShows, appointments) : null,
                 leads,
-                conversionRate: rate(converted, leads),
+                // SAME DEFINITION AS THE GROUP FIGURE: new patients per lead.
+                // This row used to report CRM `converted`/`leads` (a lead that
+                // reached treatment_started) while the group KPI directly above
+                // reported Dentally new patients / all-source leads. Two
+                // different metrics under one label — picking a practice tab
+                // silently changed what "Lead conversion" meant, and the two
+                // could never be reconciled against each other.
+                conversionRate: rateOrNull(newPatientsBy.get(p.id) || 0, leads),
+                // The CRM funnel's own definition, kept as its own field rather
+                // than overloading conversionRate. Null-safe: a practice with no
+                // leads has an UNKNOWABLE rate, not a zero one — the UI renders
+                // that as "—", so the distinction has to survive the payload.
+                crmConverted: converted,
+                crmConversionRate: leads ? rate(converted, leads) : null,
                 newPatients: newPatientsBy.get(p.id) || 0, // Dentally registrations, this practice
             };
         }).sort((a, b) => b.revenuePence - a.revenuePence);
@@ -2954,9 +2990,28 @@ export const analyticsService = {
             .filter((l) => l.fee_pence > 0)
             .sort((a, b2) => b2.fee_pence - a.fee_pence);
 
-        // Revenue target = baseline goal (owner-set). Margin REAL or 0.
+        // Revenue target = baseline goal (owner-set), PRO-RATED TO THE WINDOW.
+        //
+        // `baseline.revenue` is an ANNUAL figure in pounds — business-health
+        // labels it "Annual revenue" and every other reader divides it by 12 for
+        // a monthly rate. This card compared it, unscaled, against ONE WINDOW's
+        // revenue, so an org on plan for the month rendered a headline like
+        // "-£800,000 vs target" in warning amber. The `developer` org has
+        // £800,000 set today, so this was live, not hypothetical.
+        //
+        // Scaled by the window's own length in days against a 365-day year, which
+        // is the honest conversion for an annual goal with no monthly breakdown
+        // behind it. `revenueTargetAnnualPence` is carried through so the UI can
+        // say what the target actually is rather than implying the pro-rated
+        // slice is the owner's stated goal.
         const b = health?.baseline || {};
-        const revenueTargetPence = b.revenue ? b.revenue * 100 : 0;
+        const revenueTargetAnnualPence = b.revenue ? Math.round(b.revenue * 100) : 0;
+        const windowDays = untilISO
+            ? Math.max(1, (new Date(untilISO).getTime() - new Date(sinceISO).getTime()) / 86400000)
+            : days;
+        const revenueTargetPence = revenueTargetAnnualPence
+            ? Math.round((revenueTargetAnnualPence * windowDays) / 365)
+            : 0;
         const marginPct = (actuals.hasAny && (actuals.annual.revenue || 0) > 0)
             ? formulas_1.calculatePL(plInputFromBuckets(actuals.annual)).marginPct
             : 0;
@@ -2980,15 +3035,28 @@ export const analyticsService = {
             group: {
                 practices: practiceRows.length,
                 revenuePence: totalRevenue,
-                revenueTargetPence,
+                revenueTargetPence,          // pro-rated to THIS window
+                revenueTargetAnnualPence,    // the owner's stated annual goal
                 marginPct,
+                // Margin is a TRAILING-12-MONTH figure from the P&L ledger
+                // (_actualsBundle is called with no window), not this window's.
+                // It sits beside windowed revenue, so the UI must say so rather
+                // than let the reader assume the two describe the same period.
+                marginBasis: 'trailing_12m',
                 appointments: totalAppts,
                 noShows: totalNoShows,
-                noShowRate: rate(totalNoShows, totalAppts),
-                noShowTracked, // false => no_show state never synced; show "—" not 0%
+                noShowRate: noShowKnown ? rateOrNull(totalNoShows, totalAppts) : null,
+                noShowTracked: noShowKnown, // false => no_show state never synced; show "—" not 0%
                 leads: totalLeads,
                 leadsBySource, // named per-source breakdown (Google / Meta / GHL)
-                conversionRate: rate(newPatients, totalLeads), // new patients booked per lead
+                // CRM-only lead total. The per-practice rows below carry CRM leads
+                // ONLY — ad-platform conversions have no reliable practice
+                // attribution (one account per group is the norm), so they are
+                // counted at group level and nowhere else. Without this field the
+                // practice table's Leads column could never be reconciled against
+                // the headline Leads KPI, and the gap looked like a bug.
+                leadsCrm: crmLeads,
+                conversionRate: rateOrNull(newPatients, totalLeads), // new patients booked per lead
                 newPatients, // booked Dentally new-patient appointments (real PMS)
                 treatmentsStarted,
                 treatmentsCompleted, // completed plan count in window (practitioner activity)
@@ -3007,7 +3075,7 @@ export const analyticsService = {
                 prevPeriodLabel,
                 prevRevenuePence,
                 prevCashPence,
-                leadToStartRate: rate(treatmentsStarted, totalLeads),
+                leadToStartRate: rateOrNull(treatmentsStarted, totalLeads),
             },
             practices: practiceRows,
             revenueByLine, // clinical lines from Dentally invoice_items

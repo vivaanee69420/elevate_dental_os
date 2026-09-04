@@ -138,6 +138,117 @@ export interface GoogleKeywordsPage {
   windowClamped: boolean;
 }
 
+// Blended CPL/CPB/CPA cards (migration 000158) — PRACTICE grain, not
+// per-campaign: Google carries no CRM lead funnel of its own and CallRail
+// calls carry no ad/campaign linkage at all, so a per-campaign Google CPL
+// cannot be built from what is stored. Spend is this practice's mapped
+// Google account(s); leads are every GoHighLevel lead OR CallRail call for
+// that SAME practice in the window, phone-deduplicated and Dentally-matched.
+// See google-report.service.js's leadPerformance for the full reasoning.
+export interface GoogleLeadPractice {
+  /** null is the "unmapped" bucket — spend on an account with no practice
+   *  mapping, or a lead whose practice could not be resolved. */
+  practiceId: string | null;
+  practiceName: string | null;
+  spendPence: number;
+  impressions: number;
+  clicks: number;
+  /** Deduplicated (by phone) count of GoHighLevel leads + CallRail calls. */
+  leads: number;
+  /** Of those, phone-matched to a Dentally patient with an appointment on or
+   *  after the DAY the lead landed. */
+  booked: number;
+  /** Of those, phone-matched to a Dentally patient whose settled payments
+   *  from the lead's own day onward, net of refunds, EXCEED the payload's
+   *  acceptanceMinPaidPence (£40). Not "has a paid invoice": a floor is what
+   *  separates committing to treatment from paying for the appointment. */
+  accepted: number;
+  /** null when the corresponding denominator (leads/booked/accepted) is
+   *  zero. A cost per nothing is unknowable, not free. */
+  cplPence: number | null;
+  cpbPence: number | null;
+  cpaPence: number | null;
+}
+
+/** One deduplicated lead, for the cards' click-through drill-down list. */
+export interface GoogleLeadRow {
+  practiceId: string | null;
+  practiceName: string | null;
+  source: 'ghl' | 'callrail';
+  /** ISO instant of the lead's own first touch (GHL lead created, or the
+   *  CallRail call started) — whichever came first if both exist. */
+  leadAt: string;
+  /** UK-formatted (leading 0), e.g. "07598 983651" is NOT applied — plain
+   *  "07598983651". null only when neither source carried a usable number
+   *  (should not happen — both are required upstream to enter the ledger). */
+  phone: string | null;
+  name: string | null;
+  email: string | null;
+  /** From Dentally (the matched patient's earliest treatment-plan invoice
+   *  line), NEVER GoHighLevel's own free-text lead.treatment field — that
+   *  field is unreliable on live data (often the opportunity's own name,
+   *  not a treatment). null until a treatment-plan invoice exists. */
+  treatment: string | null;
+  booked: boolean;
+  /** True once `paidPence` EXCEEDS the payload's acceptanceMinPaidPence —
+   *  money paid, not an invoice marked paid. */
+  accepted: boolean;
+  /** Settled payments attributable to this lead, in pence, NET OF REFUNDS:
+   *  every settled row from the lead's own day onward within the window,
+   *  signed and summed. 0 is a real answer (paid nothing, or paid and fully
+   *  refunded), not a missing one — and the value can be NEGATIVE when a
+   *  refund lands in the window for something paid before the lead. */
+  paidPence: number;
+  /** false only means "not new" for a phone that actually matched a
+   *  Dentally patient — an unmatched lead is also false here, but that is
+   *  moot: booked/accepted are false for it either way. */
+  isNewPatient: boolean;
+}
+
+export interface GoogleLeadPerformancePayload {
+  state: GoogleState;
+  /** One row per practice with spend or leads in the window; omitted
+   *  (`?practice_id=` unset) is the default and returns every practice. */
+  practices: GoogleLeadPractice[];
+  /** Same shape as a practice row, summed across every practice in scope —
+   *  the all-practices total the cards show by default. null when there is
+   *  no data at all (state !== 'ok'). New patients only (see isNewPatient on
+   *  GoogleLeadRow) — the owner's own CPB/CPA definition. */
+  total: GoogleLeadPractice | null;
+  /** Same shape as `practices`, but booked/accepted count EVERY match
+   *  regardless of isNewPatient — the owner-requested "include existing
+   *  patients" toggle reads this instead of `practices`, entirely
+   *  client-side: both are computed from the SAME fetch, so flipping the
+   *  toggle costs no extra request. */
+  practicesAll: GoogleLeadPractice[];
+  /** `practicesAll` summed — the toggle's "including existing" total. */
+  totalAll: GoogleLeadPractice | null;
+  /** Every deduplicated lead behind `total`/`practices` (and
+   *  `totalAll`/`practicesAll`) — filter client-side by `booked`/`accepted`
+   *  (and `isNewPatient`, matching whichever total is on screen) for a
+   *  card's click-through list. */
+  leads: GoogleLeadRow[];
+  /** False when this org has not mapped ANY GoHighLevel pipeline to the
+   *  google_ads channel (Settings -> Ad attribution) — a leads figure of 0
+   *  then means "not configured", not "quiet period", and the cards must say
+   *  so rather than showing a silent zero. */
+  googlePipelinesMapped: boolean;
+  /** The acceptance floor `accepted` was computed against, in pence (£40 =
+   *  4000 today). Sent by the server so the card's label states the REAL
+   *  threshold — a hardcoded copy here would keep saying "£40" the day the
+   *  server's own figure changes. */
+  acceptanceMinPaidPence: number;
+  effectiveSince: string;
+  /** Always false here — leads/calls/appointments/invoices carry no 92-day
+   *  deep-grain cap the way the campaign/ad-group/ad/keyword tiers do. */
+  windowClamped: boolean;
+}
+
+export function fetchGoogleLeadPerformance(qs: string) {
+  const suffix = qs ? `?${qs}` : '';
+  return api<GoogleLeadPerformancePayload>(`/api/marketing/google/lead-performance${suffix}`);
+}
+
 export function fetchGoogleCampaigns(qs: string) {
   const suffix = qs ? `?${qs}` : '';
   return api<GoogleCampaignsPayload>(`/api/marketing/google/campaigns${suffix}`);

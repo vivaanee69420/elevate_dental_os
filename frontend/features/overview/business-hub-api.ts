@@ -18,9 +18,15 @@ export interface HubPractice {
   appointments: number;
   completed: number;
   noShows: number;
-  noShowRate: number;     // percentage points
-  leads: number;
-  conversionRate: number; // percentage points
+  /** Percentage points, or null when UNKNOWABLE — no appointments in the window,
+   *  or the org's PMS has never synced a no-show state at all. Render "—". */
+  noShowRate: number | null;
+  leads: number;          // CRM leads only; ad-platform leads are group-level
+  /** New patients per lead — the SAME definition as group.conversionRate.
+   *  Null when this practice had no leads (a rate with no denominator). */
+  conversionRate: number | null;
+  crmConverted: number;               // CRM funnel: leads that reached treatment
+  crmConversionRate: number | null;   // CRM funnel rate; null when no leads
   newPatients: number;    // Dentally registrations (joined date) in window, this practice
 }
 
@@ -37,15 +43,20 @@ export interface BusinessHub {
   group: {
     practices: number;
     revenuePence: number;
-    revenueTargetPence: number;
+    revenueTargetPence: number;        // the annual goal PRO-RATED to this window
+    revenueTargetAnnualPence: number;  // the owner's stated annual goal, unscaled
     marginPct: number;
+    marginBasis: 'trailing_12m';       // margin covers the last 12 ledger months, NOT the window
     appointments: number;
     noShows: number;
-    noShowRate: number;
+    /** Null when unknowable — no appointments, or no-show state never synced. */
+    noShowRate: number | null;
     noShowTracked: boolean; // false => Dentally never synced a no_show state; render "—"
-    leads: number;
+    leads: number;          // ALL sources: Google Ads + Meta Ads + CRM
+    leadsCrm: number;       // CRM only — what the per-practice rows sum to
     leadsBySource: { source: string; leads: number }[]; // Google Ads / Meta Ads / GHL — named sections
-    conversionRate: number;
+    /** New patients per lead. Null when there were no leads at all. */
+    conversionRate: number | null;
     newPatients: number;           // booked Dentally new-patient appointments (real PMS)
     treatmentsStarted: number;     // plans started in window (Dentally)
     treatmentsCompleted: number;   // completed-treatment count (Practitioner Activity feed) — group total
@@ -63,7 +74,7 @@ export interface BusinessHub {
     prevPeriodLabel: string;         // label for the comparison period ("May 2026")
     prevRevenuePence: number;        // turnover in the prior period
     prevCashPence: number;           // settled receipts in the prior period
-    leadToStartRate: number;       // treatmentsStarted / leads, percentage points
+    leadToStartRate: number | null; // treatmentsStarted / leads; null when no leads
   };
   practices: HubPractice[];
   revenueByLine: RevenueLine[];

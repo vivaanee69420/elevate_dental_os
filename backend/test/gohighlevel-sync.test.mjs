@@ -218,6 +218,53 @@ describe('upsertContact (dedup on pull)', () => {
         expect(db.calls.some((c) => c.op === 'insert')).toBe(false);
     });
 
+    // Found live on Plan4growth: a contact matched to a real Dentally patient
+    // (pms_external_id set) was having its phone/name silently overwritten by
+    // EVERY subsequent GoHighLevel contact pull — 2,996 GHL-linked patients on
+    // that one org, all subject to it. Dentally is the authoritative source
+    // for a confirmed patient's identity; this refresh must not touch it,
+    // same "never clobber" rule the email/phone-match branches already apply
+    // on first link.
+    it('does NOT overwrite phone/name/email when the matched contact is a confirmed Dentally patient', async () => {
+        const db = fakeDb((q) => {
+            if (q.eqs.some(([c]) => c === 'ghl_contact_id') && q.op === 'select') {
+                return { data: { id: 'patient-row', pms_external_id: '28674' }, error: null };
+            }
+            return { data: null, error: null };
+        });
+        const r = await upsertContact(
+            org,
+            contactRow(org, { id: 'g1', firstName: 'Julie', lastName: 'Wells', email: 'julie@x.com', phone: '07986228421' }),
+            db,
+        );
+        expect(r).toEqual({ id: 'patient-row', action: 'update_patient_identity_locked' });
+        const update = db.calls.find((c) => c.op === 'update');
+        expect(update.vals).not.toHaveProperty('phone');
+        expect(update.vals).not.toHaveProperty('first_name');
+        expect(update.vals).not.toHaveProperty('last_name');
+        expect(update.vals).not.toHaveProperty('email');
+    });
+
+    // The un-linked case (no pms_external_id — a bare GHL lead, never matched
+    // to a Dentally patient) keeps refreshing normally: GoHighLevel IS the
+    // authoritative source for someone who is not (yet, or ever) a patient.
+    it('still refreshes phone/name/email for a GHL contact with no Dentally link', async () => {
+        const db = fakeDb((q) => {
+            if (q.eqs.some(([c]) => c === 'ghl_contact_id') && q.op === 'select') {
+                return { data: { id: 'lead-only', pms_external_id: null }, error: null };
+            }
+            return { data: null, error: null };
+        });
+        const r = await upsertContact(
+            org,
+            contactRow(org, { id: 'g2', firstName: 'New', lastName: 'Lead', email: 'new@x.com', phone: '07700900000' }),
+            db,
+        );
+        expect(r).toEqual({ id: 'lead-only', action: 'update' });
+        const update = db.calls.find((c) => c.op === 'update');
+        expect(update.vals).toMatchObject({ first_name: 'New', last_name: 'Lead', email: 'new@x.com', phone: '07700900000' });
+    });
+
     it('creates a new contact when nothing matches (upsert on ghl_contact_id, race-proof)', async () => {
         const db = fakeDb(() => ({ data: null, error: null }));
         const r = await upsertContact(org, contactRow(org, { id: 'g9', firstName: 'New', email: 'new@x.com', phone: '07700900999' }), db);

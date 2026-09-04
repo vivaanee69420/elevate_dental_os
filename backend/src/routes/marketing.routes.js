@@ -4,6 +4,7 @@ import {
     getPerformance, getTrend, getLeads, getReconciliation,
     getFacebookCampaigns, getFacebookAdSets, getFacebookAds,
     getGoogleCampaigns, getGoogleAdGroups, getGoogleAds, getGoogleKeywords,
+    getGoogleLeadPerformance,
 } from '../controllers/marketing.controller.js';
 
 const router = express.Router();
@@ -32,5 +33,11 @@ router.get('/google/campaigns', requirePermission('marketing.view'), getGoogleCa
 router.get('/google/ad-groups', requirePermission('marketing.view'), getGoogleAdGroups);   // ?campaignId=
 router.get('/google/ads', requirePermission('marketing.view'), getGoogleAds);              // ?campaignId=&parentId=
 router.get('/google/keywords', requirePermission('marketing.view'), getGoogleKeywords);    // ?campaignId=&parentId=
+
+// Blended CPL/CPB/CPA cards, PRACTICE grain (not per-campaign — see
+// google-report.service.js's leadPerformance for why). ?practice_id=
+// narrows; omitted returns every practice's own row plus an all-practices
+// total.
+router.get('/google/lead-performance', requirePermission('marketing.view'), getGoogleLeadPerformance);
 
 export default router;

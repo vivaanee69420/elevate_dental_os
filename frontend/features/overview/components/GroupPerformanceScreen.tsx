@@ -750,8 +750,14 @@ function buildLens(rows: HubPractice[], marginPct: number, roi: MarketingRoi | u
   const topRev = [...rows].sort((a, b) => b.revenuePence - a.revenuePence)[0];
   out.push({ tone: 'good', icon: <ArrowUpRight size={16} />, title: `${topRev.name} leads on turnover`, body: `${formatPence(topRev.revenuePence)} in the window — protect its diary and replicate the mix.` });
 
-  const worstNoShow = [...rows].filter((p) => p.appointments > 0).sort((a, b) => b.noShowRate - a.noShowRate)[0];
-  if (worstNoShow && worstNoShow.noShowRate > 0)
+  // noShowRate is null when the rate is unknowable — no appointments in the
+  // window, or a tenant whose PMS has never synced a no-show state. Such a
+  // practice must not be sorted as if it were 0% and named the best performer,
+  // nor can it be named the worst.
+  const worstNoShow = [...rows]
+    .filter((p) => p.appointments > 0 && p.noShowRate !== null)
+    .sort((a, b) => (b.noShowRate ?? 0) - (a.noShowRate ?? 0))[0];
+  if (worstNoShow && (worstNoShow.noShowRate ?? 0) > 0)
     out.push({ tone: 'warn', icon: <AlertTriangle size={16} />, title: `${worstNoShow.name} no-show rate ${worstNoShow.noShowRate}%`, body: `${formatNumber(worstNoShow.noShows)} missed appointments — reminders, deposits and speed-to-lead are the cheapest fix.` });
 
   const paid = roi?.connected ? roi.channels.filter((c) => c.paid) : [];

@@ -314,8 +314,10 @@ describe('dashboardSummary — Command Centre, exact real-or-zero', () => {
     supaRec.rpcCalls = [];
     await svc.dashboardSummary(ORG_A, { now, from: '2026-05-01', to: '2026-05-25' });
     const call = supaRec.rpcCalls.find((c) => c.fn === 'settled_receipts_by_day');
-    expect(new Date(call.params.p_until).getTime())
-      .toBe(new Date(2026, 4, 25, 23, 59, 59, 999).getTime());
+    // Asserted as a literal UTC instant, not via `new Date(y, m, d, ...)`, which
+    // is server-local and would therefore pass in any zone the runner sits in.
+    // 25 May is BST, so the last instant of that LONDON day is 22:59:59.999Z.
+    expect(call.params.p_until).toBe('2026-05-25T22:59:59.999Z');
   });
 
   // Bank is org-level, so a practice-scoped request has no bank figure at all.
@@ -756,12 +758,24 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.group.appointments).toBe(3);
     expect(res.group.noShows).toBe(1);
     expect(res.group.leads).toBe(2);
-    expect(res.group.revenueTargetPence).toBe(100000000); // baseline.revenue * 100 (a target)
+    // The baseline is an ANNUAL goal (£1,000,000). It is now pro-rated to the
+    // window before being compared against window revenue — unscaled, a group on
+    // plan for a month read as a million pounds behind target.
+    expect(res.group.revenueTargetAnnualPence).toBe(100000000);
+    expect(res.group.revenueTargetPence).toBe(Math.round(100000000 * 90 / 365));
     expect(res.group.marginPct).toBe(0);                  // no real cost source → 0, not estimated
     expect(res.truncated).toBe(false);
 
     expect(res.practices[0]).toMatchObject({
-      name: 'Alpha', revenuePence: 120000, cashCollectedPence: 100000, appointments: 2, noShows: 1, noShowRate: 50, leads: 2, conversionRate: 50,
+      name: 'Alpha', revenuePence: 120000, cashCollectedPence: 100000, appointments: 2, noShows: 1, noShowRate: 50, leads: 2,
+      // conversionRate is now NEW PATIENTS per lead — the same definition the
+      // group KPI uses. It used to be the CRM funnel's own rate, so the headline
+      // and the practice row beneath it were two different metrics sharing one
+      // label. No new patients in this fixture, so a real 0%.
+      conversionRate: 0,
+      // The CRM funnel keeps its own field rather than overloading that one.
+      crmConverted: 1,
+      crmConversionRate: 50,
     });
     expect(res.practices[1]).toMatchObject({ name: 'Beta', revenuePence: 60000, cashCollectedPence: 50000, appointments: 1 });
   });
@@ -807,14 +821,24 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
   it('noShowTracked reflects whether any no_show appointment exists (— vs 0% in the UI)', async () => {
     // No no_show row anywhere -> tracked=false so the UI renders "—" not a
     // misleading 0% (Dentally feeds that never sync a DNA state look like this).
+    // The ROLLUP must agree: a feed that never syncs a DNA state reports zero
+    // no-shows there too. A fixture claiming "no no_show rows" while its rollup
+    // returns one is not a real state, and the service now believes the rollup
+    // over the probe (see the disagreement case below).
+    const noDnaRollups = (fn) => (fn === 'appointments_rollup_by_practice'
+      ? { data: [{ practice_id: 'p1', total: 2, completed: 2, no_shows: 0 }], error: null }
+      : rollups(fn));
     supaRec.resultProvider = (q) =>
       q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
       : q.table === 'appointments' ? { data: [], error: null }
       : { data: [], error: null };
-    supaRec.rpcProvider = rollups;
+    supaRec.rpcProvider = noDnaRollups;
     const off = await svc.businessHub(ORG_A, { days: 90 });
     expect(off.group.noShowTracked).toBe(false);
+    // Unknowable, so null — never a 0 that renders as a green "0% no-show".
+    expect(off.group.noShowRate).toBeNull();
+    expect(off.practices[0].noShowRate).toBeNull();
 
     // One no_show row present -> tracked=true so the real rate shows.
     // Same org+window, so drop the payload cache the way a finished sync does.
@@ -826,6 +850,24 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
       : { data: [], error: null };
     const on = await svc.businessHub(ORG_A, { days: 90 });
     expect(on.group.noShowTracked).toBe(true);
+    expect(on.group.noShowRate).not.toBeNull();
+  });
+
+  it('the rollup outvotes the probe: no-shows in the window make the rate knowable', async () => {
+    // The two sources are separate queries and can disagree — the probe scans
+    // the appointments table, the rollup is the figure actually divided. If the
+    // rollup found no-shows the rate is plainly knowable, and suppressing it on
+    // the probe's word alone would hide a real number behind an em dash.
+    svc.invalidateBusinessHub(ORG_A);
+    supaRec.resultProvider = (q) =>
+      q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
+      : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
+      : { data: [], error: null }; // probe finds nothing
+    supaRec.rpcProvider = rollups;  // ...but the rollup reports 1 no-show of 2
+    const res = await svc.businessHub(ORG_A, { days: 90 });
+    expect(res.group.noShowTracked).toBe(true);
+    expect(res.group.noShowRate).toBe(50); // only p1 is in this fixture: 1 of 2
+    expect(res.practices[0].noShowRate).toBe(50);
   });
 
   it('counts null-practice GHL leads in the group total and rolls up treatments', async () => {
@@ -867,9 +909,18 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     supaRec.resultProvider = (q) =>
       q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
-      : q.table === 'ad_metrics' ? { data: [{ provider: 'google_ads', conversions: 21 }, { provider: 'meta_ads', conversions: 1376 }], error: null }
       : { data: [], error: null };
     supaRec.rpcProvider = (fn) => {
+      // Ad-platform leads are SUMMED IN SQL now. Reading ad_metrics row by row
+      // hit PostgREST's server-side ceiling: the live org has 3,899 rows in a
+      // 90-day window, so roughly three quarters of its conversions were dropped
+      // — and because this figure is the conversion rate's DENOMINATOR, losing
+      // them made conversion look better than it was.
+      if (fn === 'ad_leads_by_provider')
+        return { data: [
+          { provider: 'google_ads', conversions: 21, spend_pence: 0 },
+          { provider: 'meta_ads', conversions: 1376, spend_pence: 0 },
+        ], error: null };
       if (fn === 'leads_rollup_by_practice') return { data: [], error: null }; // GHL empty
       if (fn === 'treatments_rollup_by_org') return { data: [{ started: 310, completed: 152, closed_value_pence: 0 }], error: null };
       if (fn === 'org_new_patients_registered_by_practice') return { data: [{ practice_id: 'p1', new_patients: 35 }], error: null };

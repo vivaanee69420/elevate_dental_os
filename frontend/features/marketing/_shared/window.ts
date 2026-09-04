@@ -78,10 +78,24 @@ export function lastInclusiveLondonDay(exclusiveUntilIso: string): string {
  * header for why this cannot be the shared windowParams(scope, win).
  */
 export function ymdWindowParams(scope: string, win: ResolvedWindow): string {
+  return ymdWindowParamsFor(scope, londonDateOf(win.since), lastInclusiveLondonDay(win.until));
+}
+
+/**
+ * The same query string, built from an EXPLICIT pair of inclusive
+ * YYYY-MM-DD days rather than from the scope bar's window.
+ *
+ * Used by the cards' comparison period, which the user types or picks and
+ * which therefore never passes through ResolvedWindow at all. Routed through
+ * one function with ymdWindowParams above so the comparison request cannot
+ * end up shaped differently from the request it is being compared against —
+ * two periods measured by two slightly different rules is a delta that looks
+ * authoritative and means nothing.
+ */
+export function ymdWindowParamsFor(scope: string, sinceYmd: string, untilYmd: string): string {
   const sp = new URLSearchParams();
-  sp.set('since', londonDateOf(win.since));
-  // win.until is the exclusive start of the day AFTER the period.
-  sp.set('until', lastInclusiveLondonDay(win.until));
+  sp.set('since', sinceYmd);
+  sp.set('until', untilYmd);
   const practiceId = practiceOf(scope);
   if (practiceId) sp.set('practice_id', practiceId);
   return sp.toString();
