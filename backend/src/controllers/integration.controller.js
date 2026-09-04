@@ -7,7 +7,7 @@ import { quickbooksAccountService } from "../services/quickbooks-account.service
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { decryptSecret } from "../lib/crypto.js";
-import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema, callrailAccountCreateSchema, callrailAccountUpdateSchema, callrailListCompaniesSchema } from "../models/integration.model.js";
+import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema, callrailAccountCreateSchema, callrailAccountUpdateSchema, callrailDiscoverSchema, callrailBulkConnectSchema } from "../models/integration.model.js";
 import { isAgencyActor } from "../middleware/agency.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
 import { emergentService } from "../services/emergent.service.js";
@@ -75,15 +75,29 @@ export const integrationController = {
         res.json(await integration_service_1.integrationService.callrailDisconnect(req.user.organisation_id));
     },
     // --- CallRail companies --------------------------------------------------
-    // Add-company step 1: list every company under a CallRail ACCOUNT so the
-    // owner picks one rather than typing an opaque id. POST, not GET+query,
-    // deliberately — the API key never belongs in a URL/query string (logs,
-    // browser history, proxies). Ungated beyond the standard requireRole on
-    // the route: this never persists anything, so there is nothing for the
-    // agency-actor check to protect.
-    async callrailListCompanies(req, res) {
-        const body = callrailListCompaniesSchema.parse(req.body);
-        res.json({ companies: await callrailService.listCompanies(req.user.organisation_id, body) });
+    // Add-company step 1 (key-only discovery): ONE API key reveals every
+    // account and company it can reach — no account id typed by hand. POST,
+    // not GET+query, deliberately — the API key never belongs in a URL/query
+    // string (logs, browser history, proxies). Ungated beyond the standard
+    // requireRole on the route: this never persists anything, so there is
+    // nothing for the agency-actor check to protect.
+    async callrailDiscover(req, res) {
+        const body = callrailDiscoverSchema.parse(req.body);
+        res.json(await callrailService.discoverAccounts(req.user.organisation_id, body));
+    },
+    // Add-company step 2: connect several discovered companies in one request.
+    // practiceId is the agency-controlled mapping field on EACH entry, same
+    // rule as callrailAccountCreate/ghlAccountUpdate — a non-agency owner may
+    // still connect companies, just unmapped, so the whole request 403s only
+    // when at least one entry actually carries a practiceId key.
+    async callrailBulkConnect(req, res) {
+        const entries = Array.isArray(req.body?.companies) ? req.body.companies : [];
+        const wantsMapping = entries.some((c) => c && c.practiceId !== undefined);
+        if (wantsMapping && !(await isAgencyActor(req))) {
+            return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
+        }
+        const body = callrailBulkConnectSchema.parse(req.body);
+        res.json(await callrailService.bulkConnect(req.user.organisation_id, body));
     },
     async callrailAccountCreate(req, res) {
         // practiceId is the agency-controlled mapping field, same rule as

@@ -248,6 +248,7 @@ describe('callrailService', () => {
     let accountsStore;
     let verifyMock;
     let listCompaniesMock;
+    let listAccountsMock;
     let callrailRepoMock;
     let pullMock;
 
@@ -329,8 +330,9 @@ describe('callrailService', () => {
         }));
 
         listCompaniesMock = vi.fn(async () => ([{ id: 'CR-1', name: 'CallRail Company Name' }]));
+        listAccountsMock = vi.fn(async () => ([{ id: 'ACC-1', name: 'CallRail Account Name' }]));
         vi.doMock('../src/lib/integrations/callrail-provider.js', () => ({
-            callrailProvider: { verify: verifyMock, listCompanies: listCompaniesMock },
+            callrailProvider: { verify: verifyMock, listCompanies: listCompaniesMock, listAccounts: listAccountsMock },
         }));
 
         // The actual HTTP pull is Task 6's own suite (callrail-sync.test.mjs) —
@@ -533,19 +535,192 @@ describe('callrailService', () => {
         });
     });
 
-    describe('listCompanies', () => {
-        it('passes the key + account id through to the provider and returns its list, without persisting anything', async () => {
-            listCompaniesMock.mockResolvedValueOnce([{ id: 'CR-1', name: 'Ashford' }, { id: 'CR-2', name: 'Bexleyheath' }]);
-            const out = await svc.listCompanies(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1' });
+    describe('discoverAccounts — key-only discovery (Add-company step 1)', () => {
+        it('lists every account the key can see, then every company under each, without persisting anything', async () => {
+            listAccountsMock.mockResolvedValueOnce([{ id: 'ACC-1', name: 'Last Mile Metrics' }, { id: 'ACC-2', name: 'Second Group' }]);
+            listCompaniesMock.mockImplementation(async (key, accountId) => (accountId === 'ACC-1'
+                ? [{ id: 'CR-1', name: 'Ashford' }]
+                : [{ id: 'CR-2', name: 'Bexleyheath' }]));
+
+            const out = await svc.discoverAccounts(ORG_A, { apiKey: 'k' });
+
+            expect(listAccountsMock).toHaveBeenCalledWith('k');
             expect(listCompaniesMock).toHaveBeenCalledWith('k', 'ACC-1');
-            expect(out).toEqual([{ id: 'CR-1', name: 'Ashford' }, { id: 'CR-2', name: 'Bexleyheath' }]);
+            expect(listCompaniesMock).toHaveBeenCalledWith('k', 'ACC-2');
+            expect(out.accounts).toEqual([
+                { accountId: 'ACC-1', accountName: 'Last Mile Metrics', companies: [{ id: 'CR-1', name: 'Ashford', alreadyConnected: false }] },
+                { accountId: 'ACC-2', accountName: 'Second Group', companies: [{ id: 'CR-2', name: 'Bexleyheath', alreadyConnected: false }] },
+            ]);
             expect(accountsStore).toHaveLength(0);
         });
 
-        it('rethrows a provider failure as a 400 with its own (key-safe) message', async () => {
-            listCompaniesMock.mockRejectedValueOnce(new Error('CallRail account ACC-1 was not found. Check the account ID and try again.'));
-            await expect(svc.listCompanies(ORG_A, { apiKey: 'k', callrailAccountId: 'ACC-1' }))
+        it('marks alreadyConnected true only for a company this ORG already has a live (non-revoked) row for', async () => {
+            seedAccount({ organisation_id: ORG_A, id: 'acc-live', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford' });
+            seedAccount({ organisation_id: ORG_A, id: 'acc-revoked', external_account_id: 'CR-2', webhook_token: 'tok-2', label: 'Old', status: 'revoked' });
+            listAccountsMock.mockResolvedValueOnce([{ id: 'ACC-1', name: 'Account' }]);
+            listCompaniesMock.mockResolvedValueOnce([
+                { id: 'CR-1', name: 'Ashford' },   // live row exists — already connected
+                { id: 'CR-2', name: 'Old' },        // revoked row — reconnectable, NOT "already connected"
+                { id: 'CR-3', name: 'New' },        // never connected
+            ]);
+
+            const out = await svc.discoverAccounts(ORG_A, { apiKey: 'k' });
+
+            const byId = Object.fromEntries(out.accounts[0].companies.map((c) => [c.id, c.alreadyConnected]));
+            expect(byId).toEqual({ 'CR-1': true, 'CR-2': false, 'CR-3': false });
+        });
+
+        it("cross-org isolation: another org's connected company never marks alreadyConnected for THIS org", async () => {
+            seedAccount({ organisation_id: ORG_B, id: 'acc-b1', external_account_id: 'CR-1', webhook_token: 'tok-b', label: 'B' });
+            listAccountsMock.mockResolvedValueOnce([{ id: 'ACC-1', name: 'Account' }]);
+            listCompaniesMock.mockResolvedValueOnce([{ id: 'CR-1', name: 'Ashford' }]);
+
+            const out = await svc.discoverAccounts(ORG_A, { apiKey: 'k' });
+
+            expect(out.accounts[0].companies[0].alreadyConnected).toBe(false);
+        });
+
+        it('one account\'s companies lookup failing is reported on THAT account, not thrown — other accounts still come back', async () => {
+            listAccountsMock.mockResolvedValueOnce([{ id: 'ACC-1', name: 'Good' }, { id: 'ACC-2', name: 'Bad' }]);
+            listCompaniesMock.mockImplementation(async (key, accountId) => {
+                if (accountId === 'ACC-2') throw new Error('CallRail account ACC-2 was not found. Check the account ID and try again.');
+                return [{ id: 'CR-1', name: 'Ashford' }];
+            });
+
+            const out = await svc.discoverAccounts(ORG_A, { apiKey: 'k' });
+
+            expect(out.accounts).toHaveLength(2);
+            const good = out.accounts.find((a) => a.accountId === 'ACC-1');
+            const bad = out.accounts.find((a) => a.accountId === 'ACC-2');
+            expect(good.companies).toEqual([{ id: 'CR-1', name: 'Ashford', alreadyConnected: false }]);
+            expect(bad.companies).toEqual([]);
+            expect(bad.error).toMatch(/not found/i);
+        });
+
+        it('rejects with 400 (not 502) when the key itself is bad (401/403)', async () => {
+            const err = new Error('CallRail rejected this API key. Check the key and try again.');
+            err.callrailStatus = 401;
+            listAccountsMock.mockRejectedValueOnce(err);
+            await expect(svc.discoverAccounts(ORG_A, { apiKey: 'bad' })).rejects.toMatchObject({ statusCode: 400 });
+        });
+
+        it('rejects with 502 (not 400) when CallRail itself is having trouble (5xx)', async () => {
+            const err = new Error('CallRail could not list accounts right now (HTTP 503). Try again shortly.');
+            err.callrailStatus = 503;
+            listAccountsMock.mockRejectedValueOnce(err);
+            await expect(svc.discoverAccounts(ORG_A, { apiKey: 'k' })).rejects.toMatchObject({ statusCode: 502 });
+        });
+
+        it('rejects an empty apiKey without ever calling the provider', async () => {
+            await expect(svc.discoverAccounts(ORG_A, { apiKey: '  ' })).rejects.toMatchObject({ statusCode: 400 });
+            expect(listAccountsMock).not.toHaveBeenCalled();
+        });
+
+        it('a key with zero reachable accounts returns an empty list, not an error', async () => {
+            listAccountsMock.mockResolvedValueOnce([]);
+            const out = await svc.discoverAccounts(ORG_A, { apiKey: 'k' });
+            expect(out).toEqual({ accounts: [] });
+            expect(listCompaniesMock).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('bulkConnect — Add-company step 2', () => {
+        it('connects every entry via addAccount and reports ok:true per company', async () => {
+            const out = await svc.bulkConnect(ORG_A, {
+                apiKey: 'k',
+                companies: [
+                    { accountId: 'ACC-1', companyId: 'CR-1', label: 'Ashford' },
+                    { accountId: 'ACC-1', companyId: 'CR-2', label: 'Bexleyheath' },
+                ],
+            });
+            expect(out.results).toHaveLength(2);
+            expect(out.results.every((r) => r.ok)).toBe(true);
+            expect(out.results.map((r) => r.companyId).sort()).toEqual(['CR-1', 'CR-2']);
+            expect(accountsStore).toHaveLength(2);
+        });
+
+        it('one bad company does not abort the rest — a 409 duplicate reports ok:false without discarding the others', async () => {
+            seedAccount({ organisation_id: ORG_A, id: 'acc-1', external_account_id: 'CR-1', webhook_token: 'tok-1', label: 'Ashford', config: { account_id: 'ACC-1' } });
+
+            const out = await svc.bulkConnect(ORG_A, {
+                apiKey: 'k',
+                companies: [
+                    { accountId: 'ACC-1', companyId: 'CR-1', label: 'Ashford again' }, // already connected -> 409
+                    { accountId: 'ACC-1', companyId: 'CR-2', label: 'Bexleyheath' },   // fine
+                ],
+            });
+
+            const failed = out.results.find((r) => r.companyId === 'CR-1');
+            const ok = out.results.find((r) => r.companyId === 'CR-2');
+            expect(failed.ok).toBe(false);
+            expect(failed.error).toMatch(/already connected/i);
+            expect(ok.ok).toBe(true);
+            // The good entry was still persisted despite the other failing.
+            expect(accountsStore.some((a) => a.external_account_id === 'CR-2')).toBe(true);
+        });
+
+        it('a verify() failure on one company reports ok:false with the key-safe message, others unaffected, and the key is never leaked', async () => {
+            const secretKey = 'sk-super-secret-do-not-leak-123';
+            verifyMock.mockImplementation(async (key, accountId, companyId) => {
+                if (companyId === 'CR-BAD') throw new Error('CallRail rejected this API key for account ACC-1. Check the key and account ID and try again.');
+                return 'Verified Name';
+            });
+
+            const out = await svc.bulkConnect(ORG_A, {
+                apiKey: secretKey,
+                companies: [
+                    { accountId: 'ACC-1', companyId: 'CR-BAD', label: 'Bad' },
+                    { accountId: 'ACC-1', companyId: 'CR-GOOD', label: 'Good' },
+                ],
+            });
+
+            const bad = out.results.find((r) => r.companyId === 'CR-BAD');
+            const good = out.results.find((r) => r.companyId === 'CR-GOOD');
+            expect(bad.ok).toBe(false);
+            expect(bad.error).not.toContain(secretKey);
+            expect(bad.error).toMatch(/rejected this API key/i);
+            expect(JSON.stringify(out)).not.toContain(secretKey);
+            expect(good.ok).toBe(true);
+        });
+
+        it('a non-agency caller omitting practiceId on every entry connects companies unmapped', async () => {
+            const out = await svc.bulkConnect(ORG_A, {
+                apiKey: 'k',
+                companies: [{ accountId: 'ACC-1', companyId: 'CR-1', label: 'Ashford' }],
+            });
+            expect(out.results[0].ok).toBe(true);
+            expect(out.results[0].account.practiceId).toBeNull();
+        });
+
+        it('an agency caller may set practiceId per entry, validated against the org', async () => {
+            const out = await svc.bulkConnect(ORG_A, {
+                apiKey: 'k',
+                companies: [{ accountId: 'ACC-1', companyId: 'CR-1', label: 'Ashford', practiceId: 'practice-1' }],
+            });
+            expect(out.results[0].ok).toBe(true);
+            expect(out.results[0].account.practiceId).toBe('practice-1');
+        });
+
+        it('rejects an empty apiKey without connecting anything', async () => {
+            await expect(svc.bulkConnect(ORG_A, { apiKey: '', companies: [{ accountId: 'ACC-1', companyId: 'CR-1' }] }))
                 .rejects.toMatchObject({ statusCode: 400 });
+            expect(accountsStore).toHaveLength(0);
+        });
+
+        it('rejects an empty companies array without calling the provider', async () => {
+            await expect(svc.bulkConnect(ORG_A, { apiKey: 'k', companies: [] })).rejects.toMatchObject({ statusCode: 400 });
+            expect(verifyMock).not.toHaveBeenCalled();
+        });
+
+        it("cross-org isolation: bulk-connecting in ORG_A never touches ORG_B's rows", async () => {
+            seedAccount({ organisation_id: ORG_B, id: 'acc-b1', external_account_id: 'CR-1', webhook_token: 'tok-b', label: 'B' });
+            const out = await svc.bulkConnect(ORG_A, {
+                apiKey: 'k',
+                companies: [{ accountId: 'ACC-1', companyId: 'CR-1', label: 'Ashford' }],
+            });
+            expect(out.results[0].ok).toBe(true);
+            expect(accountsStore.filter((a) => a.organisation_id === ORG_A)).toHaveLength(1);
+            expect(accountsStore.find((a) => a.id === 'acc-b1').organisation_id).toBe(ORG_B); // untouched
         });
     });
 
@@ -827,7 +1002,8 @@ describe('integrationController — CallRail accounts', () => {
     beforeEach(async () => {
         vi.resetModules();
         serviceMock = {
-            listCompanies: vi.fn(async () => ([{ id: 'CR-1', name: 'Ashford' }])),
+            discoverAccounts: vi.fn(async () => ({ accounts: [{ accountId: 'ACC-1', accountName: 'Account', companies: [{ id: 'CR-1', name: 'Ashford', alreadyConnected: false }] }] })),
+            bulkConnect: vi.fn(async (orgId, body) => ({ results: (body.companies ?? []).map((c) => ({ companyId: c.companyId, ok: true, account: { id: 'acc-1', ...c } })) })),
             addAccount: vi.fn(async (orgId, body) => ({ id: 'acc-1', ...body })),
             updateAccount: vi.fn(async (orgId, id, body) => ({ id, ...body })),
             removeAccount: vi.fn(async () => ({ removed: true })),
@@ -845,14 +1021,50 @@ describe('integrationController — CallRail accounts', () => {
         expect(res.json).toHaveBeenCalledWith({ connected: false, accounts: [], sourceBreakdown: [] });
     });
 
-    it('callrailListCompanies passes the session org id and body through, wrapped in { companies }', async () => {
+    it('callrailDiscover passes the session org id and body through, using the service response as-is', async () => {
         const res = mockRes();
-        await controller.callrailListCompanies({
+        await controller.callrailDiscover({
             user: { organisation_id: 'org-real' },
-            body: { apiKey: 'k', callrailAccountId: 'ACC-1' },
+            body: { apiKey: 'k' },
         }, res);
-        expect(serviceMock.listCompanies).toHaveBeenCalledWith('org-real', { apiKey: 'k', callrailAccountId: 'ACC-1' });
-        expect(res.json).toHaveBeenCalledWith({ companies: [{ id: 'CR-1', name: 'Ashford' }] });
+        expect(serviceMock.discoverAccounts).toHaveBeenCalledWith('org-real', { apiKey: 'k' });
+        expect(res.json).toHaveBeenCalledWith({ accounts: [{ accountId: 'ACC-1', accountName: 'Account', companies: [{ id: 'CR-1', name: 'Ashford', alreadyConnected: false }] }] });
+    });
+
+    it('callrailBulkConnect: a non-agency owner sending a practiceId on ANY entry is rejected with 403, and the service is never called', async () => {
+        const res = mockRes();
+        await controller.callrailBulkConnect({
+            user: { organisation_id: 'org-1', is_agency_admin: false },
+            body: { apiKey: 'k', companies: [{ accountId: 'ACC-1', companyId: 'CR-1' }, { accountId: 'ACC-1', companyId: 'CR-2', practiceId: 'practice-1' }] },
+        }, res);
+        expect(res.status).toHaveBeenCalledWith(403);
+        expect(serviceMock.bulkConnect).not.toHaveBeenCalled();
+    });
+
+    it('callrailBulkConnect: a non-agency owner may still connect companies when NO entry carries practiceId', async () => {
+        const res = mockRes();
+        await controller.callrailBulkConnect({
+            user: { organisation_id: 'org-1', is_agency_admin: false },
+            body: { apiKey: 'k', companies: [{ accountId: 'ACC-1', companyId: 'CR-1' }] },
+        }, res);
+        expect(serviceMock.bulkConnect).toHaveBeenCalled();
+        expect(res.status).not.toHaveBeenCalledWith(403);
+    });
+
+    it('callrailBulkConnect: an agency actor may set practiceId per entry, and the session org id is used, never the body', async () => {
+        const res = mockRes();
+        await controller.callrailBulkConnect({
+            user: { organisation_id: 'org-real', is_agency_admin: true },
+            body: {
+                apiKey: 'k',
+                organisation_id: 'org-spoofed',
+                companies: [{ accountId: 'ACC-1', companyId: 'CR-1', practiceId: '22222222-2222-4222-8222-222222222222' }],
+            },
+        }, res);
+        expect(serviceMock.bulkConnect).toHaveBeenCalledWith('org-real', expect.objectContaining({
+            apiKey: 'k',
+            companies: [expect.objectContaining({ practiceId: '22222222-2222-4222-8222-222222222222' })],
+        }));
     });
 
     it('callrailAccountCreate: a non-agency owner sending a practiceId is rejected with 403, and the service is never called', async () => {

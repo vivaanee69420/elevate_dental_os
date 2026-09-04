@@ -7,20 +7,24 @@
 // singleton key-paste route, and there is no owner-maintained tracking-number
 // map — a call's practice follows from the company that fetched it.
 //
-// CallRail's hierarchy is Account -> Company -> Calls. Add-company is
-// therefore two steps: paste the API key + CallRail ACCOUNT id, then PICK a
-// company from the list CallRail itself returns — the owner never types an
-// opaque company id by hand, which removes the whole class of
-// paste-the-wrong-id error this integration originally shipped with.
+// Add-company is KEY-ONLY DISCOVERY: the owner pastes ONE CallRail API key —
+// which may cover several CallRail accounts (an agency-style key) — and the
+// backend resolves EVERY account and company it can reach
+// (discoverCallRailAccounts). The owner ticks the companies they want,
+// assigns a practice to each (agency actor only), and connects them all in
+// one request (bulkConnectCallRailAccounts). No account id or company id is
+// ever typed by hand, which removes the whole class of paste-the-wrong-id
+// error this integration originally shipped with — and unblocks an owner who
+// genuinely has no account id to hand.
 
 import { Fragment, useState } from 'react';
 import { Chip, type ChipColour } from '@/components/ui';
 import { useMe, isAgencyActor } from '@/hooks/useMe';
-import type { CallRailAccount, IntegrationStatus } from '../api';
+import type { CallRailAccount, CallRailBulkConnectEntry, CallRailDiscoveredAccount, IntegrationStatus } from '../api';
 import {
   useCallRailStatus,
-  useLookupCallRailCompanies,
-  useAddCallRailAccount,
+  useDiscoverCallRailAccounts,
+  useBulkConnectCallRailAccounts,
   useUpdateCallRailAccount,
   useRemoveCallRailAccount,
   useSyncCallRailAccount,
@@ -49,8 +53,8 @@ export default function CallRailPanel() {
   const { data: practiceData } = usePractices();
   const practices = practiceData?.practices ?? [];
 
-  const lookup = useLookupCallRailCompanies();
-  const add = useAddCallRailAccount();
+  const discover = useDiscoverCallRailAccounts();
+  const bulkConnect = useBulkConnectCallRailAccounts();
   const update = useUpdateCallRailAccount();
   const remove = useRemoveCallRailAccount();
   const sync = useSyncCallRailAccount();
@@ -58,17 +62,15 @@ export default function CallRailPanel() {
   const disconnectAll = useDisconnectCallRail();
 
   const [showAdd, setShowAdd] = useState(false);
-  // Add-company step 1 (account) fields.
+  // Add-company step 1 (key-only discovery) fields.
   const [apiKey, setApiKey] = useState('');
-  const [accountId, setAccountId] = useState('');
-  const [lookupErr, setLookupErr] = useState<string | null>(null);
-  // Add-company step 2 (pick a company) fields.
-  const [stage, setStage] = useState<'account' | 'company'>('account');
-  const [companies, setCompanies] = useState<{ id: string; name: string }[]>([]);
-  const [companyId, setCompanyId] = useState('');
-  const [label, setLabel] = useState('');
-  const [practiceId, setPracticeId] = useState('');
-  const [addErr, setAddErr] = useState<string | null>(null);
+  const [discoverErr, setDiscoverErr] = useState<string | null>(null);
+  // Add-company step 2 (pick companies from what discovery found). null =
+  // discovery not yet run; [] = ran, found zero accounts.
+  const [discovered, setDiscovered] = useState<CallRailDiscoveredAccount[] | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [practiceByCompany, setPracticeByCompany] = useState<Record<string, string>>({});
+  const [connectErr, setConnectErr] = useState<string | null>(null);
 
   const [rowErr, setRowErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -103,67 +105,104 @@ export default function CallRailPanel() {
 
   function resetAddForm() {
     setApiKey('');
-    setAccountId('');
-    setCompanies([]);
-    setCompanyId('');
-    setLabel('');
-    setPracticeId('');
-    setStage('account');
-    setLookupErr(null);
-    setAddErr(null);
+    setDiscoverErr(null);
+    setDiscovered(null);
+    setSelectedIds(new Set());
+    setPracticeByCompany({});
+    setConnectErr(null);
   }
 
-  async function submitLookup() {
-    setLookupErr(null);
-    if (!apiKey.trim() || !accountId.trim()) return;
+  async function submitDiscover() {
+    setDiscoverErr(null);
+    if (!apiKey.trim()) return;
     try {
-      const res = await lookup.mutateAsync({ apiKey: apiKey.trim(), callrailAccountId: accountId.trim() });
-      if (res.companies.length === 0) {
-        setLookupErr('CallRail returned no companies for this account.');
-        return;
-      }
-      setCompanies(res.companies);
-      setCompanyId(res.companies[0].id);
-      setLabel(res.companies[0].name);
-      setStage('company');
+      const res = await discover.mutateAsync({ apiKey: apiKey.trim() });
+      // Empty results (zero accounts) are shown inline in the results view
+      // below, not as an error — the key is valid, it just can't see anything.
+      setDiscovered(res.accounts);
+      setSelectedIds(new Set());
+      setPracticeByCompany({});
     } catch (e) {
-      setLookupErr((e as Error).message);
+      setDiscoverErr((e as Error).message);
     }
   }
 
-  function backToAccount() {
-    setStage('account');
-    setCompanies([]);
-    setCompanyId('');
-    setLookupErr(null);
+  function backToKey() {
+    setDiscovered(null);
+    setSelectedIds(new Set());
+    setPracticeByCompany({});
+    setDiscoverErr(null);
+    setConnectErr(null);
   }
 
-  function onPickCompany(id: string) {
-    setCompanyId(id);
-    const found = companies.find((c) => c.id === id);
-    if (found) setLabel(found.name);
+  function toggleSelected(companyId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(companyId)) next.delete(companyId);
+      else next.add(companyId);
+      return next;
+    });
   }
 
-  async function submitAdd() {
-    setAddErr(null);
-    if (!apiKey.trim() || !accountId.trim() || !companyId.trim() || !label.trim()) return;
+  function setPracticeForCompany(companyId: string, value: string) {
+    setPracticeByCompany((prev) => ({ ...prev, [companyId]: value }));
+  }
+
+  const selectedCount = selectedIds.size;
+
+  async function submitConnect() {
+    setConnectErr(null);
+    if (!discovered || selectedCount === 0) return;
+    const entries: CallRailBulkConnectEntry[] = [];
+    for (const acc of discovered) {
+      for (const c of acc.companies) {
+        if (!selectedIds.has(c.id)) continue;
+        entries.push({
+          accountId: acc.accountId,
+          companyId: c.id,
+          // Omitted, not sent as null, when the caller can't map: the backend
+          // 403s the whole request if ANY entry carries practiceId for a
+          // non-agency actor. A non-agency owner's companies are connected
+          // unmapped — a state the panel already renders.
+          ...(canMap ? { practiceId: practiceByCompany[c.id] || null } : {}),
+        });
+      }
+    }
+    if (entries.length === 0) return;
     try {
-      await add.mutateAsync({
-        apiKey: apiKey.trim(),
-        callrailAccountId: accountId.trim(),
-        callrailCompanyId: companyId.trim(),
-        label: label.trim(),
-        // Omitted, not sent as null, when the caller can't map: the backend
-        // 403s the whole request if practiceId is present at all for a
-        // non-agency actor. A non-agency owner's company is created unmapped
-        // — a state the panel already renders ("No practice assigned…").
-        ...(canMap ? { practiceId: practiceId || null } : {}),
+      const res = await bulkConnect.mutateAsync({ apiKey: apiKey.trim(), companies: entries });
+      const failed = res.results.filter((r) => !r.ok);
+      const okCount = res.results.length - failed.length;
+
+      // Mark succeeded companies as connected locally (they leave the
+      // selectable list) and drop them from the selection, so a partial
+      // failure never leaves a company looking both "selected" and
+      // "already connected".
+      const okIds = new Set(res.results.filter((r) => r.ok).map((r) => r.companyId));
+      setDiscovered((prev) => prev?.map((acc) => ({
+        ...acc,
+        companies: acc.companies.map((c) => (okIds.has(c.id) ? { ...c, alreadyConnected: true } : c)),
+      })) ?? null);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const id of okIds) next.delete(id);
+        return next;
       });
-      resetAddForm();
-      setShowAdd(false);
-      setNotice('Company connected — pulling recent call history now. Refresh in a moment, or use Sync now.');
+
+      if (failed.length === 0) {
+        resetAddForm();
+        setShowAdd(false);
+        setNotice(`Connected ${okCount} compan${okCount === 1 ? 'y' : 'ies'} — pulling recent call history now. Refresh in a moment, or use Sync now.`);
+      } else {
+        const companyName = (id: string) => discovered?.flatMap((a) => a.companies).find((c) => c.id === id)?.name ?? id;
+        const detail = failed.map((f) => `${companyName(f.companyId)}: ${f.error}`).join(' · ');
+        setConnectErr(`${okCount} connected, ${failed.length} failed — ${detail}`);
+        if (okCount > 0) {
+          setNotice(`Connected ${okCount} compan${okCount === 1 ? 'y' : 'ies'} — pulling recent call history now.`);
+        }
+      }
     } catch (e) {
-      setAddErr((e as Error).message);
+      setConnectErr((e as Error).message);
     }
   }
 
@@ -262,71 +301,109 @@ export default function CallRailPanel() {
     <div
       style={{
         padding: 12, border: '1px solid var(--border)', borderRadius: 8, background: '#F8FAFC',
-        display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 460,
+        display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 560,
       }}
     >
-      {stage === 'account' ? (
+      {!discovered ? (
         <>
           <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="CallRail API key" style={inp} />
-          <input type="text" value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder="CallRail account ID (e.g. ACC8154748ae…)" style={inp} />
-          {lookupErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{lookupErr}</span>}
+          {discoverErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{discoverErr}</span>}
           <button
-            onClick={submitLookup}
-            disabled={lookup.isPending || !apiKey.trim() || !accountId.trim()}
+            onClick={submitDiscover}
+            disabled={discover.isPending || !apiKey.trim()}
             style={{
               alignSelf: 'flex-start', padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6,
               border: 'none', background: 'var(--brand)', color: 'white',
-              cursor: 'pointer', opacity: (lookup.isPending || !apiKey.trim() || !accountId.trim()) ? 0.5 : 1,
+              cursor: 'pointer', opacity: (discover.isPending || !apiKey.trim()) ? 0.5 : 1,
             }}
           >
-            {lookup.isPending ? 'Looking up…' : 'Look up companies'}
+            {discover.isPending ? 'Looking up…' : 'Find my CallRail accounts'}
           </button>
           <span className="text-ink-muted" style={{ fontSize: 10 }}>
-            The account holds every company underneath it — the next step lets you pick the right one.
+            One key can reveal several CallRail accounts — the next step lists every account and
+            company it can reach, so you pick which ones to connect.
           </span>
         </>
       ) : (
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span className="text-ink-muted" style={{ fontSize: 11 }}>Account: <code style={{ fontFamily: 'monospace' }}>{accountId}</code></span>
+            <span className="text-ink-muted" style={{ fontSize: 11 }}>
+              {discovered.length} account{discovered.length === 1 ? '' : 's'} found
+            </span>
             <button
-              onClick={backToAccount}
+              onClick={backToKey}
               style={{ padding: '3px 8px', fontSize: 11, border: '1px solid var(--border)', borderRadius: 6, background: 'white', cursor: 'pointer' }}
             >
-              Change
+              Change key
             </button>
           </div>
-          <select value={companyId} onChange={(e) => onPickCompany(e.target.value)} style={inp}>
-            {companies.map((c) => (
-              <option key={c.id} value={c.id}>{c.name} ({c.id})</option>
-            ))}
-          </select>
-          <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Label (e.g. Bexleyheath)" style={inp} />
-          {canMap ? (
-            <select value={practiceId} onChange={(e) => setPracticeId(e.target.value)} style={inp}>
-              <option value="">No practice yet — assign later</option>
-              {practices.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          ) : (
+
+          {discovered.length === 0 && (
+            <span style={{ fontSize: 12 }}>This key cannot see any CallRail accounts.</span>
+          )}
+
+          {!canMap && discovered.length > 0 && (
             <span className="text-ink-muted" style={{ fontSize: 10 }}>
-              Practice mapping is managed by your agency admin. This company is added unmapped — its
-              calls won&rsquo;t be attributed until it&rsquo;s mapped.
+              Practice mapping is managed by your agency admin. Companies you connect here are added
+              unmapped — their calls won&rsquo;t be attributed until they&rsquo;re mapped.
             </span>
           )}
-          {addErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{addErr}</span>}
-          <button
-            onClick={submitAdd}
-            disabled={add.isPending || !companyId.trim() || !label.trim()}
-            style={{
-              alignSelf: 'flex-start', padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6,
-              border: 'none', background: 'var(--brand)', color: 'white',
-              cursor: 'pointer', opacity: (add.isPending || !companyId.trim() || !label.trim()) ? 0.5 : 1,
-            }}
-          >
-            {add.isPending ? 'Connecting…' : 'Connect company'}
-          </button>
+
+          {discovered.map((acc) => (
+            <div key={acc.accountId} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '8px 10px' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{acc.accountName}</div>
+              {acc.error && (
+                <div style={{ fontSize: 10, color: 'var(--danger, #b91c1c)', marginBottom: 6 }}>
+                  Could not list this account&rsquo;s companies: {acc.error}
+                </div>
+              )}
+              {acc.companies.length === 0 && !acc.error && (
+                <div className="text-ink-muted" style={{ fontSize: 10 }}>No companies under this account.</div>
+              )}
+              {acc.companies.map((c) => (
+                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(c.id)}
+                    disabled={c.alreadyConnected}
+                    onChange={() => toggleSelected(c.id)}
+                  />
+                  <span style={{ flex: 1, fontSize: 12, color: c.alreadyConnected ? 'var(--ink-muted, #64748b)' : 'inherit' }}>
+                    {c.name}
+                    {c.alreadyConnected && ' — already connected'}
+                  </span>
+                  {canMap && !c.alreadyConnected && (
+                    <select
+                      value={practiceByCompany[c.id] ?? ''}
+                      onChange={(e) => setPracticeForCompany(c.id, e.target.value)}
+                      style={{ ...inp, maxWidth: 180 }}
+                    >
+                      <option value="">No practice yet</option>
+                      {practices.map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+
+          {connectErr && <span style={{ fontSize: 11, color: 'var(--danger, #b91c1c)' }}>{connectErr}</span>}
+
+          {discovered.length > 0 && (
+            <button
+              onClick={submitConnect}
+              disabled={bulkConnect.isPending || selectedCount === 0}
+              style={{
+                alignSelf: 'flex-start', padding: '7px 16px', fontSize: 12, fontWeight: 700, borderRadius: 6,
+                border: 'none', background: 'var(--brand)', color: 'white',
+                cursor: 'pointer', opacity: (bulkConnect.isPending || selectedCount === 0) ? 0.5 : 1,
+              }}
+            >
+              {bulkConnect.isPending ? 'Connecting…' : `Connect selected (${selectedCount})`}
+            </button>
+          )}
         </>
       )}
       <span className="text-ink-muted" style={{ fontSize: 10 }}>Stored encrypted at rest. Never displayed again.</span>
