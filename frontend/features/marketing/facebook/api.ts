@@ -22,6 +22,13 @@ import { api } from '@/lib/api';
 export type FacebookState =
   | 'not_connected'
   | 'never_synced'
+  // The campaign tier (ad_metrics) has real totals for this org, but THIS
+  // grain's own deep table (ad_meta_adsets/ad_meta_ads) has never received a
+  // row — the deep sync has not run yet, distinct from no_spend_in_window
+  // (both tables have synced before, just nothing in this window/filter).
+  // Never returned by campaigns(), whose own table already IS ad_metrics.
+  // See facebook-report.service.js's emptyWindowState.
+  | 'detail_not_synced'
   | 'no_spend_in_window'
   | 'no_ad_id_coverage'
   | 'ok';

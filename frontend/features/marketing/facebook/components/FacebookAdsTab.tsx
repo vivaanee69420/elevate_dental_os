@@ -14,7 +14,7 @@
 // different query answering a different question (ad_metrics' campaign-day
 // rows and ad-SET coverage), so it could tell a tenant this tab was fine
 // when the ad-level sync genuinely had nothing, or vice versa. See
-// FacebookStateNotice for the five states.
+// FacebookStateNotice for the six states.
 //
 // No campaign-level filter chain either: campaignId cannot reach this
 // endpoint (FacebookQuerySchema only accepts adSetId here) — see

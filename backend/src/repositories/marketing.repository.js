@@ -196,6 +196,42 @@ export const marketingRepository = {
         return (data ?? []).length > 0;
     },
 
+    // The deep-grain analogue of hasProviderMetrics, for exactly the same
+    // reason: an empty window in ONE of the five deep-grain tables
+    // (ad_meta_adsets/ad_meta_ads/ad_google_adgroups/ad_google_ads/
+    // ad_google_keywords) is not evidence that tier has never been synced —
+    // it may simply have no spend in the current window. So
+    // google-report.service.js / facebook-report.service.js need this org's
+    // OWN never/some signal for the SPECIFIC tier they are reporting, not
+    // borrowed from campaign-grain ad_metrics (which is a separate table,
+    // separate sync, and can be healthy while a deep tier has nothing at
+    // all — see the ad-grain repository's replaceWindow, run by a distinct
+    // sync phase per grain).
+    //
+    // Deliberately living HERE rather than in ad-grain.repository.js: that
+    // file's own header states "There is no method here that selects from
+    // the five tables, and none should be added" — a rule about relation
+    // reads that can be truncated by PostgREST's 1000-row cap and summed
+    // into a fabricated gap. A .limit(1) existence probe has no rows to sum
+    // or truncate; it is the same shape of exemption hasProviderMetrics
+    // above already carries for ad_metrics, so it stays beside it rather
+    // than inside the file whose whole point is "no direct selects here".
+    async hasGrainMetrics(orgId, table) {
+        const DEEP_GRAIN_TABLES = new Set([
+            'ad_meta_adsets', 'ad_meta_ads', 'ad_google_adgroups', 'ad_google_ads', 'ad_google_keywords',
+        ]);
+        if (!DEEP_GRAIN_TABLES.has(table)) {
+            throw new Error(`hasGrainMetrics: unknown deep-grain table '${table}'`);
+        }
+        const { data, error } = await supabase_1.serviceClient
+            .from(table)
+            .select('id')
+            .eq('organisation_id', orgId)
+            .limit(1);
+        if (error) throw new Error(`${table} probe: ${error.message}`);
+        return (data ?? []).length > 0;
+    },
+
     // One provider's ad accounts with the two fields that decide whether the
     // deep pull can reach an account: platform status and currency. Those are
     // the only two that PARTITION the data — is_selected is deliberately NOT

@@ -298,6 +298,46 @@ describe('hasProviderMetrics', () => {
     });
 });
 
+// The deep-grain analogue: the SAME never-synced/quiet-window distinction,
+// but scoped to one of the five ad_meta_adsets/ad_meta_ads/ad_google_adgroups/
+// ad_google_ads/ad_google_keywords tables rather than campaign-grain
+// ad_metrics — MAJOR 2's fix so emptyWindowState can ask about the tier it is
+// actually reporting, not borrow campaign-grain's answer.
+describe('hasGrainMetrics', () => {
+    it('is org-scoped against the named table, and asks for at most one row', async () => {
+        supaRec.resultProvider = () => ({ data: [{ id: 1 }], error: null });
+        const has = await marketingRepository.hasGrainMetrics(ORG, 'ad_google_adgroups');
+        expect(has).toBe(true);
+        expect(supaRec.last.table).toBe('ad_google_adgroups');
+        expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+        expect(supaRec.last.limitN).toBe(1);
+    });
+
+    it('reports false when no row has ever landed for that table', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        expect(await marketingRepository.hasGrainMetrics(ORG, 'ad_meta_adsets')).toBe(false);
+    });
+
+    it('surfaces a read error rather than answering "never synced"', async () => {
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'statement timeout' } });
+        await expect(marketingRepository.hasGrainMetrics(ORG, 'ad_meta_ads'))
+            .rejects.toThrow(/statement timeout/);
+    });
+
+    it('works for each of the five deep-grain tables', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        for (const table of ['ad_meta_adsets', 'ad_meta_ads', 'ad_google_adgroups', 'ad_google_ads', 'ad_google_keywords']) {
+            await expect(marketingRepository.hasGrainMetrics(ORG, table)).resolves.toBe(false);
+            expect(supaRec.last.table).toBe(table);
+        }
+    });
+
+    it('refuses an unknown table before it reaches the database', async () => {
+        await expect(marketingRepository.hasGrainMetrics(ORG, 'ad_metrics'))
+            .rejects.toThrow(/unknown deep-grain table/i);
+    });
+});
+
 describe('adAccountsForProvider', () => {
     it('reads the two fields that decide deep-pull coverage, org- and provider-scoped', async () => {
         await marketingRepository.adAccountsForProvider(ORG, 'meta_ads');
