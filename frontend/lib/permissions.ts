@@ -108,6 +108,7 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   'marketing-overview': 'marketing.view',
   'marketing-campaigns': 'marketing.view',
   'marketing-facebook': 'marketing.view',
+  'marketing-google': 'marketing.view',
   'marketing-channels': 'marketing.view',
   'marketing-practices': 'marketing.view',
   'marketing-leads': 'marketing.view',

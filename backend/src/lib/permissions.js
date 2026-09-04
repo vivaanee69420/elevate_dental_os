@@ -121,6 +121,8 @@ export const PAGE_SECTION = {
   // Facebook ad reporting. Same key as the rest of Marketing, so Reception
   // (CRM only, rule 5) never sees it.
   'marketing-facebook': 'marketing.view',
+  // Google ad reporting — same key, same reasoning.
+  'marketing-google': 'marketing.view',
   'marketing-health': 'marketing.view',
   'crm-today': 'crm.view',
   'inbox': 'crm.view',
