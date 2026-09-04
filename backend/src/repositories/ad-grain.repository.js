@@ -84,17 +84,56 @@ async function pagedRpc(fn, params) {
 }
 
 export const adGrainRepository = {
+    // Rows per upsert statement.
+    //
+    // The ceiling is a statement timeout, not memory. PostgREST connects as
+    // `authenticator`, whose statement_timeout is 8s, and only SET ROLEs to
+    // service_role — role GUCs apply at session start, so service_role's own
+    // setting never binds and neither does a `SET LOCAL` inside the function
+    // (its deadline is fixed before the body runs). Measured on live data:
+    // 2,404 keyword rows wrote in about 5s and 9,341 rows blew the limit. 2,000
+    // keeps each statement in the low seconds with room for a slower night.
+    CHUNK_ROWS: 2000,
+
+    // Replace one window: delete what is there for these accounts, then write
+    // the pull back in chunks.
+    //
+    // This USED to be a single RPC doing both halves in one statement, which
+    // made the cost scale with the account's row count against a fixed
+    // timeout — it worked for a small account and silently failed for a large
+    // one, and since the deep sync is wrapped so it can never fail the campaign
+    // sync, a failure showed up only as deep tabs serving stale rows.
+    //
+    // The trade this makes: the replace is no longer one transaction, so a
+    // failure between chunks leaves a partially refreshed window. That is worse
+    // than an atomic replace and better than the write never landing at all,
+    // and it is not silent — the reconciliation endpoint compares deep-grain
+    // spend to the campaign-grain total, where a short window reads as a gap.
+    // The next nightly run replaces the window outright.
     async replaceWindow(orgId, grain, customerIds, rows) {
         assertGrain(grain);
         // An empty pull must never reach the RPC: it would delete the window
         // and write nothing back, wiping good history on a transient glitch.
         if (!Array.isArray(rows) || rows.length === 0) return 0;
         if (!Array.isArray(customerIds) || customerIds.length === 0) return 0;
-        const { data, error } = await supabase_1.serviceClient.rpc('ad_grain_replace_window', {
-            p_org: orgId, p_grain: grain, p_customer_ids: customerIds, p_rows: rows,
+
+        const del = await supabase_1.serviceClient.rpc('ad_grain_delete_window', {
+            p_org: orgId, p_grain: grain, p_customer_ids: customerIds,
         });
-        if (error) throw new Error(`ad_grain_replace_window: ${error.message}`);
-        return Number(data ?? 0);
+        if (del.error) throw new Error(`ad_grain_delete_window: ${del.error.message}`);
+
+        let written = 0;
+        for (let i = 0; i < rows.length; i += this.CHUNK_ROWS) {
+            const chunk = rows.slice(i, i + this.CHUNK_ROWS);
+            const { data, error } = await supabase_1.serviceClient.rpc('ad_grain_upsert_chunk', {
+                p_org: orgId, p_grain: grain, p_rows: chunk,
+            });
+            if (error) {
+                throw new Error(`ad_grain_upsert_chunk (rows ${i}-${i + chunk.length} of ${rows.length}): ${error.message}`);
+            }
+            written += Number(data ?? 0);
+        }
+        return written;
     },
 
     async rollup(orgId, grain, { since, until, ...filters } = {}) {

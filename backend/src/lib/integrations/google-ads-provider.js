@@ -40,7 +40,11 @@ function redirectUri() {
 // `withLogin:false` omits the MCC header — required for
 // customers:listAccessibleCustomers, which lists accounts for the AUTHENTICATED
 // credential and rejects a login-customer-id with INVALID_ARGUMENT.
-export function adsHeaders(accessToken, { withLogin = true } = {}) {
+// `loginCustomerId` is the MCC to query THROUGH, and it is per-connection, not
+// per-deployment: one tenant's accounts may sit under a manager that means
+// nothing to another tenant. The env var remains only as an operator-level
+// fallback for a single-tenant deployment; a caller-supplied id always wins.
+export function adsHeaders(accessToken, { withLogin = true, loginCustomerId = null } = {}) {
     const h = {
         Authorization: `Bearer ${accessToken}`,
         // .trim(): a stray newline in the env value yields an invalid header
@@ -48,7 +52,7 @@ export function adsHeaders(accessToken, { withLogin = true } = {}) {
         'developer-token': (process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '').trim(),
         'Content-Type': 'application/json',
     };
-    const login = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '').replace(/-/g, '');
+    const login = String(loginCustomerId ?? process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID ?? '').replace(/-/g, '');
     if (withLogin && login) h['login-customer-id'] = login;
     return h;
 }
@@ -68,9 +72,10 @@ async function persistTokenResponse(orgId, body, configPatch = {}) {
     });
 }
 
-// After consent, find which Google Ads accounts this login can reach. Returns
-// resource names like "customers/1234567890". A Manager login returns its
-// clients too; the sync skips accounts that error on a metrics query.
+// After consent, find which Google Ads accounts this login is DIRECTLY linked
+// to. Returns bare customer ids. A manager account comes back as one id and its
+// client accounts do NOT — see expandManagerAccounts, which is what turns this
+// list into the set of accounts that actually carry spend.
 export async function listAccessibleCustomers(accessToken) {
     // Pre-flight: the developer token is operator-level config, not part of OAuth.
     // OAuth can succeed (consent + token exchange) while the dev token is unset,
@@ -91,6 +96,81 @@ export async function listAccessibleCustomers(accessToken) {
         throw new Error(googleAdsErrorMessage(body, res.status, 'listAccessibleCustomers'));
     }
     return (body.resourceNames ?? []).map((rn) => String(rn).split('/')[1]).filter(Boolean);
+}
+
+// The GAQL that lists everything beneath a manager. customer_client returns the
+// WHOLE subtree, not just direct children, so one query per accessible manager
+// reaches a nested hierarchy too. Run against a non-manager it returns exactly
+// one row — itself — which is why this is safe to run on every accessible id
+// without first knowing which of them are managers.
+const CUSTOMER_CLIENT_GAQL = [
+    'SELECT customer_client.id, customer_client.descriptive_name,',
+    'customer_client.manager, customer_client.level, customer_client.currency_code',
+    "FROM customer_client WHERE customer_client.status = 'ENABLED'",
+].join(' ');
+
+// listAccessibleCustomers returns ONLY the accounts directly linked to the
+// authenticated Google user. It does NOT return a manager's clients. That gap
+// cost this product six weeks of Ashford and Barnet spend: their access moved
+// under the "GM Dental - Practice Accounts" MCC, listAccessibleCustomers
+// stopped naming them, and the sync went on reporting `active` because the one
+// account still linked directly (Rochester) kept returning rows. A partial pull
+// that looks healthy is worse than a failed one, so the account set is now
+// resolved through the hierarchy rather than assumed from the direct grants.
+//
+// Returns { customerIds, loginByCustomer }: every non-manager account reachable
+// by this credential, and for each one the manager id that must be sent as
+// login-customer-id to query it. An account linked directly maps to nothing and
+// is queried without the header. A direct link wins over a manager route, since
+// it is the shorter path and needs no extra permission.
+// `skip` holds ids already known to be permanently unusable (a manager that
+// serves no metrics, a deactivated account). Probing them would spend exactly
+// the doomed request per night that the caller's skip list exists to prevent.
+export async function expandManagerAccounts(accessToken, accessibleIds, { skip = new Set() } = {}) {
+    const direct = new Set((accessibleIds ?? []).map(String).filter((id) => !skip.has(id)));
+    const loginByCustomer = {};
+    const found = new Set();
+    const managers = new Set();
+
+    for (const id of direct) {
+        let body;
+        try {
+            const res = await fetchWithApiVersion(
+                (v) => `${apiBase()}/${v}/customers/${id}/googleAds:search`,
+                {
+                    method: 'POST',
+                    headers: adsHeaders(accessToken, { loginCustomerId: id }),
+                    body: JSON.stringify({ query: CUSTOMER_CLIENT_GAQL }),
+                },
+            );
+            body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(googleAdsErrorMessage(body, res.status, 'customer_client'));
+        } catch (err) {
+            // A disabled or unreachable account cannot be expanded. Skip it —
+            // it is already in `direct`, and the metrics query will classify it.
+            console.error('[google_ads] expand %s failed: %s', id, err.message);
+            continue;
+        }
+        for (const row of body.results ?? []) {
+            const c = row.customerClient ?? {};
+            const childId = String(c.id ?? '');
+            if (!childId) continue;
+            if (c.manager) { managers.add(childId); continue; }
+            found.add(childId);
+            // Only route through the manager when there is no direct link.
+            if (childId !== id && !direct.has(childId) && !loginByCustomer[childId]) {
+                loginByCustomer[childId] = String(id);
+            }
+        }
+    }
+
+    // Keep every directly-linked id even if the expansion could not confirm it
+    // (a failed expansion must never shrink the account set). Managers are
+    // dropped: they serve no metrics, and carrying them only buys a guaranteed
+    // per-night error on each one.
+    for (const id of direct) if (!managers.has(id)) found.add(id);
+
+    return { customerIds: [...found], loginByCustomer };
 }
 
 // Google Ads REST errors bury the actionable reason in
@@ -180,7 +260,21 @@ export const GoogleAdsProvider = {
             await integrationsRepository.markFailed(orgId, 'google_ads', 'NO_AD_ACCOUNT');
             throw new Error('NO_AD_ACCOUNT');
         }
-        await persistTokenResponse(orgId, body, { customer_ids: customerIds });
+        // Expand managers into their client accounts. Non-fatal: a failure here
+        // leaves the direct grants, which is exactly the old behaviour.
+        let loginByCustomer = {};
+        try {
+            const expanded = await expandManagerAccounts(body.access_token, customerIds);
+            customerIds = expanded.customerIds;
+            loginByCustomer = expanded.loginByCustomer;
+        } catch (err) {
+            console.error('[google_ads] manager expansion failed at connect:', err.message);
+        }
+        if (customerIds.length === 0) {
+            await integrationsRepository.markFailed(orgId, 'google_ads', 'NO_AD_ACCOUNT');
+            throw new Error('NO_AD_ACCOUNT');
+        }
+        await persistTokenResponse(orgId, body, { customer_ids: customerIds, customer_logins: loginByCustomer });
         // Seed the account dimension with the ids; the sync enriches each row
         // with descriptive_name + currency from the customer resource. Selection
         // defaults to all-selected.

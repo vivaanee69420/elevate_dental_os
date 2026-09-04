@@ -227,9 +227,24 @@ export async function syncGoogleDeep(orgId, { accessToken, customerIds, since, u
         // Replace ONLY for accounts that actually returned rows. An empty 200 —
         // report not ready, throttle, momentary access loss — must not trigger
         // a destructive delete of good history.
-        counts[stream.grain] = rows.length
-            ? await adGrainRepository.replaceWindow(orgId, stream.grain, cids, rows)
-            : 0;
+        //
+        // ONE CALL PER ACCOUNT, not one per grain. Every account's rows used to
+        // go up in a single jsonb argument, so the payload grew with the number
+        // of connected accounts while the RPC's statement_timeout stayed at 60s.
+        // That worked at one account and failed at three: a 92-day keyword pull
+        // for three accounts timed out, and because the deep sync is wrapped so
+        // it can never fail the campaign sync, the only symptom was deep tabs
+        // quietly serving stale rows. Per-account is equivalent — the RPC's
+        // DELETE is already scoped to `customer_id = ANY(cids)` — and it bounds
+        // each transaction by ONE account's size instead of the whole org's, so
+        // connecting another practice cannot push the write over the limit.
+        let n = 0;
+        for (const cid of cids) {
+            const forCustomer = rows.filter((r) => String(r.customer_id) === String(cid));
+            if (!forCustomer.length) continue;
+            n += await adGrainRepository.replaceWindow(orgId, stream.grain, [cid], forCustomer);
+        }
+        counts[stream.grain] = n;
     }
     return { counts, skipped };
 }
