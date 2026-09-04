@@ -46,8 +46,15 @@ const COLUMNS: Column<GoogleKeywordRow>[] = [
     render: (r) => (
       <span className="font-medium text-brand">
         {r.name ?? r.id ?? 'Unnamed keyword'}
-        {r.campaignName && (
-          <span className="block text-[11px] font-normal text-ink-muted">{r.campaignName}</span>
+        {/* MINOR 5: campaign AND ad group, not campaign alone. Google reuses
+            a keyword's criterion id across ad groups, so an unfiltered
+            listing can legitimately render the SAME keyword text several
+            times under the SAME campaign with different numbers — the ad
+            group is the only thing that tells those rows apart. */}
+        {(r.campaignName || r.parentName) && (
+          <span className="block text-[11px] font-normal text-ink-muted">
+            {[r.campaignName, r.parentName].filter(Boolean).join(' · ')}
+          </span>
         )}
       </span>
     ),

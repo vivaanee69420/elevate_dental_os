@@ -582,6 +582,75 @@ describe('keywords(): campaignId and parentId (ad group id) are both optional fi
 });
 
 // ===========================================================================
+// MINOR 5: ads() and keywords() rows carry the parent AD GROUP's name, not
+// just the campaign's. ad_grain_rollup groups by (entity_id, parent_id), and
+// Google reuses a keyword's criterion id across ad groups, so an unfiltered
+// listing can legitimately render the same entity_id under the SAME campaign
+// several times with different numbers — only the ad group disambiguates
+// them, and campaignName alone could not.
+// ===========================================================================
+describe('ads()/keywords(): parent ad group name (MINOR 5)', () => {
+    it('ads(): attaches the parent ad group name, resolved from the google_adgroup grain', async () => {
+        adGrainRepository.rollup.mockImplementation(async (_orgId, grain) => {
+            if (grain === 'google_ad') return [adRow({ parent_id: 'AG1' })];
+            if (grain === 'google_adgroup') return [adGroupRow({ entity_id: 'AG1', entity_name: 'Implants UK' })];
+            return [];
+        });
+        const out = await googleReportService.ads(ORG, WIN);
+        expect(out.rows[0].parentId).toBe('AG1');
+        expect(out.rows[0].parentName).toBe('Implants UK');
+    });
+
+    it('ads(): parentName is null, not undefined/absent, when it cannot be resolved', async () => {
+        adGrainRepository.rollup.mockImplementation(async (_orgId, grain) => {
+            if (grain === 'google_ad') return [adRow({ parent_id: 'AG_UNKNOWN' })];
+            if (grain === 'google_adgroup') return [adGroupRow({ entity_id: 'AG1' })];
+            return [];
+        });
+        const out = await googleReportService.ads(ORG, WIN);
+        expect(out.rows[0].parentName).toBeNull();
+    });
+
+    it('keywords(): disambiguates the SAME keyword reused across two ad groups by parentName', async () => {
+        adGrainRepository.keywordRollup.mockResolvedValue([
+            keywordRow({ entity_id: 'KW1', parent_id: 'AG1' }),
+            keywordRow({ entity_id: 'KW1', parent_id: 'AG2' }),
+        ]);
+        adGrainRepository.rollup.mockImplementation(async (_orgId, grain) => (grain === 'google_adgroup' ? [
+            adGroupRow({ entity_id: 'AG1', entity_name: 'Implants UK' }),
+            adGroupRow({ entity_id: 'AG2', entity_name: 'Implants US' }),
+        ] : []));
+        const out = await googleReportService.keywords(ORG, WIN);
+        const byParent = Object.fromEntries(out.rows.map((r) => [r.parentId, r.parentName]));
+        expect(byParent).toEqual({ AG1: 'Implants UK', AG2: 'Implants US' });
+    });
+
+    // The empty-window path must not pay for a lookup it will never render —
+    // parentAdGroupNames is called AFTER the empty-grainRows early return.
+    it('does not query ad-group names on the empty-window path', async () => {
+        adGrainRepository.rollup.mockResolvedValue([]);
+        await googleReportService.ads(ORG, WIN);
+        expect(adGrainRepository.rollup).toHaveBeenCalledTimes(1);
+        expect(adGrainRepository.rollup).toHaveBeenCalledWith(ORG, 'google_ad', expect.anything());
+    });
+
+    // The ad-group name lookup takes practiceId/campaignId, NEVER the
+    // ad/keyword-tier `parentId` argument: on the 'google_adgroup' grain,
+    // parent_id means an ad group's own PARENT (its campaign) — passing an ad
+    // GROUP id through as if it meant the same thing would filter by an id
+    // that matches no campaign and silently return zero ad-group names.
+    it('passes practiceId/campaignId (never the ad-tier parentId) to the ad-group name lookup', async () => {
+        adGrainRepository.rollup.mockImplementation(async (_orgId, grain) => (
+            grain === 'google_ad' ? [adRow({ parent_id: 'AG1' })] : [adGroupRow({ entity_id: 'AG1' })]
+        ));
+        await googleReportService.ads(ORG, { ...WIN, campaignId: 'CMP1', parentId: 'AG1' });
+        const groupCall = adGrainRepository.rollup.mock.calls.find((c) => c[1] === 'google_adgroup');
+        expect(groupCall[2]).toMatchObject({ campaignId: 'CMP1' });
+        expect(groupCall[2].parentId ?? null).toBeNull();
+    });
+});
+
+// ===========================================================================
 // Keyword-only fields: match type, Quality Score, the three impression-share
 // figures — plus the approximate note.
 // ===========================================================================
