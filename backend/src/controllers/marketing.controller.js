@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import { marketingService } from '../services/marketing.service.js';
 import { adReconciliationService } from '../services/ad-reconciliation.service.js';
+import { facebookReportService } from '../services/facebook-report.service.js';
 import { londonDaysAgo, londonYmd } from '../lib/tz.js';
 import { DEEP_WINDOW_DAYS } from '../lib/integrations/google-ads-deep-sync.js';
 
@@ -91,6 +92,70 @@ export async function getReconciliation(req, res, next) {
             until: q.until ?? londonYmd(),
             provider: q.provider,
         });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+// since/until are OPTIONAL: when absent the server defaults them from the
+// same helpers the sync uses (see the ReconciliationQuerySchema comment
+// above), so both sides of every comparison use one clock. There is
+// deliberately no organisation field — the org comes from
+// req.user.organisation_id, which under an agency switch is already the
+// sub-account's id. Accepting it from the request would be a cross-tenant
+// hole (M1); a test asserts a submitted organisation_id is stripped.
+export const FacebookQuerySchema = z.object({
+    since: z.string().regex(YMD_RE, 'since must be YYYY-MM-DD').optional(),
+    until: z.string().regex(YMD_RE, 'until must be YYYY-MM-DD').optional(),
+    cursor: z.string().regex(/^\d{1,9}$/).optional(),
+}).strip().refine(
+    // Only applies when BOTH are present — either one alone is filled in
+    // server-side by windowFrom() and is never inverted against itself. An
+    // inverted range (since > until) would otherwise reach
+    // campaignSpendByProvider's .gte(since).lte(until), match nothing, and
+    // get reported as state: 'never_synced' — telling a fully synced tenant
+    // they have never connected Meta. A plain string compare is correct here
+    // because YYYY-MM-DD sorts lexicographically (same reasoning as
+    // clampWindow in facebook-report.service.js) — equal since/until (a
+    // single-day selection) is a legitimate request and must be accepted.
+    (q) => !q.since || !q.until || q.since <= q.until,
+    { message: 'since must not be after until', path: ['since'] },
+);
+
+function windowFrom(q) {
+    return {
+        since: q.since ?? londonDaysAgo(DEEP_WINDOW_DAYS),
+        until: q.until ?? londonYmd(),
+    };
+}
+
+export async function getFacebookCampaigns(req, res, next) {
+    try {
+        const q = FacebookQuerySchema.parse(req.query);
+        const data = await facebookReportService.campaigns(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+export async function getFacebookAdSets(req, res, next) {
+    try {
+        const q = FacebookQuerySchema.parse(req.query);
+        const data = await facebookReportService.adSets(
+            req.user.organisation_id, req.params.campaignId,
+            { ...windowFrom(q), practiceId: practiceOf(req.query.practice_id) },
+        );
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+export async function getFacebookAds(req, res, next) {
+    try {
+        const q = FacebookQuerySchema.parse(req.query);
+        const data = await facebookReportService.ads(
+            req.user.organisation_id, req.params.adSetId,
+            { ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), cursor: q.cursor ?? null },
+        );
         res.json(data);
     } catch (err) { next(err); }
 }
