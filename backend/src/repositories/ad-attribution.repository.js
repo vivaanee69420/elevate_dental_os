@@ -4,6 +4,7 @@
 // carries an explicit .eq('organisation_id', orgId) (rule 3).
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { assertNotDuplicatePracticeMapping } from "../middleware/errors.js";
 
 // PostgREST caps a single response at db-max-rows (1000) and does it SILENTLY.
 // A 12-month window of leads would come back truncated and every total
@@ -91,6 +92,7 @@ export const adAttributionRepository = {
             .update({ practice_id: practiceId ?? null })
             .eq('organisation_id', orgId)
             .eq('id', adAccountId);
+        assertNotDuplicatePracticeMapping(error, 'Google or Meta ad account');
         if (error) throw new Error(error.message);
     },
 
