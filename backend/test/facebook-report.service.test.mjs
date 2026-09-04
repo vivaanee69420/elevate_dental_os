@@ -71,6 +71,26 @@ beforeEach(() => {
 // 92 days of spend by a year of leads — the funnel window and the deep-grain
 // window must always agree. clampWindow() is the single place that decides
 // the window every downstream call actually uses.
+describe('perUnitPence — a cost is unknowable from either end', () => {
+  it('returns null when there are no units (a cost per nothing)', () => {
+    expect(__test.perUnitPence(50_000, 0)).toBeNull();
+  });
+
+  it('returns null when there is NO SPEND against real units, never 0', () => {
+    // The dangerous direction. Ashford has 57 real leads and no Google spend
+    // rows since its sync lost account access. Returning 0 here renders
+    // "£0.00", which makes the practice with NO DATA read as the practice with
+    // the cheapest leads in the group — inverted from the truth, and a number
+    // an owner would act on by moving budget toward it.
+    expect(__test.perUnitPence(0, 57)).toBeNull();
+    expect(__test.perUnitPence(null, 57)).toBeNull();
+  });
+
+  it('still computes a real cost when both sides are real', () => {
+    expect(__test.perUnitPence(9_372_89, 235)).toBe(Math.round(937289 / 235));
+  });
+});
+
 describe('window clamping', () => {
     it('clamps a since before the deep-grain floor across all three methods, and every repository call receives the CLAMPED since — not the raw one', async () => {
         const floor = londonDaysAgo(DEEP_WINDOW_DAYS);
