@@ -63,10 +63,19 @@ export const integrationRepository = {
     // mid-sync (markRevoked nulls secrets + sets 'revoked'), the finishing sync
     // must NOT flip the row back to 'active' — that would show a credential-less
     // integration as healthy until the next nightly run self-corrects it.
-    async markSynced(orgId, provider) {
+    // `warning` records a sync that COMPLETED but did not pull everything it
+    // should have. Status stays 'active' — the connection works — but the
+    // reason is kept instead of being erased.
+    //
+    // Clearing last_error unconditionally is how a partial failure destroyed
+    // its own evidence: two practices' accounts dropped out of the accessible
+    // list, the sync pulled the remaining one, marked itself active with a
+    // clean error, and nothing anywhere said two practices had stopped
+    // reporting. It stayed that way for six weeks.
+    async markSynced(orgId, provider, warning = null) {
         const { error } = await supabase_1.serviceClient
             .from('integrations')
-            .update({ status: 'active', last_error: null, last_sync_at: new Date().toISOString() })
+            .update({ status: 'active', last_error: warning ?? null, last_sync_at: new Date().toISOString() })
             .eq('organisation_id', orgId)
             .eq('provider', provider)
             .neq('status', 'revoked');

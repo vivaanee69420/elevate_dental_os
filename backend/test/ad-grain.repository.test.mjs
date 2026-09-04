@@ -26,14 +26,41 @@ describe('grain allowlist', () => {
 });
 
 describe('replaceWindow', () => {
-    it('passes org, grain, accounts and rows through to the RPC', async () => {
+    it('deletes the window for exactly those accounts, then writes the rows', async () => {
         const rows = [{ entity_id: 'KW1' }];
-        const n = await adGrainRepository.replaceWindow(ORG, 'google_keyword', ['C1'], rows);
-        const call = supaRec.rpcCalls.find((c) => c.fn === 'ad_grain_replace_window');
-        expect(call.params).toEqual({
-            p_org: ORG, p_grain: 'google_keyword', p_customer_ids: ['C1'], p_rows: rows,
-        });
-        expect(n).toBe(7);
+        await adGrainRepository.replaceWindow(ORG, 'google_keyword', ['C1'], rows);
+
+        const del = supaRec.rpcCalls.find((c) => c.fn === 'ad_grain_delete_window');
+        expect(del.params).toEqual({ p_org: ORG, p_grain: 'google_keyword', p_customer_ids: ['C1'] });
+
+        const up = supaRec.rpcCalls.find((c) => c.fn === 'ad_grain_upsert_chunk');
+        expect(up.params).toEqual({ p_org: ORG, p_grain: 'google_keyword', p_rows: rows });
+
+        // Order matters: an append that ran before the delete would be erased
+        // by it, leaving the window empty and the sync reporting success.
+        expect(supaRec.rpcCalls.findIndex((c) => c.fn === 'ad_grain_delete_window'))
+            .toBeLessThan(supaRec.rpcCalls.findIndex((c) => c.fn === 'ad_grain_upsert_chunk'));
+    });
+
+    it('splits a large payload into chunks, deleting only once', async () => {
+        const size = adGrainRepository.CHUNK_ROWS;
+        const rows = Array.from({ length: size * 2 + 1 }, (_, i) => ({ entity_id: `KW${i}` }));
+
+        await adGrainRepository.replaceWindow(ORG, 'google_keyword', ['C1'], rows);
+
+        const deletes = supaRec.rpcCalls.filter((c) => c.fn === 'ad_grain_delete_window');
+        const chunks = supaRec.rpcCalls.filter((c) => c.fn === 'ad_grain_upsert_chunk');
+        // Deleting per chunk would wipe every chunk written before it.
+        expect(deletes).toHaveLength(1);
+        expect(chunks).toHaveLength(3);
+        // No chunk may exceed the limit — the limit is what keeps each
+        // statement inside the login role's 8s timeout, which is what this
+        // whole split exists to satisfy.
+        expect(chunks.every((c) => c.params.p_rows.length <= size)).toBe(true);
+        // Every row written exactly once: an off-by-one in the slice would
+        // silently drop or duplicate rows, and both read as wrong spend.
+        const sent = chunks.flatMap((c) => c.params.p_rows.map((r) => r.entity_id));
+        expect(sent).toEqual(rows.map((r) => r.entity_id));
     });
 
     it('does not call the database with an empty payload', async () => {
@@ -154,7 +181,12 @@ describe('cross-org isolation', () => {
         await adGrainRepository.replaceWindow(ORG, 'meta_ad', ['act1'], [{ entity_id: 'A' }]);
         await adGrainRepository.restampPractices(ORG);
 
-        expect(supaRec.rpcCalls).toHaveLength(4);
+        // replaceWindow is two RPCs now (delete, then append), so five in all.
+        // The property under test is unchanged and is the point: EVERY call
+        // this repository makes carries an organisation id. serviceClient
+        // bypasses RLS, so p_org is the only thing standing between one
+        // tenant's ad spend and another's.
+        expect(supaRec.rpcCalls).toHaveLength(5);
         for (const call of supaRec.rpcCalls) {
             expect(call.params.p_org).toBe(ORG);
         }

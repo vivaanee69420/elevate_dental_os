@@ -6,7 +6,7 @@ import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn(), markAdAccountStatus: vi.fn(), listAdAccounts: vi.fn(async () => []) },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn(), markAdAccountStatus: vi.fn(), listAdAccounts: vi.fn(async () => []), mergeConfig: vi.fn() },
 }));
 
 const { syncOneOrg, syncAllOrgs, __test } = await import('../src/lib/integrations/google-ads-sync.js');
@@ -310,9 +310,16 @@ describe('permanently-unusable customers', () => {
         const res = await syncOneOrg('org-1', freshCreds(['9990000000', '8880000000', '1112223333']));
 
         const urls = global.fetch.mock.calls.map((c) => String(c[0]));
-        expect(urls.some((u) => u.includes('/customers/9990000000/'))).toBe(false);
-        expect(urls.some((u) => u.includes('/customers/8880000000/'))).toBe(false);
-        expect(urls.some((u) => u.includes('/customers/1112223333/'))).toBe(true);
+        // No METRICS request for either — that is the doomed call this skip
+        // list exists to prevent.
+        expect(urls.some((u) => u.includes('/customers/9990000000/googleAds:searchStream'))).toBe(false);
+        expect(urls.some((u) => u.includes('/customers/8880000000/googleAds:searchStream'))).toBe(false);
+        expect(urls.some((u) => u.includes('/customers/1112223333/googleAds:searchStream'))).toBe(true);
+        // The deactivated account is not probed for hierarchy either: it can
+        // serve nothing. The manager IS probed — it serves no metrics but it is
+        // the only route to its client accounts, and skipping that probe is how
+        // two practices went six weeks with no data.
+        expect(urls.some((u) => u.includes('/customers/8880000000/googleAds:search'))).toBe(false);
         expect(res.rows).toBe(1);
     });
 
@@ -321,12 +328,25 @@ describe('permanently-unusable customers', () => {
         integrationRepository.listAdAccounts.mockResolvedValueOnce([
             { customer_id: '9990000000', status: 'manager' },
         ]);
-        global.fetch = vi.fn();
+        // An empty manager: the hierarchy probe answers, and answers with
+        // nothing but the manager itself.
+        global.fetch = vi.fn(async (url) => {
+            const u = String(url);
+            if (u.includes('customers:listAccessibleCustomers')) {
+                return { ok: true, status: 200, json: async () => ({ resourceNames: ['customers/9990000000'] }) };
+            }
+            return { ok: true, status: 200, json: async () => ({ results: [
+                { customerClient: { id: '9990000000', manager: true, level: '0' } },
+            ] }) };
+        });
 
         await expect(syncOneOrg('org-1', freshCreds(['9990000000']))).rejects.toThrow(/no usable/i);
         // Never silently reports healthy with zero rows pulled.
         expect(integrationRepository.markSynced).not.toHaveBeenCalled();
-        expect(global.fetch).not.toHaveBeenCalled();
+        // Probing the hierarchy is fine and necessary; asking a manager for
+        // metrics is the doomed call, and it must not happen.
+        const urls = global.fetch.mock.calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.includes('googleAds:searchStream'))).toBe(false);
     });
 });
 
@@ -363,5 +383,141 @@ describe('API version self-heal (sunset version)', () => {
         expect(res.rows).toBe(1);
         expect(urls.at(-1)).toMatch(/\/v26\/customers\/1110000000\/googleAds:searchStream$/);
         delete process.env.GOOGLE_ADS_API_VERSION;
+    });
+});
+
+// Regression: an account reachable ONLY through a manager.
+//
+// listAccessibleCustomers names the accounts a Google login is linked to
+// DIRECTLY. It does not name a manager's clients. When Ashford's and Barnet's
+// access moved under the "GM Dental - Practice Accounts" MCC, both dropped out
+// of that list, the sync stopped querying them entirely, and the integration
+// went on reporting `active` for six weeks because the one account still linked
+// directly kept returning rows. Nothing errored; the data simply stopped.
+describe('accounts reachable only through a manager', () => {
+    const MCC = '3325223529';
+    const CHILD = '9010336897';
+
+    // One mock standing in for three distinct Google endpoints.
+    const googleMock = () => vi.fn(async (url, init) => {
+        const u = String(url);
+        if (u.includes('customers:listAccessibleCustomers')) {
+            // The manager is the ONLY thing this credential is linked to.
+            return { ok: true, status: 200, json: async () => ({ resourceNames: [`customers/${MCC}`] }) };
+        }
+        if (u.includes('googleAds:search') && !u.includes('searchStream')) {
+            return { ok: true, status: 200, json: async () => ({ results: [
+                { customerClient: { id: MCC, descriptiveName: 'GM Dental - Practice Accounts', manager: true, level: '0' } },
+                { customerClient: { id: CHILD, descriptiveName: 'GM-Dental-Ashford', manager: false, level: '1', currencyCode: 'GBP' } },
+            ] }) };
+        }
+        return { ok: true, status: 200, json: async () => ([{ results: [
+            { campaign: { id: 7, name: 'Implants' }, segments: { date: '2026-05-10' },
+              customer: { descriptiveName: 'GM-Dental-Ashford', currencyCode: 'GBP' },
+              metrics: { costMicros: 3_000_000, impressions: 500, clicks: 20, conversions: 2 } },
+        ] }]) };
+    });
+
+    it('pulls the child account and sends the manager as login-customer-id', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = googleMock();
+
+        const res = await syncOneOrg('org-1', freshCreds([MCC]));
+
+        // The child was queried at all — this is the whole bug.
+        const streamCall = global.fetch.mock.calls
+            .find(([u]) => String(u).includes(`/customers/${CHILD}/googleAds:searchStream`));
+        expect(streamCall).toBeDefined();
+        // ...and routed through the manager. Without this header Google answers
+        // as though the account does not exist for this credential, so asserting
+        // only that the request was made would pass against a broken pull.
+        expect(streamCall[1].headers['login-customer-id']).toBe(MCC);
+        expect(res.rows).toBe(1);
+    });
+
+    it('never asks for metrics on the manager itself', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = googleMock();
+
+        await syncOneOrg('org-1', freshCreds([MCC]));
+
+        const urls = global.fetch.mock.calls.map((c) => String(c[0]));
+        expect(urls.some((u) => u.includes(`/customers/${MCC}/googleAds:searchStream`))).toBe(false);
+    });
+
+    it('persists the resolved account and its manager route for the next run', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = googleMock();
+
+        await syncOneOrg('org-1', freshCreds([MCC]));
+
+        expect(integrationRepository.mergeConfig).toHaveBeenCalledWith('org-1', 'google_ads',
+            expect.objectContaining({ customer_logins: { [CHILD]: MCC } }));
+    });
+});
+
+// The failure mode that hurt most was not an error — it was a green light.
+// A sync that pulls only part of what it should must say so, or an owner has
+// no way to tell "this practice spends nothing" from "we stopped asking".
+describe('a partial pull is never recorded as a clean one', () => {
+    const OK_STREAM = [{ results: [
+        { campaign: { id: 7, name: 'Brand' }, segments: { date: '2026-05-10' },
+          metrics: { costMicros: 3_000_000, impressions: 500, clicks: 20, conversions: 2 } },
+    ] }];
+
+    it('warns when a practice-mapped account is not in the pull set at all', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        // Barnet is mapped to a practice and carries no error status — it is
+        // simply absent from the accessible list. Nothing about this run
+        // throws, which is exactly why it went unnoticed.
+        integrationRepository.listAdAccounts.mockResolvedValueOnce([
+            { customer_id: '1112223333', status: null, practice_id: null, name: 'Rochester' },
+            { customer_id: '6110644137', status: null, practice_id: 'prac-barnet', name: 'Barnet' },
+        ]);
+        global.fetch = vi.fn(async (url) => {
+            const u = String(url);
+            if (u.includes('customers:listAccessibleCustomers')) {
+                return { ok: true, status: 200, json: async () => ({ resourceNames: ['customers/1112223333'] }) };
+            }
+            if (u.includes('googleAds:search') && !u.includes('searchStream')) {
+                return { ok: true, status: 200, json: async () => ({ results: [
+                    { customerClient: { id: '1112223333', manager: false, level: '0' } },
+                ] }) };
+            }
+            return { ok: true, status: 200, json: async () => OK_STREAM };
+        });
+
+        const res = await syncOneOrg('org-1', freshCreds(['1112223333']));
+
+        expect(res.unreachable).toContain('6110644137');
+        const [, , warning] = integrationRepository.markSynced.mock.calls.at(-1);
+        expect(warning).toMatch(/Barnet/);
+        expect(warning).toMatch(/not reachable/i);
+    });
+
+    it('leaves no warning when every mapped account was pulled', async () => {
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        integrationRepository.listAdAccounts.mockResolvedValueOnce([
+            { customer_id: '1112223333', status: null, practice_id: 'prac-a', name: 'Rochester' },
+        ]);
+        global.fetch = vi.fn(async (url) => {
+            const u = String(url);
+            if (u.includes('customers:listAccessibleCustomers')) {
+                return { ok: true, status: 200, json: async () => ({ resourceNames: ['customers/1112223333'] }) };
+            }
+            if (u.includes('googleAds:search') && !u.includes('searchStream')) {
+                return { ok: true, status: 200, json: async () => ({ results: [
+                    { customerClient: { id: '1112223333', manager: false, level: '0' } },
+                ] }) };
+            }
+            return { ok: true, status: 200, json: async () => OK_STREAM };
+        });
+
+        await syncOneOrg('org-1', freshCreds(['1112223333']));
+
+        // A warning on a healthy sync is as bad as silence on a broken one:
+        // it teaches the owner to ignore the field.
+        const [, , warning] = integrationRepository.markSynced.mock.calls.at(-1);
+        expect(warning).toBeNull();
     });
 });

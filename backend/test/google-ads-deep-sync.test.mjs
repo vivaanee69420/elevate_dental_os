@@ -124,6 +124,42 @@ describe('syncGoogleDeep', () => {
         expect(grains).toContain('google_ad');
     });
 
+    it('writes ONE call per account, never one payload for all of them', async () => {
+        const queryCustomer = vi.fn(async (cid, _tok, gaql) => (
+            gaql.includes('FROM ad_group_ad') || gaql.includes('FROM keyword_view')
+                ? batches([])
+                : batches([{ campaign: { id: 7 }, adGroup: { id: 42 },
+                             segments: { date: '2026-08-01' }, metrics: { costMicros: '1000000' } }])
+        ));
+
+        await syncGoogleDeep(ORG, {
+            accessToken: 'tok', customerIds: ['C1', 'C2', 'C3'],
+            since: '2026-06-01', until: '2026-08-31', queryCustomer,
+        });
+
+        const adgroupCalls = adGrainRepository.replaceWindow.mock.calls
+            .filter((c) => c[1] === 'google_adgroup');
+
+        // Three accounts, three writes. Batching them into one jsonb argument
+        // made the payload grow with the number of connected accounts against a
+        // fixed 60s statement_timeout: it worked at one account and timed out at
+        // three, and because the deep sync is wrapped so it can never fail the
+        // campaign sync, the only symptom was deep tabs quietly serving stale
+        // rows. Asserting the COUNT is the point — asserting the summed row
+        // total would pass just as happily against a single oversized write.
+        expect(adgroupCalls).toHaveLength(3);
+
+        // Each write is scoped to exactly its own account, both in the customer
+        // list that drives the RPC's DELETE and in the rows it carries. A call
+        // that deleted for one account while carrying another's rows would
+        // still be "one call per account" and would still lose data.
+        for (const [, , cids, rows] of adgroupCalls) {
+            expect(cids).toHaveLength(1);
+            expect(rows.every((r) => String(r.customer_id) === String(cids[0]))).toBe(true);
+        }
+        expect(adgroupCalls.map((c) => c[2][0]).sort()).toEqual(['C1', 'C2', 'C3']);
+    });
+
     it('does not replace a grain that returned nothing', async () => {
         const queryCustomer = vi.fn(async () => batches([]));
         await syncGoogleDeep(ORG, {

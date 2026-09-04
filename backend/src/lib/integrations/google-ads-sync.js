@@ -107,11 +107,18 @@ async function ensureToken(orgId, integration) {
     return integrationRepository.getByProvider(orgId, 'google_ads');
 }
 
-async function queryCustomer(customerId, accessToken, query) {
+async function queryCustomer(customerId, accessToken, query, loginCustomerId = null) {
     const { adsHeaders, googleAdsErrorMessage } = await import('./google-ads-provider.js');
     const res = await fetchWithApiVersion(
         (v) => `${apiBase()}/${v}/customers/${customerId}/googleAds:searchStream`,
-        { method: 'POST', headers: adsHeaders(accessToken), body: JSON.stringify({ query }) },
+        {
+            method: 'POST',
+            // An account reached through a manager MUST carry that manager as
+            // login-customer-id; without it Google answers as though the account
+            // does not exist for this credential.
+            headers: adsHeaders(accessToken, { loginCustomerId }),
+            body: JSON.stringify({ query }),
+        },
     );
     if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -162,28 +169,99 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
     }
     try {
         integration = await ensureToken(orgId, integration);
-        const allCustomerIds = integration.config?.customer_ids ?? [];
+        let allCustomerIds = integration.config?.customer_ids ?? [];
+        let customerLogins = integration.config?.customer_logins ?? {};
         if (allCustomerIds.length === 0) {
             throw new Error('no accessible Google Ads customers (check developer token / MCC access)');
         }
         // Drop accounts already known to be permanently unusable so the nightly
         // run stops spending a doomed request on each of them forever.
+        let knownAccounts = [];
         let permanent = new Set();
+        // A manager is permanently unusable for METRICS and simultaneously the
+        // only route to its client accounts, so it is tracked separately: never
+        // queried for spend, always probed for hierarchy. Collapsing the two
+        // ideas into one skip set is what made the first cut of this fix inert
+        // — it excluded the MCC from the probe and so never found the children
+        // sitting underneath it.
+        let managerIds = new Set();
         try {
-            const known = await integrationRepository.listAdAccounts(orgId, 'google_ads');
+            knownAccounts = await integrationRepository.listAdAccounts(orgId, 'google_ads') ?? [];
+            const known = knownAccounts;
             permanent = new Set((known ?? [])
                 .filter((a) => SKIP_STATUSES.has(a.status))
+                .map((a) => String(a.customer_id)));
+            managerIds = new Set((known ?? [])
+                .filter((a) => a.status === PERMANENT_CUSTOMER_ERRORS.REQUESTED_METRICS_FOR_MANAGER)
                 .map((a) => String(a.customer_id)));
         } catch (err) {
             // Non-fatal: without the skip list we simply query everything, which
             // is the old behaviour. Never let it block a real sync.
             console.error('[google_ads] ad_accounts skip-list read failed:', err.message);
         }
+        const { access_token } = JSON.parse(decryptSecret(integration.secrets));
+
+        // Re-resolve the account hierarchy on EVERY run, not only at connect.
+        // Account access moves — a practice's account gets relinked under a
+        // manager, listAccessibleCustomers stops naming it, and the sync keeps
+        // reporting healthy off whichever accounts are still linked directly.
+        // That is how Ashford and Barnet went six weeks with no data while the
+        // integration showed `active`. Re-resolving here means the next nightly
+        // run repairs it with no reconnect asked of the owner.
+        //
+        // This runs BEFORE the skip filter and AFTER the skip list is read, on
+        // purpose: the newly resolved ids must reach the pull loop below, and
+        // accounts already known permanently unusable must not cost a probe.
+        // Non-fatal — on failure we fall back to the stored set, which is the
+        // old behaviour.
+        try {
+            const { expandManagerAccounts, listAccessibleCustomers } = await import('./google-ads-provider.js');
+            const seed = await listAccessibleCustomers(access_token).catch(() => allCustomerIds);
+            // Unprobeable = permanently unusable AND not a manager. A
+            // deactivated account can serve nothing, hierarchy included; a
+            // manager serves the hierarchy and nothing else.
+            const unprobeable = new Set([...permanent].filter((cid) => !managerIds.has(String(cid))));
+            const expanded = await expandManagerAccounts(
+                access_token,
+                (seed?.length ? seed : allCustomerIds).filter((cid) => !unprobeable.has(String(cid))),
+                { skip: unprobeable },
+            );
+            // Take the expansion's set outright rather than unioning it with the
+            // stored one. It already keeps every direct grant it could not
+            // disprove, and drops the ids it confirmed are managers — union them
+            // back in and every manager buys a guaranteed failed metrics call
+            // per night, which is the cost the skip list exists to avoid. An
+            // empty result means the expansion learned nothing, and the stored
+            // set stands.
+            const resolved = expanded.customerIds.length ? expanded.customerIds : allCustomerIds.map(String);
+            const stored = allCustomerIds.map(String);
+            const added = resolved.filter((c) => !stored.includes(String(c)));
+            const removed = stored.filter((c) => !resolved.includes(String(c)));
+            // Write only on a real change — an unconditional merge would burn a
+            // config write per org per night to store an identical object.
+            const changed = added.length > 0 || removed.length > 0
+                || JSON.stringify(customerLogins) !== JSON.stringify(expanded.loginByCustomer);
+            if (changed) {
+                allCustomerIds = resolved;
+                customerLogins = expanded.loginByCustomer;
+                await integrationRepository.mergeConfig(orgId, 'google_ads', {
+                    customer_ids: allCustomerIds,
+                    customer_logins: customerLogins,
+                });
+                if (added.length) {
+                    console.log('[google_ads] resolved %d account(s) reachable only through a manager: %s',
+                        added.length, added.join(', '));
+                }
+            }
+        } catch (err) {
+            console.error('[google_ads] account re-resolution failed, using stored set:', err.message);
+        }
+
         const customerIds = allCustomerIds.filter((cid) => !permanent.has(String(cid)));
         if (customerIds.length === 0) {
             throw new Error(`no usable Google Ads customers — all ${allCustomerIds.length} are manager or deactivated accounts`);
         }
-        const { access_token } = JSON.parse(decryptSecret(integration.secrets));
+
         // Full backfill pulls 6mo; the nightly cron pulls the trailing 3mo.
         const windowDays = opts.full ? FULL_DAYS : INCREMENTAL_DAYS;
         const sinceDate = daysAgo(windowDays);
@@ -199,7 +277,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         const accounts = [];
         for (const cid of customerIds) {
             try {
-                const batches = await queryCustomer(cid, access_token, gaql);
+                const batches = await queryCustomer(cid, access_token, gaql, customerLogins[cid] ?? null);
                 const { rows, account } = parseSearchStream(batches);
                 accounts.push({ customer_id: cid, name: account?.name ?? null, currency: account?.currency ?? null });
                 for (const row of rows) {
@@ -292,7 +370,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
                 customerIds: supported,
                 since: deepSince,
                 until: untilDate,
-                queryCustomer: (cid, tok, gaql) => queryCustomer(cid, tok, gaql),
+                queryCustomer: (cid, tok, gaql) => queryCustomer(cid, tok, gaql, customerLogins[cid] ?? null),
             });
             deep = { ...r, unsupportedCurrency: unsupported };
         } catch (err) {
@@ -300,9 +378,40 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
             deep = { counts: {}, skipped: [], unsupportedCurrency: [], error: String(err.message).slice(0, 200) };
         }
 
+        // A sync that pulled SOME of what it should have is not a healthy sync,
+        // and until now it was recorded as one. Three ways a pull comes back
+        // short, all of them previously silent:
+        //
+        //  1. A practice-mapped account is not in the pull set at all. This is
+        //     the one that cost six weeks: an account relinked under a manager
+        //     stops appearing in listAccessibleCustomers, so the sync does not
+        //     fail on it — it never asks for it. Nothing errors. The practice
+        //     simply reports nothing while the integration shows green.
+        //  2. An account errored this run (throttle, transient permission).
+        //  3. The deep-grain pull failed. It is wrapped so it can never fail
+        //     the campaign sync, which is right, but "cannot fail the sync" was
+        //     being read as "need not be mentioned".
+        //
+        // Recorded as a warning on an otherwise 'active' integration: the
+        // connection genuinely works, so flipping it to 'failed' would be a lie
+        // in the other direction, and would put a reconnect prompt in front of
+        // an owner whose credentials are fine.
+        const unreachable = knownAccounts.filter((a) => a.practice_id
+            && !permanent.has(String(a.customer_id))
+            && !customerIds.map(String).includes(String(a.customer_id)));
+        const warnings = [];
+        if (unreachable.length) {
+            warnings.push(`${unreachable.length} mapped account(s) not reachable by this login: ${unreachable.map((a) => a.name || a.customer_id).join(', ')} — reconnect with a Google account that can see them, or link them under a manager it can.`);
+        }
+        if (skipped.length) {
+            warnings.push(`${skipped.length} account(s) failed this run: ${skipped.map((s) => `${s.cid}: ${s.error}`).join('; ')}`);
+        }
+        if (deep.error) warnings.push(`deep-grain (ad group/ad/keyword) pull failed: ${deep.error}`);
+
         // Scoped status write (won't resurrect a row revoked mid-sync).
-        await integrationRepository.markSynced(orgId, 'google_ads');
-        return { rows: all.length, customers: customerIds.length, skipped, permanentlySkipped: [...permanent], deep };
+        await integrationRepository.markSynced(orgId, 'google_ads',
+            warnings.length ? warnings.join(' | ').slice(0, 500) : null);
+        return { rows: all.length, customers: customerIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), permanentlySkipped: [...permanent], deep };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'google_ads', String(err.message).slice(0, 500));
         throw err;

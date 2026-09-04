@@ -227,7 +227,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
     }
     try {
         integration = await ensureToken(orgId, integration);
-        const accountIds = integration.config?.account_ids ?? [];
+        let accountIds = integration.config?.account_ids ?? [];
         if (accountIds.length === 0) {
             throw new Error('no connected Meta ad accounts (check ads_read permission)');
         }
@@ -242,7 +242,27 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         try {
             const { listAdAccounts } = await import('./meta-ads-provider.js');
             const accounts = await listAdAccounts(access_token);
-            if (accounts.length) await integrationRepository.upsertAdAccounts(orgId, 'meta_ads', accounts);
+            if (accounts.length) {
+                await integrationRepository.upsertAdAccounts(orgId, 'meta_ads', accounts);
+                // Re-resolve the pull set from the LIVE list, not the one
+                // frozen at connect. config.account_ids was written once at
+                // OAuth and never revisited, so an account added to the
+                // business afterwards was invisible to every subsequent sync,
+                // and one removed was requested forever. This is the same
+                // failure Google had, where two practices went six weeks with
+                // no data. Selection is NOT overridden by this — that lives on
+                // ad_accounts.is_selected; account_ids is only ever the set the
+                // credential can reach.
+                const live = accounts.map((a) => String(a.customer_id ?? a.account_id ?? a.id)).filter(Boolean);
+                const added = live.filter((id) => !accountIds.map(String).includes(id));
+                const dropped = accountIds.map(String).filter((id) => !live.includes(id));
+                if (live.length && (added.length || dropped.length)) {
+                    accountIds = live;
+                    await integrationRepository.mergeConfig(orgId, 'meta_ads', { account_ids: accountIds });
+                    if (added.length) console.log('[meta_ads] %d new account(s) now reachable: %s', added.length, added.join(', '));
+                    if (dropped.length) console.log('[meta_ads] %d account(s) no longer reachable: %s', dropped.length, dropped.join(', '));
+                }
+            }
         } catch (err) {
             console.error('[meta_ads] sync ad_accounts refresh failed:', err.message);
         }
@@ -348,8 +368,29 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         }
 
         // Scoped status write (won't resurrect a row revoked mid-sync).
-        await integrationRepository.markSynced(orgId, 'meta_ads');
-        return { rows: all.length, accounts: accountIds.length, skipped, deep };
+        // Same reasoning as google-ads-sync.js: a pull that came back short is
+        // not a healthy sync, and recording it as one leaves an owner unable to
+        // tell "this practice spends nothing" from "we stopped asking".
+        let knownAccounts = [];
+        try {
+            knownAccounts = await integrationRepository.listAdAccounts(orgId, 'meta_ads') ?? [];
+        } catch (err) {
+            console.error('[meta_ads] mapped-account check skipped:', err.message);
+        }
+        const unreachable = knownAccounts.filter((a) => a.practice_id
+            && !accountIds.map(String).includes(String(a.customer_id)));
+        const warnings = [];
+        if (unreachable.length) {
+            warnings.push(`${unreachable.length} mapped account(s) not reachable by this login: ${unreachable.map((a) => a.name || a.customer_id).join(', ')} — reconnect with a Meta account that can see them.`);
+        }
+        if (skipped.length) {
+            warnings.push(`${skipped.length} account(s) failed this run: ${skipped.map((s) => `${s.aid}: ${s.error}`).join('; ')}`);
+        }
+        if (deep.error) warnings.push(`deep-grain (ad set/ad) pull failed: ${deep.error}`);
+
+        await integrationRepository.markSynced(orgId, 'meta_ads',
+            warnings.length ? warnings.join(' | ').slice(0, 500) : null);
+        return { rows: all.length, accounts: accountIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), deep };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'meta_ads', String(err.message).slice(0, 500));
         throw err;
