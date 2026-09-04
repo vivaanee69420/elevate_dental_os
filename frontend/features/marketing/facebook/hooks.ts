@@ -5,105 +5,25 @@
 // Reconciliation panel (Integrations page, no scope bar, sends no window at
 // all), the window IS sent here, together with practice scope.
 //
-// It is NOT sent via the shared windowParams(scope, win) helper every other
-// marketing hook uses, even though the brief for this task originally said
-// to reuse it verbatim. windowParams emits since/until as full ISO datetimes
-// on a HALF-OPEN [since, until) window — the shape /api/marketing/performance
-// etc. take. The Facebook endpoints' FacebookQuerySchema
-// (backend/src/controllers/marketing.controller.js) instead requires plain
-// `YYYY-MM-DD` matching `/^\d{4}-\d{2}-\d{2}$/`, BOTH ends INCLUSIVE — the
-// same convention the ads-deep-grain Reconciliation endpoint uses, because
-// campaignSpendByProvider() compares them against a plain DATE column with
-// `.gte(...).lte(...)`. Sending win.since/win.until as-is would 400 on every
-// request (backend/test/marketing.routes.test.mjs asserts a non-YYYY-MM-DD
-// string is rejected) — and even format aside, win.until directly would ask
-// for one day too many, since it is the EXCLUSIVE start of the day *after*
-// the period, not the last day in it.
-//
-// Converting the ISO instant to a calendar date with `.slice(0, 10)` is ALSO
-// wrong: during BST, London midnight is 23:00 UTC the PREVIOUS day, so
-// slicing win.since would silently return yesterday's date for roughly half
-// the year. londonDateOf() below reads the calendar date via Intl against
-// Europe/London instead — the same technique backend/src/lib/tz.js uses
-// server-side — so this agrees with the server regardless of DST.
-//
-// Deriving the last inclusive day from win.until by subtracting a fixed 24h
-// (86_400_000ms) is a DIFFERENT, subtler DST bug: on the UK spring-forward
-// Sunday the clocks skip an hour, so that calendar day is only 23 real hours
-// end to end, and a 24h instant-subtraction lands a day early. For a
-// single-day selection on that Sunday it produces since > until — an
-// inverted range matching zero rows, which campaigns() cannot tell apart
-// from "never synced" — so a fully synced tenant would be told they have
-// never connected Meta. lastInclusiveLondonDay() below does CALENDAR
-// arithmetic (subtract 1 from the day field, via Date.UTC) instead of
-// INSTANT arithmetic, so it is immune to how many real hours the day was.
-//
-// The server does not stop at this window either: the deep-grain tables only
-// hold a rolling 92 days, so a "year" request is clamped there
-// (facebook-report.service.js's clampWindow) and the clamp is reported back
-// as effectiveSince/windowClamped on every payload — that is what lets a
-// future component say "showing from X" rather than quietly showing less
-// than what the period pill claims.
+// The since/until -> plain-YYYY-MM-DD conversion (and why it is NOT the
+// shared windowParams(scope, win) every other marketing hook uses) now lives
+// in ../_shared/window.ts, shared verbatim with the Google report's
+// hooks.ts — two independent copies of DST-sensitive date arithmetic is
+// exactly the kind of thing that silently drifts between two pages that must
+// agree. See that file's header for the full reasoning (BST midnight
+// slicing, the spring-forward-Sunday 24h-subtraction bug, and the 92-day
+// clamp echoed back as effectiveSince/windowClamped).
 import { useQuery, useInfiniteQuery, keepPreviousData } from '@tanstack/react-query';
-import { useScopePeriod, scopeKey, type ResolvedWindow } from '@/features/_shared/scope-context';
+import { useScopePeriod, scopeKey } from '@/features/_shared/scope-context';
+import { ymdWindowParams } from '../_shared/window';
 import {
   fetchFacebookCampaigns, fetchFacebookAdSets, fetchFacebookAds,
   type FacebookCampaignsPayload, type FacebookAdSetsPayload, type FacebookAdsPage,
 } from './api';
 
-// Scope is a bare string: 'all' or a practiceId. Not an object — reading
-// `scope.practiceId` would be undefined for every tenant and every request
-// would silently go org-wide while the practice pills appeared to work.
-// (frontend/features/_shared/scope-context.tsx: `export type Scope = string`.)
-function practiceOf(scope: string | null | undefined): string | null {
-  return scope && scope !== 'all' ? scope : null;
-}
-
-// en-CA renders as YYYY-MM-DD; explicit options match backend/src/lib/tz.js's
-// own YMD formatter rather than relying on en-CA's default shape.
-const LONDON_DATE = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
-});
-
-/** The London calendar date (YYYY-MM-DD) a UTC ISO instant falls in. */
-function londonDateOf(iso: string): string {
-  return LONDON_DATE.format(new Date(iso));
-}
-
-// The last inclusive day, derived from London CALENDAR parts rather than by
-// subtracting 24h from an instant. A fixed 86_400_000ms subtraction is wrong
-// on the UK spring-forward Sunday, which is only 23 real hours long: it lands
-// a day early, and for a single-day selection on that Sunday it produces an
-// inverted range (since > until) that matches no rows at all — which the
-// service cannot distinguish from "never synced", so a fully synced tenant
-// would be told they have never connected Meta. Date.UTC handles a day-0
-// rollover into the previous month/year correctly, and slicing a
-// UTC-constructed midnight is safe — the danger was only ever slicing a
-// LONDON instant, which londonDateOf already handles via Intl.
-function lastInclusiveLondonDay(exclusiveUntilIso: string): string {
-  const [y, m, d] = londonDateOf(exclusiveUntilIso).split('-').map(Number);
-  const prev = new Date(Date.UTC(y, m - 1, d - 1));
-  return prev.toISOString().slice(0, 10);
-}
-
-/**
- * Builds the query string every Facebook fetcher takes: plain YYYY-MM-DD
- * since/until (both inclusive) plus practice_id. See the file header for why
- * this cannot be the shared windowParams(scope, win).
- */
-function facebookWindowParams(scope: string, win: ResolvedWindow): string {
-  const sp = new URLSearchParams();
-  sp.set('since', londonDateOf(win.since));
-  // win.until is the exclusive start of the day AFTER the period.
-  sp.set('until', lastInclusiveLondonDay(win.until));
-  const practiceId = practiceOf(scope);
-  if (practiceId) sp.set('practice_id', practiceId);
-  return sp.toString();
-}
-
 export function useFacebookCampaigns() {
   const { scope, win } = useScopePeriod();
-  const qs = facebookWindowParams(scope, win);
+  const qs = ymdWindowParams(scope, win);
   return useQuery<FacebookCampaignsPayload>({
     queryKey: ['marketing', 'facebook', 'campaigns', scopeKey({ scope, win })],
     queryFn: () => fetchFacebookCampaigns(qs),
@@ -124,7 +44,7 @@ export function useFacebookCampaigns() {
 // app already made" idiom the old AdSetsScreen used for the campaign name.
 export function useFacebookAdSets(campaignId: string | null) {
   const { scope, win } = useScopePeriod();
-  const qs = facebookWindowParams(scope, win);
+  const qs = ymdWindowParams(scope, win);
   const full = campaignId ? `${qs}&campaignId=${encodeURIComponent(campaignId)}` : qs;
   return useQuery<FacebookAdSetsPayload>({
     queryKey: ['marketing', 'facebook', 'adsets', campaignId ?? 'all', scopeKey({ scope, win })],
@@ -150,7 +70,7 @@ export function useFacebookAdSets(campaignId: string | null) {
 // and its data is wanted, matching how the Campaigns/Ad sets tabs behave.
 export function useFacebookAds(adSetId: string | null) {
   const { scope, win } = useScopePeriod();
-  const qs = facebookWindowParams(scope, win);
+  const qs = ymdWindowParams(scope, win);
   const base = adSetId ? `${qs}&adSetId=${encodeURIComponent(adSetId)}` : qs;
   return useInfiniteQuery<FacebookAdsPage>({
     queryKey: ['marketing', 'facebook', 'ads', adSetId ?? 'all', scopeKey({ scope, win })],
