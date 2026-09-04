@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { visibleNavSections, type Permissions } from '@/lib/permissions';
+import type { NavSection } from '@/lib/nav';
 import { useMe } from '@/hooks/useMe';
 import { AgencyDialog } from '@/features/agency/components/AgencyDialog';
 import { AccountPicker } from '@/features/agency/components/AccountPicker';
@@ -33,7 +34,7 @@ const SECTION_ICONS: Record<string, string> = {
   'Elevate CRM': 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
   Wealth: 'M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6',
   Training: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5',
-  System: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.92.68 2 2 0 1 1-3.96 0 1.65 1.65 0 0 0-2.92-.68 2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a2 2 0 1 1 0-3.96 1.65 1.65 0 0 0-.68-2.92 2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 2.92-.68 2 2 0 1 1 3.96 0 1.65 1.65 0 0 0 2.92.68 2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0 .42 2.74z',
+  Settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-2.92.68 2 2 0 1 1-3.96 0 1.65 1.65 0 0 0-2.92-.68 2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a2 2 0 1 1 0-3.96 1.65 1.65 0 0 0-.68-2.92 2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 2.92-.68 2 2 0 1 1 3.96 0 1.65 1.65 0 0 0 2.92.68 2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0 .42 2.74z',
   'Data Room': 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6',
 };
 
@@ -70,6 +71,42 @@ function SectionIcon({ label }: { label: string }) {
   );
 }
 
+// One section row. Shared by the scrolling list and the pinned footer so the
+// two can never drift apart visually.
+function SectionRow({
+  section,
+  pathname,
+}: {
+  section: NavSection;
+  pathname: string;
+}) {
+  const active = section.items.some((i) => pathname === `/${i.id}`);
+  const hasNew = section.items.some((i) => i.isNew);
+  return (
+    <Link
+      href={`/${section.items[0].id}`}
+      aria-current={active ? 'page' : undefined}
+      className={`group relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors duration-150 ${
+        active
+          ? 'bg-brand-50 font-semibold text-brand'
+          : 'font-medium text-ink-muted hover:bg-bg hover:text-ink'
+      }`}
+    >
+      {/* active rail */}
+      <span
+        className={`absolute left-0 top-1/2 w-0.5 -translate-y-1/2 rounded-full bg-brand transition-all duration-150 ${
+          active ? 'h-5 opacity-100' : 'h-0 opacity-0 group-hover:h-3 group-hover:opacity-40'
+        }`}
+      />
+      <SectionIcon label={section.label} />
+      <span className="min-w-0 flex-1 truncate">{section.label}</span>
+      {hasNew && !active && (
+        <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+      )}
+    </Link>
+  );
+}
+
 function initials(name: string): string {
   return name
     .split(/[\s@.]+/)
@@ -83,6 +120,9 @@ const MIN_W = 208;
 const MAX_W = 384;
 const DEFAULT_W = 256;
 const WIDTH_KEY = 'sidebar:w';
+
+// Section rendered in the sidebar's footer rather than the scrolling list.
+const PINNED_BOTTOM = 'Settings';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -135,6 +175,11 @@ export function Sidebar() {
   const permissions: Permissions | null = me?.permissions ?? null;
 
   const displayName = me?.full_name || me?.email || '';
+
+  // Settings sits in the pinned footer, everything else in the scrolling list.
+  const visible = visibleNavSections(me?.role, permissions, me?.features);
+  const pinned = visible.filter((s) => s.label === PINNED_BOTTOM);
+  const sections = visible.filter((s) => s.label !== PINNED_BOTTOM);
 
   return (
     <aside
@@ -195,35 +240,23 @@ export function Sidebar() {
           grows. A row lands on the section's first VISIBLE item, so RBAC
           still decides where the click goes. */}
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-        {visibleNavSections(me?.role, permissions, me?.features).map((section) => {
-          const active = section.items.some((i) => pathname === `/${i.id}`);
-          const hasNew = section.items.some((i) => i.isNew);
-          return (
-            <Link
-              key={section.label}
-              href={`/${section.items[0].id}`}
-              aria-current={active ? 'page' : undefined}
-              className={`group relative flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors duration-150 ${
-                active
-                  ? 'bg-brand-50 font-semibold text-brand'
-                  : 'font-medium text-ink-muted hover:bg-bg hover:text-ink'
-              }`}
-            >
-              {/* active rail */}
-              <span
-                className={`absolute left-0 top-1/2 w-0.5 -translate-y-1/2 rounded-full bg-brand transition-all duration-150 ${
-                  active ? 'h-5 opacity-100' : 'h-0 opacity-0 group-hover:h-3 group-hover:opacity-40'
-                }`}
-              />
-              <SectionIcon label={section.label} />
-              <span className="min-w-0 flex-1 truncate">{section.label}</span>
-              {hasNew && !active && (
-                <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-              )}
-            </Link>
-          );
-        })}
+        {sections.map((section) => (
+          <SectionRow key={section.label} section={section} pathname={pathname} />
+        ))}
       </nav>
+
+      {/* Settings is pinned to the foot of the sidebar, away from the sections
+          used daily — it is where you go to change how the app works, not to
+          do the work. It renders only when visibleNavSections returns it, so
+          an org without the module, or a role without the permissions, sees
+          no empty footer rail. */}
+      {pinned.length > 0 && (
+        <div className="shrink-0 border-t border-border p-3 space-y-0.5">
+          {pinned.map((section) => (
+            <SectionRow key={section.label} section={section} pathname={pathname} />
+          ))}
+        </div>
+      )}
 
       {/* Drag handle — stretch sidebar width */}
       {!collapsed && (

@@ -97,12 +97,6 @@ export const NAV: NavSection[] = [
     { id: 'training-mentorship', label: 'Mentorship Calls' },
     { id: 'training-onetoone', label: '1-to-1 Coaching' },
   ]},
-  { label: 'System', items: [
-    { id: 'integrations', label: 'Integrations' },
-    { id: 'data-hub', label: 'Data Hub', isNew: true },
-    { id: 'team-permissions', label: 'Team Permissions' },
-    { id: 'settings', label: 'Settings' },
-  ]},
   { label: 'Data Room', items: [
     { id: 'data-summaries', label: 'Summaries', isNew: true },
     { id: 'data-dentally', label: 'Dentally', isNew: true },
@@ -110,6 +104,15 @@ export const NAV: NavSection[] = [
     { id: 'data-meta-ads', label: 'Meta Ads', isNew: true },
     { id: 'data-gohighlevel', label: 'GoHighLevel', isNew: true },
     { id: 'data-emergent', label: 'Emergent', isNew: true },
+  ]},
+  // Settings is LAST in NAV because the sidebar pins it to the bottom, and
+  // accessibleRouteIds walks this same order to pick a landing route — an
+  // analyst should fall through to a working screen before an admin one.
+  { label: 'Settings', items: [
+    { id: 'integrations', label: 'Integrations' },
+    { id: 'data-hub', label: 'Data Hub', isNew: true },
+    { id: 'team-permissions', label: 'Team Permissions' },
+    { id: 'settings', label: 'Settings' },
   ]},
 ];
 
