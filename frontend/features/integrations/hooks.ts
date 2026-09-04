@@ -34,8 +34,18 @@ import {
   drainSheetsWriter,
   disconnectSheetsWriter,
   getSheetsWriterActivity,
+  getCallRailStatus,
+  discoverCallRailAccounts,
+  bulkConnectCallRailAccounts,
+  addCallRailAccount,
+  updateCallRailAccount,
+  removeCallRailAccount,
+  syncCallRailAccount,
+  syncAllCallRail,
+  disconnectCallRail,
   type ConnectInput,
   type DentallySyncResource,
+  type CallRailBulkConnectEntry,
 } from './api';
 
 export function useIntegrations() {
@@ -371,5 +381,83 @@ export function useSheetsWriterActivity(enabled: boolean) {
     queryFn: getSheetsWriterActivity,
     enabled,
     staleTime: 15_000,
+  });
+}
+
+// --- CallRail companies (multi-company call tracking) -----------------------
+export function useCallRailStatus() {
+  return useQuery({
+    queryKey: ['callrail-status'],
+    queryFn: getCallRailStatus,
+    staleTime: 30_000,
+  });
+}
+
+// Add-company step 1 (key-only discovery): not cached (deliberately not a
+// useQuery) — a fresh lookup every time the owner clicks, and the API key
+// never sits in the query cache.
+export function useDiscoverCallRailAccounts() {
+  return useMutation({
+    mutationFn: (body: { apiKey: string }) => discoverCallRailAccounts(body),
+  });
+}
+
+// Add-company step 2: connect several discovered companies in one request.
+export function useBulkConnectCallRailAccounts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { apiKey: string; companies: CallRailBulkConnectEntry[] }) => bulkConnectCallRailAccounts(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useAddCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { apiKey: string; callrailAccountId: string; callrailCompanyId: string; label: string; practiceId?: string | null }) =>
+      addCallRailAccount(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useUpdateCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; practiceId?: string | null; label?: string; apiKey?: string; signingKey?: string | null }) =>
+      updateCallRailAccount(id, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useRemoveCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => removeCallRailAccount(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useSyncCallRailAccount() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => syncCallRailAccount(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+// "Sync now — every company".
+export function useSyncAllCallRail() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => syncAllCallRail(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
+  });
+}
+
+export function useDisconnectCallRail() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => disconnectCallRail(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
   });
 }

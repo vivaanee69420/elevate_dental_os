@@ -316,3 +316,10 @@ CREATE POLICY "treatment_plans_write" ON treatment_plans
 -- Emergent-era tables.
 -- ============================================================================
 ALTER TABLE practice_cost_model ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================================
+-- CALLRAIL_CALLS (migration 20260101000154) — RLS enabled, no policies;
+-- repositories read via serviceClient (bypasses RLS), matching the other
+-- Emergent-era tables.
+-- ============================================================================
+ALTER TABLE callrail_calls ENABLE ROW LEVEL SECURITY;

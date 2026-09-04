@@ -10,7 +10,11 @@ export type Role = 'owner' | 'practice_manager' | 'reception' | 'analyst';
 export interface PermissionsMatrix {
   /** permission key -> human label */
   catalog: Record<string, string>;
-  /** role -> { permission key -> allowed } */
+  /** page id -> the section key it inherits from, when not overridden */
+  pages?: Record<string, string>;
+  /** role -> { 'page:<id>' -> allowed } for EXPLICIT overrides only */
+  overrides?: Record<string, Record<string, boolean>>;
+  /** role -> { permission key -> allowed }, page keys included and resolved */
   roles: {
     owner: Record<string, boolean>;
     practice_manager: Record<string, boolean>;
@@ -26,7 +30,8 @@ export function getPermissionsMatrix(): Promise<PermissionsMatrix> {
 export function setRolePermission(input: {
   role: EditableRole;
   permission_key: string;
-  allowed: boolean;
+  /** null clears the row: a page override goes back to inheriting its section. */
+  allowed: boolean | null;
 }): Promise<unknown> {
   return api('/api/admin/permissions/role', {
     method: 'PUT',

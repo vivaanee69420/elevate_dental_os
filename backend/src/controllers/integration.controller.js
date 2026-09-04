@@ -7,11 +7,12 @@ import { quickbooksAccountService } from "../services/quickbooks-account.service
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { decryptSecret } from "../lib/crypto.js";
-import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema } from "../models/integration.model.js";
+import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema, callrailAccountCreateSchema, callrailAccountUpdateSchema, callrailDiscoverSchema, callrailBulkConnectSchema } from "../models/integration.model.js";
 import { isAgencyActor } from "../middleware/agency.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
 import { emergentService } from "../services/emergent.service.js";
 import { featuresService } from "../services/features.service.js";
+import { callrailService } from "../services/callrail.service.js";
 
 function frontendUrl() {
     const raw = (process.env.FRONTEND_URL || process.env.APP_URL || 'http://localhost:3000').trim();
@@ -41,6 +42,12 @@ export const integrationController = {
         const full = req.body?.full === true || req.query?.full === 'true';
         res.json(await emergentService.sync(req.user.organisation_id, { full }));
     },
+    async dentallyRepairPayments(req, res) {
+        const body = integration_model_1.dentallyPaymentRepairSchema.parse(req.body);
+        res.json(await integration_service_1.integrationService.repairDentallyPayments(
+            req.user.organisation_id, { since: body.since, until: body.until },
+        ));
+    },
     async emergentDisconnect(req, res) {
         res.json(await emergentService.disconnect(req.user.organisation_id));
     },
@@ -53,6 +60,70 @@ export const integrationController = {
             businessId: body.business_id,
             practiceId: body.practice_id,
         }));
+    },
+    // ---- CallRail (multi-company call tracking) — provider-level status/
+    // sync/disconnect (Task 3), plus the per-company /accounts routes below
+    // (Task 4). callrailGet now reads the real per-company rows + source
+    // breakdown via callrail.service.js rather than the Task-3-era stub.
+    async callrailGet(req, res) {
+        res.json(await callrailService.status(req.user.organisation_id));
+    },
+    async callrailSync(req, res) {
+        res.json(await integration_service_1.integrationService.callrailSync(req.user.organisation_id));
+    },
+    async callrailDisconnect(req, res) {
+        res.json(await integration_service_1.integrationService.callrailDisconnect(req.user.organisation_id));
+    },
+    // --- CallRail companies --------------------------------------------------
+    // Add-company step 1 (key-only discovery): ONE API key reveals every
+    // account and company it can reach — no account id typed by hand. POST,
+    // not GET+query, deliberately — the API key never belongs in a URL/query
+    // string (logs, browser history, proxies). Ungated beyond the standard
+    // requireRole on the route: this never persists anything, so there is
+    // nothing for the agency-actor check to protect.
+    async callrailDiscover(req, res) {
+        const body = callrailDiscoverSchema.parse(req.body);
+        res.json(await callrailService.discoverAccounts(req.user.organisation_id, body));
+    },
+    // Add-company step 2: connect several discovered companies in one request.
+    // practiceId is the agency-controlled mapping field on EACH entry, same
+    // rule as callrailAccountCreate/ghlAccountUpdate — a non-agency owner may
+    // still connect companies, just unmapped, so the whole request 403s only
+    // when at least one entry actually carries a practiceId key.
+    async callrailBulkConnect(req, res) {
+        const entries = Array.isArray(req.body?.companies) ? req.body.companies : [];
+        const wantsMapping = entries.some((c) => c && c.practiceId !== undefined);
+        if (wantsMapping && !(await isAgencyActor(req))) {
+            return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
+        }
+        const body = callrailBulkConnectSchema.parse(req.body);
+        res.json(await callrailService.bulkConnect(req.user.organisation_id, body));
+    },
+    async callrailAccountCreate(req, res) {
+        // practiceId is the agency-controlled mapping field, same rule as
+        // ghlAccountUpdate's practice_id — a non-agency owner may still add
+        // an unmapped company, just not choose its practice.
+        if (req.body?.practiceId !== undefined && !(await isAgencyActor(req))) {
+            return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
+        }
+        const body = callrailAccountCreateSchema.parse(req.body);
+        res.json(await callrailService.addAccount(req.user.organisation_id, body));
+    },
+    async callrailAccountUpdate(req, res) {
+        if (req.body?.practiceId !== undefined && !(await isAgencyActor(req))) {
+            return res.status(403).json({ error: 'Agency access required', code: 'AGENCY_ONLY' });
+        }
+        const { id } = idParamSchema.parse(req.params);
+        const body = callrailAccountUpdateSchema.parse(req.body);
+        res.json(await callrailService.updateAccount(req.user.organisation_id, id, body));
+    },
+    async callrailAccountRemove(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await callrailService.removeAccount(req.user.organisation_id, id));
+    },
+    async callrailAccountSync(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await callrailService.syncAccount(req.user.organisation_id, id));
     },
     async list(req, res) {
         res.json(await integration_service_1.integrationService.list(req.user.organisation_id));

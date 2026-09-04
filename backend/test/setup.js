@@ -23,6 +23,9 @@ process.env.INTEGRATIONS_SECRET_KEY ||= 'test-integrations-key';
 // Collapse the GoHighLevel retry backoff so tests that exercise the retry path
 // don't spend ~17s sleeping through real exponential waits.
 process.env.GHL_RETRY_BASE_MS ||= '1';
+// Same, for CallRail's shared 429-backoff (callrail-provider.js's
+// fetchWithBackoff, reused by callrail-sync.js's calls.json pull).
+process.env.CALLRAIL_RETRY_BASE_MS ||= '1';
 process.env.OAUTH_STATE_SECRET ||= 'test-state-secret';
 // Messaging clients (postmark/twilio) construct at module import; give them
 // non-empty dummy creds so importing any service that pulls in lib/messaging.js

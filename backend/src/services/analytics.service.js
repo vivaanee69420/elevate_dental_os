@@ -18,13 +18,14 @@ import { boardReportRepository } from "../repositories/boardReport.repository.js
 import { orgSettingsRepository } from "../repositories/orgSettings.repository.js";
 import { businessHealthRepository } from "../repositories/business-health.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
-import { bucketsByPeriod, accountLinesByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow } from "./monthlyFinancial.service.js";
+import { bucketsByPeriod, accountLinesByPeriod, plInputFromBuckets, financeSeriesRowFromBuckets, sumBucketsInWindow, countBucketPeriodsInWindow } from "./monthlyFinancial.service.js";
 import { debtService } from "./debt.service.js";
 import { getProvider } from "../lib/ai/index.js";
 import { checkBudget, recordUsage } from "../lib/ai/guardrails.js";
 import { overlayPeriodReach } from "../lib/marketing-reach.js";
 import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonParts, londonMonthKey } from "../lib/tz.js";
+import { dayWindowISO } from "../lib/date-window.js";
 import * as async_pool_1 from "../lib/async-pool.js";
 import * as dashboard_cache_1 from "../lib/dashboard-cache.js";
 import { createTtlCache } from "../lib/ttl-cache.js";
@@ -1722,14 +1723,10 @@ export const analyticsService = {
     async dashboardSummary(orgId, { now = () => new Date(), from = null, to = null, practiceId = null } = {}) {
         // Period: a custom [from,to] range (MTD/QTD/6M/YTD from the UI) overrides
         // the trailing 12-month window. Revenue/cash are scoped to the period.
-        let sinceISO, untilISO, ranged = false;
-        if (from && to) {
-            const [fy, fm, fd] = from.split('-').map(Number);
-            const [ty, tm, td] = to.split('-').map(Number);
-            sinceISO = new Date(fy, fm - 1, fd).toISOString();
-            untilISO = new Date(ty, tm - 1, td, 23, 59, 59).toISOString();
-            ranged = true;
-        } else {
+        // Day bounds come from lib/date-window so this window and the lead
+        // funnel's window are constructed by the SAME code and cannot drift.
+        let { ranged, sinceISO, untilISO } = dayWindowISO(from, to);
+        if (!ranged) {
             const since = new Date(now());
             since.setMonth(since.getMonth() - 12);
             sinceISO = since.toISOString();
@@ -1781,6 +1778,53 @@ export const analyticsService = {
             revenuePence = billedPence;
             turnoverBasis = 'billed';
         }
+        // --------------------------------------------------------------------
+        // Cash figures. These three used to be: cashflow = bank balance,
+        // reserve = 0, excess = bank balance. The Command Centre rendered them
+        // as a running statement —
+        //     Cash collected − costs = Operating cashflow − reserve = Excess
+        // — so the page presented an arithmetic that its own numbers did not
+        // satisfy. On Plan4growth YTD it showed +£765,391 of "operating
+        // cashflow" where its two input rows give −£112,646: the same bank
+        // balance printed twice, once under a label describing a subtraction
+        // that never happened, and it flipped the sign of the group's real
+        // operating position.
+        //
+        // Now each figure means what its name says, and anything we cannot
+        // compute is null (the UI renders "—") rather than a 0 that reads as a
+        // real zero. `bankBalancePence` is the honest name for the bank number;
+        // `cashflowPence` is genuine operating cashflow.
+        //
+        // The reserve needs a monthly cost run-rate, so it exists only on the
+        // actuals basis. A Dentally-only org with no cost feed gets nulls —
+        // which is the truth, and is why "Less: 2mo cost reserve (£0)" was
+        // misleading rather than merely empty.
+        //
+        // The reserve divisor must be the number of months that ACTUALLY
+        // CONTRIBUTED COSTS, not the number of calendar months the window
+        // spans. A 9-month window holding 3 months of ledger would otherwise
+        // divide by 9 and understate the monthly run-rate by two thirds — an
+        // under-stated reserve overstates excess cash, which is the direction
+        // that gets a business into trouble.
+        const monthsCovered = countBucketPeriodsInWindow(
+            actuals.byPeriod, ranged ? from : null, ranged ? to : null,
+        ) || (ranged ? 1 : 12);
+        const haveCosts = useActuals && totalCostsPence > 0;
+        const operatingCashflowPence = haveCosts ? periodRevenue - totalCostsPence : null;
+        const reservePence = haveCosts ? Math.round((totalCostsPence / monthsCovered) * 2) : null;
+        // A bank figure exists only when there is an org-level bank connection
+        // to read. Two distinct cases both used to collapse to £0:
+        //   * practice scope — bank is org-level, so there is no per-practice
+        //     figure at all;
+        //   * no bank accounts connected — bankSummary sums an empty list to 0.
+        // Treating the second as a real £0 balance would make excess cash
+        // `0 - reserve`, i.e. a confident NEGATIVE excess-cash figure for an
+        // org that simply has not connected a bank. `count` distinguishes an
+        // empty feed from a genuine zero balance.
+        const bankKnown = !practiceId && (bank.count || 0) > 0;
+        const bankBalancePence = bankKnown ? bankPence : null;
+        const excessCashPence = bankKnown && reservePence !== null ? bankPence - reservePence : null;
+
         return {
             basis: useActuals ? 'actuals' : 'revenue-only',
             turnoverBasis,
@@ -1789,9 +1833,14 @@ export const analyticsService = {
             marginPct,
             totalCostsPence,
             cashCollectedPence: periodRevenue,
-            cashflowPence: bankPence,
-            reservePence: 0,
-            excessCashPence: bankPence,
+            monthsCovered,
+            // Real operating cashflow: cash in less costs. Null without costs.
+            cashflowPence: operatingCashflowPence,
+            // The bank position itself — a different thing from cashflow, and
+            // indicative only (it includes card/clearing accounts).
+            bankBalancePence,
+            reservePence,
+            excessCashPence,
         };
     },
     // 12-month revenue series — EXACT real settled payments per month (RPC), no
@@ -1827,7 +1876,10 @@ export const analyticsService = {
             return {
                 keys,
                 sinceISO: new Date(fy, fm - 1, 1).toISOString(),
-                untilISO: new Date(ty, tm, 0, 23, 59, 59).toISOString(), // last day of `to` month
+                // Last instant of the `to` month. The .999 matters: without it
+                // anything timestamped in the final second of the month falls
+                // outside a `<= until` filter.
+                untilISO: new Date(ty, tm, 0, 23, 59, 59, 999).toISOString(),
             };
         }
         const keys = [];
@@ -1948,7 +2000,11 @@ export const analyticsService = {
             const endMs = new Date(ty, tm - 1, td).getTime() + DAY;
             weeks = Math.min(53, Math.max(1, Math.ceil((endMs - startMs) / WEEK)));
             windowEnd = startMs + weeks * WEEK;
-            untilISO = new Date(endMs).toISOString();
+            // endMs is the EXCLUSIVE end (start of the day after `to`), but the
+            // RPC filters `processed_at <= p_until` — inclusive. Step back one
+            // millisecond so a receipt timestamped exactly at midnight on the
+            // day AFTER the window does not fall inside it.
+            untilISO = new Date(endMs - 1).toISOString();
         } else {
             const todayLocal = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate()).getTime();
             windowEnd = todayLocal + DAY; // include all of today
@@ -2249,13 +2305,10 @@ export const analyticsService = {
     // other line is 0 until a real accounting source exists. Nothing is flagged
     // `estimated` because nothing is estimated — it is real or zero.
     async financial(orgId, { dsoDays = 45, payableDays = 30, practiceId = null, now = () => new Date(), from = null, to = null } = {}) {
-        let sinceISO, untilISO;
-        if (from && to) {
-            const [fy, fm, fd] = from.split('-').map(Number);
-            const [ty, tm, td] = to.split('-').map(Number);
-            sinceISO = new Date(fy, fm - 1, fd).toISOString();
-            untilISO = new Date(ty, tm - 1, td, 23, 59, 59).toISOString();
-        } else {
+        // Same shared day bounds as dashboardSummary — this was a verbatim
+        // copy of that logic, which is how the two drift.
+        let { ranged, sinceISO, untilISO } = dayWindowISO(from, to);
+        if (!ranged) {
             const since = new Date(now());
             since.setMonth(since.getMonth() - 12);
             sinceISO = since.toISOString();
@@ -2655,7 +2708,17 @@ export const analyticsService = {
         // Ad-platform lead window as YYYY-MM-DD (ad_metrics.metric_date is a date).
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
         const adFromDate = sinceISO.slice(0, 10);
-        const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 86400000) : now()).toISOString().slice(0, 10);
+        // The last calendar DAY inside the window. Derived as `until - 1ms`,
+        // which is correct whichever convention the caller used — an exclusive
+        // next-day-midnight, an inclusive end-of-day, or a UTC-midnight bound.
+        //
+        // It used to subtract a fixed 86400000ms and slice the UTC string. That
+        // is only right when `until` is exactly UTC midnight. Windows built in
+        // a browser carry the user's offset, so for a UK user in BST `until`
+        // arrives as 23:00Z; minus 24h lands on the previous day and the ad
+        // window silently lost its final day for most of the year.
+        const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 1) : now())
+            .toISOString().slice(0, 10);
         // Bounded fan-out. These are 16 heavy aggregates; firing them all at
         // once starved individual statements past the 8s statement_timeout
         // (panels failed while their neighbours on the same page loaded).
@@ -3118,10 +3181,11 @@ export const analyticsService = {
     // scored — it is null on every synced Dentally appt (data wall), so scoring
     // it would crater every practice. RAG: green >=90, amber >=70, else red.
     async dataQuality(orgId, { now = () => new Date() } = {}) {
-        const [practices, dqRows, connectors] = await Promise.all([
+        const [practices, dqRows, connectors, integrity] = await Promise.all([
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             analytics_repository_1.analyticsRepository.dataQualityByPractice(orgId),
             analytics_repository_1.analyticsRepository.connectorStates(orgId),
+            analytics_repository_1.analyticsRepository.dataIntegrityAlerts(orgId),
         ]);
         const num = (v) => Number(v || 0);
         const nameBy = new Map(practices.map((p) => [p.id, p.name]));
@@ -3159,7 +3223,22 @@ export const analyticsService = {
         }, { totalAppts: 0, uncodedAppts: 0, unlinkedAppts: 0, unassignedAppts: 0, totalInvoices: 0, unmatchedInvoices: 0, invoicedPence: 0, outstandingPence: 0 });
 
         const connectorHealth = scoreConnectors(connectors, now());
-        const alerts = buildDataQualityAlerts(practiceScores, totals, connectorHealth);
+        // Integrity findings sit alongside the cleanliness/connector alerts so a
+        // tenant sees "your data is double-counted" in the same place it already
+        // looks for "your data is incomplete". These are the problems a unique
+        // index is not entitled to judge — see migration 000150.
+        const integrityAlerts = (integrity || []).map((f) => ({
+            severity: f.severity,
+            area: 'integrity',
+            key: `integrity:${f.kind}:${f.subject}`,
+            text: Number(f.value_pence) > 0
+                ? `${f.subject} — ${f.detail} (£${(Number(f.value_pence) / 100).toLocaleString('en-GB')} affected)`
+                : `${f.subject} — ${f.detail}`,
+        }));
+        const alerts = [
+            ...buildDataQualityAlerts(practiceScores, totals, connectorHealth),
+            ...integrityAlerts,
+        ].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
         return {
             orgScore,
             rag: ragBand(orgScore),

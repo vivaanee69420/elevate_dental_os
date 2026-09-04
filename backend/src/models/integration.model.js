@@ -59,3 +59,73 @@ export const ghlDashboardQuerySchema = zod_1.z.object({
     since: zod_1.z.string().datetime().optional(),
     until: zod_1.z.string().datetime().optional(),
 });
+// CallRail multi-company management schemas. CallRail's hierarchy is
+// Account -> Company -> Calls: callrailAccountId is the CallRail ACCOUNT id
+// (shaped "ACC8154748ae…", stored on config.account_id — every
+// `/v3/a/{...}` URL needs it), callrailCompanyId is the CallRail COMPANY id
+// (stored on integration_accounts.external_account_id — the value the
+// unique-per-org constraint dedupes on, and what calls.json's company_id
+// filter and practice mapping key off). One company = one API key, one
+// practice — label is REQUIRED on create (unlike GHL's optional label) per
+// the frontend contract; practiceId is optional/nullable on both and is an
+// agency-actor-only field enforced in the controller, not here.
+export const callrailAccountCreateSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1),
+    callrailAccountId: zod_1.z.string().min(1),
+    callrailCompanyId: zod_1.z.string().min(1),
+    label: zod_1.z.string().min(1).max(120),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+});
+// apiKey is optional here (unlike create) — the FIX for "a rotated API key
+// can never be replaced": updateAccount re-verifies it against THIS
+// company's EXISTING account/company ids (already on file, not re-supplied
+// here — rotating the key is not the same operation as re-pointing a row at
+// a different CallRail company, which this schema deliberately does not
+// support) before persisting, same discipline as addAccount.
+export const callrailAccountUpdateSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1).optional(),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+    label: zod_1.z.string().min(1).max(120).optional(),
+    // Second-factor webhook signature verification (see
+    // callrail-webhook.js's file header). A credential, encrypted into the
+    // account's `secrets` blob — never config — so it is a plain string, not
+    // an agency-actor field: a tenant owner pasting their own CallRail
+    // signing key is ordinary self-service, not a practice-mapping decision
+    // (enforced by omission from the controller's isAgencyActor gate, which
+    // only checks practiceId). `null` clears a previously-set key.
+    signingKey: zod_1.z.string().min(1).max(200).nullable().optional(),
+});
+// Add-company step 1 (key-only discovery): the owner pastes ONE API key,
+// which may cover several CallRail accounts (an agency-style key) — no
+// account id, fixing the case that blocked an owner who genuinely does not
+// have one to hand. The backend fans out to /v3/a.json then companies.json
+// per account (see callrail-provider.js's listAccounts/listCompanies).
+export const callrailDiscoverSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1),
+});
+// Add-company step 2: connect several companies discovered above in one
+// request. Each entry carries its OWN accountId/companyId — a single key can
+// reach several accounts, and each company individually re-verifies against
+// CallRail (addAccount, reused per entry) — plus an optional label (falls
+// back to the company's own CallRail name when omitted) and practiceId.
+// apiKey is shared once across the whole batch: CallRail keys aren't
+// per-company. practiceId is agency-actor-gated in the CONTROLLER, exactly
+// like callrailAccountCreateSchema's own field.
+export const callrailBulkConnectItemSchema = zod_1.z.object({
+    accountId: zod_1.z.string().min(1),
+    companyId: zod_1.z.string().min(1),
+    label: zod_1.z.string().min(1).max(120).optional(),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+});
+export const callrailBulkConnectSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1),
+    companies: zod_1.z.array(callrailBulkConnectItemSchema).min(1),
+});
+
+// Window for the one-off Dentally payment-status repair. Both bounds required:
+// a lone bound would silently repair a different span than intended, and this
+// walks a remote API, so the caller must say exactly what it is asking for.
+export const dentallyPaymentRepairSchema = zod_1.z.object({
+    since: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'since must be YYYY-MM-DD'),
+    until: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'until must be YYYY-MM-DD'),
+}).refine((v) => v.since <= v.until, { message: 'since must not be after until' });

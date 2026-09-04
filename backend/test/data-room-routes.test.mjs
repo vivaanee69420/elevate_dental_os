@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import http from 'node:http';
 import express from 'express';
 import { AppError } from '../src/middleware/errors.js';
-import { analystLock } from '../src/middleware/analyst-lock.js';
+import { sectionLock } from '../src/middleware/section-lock.js';
 
 // The router now carries a router-level requireFeature('data_room') gate
 // (agency entitlement) ahead of the permission gate under test here — stub
@@ -68,7 +68,7 @@ function buildApp() {
   // req.path inside it is relative to /api, e.g. /data-room/...). Mount it
   // the same way here rather than under /api/data-room directly, so the
   // lock sees the same relative path it will see in app.js.
-  app.use('/api', analystLock);
+  app.use('/api', sectionLock);
   app.use('/api/data-room', router);
   app.use(errorHandler);
   return app;

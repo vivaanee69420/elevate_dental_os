@@ -25,6 +25,8 @@ import {
 } from '../hooks';
 import type { TeamMember, EditableRole } from '../api';
 import { SECTION_COLOURS } from '../data';
+import { NAV } from '@/lib/nav';
+import { ROUTE_PERMISSION, pageKey, PAGE_ENFORCED } from '@/lib/permissions';
 
 /** Status -> chip colour, mirroring the STAGE_CHIP_COLOUR convention. */
 const STATUS_CHIP_COLOUR: Record<TeamMember['status'], ChipColour> = {
@@ -467,13 +469,19 @@ const KEY_SECTION: Record<string, string> = {
   'finance.view': 'Finance',
   'valuation.view': 'Finance',
   'businesshealth.manage': 'Business Health',
+  'overview.view': 'Overview',
   'operations.view': 'Operations',
+  'payrun.manage': 'Operations',
   'intelligence.view': 'Intelligence',
   'growth.view': 'Growth',
   'crm.view': 'Elevate CRM',
   'crm.manage': 'Elevate CRM',
   'wealth.view': 'Wealth',
   'training.view': 'Training',
+  'marketing.view': 'Marketing',
+  // Was falling through to 'System', which buried the Data Room toggle in with
+  // user admin. It is its own nav section, so it gets its own matrix section.
+  'data.export': 'Data Room',
   'system.manage': 'System',
   'users.invite': 'System',
   'users.manage': 'System',
@@ -481,6 +489,8 @@ const KEY_SECTION: Record<string, string> = {
 };
 
 const SECTION_ORDER = [
+  // Overview first, matching the sidebar order.
+  'Overview',
   'Finance',
   'Business Health',
   'Operations',
@@ -489,6 +499,8 @@ const SECTION_ORDER = [
   'Elevate CRM',
   'Wealth',
   'Training',
+  'Marketing',
+  'Data Room',
   'System',
 ];
 
@@ -569,24 +581,43 @@ export default function TeamPermissionsScreen() {
     return g;
   }, [data]);
 
+  // Which pages sit under each permission key, in sidebar order. This is what
+  // lets an owner hand out one page instead of a whole section: the key row is
+  // the default, each page row below it can override that default on or off.
+  const pagesForKey = useMemo(() => {
+    const m: Record<string, { id: string; label: string; section: string }[]> = {};
+    for (const section of NAV) {
+      for (const item of section.items) {
+        const key = ROUTE_PERMISSION[item.id];
+        if (key) (m[key] ??= []).push({ id: item.id, label: item.label, section: section.label });
+      }
+    }
+    return m;
+  }, []);
+
+  const [openKeys, setOpenKeys] = useState<Record<string, boolean>>({});
+
+  // Counts are about the permission CATALOG, not the resolved page keys the
+  // matrix now also carries — otherwise every section grant would inflate them.
+  const countFor = (role: EditableRole) =>
+    data ? Object.keys(data.catalog).filter((k) => data.roles[role][k]).length : 0;
+
   const totalPerms = data ? Object.keys(data.catalog).length : 0;
-  const pmCount = data
-    ? Object.values(data.roles.practice_manager).filter(Boolean).length
-    : 0;
-  const recCount = data
-    ? Object.values(data.roles.reception).filter(Boolean).length
-    : 0;
-  const anCount = data
-    ? Object.values(data.roles.analyst).filter(Boolean).length
-    : 0;
+  const pmCount = countFor('practice_manager');
+  const recCount = countFor('reception');
+  const anCount = countFor('analyst');
 
   function toggle(
     role: EditableRole,
     permission_key: string,
-    allowed: boolean,
+    allowed: boolean | null,
   ) {
     setRole.mutate({ role, permission_key, allowed });
   }
+
+  /** True when this role has pinned this page rather than inheriting it. */
+  const isOverridden = (role: EditableRole, pageId: string) =>
+    data?.overrides?.[role]?.[pageKey(pageId)] !== undefined;
 
   if (isLoading) {
     return (
@@ -759,9 +790,11 @@ export default function TeamPermissionsScreen() {
               const pmAllowed = !!data.roles.practice_manager[row.key];
               const recAllowed = !!data.roles.reception[row.key];
               const anAllowed = !!data.roles.analyst[row.key];
+              const pages = pagesForKey[row.key] ?? [];
+              const open = !!openKeys[row.key];
               return (
+                <div key={row.key}>
                 <div
-                  key={row.key}
                   style={{
                     display: 'grid',
                     gridTemplateColumns: '1fr 90px 90px 90px 90px',
@@ -778,6 +811,24 @@ export default function TeamPermissionsScreen() {
                       gap: 8,
                     }}
                   >
+                    {/* Expands the pages this key covers, so access can be
+                        given one page at a time instead of the whole section. */}
+                    {pages.length > 0 && (
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        aria-label={`${open ? 'Hide' : 'Show'} the ${pages.length} pages under ${row.label}`}
+                        onClick={() => setOpenKeys((o) => ({ ...o, [row.key]: !open }))}
+                        style={{
+                          border: '1px solid var(--border)', background: '#FFFFFF',
+                          borderRadius: 6, cursor: 'pointer', fontSize: 10,
+                          lineHeight: 1, padding: '3px 5px', color: 'var(--ink-muted)',
+                          minWidth: 34, textAlign: 'center',
+                        }}
+                      >
+                        {open ? '▾' : '▸'} {pages.length}
+                      </button>
+                    )}
                     <span style={{ fontSize: 13 }}>{row.label}</span>
                     <span
                       className="text-ink-muted"
@@ -827,6 +878,70 @@ export default function TeamPermissionsScreen() {
                       onChange={(v) => toggle('analyst', row.key, v)}
                     />
                   </div>
+                </div>
+
+                {/* Per-page overrides. A page follows the section above unless
+                    it is pinned here; ↺ removes the pin and lets it follow
+                    again. Pages whose data is shared with other pages on one
+                    endpoint are marked — hiding those is nav-only. */}
+                {open && pages.map((pg) => (
+                  <div
+                    key={pg.id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 90px 90px 90px 90px',
+                      gap: 12,
+                      alignItems: 'center',
+                      padding: '7px 14px 7px 34px',
+                      borderBottom: '1px solid var(--border)',
+                      background: 'var(--bg)',
+                    }}
+                  >
+                    <div className="text-ink-muted" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <span>{pg.label}</span>
+                      {!PAGE_ENFORCED.has(pg.id) && (
+                        <span
+                          title="This page shares its data endpoint with others in the section, so turning it off hides the page but does not block the data."
+                          style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#FEF3C7', color: '#92400E' }}
+                        >
+                          nav only
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <span className="text-ink-muted" style={{ fontSize: 11, opacity: 0.6 }}>Always</span>
+                    </div>
+                    {(['practice_manager', 'reception', 'analyst'] as const).map((role) => {
+                      const colour = role === 'practice_manager' ? PM_BLUE : role === 'reception' ? REC_GREEN : AN_SLATE;
+                      const on = !!data.roles[role][pageKey(pg.id)];
+                      const pinned = isOverridden(role, pg.id);
+                      return (
+                        <div key={role} style={{ textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                          <Toggle
+                            on={on}
+                            colour={colour}
+                            disabled={setRole.isPending}
+                            onChange={(v) => toggle(role, pageKey(pg.id), v)}
+                          />
+                          <button
+                            type="button"
+                            title={pinned ? 'Reset: follow the section again' : 'Following the section'}
+                            aria-label={`Reset ${pg.label} for ${role} to follow the section`}
+                            disabled={!pinned || setRole.isPending}
+                            onClick={() => toggle(role, pageKey(pg.id), null)}
+                            style={{
+                              border: 'none', background: 'none', fontSize: 11, lineHeight: 1,
+                              padding: 2, cursor: pinned ? 'pointer' : 'default',
+                              color: 'var(--ink-muted)', opacity: pinned ? 1 : 0.25,
+                            }}
+                          >
+                            ↺
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
                 </div>
               );
             })}
