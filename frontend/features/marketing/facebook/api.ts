@@ -151,14 +151,18 @@ export function fetchFacebookCampaigns(qs: string) {
   return api<FacebookCampaignsPayload>(`/api/marketing/facebook/campaigns${suffix}`);
 }
 
-export function fetchFacebookAdSets(campaignId: string, qs: string) {
+// Flat, query-filtered endpoint — campaignId narrows it (?campaignId=) but is
+// OPTIONAL: the Ad sets tab calls this with no filter at all to list every ad
+// set in the window across every campaign. Matches
+// backend/src/routes/marketing.routes.js's '/facebook/ad-sets'.
+export function fetchFacebookAdSets(qs: string) {
   const suffix = qs ? `?${qs}` : '';
-  return api<FacebookAdSetsPayload>(
-    `/api/marketing/facebook/campaigns/${encodeURIComponent(campaignId)}/adsets${suffix}`,
-  );
+  return api<FacebookAdSetsPayload>(`/api/marketing/facebook/ad-sets${suffix}`);
 }
 
-export function fetchFacebookAds(adSetId: string, qs: string) {
+// Same shape: adSetId (?adSetId=) is OPTIONAL, so the Ads tab can list every
+// ad in the window unfiltered. Matches '/facebook/ads'.
+export function fetchFacebookAds(qs: string) {
   const suffix = qs ? `?${qs}` : '';
-  return api<FacebookAdsPage>(`/api/marketing/facebook/adsets/${encodeURIComponent(adSetId)}/ads${suffix}`);
+  return api<FacebookAdsPage>(`/api/marketing/facebook/ads${suffix}`);
 }

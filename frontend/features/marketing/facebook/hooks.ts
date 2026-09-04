@@ -114,36 +114,50 @@ export function useFacebookCampaigns() {
   });
 }
 
-export function useFacebookAdSets(campaignId: string) {
+// campaignId is OPTIONAL and, unlike the old nested-route version, this is
+// now ALWAYS enabled — the Ad sets tab lists every ad set in the window when
+// there is no campaign filter, which is the whole point of Task 2 moving the
+// parent id off the path and into the query. Called unconditionally from the
+// top-level FacebookReportScreen (not just from inside the Ad sets tab) so
+// its result can double as the source for the Ads tab's filter-chip name
+// lookup — same cache entry, no second request, same "reuse the call the
+// app already made" idiom the old AdSetsScreen used for the campaign name.
+export function useFacebookAdSets(campaignId: string | null) {
   const { scope, win } = useScopePeriod();
   const qs = facebookWindowParams(scope, win);
+  const full = campaignId ? `${qs}&campaignId=${encodeURIComponent(campaignId)}` : qs;
   return useQuery<FacebookAdSetsPayload>({
-    queryKey: ['marketing', 'facebook', 'adsets', campaignId, scopeKey({ scope, win })],
-    queryFn: () => fetchFacebookAdSets(campaignId, qs),
+    queryKey: ['marketing', 'facebook', 'adsets', campaignId ?? 'all', scopeKey({ scope, win })],
+    queryFn: () => fetchFacebookAdSets(full),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
-    enabled: Boolean(campaignId),
   });
 }
 
-// Ads for one ad set, one page at a time (Task 7's "Show more" — a tenant
-// with many times this org's ad count must not be rendered in one response).
-// useInfiniteQuery, not repeated useQuery calls with cursor in the key: the
-// cursor is a page PARAMETER react-query threads through queryFn/
-// getNextPageParam itself, not a cache-key dimension — putting it in the key
-// would give every page its own cache entry instead of one growing list.
-// Matches the shape of useTreatmentsCompletedLines (clinicians-hooks.ts).
-export function useFacebookAds(adSetId: string, enabled: boolean) {
+// Ads for one ad set, or every ad in the window when adSetId is null (the Ads
+// tab unfiltered), one page at a time — a tenant with many times this org's
+// ad count must not be rendered in one response. useInfiniteQuery, not
+// repeated useQuery calls with cursor in the key: the cursor is a page
+// PARAMETER react-query threads through queryFn/getNextPageParam itself, not
+// a cache-key dimension — putting it in the key would give every page its
+// own cache entry instead of one growing list. Matches the shape of
+// useTreatmentsCompletedLines (clinicians-hooks.ts).
+//
+// No `enabled` flag: this is now a real tab (FacebookAdsTab), not a
+// lazily-expanded row — when it is mounted it is because the tab is active
+// and its data is wanted, matching how the Campaigns/Ad sets tabs behave.
+export function useFacebookAds(adSetId: string | null) {
   const { scope, win } = useScopePeriod();
   const qs = facebookWindowParams(scope, win);
+  const base = adSetId ? `${qs}&adSetId=${encodeURIComponent(adSetId)}` : qs;
   return useInfiniteQuery<FacebookAdsPage>({
-    queryKey: ['marketing', 'facebook', 'ads', adSetId, scopeKey({ scope, win })],
+    queryKey: ['marketing', 'facebook', 'ads', adSetId ?? 'all', scopeKey({ scope, win })],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) => {
       const cursor = pageParam as string | null;
-      return fetchFacebookAds(adSetId, cursor ? `${qs}&cursor=${encodeURIComponent(cursor)}` : qs);
+      return fetchFacebookAds(cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base);
     },
     // undefined (not null) tells react-query there is no next page — the
     // contract getNextPageParam must follow.
@@ -151,6 +165,5 @@ export function useFacebookAds(adSetId: string, enabled: boolean) {
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
-    enabled: enabled && Boolean(adSetId),
   });
 }
