@@ -133,6 +133,22 @@ export const adGrainRepository = {
             }
             written += Number(data ?? 0);
         }
+
+        // Stamp practice_id from the account mapping. The single RPC this
+        // replaced did it as its own last step, and splitting the write left
+        // it with no caller: 39,830 deep-grain rows landed with a NULL
+        // practice, so every practice-filtered Ad groups / Ads / Keywords tab
+        // read "no spend in the selected period" while the Campaigns tab —
+        // which reads ad_metrics, stamped inline by its own RPC — showed the
+        // same period's spend perfectly. The failure looked like a per-practice
+        // sync problem and was neither.
+        //
+        // It belongs HERE, not in the sync that calls this, precisely because
+        // it was forgettable once. A caller cannot write these rows without
+        // stamping them. It is idempotent (the RPC updates only rows whose
+        // practice differs), so the repeat calls across grains settle to
+        // no-ops after the first.
+        await this.restampPractices(orgId);
         return written;
     },
 

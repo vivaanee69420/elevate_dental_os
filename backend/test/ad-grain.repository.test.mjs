@@ -63,6 +63,25 @@ describe('replaceWindow', () => {
         expect(sent).toEqual(rows.map((r) => r.entity_id));
     });
 
+    it('stamps practice_id after writing — a write that skips it reads as no spend', async () => {
+        await adGrainRepository.replaceWindow(ORG, 'google_keyword', ['C1'], [{ entity_id: 'KW1' }]);
+
+        const fns = supaRec.rpcCalls.map((c) => c.fn);
+        expect(fns).toContain('ad_grain_restamp_practices');
+        // Last, not first: a restamp before the rows exist stamps nothing.
+        expect(fns.at(-1)).toBe('ad_grain_restamp_practices');
+
+        // Deep-grain rows carry no practice of their own — it comes from the
+        // ad account's mapping — so an unstamped row is invisible to every
+        // practice-filtered read. Omitting this step once left 39,830 rows
+        // NULL, and the symptom was "no Google spend in the selected period"
+        // on the Ad groups/Ads/Keywords tabs while Campaigns showed the same
+        // period's spend, because ad_metrics is stamped by a different RPC.
+        // Asserting the write "succeeded" would not have caught it: it did.
+        const restamp = supaRec.rpcCalls.find((c) => c.fn === 'ad_grain_restamp_practices');
+        expect(restamp.params).toEqual({ p_org: ORG });
+    });
+
     it('does not call the database with an empty payload', async () => {
         const n = await adGrainRepository.replaceWindow(ORG, 'google_keyword', ['C1'], []);
         expect(supaRec.rpcCalls).toHaveLength(0);
@@ -181,12 +200,12 @@ describe('cross-org isolation', () => {
         await adGrainRepository.replaceWindow(ORG, 'meta_ad', ['act1'], [{ entity_id: 'A' }]);
         await adGrainRepository.restampPractices(ORG);
 
-        // replaceWindow is two RPCs now (delete, then append), so five in all.
-        // The property under test is unchanged and is the point: EVERY call
-        // this repository makes carries an organisation id. serviceClient
+        // replaceWindow is three RPCs now (delete, append, restamp), so six in
+        // all. The property under test is unchanged and is the point: EVERY
+        // call this repository makes carries an organisation id. serviceClient
         // bypasses RLS, so p_org is the only thing standing between one
         // tenant's ad spend and another's.
-        expect(supaRec.rpcCalls).toHaveLength(5);
+        expect(supaRec.rpcCalls).toHaveLength(6);
         for (const call of supaRec.rpcCalls) {
             expect(call.params.p_org).toBe(ORG);
         }
