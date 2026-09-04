@@ -17,10 +17,13 @@ const FEATURE_LABELS: Record<string, string> = {
   business_health: 'Business Health',
   operations: 'Operations',
   growth: 'Growth',
+  marketing: 'Marketing',
   crm: 'Elevate CRM',
   wealth: 'Wealth',
   training: 'Training',
-  system: 'System',
+  // Keys are backend module names; the labels name what the sub-account's
+  // owner actually sees in their sidebar, so 'system' reads as Settings.
+  system: 'Settings',
   data_room: 'Data Room',
   emergent: 'Emergent',
   call_reporting: 'Call Reporting',

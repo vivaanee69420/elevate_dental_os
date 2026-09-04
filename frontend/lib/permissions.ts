@@ -193,7 +193,9 @@ export const SECTION_FEATURE: Record<string, string> = {
   'Elevate CRM': 'crm',
   Wealth: 'wealth',
   Training: 'training',
-  System: 'system',
+  // Keyed by the nav LABEL, which is now 'Settings'; the feature key stays
+  // 'system' because that is the backend module name, not a display string.
+  Settings: 'system',
 };
 
 /** As featureAllowsRoute, but for a whole nav section. */
