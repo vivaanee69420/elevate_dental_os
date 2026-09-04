@@ -3,6 +3,7 @@ import {
 } from 'vitest';
 import { adAttributionRepository } from '../src/repositories/ad-attribution.repository.js';
 import { adChannelPipelineRepository } from '../src/repositories/ad-channel-pipeline.repository.js';
+import { adGrainRepository } from '../src/repositories/ad-grain.repository.js';
 import {
   resolveChannel, ratio, computePerformance, adAttributionService, accountPracticeByCustomerId,
   FEED_STALE_AFTER_DAYS,
@@ -29,6 +30,9 @@ vi.mock('../src/repositories/ad-channel-pipeline.repository.js', () => ({
     channelMap: vi.fn(),
     setChannel: vi.fn(),
   },
+}));
+vi.mock('../src/repositories/ad-grain.repository.js', () => ({
+  adGrainRepository: { restampPractices: vi.fn() },
 }));
 
 describe('resolveChannel', () => {
@@ -1070,18 +1074,36 @@ describe('adAttributionService.setAdAccountPractice', () => {
     adAttributionRepository.setAdAccountPractice.mockReset();
     adAttributionRepository.restampAdMetricsPractices.mockReset();
     adAttributionRepository.restampAdMetricsPractices.mockResolvedValue(42);
+    adGrainRepository.restampPractices.mockReset();
+    adGrainRepository.restampPractices.mockResolvedValue(11);
   });
 
-  it('writes the mapping and then restamps the existing spend rows', async () => {
+  // BOTH restamps must fire. The deep-grain tables carry their own
+  // denormalised practice_id, and an account that has stopped syncing is never
+  // re-stamped by a pull — so a campaign-only restamp leaves the ad
+  // group/ad/keyword rows on the OLD mapping for ever. That is the shape of
+  // the incident that had every practice-scoped ad-spend figure reading £0.
+  it('writes the mapping and then restamps BOTH the campaign and deep-grain spend rows', async () => {
     const out = await adAttributionService.setAdAccountPractice('org1', 'acct-1', 'prac-9');
     expect(adAttributionRepository.setAdAccountPractice)
       .toHaveBeenCalledWith('org1', 'acct-1', 'prac-9');
     expect(adAttributionRepository.restampAdMetricsPractices).toHaveBeenCalledWith('org1');
-    expect(out).toEqual({ ok: true, restamped: 42 });
+    expect(adGrainRepository.restampPractices).toHaveBeenCalledWith('org1');
+    expect(out).toEqual({ ok: true, restamped: 42, grainRestamped: 11 });
   });
 
   it('restamps when a mapping is CLEARED too, so stale stamps are removed', async () => {
     await adAttributionService.setAdAccountPractice('org1', 'acct-1', null);
     expect(adAttributionRepository.restampAdMetricsPractices).toHaveBeenCalledWith('org1');
+    expect(adGrainRepository.restampPractices).toHaveBeenCalledWith('org1');
+  });
+
+  // Campaign grain feeds every existing figure in the product; deep grain
+  // feeds two new pages. A deep-grain failure must not undo or hide the
+  // campaign restamp that already succeeded.
+  it('still reports the campaign restamp when the deep-grain restamp fails', async () => {
+    adGrainRepository.restampPractices.mockRejectedValueOnce(new Error('rpc missing'));
+    const out = await adAttributionService.setAdAccountPractice('org1', 'acct-1', 'prac-9');
+    expect(out).toEqual({ ok: true, restamped: 42, grainRestamped: 0 });
   });
 });

@@ -89,6 +89,79 @@ export const marketingRepository = {
         };
     },
 
+    // Raw ad_metrics rows for ONE provider over a window, for the reconciliation
+    // service to sum. Deliberately NOT campaignSpend(): that method resolves its
+    // window to LONDON calendar dates for the shared ScopePeriod bar and bounds
+    // it HALF-OPEN (`gte`/`lt`), while the ad_grain_rollup RPC this feeds
+    // compares plain dates INCLUSIVE on both ends (`>= since AND <= until`).
+    // Reusing campaignSpend would silently drop the final day's spend from one
+    // side of every comparison and report a permanent false gap on the very
+    // feature built to prove the numbers tally — so `since`/`until` here are
+    // taken as plain YYYY-MM-DD strings, never routed through londonYmd, and
+    // bounded with `.gte()`/`.lte()` to match the RPC exactly.
+    //
+    // PAGED, and it must be: PostgREST caps a response at 1000 rows server-side
+    // and says nothing about it (see allForOrg in monthlyFinancial.repository.js,
+    // which documents this bug after it silently wrecked every QuickBooks-derived
+    // figure in the product). Ordered on `id`, the table's own unique key, so
+    // OFFSET paging cannot repeat or skip a row; stops on an EMPTY page, never a
+    // short one — the server's cap is its own setting, and treating a short page
+    // as the last would reintroduce the same truncation at whatever that number
+    // happens to be.
+    // `customerIds`, when given, narrows the read to those accounts. The
+    // reconciliation service passes the accounts the DEEP pull can actually
+    // cover, because otherwise the two sides of the comparison span different
+    // account sets: ad_metrics keeps 92 days of history for an account that has
+    // since been deactivated, deselected, or found to bill in a currency we
+    // refuse to convert, while the deep tables hold nothing for it. That
+    // account's whole spend would then read as a permanent unexplained red gap
+    // on the one screen built to prove the numbers tally. An EMPTY array means
+    // "no account is covered" and is honoured as such (a zero campaign total,
+    // matching a zero deep total); null/undefined means "no filter".
+    async campaignSpendByProvider(orgId, since, until, provider, customerIds = null) {
+        const PAGE = 1000;
+        const MAX_PAGES = 500;   // a bound against a faulty server, not real data
+        if (Array.isArray(customerIds) && customerIds.length === 0) return [];
+        const rows = [];
+        for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            let q = supabase_1.serviceClient
+                .from('ad_metrics')
+                .select('id, spend_pence')
+                .eq('organisation_id', orgId)
+                .eq('provider', provider)
+                .gte('metric_date', since)
+                .lte('metric_date', until)
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (Array.isArray(customerIds)) q = q.in('customer_id', customerIds.map(String));
+            const { data, error } = await q;
+            if (error) throw new Error(`ad_metrics read: ${error.message}`);
+            const page = Array.isArray(data) ? data : [];
+            rows.push(...page);
+            if (page.length === 0) break;
+            from += page.length;
+        }
+        return rows;
+    },
+
+    // One provider's ad accounts with the two fields that decide whether the
+    // deep pull can reach an account: platform status and currency. Those are
+    // the only two that PARTITION the data — is_selected is deliberately NOT
+    // read here, because neither sync consults it, so a deselected account
+    // still receives rows in ad_metrics and in the deep tables alike.
+    // Deliberately separate from adAccounts() below, which answers a different
+    // question (practice mapping) for a different screen — widening that
+    // select would couple the two.
+    async adAccountsForProvider(orgId, provider) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('ad_accounts')
+            .select('customer_id, name, currency, status')
+            .eq('organisation_id', orgId)
+            .eq('provider', provider);
+        if (error) throw new Error(`ad_accounts read: ${error.message}`);
+        return data ?? [];
+    },
+
     // The org's ad accounts and which practice each is mapped to. Read so the
     // screen can distinguish "this practice spent nothing" from "no ad account
     // is mapped to this practice, so we cannot attribute any spend to it" —

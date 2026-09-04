@@ -1,6 +1,6 @@
 import express from 'express';
 import { requirePermission } from '../middleware/auth.js';
-import { getPerformance, getTrend, getLeads } from '../controllers/marketing.controller.js';
+import { getPerformance, getTrend, getLeads, getReconciliation } from '../controllers/marketing.controller.js';
 
 const router = express.Router();
 
@@ -11,5 +11,6 @@ const router = express.Router();
 router.get('/performance', requirePermission('marketing.view'), getPerformance);
 router.get('/trend', requirePermission('marketing.view'), getTrend);
 router.get('/leads', requirePermission('marketing.view'), getLeads);
+router.get('/reconciliation', requirePermission('marketing.view'), getReconciliation);
 
 export default router;

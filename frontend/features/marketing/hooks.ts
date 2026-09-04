@@ -10,8 +10,8 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useScopePeriod, windowParams, scopeKey } from '@/features/_shared/scope-context';
 import {
-  fetchMarketingPerformance, fetchMarketingTrend, fetchMarketingLeads,
-  type MarketingPerformance, type TrendMonth, type MarketingLeadPage,
+  fetchMarketingPerformance, fetchMarketingTrend, fetchMarketingLeads, fetchReconciliation,
+  type MarketingPerformance, type TrendMonth, type MarketingLeadPage, type Reconciliation,
 } from './api';
 
 export function useMarketingPerformance() {
@@ -82,6 +82,23 @@ export function useMarketingLeads(opts: {
     staleTime: 5 * 60_000,
     gcTime: 30 * 60_000,
     placeholderData: keepPreviousData,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// Ads deep-grain reconciliation (Integrations screen). Takes NO window: this
+// panel is not windowed by the shared ScopePeriod bar, and the window it wants
+// is the deep pull's own, which only the server can compute on the same London
+// clock the sync uses (see fetchReconciliation). The response reports the
+// dates it used, so the query key needs only the provider.
+export function useAdReconciliation(provider: 'google_ads' | 'meta_ads') {
+  return useQuery<Reconciliation>({
+    queryKey: ['marketing', 'reconciliation', provider],
+    queryFn: () => fetchReconciliation(provider),
+    // Written by the nightly deep-grain pull, so a five-minute client stale
+    // time costs nothing in freshness and saves a refetch on every remount.
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
   });
 }
