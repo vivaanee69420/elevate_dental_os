@@ -2008,3 +2008,133 @@ response's `nextCursor` verbatim).
 row is the same cost/funnel shape as the campaign tier. `nextCursor` is `null`
 on the last page. `effectiveSince`/`windowClamped` are as documented on the
 campaign tier.
+
+## Google report (`/api/marketing/google`)
+
+Campaign → Ad Group → **{ Ads, Keywords }** over the Google deep-grain
+tables, in the same spirit as the Facebook report above but with FOUR tiers
+instead of three: Google's hierarchy splits at the ad group into two
+**sibling** leaves — an ad's parent is an ad group and a keyword's parent is
+an ad group, but neither ads nor keywords contain the other, so neither is
+nested inside the other's response. **Permission:** `marketing.view` on all
+four routes. **The organisation is taken from `req.user.organisation_id` and
+is NEVER accepted as a request parameter** — same isolation model as the
+Facebook report above.
+
+**Query (all four routes):** `since`, `until` (`YYYY-MM-DD`, both
+**optional**, both **INCLUSIVE**, same semantics/defaults as the Facebook
+report's — `londonDaysAgo(DEEP_WINDOW_DAYS)` through `londonYmd()` when
+omitted) and `practice_id` (optional UUID, silently ignored otherwise).
+`/google/ad-groups`, `/google/ads` and `/google/keywords` additionally accept
+`campaignId` (the ad platform's own campaign id, not a uuid) and — on
+`/ads`/`/keywords` only — `parentId` (an **ad group's** own id, never a
+campaign id). Both are optional filters, not required path segments:
+omitting them lists everything in scope across every parent; supplying one
+narrows to it. `campaignId` and `parentId` can be supplied together on
+`/ads`/`/keywords` (narrows to one campaign's ads/keywords with no ad group
+picked yet, or to one ad group's).
+
+Money is integer pence throughout. `cpcPence` and `costPerConversionPence`
+are `null`, never `0`, when their denominator (clicks/conversions) is zero —
+a cost per nothing is unknowable, not free.
+
+**Deliberately different from the Facebook report:**
+- **Every row carries `conversions` and `costPerConversionPence`** —
+  Google's own tracked conversions, computed from the SAME `metrics.conversions`
+  Google returns to the deep sync and the campaign sync alike. This is the one
+  grain-level metric Meta's report does not carry: Meta's `actions` are never
+  requested at ad-set/ad grain, so that column would be a permanent zero
+  there, which is why the Facebook report uses the CRM funnel instead.
+  `conversions` is **numeric, not an integer** — Google reports modelled
+  (fractional) conversions, and the figure is never rounded or parsed as an
+  int.
+- **No `coverage`, no `leads`/`booked`/`attended`/`patients`, no
+  `cplPence`/`cpbPence`/`cpaPence`, no `notIdentified`/`unmatchedLeads`
+  anywhere on this page.** Google's rows are already fully attributed by the
+  platform itself, so there is no CRM-matching gap to measure or bucket.
+  CPL/CPB/CPA need CallRail calls and GoHighLevel leads deduplicated to one
+  person per lead — a separate plan with its own migration — and are not
+  added here even as a blank column: an empty column reads worse than an
+  absent one (the same reasoning that removed the blank Reach column from the
+  Facebook ad-set/ad tiers).
+- **Every one of the four methods returns its own `state`** (see below) —
+  unlike the Facebook report's `/facebook/ads`, which currently returns none
+  at all (a known, separately-tracked gap on that page, not reproduced here).
+
+`state` is one of:
+- `not_connected` — no Google ad account on this org.
+- `never_synced` — a Google account is connected but **no `google_ads`
+  metric row has ever landed for this organisation**. Same out-of-window
+  probe as the Facebook report's identical state.
+- `no_spend_in_window` — Google has delivered data before, but there is no
+  spend in the selected period/practice/campaign/ad group. The honest
+  empty-window state.
+- `ok` — normal.
+
+### `GET /api/marketing/google/campaigns`
+
+Google report, campaign tier.
+
+**Response:** `{ state, rows[], excludedAccounts[], totals, effectiveSince,
+windowClamped }`.
+
+- Each row: `{ id, name, status, spendPence, impressions, clicks, ctr,
+  cpcPence, conversions, costPerConversionPence }`. `totals` is the same
+  shape with `id`/`name`/`status` null. `status` is Google's own campaign
+  status (`ENABLED`, `PAUSED`, …) as it stood on the **latest day in the
+  window** — `ad_metrics` stamps it per campaign-day, exactly as the Facebook
+  report's campaign tier documents.
+- `excludedAccounts` lists connected Google accounts excluded for an
+  unsupported currency (`{ customerId, name, currency, reason:
+  'unsupported_currency' }`), same shape/reasoning as the Facebook report's.
+
+### `GET /api/marketing/google/ad-groups`
+
+As above, at the ad-group tier. **Query:** adds `campaignId` (optional;
+omitted lists every ad group in the window across every campaign, supplied
+narrows to one campaign's).
+
+**Response:** `{ state, rows[], excludedAccounts[], effectiveSince,
+windowClamped }` — no `totals` at this tier (same as the Facebook report's
+ad-set tier). Each row additionally carries `campaignId`/`campaignName`, so
+an unfiltered listing across campaigns stays readable.
+
+### `GET /api/marketing/google/ads`
+
+Ads, spend-sorted descending (ties broken by id, ascending, for stable
+paging), 50 per page — same paging idiom as the Facebook report's
+`/facebook/ads`. **Query:** adds `campaignId` and `parentId` (both optional —
+see above).
+
+**Response:** `{ state, rows[], nextCursor, excludedAccounts[],
+effectiveSince, windowClamped }`. Each row is the same shape as the ad-group
+tier plus `parentId` (its ad group's id). `nextCursor` is `null` on the last
+page.
+
+### `GET /api/marketing/google/keywords`
+
+Keywords — the **sibling** of `/ads` under the same ad group, not a child of
+it. Same spend-sorted, 50-per-page paging as `/ads`. **Query:** adds
+`campaignId` and `parentId` (an ad group's id, both optional — see above).
+
+**Response:** `{ state, rows[], nextCursor, excludedAccounts[], approximate,
+effectiveSince, windowClamped }`. Each row is the ad-group-tier shape plus
+`parentId`, `matchType` (`EXACT`/`PHRASE`/`BROAD`), `qualityScore` (1-10 or
+`null`), and the three impression-share ratios: `searchImpressionShare`,
+`searchTopImpressionShare`, `searchAbsoluteTopImpressionShare` (`0..1` or
+`null`). Two of these are approximations, and `approximate` states that
+plainly rather than presenting either as exact:
+
+- `approximate.impressionShare` — the three share figures are an
+  **impression-weighted average** over the window, with the denominator
+  filtered (in SQL, `ad_keyword_rollup`) to only the days Google actually
+  reported a share. Google computes its own range figure from eligible
+  impressions, which the API does not expose, so this can differ slightly.
+  Spend, clicks and conversions are exact.
+- `approximate.qualityScore` — `qualityScore` is the **latest** value in the
+  window, not an average: it is a 1-10 grade Google assigns, and averaging
+  grades is meaningless.
+
+`approximate` is present on every `/keywords` response, including the
+`not_connected`/empty-window early returns — it is a fixed pair of strings,
+not computed per request.

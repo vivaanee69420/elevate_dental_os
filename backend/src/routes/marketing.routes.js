@@ -3,6 +3,7 @@ import { requirePermission } from '../middleware/auth.js';
 import {
     getPerformance, getTrend, getLeads, getReconciliation,
     getFacebookCampaigns, getFacebookAdSets, getFacebookAds,
+    getGoogleCampaigns, getGoogleAdGroups, getGoogleAds, getGoogleKeywords,
 } from '../controllers/marketing.controller.js';
 
 const router = express.Router();
@@ -22,5 +23,14 @@ router.get('/facebook/campaigns', requirePermission('marketing.view'), getFacebo
 // practice_id does on all three).
 router.get('/facebook/ad-sets', requirePermission('marketing.view'), getFacebookAdSets);   // ?campaignId=
 router.get('/facebook/ads', requirePermission('marketing.view'), getFacebookAds);          // ?adSetId=
+
+// Google's hierarchy is Campaign -> Ad Group -> { Ads, Keywords } — ads and
+// keywords are SIBLINGS under an ad group (neither contains the other), which
+// is why there are four routes here where Facebook has three. Same flat,
+// query-filtered shape as the Facebook routes above.
+router.get('/google/campaigns', requirePermission('marketing.view'), getGoogleCampaigns);
+router.get('/google/ad-groups', requirePermission('marketing.view'), getGoogleAdGroups);   // ?campaignId=
+router.get('/google/ads', requirePermission('marketing.view'), getGoogleAds);              // ?campaignId=&parentId=
+router.get('/google/keywords', requirePermission('marketing.view'), getGoogleKeywords);    // ?campaignId=&parentId=
 
 export default router;
