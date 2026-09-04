@@ -47,14 +47,13 @@ export function SectionTabs() {
   if (!section || items.length === 0) return null;
 
   return (
-    // Full-bleed against the content area's padding so the hairline runs the
-    // width of the page, the way a tab strip reads in a desktop app. <main> is
-    // the scroll container, so sticking to its top keeps the section's other
-    // screens one click away however far down a long page the reader is.
-    <div className="sticky top-0 z-20 -mx-6 -mt-6 mb-6 border-b border-border bg-card">
+    // Rendered above <main>, so it is already flush under the topbar and spans
+    // the full width — the white continues the topbar's surface and one
+    // hairline closes the header block.
+    <div className="shrink-0 border-b border-border bg-card">
       <div
         ref={scrollerRef}
-        className="flex items-stretch gap-1 overflow-x-auto px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="flex h-11 items-stretch gap-0.5 overflow-x-auto px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {items.map((item) => {
           const active = routeId === item.id;
@@ -64,27 +63,26 @@ export function SectionTabs() {
               href={`/${item.id}`}
               ref={active ? activeRef : undefined}
               aria-current={active ? 'page' : undefined}
-              className={`group relative shrink-0 whitespace-nowrap px-3 pt-3.5 pb-3 text-[13px] transition-colors duration-150 ${
+              className={`group relative flex shrink-0 items-center whitespace-nowrap px-3 text-[13px] transition-colors duration-150 ${
                 active ? 'font-semibold text-brand' : 'font-medium text-ink-muted hover:text-ink'
               }`}
             >
               <span className="inline-flex items-center gap-1.5">
                 {item.label}
+                {/* A dot, not a NEW pill: a row of pills was louder than the
+                    tab labels themselves and buried the active tab. */}
                 {item.isNew && (
                   <span
-                    className={`rounded px-1 py-px text-[9px] font-bold uppercase tracking-wide transition-colors ${
-                      active ? 'bg-brand-50 text-brand' : 'bg-emerald-50 text-emerald-600'
-                    }`}
-                  >
-                    New
-                  </span>
+                    aria-label="New"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500"
+                  />
                 )}
               </span>
               {/* The underline sits on the strip's own border line. It is always
                   rendered and only scaled, so moving between tabs animates
                   rather than popping in and out. */}
               <span
-                className={`absolute inset-x-2 -bottom-px h-0.5 origin-center rounded-full bg-brand transition-transform duration-200 ${
+                className={`absolute inset-x-2 bottom-0 h-0.5 origin-center rounded-t-full bg-brand transition-transform duration-200 ${
                   active ? 'scale-x-100' : 'scale-x-0 group-hover:scale-x-100 group-hover:bg-border'
                 }`}
               />

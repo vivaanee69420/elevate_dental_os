@@ -23,10 +23,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <Sidebar />
               <div className="flex-1 flex flex-col min-w-0">
                 <TopBar />
-                <main className="flex-1 p-6 overflow-y-auto">
-                  <SectionTabs />
-                  {children}
-                </main>
+                {/* The section's tab strip is a sibling of <main>, not its
+                    first child: inside, it sat below main's 24px top padding
+                    and needed negative margins to reach the edges. Out here it
+                    is flush under the topbar, spans the full width, and stays
+                    put while the page scrolls without relying on sticky. */}
+                <SectionTabs />
+                <main className="flex-1 p-6 overflow-y-auto">{children}</main>
               </div>
             </div>
           </SyncToastProvider>
