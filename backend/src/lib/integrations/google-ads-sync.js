@@ -22,6 +22,8 @@ import { apiBase, fetchWithApiVersion } from './google-ads-version.js';
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
+import { syncGoogleDeep, DEEP_WINDOW_DAYS } from "./google-ads-deep-sync.js";
+import { partitionAccountsByCurrency } from "./ad-currency.js";
 
 const INCREMENTAL_DAYS = 90;  // nightly cron window: trailing 3 months (product rule)
 const FULL_DAYS = 183;        // on-connect / reconnect backfill window: 6 months (product rule)
@@ -138,7 +140,12 @@ export function classifyCustomerError(message) {
 // successful sync or a reconnect writes status back to null (upsertAdAccounts
 // sets it from the payload), so this self-heals the moment the account works
 // again — a reactivated Google Ads account recovers on the next connect.
-const SKIP_STATUSES = new Set(Object.values(PERMANENT_CUSTOMER_ERRORS));
+//
+// EXPORTED so the reconciliation service can derive the same "this account is
+// not in the pull" set from one definition. Two copies of this list would
+// drift, and a drifted copy shows up as a permanent unexplained spend gap on
+// the tally screen.
+export const SKIP_STATUSES = new Set(Object.values(PERMANENT_CUSTOMER_ERRORS));
 
 export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'google_ads');
@@ -251,9 +258,44 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
             if (error) throw new Error(`ad_metrics upsert: ${error.message}`);
         }
 
+        // Deep grain (ad group / ad / keyword) runs AFTER the campaign replace
+        // and is wrapped so it can never fail the campaign sync. Campaign grain
+        // feeds every existing marketing figure; deep grain feeds two new pages
+        // that tolerate being a day stale. A keyword pull that trips a 403
+        // throttle must not cost us the day's spend.
+        let deep = { counts: {}, skipped: [], unsupportedCurrency: [] };
+        try {
+            // Currency comes from the LIVE stream we just read (customer
+            // .currency_code, sniffed into `accounts` above), not from a
+            // re-read of ad_accounts. The old re-read was wrapped in
+            // `.catch(() => [])`, so a database hiccup made every currency
+            // read null — and a null currency is treated as GBP by design.
+            // The guard therefore FAILED OPEN on exactly the kind of transient
+            // fault it is meant to survive, admitting a USD account and
+            // silently inflating every group total. The stream value is also
+            // fresher: it is this run's answer from Google, not the last
+            // sync's copy.
+            const byId = new Map(accounts.map((a) => [String(a.customer_id), a]));
+            const { supported, unsupported } = partitionAccountsByCurrency(
+                cidsWithRows.map((cid) => ({ customer_id: cid, currency: byId.get(String(cid))?.currency ?? null })),
+            );
+            const deepSince = daysAgo(DEEP_WINDOW_DAYS);
+            const r = await syncGoogleDeep(orgId, {
+                accessToken: access_token,
+                customerIds: supported,
+                since: deepSince,
+                until: untilDate,
+                queryCustomer: (cid, tok, gaql) => queryCustomer(cid, tok, gaql),
+            });
+            deep = { ...r, unsupportedCurrency: unsupported };
+        } catch (err) {
+            console.error('[google_ads] deep-grain sync failed:', err.message);
+            deep = { counts: {}, skipped: [], unsupportedCurrency: [], error: String(err.message).slice(0, 200) };
+        }
+
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'google_ads');
-        return { rows: all.length, customers: customerIds.length, skipped, permanentlySkipped: [...permanent] };
+        return { rows: all.length, customers: customerIds.length, skipped, permanentlySkipped: [...permanent], deep };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'google_ads', String(err.message).slice(0, 500));
         throw err;

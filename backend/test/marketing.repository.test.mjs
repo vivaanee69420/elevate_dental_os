@@ -117,6 +117,166 @@ describe('campaignSpend window', () => {
     });
 });
 
+// campaignSpendByProvider feeds the reconciliation service, which compares it
+// directly against ad_grain_rollup — a plpgsql RPC that filters
+// `metric_date >= p_since AND metric_date <= p_until` on PLAIN date strings.
+// Any divergence from that (a London-resolved date, or a half-open bound)
+// reintroduces the false permanent gap RULING B exists to prevent.
+describe('campaignSpendByProvider', () => {
+    const lte = (col) => supaRec.last.ltes.find((x) => x.col === col)?.val;
+
+    it('takes since/until as plain strings, verbatim — no londonYmd resolution', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(gte('metric_date')).toBe('2026-08-01');
+        expect(lte('metric_date')).toBe('2026-08-31');
+    });
+
+    it('bounds INCLUSIVE on both ends (gte/lte), matching ad_grain_rollup — never lt', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(supaRec.last.ltes?.some((x) => x.col === 'metric_date')).toBe(true);
+        expect(supaRec.last.lts ?? []).toEqual([]);
+    });
+
+    it('scopes to the organisation and the requested provider', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'meta_ads');
+        expect(supaRec.last.table).toBe('ad_metrics');
+        expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+        expect(supaRec.last.eqs).toContainEqual({ col: 'provider', val: 'meta_ads' });
+    });
+
+    it('returns rows carrying spend_pence for the caller to sum', async () => {
+        supaRec.resultProvider = () => ({
+            data: [{ id: 'a', spend_pence: 1200 }, { id: 'b', spend_pence: 3400 }],
+            error: null,
+        });
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(rows.reduce((n, r) => n + r.spend_pence, 0)).toBe(4600);
+    });
+
+    // The bug this pins: PostgREST caps a table read at 1000 rows server-side
+    // and says nothing about it (see allForOrg in monthlyFinancial.repository.js).
+    //
+    // The ROW TOTAL alone cannot separate a correct `page.length === 0`
+    // reader from a buggy `page.length < PAGE` one: both push a page before
+    // deciding whether to stop, so the trailing 64-row ("short") page is
+    // captured by EITHER implementation and the totals come out identical
+    // (1064 either way, on this harness). What differs is the READ COUNT —
+    // the correct reader makes a THIRD, confirming read (range 1064-2063)
+    // that comes back empty before it will stop; the buggy reader treats the
+    // 64-row page as the last and never makes that read. Counting reads is
+    // therefore the only assertion that actually pins page.length === 0 over
+    // page.length < PAGE — do not "simplify" this back to a row-count-only
+    // check, it would stop discriminating the bug it exists to catch.
+    it('returns EVERY row when the window exceeds one page, making the confirming empty-page read', async () => {
+        let reads = 0;
+        supaRec.resultProvider = () => {
+            reads += 1;
+            return {
+                data: Array.from({ length: 1064 }, (_, i) => ({ id: `r${i}`, spend_pence: 100 })),
+                error: null,
+            };
+        };
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(rows).toHaveLength(1064);
+        // 1000 + 64 + a confirming empty page. A `page.length < PAGE` reader
+        // would stop right after the 64-row page and this would read 2, not 3.
+        expect(reads).toBe(3);
+    });
+
+    // Renamed from "does not stop on a SHORT page, only an empty one" — that
+    // name made a claim about read behaviour the test never actually checked
+    // (it only asserted the final row total, which is identical under the
+    // buggy implementation too — see the comment above). Same blind spot, on
+    // the fixture that lands the FIRST page short (700 < 1000, with no
+    // second page of data behind it at all): a `page.length < PAGE` reader
+    // stops immediately and a `page.length === 0` reader makes one more,
+    // confirming, empty read — both return the same 700 rows. Only the read
+    // count tells them apart.
+    it('does not mistake a short-but-nonempty page for the last one — pinned by read count, not row total', async () => {
+        let reads = 0;
+        supaRec.resultProvider = () => {
+            reads += 1;
+            return {
+                data: Array.from({ length: 700 }, (_, i) => ({ id: `r${i}`, spend_pence: 1 })),
+                error: null,
+            };
+        };
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(rows).toHaveLength(700);
+        // The single 700-row page, plus a confirming empty page. A
+        // `page.length < PAGE` reader would stop after the first page and
+        // this would read 1, not 2.
+        expect(reads).toBe(2);
+    });
+
+    it('orders by id, the table\'s unique key, so OFFSET paging cannot duplicate or skip a row', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads');
+        expect(supaRec.last.orders?.some((o) => o.col === 'id')).toBe(true);
+    });
+
+    it('surfaces a read error rather than returning a short result', async () => {
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'statement timeout' } });
+        await expect(marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads'))
+            .rejects.toThrow(/statement timeout/);
+    });
+
+    // Without an account filter this read spans EVERY ad_metrics row the org
+    // has for the provider — including accounts the deep pull no longer covers
+    // (deactivated, deselected, non-GBP), whose 92 days of history still sit
+    // in the table. Comparing that against a deep total that cannot contain
+    // them turns their spend into a permanent unexplained gap.
+    it('narrows to the given accounts when the caller supplies a set', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads', ['C1', 'C2']);
+        expect(supaRec.last.ins).toContainEqual({ col: 'customer_id', vals: ['C1', 'C2'] });
+    });
+
+    it('applies no account filter when the caller passes null', async () => {
+        await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads', null);
+        expect(supaRec.last.ins ?? []).toEqual([]);
+    });
+
+    // An EMPTY set means "no account is covered", which is a real answer (a
+    // zero campaign total to sit beside a zero deep total) — not "no filter".
+    // Falling through to an unfiltered read here would compare the org's
+    // entire spend against nothing.
+    it('returns nothing, without reading, for an empty account set', async () => {
+        supaRec.last = undefined;
+        const rows = await marketingRepository.campaignSpendByProvider(ORG, '2026-08-01', '2026-08-31', 'google_ads', []);
+        expect(rows).toEqual([]);
+        expect(supaRec.last).toBeUndefined();
+    });
+});
+
+describe('adAccountsForProvider', () => {
+    it('reads the two fields that decide deep-pull coverage, org- and provider-scoped', async () => {
+        await marketingRepository.adAccountsForProvider(ORG, 'meta_ads');
+        expect(supaRec.last.table).toBe('ad_accounts');
+        expect(supaRec.last.eqs).toContainEqual({ col: 'organisation_id', val: ORG });
+        expect(supaRec.last.eqs).toContainEqual({ col: 'provider', val: 'meta_ads' });
+        for (const col of ['currency', 'status']) {
+            expect(supaRec.last.select).toContain(col);
+        }
+    });
+
+    // is_selected is NOT read, on purpose: neither sync consults it, so a
+    // deselected account still gets rows in ad_metrics and in the deep tables
+    // alike. Reading it here is what tempted the service into excluding it
+    // from one side only.
+    it('does not read is_selected, which partitions neither side', async () => {
+        await marketingRepository.adAccountsForProvider(ORG, 'google_ads');
+        expect(supaRec.last.select).not.toContain('is_selected');
+    });
+
+    it('surfaces a read error rather than reporting an empty account list', async () => {
+        // An empty list is meaningful here — it means "no account dimension",
+        // which makes the service skip account filtering entirely. Swallowing
+        // an error into that shape would silently widen the comparison.
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'boom' } });
+        await expect(marketingRepository.adAccountsForProvider(ORG, 'google_ads'))
+            .rejects.toThrow(/ad_accounts read: boom/);
+    });
+});
+
 describe('leadsByCampaign', () => {
     it('passes the raw timestamptz bounds through to the RPC, org-scoped', async () => {
         supaRec.rpcCalls = [];

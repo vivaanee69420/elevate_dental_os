@@ -315,6 +315,39 @@ What we can promise, and what the panel asserts nightly:
 | Keyword total vs campaign total | Will not sum — by design | n/a |
 | Reach | n/a | Never additive |
 
+## Known divergences
+
+Recorded here so they are not rediscovered as bugs.
+
+### Meta ad-set and ad rows carry `conversions = 0`
+
+This spec promises platform conversions at every level. The shipped Meta deep
+sync does **not** request the `actions` field at ad-set or ad level, so
+`ad_meta_adsets.conversions` and `ad_meta_ads.conversions` are always `0` — a
+placeholder, not a measurement.
+
+This is a deliberate ruling, not an oversight:
+
+- `actions` materially increases the insights payload, and Meta throttles
+  harder at ad level than anywhere else — the level with the most rows is the
+  level least able to afford the extra field.
+- Our own cost-per-lead, cost-per-booking and cost-per-acquisition figures are
+  built from the Dentally/GoHighLevel funnel, not from platform conversions, so
+  nothing in the product reads these columns.
+
+Platform conversions remain available and exact at **campaign** grain in
+`ad_metrics`, which is where the spec's "exact when attribution settings match"
+promise continues to hold.
+
+**Consequence for the UI:** the Facebook Reporting page must not present a
+conversions column at ad-set or ad grain as though it were a real zero. Either
+omit the column at those levels or label it as not collected. A rendered "0"
+would read as "this ad set converted nobody", which is a different and false
+statement. Revisit if a surface ever needs platform conversions below campaign
+grain — the fix is to add `actions` to `ADSET_FIELDS`/`AD_FIELDS` in
+`meta-ads-deep-sync.js` and reuse `conversionsFromActions` from
+`meta-ads-sync.js`.
+
 ## Testing
 
 - **Idempotency:** running a sync twice produces identical totals. This is the

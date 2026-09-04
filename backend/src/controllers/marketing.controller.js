@@ -2,6 +2,9 @@
 // No business logic.
 import { z } from 'zod';
 import { marketingService } from '../services/marketing.service.js';
+import { adReconciliationService } from '../services/ad-reconciliation.service.js';
+import { londonDaysAgo, londonYmd } from '../lib/tz.js';
+import { DEEP_WINDOW_DAYS } from '../lib/integrations/google-ads-deep-sync.js';
 
 // The shared ScopePeriod bar sends ISO datetimes (not plain dates) and a
 // `scope` that is either the literal 'all' or a practice UUID. Guard the UUID
@@ -30,6 +33,30 @@ export const LeadListQuerySchema = PerformanceQuerySchema.extend({
 
 const practiceOf = (scope) => (scope && UUID_RE.test(scope) ? scope : null);
 
+// Deliberately PLAIN dates, not the ScopePeriod bar's ISO datetime: this
+// window feeds ad_grain_rollup and the new campaignSpendByProvider read
+// directly, both of which compare plain DATE columns inclusive on both ends
+// (`>= since AND <= until`) — not the half-open, London-resolved instant the
+// other marketing endpoints take. Mixing the two conventions on this one
+// endpoint is exactly how a false gap would reach the reconciliation screen.
+//
+// BOTH ARE OPTIONAL, and omitting them is the intended use. The deep pull's
+// window is londonDaysAgo(DEEP_WINDOW_DAYS)..londonYmd() — London days. A
+// caller computing the same window from its own UTC clock disagrees with that
+// for the hour after midnight London through the whole of BST, and asks for a
+// day that exists in ad_metrics but cannot exist in the deep tables yet: a
+// full day of campaign spend lands on one side of the comparison only and
+// every non-keyword level goes red. When the parameters are absent the server
+// computes the window with the SAME helpers and the SAME constant the sync
+// uses, so there is one clock and one window definition.
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export const ReconciliationQuerySchema = z.object({
+    since: z.string().regex(YMD_RE, 'since must be YYYY-MM-DD').optional(),
+    until: z.string().regex(YMD_RE, 'until must be YYYY-MM-DD').optional(),
+    provider: z.enum(['google_ads', 'meta_ads']).default('google_ads'),
+});
+
 export async function getPerformance(req, res, next) {
     try {
         const q = PerformanceQuerySchema.parse(req.query);
@@ -45,6 +72,24 @@ export async function getTrend(req, res, next) {
         const q = PerformanceQuerySchema.parse(req.query);
         const data = await marketingService.trend(req.user.organisation_id, {
             since: q.since, until: q.until, practiceId: practiceOf(q.scope),
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
+// The tally between our deep-grain totals and the platform's own campaign
+// total — the owner's stated acceptance criterion made into a product
+// surface. orgId always comes from the authenticated session, never the
+// query string (rule 3 — serviceClient has no automatic isolation).
+export async function getReconciliation(req, res, next) {
+    try {
+        const q = ReconciliationQuerySchema.parse(req.query);
+        const data = await adReconciliationService.build(req.user.organisation_id, {
+            // Same helpers, same constant, as the deep pull itself — see the
+            // schema comment. A caller's own clock is never used for this.
+            since: q.since ?? londonDaysAgo(DEEP_WINDOW_DAYS),
+            until: q.until ?? londonYmd(),
+            provider: q.provider,
         });
         res.json(data);
     } catch (err) { next(err); }

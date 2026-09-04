@@ -35,6 +35,7 @@ import GoogleSheetsWriterPanel from '@/features/integrations/components/GoogleSh
 import EmergentPracticeMapping from '@/features/integrations/components/EmergentPracticeMapping';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
 import { useSyncToast } from '@/features/integrations/sync-toast';
+import { AdReconciliationPanel } from '@/features/marketing/components/AdReconciliationPanel';
 
 // Map an OAuth callback error code to a human title + message. Known codes get
 // specific guidance; anything else falls back to the raw message.
@@ -225,6 +226,26 @@ export default function IntegrationsScreen() {
       {hasFeature('sheet_export') && <GoogleSheetsWriterPanel />}
       {googleAdsConnected && <AdAccountSelector provider="google_ads" label="Google Ads" />}
       {metaAdsConnected && <AdAccountSelector provider="meta_ads" label="Meta Ads" />}
+
+      {/* Reconciliation only makes sense once a provider is actually
+          connected — an unconnected provider has no campaign total to compare
+          against, so its card would show nothing but misleading zeroes.
+
+          No window is passed to the panel. It used to be computed here from
+          Date.now() in UTC while the sync computes its own in LONDON, so
+          through BST the two disagreed for the hour after midnight and the
+          panel asked for a day that could not yet exist in the deep tables.
+          The server now supplies the window on the sync's own clock. */}
+      {(googleAdsConnected || metaAdsConnected) && (
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          {googleAdsConnected && (
+            <AdReconciliationPanel provider="google_ads" />
+          )}
+          {metaAdsConnected && (
+            <AdReconciliationPanel provider="meta_ads" />
+          )}
+        </div>
+      )}
 
       {groups.map((g) => (
         <div key={g.category} style={{ marginBottom: 20 }}>
