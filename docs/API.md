@@ -1918,6 +1918,18 @@ legitimately disagree, so each tier reports only what it actually found.
   their campaigns, picked a quiet day, or filtered to a practice whose mapped
   account did not buy this campaign has synced perfectly well and must not be
   told otherwise.
+- `detail_not_synced` — **`/facebook/ad-sets` and `/facebook/ads` only.**
+  Campaign-grain `ad_metrics` **is** populated for this org — spend/campaign
+  totals are real — but THIS tier's own deep-grain table (`ad_meta_adsets`/
+  `ad_meta_ads`) has **never** received a row: the deep sync (a separate
+  table, a separate sync phase from the campaign pull) has not run yet.
+  Distinct from `no_spend_in_window`, where this tier's own table HAS synced
+  before and there is simply nothing in the current window/filter. Before
+  this state existed, the empty-window probe only ever checked `ad_metrics`,
+  so this exact case returned `no_spend_in_window` — telling the owner "this
+  is not a sync problem" while ruling out the one true explanation.
+  `/facebook/campaigns` never returns this state — its own table already IS
+  `ad_metrics`, so there is no separate detail table to distinguish.
 - `no_spend_in_window` — Meta has delivered data before, but there is no spend
   in the selected period/practice/campaign. The honest empty-window state.
 - `no_ad_id_coverage` — the leads **this payload measured** could not be
@@ -2078,6 +2090,16 @@ a cost per nothing is unknowable, not free.
 - `never_synced` — a Google account is connected but **no `google_ads`
   metric row has ever landed for this organisation**. Same out-of-window
   probe as the Facebook report's identical state.
+- `detail_not_synced` — **`/google/ad-groups`, `/google/ads` and
+  `/google/keywords` only.** Campaign-grain `ad_metrics` **is** populated for
+  this org — spend/campaign totals are real — but THIS tier's own deep-grain
+  table (`ad_google_adgroups`/`ad_google_ads`/`ad_google_keywords`) has
+  **never** received a row: the deep sync (a separate table, a separate sync
+  phase from the campaign pull) has not run yet. Distinct from
+  `no_spend_in_window`, where this tier's own table HAS synced before and
+  there is simply nothing in the current window/filter. Same reasoning as the
+  Facebook report's identical state; `/google/campaigns` never returns it —
+  its own table already IS `ad_metrics`.
 - `no_spend_in_window` — Google has delivered data before, but there is no
   spend in the selected period/practice/campaign/ad group. The honest
   empty-window state.

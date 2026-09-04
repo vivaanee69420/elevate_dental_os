@@ -13,6 +13,7 @@ vi.mock('../src/repositories/marketing.repository.js', () => ({
         campaignSpendByProvider: vi.fn(),
         adAccountsForProvider: vi.fn(),
         hasProviderMetrics: vi.fn(),
+        hasGrainMetrics: vi.fn(),
     },
 }));
 vi.mock('../src/repositories/ad-grain.repository.js', () => ({
@@ -33,9 +34,12 @@ const WIN = { since: londonDaysAgo(DEEP_WINDOW_DAYS - 10), until: '2026-08-31', 
 
 beforeEach(() => {
     vi.clearAllMocks();
-    // Default: this org HAS synced Google before, so an empty window is a
-    // quiet window, not a missing sync. Tests that mean "never synced" say so.
+    // Default: this org HAS synced Google before, at both campaign grain AND
+    // this deep tier, so an empty window is a quiet window, not a missing
+    // sync or unsynced detail. Tests that mean "never synced" or
+    // "detail_not_synced" say so.
     marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+    marketingRepository.hasGrainMetrics.mockResolvedValue(true);
     marketingRepository.adAccountsForProvider.mockResolvedValue([
         { customer_id: 'act1', name: 'Acct', currency: 'GBP', status: 'ACTIVE' },
     ]);
@@ -179,19 +183,73 @@ describe('multi-tenant states', () => {
         expect(out.state).toBe('no_spend_in_window');
     });
 
-    it('applies the same never_synced / no_spend_in_window distinction at ad-group, ad and keyword grain', async () => {
+    it('applies the same never_synced / no_spend_in_window distinction at ad-group, ad and keyword grain, when the deep table has synced before', async () => {
         adGrainRepository.rollup.mockResolvedValue([]);
         adGrainRepository.keywordRollup.mockResolvedValue([]);
 
+        // This grain's OWN deep table has landed a row before (just none in
+        // this window) — so an empty campaign-grain probe still wins.
         marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+        marketingRepository.hasGrainMetrics.mockResolvedValue(true);
         expect((await googleReportService.adGroups(ORG, WIN)).state).toBe('no_spend_in_window');
         expect((await googleReportService.ads(ORG, WIN)).state).toBe('no_spend_in_window');
         expect((await googleReportService.keywords(ORG, WIN)).state).toBe('no_spend_in_window');
 
+        // Google Ads has NEVER synced for this org at all — never_synced wins
+        // regardless of hasGrainMetrics (which the tri-state never even
+        // needs to consult in that case).
         marketingRepository.hasProviderMetrics.mockResolvedValue(false);
         expect((await googleReportService.adGroups(ORG, WIN)).state).toBe('never_synced');
         expect((await googleReportService.ads(ORG, WIN)).state).toBe('never_synced');
         expect((await googleReportService.keywords(ORG, WIN)).state).toBe('never_synced');
+    });
+
+    // ===========================================================================
+    // MAJOR 2: detail_not_synced — the campaign tier (ad_metrics) IS
+    // populated for this org, but THIS grain's own deep table has never
+    // received a row. Before this fix emptyWindowState only ever probed
+    // ad_metrics, so this exact case returned no_spend_in_window — "this is
+    // not a sync problem, there is simply no spend" — while ruling out the
+    // one true explanation (the deep sync has not run yet). These tests
+    // FAIL without the fix: they'd see 'no_spend_in_window' instead.
+    // ===========================================================================
+    describe('detail_not_synced: campaign totals real, this grain never synced', () => {
+        it('reports detail_not_synced at ad-group grain, NOT no_spend_in_window, when ad_metrics has rows but ad_google_adgroups never has', async () => {
+            adGrainRepository.rollup.mockResolvedValue([]);
+            marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+            marketingRepository.hasGrainMetrics.mockResolvedValue(false);
+            const out = await googleReportService.adGroups(ORG, WIN);
+            expect(out.state).toBe('detail_not_synced');
+            expect(marketingRepository.hasGrainMetrics).toHaveBeenCalledWith(ORG, 'ad_google_adgroups');
+        });
+
+        it('reports detail_not_synced at ad grain against ad_google_ads', async () => {
+            adGrainRepository.rollup.mockResolvedValue([]);
+            marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+            marketingRepository.hasGrainMetrics.mockResolvedValue(false);
+            const out = await googleReportService.ads(ORG, WIN);
+            expect(out.state).toBe('detail_not_synced');
+            expect(marketingRepository.hasGrainMetrics).toHaveBeenCalledWith(ORG, 'ad_google_ads');
+        });
+
+        it('reports detail_not_synced at keyword grain against ad_google_keywords', async () => {
+            adGrainRepository.keywordRollup.mockResolvedValue([]);
+            marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+            marketingRepository.hasGrainMetrics.mockResolvedValue(false);
+            const out = await googleReportService.keywords(ORG, WIN);
+            expect(out.state).toBe('detail_not_synced');
+            expect(marketingRepository.hasGrainMetrics).toHaveBeenCalledWith(ORG, 'ad_google_keywords');
+        });
+
+        it('campaigns() has no third state — it IS campaign grain, so an empty window is never_synced/no_spend_in_window only', async () => {
+            marketingRepository.campaignSpendByProvider.mockResolvedValue([]);
+            marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+            const out = await googleReportService.campaigns(ORG, WIN);
+            expect(out.state).toBe('no_spend_in_window');
+            // campaigns() must never consult hasGrainMetrics at all — it has
+            // no deep table of its own to distinguish.
+            expect(marketingRepository.hasGrainMetrics).not.toHaveBeenCalled();
+        });
     });
 
     it('reports ok at every grain when rows are present', async () => {

@@ -1,18 +1,27 @@
 'use client';
-// Five states, one component (the ad-set tier reuses it). Most tenants sit in
+// Six states, one component (the ad-set tier reuses it). Most tenants sit in
 // one of the non-happy states rather than the happy path, so each gets its own
 // sentence — a generic empty table would leave an owner unable to tell "not
 // connected" from "nothing happened".
 //
-// TWO of these sentences are about a fact this component cannot see on its
-// own, so both are parameterised rather than guessed:
+// THREE of these sentences are about a fact this component cannot see on its
+// own, so all three are parameterised rather than guessed:
 //
-//  - never_synced vs no_spend_in_window. "No performance data has arrived yet"
-//    used to fire whenever the WINDOW was empty, which told a tenant who
-//    paused their campaigns two months ago — or simply picked a quiet day —
-//    that they had never synced. The server now distinguishes the two by
-//    probing outside the window, and the quiet-window case gets its own
-//    honest sentence.
+//  - never_synced vs detail_not_synced vs no_spend_in_window. "No performance
+//    data has arrived yet" used to fire whenever the WINDOW was empty, which
+//    told a tenant who paused their campaigns two months ago — or simply
+//    picked a quiet day — that they had never synced. The server distinguishes
+//    never_synced from a quiet window by probing outside the window. A THIRD
+//    fact hid inside "quiet window" until detail_not_synced existed: this
+//    grain's own deep table (ad_meta_adsets/ad_meta_ads) can have NEVER
+//    received a row while campaign-grain ad_metrics is fully populated — the
+//    deep sync (a separate table, separate sync phase) simply has not run
+//    yet. Measured on hosted: £123,441 of Meta spend showing on Campaigns
+//    beside "no spend in the selected period" on Ad sets and Ads, the day the
+//    deep sync had not run. detail_not_synced is the honest state for that
+//    case, distinct from no_spend_in_window (this grain's table HAS synced
+//    before, just nothing in this window/filter) — see
+//    facebook-report.service.js's emptyWindowState.
 //
 //  - no_ad_id_coverage's SCOPE. That state is computed over whatever the
 //    payload measured: the whole organisation at the campaign tier, ONE
@@ -49,6 +58,10 @@ const COPY: Record<Exclude<FacebookState, 'ok' | 'no_ad_id_coverage'>, { title: 
   never_synced: {
     title: 'Waiting for the first sync',
     body: 'Meta Ads is connected but no performance data has arrived yet. The nightly sync pulls the trailing 92 days.',
+  },
+  detail_not_synced: {
+    title: 'Detail for this tab has not synced yet',
+    body: 'Meta Ads spend and campaign totals are complete and up to date. The ad set and ad detail behind them has not been collected yet — it arrives on the nightly sync.',
   },
   no_spend_in_window: {
     title: 'No Meta spend in the selected period',

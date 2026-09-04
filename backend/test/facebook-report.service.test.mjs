@@ -11,6 +11,7 @@ vi.mock('../src/repositories/marketing.repository.js', () => ({
         campaignSpendByProvider: vi.fn(),
         adAccountsForProvider: vi.fn(),
         hasProviderMetrics: vi.fn(),
+        hasGrainMetrics: vi.fn(),
     },
 }));
 vi.mock('../src/repositories/ad-grain.repository.js', () => ({
@@ -42,9 +43,12 @@ beforeEach(() => {
     // rows, so the cache must be cleared between them or a test would assert
     // against the previous one's data.
     invalidateFunnelCache();
-    // Default: this org HAS synced Meta before, so an empty window is a quiet
-    // window, not a missing sync. Tests that mean "never synced" say so.
+    // Default: this org HAS synced Meta before, at both campaign grain AND
+    // this deep tier, so an empty window is a quiet window, not a missing
+    // sync or unsynced detail. Tests that mean "never synced" or
+    // "detail_not_synced" say so.
     marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+    marketingRepository.hasGrainMetrics.mockResolvedValue(true);
     // adAccountsForProvider(orgId, 'meta_ads') is already provider-scoped —
     // an empty array IS "no Meta account", with no extra filtering needed.
     marketingRepository.adAccountsForProvider.mockResolvedValue([
@@ -165,9 +169,12 @@ describe('multi-tenant states', () => {
         expect(out.state).toBe('no_spend_in_window');
     });
 
-    it('applies the same distinction at the ad-set tier, where a practice filter can empty the rollup', async () => {
+    it('applies the same distinction at the ad-set tier, where a practice filter can empty the rollup, when the deep table has synced before', async () => {
         adGrainRepository.rollup.mockResolvedValue([]);
+        // This tier's OWN deep table (ad_meta_adsets) has landed a row
+        // before — just none in this window/filter.
         marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+        marketingRepository.hasGrainMetrics.mockResolvedValue(true);
         const quiet = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(quiet.state).toBe('no_spend_in_window');
 
@@ -175,6 +182,31 @@ describe('multi-tenant states', () => {
         marketingRepository.hasProviderMetrics.mockResolvedValue(false);
         const fresh = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
         expect(fresh.state).toBe('never_synced');
+    });
+
+    // ===========================================================================
+    // MAJOR 2: detail_not_synced — campaign-grain ad_metrics IS populated for
+    // this org (campaigns() is 'ok'), but the ad-set deep table
+    // (ad_meta_adsets) has NEVER received a row. Before this fix,
+    // emptyWindowState only ever probed ad_metrics, so this exact case
+    // returned 'no_spend_in_window' — "this is not a sync problem" — ruling
+    // out the one true explanation. These tests FAIL without the fix.
+    // ===========================================================================
+    it('reports detail_not_synced at the ad-set tier, NOT no_spend_in_window, when ad_metrics has rows but ad_meta_adsets never has', async () => {
+        adGrainRepository.rollup.mockResolvedValue([]);
+        marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+        marketingRepository.hasGrainMetrics.mockResolvedValue(false);
+        const out = await facebookReportService.adSets(ORG, { ...WIN, campaignId: 'CMP1' });
+        expect(out.state).toBe('detail_not_synced');
+        expect(marketingRepository.hasGrainMetrics).toHaveBeenCalledWith(ORG, 'ad_meta_adsets');
+    });
+
+    it('campaigns() has no third state — an empty window is never_synced/no_spend_in_window only, and never consults hasGrainMetrics', async () => {
+        marketingRepository.campaignSpendByProvider.mockResolvedValue([]);
+        marketingRepository.hasProviderMetrics.mockResolvedValue(true);
+        const out = await facebookReportService.campaigns(ORG, WIN);
+        expect(out.state).toBe('no_spend_in_window');
+        expect(marketingRepository.hasGrainMetrics).not.toHaveBeenCalled();
     });
 
     // A tenant whose GoHighLevel never sends ad_id must not get a report whose
@@ -835,10 +867,12 @@ describe("ads() computes its own state, from its own grain — not campaigns()'s
     // no hint anything is wrong at the ad grain; borrowing it would render
     // an unexplained empty Ads tab for a tenant whose ad-level sync simply
     // has not caught up.
-    it('reports no_spend_in_window at the ad grain even though campaigns() is ok for the same org and window', async () => {
+    it('reports no_spend_in_window at the ad grain even though campaigns() is ok for the same org and window, when ad_meta_ads has synced before', async () => {
         const campaignsOut = await facebookReportService.campaigns(ORG, WIN);
         expect(campaignsOut.state).toBe('ok');
 
+        // ad_meta_ads landed a row before (beforeEach default) — just none
+        // in this window.
         adGrainRepository.rollup.mockResolvedValue([]);
         const adsOut = await facebookReportService.ads(ORG, WIN);
         expect(adsOut.state).toBe('no_spend_in_window');
@@ -855,6 +889,23 @@ describe("ads() computes its own state, from its own grain — not campaigns()'s
         marketingRepository.hasProviderMetrics.mockResolvedValue(false);
         const adsOut = await facebookReportService.ads(ORG, WIN);
         expect(adsOut.state).toBe('never_synced');
+    });
+
+    // MAJOR 2: campaigns() is 'ok' (real spend, real totals) but the ad-level
+    // deep table (ad_meta_ads) has NEVER received a row for this org — not
+    // merely quiet in this window. Before this fix, ads() could not tell that
+    // apart from no_spend_in_window at all: emptyWindowState only ever probed
+    // ad_metrics. This test FAILS without the fix (it would see
+    // 'no_spend_in_window' instead).
+    it('reports detail_not_synced at the ad grain when campaigns() is ok but ad_meta_ads has never synced', async () => {
+        const campaignsOut = await facebookReportService.campaigns(ORG, WIN);
+        expect(campaignsOut.state).toBe('ok');
+
+        adGrainRepository.rollup.mockResolvedValue([]);
+        marketingRepository.hasGrainMetrics.mockResolvedValue(false);
+        const adsOut = await facebookReportService.ads(ORG, WIN);
+        expect(adsOut.state).toBe('detail_not_synced');
+        expect(marketingRepository.hasGrainMetrics).toHaveBeenCalledWith(ORG, 'ad_meta_ads');
     });
 
     it('reports ok, not no_ad_id_coverage, when there are simply no leads in scope for this ad set', async () => {

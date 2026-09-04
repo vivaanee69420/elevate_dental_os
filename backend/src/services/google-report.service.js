@@ -162,15 +162,37 @@ function excludedAccountsOf(accounts) {
 
 // "No rows in THIS WINDOW" is not evidence a sync has never happened — a
 // tenant may have paused every campaign, picked a quiet day, or filtered to a
-// practice/campaign/ad group with nothing in it. Probe OUTSIDE the window:
-// has ANY google_ads metric row ever landed for this org? Same signal
-// facebook-report.service.js uses for all three of its tiers (it probes
-// ad_metrics regardless of which deep table the tier itself reads), reused
-// here across all four Google tiers for the same reason: it is a statement
-// about whether this org has ever synced Google at all, not about one grain.
-async function emptyWindowState(orgId) {
-    return (await marketingRepository.hasProviderMetrics(orgId, PROVIDER))
-        ? 'no_spend_in_window' : 'never_synced';
+// practice/campaign/ad group with nothing in it. THREE distinct facts can
+// each produce an empty table here, and collapsing them into one message is
+// exactly the bug this function fixes:
+//
+//   1. never_synced        — Google Ads has never landed a single ad_metrics
+//                             row for this org, at ANY grain, ever.
+//   2. detail_not_synced    — the campaign tier (ad_metrics) IS populated —
+//                             totals are real — but THIS grain's own deep
+//                             table (ad_google_adgroups/ad_google_ads/
+//                             ad_google_keywords) has never received a row
+//                             for this org. The deep sync (a separate table,
+//                             separate sync phase from the campaign pull)
+//                             simply has not run yet. This used to be
+//                             unreachable: the old check only ever probed
+//                             ad_metrics, so a populated campaign tier beside
+//                             an empty deep table returned no_spend_in_window
+//                             — telling the owner "there is simply no spend
+//                             ... this is not a sync problem" while ruling
+//                             out the one true explanation.
+//   3. no_spend_in_window   — both ad_metrics AND this grain's own deep table
+//                             have received rows before; there just aren't
+//                             any in the requested window/filter.
+//
+// `table` is the CALLING TIER'S OWN deep-grain table — omitted by
+// campaigns(), whose own table already IS ad_metrics, so there is no third
+// state to distinguish at that tier.
+async function emptyWindowState(orgId, table = null) {
+    if (!(await marketingRepository.hasProviderMetrics(orgId, PROVIDER))) return 'never_synced';
+    if (!table) return 'no_spend_in_window';
+    return (await marketingRepository.hasGrainMetrics(orgId, table))
+        ? 'no_spend_in_window' : 'detail_not_synced';
 }
 
 // Shared early return for "no Google account connected at all" — every one
@@ -252,7 +274,7 @@ export const googleReportService = {
         });
         if ((grainRows ?? []).length === 0) {
             return {
-                state: await emptyWindowState(orgId), rows: [], excludedAccounts,
+                state: await emptyWindowState(orgId, 'ad_google_adgroups'), rows: [], excludedAccounts,
                 effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
             };
         }
@@ -283,7 +305,7 @@ export const googleReportService = {
         });
         if ((grainRows ?? []).length === 0) {
             return {
-                state: await emptyWindowState(orgId), rows: [], nextCursor: null, excludedAccounts,
+                state: await emptyWindowState(orgId, 'ad_google_ads'), rows: [], nextCursor: null, excludedAccounts,
                 effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
             };
         }
@@ -326,7 +348,7 @@ export const googleReportService = {
         });
         if ((grainRows ?? []).length === 0) {
             return {
-                state: await emptyWindowState(orgId), rows: [], nextCursor: null, excludedAccounts,
+                state: await emptyWindowState(orgId, 'ad_google_keywords'), rows: [], nextCursor: null, excludedAccounts,
                 approximate: APPROXIMATE,
                 effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
             };

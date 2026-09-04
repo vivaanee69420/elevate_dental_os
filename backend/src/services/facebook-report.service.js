@@ -211,15 +211,42 @@ async function metaAccounts(orgId) {
 // or filtered to a practice whose mapped account did not buy this campaign is
 // a plain untruth.
 //
+// THREE distinct facts can each produce an empty table here:
+//
+//   1. never_synced       — Meta has never landed a single ad_metrics row for
+//                            this org, at ANY grain, ever.
+//   2. detail_not_synced   — the campaign tier (ad_metrics) IS populated —
+//                            totals are real — but THIS grain's own deep
+//                            table (ad_meta_adsets/ad_meta_ads) has never
+//                            received a row for this org: the deep sync (a
+//                            separate table, separate sync phase from the
+//                            campaign pull) simply has not run yet. This used
+//                            to be unreachable — the old check only ever
+//                            probed ad_metrics, so a populated campaign tier
+//                            beside an empty deep table returned
+//                            no_spend_in_window, telling the owner "this is
+//                            not a sync problem" while ruling out the one
+//                            true explanation.
+//   3. no_spend_in_window  — both ad_metrics AND this grain's own deep table
+//                            have received rows before; there just aren't any
+//                            in the requested window/filter.
+//
 // So probe OUTSIDE the window: has ANY Meta metric row ever landed for this
-// org? That is the only trustworthy signal — deliberately not
+// org, and (for a deep tier) has THIS grain's own table ever landed one?
+// That is the only trustworthy signal — deliberately not
 // ad_accounts.period_synced_at, which records that a sync RAN and the window
 // it ASKED for, not what came back (migration 000116's header documents a live
 // account showing a clean sync through June 2026 with zero metric rows ever).
 // Called only on the empty-window path, so the normal path pays nothing.
-async function emptyWindowState(orgId) {
-    return (await marketingRepository.hasProviderMetrics(orgId, 'meta_ads'))
-        ? 'no_spend_in_window' : 'never_synced';
+//
+// `table` is the CALLING TIER'S OWN deep-grain table — omitted by
+// campaigns(), whose own table already IS ad_metrics, so there is no third
+// state to distinguish at that tier.
+async function emptyWindowState(orgId, table = null) {
+    if (!(await marketingRepository.hasProviderMetrics(orgId, 'meta_ads'))) return 'never_synced';
+    if (!table) return 'no_spend_in_window';
+    return (await marketingRepository.hasGrainMetrics(orgId, table))
+        ? 'no_spend_in_window' : 'detail_not_synced';
 }
 
 function excludedAccountsOf(accounts) {
@@ -426,7 +453,7 @@ export const facebookReportService = {
         // of missing ad-id coverage, only a quiet window. Do not drop the
         // leadsTotal > 0 check. And an empty rollup is not evidence of a
         // missing sync either — see emptyWindowState.
-        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId)
+        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId, 'ad_meta_adsets')
             : coverage.leadsTotal > 0 && coverage.leadsWithAdSet === 0 ? 'no_ad_id_coverage' : 'ok';
         return {
             state, coverage, rows, notIdentified, unmatchedLeads,
@@ -511,7 +538,7 @@ export const facebookReportService = {
         // window before saying so), and zero leads in scope is a quiet
         // window, not a coverage problem — do not drop the leadsTotal > 0
         // check.
-        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId)
+        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId, 'ad_meta_ads')
             : leadsTotal > 0 && leadsWithAdId === 0 ? 'no_ad_id_coverage' : 'ok';
 
         return {

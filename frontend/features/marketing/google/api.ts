@@ -23,7 +23,14 @@
 // OPTIONAL, same shape/reasoning as the Facebook client's campaignId/adSetId.
 import { api } from '@/lib/api';
 
-export type GoogleState = 'not_connected' | 'never_synced' | 'no_spend_in_window' | 'ok';
+// detail_not_synced: the campaign tier (ad_metrics) has real totals for this
+// org, but THIS grain's own deep table (ad_google_adgroups/ad_google_ads/
+// ad_google_keywords) has never received a row — the deep sync has not run
+// yet, distinct from no_spend_in_window (both tables have synced before,
+// just nothing in this window/filter). Never returned by campaigns(), whose
+// own table already IS ad_metrics. See google-report.service.js's
+// emptyWindowState.
+export type GoogleState = 'not_connected' | 'never_synced' | 'detail_not_synced' | 'no_spend_in_window' | 'ok';
 
 export interface GoogleExcludedAccount {
   customerId: string;
