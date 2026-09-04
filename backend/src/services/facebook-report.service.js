@@ -99,9 +99,28 @@ export function invalidateFunnelCache(orgId) {
 
 // A cost per nothing is unknowable, not free. Returning 0 would render as
 // "this campaign acquires patients at no cost".
+// A cost is unknowable from EITHER end, and both must return null.
+//
+// Zero units is the obvious one: a cost per nothing cannot be computed.
+//
+// Zero spend against real units is the dangerous one, and it was returning 0.
+// If leads are attributed to advertising, the advertising was paid for — so a
+// £0 total beside real leads means the spend rows are ABSENT, not that the
+// leads were free. Rendering £0.00 there makes the practice with NO DATA look
+// like the practice with the best cost per lead in the group, which is exactly
+// inverted from the truth and is the kind of number an owner acts on. Live
+// today: Ashford and Barnet have real leads and no Google spend rows since
+// their sync lost account access, and both read "£0.00".
+//
+// (A genuinely paused campaign with a lead from a click just before the window
+// lands here too, and null is right for it as well — the cost is real, it just
+// falls outside the window being measured.)
 function perUnitPence(totalPence, units) {
     const n = Number(units ?? 0);
-    return n > 0 ? Math.round(Number(totalPence ?? 0) / n) : null;
+    if (n <= 0) return null;
+    const total = Number(totalPence ?? 0);
+    if (total <= 0) return null;
+    return Math.round(total / n);
 }
 
 function ratio(numerator, denominator) {
