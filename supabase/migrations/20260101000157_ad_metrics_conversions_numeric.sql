@@ -39,7 +39,50 @@
 -- against hosted directly (see CLAUDE.md). Do not apply from this branch.
 -- After applying on hosted: NOTIFY pgrst, 'reload schema';
 -- ============================================================================
+-- The Data Room view reads this column, and Postgres refuses to alter a type
+-- a view depends on. Dropped and recreated verbatim around the ALTER — the
+-- definition below is pg_get_viewdef() output from hosted, not a rewrite, so
+-- the view's own logic is unchanged. Its cpl_pence already casts conversions
+-- to numeric, so widening the column changes nothing about what it returns.
+DROP VIEW IF EXISTS public.data_room_ad_metrics;
+
 ALTER TABLE ad_metrics ALTER COLUMN conversions TYPE numeric(14,2);
 
--- Reload PostgREST cache after applying:
---   NOTIFY pgrst, 'reload schema';
+CREATE VIEW public.data_room_ad_metrics AS
+ SELECT m.id,
+    m.organisation_id,
+    m.practice_id,
+    m.provider,
+    m.source,
+    m.customer_id,
+    m.campaign_id,
+    m.campaign_name,
+    m.metric_date,
+    m.spend_pence,
+    m.impressions,
+    m.clicks,
+    m.leads,
+    m.conversions,
+    m.created_at,
+    m.updated_at,
+    m.reach,
+    m.frequency,
+    m.campaign_status,
+    m.objective,
+    pr.name AS practice_name,
+        CASE
+            WHEN COALESCE(m.conversions, 0) > 0 THEN round(m.spend_pence::numeric / m.conversions::numeric)::bigint
+            ELSE NULL::bigint
+        END AS cpl_pence
+   FROM ad_metrics m
+     LEFT JOIN LATERAL ( SELECT aa.practice_id
+           FROM ad_accounts aa
+          WHERE aa.organisation_id = m.organisation_id AND aa.provider = m.provider AND aa.customer_id = m.customer_id
+         LIMIT 1) acc ON true
+     LEFT JOIN practices pr ON pr.id = acc.practice_id;
+
+-- Restore the grants the dropped view held: service_role only. anon and
+-- authenticated deliberately hold nothing on the Data Room views.
+GRANT SELECT ON public.data_room_ad_metrics TO service_role;
+
+NOTIFY pgrst, 'reload schema';
