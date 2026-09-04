@@ -9,7 +9,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useGhlAccounts, useAddGhlAccount } from '../hooks';
 import { syncGhlAccount } from '../api';
 import GhlAccountRow from './GhlAccountRow';
-import CollapsibleCard from './CollapsibleCard';
+import PanelCard from './PanelCard';
 import DailyReportCard from './DailyReportCard';
 
 export default function GoHighLevelPanel() {
@@ -45,7 +45,7 @@ export default function GoHighLevelPanel() {
   }
 
   return (
-    <CollapsibleCard
+    <PanelCard
       title="GoHighLevel subaccounts"
       actions={(
         <button onClick={() => setShowAdd((v) => !v)} style={{ padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none', background: 'var(--brand)', color: 'white', cursor: 'pointer' }}>
@@ -102,7 +102,7 @@ export default function GoHighLevelPanel() {
       )}
 
       <DailyReportCard />
-    </CollapsibleCard>
+    </PanelCard>
   );
 }
 

@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { Chip } from '@/components/ui';
-import CollapsibleCard from './CollapsibleCard';
+import PanelCard from './PanelCard';
 import { useSetWebhookSecret } from '../hooks';
 
 interface EmergentStatus {
@@ -124,10 +124,10 @@ export default function EmergentPanel() {
   const connected = data?.connected;
 
   return (
-    <CollapsibleCard
+    <PanelCard
       title="Emergent — Treatments Accepted"
       style={{ marginBottom: 12 }}
-      actions={connected ? <Chip colour="emerald">Connected</Chip> : <Chip colour="amber">Not connected</Chip>}
+      badge={connected ? <Chip colour="emerald">Connected</Chip> : <Chip colour="amber">Not connected</Chip>}
     >
       <div className="text-ink-muted" style={{ fontSize: 11, marginBottom: 4 }}>
         Pulls treatment-acceptance records staff log in the Emergent ops app into the Business Hub.
@@ -281,6 +281,6 @@ export default function EmergentPanel() {
           </div>
         </div>
       )}
-    </CollapsibleCard>
+    </PanelCard>
   );
 }

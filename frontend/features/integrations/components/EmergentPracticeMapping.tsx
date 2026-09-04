@@ -1,6 +1,9 @@
+'use client';
+
 import { useState } from 'react';
 import { useEmergentPractices, useSetEmergentPractice } from '@/features/integrations/hooks';
 import { useMe, isAgencyActor } from '@/hooks/useMe';
+import PanelCard from './PanelCard';
 
 export default function EmergentPracticeMapping() {
   const { data: me } = useMe();
@@ -24,16 +27,23 @@ export default function EmergentPracticeMapping() {
     }
   }
 
+  // A null practice_id is a deliberate "do not sync" as often as it is an
+  // oversight, so this counts rather than warns — the same shape the Dentally
+  // mapping badge uses.
+  const unmapped = data.businesses.filter((b) => !b.practice_id).length;
+
   return (
-    <div className="card-padded" style={{ marginBottom: 20 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <div>
-          <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Emergent Practice Mapping</h2>
-          <p className="text-ink-muted" style={{ fontSize: 13, marginTop: 4 }}>
-            Map Emergent businesses to your Elevate practices so accepted treatments sync to the correct dashboard.
-          </p>
-        </div>
-      </div>
+    <PanelCard
+      title="Emergent practice mapping"
+      badge={unmapped > 0 ? (
+        <span className="text-ink-muted" style={{ fontSize: 12, fontWeight: 600 }}>
+          {unmapped} not synced
+        </span>
+      ) : undefined}
+    >
+      <p className="text-ink-muted" style={{ fontSize: 13, marginBottom: 12 }}>
+        Map Emergent businesses to your Elevate practices so accepted treatments sync to the correct dashboard.
+      </p>
 
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
@@ -74,6 +84,6 @@ export default function EmergentPracticeMapping() {
           })}
         </tbody>
       </table>
-    </div>
+    </PanelCard>
   );
 }

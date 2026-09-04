@@ -32,7 +32,7 @@ import {
   useDisconnectCallRail,
   usePractices,
 } from '../hooks';
-import CollapsibleCard from './CollapsibleCard';
+import PanelCard from './PanelCard';
 
 const STATUS_CHIP: Record<IntegrationStatus, ChipColour> = {
   active: 'emerald',
@@ -411,7 +411,7 @@ export default function CallRailPanel() {
   );
 
   return (
-    <CollapsibleCard
+    <PanelCard
       title="CallRail — call tracking"
       actions={connected ? (
         <button
@@ -726,7 +726,7 @@ export default function CallRailPanel() {
           </div>
         </>
       )}
-    </CollapsibleCard>
+    </PanelCard>
   );
 }
 
