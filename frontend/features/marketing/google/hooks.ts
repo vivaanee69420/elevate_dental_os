@@ -50,9 +50,9 @@ export function useGoogleAdGroups(campaignId: string | null) {
 // Ads tab unfiltered), one page at a time. useInfiniteQuery, not repeated
 // useQuery calls with cursor in the key — same reasoning as
 // useFacebookAds. No `enabled` flag: this is a real tab, mounted only when
-// active and its data is wanted. No `orgState` prop either (unlike
-// FacebookAdsTab borrowing the Campaigns tab's state) — ads() returns its
-// OWN state, per google-report.service.js's file header.
+// active and its data is wanted. No `orgState` prop either — ads() returns
+// its OWN state, per google-report.service.js's file header (matching
+// facebook-report.service.js's ads(), which does the same for its grain).
 export function useGoogleAds(parentId: string | null) {
   const { scope, win } = useScopePeriod();
   const qs = ymdWindowParams(scope, win);

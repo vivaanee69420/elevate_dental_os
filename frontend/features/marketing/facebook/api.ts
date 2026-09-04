@@ -29,11 +29,12 @@ export type FacebookState =
 /**
  * What the state/coverage figures on a payload were actually measured over.
  * The campaign tier measures the whole organisation (or, under a practice
- * filter, that selection); the ad-set tier measures ONE campaign. Saying
- * "this organisation" over a per-campaign computation tells an org with 90%
- * coverage that its whole CRM sends no ad ids.
+ * filter, that selection); the ad-set tier measures ONE campaign; the ad
+ * tier measures ONE ad set when filtered. Saying "this organisation" over a
+ * per-campaign (or per-ad-set) computation tells an org with 90% coverage
+ * that its whole CRM sends no ad ids.
  */
-export type FacebookNoticeScope = 'organisation' | 'selection' | 'campaign';
+export type FacebookNoticeScope = 'organisation' | 'selection' | 'campaign' | 'adset';
 
 export interface FacebookCoverage {
   leadsTotal: number;
@@ -133,6 +134,13 @@ export interface FacebookAdSetsPayload {
 }
 
 export interface FacebookAdsPage {
+  /**
+   * This grain's OWN state — computed from the deep-grain ad rollup and
+   * ad_id resolution, not borrowed from campaigns(). A tenant can be `ok` at
+   * the campaign tier while the ad-level sync has nothing for this window,
+   * or vice versa; each tier reports what it actually found.
+   */
+  state: FacebookState;
   /** Same shape as the campaign tier's rows — no reach at this tier. */
   rows: FacebookRow[];
   /** Opaque; pass back verbatim as `cursor`. null on the last page. */

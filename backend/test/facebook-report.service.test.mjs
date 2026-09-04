@@ -811,6 +811,80 @@ describe('ads() paging', () => {
     });
 });
 
+// ads() used to have no state of its own at all — the frontend borrowed
+// campaigns()'s state to explain an empty Ads tab (not_connected/never_synced
+// only; see FacebookAdsTab's old header comment). That borrowing reads a
+// DIFFERENT query answering a DIFFERENT question: campaigns() is computed
+// from ad_metrics' campaign-day rows and org/campaign-wide ad-set coverage,
+// while ads() is computed from the deep-grain ad rollup (a separate table,
+// separate sync) and ad-level (ad_id) coverage. These tests pin cases where
+// the two genuinely disagree — exactly the cases the borrowing got wrong.
+describe("ads() computes its own state, from its own grain — not campaigns()'s", () => {
+    it('reports not_connected when the org has no Meta ad account (ads() had no accounts check at all before this fix)', async () => {
+        marketingRepository.adAccountsForProvider.mockResolvedValue([]);
+        const out = await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
+        expect(out.state).toBe('not_connected');
+        expect(out.rows).toEqual([]);
+        expect(out.nextCursor).toBeNull();
+    });
+
+    // THE case the borrowing gets wrong: campaigns() reads ad_metrics'
+    // campaign-day rows and is healthy (spend exists, ad-set coverage is
+    // fine) — but the deep-grain ad rollup, a separate table populated by a
+    // separate sync, has nothing for this window. campaigns()'s state gives
+    // no hint anything is wrong at the ad grain; borrowing it would render
+    // an unexplained empty Ads tab for a tenant whose ad-level sync simply
+    // has not caught up.
+    it('reports no_spend_in_window at the ad grain even though campaigns() is ok for the same org and window', async () => {
+        const campaignsOut = await facebookReportService.campaigns(ORG, WIN);
+        expect(campaignsOut.state).toBe('ok');
+
+        adGrainRepository.rollup.mockResolvedValue([]);
+        const adsOut = await facebookReportService.ads(ORG, WIN);
+        expect(adsOut.state).toBe('no_spend_in_window');
+    });
+
+    // Same shape, the never_synced twin: the deep-grain ad table has never
+    // received a row for this org, which campaigns() (reading a different
+    // table) cannot see either way.
+    it('reports never_synced at the ad grain when no Meta metric row has ever landed for the org, independent of campaigns()', async () => {
+        const campaignsOut = await facebookReportService.campaigns(ORG, WIN);
+        expect(campaignsOut.state).toBe('ok');
+
+        adGrainRepository.rollup.mockResolvedValue([]);
+        marketingRepository.hasProviderMetrics.mockResolvedValue(false);
+        const adsOut = await facebookReportService.ads(ORG, WIN);
+        expect(adsOut.state).toBe('never_synced');
+    });
+
+    it('reports ok, not no_ad_id_coverage, when there are simply no leads in scope for this ad set', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AD1', entity_name: 'Ad one', parent_id: 'AS1',
+              campaign_id: 'CMP1', entity_status: 'ACTIVE',
+              spend_pence: 3000, impressions: 100, clicks: 5, conversions: 0 },
+        ]);
+        marketingRepository.metaFunnel.mockResolvedValue([]);
+        const out = await facebookReportService.ads(ORG, { ...WIN, adSetId: 'AS1' });
+        expect(out.state).toBe('ok');
+    });
+
+    // Ad-level coverage (ad_id), not ad-set-level (ad_set_id) — this grain's
+    // own question, computed over its own funnel rows.
+    it('reports no_ad_id_coverage when leads in scope carry no ad_id at all', async () => {
+        adGrainRepository.rollup.mockResolvedValue([
+            { entity_id: 'AD1', entity_name: 'Ad one', parent_id: 'AS1',
+              campaign_id: 'CMP1', entity_status: 'ACTIVE',
+              spend_pence: 3000, impressions: 100, clicks: 5, conversions: 0 },
+        ]);
+        marketingRepository.metaFunnel.mockResolvedValue([
+            { campaign_id: 'CMP1', ad_set_id: null, ad_id: null, practice_id: null,
+              leads: 12, booked: 0, attended: 0, patients: 0, new_patients: 0 },
+        ]);
+        const out = await facebookReportService.ads(ORG, WIN);
+        expect(out.state).toBe('no_ad_id_coverage');
+    });
+});
+
 // I7: ads() calls the funnel unfiltered by campaign or ad set, and the
 // repository PAGES it — re-executing ad_lead_conversions, documented at 2.8s
 // for 10,429 rows. Expanding five ad sets on one screen meant five full-org
