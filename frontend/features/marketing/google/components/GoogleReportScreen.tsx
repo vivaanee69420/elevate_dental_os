@@ -59,6 +59,18 @@ const FILTER_PARAM: Record<string, 'campaignId' | 'parentId' | null> = {
   keywords: 'parentId',
 };
 
+// Calm, factual prose — never an error/warning colour. Same styling as the
+// per-tab Note components (GoogleCampaignsTab.tsx etc.) — placed here instead
+// because it is a fact about the WHOLE page, true on every tab, not one
+// table's own caveat.
+function Note({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-panel border border-border bg-bg px-3 py-2 text-[12.5px] leading-relaxed text-ink-muted">
+      {children}
+    </p>
+  );
+}
+
 function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void }) {
   return (
     <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-bg px-3 py-1 text-[12.5px] text-ink">
@@ -142,6 +154,19 @@ export default function GoogleReportScreen() {
         subtitle="Google Ads performance, from spend down to Google's own tracked conversions."
       />
       <ScopePeriodBar />
+
+      {/* MINOR 3: the spec requires the page to say, not just a code comment,
+          why there is no cost-per-lead here — an owner who just read a
+          cost-per-patient on the Facebook page and then finds the column
+          gone on Google, with no explanation, could reasonably conclude the
+          page is broken or that Google produced no patients. True on every
+          tab, so it sits above the tab strip rather than inside one table's
+          own Notes. */}
+      <Note>
+        Cost per lead, per booking and per patient are not shown on any tab here. Google&apos;s clicks
+        cannot yet be tied to a lead without call tracking (CallRail) — those columns will appear once
+        that connection lands. Spend, clicks and Google&apos;s own tracked conversions are shown in full below.
+      </Note>
 
       <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
 
