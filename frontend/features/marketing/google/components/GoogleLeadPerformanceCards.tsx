@@ -107,7 +107,11 @@ const LEAD_COLUMNS: Column<GoogleLeadRow>[] = [
   // — and the whole point of the £40 floor is that those two are different
   // answers. £0.00 here is a real figure (this lead has paid nothing), not
   // an unknown, so it is NOT dashed out.
-  { key: 'paid', header: 'Paid', align: 'right', render: (r) => money(r.paidPence) },
+  // "Paid" is money TO DATE since the lead landed, not money inside the
+  // selected period — acceptance is a cohort question, so a July lead who
+  // paid in August shows that payment on the July report. Headed "Paid
+  // since" so the column cannot be read as period cash.
+  { key: 'paid', header: 'Paid since', align: 'right', render: (r) => money(r.paidPence) },
   { key: 'accepted', header: 'Accepted', align: 'right', render: (r) => (r.accepted ? 'Yes' : DASH) },
 ];
 
@@ -420,7 +424,7 @@ export function GoogleLeadPerformanceCards() {
           // The threshold comes from the payload, never a literal here: the
           // server decided it, and a second copy in the UI is a copy that
           // can disagree with the number it is labelling.
-          sub={`${num(total.accepted)} paid over ${money(data.acceptanceMinPaidPence)}${includeExisting ? '' : ' (new patients)'}`}
+          sub={`${num(total.accepted)} paid over ${money(data.acceptanceMinPaidPence)} to date${includeExisting ? '' : ' (new patients)'}`}
           active={openBucket === 'accepted'}
           onClick={() => toggle('accepted')}
           delta={badge((t) => t.cpaPence, 'lower-better')}

@@ -159,9 +159,14 @@ export interface GoogleLeadPractice {
    *  after the DAY the lead landed. */
   booked: number;
   /** Of those, phone-matched to a Dentally patient whose settled payments
-   *  from the lead's own day onward, net of refunds, EXCEED the payload's
-   *  acceptanceMinPaidPence (£40). Not "has a paid invoice": a floor is what
-   *  separates committing to treatment from paying for the appointment. */
+   *  from the lead's own day onward — to date, with no upper bound — net of
+   *  refunds, EXCEED the payload's acceptanceMinPaidPence (£40). Not "has a
+   *  paid invoice": a floor is what separates committing to treatment from
+   *  paying for the appointment.
+   *
+   *  Because it has no upper bound, a past period's figure IMPROVES as its
+   *  leads convert. That is deliberate and matches `booked`; a funnel whose
+   *  two halves answer different questions is worse than one that moves. */
   accepted: number;
   /** null when the corresponding denominator (leads/booked/accepted) is
    *  zero. A cost per nothing is unknowable, not free. */
@@ -194,10 +199,18 @@ export interface GoogleLeadRow {
    *  money paid, not an invoice marked paid. */
   accepted: boolean;
   /** Settled payments attributable to this lead, in pence, NET OF REFUNDS:
-   *  every settled row from the lead's own day onward within the window,
-   *  signed and summed. 0 is a real answer (paid nothing, or paid and fully
-   *  refunded), not a missing one — and the value can be NEGATIVE when a
-   *  refund lands in the window for something paid before the lead. */
+   *  every settled row from the lead's own day onward, signed and summed.
+   *
+   *  TO DATE, NOT WITHIN THE WINDOW. Acceptance is a cohort question — of
+   *  the leads this period's spend bought, how many have paid — so money
+   *  counts whenever it arrives, exactly as `booked` counts an appointment
+   *  whenever it happens. A lead from 12 July who paid on 15 August shows
+   *  that £173 on the July report. Window-bounding it undercounted July by
+   *  25% of its booked leads.
+   *
+   *  0 is a real answer (paid nothing, or paid and fully refunded), not a
+   *  missing one, and the value can be NEGATIVE when refunds exceed
+   *  payments since the lead landed. */
   paidPence: number;
   /** false only means "not new" for a phone that actually matched a
    *  Dentally patient — an unmatched lead is also false here, but that is
