@@ -6,23 +6,15 @@
 // changed: this is now a first-class tab, filtered by `adSetId` from the URL
 // instead of always scoped to whichever row was expanded.
 //
-// ads() (backend/src/services/facebook-report.service.js) returns ONLY
-// { rows, nextCursor, effectiveSince, windowClamped } — no state, no
-// coverage, no notIdentified/unmatchedLeads bucket. That was fine when this
-// data only ever rendered nested under an Ad-sets row whose OWN state notice
-// already explained an empty result; as a first-class tab it can be the very
-// first thing a tenant with no Meta connection lands on, and an empty table
-// with no explanation would fail "a tab showing an empty table must say
-// why". `orgState` — the Campaigns tab's organisation-wide state, threaded
-// down from FacebookReportScreen (same lifted query, no extra request) —
-// fills that gap.
-//
-// Only not_connected/never_synced are borrowed, not the full FacebookState:
-// both imply zero ad_metrics rows exist at all, so an empty ad-grain table
-// has the same cause. no_spend_in_window/no_ad_id_coverage are measured over
-// leads-to-campaign attribution — a question this grain's spend rows do not
-// depend on — so borrowing those would tell a tenant their ad spend is
-// missing when it is really their lead-to-ad-id coverage that is.
+// ads() (backend/src/services/facebook-report.service.js) now computes its
+// OWN state from THIS grain's own rows — the deep-grain ad rollup and ad_id
+// resolution — the same way adSets() does for ad sets. It used to return
+// only { rows, nextCursor, effectiveSince, windowClamped }, and this tab
+// borrowed the Campaigns tab's state to explain an empty table; that read a
+// different query answering a different question (ad_metrics' campaign-day
+// rows and ad-SET coverage), so it could tell a tenant this tab was fine
+// when the ad-level sync genuinely had nothing, or vice versa. See
+// FacebookStateNotice for the five states.
 //
 // No campaign-level filter chain either: campaignId cannot reach this
 // endpoint (FacebookQuerySchema only accepts adSetId here) — see
@@ -31,11 +23,12 @@
 import { EmptyState, SkeletonTable } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { formatDate } from '@/lib/format';
+import { useScopePeriod } from '@/features/_shared/scope-context';
 import { AdMetricTable, type Column } from '../../_shared/AdMetricTable';
 import { money, ctr, num } from '../../_shared/format';
 import { FacebookStateNotice } from './FacebookStateNotice';
 import { useFacebookAds } from '../hooks';
-import type { FacebookRow, FacebookState } from '../api';
+import type { FacebookRow, FacebookNoticeScope } from '../api';
 
 // Calm, factual prose — never an error/warning colour. These are facts about
 // the data, not problems with it.
@@ -71,18 +64,23 @@ const COLUMNS: Column<FacebookRow>[] = [
 
 export function FacebookAdsTab({
   adSetId,
-  orgState,
 }: {
   /** The active ad-set filter, or null when this tab is listing every ad in
    *  the window unfiltered. */
   adSetId: string | null;
-  /** The Campaigns tab's own state — see file header for why only two of its
-   *  five values are borrowed here. undefined while that query is loading. */
-  orgState: FacebookState | undefined;
 }) {
   const {
     data, isLoading, isError, error, hasNextPage, isFetchingNextPage, fetchNextPage,
   } = useFacebookAds(adSetId);
+
+  // What this payload's state was actually measured over: ONE ad set when a
+  // filter is active, otherwise the same organisation/selection distinction
+  // the Campaigns and Ad sets tabs make — same pattern as AdSetsTab's
+  // noticeScope, one grain down.
+  const { scope } = useScopePeriod();
+  const noticeScope: FacebookNoticeScope = adSetId
+    ? 'adset'
+    : (scope && scope !== 'all' ? 'selection' : 'organisation');
 
   if (isError) {
     return <EmptyState message={`Couldn't load ads: ${(error as Error)?.message ?? 'unknown error'}`} />;
@@ -92,46 +90,49 @@ export function FacebookAdsTab({
 
   const rows = data.pages.flatMap((p) => p.rows);
   const firstPage = data.pages[0];
-  const notice = orgState === 'not_connected' || orgState === 'never_synced' ? orgState : null;
+
+  // Platform metrics stand on their own even without ad-id coverage; only
+  // not_connected/never_synced/no_spend_in_window have nothing to show — and
+  // by construction (see the service), rows are always empty in those three
+  // states anyway, since the grain rollup itself was empty.
+  const showTable = firstPage.state === 'ok' || firstPage.state === 'no_ad_id_coverage';
 
   return (
     <div className="flex flex-col gap-4">
-      {notice ? (
-        <FacebookStateNotice state={notice} coverage={null} scope="organisation" />
-      ) : (
-        <>
-          {firstPage.windowClamped && (
-            <Note>
-              Ad set and ad detail is kept for 92 days. This period reaches further back
-              than that, so figures below are shown from {formatDate(firstPage.effectiveSince)}
-              {' '}onward rather than the whole period.
-            </Note>
-          )}
+      <FacebookStateNotice state={firstPage.state} coverage={null} scope={noticeScope} />
 
-          <DeferUntilVisible minHeight={360}>
-            <AdMetricTable
-              columns={COLUMNS}
-              rows={rows}
-              emptyState={<EmptyState message="No ads with spend in this window." />}
-            />
-            <p className="mt-2 text-[12px] text-ink-muted">
-              * Attended is Dentally-only — a GoHighLevel booking alone cannot say whether
-              someone turned up.
-            </p>
-            {hasNextPage && (
-              <div className="mt-3 flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => fetchNextPage()}
-                  disabled={isFetchingNextPage}
-                  className="rounded-lg border border-border bg-surface px-4 py-1.5 text-[12.5px] text-ink-muted hover:bg-bg disabled:opacity-50"
-                >
-                  {isFetchingNextPage ? 'Loading…' : 'Show more ads'}
-                </button>
-              </div>
-            )}
-          </DeferUntilVisible>
-        </>
+      {firstPage.windowClamped && (
+        <Note>
+          Ad set and ad detail is kept for 92 days. This period reaches further back
+          than that, so figures below are shown from {formatDate(firstPage.effectiveSince)}
+          {' '}onward rather than the whole period.
+        </Note>
+      )}
+
+      {showTable && (
+        <DeferUntilVisible minHeight={360}>
+          <AdMetricTable
+            columns={COLUMNS}
+            rows={rows}
+            emptyState={<EmptyState message="No ads with spend in this window." />}
+          />
+          <p className="mt-2 text-[12px] text-ink-muted">
+            * Attended is Dentally-only — a GoHighLevel booking alone cannot say whether
+            someone turned up.
+          </p>
+          {hasNextPage && (
+            <div className="mt-3 flex justify-center">
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="rounded-lg border border-border bg-surface px-4 py-1.5 text-[12.5px] text-ink-muted hover:bg-bg disabled:opacity-50"
+              >
+                {isFetchingNextPage ? 'Loading…' : 'Show more ads'}
+              </button>
+            </div>
+          )}
+        </DeferUntilVisible>
       )}
     </div>
   );

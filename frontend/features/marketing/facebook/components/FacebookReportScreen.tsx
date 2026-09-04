@@ -11,18 +11,18 @@
 // deliberately:
 //
 //  - useFacebookCampaigns(): needed by the Campaigns tab for its own table,
-//    but ALSO by the Ads tab, which has no state/coverage of its own (the
-//    ads() endpoint returns only rows/paging/window — see FacebookAdsTab's
-//    header comment) and falls back to this organisation-wide connectivity
-//    signal to explain an empty table.
+//    and to resolve the human-readable campaign name behind the
+//    `campaignId` filter chip shown on the Ad sets tab.
 //  - useFacebookAdSets(campaignId): needed by the Ad sets tab for its own
 //    table, but ALSO by the Ads tab, to resolve the human-readable ad-set
-//    name behind the `adSetId` filter chip.
+//    name behind the `adSetId` filter chip. (The Ads tab's own state/
+//    coverage notice comes from ads() itself now — see FacebookAdsTab's
+//    header comment — not from either of these.)
 //
 // Lifting them here means both are ONE request each (react-query dedupes an
 // identical queryKey) rather than a second copy fired from inside whichever
-// tab happens to need the name/state — the exact "reuse the call the app
-// already made" idiom the old AdSetsScreen used for its campaign name.
+// tab happens to need the name — the exact "reuse the call the app already
+// made" idiom the old AdSetsScreen used for its campaign name.
 //
 // Filter chain: clicking a campaign row (Campaigns tab) sets `campaignId`
 // and switches to Ad sets; clicking an ad-set row (Ad sets tab) sets
@@ -166,7 +166,7 @@ export default function FacebookReportScreen() {
         <FacebookAdSetsTab query={adSets} campaignId={campaignId} onSelectAdSet={filterByAdSet} />
       )}
       {tab === 'ads' && (
-        <FacebookAdsTab adSetId={adSetId} orgState={campaigns.data?.state} />
+        <FacebookAdsTab adSetId={adSetId} />
       )}
     </div>
   );

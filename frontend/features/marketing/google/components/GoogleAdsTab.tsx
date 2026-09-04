@@ -4,11 +4,10 @@
 // this file and GoogleKeywordsTab.tsx both take the SAME `parentId` (an ad
 // group id) rather than one nesting inside the other.
 //
-// Unlike ../facebook/components/FacebookAdsTab.tsx, this tab needs NO
+// Like ../facebook/components/FacebookAdsTab.tsx, this tab needs NO
 // `orgState` prop borrowed from the Campaigns tab: ads() returns its own
 // `state`, so an empty table can say why from its own data (see
-// google-report.service.js's file header, point 3 — the exact gap Facebook's
-// ads() has and Google deliberately does not reproduce).
+// google-report.service.js's file header, point 3).
 import { EmptyState, SkeletonTable } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { formatDate } from '@/lib/format';

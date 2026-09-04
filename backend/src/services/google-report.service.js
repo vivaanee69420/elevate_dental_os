@@ -33,11 +33,10 @@
 //     interface. Every read below uses Number(), never Number.parseInt,
 //     and costPerConversionPence divides by the fractional value untouched.
 //
-//  3. Every one of the four methods returns its own `state`. ads() on the
-//     Facebook page currently returns none at all — a known, separately
-//     tracked gap there — and that gap is NOT reproduced here: a tab showing
-//     an empty table must be able to say why from its own data, never borrow
-//     another tab's.
+//  3. Every one of the four methods returns its own `state`, computed from
+//     THIS grain's own rows — same discipline facebook-report.service.js's
+//     ads() follows for its grain: a tab showing an empty table must be able
+//     to say why from its own data, never borrow another tab's.
 //
 //  4. Two keyword figures are stated as approximations, not presented as
 //     exact, because saying so is the point:
@@ -175,9 +174,9 @@ async function emptyWindowState(orgId) {
 }
 
 // Shared early return for "no Google account connected at all" — every one
-// of the four methods checks this FIRST and returns its OWN state, unlike
-// facebook-report.service.js's ads(), which currently returns none (a known,
-// separately-tracked gap that must not be reproduced here).
+// of the four methods checks this FIRST and returns its OWN state, same
+// discipline facebook-report.service.js's three methods (including ads())
+// follow.
 function notConnected(win, extra = {}) {
     return {
         state: 'not_connected', rows: [], excludedAccounts: [],

@@ -437,6 +437,14 @@ export const facebookReportService = {
     async ads(orgId, { since, until, practiceId = null, adSetId = null, cursor = null } = {}) {
         const PAGE = 50;
         const win = clampWindow(since, until);
+        const accounts = await metaAccounts(orgId);
+        if (accounts.length === 0) {
+            return {
+                state: 'not_connected', rows: [], nextCursor: null,
+                effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+            };
+        }
+
         const [grainRows, funnelRows] = await Promise.all([
             adGrainRepository.rollup(orgId, 'meta_ad', { since: win.since, until: win.until, practiceId, parentId: adSetId }),
             // Cached: this is the call every ad-set expansion used to re-run
@@ -474,8 +482,40 @@ export const facebookReportService = {
         const start = cursor ? Number(cursor) : 0;
         const page = all.slice(start, start + PAGE);
         const nextCursor = start + PAGE < all.length ? String(start + PAGE) : null;
+
+        // THIS grain's own state, computed from THIS grain's own rows — not
+        // borrowed from campaigns()/adSets(), which read a different table
+        // (ad_metrics' campaign-day rows, not the deep-grain ad rollup) and
+        // answer a different question. A tenant can be 'ok' at the campaign
+        // tier while the ad-level deep-grain sync has nothing for this
+        // window, or vice versa; each tier must report what IT actually
+        // found.
+        //
+        // Coverage here is ad_id resolution, not ad_set_id — the question
+        // this grain asks is "did a lead resolve down to a specific ad",
+        // scoped to the current ad-set filter the same way adSets() scopes
+        // its own coverage to campaignId. (ad_meta_funnel derives ad_set_id
+        // FROM a lead's ad_id via a join, so ad_set_id present implies ad_id
+        // present — but not the reverse — which is why this is its own
+        // computation and not a reuse of coverageOf.)
+        const forScope = adSetId
+            ? (funnelRows ?? []).filter((r) => r.ad_set_id === adSetId)
+            : (funnelRows ?? []);
+        const leadsTotal = forScope.reduce((n, r) => n + Number(r.leads ?? 0), 0);
+        const leadsWithAdId = forScope
+            .filter((r) => r.ad_id)
+            .reduce((n, r) => n + Number(r.leads ?? 0), 0);
+
+        // Same two guards as campaigns()/adSets(): an empty rollup is not
+        // evidence of a missing sync (emptyWindowState probes outside the
+        // window before saying so), and zero leads in scope is a quiet
+        // window, not a coverage problem — do not drop the leadsTotal > 0
+        // check.
+        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId)
+            : leadsTotal > 0 && leadsWithAdId === 0 ? 'no_ad_id_coverage' : 'ok';
+
         return {
-            rows: page, nextCursor,
+            state, rows: page, nextCursor,
             effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
         };
     },

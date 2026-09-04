@@ -35,6 +35,10 @@ const SCOPE_COPY: Record<FacebookNoticeScope, { title: string; body: string }> =
     title: 'Ad set and ad detail is not available for this campaign',
     body: "None of this campaign's leads in the selected period carry the Meta ad they came from, so its leads cannot be attributed below campaign level. Spend, impressions and clicks are shown in full.",
   },
+  adset: {
+    title: 'Ad detail is not available for this ad set',
+    body: "None of this ad set's leads in the selected period carry the Meta ad they came from, so its leads cannot be attributed below ad-set level. Spend, impressions and clicks are shown in full.",
+  },
 };
 
 const COPY: Record<Exclude<FacebookState, 'ok' | 'no_ad_id_coverage'>, { title: string; body: string }> = {
