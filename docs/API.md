@@ -1890,6 +1890,14 @@ date is still rejected; optional does not mean unvalidated. `practice_id`
 (optional, must be a UUID or it is silently treated as unscoped — same
 `practiceOf` guard `/leads` uses) narrows to one practice.
 
+`/facebook/ad-sets` and `/facebook/ads` take their parent id as an **optional
+query filter** (`campaignId` / `adSetId` — the ad platform's own id, e.g.
+`120249721894530517`, not a uuid; bounded to 128 chars, same shape as
+`LeadListQuerySchema`'s `campaignId`), not a required path segment. Omitting
+it lists every ad set, or every ad, across the whole window — the shape a
+standalone tab needs; supplying it narrows to one parent exactly as the old
+nested drill-down routes did.
+
 Money is integer pence throughout. Every row's cost figures
 (`cpcPence`/`cplPence`/`cpbPence`/`cpaPence`) are `null`, never `0`, when
 their denominator (clicks/leads/booked/patients) is zero — a cost per
@@ -1912,9 +1920,11 @@ an org with no Dentally connection rather than being omitted.
   be built (a quiet window with zero leads is never reported as this — it is
   not evidence of missing coverage). **Scope matters**: on `/campaigns` it is
   measured over the organisation, narrowed by any `practice_id`; on
-  `/campaigns/:campaignId/adsets` it is measured over **that one campaign**.
-  The UI words the notice for what was measured rather than making an
-  organisation-wide claim from a per-campaign computation.
+  `/facebook/ad-sets` it is measured over **whatever `campaignId` narrowed
+  it to** — one campaign when supplied, the whole window across every
+  campaign when omitted. The UI words the notice for what was measured
+  rather than making an organisation-wide claim from a per-campaign
+  computation.
 - `ok` — normal.
 
 ### `GET /api/marketing/facebook/campaigns`
@@ -1958,9 +1968,11 @@ unmatchedLeads, effectiveSince, windowClamped }`.
   as clamped). The page uses them to say what it is showing rather than
   quietly showing less than the period pill claims.
 
-### `GET /api/marketing/facebook/campaigns/:campaignId/adsets`
+### `GET /api/marketing/facebook/ad-sets`
 
-As above, for one campaign's ad sets.
+As above, at the ad-set tier. **Query:** adds `campaignId` (optional — see
+above; omitted lists every ad set in the window across every campaign,
+supplied narrows to one campaign's).
 
 **Response:** `{ state, coverage, rows[], notIdentified, unmatchedLeads,
 effectiveSince, windowClamped }` — no `excludedAccounts`/`totals` at this
@@ -1972,23 +1984,24 @@ tier.
   for every tenant. Surfacing it needs a new RPC and a migration; it is not
   shipped half-done.
 - `notIdentified` is a summed funnel object (same shape as `unmatchedLeads`)
-  for leads attributed to this campaign whose ad set could **not be resolved
-  at all**. They carry no spend, so they carry no cost either — `null` when
-  there are none.
+  for leads in scope (the one campaign, or the whole window when `campaignId`
+  is omitted) whose ad set could **not be resolved at all**. They carry no
+  spend, so they carry no cost either — `null` when there are none.
 - `unmatchedLeads` is the same shape, for leads whose ad set **did** resolve
   but which is not among `rows` — it had no delivery in this window, or its
   spend sits under a different practice mapping than the current filter.
   Without it those leads would appear in no row and in no bucket, so this tier
-  could sum to less than the campaign row above it. `rows` + `notIdentified` +
+  could sum to less than the scope above it. `rows` + `notIdentified` +
   `unmatchedLeads` reconciles exactly to the campaign tier's row for the same
-  campaign. `null` when there are none.
+  campaign when `campaignId` was given, or to the campaign tier's grand total
+  when it was omitted. `null` when there are none.
 
-### `GET /api/marketing/facebook/adsets/:adSetId/ads`
+### `GET /api/marketing/facebook/ads`
 
-One ad set's ads, spend-sorted descending (ties broken by id, ascending, for
-stable paging), 50 per page.
-
-**Query:** adds `cursor` (optional, opaque — pass back the previous
+Ads, spend-sorted descending (ties broken by id, ascending, for stable
+paging), 50 per page. **Query:** adds `adSetId` (optional — see above;
+omitted lists every ad in the window across every ad set, supplied narrows
+to one ad set's) and `cursor` (optional, opaque — pass back the previous
 response's `nextCursor` verbatim).
 
 **Response:** `{ rows[], nextCursor, effectiveSince, windowClamped }`. Each

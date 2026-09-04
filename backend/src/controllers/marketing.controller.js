@@ -103,9 +103,18 @@ export async function getReconciliation(req, res, next) {
 // req.user.organisation_id, which under an agency switch is already the
 // sub-account's id. Accepting it from the request would be a cross-tenant
 // hole (M1); a test asserts a submitted organisation_id is stripped.
+//
+// campaignId/adSetId are the ad platform's OWN ids (e.g.
+// '120249721894530517'), not uuids — same bounded free-text shape as
+// LeadListQuerySchema's campaignId above, so the filter cannot carry a
+// payload. Both are OPTIONAL: a standalone ad-sets/ads tab omits them
+// entirely and lists every ad set, or every ad, in the window — that is the
+// whole point of moving the parent id off the path and into the query.
 export const FacebookQuerySchema = z.object({
     since: z.string().regex(YMD_RE, 'since must be YYYY-MM-DD').optional(),
     until: z.string().regex(YMD_RE, 'until must be YYYY-MM-DD').optional(),
+    campaignId: z.string().min(1).max(128).optional(),
+    adSetId: z.string().min(1).max(128).optional(),
     cursor: z.string().regex(/^\d{1,9}$/).optional(),
 }).strip().refine(
     // Only applies when BOTH are present — either one alone is filled in
@@ -141,10 +150,9 @@ export async function getFacebookCampaigns(req, res, next) {
 export async function getFacebookAdSets(req, res, next) {
     try {
         const q = FacebookQuerySchema.parse(req.query);
-        const data = await facebookReportService.adSets(
-            req.user.organisation_id, req.params.campaignId,
-            { ...windowFrom(q), practiceId: practiceOf(req.query.practice_id) },
-        );
+        const data = await facebookReportService.adSets(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), campaignId: q.campaignId ?? null,
+        });
         res.json(data);
     } catch (err) { next(err); }
 }
@@ -152,10 +160,9 @@ export async function getFacebookAdSets(req, res, next) {
 export async function getFacebookAds(req, res, next) {
     try {
         const q = FacebookQuerySchema.parse(req.query);
-        const data = await facebookReportService.ads(
-            req.user.organisation_id, req.params.adSetId,
-            { ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), cursor: q.cursor ?? null },
-        );
+        const data = await facebookReportService.ads(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), adSetId: q.adSetId ?? null, cursor: q.cursor ?? null,
+        });
         res.json(data);
     } catch (err) { next(err); }
 }

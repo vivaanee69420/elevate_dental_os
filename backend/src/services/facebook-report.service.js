@@ -352,7 +352,7 @@ export const facebookReportService = {
         };
     },
 
-    async adSets(orgId, campaignId, { since, until, practiceId = null } = {}) {
+    async adSets(orgId, { since, until, practiceId = null, campaignId = null } = {}) {
         const win = clampWindow(since, until);
         const accounts = await metaAccounts(orgId);
         if (accounts.length === 0) {
@@ -367,7 +367,14 @@ export const facebookReportService = {
             loadFunnel(orgId, win.since, win.until, practiceId),
         ]);
 
-        const forCampaign = (funnelRows ?? []).filter((r) => r.campaign_id === campaignId);
+        // campaignId is now an OPTIONAL filter: a standalone ad-sets tab calls
+        // this with none, and must see every ad set in the window across every
+        // campaign. Narrow the funnel to one campaign only when the caller
+        // asked for one — filtering on `=== null` here would wrongly keep only
+        // the (rare) leads that themselves resolved to no campaign at all.
+        const forCampaign = campaignId
+            ? (funnelRows ?? []).filter((r) => r.campaign_id === campaignId)
+            : (funnelRows ?? []);
         const coverage = coverageOf(forCampaign);
 
         const byAdSet = new Map();
@@ -403,8 +410,11 @@ export const facebookReportService = {
         // Before the second bucket existed those leads appeared in no row and
         // in no bucket: a campaign row saying 100 leads could render as 60 in
         // the table plus a 20-lead "not identified" row, with 20 simply gone.
-        // rows + notIdentified + unmatchedLeads now reconciles exactly to the
-        // campaign tier's row for this campaign — there is a test pinning that.
+        // rows + notIdentified + unmatchedLeads reconciles exactly to the
+        // campaign tier's row for this campaign when campaignId is given —
+        // there is a test pinning that — and to the campaign tier's grand
+        // total when it is omitted, since forCampaign is then every funnel
+        // row in the window rather than one campaign's.
         const shownAdSetIds = new Set((grainRows ?? []).map((g) => g.entity_id));
         const orphan = sumFunnel(forCampaign.filter((r) => !r.ad_set_id));
         const notIdentified = orphan.leads > 0 ? orphan : null;
@@ -424,7 +434,7 @@ export const facebookReportService = {
         };
     },
 
-    async ads(orgId, adSetId, { since, until, practiceId = null, cursor = null } = {}) {
+    async ads(orgId, { since, until, practiceId = null, adSetId = null, cursor = null } = {}) {
         const PAGE = 50;
         const win = clampWindow(since, until);
         const [grainRows, funnelRows] = await Promise.all([
