@@ -6,11 +6,87 @@
 // that file's header for the full DST reasoning.
 import { useQuery, useInfiniteQuery, keepPreviousData } from '@tanstack/react-query';
 import { useScopePeriod, scopeKey } from '@/features/_shared/scope-context';
-import { ymdWindowParams } from '../_shared/window';
+import {
+  ymdWindowParams, ymdWindowParamsFor, londonDateOf, lastInclusiveLondonDay,
+} from '../_shared/window';
 import {
   fetchGoogleCampaigns, fetchGoogleAdGroups, fetchGoogleAds, fetchGoogleKeywords,
+  fetchGoogleLeadPerformance,
   type GoogleCampaignsPayload, type GoogleAdGroupsPayload, type GoogleAdsPage, type GoogleKeywordsPage,
+  type GoogleLeadPerformancePayload,
 } from './api';
+
+// The blended CPL/CPB/CPA cards. Same scope-bar plumbing as every other hook
+// here — ymdWindowParams already sends `practice_id` only when the bar is
+// narrowed to one practice, so "All practices" (the bar's own default) is
+// what this renders with no extra code on this page's side.
+// The owner-requested "include existing patients" toggle is answered
+// entirely client-side (GoogleLeadPerformanceCards reads practicesAll/
+// totalAll instead of practices/total) — this hook fetches ONCE per
+// org+window and both figures come out of that same response, so flipping
+// the toggle costs no extra request. It used to take an `includeExisting`
+// argument and re-fetch with `?include_existing=1`; that was the single
+// biggest speed problem on this page, since the SQL itself never depended
+// on the flag, only on how the already-fetched rows get summed.
+export function useGoogleLeadPerformance() {
+  const { scope, win } = useScopePeriod();
+  const qs = ymdWindowParams(scope, win);
+  return useQuery<GoogleLeadPerformancePayload>({
+    queryKey: ['marketing', 'google', 'lead-performance', scopeKey({ scope, win })],
+    queryFn: () => fetchGoogleLeadPerformance(qs),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * The selected period as the plain inclusive YYYY-MM-DD pair the cards'
+ * comparison arithmetic works in.
+ *
+ * Read through the SAME londonDateOf/lastInclusiveLondonDay pair that builds
+ * the request, not re-derived from win.since/win.until here. Those two
+ * conversions are where this codebase has twice put a DST bug (see
+ * ../_shared/window.ts's header); computing the displayed period one way and
+ * the requested period another is how the comparison would end up measured
+ * against a window a day away from the one on screen.
+ */
+export function useSelectedYmdWindow(): { since: string; until: string } {
+    const { win } = useScopePeriod();
+    return { since: londonDateOf(win.since), until: lastInclusiveLondonDay(win.until) };
+}
+
+/**
+ * The same cards, for an ARBITRARY window — the comparison period.
+ *
+ * A second call to the same endpoint rather than a `compare_since`/
+ * `compare_until` parameter on the first: the two periods are then computed
+ * by one code path on the server, cached independently (the service already
+ * keys its 60s cache on org+window), and a comparison window that happens to
+ * equal a window already on screen costs nothing. It also means the
+ * comparison cannot drift from the primary figure, because it IS the primary
+ * figure, asked for a different fortnight.
+ *
+ * `enabled` is false while comparison is off, so the page fires no request at
+ * all until the user asks for one.
+ */
+export function useGoogleLeadPerformanceFor(
+    compareWindow: { since: string; until: string } | null,
+) {
+    const { scope } = useScopePeriod();
+    const qs = compareWindow ? ymdWindowParamsFor(scope, compareWindow.since, compareWindow.until) : '';
+    return useQuery<GoogleLeadPerformancePayload>({
+        queryKey: ['marketing', 'google', 'lead-performance', 'compare',
+            scope, compareWindow?.since ?? '', compareWindow?.until ?? ''],
+        queryFn: () => fetchGoogleLeadPerformance(qs),
+        enabled: Boolean(compareWindow),
+        placeholderData: keepPreviousData,
+        staleTime: 5 * 60_000,
+        gcTime: 30 * 60_000,
+        refetchOnWindowFocus: false,
+    });
+}
 
 export function useGoogleCampaigns() {
   const { scope, win } = useScopePeriod();

@@ -29,6 +29,32 @@ export const RPC_PAGE_SIZE = 1000;
 // mis-stubbed test dies fast instead of eating the machine.
 export const RPC_MAX_PAGES = 250;
 
+// Read every row of a TABLE select, paging past the same cap.
+//
+// `build()` must return a FRESH query builder each call: a Supabase builder
+// accumulates its modifiers, so reusing one instance sends two .order()/.range()
+// clauses. `orderBy` must be a column with a total order (an id, not a
+// timestamp) — OFFSET paging without one repeats or skips rows between pages.
+//
+// Same stopping rule and same loop bound as fetchAllRpc, for the same reasons.
+export async function fetchAllRows(build, { orderBy = 'id', ascending = true, pageSize = RPC_PAGE_SIZE, maxPages = RPC_MAX_PAGES } = {}) {
+    const out = [];
+    for (let page = 0; page < maxPages; page++) {
+        const from = page * pageSize;
+        const { data, error } = await build()
+            .order(orderBy, { ascending })
+            .range(from, from + pageSize - 1);
+        if (error) return { data: null, error };
+        const rows = Array.isArray(data) ? data : [];
+        out.push(...rows);
+        if (rows.length < pageSize) return { data: out, error: null };
+    }
+    return {
+        data: null,
+        error: { message: `paged select exceeded ${maxPages} pages (${maxPages * pageSize} rows); refusing to return a partial result` },
+    };
+}
+
 // Read every row of a set-returning RPC, paging past the row cap.
 //
 // `orderBy` is REQUIRED in spirit even where the function already sorts:

@@ -1,6 +1,19 @@
 import * as analytics_service_1 from "../services/analytics.service.js";
 import * as analytics_model_1 from "../models/analytics.model.js";
 import { idParamSchema, practiceQuerySchema } from "../models/common.model.js";
+
+// Trailing-window length in days, clamped to something a real UI can ask for.
+// Anything non-finite or non-positive falls back to the 90-day default rather
+// than reaching the window arithmetic, where a negative silently inverts the
+// prior-period comparison instead of failing.
+const DEFAULT_WINDOW_DAYS = 90;
+const MAX_WINDOW_DAYS = 1827; // ~5 years
+export function clampDays(value, fallback = DEFAULT_WINDOW_DAYS) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return Math.min(Math.floor(n), MAX_WINDOW_DAYS);
+}
+
 export const analyticsController = {
     async dashboard(req, res) {
         res.json(await analytics_service_1.analyticsService.dashboard(req.user.organisation_id));
@@ -71,12 +84,23 @@ export const analyticsController = {
         res.json(await analytics_service_1.analyticsService.kpis(req.user.organisation_id));
     },
     async businessHub(req, res) {
-        const days = Number(req.query.days) || 90;
+        // CLAMPED. `Number(req.query.days) || 90` accepted anything: a negative
+        // put `since` in the future AND inverted the prior-period comparison
+        // (winMs = days * 86400000 went negative), and an arbitrarily large value
+        // was both an expensive scan and unbounded cache-key cardinality against
+        // a shared 300-entry LRU — one tenant issuing distinct windows could
+        // evict every other tenant's cached payload. 5 years is past any window
+        // the UI can produce.
+        const days = clampDays(req.query.days);
         // Optional explicit window (a picked month/day). Normalise to ISO; ignore
         // anything unparseable so a bad query param can't reach the SQL window.
         const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
         const since = iso(req.query.since);
-        const until = iso(req.query.until);
+        let until = iso(req.query.until);
+        // An inverted range matched nothing and reported an empty window as if it
+        // were a genuinely quiet one. Drop the upper bound rather than serve a
+        // confident zero.
+        if (since && until && Date.parse(until) < Date.parse(since)) until = null;
         const label = typeof req.query.label === 'string' ? req.query.label.slice(0, 40) : null;
         res.json(await analytics_service_1.analyticsService.businessHub(req.user.organisation_id, { days, since, until, label }));
     },
@@ -84,7 +108,7 @@ export const analyticsController = {
     // invoice line in the same window (+ optional practice scope). Same window
     // parsing as businessHub so the drill-down reconciles to the tile.
     async planFeesLines(req, res) {
-        const days = Number(req.query.days) || 90;
+        const days = clampDays(req.query.days);
         const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
         const since = iso(req.query.since);
         const until = iso(req.query.until);
@@ -96,7 +120,7 @@ export const analyticsController = {
         res.json(await analytics_service_1.analyticsService.planFeesLines(req.user.organisation_id, { days, since, until, label, practiceId }));
     },
     async leakage(req, res) {
-        const days = Number(req.query.days) || 90;
+        const days = clampDays(req.query.days);
         const iso = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
         const since = iso(req.query.since);
         const until = iso(req.query.until);

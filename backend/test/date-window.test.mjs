@@ -19,22 +19,50 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { startOfDayISO, endOfDayISO, dayWindowISO } from '../src/lib/date-window.js';
+import { startOfDayISO, endOfDayISO, exclusiveEndISO, dayWindowISO } from '../src/lib/date-window.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-describe('a calendar day expands to the whole day', () => {
+describe('a calendar day expands to the whole day, in Europe/London', () => {
+  // Bounds are asserted as literal UTC instants, NOT via `new Date(y, m, d)`,
+  // which is server-local and so would pass for any zone the runner happens to
+  // be in — the exact blind spot that let a UTC-built bound describe a
+  // different day from the one the user picked.
   it('the upper bound is the LAST instant of the day, not the first', () => {
     // The whole bug in one assertion.
-    expect(new Date(endOfDayISO('2026-08-31')).getTime())
-      .toBe(new Date(2026, 7, 31, 23, 59, 59, 999).getTime());
+    expect(endOfDayISO('2026-08-31')).toBe('2026-08-31T22:59:59.999Z');
     expect(new Date(endOfDayISO('2026-08-31')).getTime())
       .toBeGreaterThan(new Date(startOfDayISO('2026-08-31')).getTime());
   });
 
-  it('the lower bound is the first instant of the day', () => {
-    expect(new Date(startOfDayISO('2026-08-01')).getTime())
-      .toBe(new Date(2026, 7, 1, 0, 0, 0, 0).getTime());
+  it('the lower bound is the first instant of the LONDON day', () => {
+    // 1 Aug is BST, so London midnight is 23:00Z on 31 July. Building this in
+    // UTC would start the window an hour late and lose the first London hour of
+    // the month from every BST period.
+    expect(startOfDayISO('2026-08-01')).toBe('2026-07-31T23:00:00.000Z');
+  });
+
+  it('winter days are GMT and summer days are BST — the zone is not a fixed offset', () => {
+    // "UK time" is not UTC+1. Pinning a constant +1 would be wrong for the five
+    // months the country is on GMT, which is the same class of error as pinning
+    // UTC — just wrong in the other half of the year.
+    expect(startOfDayISO('2026-01-15')).toBe('2026-01-15T00:00:00.000Z'); // GMT
+    expect(startOfDayISO('2026-07-15')).toBe('2026-07-14T23:00:00.000Z'); // BST
+  });
+
+  it('the clock-change days are 23 and 25 hours long, not 24', () => {
+    const spring = new Date(endOfDayISO('2026-03-29')).getTime() - new Date(startOfDayISO('2026-03-29')).getTime();
+    const autumn = new Date(endOfDayISO('2026-10-25')).getTime() - new Date(startOfDayISO('2026-10-25')).getTime();
+    expect(spring).toBe(23 * 3600_000 - 1); // BST begins: an hour is skipped
+    expect(autumn).toBe(25 * 3600_000 - 1); // BST ends: an hour repeats
+  });
+
+  it('the exclusive end is the start of the NEXT London day', () => {
+    // This is the bound the period pickers produce and the shape the SQL helper
+    // window_last_day() expects. Handing a date-column aggregate the inclusive
+    // 23:59:59.999 instead would resolve to the FOLLOWING London day in BST.
+    expect(exclusiveEndISO('2026-08-31')).toBe('2026-08-31T23:00:00.000Z');
+    expect(exclusiveEndISO('2026-08-31')).toBe(startOfDayISO('2026-09-01'));
   });
 
   it('a single-day window is a real 24h span, not an empty instant', () => {

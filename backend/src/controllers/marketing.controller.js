@@ -234,6 +234,27 @@ export async function getGoogleKeywords(req, res, next) {
     } catch (err) { next(err); }
 }
 
+// Same query shape as the four grain routes — since/until optional
+// YYYY-MM-DD, practice_id optional. campaignId/parentId/cursor are accepted
+// (GoogleQuerySchema.strip()) but unused here: this endpoint has no
+// per-campaign grain at all, see google-report.service.js's leadPerformance.
+export async function getGoogleLeadPerformance(req, res, next) {
+    try {
+        const q = GoogleQuerySchema.parse(req.query);
+        // No include_existing query param: the owner-requested "new
+        // patients only" vs "including existing patients" toggle is answered
+        // entirely client-side now — leadPerformance returns BOTH
+        // (practices/total AND practicesAll/totalAll) from one fetch, so
+        // flipping the toggle costs nothing over the network. See
+        // leadPerformance's own comment for why that mattered more than
+        // anything in the query itself.
+        const data = await googleReportService.leadPerformance(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
 export async function getLeads(req, res, next) {
     try {
         const q = LeadListQuerySchema.parse(req.query);

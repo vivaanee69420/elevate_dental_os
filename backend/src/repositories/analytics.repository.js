@@ -132,23 +132,43 @@ export const analyticsRepository = {
     // accountIds (array | null): when non-null, restrict to those ad-account
     // customer_ids (the dynamic, org-isolated account filter). null = no account
     // filter (all of the org's accounts).
+    //
+    // AGGREGATED IN SQL, and it must be. This used to read ad_metrics row by row
+    // under `.limit(LIMIT_GUARD)`, which does NOT lift PostgREST's own server-side
+    // ceiling — the server truncates and says nothing. The live org holds 3,899
+    // ad_metrics rows in a 90-day window and 1,079 in 30 days, both past that
+    // ceiling, and the read carried no ORDER BY, so *which* rows survived changed
+    // between calls. Every figure built from this (spend, ROAS, cost per lead)
+    // was a partial sum presented as a total. `ad_metrics_rollup` (migration
+    // 000161) groups by provider x account x practice in SQL, so the row count
+    // crossing the wire is bounded by the org's account count, not its history.
     async adMetricsInWindow(orgId, fromDate, toDate, practiceIds = null, accountIds = null) {
         // Resolve gating BEFORE the main query so it stays the last query issued.
         const revoked = await revokedProviders(orgId);
-        let q = supabase_1.serviceClient
-            .from('ad_metrics')
-            .select('provider, customer_id, spend_pence, impressions, clicks, reach, conversions, practice_id')
-            .eq('organisation_id', orgId)
-            .gte('metric_date', fromDate)
-            .lte('metric_date', toDate)
-            .limit(LIMIT_GUARD);
-        if (practiceIds) q = q.in('practice_id', practiceIds);
-        if (accountIds !== null) q = q.in('customer_id', accountIds);
-        const { data, error } = await q;
+        const { data, error } = await supabase_1.serviceClient.rpc('ad_metrics_rollup', {
+            p_org: orgId,
+            p_from: fromDate,
+            p_to: toDate,
+            p_practices: practiceIds ?? null,
+            p_accounts: accountIds ?? null,
+        });
         if (error) throw new Error(error.message);
         // Hide a disconnected ad provider's spend (ad_metrics.provider is the
         // integration id: 'google_ads' | 'meta_ads'). Manual rows have neither.
-        return (data || []).filter((r) => !revoked.has(r.provider));
+        return (Array.isArray(data) ? data : [])
+            .filter((r) => !revoked.has(r.provider))
+            .map((r) => ({
+                provider: r.provider,
+                customer_id: r.customer_id,
+                practice_id: r.practice_id,
+                spend_pence: Number(r.spend_pence) || 0,
+                impressions: Number(r.impressions) || 0,
+                clicks: Number(r.clicks) || 0,
+                reach: Number(r.reach) || 0,
+                // numeric(14,2): Google reports modelled/fractional conversions,
+                // so this is deliberately not coerced to an integer.
+                conversions: Number(r.conversions) || 0,
+            }));
     },
     // Real ad-platform leads (ad_metrics.conversions) summed by provider in the
     // window. Powers the Business Hub "Leads" KPI: Google + Meta report lead-form
@@ -156,20 +176,22 @@ export const analyticsRepository = {
     // providers are hidden (same rule as adMetricsInWindow). Whole-org (no
     // practice/account filter) — the group Leads card is not account-scoped.
     // Returns Map<provider, conversions>.
+    //
+    // AGGREGATED IN SQL — see adMetricsInWindow above for the measurement. This
+    // one mattered most: its result is the DENOMINATOR of the Business Hub's
+    // conversion rate, so truncating it did not just lose leads, it made
+    // conversion look BETTER than it was. Summing 3,899 rows down to one per
+    // provider in the database is both the correct fix and the fast one.
     async adLeadsByProvider(orgId, fromDate, toDate) {
         const revoked = await revokedProviders(orgId);
-        const { data, error } = await supabase_1.serviceClient
-            .from('ad_metrics')
-            .select('provider, conversions')
-            .eq('organisation_id', orgId)
-            .gte('metric_date', fromDate)
-            .lte('metric_date', toDate)
-            .limit(LIMIT_GUARD);
+        const { data, error } = await supabase_1.serviceClient.rpc('ad_leads_by_provider', {
+            p_org: orgId, p_from: fromDate, p_to: toDate,
+        });
         if (error) throw new Error(error.message);
         const by = new Map();
-        for (const r of (data || [])) {
+        for (const r of (Array.isArray(data) ? data : [])) {
             if (revoked.has(r.provider)) continue;
-            by.set(r.provider, (by.get(r.provider) || 0) + (r.conversions || 0));
+            by.set(r.provider, (by.get(r.provider) || 0) + (Number(r.conversions) || 0));
         }
         return by;
     },
@@ -207,21 +229,40 @@ export const analyticsRepository = {
         if (error) throw new Error(error.message);
         return Array.isArray(data) ? data : [];
     },
+    // PAGED, and it must be. `.limit(LIMIT_GUARD)` does not lift PostgREST's
+    // server-side ceiling; the live org has 3,792 leads in a 90-day window, so
+    // the read stopped roughly a quarter of the way through and every channel
+    // count, CPL and conversion built on it was a partial sum shown as a total.
+    // This one cannot become a SQL aggregate like the ad reads: the service
+    // classifies each lead's channel in JS (`attributeChannel`) from source +
+    // UTMs, so it genuinely needs the rows. Ordered by id — `created_at` is not
+    // unique and OFFSET paging without a total order repeats or skips rows.
     async leadsForMarketing(orgId, sinceISO, untilISO, practiceIds = null) {
         if (await crmHidden(orgId)) return [];
-        // Embed the linked contact's practice so leads with no own practice_id
-        // (GHL enquiries) can still be attributed to a site via their contact.
-        let q = supabase_1.serviceClient
-            .from('leads')
-            .select('source, utm_source, utm_medium, status, practice_id, estimated_value_pence, created_at, contact:contacts(practice_id)')
-            .eq('organisation_id', orgId)
-            .gte('created_at', sinceISO)
-            .lt('created_at', untilISO)
-            .limit(LIMIT_GUARD);
-        if (practiceIds) q = q.in('practice_id', practiceIds);
-        const { data, error } = await q;
-        if (error) throw new Error(error.message);
-        return data || [];
+        const PAGE = 1000;
+        const MAX_PAGES = 500;
+        const rows = [];
+        for (let offset = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            // Rebuilt each iteration: a Supabase builder accumulates modifiers,
+            // so reusing one instance sends two .order()/.range() clauses.
+            let q = supabase_1.serviceClient
+                .from('leads')
+                // Embed the linked contact's practice so leads with no own
+                // practice_id (GHL enquiries) can still be attributed to a site.
+                .select('id, source, utm_source, utm_medium, status, practice_id, estimated_value_pence, created_at, contact:contacts(practice_id)')
+                .eq('organisation_id', orgId)
+                .gte('created_at', sinceISO)
+                .lt('created_at', untilISO);
+            if (practiceIds) q = q.in('practice_id', practiceIds);
+            const { data, error } = await q.order('id', { ascending: true }).range(offset, offset + PAGE - 1);
+            if (error) throw new Error(error.message);
+            const page = Array.isArray(data) ? data : [];
+            rows.push(...page);
+            // Stop on an EMPTY page, never a short one.
+            if (page.length === 0) break;
+            offset += page.length;
+        }
+        return rows;
     },
     async settledPaymentsInWindow(orgId, sinceISO) {
         const drop = new Set(await groupReceiptExcludedSources(orgId));

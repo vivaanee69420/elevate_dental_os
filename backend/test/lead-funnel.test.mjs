@@ -174,10 +174,11 @@ describe('tenant and scope isolation', () => {
     // The upper bound must be the END of 3 September. Passing the bare
     // 'YYYY-MM-DD' made it midnight at the START of that day, silently losing a
     // whole day of leads (44 of 1,429 for August; all of them on an MTD day 1).
-    expect(new Date(args.until).getTime())
-      .toBe(new Date(2026, 8, 3, 23, 59, 59, 999).getTime());
-    expect(new Date(args.since).getTime())
-      .toBe(new Date(2026, 0, 1, 0, 0, 0, 0).getTime());
+    // Literal UTC instants: `new Date(y, m, d, ...)` is server-local and would
+    // pass under any runner zone. 3 Sept is BST (last instant 22:59:59.999Z);
+    // 1 Jan is GMT (first instant 00:00:00.000Z). Both are Europe/London.
+    expect(args.until).toBe('2026-09-03T22:59:59.999Z');
+    expect(args.since).toBe('2026-01-01T00:00:00.000Z');
   });
 
   it('a single-day window still covers that whole day', async () => {
@@ -312,8 +313,8 @@ describe('CRM Reports figures come from the aggregate, not a page of leads', () 
     const spy = stubReport([]);
     await leadService.report(ORG_A, { since: '2026-08-01', until: '2026-08-31' });
     const args = spy.mock.calls[0][1];
-    expect(new Date(args.until).getTime())
-      .toBe(new Date(2026, 7, 31, 23, 59, 59, 999).getTime());
+    // 31 Aug is BST — the last instant of that London day is 22:59:59.999Z.
+    expect(args.until).toBe('2026-08-31T22:59:59.999Z');
   });
 
   it('binds p_org server-side and scopes by ids, never names', async () => {

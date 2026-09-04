@@ -51,7 +51,12 @@ export function LeadFunnelScreen({ overrideAccountId }: { overrideAccountId?: st
       const lCount = sum('leads');
       const bCount = sum('appointments');
       const aCount = sum('completed');
-      const accCount = rows.reduce((s, p) => s + Math.round((p.leads * p.conversionRate) / 100), 0);
+      // The exact CRM count, not a count reconstructed from a rounded rate.
+      // This used to be `round(leads * conversionRate / 100)`, which re-derived a
+      // number the payload already carried exactly — and conversionRate has since
+      // become new-patients-per-lead, a different metric from the CRM funnel this
+      // stage means, so the old expression would now silently mis-state it.
+      const accCount = rows.reduce((s, p) => s + (p.crmConverted || 0), 0);
       return { leads: lCount, booked: bCount, attended: aCount, accepted: accCount };
     }
   }, [rows, leadData, isUsingGhlOverride]);

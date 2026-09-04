@@ -14,6 +14,7 @@ import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonYmd, londonDaysAgo, londonStartOfDayISO, londonMidnightUTC } from "../lib/tz.js";
 const router = (0, express_1.Router)();
 import { createTtlCache } from "../lib/ttl-cache.js";
+import * as paged_rpc_1 from "../lib/paged-rpc.js";
 
 // 60s payload cache, matching the Business Hub. These aggregates are identical
 // for every viewer of the same org+window and compete for the same database.
@@ -610,31 +611,56 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         const practiceCids = adAccounts.filter((a) => a.practice_id === pid).map((a) => a.customer_id);
         adAccountIds = accountIds === null ? practiceCids : practiceCids.filter((c) => accountIds.includes(c));
     }
-    const withAdScope = (q) => (adAccountIds !== null ? q.in('customer_id', adAccountIds) : q);
+    // (the customer_id scope is now a parameter of ad_metrics_rollup below,
+    //  so there is no builder to wrap)
 
+    // EVERY read below is aggregated or paged. They used to be plain selects with
+    // no .limit() at all, so PostgREST's own row ceiling applied and silently
+    // truncated them. The live org holds 3,899 ad_metrics rows in 90 days, 3,792
+    // leads and 34,052 payments — so spend, lead counts and settled revenue were
+    // all partial sums presented as totals, and ROAS (revenue / spend) divided
+    // one truncated figure by another. None of the reads carried an ORDER BY, so
+    // which rows survived changed between calls.
     const [adR, leadsR, newPatients, paymentsR, healthR] = await Promise.all([
-        withAdScope(supabase_1.serviceClient.from('ad_metrics')
-            .select('provider, customer_id, spend_pence, impressions, clicks, reach, conversions')
+        // Summed in SQL: provider x account x practice, bounded by the org's
+        // account count instead of its history.
+        supabase_1.serviceClient.rpc('ad_metrics_rollup', {
+            p_org: orgId, p_from: fromDate, p_to: toDate,
+            p_practices: null, p_accounts: adAccountIds ?? null,
+        }),
+        // Paged, not aggregated: attributeProvider() classifies each lead in JS
+        // from source + UTMs, so the rows are genuinely needed.
+        (0, paged_rpc_1.fetchAllRows)(() => withPid(supabase_1.serviceClient.from('leads')
+            .select('id, source, utm_source, utm_medium, created_at')
             .eq('organisation_id', orgId)
-            .gte('metric_date', fromDate).lte('metric_date', toDate)),
-        withPid(supabase_1.serviceClient.from('leads')
-            .select('source, utm_source, utm_medium, created_at')
-            .eq('organisation_id', orgId)
-            .gte('created_at', fromISO).lte('created_at', toEndISO)),
+            .gte('created_at', fromISO).lte('created_at', toEndISO))),
         // New patients = first-ever appointment in-window, NOT contacts.created_at
         // (= Dentally sync time). Honors the optional per-practice scope (pid).
         // Drives CAC below. See migration 000072.
         newPatientsCount(orgId, fromISO, toEndISO, pid),
-        withPid(supabase_1.serviceClient.from('payments')
-            .select('amount_pence, status, processed_at')
+        (0, paged_rpc_1.fetchAllRows)(() => withPid(supabase_1.serviceClient.from('payments')
+            .select('id, amount_pence, status, processed_at')
             .eq('organisation_id', orgId)
-            .gte('processed_at', fromISO).lte('processed_at', toEndISO)),
+            .gte('processed_at', fromISO).lte('processed_at', toEndISO))),
         supabase_1.serviceClient.from('business_health')
             .select('baseline')
             .eq('organisation_id', orgId)
             .maybeSingle(),
     ]);
-    const adRows = adR.data ?? [];
+    // A paged read refuses rather than returning a partial result; surface that
+    // instead of rendering the shortfall as a real number.
+    for (const r of [adR, leadsR, paymentsR]) {
+        if (r.error) throw new AppError(500, `Marketing ROI read failed: ${r.error.message}`);
+    }
+    const adRows = (adR.data ?? []).map((r) => ({
+        provider: r.provider,
+        customer_id: r.customer_id,
+        spend_pence: Number(r.spend_pence) || 0,
+        impressions: Number(r.impressions) || 0,
+        clicks: Number(r.clicks) || 0,
+        reach: Number(r.reach) || 0,
+        conversions: Number(r.conversions) || 0,
+    }));
     const leads = leadsR.data ?? [];
     const revenue_pence = (paymentsR.data ?? [])
         .filter((p) => p.status === 'settled')

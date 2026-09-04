@@ -12,7 +12,16 @@ import { Card, Chip, SkeletonKpiRow, SkeletonChart, Skeleton } from '@/component
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, type HubPractice } from '../business-hub-api';
 import { useMarketingRoi } from '@/features/growth/hooks';
+import { useScopePeriod } from '@/features/_shared/scope-context';
 import PracticeTabs from '@/features/practices/PracticeTabs';
+
+// A rate the data cannot support is an em dash, never a confident 0%. The
+// backend returns null for exactly that case (no denominator, or a metric the
+// tenant's PMS has never synced); rendering it as 0 turned "we don't know" into
+// "excellent" for no-show and into "terrible" for conversion.
+function pct(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : `${value}%`;
+}
 
 function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'good' | 'warn' | 'bad' }) {
   const colour = tone === 'good' ? 'var(--success)' : tone === 'warn' ? 'var(--warning)' : tone === 'bad' ? 'var(--danger)' : undefined;
@@ -26,7 +35,10 @@ function Kpi({ label, value, sub, tone }: { label: string; value: string; sub?: 
 }
 
 // Red when a practice's no-show rate is high; green when conversion is strong.
-function rateChip(value: number, kind: 'noShow' | 'conversion') {
+function rateChip(value: number | null, kind: 'noShow' | 'conversion') {
+  // Unknowable: no chip colour at all. A grey em dash cannot be misread as a
+  // grade the way a green or red 0% can.
+  if (value === null) return <span className="text-ink-muted">—</span>;
   if (kind === 'noShow') {
     if (value >= 15) return <Chip colour="rose">{value}%</Chip>;
     if (value >= 8) return <Chip colour="amber">{value}%</Chip>;
@@ -43,8 +55,14 @@ export default function BusinessHubScreen() {
   // made this block disagree with the rest of the page (e.g. page on "Mar 2026"
   // but this still showing trailing 90 days).
   const { data, isLoading, error } = useBusinessHub();
-  const { data: roi } = useMarketingRoi();
   const [practiceId, setPracticeId] = useState<string | null>(null);
+  // SCOPED. useMarketingRoi() was called with no arguments, so these cards stayed
+  // group-wide over the backend's own default window while the user had a
+  // practice selected and a period picked — and they were labelled "(30d)",
+  // which was not that default either. They now follow the same practice tab and
+  // the same period as every other figure on the page.
+  const { win } = useScopePeriod();
+  const { data: roi } = useMarketingRoi(practiceId, { from: win.since, to: win.until });
 
   if (isLoading) {
     return (
@@ -73,7 +91,13 @@ export default function BusinessHubScreen() {
   const selected = practiceId ? practices.find((p) => p.practiceId === practiceId) ?? null : null;
   const view = selected ?? g;
   const targetDelta = g.revenueTargetPence ? g.revenuePence - g.revenueTargetPence : 0;
-  const hasData = g.revenuePence > 0 || g.appointments > 0 || g.leads > 0;
+  // Two different empty states that used to render as one. "Nothing at all" means
+  // no source is connected and the fix is Integrations; "nothing in this window"
+  // means the tenant has data, just not here, and the fix is the period picker.
+  // Telling a brand-new org that its quiet month is the problem sent it looking
+  // in the wrong place.
+  const hasWindowData = g.revenuePence > 0 || g.appointments > 0 || g.leads > 0;
+  const hasAnyPractices = practices.length > 0;
 
   return (
     <div>
@@ -86,11 +110,20 @@ export default function BusinessHubScreen() {
 
       <PracticeTabs value={practiceId} onChange={setPracticeId} />
 
-      {!hasData && (
+      {!hasWindowData && (
         <Card className="mb-4">
           <div className="text-sm text-ink-muted">
-            No revenue, appointments or leads yet for this period. Connect Dentally/GoHighLevel or import a CSV
-            via <strong>Data Hub</strong>, and these totals fill in automatically.
+            {hasAnyPractices ? (
+              <>
+                No revenue, appointments or leads fell in <strong>{data!.period.label ?? 'this period'}</strong>.
+                Try a different period, or check the feed dates on <strong>Integrations</strong>.
+              </>
+            ) : (
+              <>
+                Nothing is connected yet. Connect Dentally or GoHighLevel, or import a CSV via{' '}
+                <strong>Data Hub</strong>, and these totals fill in automatically.
+              </>
+            )}
           </div>
         </Card>
       )}
@@ -103,26 +136,30 @@ export default function BusinessHubScreen() {
           sub={selected
             ? selected.name
             : g.revenueTargetPence
-              ? `${targetDelta >= 0 ? '+' : ''}${formatPence(targetDelta)} vs target`
+              ? `${targetDelta >= 0 ? '+' : ''}${formatPence(targetDelta)} vs target (${formatPence(g.revenueTargetAnnualPence)}/yr pro-rated)`
               : 'no target set'}
           tone={selected ? undefined : g.revenueTargetPence ? (targetDelta >= 0 ? 'good' : 'warn') : undefined}
         />
         <Kpi
           label="Group margin"
           value={selected ? '—' : g.marginPct ? `${g.marginPct}%` : '—'}
-          sub={selected ? 'group-level only' : g.marginPct ? 'real (P&L actuals)' : 'no cost data'}
+          sub={selected ? 'group-level only' : g.marginPct ? 'P&L actuals, last 12 months' : 'no cost data'}
         />
         <Kpi
           label="Appointments"
           value={formatNumber(view.appointments)}
-          sub={`${view.noShowRate}% no-show`}
-          tone={view.noShowRate >= 15 ? 'bad' : view.noShowRate >= 8 ? 'warn' : 'good'}
+          sub={g.noShowTracked ? `${pct(view.noShowRate)} no-show` : 'no-show not tracked'}
+          tone={view.noShowRate === null ? undefined
+            : view.noShowRate >= 15 ? 'bad' : view.noShowRate >= 8 ? 'warn' : 'good'}
         />
         <Kpi
           label="Lead conversion"
-          value={`${view.conversionRate}%`}
-          sub={`${formatNumber(view.leads)} leads`}
-          tone={view.conversionRate >= 50 ? 'good' : view.conversionRate >= 30 ? 'warn' : 'bad'}
+          value={pct(view.conversionRate)}
+          sub={selected
+            ? `${formatNumber(view.leads)} CRM leads`
+            : `${formatNumber(g.leads)} leads, all sources`}
+          tone={view.conversionRate === null ? undefined
+            : view.conversionRate >= 50 ? 'good' : view.conversionRate >= 30 ? 'warn' : 'bad'}
         />
       </div>
 
@@ -130,12 +167,12 @@ export default function BusinessHubScreen() {
           days. Account-level (not per-practice), so it stays on group view. */}
       {!selected && roi?.connected && (
         <div className="grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
-          <Kpi label="Ad spend (30d)" value={formatPence(roi.spend_pence)} sub={`${formatNumber(roi.clicks)} clicks`} />
+          <Kpi label="Ad spend" value={formatPence(roi.spend_pence)} sub={`${formatNumber(roi.clicks)} clicks · ${data!.period.label ?? 'window'}`} />
           <Kpi
             label="ROAS"
             value={roi.roas ? `${roi.roas.toFixed(2)}x` : '—'}
             sub="settled revenue / spend"
-            tone={roi.roas >= 4 ? 'good' : roi.roas >= 1 ? 'warn' : 'bad'}
+            tone={!roi.roas ? undefined : roi.roas >= 4 ? 'good' : roi.roas >= 1 ? 'warn' : 'bad'}
           />
           <Kpi label="Cost / new patient" value={roi.cac_pence ? formatPence(roi.cac_pence) : '—'} sub={`${formatNumber(roi.new_patients)} new patients`} />
           <Kpi label="Cost / lead" value={roi.cpl_pence ? formatPence(roi.cpl_pence) : '—'} sub={`${formatNumber(roi.leads_from_ads)} ad leads`} />
@@ -153,7 +190,7 @@ export default function BusinessHubScreen() {
               <th className="right">Chairs</th>
               <th className="right">Appts</th>
               <th className="right">No-show</th>
-              <th className="right">Leads</th>
+              <th className="right">Leads (CRM)</th>
               <th className="right">Conversion</th>
             </tr>
           </thead>
@@ -171,6 +208,14 @@ export default function BusinessHubScreen() {
             ))}
           </tbody>
         </table>
+        {g.leads > g.leadsCrm && (
+          <div className="text-xs text-ink-muted mt-2">
+            Per-practice leads are CRM enquiries only ({formatNumber(g.leadsCrm)}). The{' '}
+            {formatNumber(g.leads - g.leadsCrm)} ad-platform leads in the headline have no reliable
+            practice attribution — one ad account usually serves the whole group — so they are
+            counted at group level and not split across these rows.
+          </div>
+        )}
         {data!.truncated && (
           <div className="text-xs text-ink-muted mt-2">Showing a capped sample — totals may be partial.</div>
         )}

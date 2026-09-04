@@ -500,4 +500,106 @@ export const marketingRepository = {
         if (error) throw new Error(`contacts read: ${error.message}`);
         return data ?? [];
     },
+
+    // Ad spend/impressions/clicks per PRACTICE, any provider — the spend side
+    // of the Google report's blended CPL/CPB/CPA cards (000158). One row per
+    // practice this window has spend for, plus one row with practice_id NULL
+    // for spend on an account not mapped to any practice. since/until are
+    // plain YYYY-MM-DD, INCLUSIVE both ends — same convention as
+    // campaignSpendByProvider (metric_date IS a date).
+    async adSpendByPractice(orgId, provider, since, until) {
+        const { data, error } = await supabase_1.serviceClient.rpc('ad_provider_spend_by_practice', {
+            p_org: orgId, p_provider: provider, p_since: since, p_until: until,
+        });
+        if (error) throw new Error(`ad_provider_spend_by_practice: ${error.message}`);
+        return (data ?? []).map((r) => ({
+            practice_id: r.practice_id ?? null,
+            practice_name: r.practice_name ?? null,
+            spend_pence: Number(r.spend_pence ?? 0),
+            impressions: Number(r.impressions ?? 0),
+            clicks: Number(r.clicks ?? 0),
+        }));
+    },
+
+    // The Google report's blended lead ledger (000158): one row per
+    // deduplicated lead (GoHighLevel form OR CallRail call, phone-matched)
+    // in the window, Dentally-matched for booked/accepted. Google only —
+    // Facebook's own funnel (metaFunnel above) is untouched.
+    //
+    // since/until are timestamptz, HALF-OPEN (`>= since AND < until`) — same
+    // convention metaFunnel uses, because a lead carries a time, not a date.
+    // Paged the same way metaFunnel is: the ledger is one row per PERSON, not
+    // per campaign-day, but a busy multi-practice group over a wide window
+    // can still cross PostgREST's 1000-row cap.
+    //
+    // minPaidPence is the acceptance floor (000162): a lead counts as
+    // accepted once its settled payments exceed this, so routine
+    // consultation fees are not read as treatment acceptances. Passed
+    // explicitly rather than left to the RPC's own DEFAULT — the caller owns
+    // the tenant's fee, and a silent server-side default is exactly how the
+    // two would drift apart.
+    // PERFORMANCE, and why this asks for the count.
+    //
+    // The obvious paging loop stops on an EMPTY page, which is the safe rule
+    // (a SHORT page is ambiguous: it can mean "no more rows" or "the server
+    // capped this response"). But it costs one extra request that re-runs the
+    // WHOLE function and then throws every row away through OFFSET. Measured
+    // on the live org: the ledger itself is ~16ms warm, and that discard-
+    // everything second page is 1,570ms — bigger than the entire rest of the
+    // request. Every org under 1,000 leads, which is every org today, paid it
+    // on every single load, and the comparison period doubled it again.
+    //
+    // Asking PostgREST for an exact count removes the probe without giving up
+    // the safety: the count arrives on the SAME response (PostgREST computes
+    // it with a window function over the same scan, not a second execution),
+    // so once `rows.length` reaches it there is provably nothing left to
+    // fetch. If the count is ever absent — an older PostgREST, a shape that
+    // does not support it — `total` stays null, no early break fires, and the
+    // loop falls back to exactly the empty-page rule it had before. The fast
+    // path is an addition, never a replacement, for the correct one.
+    async googleLeadLedger(orgId, since, until, minPaidPence) {
+        const PAGE = 1000;
+        const MAX_PAGES = 500; // a bound against a faulty server, not real data
+        const rows = [];
+        let total = null;
+        for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            const { data, error, count } = await supabase_1.serviceClient
+                .rpc('ad_google_lead_ledger', {
+                    p_org: orgId, p_since: since, p_until: until,
+                    p_min_paid_pence: minPaidPence,
+                }, { count: 'exact' })
+                .order('phone10', { ascending: true, nullsFirst: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(`ad_google_lead_ledger: ${error.message}`);
+            const page = data ?? [];
+            rows.push(...page);
+            if (typeof count === 'number') total = count;
+            if (page.length === 0) break;
+            // The whole point: stop as soon as the server's own total says we
+            // have everything, instead of proving it with another full run.
+            if (total !== null && rows.length >= total) break;
+            from += page.length;
+        }
+        return rows.map((r) => ({
+            phone10: r.phone10 ?? null,
+            practice_id: r.practice_id ?? null,
+            practice_name: r.practice_name ?? null,
+            source: r.source ?? null,
+            lead_at: r.lead_at ?? null,
+            name: r.name ?? null,
+            email: r.email ?? null,
+            treatment: r.treatment ?? null,
+            booked: Boolean(r.booked),
+            accepted: Boolean(r.accepted),
+            // false only means "not new" when a patient was actually matched
+            // — the service layer never trusts this alone to mean "existing"
+            // for an unmatched lead, since booked/accepted are also false
+            // there regardless.
+            is_new_patient: Boolean(r.is_new_patient),
+            // The money behind `accepted`, so the drill-down can show what
+            // was actually paid rather than a bare Yes whose threshold the
+            // reader cannot see.
+            paid_pence: Number(r.paid_pence ?? 0),
+        }));
+    },
 };

@@ -14,8 +14,16 @@ import { formatPence } from '@/lib/format';
 
 export const DASH = '—';
 
-export const money = (pence: number | null | undefined): string =>
-  (pence === null || pence === undefined ? DASH : formatPence(pence));
+// Negatives are real here: a lead's Paid figure is net of refunds, so a
+// refund of something paid before the lead can put it below zero. formatPence
+// interpolates the sign after the symbol and renders "£-40.00", which reads
+// as a typo rather than as money going the other way; British convention puts
+// the sign first. Fixed here rather than in formatPence itself, which every
+// screen in the app shares and almost none of which can produce a negative.
+export const money = (pence: number | null | undefined): string => {
+  if (pence === null || pence === undefined) return DASH;
+  return pence < 0 ? `-${formatPence(-pence)}` : formatPence(pence);
+};
 
 // CTR arrives from the rollups as a raw 0-1 fraction. It is scaled to a
 // percentage exactly once, here, so the Facebook and Google pages cannot

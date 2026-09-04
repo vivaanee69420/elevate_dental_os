@@ -341,7 +341,20 @@ async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationPa
 // Dedup-aware upsert of ONE GHL contact (row built by contactRow). Match
 // priority mirrors matchOrCreateContact so the contact PULL and the
 // per-opportunity match never create competing rows for the same person:
-//   1. ghl_contact_id  -> already a GHL contact: refresh its details
+//   1. ghl_contact_id  -> already a GHL contact: refresh its details — UNLESS
+//                          it is ALSO a confirmed Dentally patient
+//                          (pms_external_id set), in which case Dentally is
+//                          the authoritative source for identity from here
+//                          on and this refresh must not touch it either —
+//                          same rule as #2/#3 below, just applied on every
+//                          SUBSEQUENT sync, not only the first link. Found
+//                          live on Plan4growth: this branch had been
+//                          silently overwriting a matched patient's phone
+//                          with GoHighLevel's own copy on every contact
+//                          pull — 2,996 GHL-linked Dentally patients on that
+//                          one org, all subject to it — which is how a real
+//                          patient's stored phone ends up not matching what
+//                          Dentally itself has on file for them.
 //   2. email           -> existing contact (Dentally/manual/CSV): link the GHL
 //                          id only, never clobber its source/name
 //   3. normalised phone -> same as email
@@ -349,14 +362,17 @@ async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationPa
 // Linking on match (not inserting) is what prevents duplicates across sources.
 export async function upsertContact(orgId, c, db = supabase_1.serviceClient) {
     if (c.ghl_contact_id) {
-        const { data } = await db.from('contacts').select('id')
+        const { data } = await db.from('contacts').select('id, pms_external_id')
             .eq('organisation_id', orgId).eq('ghl_contact_id', c.ghl_contact_id).maybeSingle();
         if (data) {
-            await db.from('contacts').update({
-                first_name: c.first_name, last_name: c.last_name, email: c.email, phone: c.phone,
-                integration_account_id: c.integration_account_id || undefined,
-            }).eq('id', data.id);
-            return { id: data.id, action: 'update' };
+            const patch = data.pms_external_id
+                ? { integration_account_id: c.integration_account_id || undefined }
+                : {
+                    first_name: c.first_name, last_name: c.last_name, email: c.email, phone: c.phone,
+                    integration_account_id: c.integration_account_id || undefined,
+                };
+            await db.from('contacts').update(patch).eq('id', data.id);
+            return { id: data.id, action: data.pms_external_id ? 'update_patient_identity_locked' : 'update' };
         }
     }
     if (c.email) {
