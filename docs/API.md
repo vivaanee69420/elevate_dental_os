@@ -1905,6 +1905,11 @@ nothing is unknowable, not free. `attended` is Dentally-only (it comes from
 the funnel join against real appointment data, not from Meta) and is `0` for
 an org with no Dentally connection rather than being omitted.
 
+**Every one of the three routes returns its own `state`, computed from THAT
+tier's own rows** — `/facebook/ads` is not an exception and does not borrow
+`/facebook/campaigns`'s: the two are computed from different tables (the
+campaign-day `ad_metrics` rows vs. the deep-grain ad rollup) and can
+legitimately disagree, so each tier reports only what it actually found.
 `state` is one of:
 - `not_connected` — no Meta ad account on this org.
 - `never_synced` — a Meta account is connected but **no Meta metric row has
@@ -1915,16 +1920,21 @@ an org with no Dentally connection rather than being omitted.
   told otherwise.
 - `no_spend_in_window` — Meta has delivered data before, but there is no spend
   in the selected period/practice/campaign. The honest empty-window state.
-- `no_ad_id_coverage` — the leads **this payload measured** are attributed to
-  Meta but not one of them carries an ad set id, so an ad-set/ad tier cannot
-  be built (a quiet window with zero leads is never reported as this — it is
-  not evidence of missing coverage). **Scope matters**: on `/campaigns` it is
-  measured over the organisation, narrowed by any `practice_id`; on
-  `/facebook/ad-sets` it is measured over **whatever `campaignId` narrowed
-  it to** — one campaign when supplied, the whole window across every
-  campaign when omitted. The UI words the notice for what was measured
-  rather than making an organisation-wide claim from a per-campaign
-  computation.
+- `no_ad_id_coverage` — the leads **this payload measured** could not be
+  attributed down to the grain this tier reports. **Scope and the exact
+  question both vary by tier**: on `/campaigns` and `/facebook/ad-sets` it
+  means not one of the leads in scope carries an **ad set** id (an ad-set/ad
+  tier cannot be built under it), scoped to the organisation (narrowed by any
+  `practice_id`) on `/campaigns` and to **whatever `campaignId` narrowed it
+  to** on `/facebook/ad-sets` — one campaign when supplied, the whole window
+  across every campaign when omitted. On `/facebook/ads` it means not one of
+  the leads in scope carries an **ad** id specifically (a lead can resolve to
+  an ad set without Meta having said which ad within it), scoped to
+  **whatever `adSetId` narrowed it to** — one ad set when supplied, the whole
+  window across every ad set when omitted. In every case a quiet window with
+  zero leads is never reported as this — it is not evidence of missing
+  coverage. The UI words the notice for what was measured rather than making
+  an organisation-wide claim from a per-campaign (or per-ad-set) computation.
 - `ok` — normal.
 
 ### `GET /api/marketing/facebook/campaigns`
@@ -2004,10 +2014,12 @@ omitted lists every ad in the window across every ad set, supplied narrows
 to one ad set's) and `cursor` (optional, opaque — pass back the previous
 response's `nextCursor` verbatim).
 
-**Response:** `{ rows[], nextCursor, effectiveSince, windowClamped }`. Each
-row is the same cost/funnel shape as the campaign tier. `nextCursor` is `null`
-on the last page. `effectiveSince`/`windowClamped` are as documented on the
-campaign tier.
+**Response:** `{ state, rows[], nextCursor, effectiveSince, windowClamped }`.
+`state` is this tier's own — see above, including its `no_ad_id_coverage`
+scoping to `adSetId`; there is no `coverage`/`notIdentified`/`unmatchedLeads`
+at this tier. Each row is the same cost/funnel shape as the campaign tier.
+`nextCursor` is `null` on the last page. `effectiveSince`/`windowClamped` are
+as documented on the campaign tier.
 
 ## Google report (`/api/marketing/google`)
 
@@ -2058,8 +2070,8 @@ a cost per nothing is unknowable, not free.
   absent one (the same reasoning that removed the blank Reach column from the
   Facebook ad-set/ad tiers).
 - **Every one of the four methods returns its own `state`** (see below) —
-  unlike the Facebook report's `/facebook/ads`, which currently returns none
-  at all (a known, separately-tracked gap on that page, not reproduced here).
+  same discipline as every one of the Facebook report's three methods,
+  `/facebook/ads` included.
 
 `state` is one of:
 - `not_connected` — no Google ad account on this org.
