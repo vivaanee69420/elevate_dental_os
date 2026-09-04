@@ -280,8 +280,16 @@ describe('monthly_financials reads page past the server row ceiling', () => {
     amount_pence: 100, source: 'quickbooks', practice_id: null,
     integration_account_id: null, accounting_method: 'accrual',
   });
-  // The harness serves one dataset through .range(), exactly as the server does.
-  const serve = (rows) => { supaRec.resultProvider = () => ({ data: rows, error: null }); };
+  // The harness serves one dataset through .range(), exactly as the server
+  // does. The row TOTAL cannot tell a correct pager from one that stops on a
+  // short page — with the harness slicing by .range(), both return every
+  // row. Only the READ COUNT separates them: 1064 rows is 1000 + 64 + a
+  // confirming empty read, where a `length < PAGE` reader stops after two.
+  let reads = 0;
+  const serve = (rows) => {
+    reads = 0;
+    supaRec.resultProvider = () => { reads += 1; return { data: rows, error: null }; };
+  };
 
   beforeEach(() => { supaRec.last = undefined; });
 
@@ -291,13 +299,21 @@ describe('monthly_financials reads page past the server row ceiling', () => {
     // 1,064 — not the 1,000 the server hands back in one page.
     expect(out).toHaveLength(1064);
     expect(out.reduce((n, r) => n + r.amount_pence, 0)).toBe(106400);
+    // 1000 + 64 + a confirming empty page. A `length < PAGE` reader would
+    // stop after the 64-row page (2 reads) and still return all 1064 rows —
+    // the row count alone cannot catch that regression.
+    expect(reads).toBe(3);
   });
 
-  it('does not stop on a SHORT page, only an empty one', async () => {
+  it('reads a third, confirming EMPTY page rather than stopping on the short 64-row one', async () => {
     // The server's ceiling is its own setting: treating a short page as the
     // last would reintroduce this truncation at whatever that number is.
     serve(Array.from({ length: 700 }, (_, i) => row(i)));
     expect(await repo.allForOrg(ORG_A)).toHaveLength(700);
+    // 700 < PAGE (1000), so a correct reader still takes a second, empty read
+    // to confirm the ledger is exhausted. A `length < PAGE` reader stops
+    // after just the first read and returns the same 700 rows.
+    expect(reads).toBe(2);
   });
 
   it('orders the paged read, so OFFSET cannot repeat or skip a row', async () => {
@@ -317,5 +333,10 @@ describe('monthly_financials reads page past the server row ceiling', () => {
     const out = await repo.list(ORG_A, {});
     expect(out).toHaveLength(1200);
     expect(supaRec.last.orders?.some((o) => o.col === 'id')).toBe(true);
+    // Same blind spot as allForOrg above: 1200 rows is indistinguishable
+    // between a correct pager and a `length < PAGE` one by row count alone
+    // (both return all 1200). 1000 + 200 + a confirming empty page = 3 reads;
+    // a `length < PAGE` reader would stop after the 200-row page (2 reads).
+    expect(reads).toBe(3);
   });
 });
