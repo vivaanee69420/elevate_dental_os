@@ -500,8 +500,11 @@ export function getSheetsWriterActivity() {
 // the CallRail ACCOUNT id, callrailCompanyId is the CallRail COMPANY id —
 // deliberately both surfaced rather than conflated (that conflation was the
 // root defect an earlier version of this integration shipped with). The
-// Add-company flow is two steps for the same reason: paste the API key +
-// account id, then PICK a company from a list — see listCallRailCompanies.
+// Add-company flow is KEY-ONLY DISCOVERY: the owner pastes ONE API key (which
+// may cover several CallRail accounts — an agency-style key), the backend
+// resolves EVERY account and company it can reach (discoverCallRailAccounts),
+// and the owner ticks the companies to connect in one request
+// (bulkConnectCallRailAccounts) — no account id is ever typed by hand.
 export interface CallRailAccount {
   id: string;
   label: string | null;
@@ -541,11 +544,51 @@ export function getCallRailStatus() {
   return api<CallRailStatus>('/api/integrations/callrail');
 }
 
-// Add-company step 1: every company under a CallRail account, so the owner
-// PICKS one instead of typing an opaque id. POST (never GET+query) — the API
-// key belongs in a body, not a URL. Nothing is persisted by this call.
-export function listCallRailCompanies(body: { apiKey: string; callrailAccountId: string }) {
-  return api<{ companies: { id: string; name: string }[] }>('/api/integrations/callrail/companies', {
+// Add-company step 1 (key-only discovery): ONE API key reveals every account
+// and company it can reach — no account id typed by hand. POST (never
+// GET+query) — the API key belongs in a body, not a URL. Nothing is
+// persisted by this call.
+export interface CallRailDiscoveredCompany {
+  id: string;
+  name: string;
+  alreadyConnected: boolean;
+}
+export interface CallRailDiscoveredAccount {
+  accountId: string;
+  accountName: string;
+  companies: CallRailDiscoveredCompany[];
+  // Present only when THIS account's companies lookup failed — the other
+  // discovered accounts are unaffected (see callrailService.discoverAccounts).
+  error?: string;
+}
+export function discoverCallRailAccounts(body: { apiKey: string }) {
+  return api<{ accounts: CallRailDiscoveredAccount[] }>('/api/integrations/callrail/discover', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+// Add-company step 2: connect several discovered companies in one request.
+// One shared apiKey (CallRail keys aren't per-company) + a per-entry
+// accountId/companyId/label/practiceId. practiceId is omitted, not just
+// nulled, on any entry for a non-agency-actor caller: the backend rejects
+// practiceId anywhere in this body entirely unless the caller is an agency
+// actor (same rule as GHL account update's practice_id field), so the key
+// must not be present in the JSON at all — see CallRailPanel's submitConnect.
+export interface CallRailBulkConnectEntry {
+  accountId: string;
+  companyId: string;
+  label?: string;
+  practiceId?: string | null;
+}
+export interface CallRailBulkConnectResult {
+  companyId: string;
+  ok: boolean;
+  account?: CallRailAccount;
+  error?: string;
+}
+export function bulkConnectCallRailAccounts(body: { apiKey: string; companies: CallRailBulkConnectEntry[] }) {
+  return api<{ results: CallRailBulkConnectResult[] }>('/api/integrations/callrail/accounts/bulk', {
     method: 'POST',
     body: JSON.stringify(body),
   });

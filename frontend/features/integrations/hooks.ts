@@ -35,7 +35,8 @@ import {
   disconnectSheetsWriter,
   getSheetsWriterActivity,
   getCallRailStatus,
-  listCallRailCompanies,
+  discoverCallRailAccounts,
+  bulkConnectCallRailAccounts,
   addCallRailAccount,
   updateCallRailAccount,
   removeCallRailAccount,
@@ -44,6 +45,7 @@ import {
   disconnectCallRail,
   type ConnectInput,
   type DentallySyncResource,
+  type CallRailBulkConnectEntry,
 } from './api';
 
 export function useIntegrations() {
@@ -391,12 +393,21 @@ export function useCallRailStatus() {
   });
 }
 
-// Add-company step 1: not cached (deliberately not a useQuery) — a fresh
-// lookup every time the owner clicks, and the api key/account id never sit
-// in the query cache.
-export function useLookupCallRailCompanies() {
+// Add-company step 1 (key-only discovery): not cached (deliberately not a
+// useQuery) — a fresh lookup every time the owner clicks, and the API key
+// never sits in the query cache.
+export function useDiscoverCallRailAccounts() {
   return useMutation({
-    mutationFn: (body: { apiKey: string; callrailAccountId: string }) => listCallRailCompanies(body),
+    mutationFn: (body: { apiKey: string }) => discoverCallRailAccounts(body),
+  });
+}
+
+// Add-company step 2: connect several discovered companies in one request.
+export function useBulkConnectCallRailAccounts() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { apiKey: string; companies: CallRailBulkConnectEntry[] }) => bulkConnectCallRailAccounts(body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['callrail-status'] }),
   });
 }
 

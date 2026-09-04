@@ -241,7 +241,14 @@ describe('resilience', () => {
     const results = await syncAllOrgs();
 
     expect(results).toHaveLength(2);
-    expect(results.find((r) => r.accountId === 'acc-fail').error).toMatch(/ECONNRESET/);
+    // A raw network failure now passes through callrail-provider.js's shared
+    // fetchWithBackoff (the 429-retry loop this file's fetchCallsPage used to
+    // carry a separate copy of), which wraps it in a fixed, safe message —
+    // the raw error ('ECONNRESET' here) never reaches last_error. Same
+    // discipline verify()/listAccounts already applied; this failure path is
+    // no longer an exception to it.
+    expect(results.find((r) => r.accountId === 'acc-fail').error).toMatch(/Could not reach CallRail/i);
+    expect(results.find((r) => r.accountId === 'acc-fail').error).not.toMatch(/ECONNRESET/);
     expect(results.find((r) => r.accountId === 'acc-ok').error).toBeUndefined();
     expect(integrationAccountRepository.markFailed).toHaveBeenCalledWith(ORG_A, 'acc-fail', expect.any(String));
     expect(integrationAccountRepository.markSynced).toHaveBeenCalledWith(ORG_B, 'acc-ok');

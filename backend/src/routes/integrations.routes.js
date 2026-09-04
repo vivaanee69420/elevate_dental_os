@@ -68,10 +68,12 @@ router.delete('/quickbooks/accounts/:id', (0, auth_1.requireRole)('owner'), (0, 
 router.get('/callrail', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailGet));
 router.post('/callrail/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailSync));
 router.delete('/callrail', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDisconnect));
-// Add-company step 1 — list companies under a CallRail account, so the
-// owner picks one instead of typing an opaque id. POST (not GET+query): the
-// API key belongs in a body, never a URL.
-router.post('/callrail/companies', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailListCompanies));
+// Add-company step 1 (key-only discovery) — ONE API key reveals every
+// account and company it can reach; no account id typed by hand. POST (not
+// GET+query): the API key belongs in a body, never a URL.
+router.post('/callrail/discover', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDiscover));
+// Add-company step 2 — connect several discovered companies in one request.
+router.post('/callrail/accounts/bulk', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailBulkConnect));
 router.post('/callrail/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountCreate));
 router.patch('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountUpdate));
 router.delete('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountRemove));

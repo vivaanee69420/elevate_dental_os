@@ -95,12 +95,31 @@ export const callrailAccountUpdateSchema = zod_1.z.object({
     // only checks practiceId). `null` clears a previously-set key.
     signingKey: zod_1.z.string().min(1).max(200).nullable().optional(),
 });
-// Add-company step 1: list every company under a CallRail account, so the
-// owner PICKS a company instead of typing an opaque id (removes the whole
-// class of paste-the-wrong-id error the original flow shipped with).
-export const callrailListCompaniesSchema = zod_1.z.object({
+// Add-company step 1 (key-only discovery): the owner pastes ONE API key,
+// which may cover several CallRail accounts (an agency-style key) — no
+// account id, fixing the case that blocked an owner who genuinely does not
+// have one to hand. The backend fans out to /v3/a.json then companies.json
+// per account (see callrail-provider.js's listAccounts/listCompanies).
+export const callrailDiscoverSchema = zod_1.z.object({
     apiKey: zod_1.z.string().min(1),
-    callrailAccountId: zod_1.z.string().min(1),
+});
+// Add-company step 2: connect several companies discovered above in one
+// request. Each entry carries its OWN accountId/companyId — a single key can
+// reach several accounts, and each company individually re-verifies against
+// CallRail (addAccount, reused per entry) — plus an optional label (falls
+// back to the company's own CallRail name when omitted) and practiceId.
+// apiKey is shared once across the whole batch: CallRail keys aren't
+// per-company. practiceId is agency-actor-gated in the CONTROLLER, exactly
+// like callrailAccountCreateSchema's own field.
+export const callrailBulkConnectItemSchema = zod_1.z.object({
+    accountId: zod_1.z.string().min(1),
+    companyId: zod_1.z.string().min(1),
+    label: zod_1.z.string().min(1).max(120).optional(),
+    practiceId: zod_1.z.string().uuid().nullable().optional(),
+});
+export const callrailBulkConnectSchema = zod_1.z.object({
+    apiKey: zod_1.z.string().min(1),
+    companies: zod_1.z.array(callrailBulkConnectItemSchema).min(1),
 });
 
 // Window for the one-off Dentally payment-status repair. Both bounds required:
