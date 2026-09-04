@@ -1,1 +1,1 @@
-export { default } from '@/features/marketing/facebook/components/FacebookCampaignsScreen';
+export { default } from '@/features/marketing/facebook/components/FacebookReportScreen';
