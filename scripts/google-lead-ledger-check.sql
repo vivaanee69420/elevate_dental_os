@@ -30,6 +30,15 @@
 -- committing to one record loses real bookings. Listed here so the next
 -- person to find it knows it was measured, not missed.
 --
+-- RUN IT ON A NARROW WINDOW, NOT ONLY A WIDE ONE. This matters more than it
+-- sounds. The window-bound bug (a lead that pays after the period closes was
+-- never counted) scales INVERSELY with window width: on the 92-day view it
+-- lost one acceptance in 44 and every check passed, while July 2026 was
+-- reporting 16 against a true 20 — a 25% undercount of 28 booked. It was
+-- verified on the wide window, shipped, and found by the owner on a single
+-- month. Run this for at least one single month as well as the wide window,
+-- and prefer a RECENT month, where conversions are still arriving.
+--
 -- Same spirit as scripts/data-room-reconcile.sql.
 -- ============================================================================
 
@@ -56,7 +65,7 @@ checks AS (
   --    paid_pence should be, compared against what the ledger returned.
   --    Deliberately a restatement and not a call back into the function:
   --    edit the RPC's predicates without editing this one and the two
-  --    disagree, which is the whole point. Three separate live defects are
+  --    disagree, which is the whole point. Four separate live defects are
   --    caught by this single check —
   --
   --      * SAME-DAY PAYMENTS. Every settled row from this feed is stamped
@@ -67,8 +76,15 @@ checks AS (
   --      * REFUNDS. Filtering `amount_pence > 0` reads a refund as though it
   --        never happened; one lead was counted as an acquired patient whose
   --        money had been returned IN FULL.
-  --      * WINDOW BOUNDS. `::date` on a window bound resolves in the
-  --        SERVER's zone, so a London instant reads a day early all summer.
+  --      * A WINDOW BOUND ON THE MONEY. Acceptance is a COHORT question, so
+  --        there is NO upper bound: a lead from 12 July who pays on 15 August
+  --        converted, and the July report must say so. This recomputation is
+  --        deliberately open-ended for that reason — an earlier version of
+  --        this very check carried the same bound the code did and therefore
+  --        agreed with the bug. A check that shares the code's assumption
+  --        verifies nothing.
+  --      * `::date` ON A WINDOW BOUND resolves in the SERVER's zone, so a
+  --        London instant reads a day early all summer.
   SELECT 'paid_pence disagrees with an independent net recomputation' AS check_name,
          count(*) AS should_be_zero
     FROM pids p
@@ -78,9 +94,25 @@ checks AS (
       WHERE pm.organisation_id = :org::uuid AND pm.contact_id = ANY(p.ids)
         AND pm.status = 'settled'
         AND london_day(pm.processed_at) >= london_day(p.lead_at)
-        AND london_day(pm.processed_at) >= london_day(:since::timestamptz)
-        AND london_day(pm.processed_at) <  london_day(:until::timestamptz)
    ), 0)
+
+  UNION ALL
+  -- 1b. TRUNCATION, STATED DIRECTLY. Check 1 compares totals; this one names
+  --     the symptom the owner actually reported — a lead that has paid real
+  --     money since it landed, sitting on screen as not accepted. It is
+  --     redundant with 1 by construction and kept anyway, because it is the
+  --     check whose FAILURE MESSAGE a future reader will understand without
+  --     first understanding the recomputation.
+  SELECT 'a lead has paid over the floor since it landed but is not accepted', count(*)
+    FROM pids p
+    JOIN led l ON l.phone10 = p.phone10
+   WHERE NOT l.accepted
+     AND coalesce((
+       SELECT sum(pm.amount_pence) FROM payments pm
+        WHERE pm.organisation_id = :org::uuid AND pm.contact_id = ANY(p.ids)
+          AND pm.status = 'settled'
+          AND london_day(pm.processed_at) >= london_day(p.lead_at)
+     ), 0) > 4000
 
   UNION ALL
   -- 2. THE SAME-DAY TRAP, BOOKING SIDE. An appointment EARLIER in the day

@@ -284,6 +284,21 @@ BEGIN
     -- date-not-instant reasoning, for why the lower bound is the lead's own
     -- day, and for why refunds net off rather than being filtered out.
     -- status='settled' only: 'pending' means the cash has not landed.
+    --
+    -- NO UPPER BOUND, exactly like booking above. This is a COHORT question —
+    -- "of the leads this window's spend bought, how many have paid" — not a
+    -- cash-in-period question, so money counts whenever it arrives. Bounding
+    -- it to the window truncated every lead who paid after the period closed,
+    -- and the damage grew as the window narrowed: on July 2026 it reported 16
+    -- accepted against a true 20, a 25% undercount of 28 booked, while the
+    -- 92-day view lost only one. That is why it survived being tested on a
+    -- wide window and surfaced on a single month.
+    --
+    -- The cost of this is real and accepted: a past period's CPA improves as
+    -- its leads convert, so the same month re-read later can show a better
+    -- figure. `booked` has always behaved that way (checked against Dentally's
+    -- own count), and a funnel whose two halves answer different questions is
+    -- worse than one that moves.
     paid AS (
       SELECT pi.phone10, sum(pm.amount_pence)::bigint AS paid_pence
         FROM patient_ids pi
@@ -292,14 +307,17 @@ BEGIN
          AND pm.contact_id = ANY(pi.ids)
          AND pm.status = 'settled'
          AND pm.processed_at >= pi.lead_day_start
-         AND pm.processed_at >= %5$L
-         AND pm.processed_at <  %6$L
        GROUP BY pi.phone10
     ),
     -- The drill-down's `treatment` label ONLY — it does not decide acceptance.
     -- LARGEST LINE WINS: ordering by invoiced_on/id picked whatever sorted
     -- first, which on a real invoice is regularly a £0.00 filler (see the
     -- header's £89 patient labelled with a £0.00 "Bitewings").
+    --
+    -- Lead-relative and open-ended, like paid and booking. Window-bounding it
+    -- left an accepted patient with a blank treatment whenever the invoice
+    -- landed after the period closed — the same truncation, showing up as a
+    -- row that says someone paid £173 for nothing in particular.
     --
     -- invoiced_on is a DATE column, so a plain date bound is already sargable
     -- and needs no london_day_start.
@@ -310,8 +328,7 @@ BEGIN
         JOIN invoice_items ii ON ii.organisation_id = %1$L
                               AND ii.contact_id = ANY(pi.ids)
                               AND ii.treatment_plan_id IS NOT NULL
-                              AND ii.invoiced_on >= %7$L
-                              AND ii.invoiced_on <  %8$L
+                              AND ii.invoiced_on >= london_day(pi.lead_at)
        ORDER BY pi.phone10, ii.fee_pence DESC NULLS LAST, ii.invoiced_on, ii.id
     )
     SELECT d.phone10, d.practice_id, pr.name, d.source, d.lead_at, d.name, d.email,
@@ -327,9 +344,7 @@ BEGIN
       LEFT JOIN is_new inw ON inw.phone10 = d.phone10
       LEFT JOIN paid pd ON pd.phone10 = d.phone10
   $q$,
-    p_org, p_since, p_until, p_min_paid_pence,
-    london_day_start(p_since), london_day_start(p_until),
-    london_day(p_since), london_day(p_until));
+    p_org, p_since, p_until, p_min_paid_pence);
 END;
 $fn$;
 
