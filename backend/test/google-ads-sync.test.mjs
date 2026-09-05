@@ -58,7 +58,11 @@ describe('parseSearchStream', () => {
             rows: [
                 { campaign_id: '1', campaign_name: 'Implants', metric_date: '2026-05-01', spend_pence: 500,
                   impressions: 1200, clicks: 40, reach: null, frequency: null,
-                  campaign_status: 'ENABLED', objective: 'SEARCH', conversions: 3 },
+                  campaign_status: 'ENABLED', objective: 'SEARCH', conversions: 3,
+                  conversions_value_pence: null, all_conversions: null, phone_calls: null,
+                  search_impression_share: null, search_top_impression_share: null,
+                  search_absolute_top_impression_share: null,
+                  search_budget_lost_impression_share: null, search_rank_lost_impression_share: null },
                 // FRACTIONAL, not rounded to 2: Google reports modelled
                 // conversions as decimals, and ad_metrics.conversions is
                 // numeric(14,2) (migration 000157) precisely so this figure
@@ -68,10 +72,46 @@ describe('parseSearchStream', () => {
                 // ad-group/ad/keyword grain, which were always stored exact.
                 { campaign_id: '2', campaign_name: 'Whitening', metric_date: '2026-05-02', spend_pence: 250,
                   impressions: 800, clicks: 25, reach: null, frequency: null,
-                  campaign_status: 'PAUSED', objective: 'DISPLAY', conversions: 1.6 },
+                  campaign_status: 'PAUSED', objective: 'DISPLAY', conversions: 1.6,
+                  conversions_value_pence: null, all_conversions: null, phone_calls: null,
+                  search_impression_share: null, search_top_impression_share: null,
+                  search_absolute_top_impression_share: null,
+                  search_budget_lost_impression_share: null, search_rank_lost_impression_share: null },
             ],
         });
     });
+    // NULL, NEVER 0, for every enriched field Google did not report. This is
+    // the whole assertion: ad_google_campaign_rollup filters its weighted
+    // impression-share denominator on exactly this nullness, so a 0 would drag
+    // every reported share downward, and a 0 conversion value would price a
+    // campaign we cannot price at nothing. Display and Video campaigns do not
+    // compete in the search auction at all, so a null share there is the
+    // correct answer rather than a gap.
+    it('carries conversion value, phone calls and all five impression shares when Google reports them', () => {
+        const batches = [{ results: [
+            { campaign: { id: 3, name: 'Emergency', status: 'ENABLED', advertisingChannelType: 'SEARCH' },
+              segments: { date: '2026-06-01' },
+              metrics: {
+                  costMicros: 1_000_000, impressions: 100, clicks: 10, conversions: 2,
+                  conversionsValue: 480.5, allConversions: 4.5, phoneCalls: 7,
+                  searchImpressionShare: 0.55, searchTopImpressionShare: 0.30,
+                  searchAbsoluteTopImpressionShare: 0.12,
+                  searchBudgetLostImpressionShare: 0.31, searchRankLostImpressionShare: 0.14,
+              } },
+        ] }];
+        const [row] = __test.parseSearchStream(batches).rows;
+        // Value arrives in whole account-currency units, not micros — pence is
+        // x100, not /10,000. Getting that backwards is off by 10,000x and
+        // still looks like a plausible amount of money.
+        expect(row.conversions_value_pence).toBe(48050);
+        expect(row.all_conversions).toBe(4.5);
+        expect(row.phone_calls).toBe(7);
+        expect(row.search_impression_share).toBe(0.55);
+        // The two that say WHY share was missed — the actionable half.
+        expect(row.search_budget_lost_impression_share).toBe(0.31);
+        expect(row.search_rank_lost_impression_share).toBe(0.14);
+    });
+
     it('handles empty / non-array input', () => {
         expect(__test.parseSearchStream(undefined)).toEqual({ rows: [], account: null });
         expect(__test.parseSearchStream([])).toEqual({ rows: [], account: null });

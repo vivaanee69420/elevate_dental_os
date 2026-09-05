@@ -17,8 +17,12 @@ vi.mock('../src/repositories/marketing.repository.js', () => ({
     },
 }));
 vi.mock('../src/repositories/ad-grain.repository.js', () => ({
-    GRAINS: ['meta_adset', 'meta_ad', 'google_adgroup', 'google_ad', 'google_keyword'],
-    adGrainRepository: { rollup: vi.fn(), keywordRollup: vi.fn() },
+    GRAINS: ['meta_adset', 'meta_ad', 'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term'],
+    GOOGLE_GRAINS: ['google_adgroup', 'google_ad', 'google_keyword', 'google_search_term'],
+    adGrainRepository: {
+        rollup: vi.fn(), keywordRollup: vi.fn(),
+        googleRollup: vi.fn(), googleCampaignRollup: vi.fn(),
+    },
 }));
 
 const { googleReportService, __test } = await import('../src/services/google-report.service.js');
@@ -49,6 +53,78 @@ beforeEach(() => {
     ]);
     adGrainRepository.rollup.mockResolvedValue([]);
     adGrainRepository.keywordRollup.mockResolvedValue([]);
+
+    // ========================================================================
+    // TWO DELEGATING SHIMS, so the fixtures below keep their original shape.
+    //
+    // Migration 000164 moved every Google read onto two new RPCs:
+    // ad_google_rollup (all four deep grains, one function) and
+    // ad_google_campaign_rollup (campaign grain, aggregated in SQL because the
+    // impression-share figures are impression-weighted averages that cannot be
+    // reconstructed from rows a plain select returns).
+    //
+    // The tests in this file are about the SERVICE's logic — cost guards,
+    // tenant states, window clamping, sorting — not about which repository
+    // method carries the rows. Rewriting sixty fixtures to prove that would
+    // have tested the rewrite, not the behaviour. So the new methods delegate
+    // to the old mocks: `rollup`/`keywordRollup` keep serving the deep grains
+    // (dispatched on grain, exactly as the real RPC is), and
+    // `campaignSpendByProvider` keeps serving campaign grain through the same
+    // day-row collapse the service used to do in JS.
+    //
+    // Every assertion on the old mocks' .mock.calls still fires, because the
+    // shims really do call them, with the same argument shapes.
+    // ========================================================================
+    adGrainRepository.googleRollup.mockImplementation((orgId, grain, opts) => (
+        grain === 'google_keyword'
+            ? adGrainRepository.keywordRollup(orgId, opts)
+            : adGrainRepository.rollup(orgId, grain, opts)
+    ));
+    adGrainRepository.googleCampaignRollup.mockImplementation(async (orgId, opts = {}) => {
+        const rows = await marketingRepository.campaignSpendByProvider(
+            orgId, opts.since, opts.until, 'google_ads', null, opts.practiceId ?? null,
+        );
+        // Collapsed HERE rather than by a helper in the service: campaigns()
+        // no longer collapses campaign-day rows in JS at all (the RPC groups
+        // them in SQL), so the service's own collapseByCampaign was deleted
+        // rather than left alive purely to serve this shim. Latest day wins
+        // for status, matching what the RPC does — ad_metrics stamps status
+        // per campaign-day, so any other pick is arbitrary.
+        const byCampaign = new Map();
+        for (const r of rows ?? []) {
+            const acc = byCampaign.get(r.campaign_id) ?? {
+                campaign_id: r.campaign_id, campaign_name: null, campaign_status: null,
+                _statusDate: null, spend_pence: 0, impressions: 0, clicks: 0, conversions: 0,
+            };
+            acc.spend_pence += Number(r.spend_pence ?? 0);
+            acc.impressions += Number(r.impressions ?? 0);
+            acc.clicks += Number(r.clicks ?? 0);
+            acc.conversions += Number(r.conversions ?? 0);
+            if (!acc.campaign_name && r.campaign_name) acc.campaign_name = r.campaign_name;
+            const d = r.metric_date ?? null;
+            if (r.campaign_status && (acc._statusDate === null || (d !== null && d >= acc._statusDate))) {
+                acc.campaign_status = r.campaign_status;
+                acc._statusDate = d;
+            }
+            byCampaign.set(r.campaign_id, acc);
+        }
+        return [...byCampaign.values()].map((c) => ({
+            entity_id: c.campaign_id,
+            entity_name: c.campaign_name,
+            entity_status: c.campaign_status,
+            objective: c.objective ?? null,
+            spend_pence: c.spend_pence,
+            impressions: c.impressions,
+            clicks: c.clicks,
+            conversions: c.conversions,
+            // Absent unless a fixture says otherwise — and absent means NULL,
+            // never 0. See googleExtras.
+            conversions_value_pence: null, all_conversions: null, phone_calls: null,
+            search_impression_share: null, search_top_impression_share: null,
+            search_absolute_top_impression_share: null,
+            search_budget_lost_impression_share: null, search_rank_lost_impression_share: null,
+        }));
+    });
 });
 
 function adGroupRow(overrides = {}) {

@@ -37,9 +37,66 @@ function buildGaql(sinceDate, untilDate) {
         'SELECT campaign.id, campaign.name, campaign.status,',
         'campaign.advertising_channel_type, segments.date,',
         'customer.descriptive_name, customer.currency_code,',
+        'metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions,',
+        // Value, not just count — a campaign producing ten £40 enquiries and
+        // one producing ten £4,000 implant consultations are otherwise
+        // indistinguishable. all_conversions and phone_calls carry the actions
+        // Google keeps OUT of the headline figure, call-extension calls
+        // included, which for a dental practice is most of the point.
+        'metrics.conversions_value, metrics.all_conversions, metrics.phone_calls,',
+        // The five impression-share ratios. The headline share says you missed
+        // traffic; the two LOST shares say why, and they are different
+        // instructions — budget-lost means raise the budget, rank-lost means
+        // raise the bid or fix the ad. Reported as null on campaign types that
+        // do not compete in the search auction (Display, Video), which is
+        // correct and must stay null rather than becoming 0.
+        'metrics.search_impression_share, metrics.search_top_impression_share,',
+        'metrics.search_absolute_top_impression_share,',
+        'metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share',
+        `FROM campaign WHERE segments.date BETWEEN '${sinceDate}' AND '${untilDate}'`,
+    ].join(' ');
+}
+
+// The shape this query had before the enrichment above, used ONLY as a
+// fallback. GAQL rejects an unknown or incompatible field by failing the whole
+// query rather than omitting the column, and this is the campaign tier — the
+// single most load-bearing read in the marketing stack, behind every spend
+// figure in the app. Losing it to one retired field name is not an acceptable
+// risk to run for the sake of five ratios, so a failure degrades to the
+// working shape and reports the downgrade rather than taking the tier down.
+function buildBasicGaql(sinceDate, untilDate) {
+    return [
+        'SELECT campaign.id, campaign.name, campaign.status,',
+        'campaign.advertising_channel_type, segments.date,',
+        'customer.descriptive_name, customer.currency_code,',
         'metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions',
         `FROM campaign WHERE segments.date BETWEEN '${sinceDate}' AND '${untilDate}'`,
     ].join(' ');
+}
+
+// Account-currency units -> integer pence (rule 2). Distinct from
+// microsToPence: cost arrives in micros, conversion value in whole units.
+// Null, never 0, when Google reports nothing — a campaign we cannot price is
+// not a campaign worth nothing.
+function moneyToPence(value) {
+    if (value === null || value === undefined) return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.round(n * 100) : null;
+}
+
+// An impression-share ratio, 0..1, or null where Google reported none. NEVER
+// 0: ad_google_campaign_rollup filters its weighted-average denominator on
+// exactly this nullness, and a 0 would drag every reported share downward.
+function ratioOrNull(v) {
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+
+function countOrNull(v) {
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
 }
 
 function microsToPence(micros) {
@@ -90,6 +147,14 @@ function parseSearchStream(batches) {
                 // ad-group/ad/keyword deep-grain tiers, which already store
                 // it exact (google-ads-deep-sync.js's `conversions()`).
                 conversions: Number(metrics.conversions ?? 0),
+                conversions_value_pence: moneyToPence(metrics.conversionsValue),
+                all_conversions: countOrNull(metrics.allConversions),
+                phone_calls: countOrNull(metrics.phoneCalls),
+                search_impression_share: ratioOrNull(metrics.searchImpressionShare),
+                search_top_impression_share: ratioOrNull(metrics.searchTopImpressionShare),
+                search_absolute_top_impression_share: ratioOrNull(metrics.searchAbsoluteTopImpressionShare),
+                search_budget_lost_impression_share: ratioOrNull(metrics.searchBudgetLostImpressionShare),
+                search_rank_lost_impression_share: ratioOrNull(metrics.searchRankLostImpressionShare),
             });
         }
     }
@@ -267,6 +332,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         const sinceDate = daysAgo(windowDays);
         const untilDate = londonYmd();
         const gaql = buildGaql(sinceDate, untilDate);
+        const basicGaql = buildBasicGaql(sinceDate, untilDate);
 
         // Pull each accessible account; skip the ones that error (a Manager
         // account, or one the dev token can't reach) so one bad account doesn't
@@ -277,7 +343,19 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         const accounts = [];
         for (const cid of customerIds) {
             try {
-                const batches = await queryCustomer(cid, access_token, gaql, customerLogins[cid] ?? null);
+                let batches;
+                try {
+                    batches = await queryCustomer(cid, access_token, gaql, customerLogins[cid] ?? null);
+                } catch (err) {
+                    // Degrade, do not disappear — see buildBasicGaql. Reported
+                    // in `skipped` so a downgrade that lasts is visible rather
+                    // than being mistaken for a working sync.
+                    batches = await queryCustomer(cid, access_token, basicGaql, customerLogins[cid] ?? null);
+                    skipped.push({
+                        cid,
+                        error: `enriched query failed, fell back to base fields: ${String(err.message).slice(0, 150)}`,
+                    });
+                }
                 const { rows, account } = parseSearchStream(batches);
                 accounts.push({ customer_id: cid, name: account?.name ?? null, currency: account?.currency ?? null });
                 for (const row of rows) {

@@ -1,141 +1,154 @@
 'use client';
-// Google report — Ads tab. The SIBLING of the Keywords tab under an ad group
-// (google-report.service.js's file header) — neither contains the other, so
-// this file and GoogleKeywordsTab.tsx both take the SAME `parentId` (an ad
-// group id) rather than one nesting inside the other.
+// Google report — Ads tab. The SIBLING of the Keywords tab under an ad group,
+// so both take the SAME `parentId` (an ad group id) rather than one nesting
+// inside the other.
 //
-// Like ../facebook/components/FacebookAdsTab.tsx, this tab needs NO
-// `orgState` prop borrowed from the Campaigns tab: ads() returns its own
-// `state`, so an empty table can say why from its own data (see
-// google-report.service.js's file header, point 3).
-import { EmptyState, SkeletonTable } from '@/components/ui';
+// EVERY AD USED TO RENDER AS A 12-DIGIT NUMBER. ad_group_ad.ad.name is an
+// optional internal label and almost no advertiser sets one — measured on this
+// org's live tables, 0 of 186 ads had a name. The connector now falls back to
+// the ad's first responsive-search headline, so the first column finally says
+// what the ad actually says, and the rest of the creative is one click away in
+// the expansion panel.
+import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
-import { formatDate } from '@/lib/format';
-import { AdMetricTable, type Column } from '../../_shared/AdMetricTable';
-import { money, ctr, num } from '../../_shared/format';
-import { GoogleStateNotice } from './GoogleStateNotice';
+import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
+import { SectionHead } from '../../_shared/StatRail';
+import { Chip, humanise } from '../../_shared/Bars';
+import { num, DASH } from '../../_shared/format';
+import { nameColumn, deliveryColumns } from './columns';
+import { GoogleTabFrame, ShowMore } from './GoogleTabFrame';
 import { useGoogleAds } from '../hooks';
-import type { GoogleRow } from '../api';
+import type { GoogleAdRow } from '../api';
 
-// Calm, factual prose — never an error/warning colour.
-function Note({ children }: { children: React.ReactNode }) {
+// Google's approval verdict is the one enum on this page that carries a real
+// judgement, so it is the one that gets a colour. Everything else stays
+// neutral — a page where several things are coloured is a page where none of
+// them mean anything.
+function approvalTone(status: string | null): 'neutral' | 'bad' | 'muted' {
+  if (!status) return 'muted';
+  if (/DISAPPROVED/i.test(status)) return 'bad';
+  return 'neutral';
+}
+
+// The creative, shown in place. This is what an ad IS — the rest of the row is
+// what happened to it — and until the connector pulled headlines there was no
+// way to see it in Elevate at all.
+function AdCreative({ row }: { row: GoogleAdRow }) {
+  const headlines = row.headlines ?? [];
+  const descriptions = row.descriptions ?? [];
+  if (headlines.length === 0 && descriptions.length === 0 && !row.finalUrl) {
+    return (
+      <p className="text-[12px] text-ink-muted">
+        No creative recorded for this ad. Google returns headlines and descriptions for
+        responsive search ads; other formats (image, video, Performance Max assets) carry
+        their content elsewhere.
+      </p>
+    );
+  }
   return (
-    <p className="rounded-panel border border-border bg-bg px-3 py-2 text-[12.5px] leading-relaxed text-ink-muted">
-      {children}
-    </p>
+    <div className="flex flex-col gap-3 text-[12.5px]">
+      {headlines.length > 0 && (
+        <div>
+          <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+            Headlines
+          </p>
+          {/* Google assembles a responsive search ad from these at auction
+              time — it does NOT show them all at once, and the order here is
+              the order they were declared, not an order anyone saw. Said
+              plainly so the panel is not read as a preview of the live ad. */}
+          <p className="text-ink">{headlines.join('  ·  ')}</p>
+        </div>
+      )}
+      {descriptions.length > 0 && (
+        <div>
+          <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+            Descriptions
+          </p>
+          <p className="text-ink">{descriptions.join('  ·  ')}</p>
+        </div>
+      )}
+      {row.finalUrl && (
+        <div>
+          <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+            Landing page
+          </p>
+          {/* First of possibly several final URLs — the field is named for
+              what it is rather than pretending to be "the" URL. */}
+          <a
+            href={row.finalUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="break-all text-brand hover:underline"
+          >
+            {row.finalUrl}
+          </a>
+        </div>
+      )}
+      <p className="text-[11.5px] text-ink-muted">
+        Google assembles these into an ad at auction time; this is the pool it draws from,
+        not a single ad anyone saw.
+      </p>
+    </div>
   );
 }
 
-// Name, Spend, Impressions, Clicks, CTR, CPC, Conversions, Cost / conversion
-// — no CPL/CPB/CPA-shaped columns anywhere on this page (see
-// google-report.service.js's file header, point 5): those need CallRail
-// calls and GoHighLevel leads deduplicated to one person, a separate plan.
-const COLUMNS: Column<GoogleRow>[] = [
-  {
-    key: 'name',
-    header: 'Ad',
-    align: 'left',
-    render: (r) => (
-      <span className="font-medium text-brand">
-        {r.name ?? r.id ?? 'Unnamed ad'}
-        {/* MINOR 5: campaign AND ad group, not campaign alone. An unfiltered
-            listing can legitimately show the same ad id under the same
-            campaign more than once when it belongs to a different ad group —
-            the ad group is what tells those rows apart. */}
-        {(r.campaignName || r.parentName) && (
-          <span className="block text-[11px] font-normal text-ink-muted">
-            {[r.campaignName, r.parentName].filter(Boolean).join(' · ')}
-          </span>
-        )}
-      </span>
-    ),
-  },
-  { key: 'spend', header: 'Spend', align: 'right', render: (r) => money(r.spendPence) },
-  { key: 'impressions', header: 'Impressions', align: 'right', render: (r) => num(r.impressions) },
-  { key: 'clicks', header: 'Clicks', align: 'right', render: (r) => num(r.clicks) },
-  { key: 'ctr', header: 'CTR', align: 'right', render: (r) => ctr(r.ctr) },
-  { key: 'cpc', header: 'CPC', align: 'right', render: (r) => money(r.cpcPence) },
-  { key: 'conversions', header: 'Conversions', align: 'right', render: (r) => num(r.conversions) },
-  { key: 'costPerConversion', header: 'Cost / conversion', align: 'right', render: (r) => money(r.costPerConversionPence) },
-];
-
-export function GoogleAdsTab({ parentId }: {
-  /** The active ad-group filter, or null when this tab is listing every ad
-   *  in the window unfiltered. */
-  parentId: string | null;
-}) {
+export function GoogleAdsTab({ parentId }: { parentId: string | null }) {
   const {
-    data, isLoading, isError, error, hasNextPage, isFetchingNextPage, fetchNextPage,
+    data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
   } = useGoogleAds(parentId);
 
-  if (isError) {
-    return <EmptyState message={`Couldn't load ads: ${(error as Error)?.message ?? 'unknown error'}`} />;
-  }
-  if (isLoading && !data) return <SkeletonTable rows={8} cols={8} />;
-  if (!data) return null;
+  const first = data?.pages[0];
+  const rows = data?.pages.flatMap((p) => p.rows) ?? [];
+  const maxSpend = rows.reduce((m, r) => Math.max(m, r.spendPence), 0);
 
-  const rows = data.pages.flatMap((p) => p.rows);
-  const firstPage = data.pages[0];
-  const showTable = firstPage.state === 'ok';
+  const columns: GridColumn<GoogleAdRow>[] = [
+    nameColumn<GoogleAdRow>('Ad', maxSpend, 'Unnamed ad'),
+    ...deliveryColumns<GoogleAdRow>(),
+    {
+      key: 'strength', header: 'Ad strength', align: 'right', width: 'w-[120px]',
+      sortBy: (r) => r.adStrength ?? null,
+      render: (r) => (r.adStrength ? <Chip>{humanise(r.adStrength)}</Chip> : DASH),
+      sub: (r) => (r.approvalStatus && /DISAPPROVED|LIMITED/i.test(r.approvalStatus)
+        ? <Chip tone={approvalTone(r.approvalStatus)}>{humanise(r.approvalStatus)}</Chip>
+        : null),
+    },
+  ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <GoogleStateNotice state={firstPage.state} />
-
-      {/* MINOR 4: outside the showTable gate, matching GoogleCampaignsTab.tsx —
-          a request clamped to 92 days that then lands on an empty state must
-          still say so. Buried inside showTable, a user who picked twelve
-          months, landed on an empty state, and was told to "try a wider
-          period" was never told the window was already clamped. */}
-      {firstPage.windowClamped && (
-        <Note>
-          Ad group, ad and keyword detail is kept for 92 days. This period reaches further back
-          than that, so figures below are shown from {formatDate(firstPage.effectiveSince)}
-          {' '}onward rather than the whole period.
-        </Note>
+    <GoogleTabFrame
+      state={first?.state}
+      isLoading={isLoading}
+      isError={isError}
+      errorLabel={`Couldn't load ads: ${(error as Error)?.message ?? 'unknown error'}`}
+      windowClamped={first?.windowClamped}
+      effectiveSince={first?.effectiveSince}
+      excludedAccounts={first?.excludedAccounts}
+      footer={(
+        <ShowMore
+          hasNext={Boolean(hasNextPage)}
+          isFetching={isFetchingNextPage}
+          onClick={() => fetchNextPage()}
+          label="Show more ads"
+        />
       )}
-
-      {showTable && (
-        <>
-          <DeferUntilVisible minHeight={360}>
-            <AdMetricTable
-              columns={COLUMNS}
-              rows={rows}
-              emptyState={<EmptyState message="No ads with spend in this window." />}
-            />
-            {hasNextPage && (
-              <div className="mt-3 flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => fetchNextPage()}
-                  disabled={isFetchingNextPage}
-                  className="rounded-lg border border-border bg-surface px-4 py-1.5 text-[12.5px] text-ink-muted hover:bg-bg disabled:opacity-50"
-                >
-                  {isFetchingNextPage ? 'Loading…' : 'Show more ads'}
-                </button>
-              </div>
-            )}
-          </DeferUntilVisible>
-        </>
-      )}
-
-      {firstPage.excludedAccounts.length > 0 && (
-        <Note>
-          {firstPage.excludedAccounts.length === 1
-            ? 'One Google account is'
-            : `${firstPage.excludedAccounts.length} Google accounts are`}
-          {' '}not shown here because Elevate does not yet report in{' '}
-          {firstPage.excludedAccounts.length === 1 ? 'its' : 'their'} currency:{' '}
-          {firstPage.excludedAccounts.map((a, i) => (
-            <span key={a.customerId}>
-              {i > 0 ? ', ' : ''}
-              {a.name ?? a.customerId}
-              {a.currency ? ` (${a.currency})` : ''}
-            </span>
-          ))}
-          .
-        </Note>
-      )}
-    </div>
+    >
+      <div className="flex flex-col gap-2">
+        <SectionHead
+          title="Ads"
+          note="Open a row to read the headlines and descriptions Google draws the ad from."
+          right={<span className="text-[12px] text-ink-muted">{num(rows.length)} shown</span>}
+        />
+        <DeferUntilVisible minHeight={360}>
+          <DataGrid
+            columns={columns}
+            rows={rows}
+            rowKey={(r) => `${r.id}-${r.parentId ?? ''}`}
+            emptyState={<EmptyState message="No ads with spend in this window." />}
+            rowTone={(r) => (r.spendPence > 0 ? 'default' : 'muted')}
+            renderExpanded={(r) => <AdCreative row={r} />}
+          />
+        </DeferUntilVisible>
+      </div>
+    </GoogleTabFrame>
   );
 }

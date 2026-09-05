@@ -16,8 +16,18 @@ vi.mock('../src/repositories/ad-channel-pipeline.repository.js', () => ({
     adChannelPipelineRepository: { list: vi.fn() },
 }));
 vi.mock('../src/repositories/ad-grain.repository.js', () => ({
-    GRAINS: ['meta_adset', 'meta_ad', 'google_adgroup', 'google_ad', 'google_keyword'],
-    adGrainRepository: { rollup: vi.fn(), keywordRollup: vi.fn() },
+    GRAINS: ['meta_adset', 'meta_ad', 'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term'],
+    GOOGLE_GRAINS: ['google_adgroup', 'google_ad', 'google_keyword', 'google_search_term'],
+    adGrainRepository: {
+        rollup: vi.fn(), keywordRollup: vi.fn(),
+        googleRollup: vi.fn(),
+        // Campaign-grain spend, behind the per-campaign CPL/CPB/CPA table
+        // (migration 000165). Defaults to EMPTY here: these tests are about
+        // the practice-level cards, and an empty campaign side leaves every
+        // lead in the "not attributed" bucket, which is the correct and
+        // deliberately visible answer rather than a crash or a hidden row.
+        googleCampaignRollup: vi.fn(() => Promise.resolve([])),
+    },
 }));
 
 const { googleReportService, invalidateLeadPerformanceCache, __test } = await import('../src/services/google-report.service.js');

@@ -33,3 +33,34 @@ export const ctr = (fraction: number | null | undefined): string =>
 
 export const num = (n: number | null | undefined): string =>
   (n === null || n === undefined ? DASH : n.toLocaleString('en-GB'));
+
+// A 0-1 ratio as a whole-number percentage. Distinct from `ctr` above only in
+// its precision: an impression share of 62% is acted on, a CTR of 3.12% is
+// compared, so they round differently on purpose.
+export const pct = (fraction: number | null | undefined, dp = 0): string =>
+  (fraction === null || fraction === undefined ? DASH : `${(fraction * 100).toFixed(dp)}%`);
+
+// A ratio shown as a multiple — return on spend, where "2.4x" reads instantly
+// and "240%" invites the reader to wonder whether the original stake is
+// included. One decimal place: the input is a cohort figure that moves as
+// patients pay, and a second decimal would imply a precision it does not have.
+export const multiple = (n: number | null | undefined): string =>
+  (n === null || n === undefined ? DASH : `${n.toFixed(1)}x`);
+
+// Money with the pence dropped — for figures big enough that the pence are
+// noise and the column width is not. Never used for a cost-per-something,
+// where £41 and £41.60 are a real difference to anyone setting a bid.
+export const money0 = (pence: number | null | undefined): string => {
+  if (pence === null || pence === undefined) return DASH;
+  const neg = pence < 0;
+  const whole = Math.round(Math.abs(pence) / 100);
+  return `${neg ? '-' : ''}£${whole.toLocaleString('en-GB')}`;
+};
+
+// Google reports modelled conversions as decimals (3.5 is a real value in its
+// own interface), so this must NOT round to an integer — but a trailing ".0"
+// on a whole number is noise, so it is trimmed.
+export const conversions = (n: number | null | undefined): string => {
+  if (n === null || n === undefined) return DASH;
+  return Number.isInteger(n) ? n.toLocaleString('en-GB') : n.toFixed(1);
+};

@@ -1,36 +1,37 @@
 'use client';
-// Google report — one page, FOUR tabs (Campaigns / Ad groups / Ads /
-// Keywords), the Google analogue of
-// ../facebook/components/FacebookReportScreen.tsx. Four rather than three
-// because Google's hierarchy is Campaign -> Ad Group -> { Ads, Keywords } —
-// ads and keywords are SIBLINGS under an ad group, so neither is nested
-// inside the other's tab.
+// ============================================================================
+// Google report — one page, FIVE tabs: Campaigns / Ad groups / Ads / Keywords
+// / Search terms.
 //
-// Two queries are lifted to this top level, ABOVE the tab that "owns" them —
-// same idiom as the Facebook screen, same reason:
+// Google's hierarchy is Campaign -> Ad Group -> { Ads, Keywords }, with search
+// terms hanging off the ad group as a report rather than an entity. Ads and
+// keywords are SIBLINGS — neither contains the other — which is why this page
+// has more tabs than the Facebook one, whose hierarchy is a straight
+// Campaign -> Ad Set -> Ad chain.
 //
-//  - useGoogleCampaigns(): needed by the Campaigns tab for its own table,
-//    and to resolve the human-readable campaign name behind the
-//    `campaignId` filter chip shown on the Ad groups tab.
-//  - useGoogleAdGroups(campaignId): needed by the Ad groups tab for its own
-//    table, and to resolve the ad-group name behind the `parentId` filter
-//    chip shown on the Ads AND Keywords tabs (both take the same filter —
-//    ads and keywords are siblings, not parent/child).
+// WHAT CHANGED IN THIS PASS, and why it is worth a note:
 //
-// Lifting them here means each is ONE request (react-query dedupes an
-// identical queryKey), not a second copy fired from whichever tab happens to
-// need the name.
+//  * THE AD-GROUP ROW NO LONGER TELEPORTS. It used to set `?tab=ads&parentId=`
+//    — click an ad group, land on a different tab, looking at a list of ads
+//    that (measured live) had no names at all. An ad group has TWO kinds of
+//    child, so navigating to one was choosing for the reader with no basis for
+//    the choice. It now expands in place and shows both. Only the CAMPAIGN row
+//    still navigates, because a campaign has exactly one kind of child.
 //
-// Filter chain: clicking a campaign row (Campaigns tab) sets `campaignId`
-// and switches to Ad groups; clicking an ad-group row (Ad groups tab) sets
-// `parentId` and switches to Ads — and that SAME `parentId` filter applies
-// on the Keywords tab too, so switching between Ads and Keywords keeps the
-// chip and the filter (unlike switching to/from Ad groups, which drops it).
-// Both filters live in the URL beside `tab`, so the view is shareable and
-// the back button works. A tab that cannot honour the current filter clears
-// it rather than silently ignoring it (FILTER_PARAM below + the effect that
-// enforces it) — the backend only accepts campaignId on /google/ad-groups
-// and parentId on /google/ads + /google/keywords (GoogleQuerySchema).
+//  * `parentId` therefore no longer arrives from a row click. It survives as a
+//    URL filter because Ads, Keywords and Search terms all honour one and a
+//    filtered view stays shareable, but nothing on this page sets it any more.
+//
+//  * The performance panel above the tabs now carries a per-campaign
+//    breakdown (migration 000165) — which campaign bought which patient, and
+//    what those patients have paid. That figure did not exist before.
+//
+// Filters live in the URL beside `tab`, so a view is shareable and the back
+// button works. A tab that cannot honour the current filter clears it rather
+// than silently ignoring it — the backend only accepts campaignId on
+// /google/ad-groups and parentId on /google/ads, /google/keywords and
+// /google/search-terms (GoogleQuerySchema).
+// ============================================================================
 import { useCallback, useEffect } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/ui';
@@ -41,46 +42,37 @@ import { GoogleCampaignsTab } from './GoogleCampaignsTab';
 import { GoogleAdGroupsTab } from './GoogleAdGroupsTab';
 import { GoogleAdsTab } from './GoogleAdsTab';
 import { GoogleKeywordsTab } from './GoogleKeywordsTab';
-import { GoogleLeadPerformanceCards } from './GoogleLeadPerformanceCards';
+import { GoogleSearchTermsTab } from './GoogleSearchTermsTab';
+import { GooglePerformancePanel } from './GooglePerformancePanel';
 
 const TABS: AdReportTab[] = [
   { id: 'campaigns', label: 'Campaigns' },
   { id: 'adgroups', label: 'Ad groups' },
   { id: 'ads', label: 'Ads' },
   { id: 'keywords', label: 'Keywords' },
+  { id: 'searchterms', label: 'Search terms' },
 ];
 
-// Which URL filter param each tab can actually honour. Ads and Keywords
-// share `parentId` — the one deliberate difference from the Facebook
-// screen's FILTER_PARAM, where each tab owns a distinct param.
+// Which URL filter param each tab can actually honour. Ads, Keywords and
+// Search terms all share `parentId` — an ad group's id — because all three are
+// reports ABOUT an ad group rather than levels beneath one another.
 const FILTER_PARAM: Record<string, 'campaignId' | 'parentId' | null> = {
   campaigns: null,
   adgroups: 'campaignId',
   ads: 'parentId',
   keywords: 'parentId',
+  searchterms: 'parentId',
 };
-
-// Calm, factual prose — never an error/warning colour. Same styling as the
-// per-tab Note components (GoogleCampaignsTab.tsx etc.) — placed here instead
-// because it is a fact about the WHOLE page, true on every tab, not one
-// table's own caveat.
-function Note({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="rounded-panel border border-border bg-bg px-3 py-2 text-[12.5px] leading-relaxed text-ink-muted">
-      {children}
-    </p>
-  );
-}
 
 function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void }) {
   return (
-    <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-border bg-bg px-3 py-1 text-[12.5px] text-ink">
+    <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-[12px] text-brand-700">
       {label}
       <button
         type="button"
         onClick={onDismiss}
         aria-label={`Clear filter: ${label}`}
-        className="leading-none text-ink-muted hover:text-ink"
+        className="leading-none text-brand-700/60 transition-colors hover:text-brand-700"
       >
         ×
       </button>
@@ -97,11 +89,9 @@ export default function GoogleReportScreen() {
   const campaignId = params.get('campaignId');
   const parentId = params.get('parentId');
 
-  // A tab that cannot honour the current filter clears it rather than
-  // silently ignoring it. Runs on mount and whenever the active tab changes
-  // (including the tab strip's own self-correction of an unrecognised
-  // ?tab=, via useAdReportTab's effect). Deliberately keyed on `tab` alone:
-  // this must NOT re-run just because scope/period params changed.
+  // A tab that cannot honour the current filter clears it rather than silently
+  // ignoring it. Deliberately keyed on `tab` alone: this must NOT re-run just
+  // because scope/period params changed.
   useEffect(() => {
     const keep = FILTER_PARAM[tab];
     const sp = new URLSearchParams(params.toString());
@@ -113,21 +103,12 @@ export default function GoogleReportScreen() {
   }, [tab]);
 
   // new URLSearchParams(params.toString()) preserves every OTHER param —
-  // scope, mode, mk/yk/cs/cu (features/_shared/scope-context.tsx) — the same
-  // way that context's own setScope/setMode do.
+  // scope, mode, mk/yk/cs/cu — the same way scope-context's own setters do.
   const filterByCampaign = useCallback((id: string) => {
     const sp = new URLSearchParams(params.toString());
     sp.set('tab', 'adgroups');
     sp.set('campaignId', id);
     sp.delete('parentId');
-    router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
-  }, [params, pathname, router]);
-
-  const filterByAdGroup = useCallback((id: string) => {
-    const sp = new URLSearchParams(params.toString());
-    sp.set('tab', 'ads');
-    sp.set('parentId', id);
-    sp.delete('campaignId');
     router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
   }, [params, pathname, router]);
 
@@ -137,7 +118,11 @@ export default function GoogleReportScreen() {
     router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
   }, [params, pathname, router]);
 
-  // Lifted so both can be shared with the Ads/Keywords tabs — see file header.
+  // Lifted above the tab that owns them: useGoogleCampaigns feeds the
+  // Campaigns tab AND resolves the human-readable name behind the campaignId
+  // chip; useGoogleAdGroups feeds the Ad groups tab AND resolves the ad-group
+  // name behind the parentId chip on the three tabs that take one. React Query
+  // dedupes an identical queryKey, so each is ONE request.
   const campaigns = useGoogleCampaigns();
   const adGroups = useGoogleAdGroups(campaignId);
 
@@ -149,57 +134,45 @@ export default function GoogleReportScreen() {
     : null;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       <PageHeader
         title="Google"
-        subtitle="Google Ads performance, from spend down to Google's own tracked conversions."
+        subtitle="What the spend bought — from the campaign down to the words people typed."
       />
       <ScopePeriodBar />
 
-      {/* Blended CPL/CPB/CPA cards (migration 000158) — PRACTICE grain, not
-          per-campaign, and NOT itself a tab: visible above the tab strip
-          regardless of which of the four grain tabs is active. See
-          GoogleLeadPerformanceCards.tsx's header for why this exists instead
-          of a per-row CPL/CPB/CPA column on the grain tabs below (Google has
-          no CRM lead funnel of its own, and CallRail calls carry no
-          ad/campaign linkage at all — a per-campaign figure is not
-          buildable from what is stored). */}
-      <GoogleLeadPerformanceCards />
+      {/* Above the tab strip on purpose: this is the answer to "what did
+          Google cost us", true regardless of which grain tab is open, and it
+          is now per-campaign as well as per-practice. The grain tabs below
+          report Google's OWN tracked conversions, which count something
+          different from the CRM funnel and are deliberately not blended with
+          it anywhere on this page. */}
+      <GooglePerformancePanel />
 
-      {/* True on every tab below: Google's OWN tracked conversions
-          (campaigns()/adGroups()/ads()/keywords()) still carry no
-          CPL/CPB/CPA — that figure lives in the cards above, at practice
-          grain, not here at campaign/ad-group/ad/keyword grain. */}
-      <Note>
-        Cost per lead, per booking and per accepted patient are shown above, blended across GoHighLevel
-        and CallRail at practice level — Google&apos;s own click data cannot be tied to an individual lead
-        below campaign level. The tabs below show spend, clicks and Google&apos;s own tracked conversions
-        per campaign, ad group, ad and keyword.
-      </Note>
+      <div className="flex flex-col gap-4">
+        <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
 
-      <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
+        {tab === 'adgroups' && campaignId && (
+          <FilterChip
+            label={`Campaign: ${campaignName ?? campaignId}`}
+            onDismiss={() => clearFilter('campaignId')}
+          />
+        )}
+        {(tab === 'ads' || tab === 'keywords' || tab === 'searchterms') && parentId && (
+          <FilterChip
+            label={`Ad group: ${adGroupName ?? parentId}`}
+            onDismiss={() => clearFilter('parentId')}
+          />
+        )}
 
-      {tab === 'adgroups' && campaignId && (
-        <FilterChip
-          label={`Campaign: ${campaignName ?? campaignId}`}
-          onDismiss={() => clearFilter('campaignId')}
-        />
-      )}
-      {(tab === 'ads' || tab === 'keywords') && parentId && (
-        <FilterChip
-          label={`Ad group: ${adGroupName ?? parentId}`}
-          onDismiss={() => clearFilter('parentId')}
-        />
-      )}
-
-      {tab === 'campaigns' && (
-        <GoogleCampaignsTab query={campaigns} onSelectCampaign={filterByCampaign} />
-      )}
-      {tab === 'adgroups' && (
-        <GoogleAdGroupsTab query={adGroups} onSelectAdGroup={filterByAdGroup} />
-      )}
-      {tab === 'ads' && <GoogleAdsTab parentId={parentId} />}
-      {tab === 'keywords' && <GoogleKeywordsTab parentId={parentId} />}
+        {tab === 'campaigns' && (
+          <GoogleCampaignsTab query={campaigns} onSelectCampaign={filterByCampaign} />
+        )}
+        {tab === 'adgroups' && <GoogleAdGroupsTab query={adGroups} />}
+        {tab === 'ads' && <GoogleAdsTab parentId={parentId} />}
+        {tab === 'keywords' && <GoogleKeywordsTab parentId={parentId} />}
+        {tab === 'searchterms' && <GoogleSearchTermsTab parentId={parentId} />}
+      </div>
     </div>
   );
 }

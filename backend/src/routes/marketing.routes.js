@@ -4,6 +4,7 @@ import {
     getPerformance, getTrend, getLeads, getReconciliation,
     getFacebookCampaigns, getFacebookAdSets, getFacebookAds,
     getGoogleCampaigns, getGoogleAdGroups, getGoogleAds, getGoogleKeywords,
+    getGoogleSearchTerms,
     getGoogleLeadPerformance,
 } from '../controllers/marketing.controller.js';
 
@@ -33,6 +34,9 @@ router.get('/google/campaigns', requirePermission('marketing.view'), getGoogleCa
 router.get('/google/ad-groups', requirePermission('marketing.view'), getGoogleAdGroups);   // ?campaignId=
 router.get('/google/ads', requirePermission('marketing.view'), getGoogleAds);              // ?campaignId=&parentId=
 router.get('/google/keywords', requirePermission('marketing.view'), getGoogleKeywords);    // ?campaignId=&parentId=
+// Search terms — what people actually typed, as opposed to what we bid on.
+// A 30-day window of its own, reported in the payload as windowDays.
+router.get('/google/search-terms', requirePermission('marketing.view'), getGoogleSearchTerms); // ?campaignId=&parentId=
 
 // Blended CPL/CPB/CPA cards, PRACTICE grain (not per-campaign — see
 // google-report.service.js's leadPerformance for why). ?practice_id=

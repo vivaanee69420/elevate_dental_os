@@ -2035,13 +2035,14 @@ as documented on the campaign tier.
 
 ## Google report (`/api/marketing/google`)
 
-Campaign → Ad Group → **{ Ads, Keywords }** over the Google deep-grain
-tables, in the same spirit as the Facebook report above but with FOUR tiers
-instead of three: Google's hierarchy splits at the ad group into two
+Campaign → Ad Group → **{ Ads, Keywords, Search terms }** over the Google
+deep-grain tables, in the same spirit as the Facebook report above but with
+FIVE tiers instead of three: Google's hierarchy splits at the ad group into
 **sibling** leaves — an ad's parent is an ad group and a keyword's parent is
 an ad group, but neither ads nor keywords contain the other, so neither is
-nested inside the other's response. **Permission:** `marketing.view` on all
-four routes. **The organisation is taken from `req.user.organisation_id` and
+nested inside the other's response. Search terms hang off the ad group too,
+as a report rather than an entity. **Permission:** `marketing.view` on all
+five routes. **The organisation is taken from `req.user.organisation_id` and
 is NEVER accepted as a request parameter** — same isolation model as the
 Facebook report above.
 
@@ -2049,10 +2050,10 @@ Facebook report above.
 **optional**, both **INCLUSIVE**, same semantics/defaults as the Facebook
 report's — `londonDaysAgo(DEEP_WINDOW_DAYS)` through `londonYmd()` when
 omitted) and `practice_id` (optional UUID, silently ignored otherwise).
-`/google/ad-groups`, `/google/ads` and `/google/keywords` additionally accept
-`campaignId` (the ad platform's own campaign id, not a uuid) and — on
-`/ads`/`/keywords` only — `parentId` (an **ad group's** own id, never a
-campaign id). Both are optional filters, not required path segments:
+`/google/ad-groups`, `/google/ads`, `/google/keywords` and
+`/google/search-terms` additionally accept `campaignId` (the ad platform's
+own campaign id, not a uuid) and — on `/ads`/`/keywords`/`/search-terms`
+only — `parentId` (an **ad group's** own id, never a campaign id). Both are optional filters, not required path segments:
 omitting them lists everything in scope across every parent; supplying one
 narrows to it. `campaignId` and `parentId` can be supplied together on
 `/ads`/`/keywords` (narrows to one campaign's ads/keywords with no ad group
@@ -2105,6 +2106,40 @@ a cost per nothing is unknowable, not free.
   empty-window state.
 - `ok` — normal.
 
+### Fields every Google row carries (migration `000164`)
+
+Every row at every tier carries, in addition to its own tier's fields:
+`conversionsValuePence` (Google's tracked conversion **value**, integer
+pence), `allConversions` (includes the conversion actions Google keeps out of
+the headline `conversions` figure — call-extension phone calls among them),
+`roas` (`conversionsValuePence / spendPence`), and five impression-share
+ratios (`0..1`): `searchImpressionShare`, `searchTopImpressionShare`,
+`searchAbsoluteTopImpressionShare`, `searchBudgetLostImpressionShare`,
+`searchRankLostImpressionShare`.
+
+**Every one of these can be `null`, and `null` is NOT zero.** Google does not
+report an impression share for an individual ad, or a conversion value for an
+account with no value-tracking conversion action, and a Display or Video
+campaign never competes in the search auction at all. Rendering any of them
+as `0` would assert a measurement nobody took — "0% impression share" reads
+as "you are invisible", which is a very different claim from "not measured
+here". `roas` is `null` unless BOTH sides are known: a return on spend where
+the return is unknown is not 0x.
+
+The two **lost** shares are the actionable half and are the reason the set
+was pulled: the headline share says traffic was missed, budget-lost vs
+rank-lost says *why*, and those are different instructions (raise the budget
+vs raise the bid / improve the ad). They are requested at campaign and
+ad-group grain only — `keyword_view` is asked for the three shares that have
+been pulling successfully since `000148`, because GAQL fails the *whole*
+query on an unknown or grain-incompatible field, and guessing wrong there
+would send every keyword pull down the degraded fallback path permanently.
+
+Impression share is an **impression-weighted average** over the window, with
+the denominator filtered in SQL to the days Google actually reported a share.
+It is approximate for the reason `/keywords`' `approximate.impressionShare`
+states; spend, clicks, impressions and conversions are exact.
+
 ### `GET /api/marketing/google/campaigns`
 
 Google report, campaign tier.
@@ -2112,9 +2147,19 @@ Google report, campaign tier.
 **Response:** `{ state, rows[], excludedAccounts[], totals, effectiveSince,
 windowClamped }`.
 
-- Each row: `{ id, name, status, spendPence, impressions, clicks, ctr,
-  cpcPence, conversions, costPerConversionPence }`. `totals` is the same
-  shape with `id`/`name`/`status` null. `status` is Google's own campaign
+- Each row: `{ id, name, status, channelType, spendPence, impressions,
+  clicks, ctr, cpcPence, conversions, costPerConversionPence, phoneCalls }`
+  plus the shared fields above. `channelType` is Google's own
+  `SEARCH`/`PERFORMANCE_MAX`/`DISPLAY`/`VIDEO` and is load-bearing rather
+  than decorative: it is what explains a blank keyword column and a blank
+  impression share on the same row. `phoneCalls` counts call-extension calls
+  as Google counts them — deliberately NOT reconciled with the CallRail
+  figure on `/lead-performance`, which counts deduplicated *people*.
+  `totals` is the same shape with `id`/`name`/`status`/`channelType` null.
+  **Sums are summed; ratios are not:** spend, impressions, clicks,
+  conversions and value add up across campaigns, but impression share is a
+  proportion of each campaign's own eligible auctions, so every share is
+  `null` on `totals` rather than being invented. `status` is Google's own campaign
   status (`ENABLED`, `PAUSED`, …) as it stood on the **latest day in the
   window** — `ad_metrics` stamps it per campaign-day, exactly as the Facebook
   report's campaign tier documents.
@@ -2142,8 +2187,18 @@ see above).
 
 **Response:** `{ state, rows[], nextCursor, excludedAccounts[],
 effectiveSince, windowClamped }`. Each row is the same shape as the ad-group
-tier plus `parentId` (its ad group's id). `nextCursor` is `null` on the last
-page.
+tier plus `parentId` (its ad group's id) and the ad's **creative**: `adType`,
+`adStrength`, `approvalStatus`, `finalUrl`, `headlines[]`, `descriptions[]`
+(plain strings — the connector flattens Google's `{text, pinnedField}`
+assets). `nextCursor` is `null` on the last page.
+
+`name` falls back to the ad's **first responsive-search headline** when the
+advertiser set no ad name. That fallback is not cosmetic: `ad_group_ad.ad
+.name` is an optional internal label almost nobody sets — measured on live
+data, **0 of 186** ads in the reference org had one — so without it every row
+of this tier rendered as a bare 12-digit id. Google assembles an ad from the
+headline/description pool at auction time, so `headlines[]` is the pool the
+ad is drawn from, not a single ad anyone saw.
 
 ### `GET /api/marketing/google/keywords`
 
@@ -2172,3 +2227,130 @@ plainly rather than presenting either as exact:
 `approximate` is present on every `/keywords` response, including the
 `not_connected`/empty-window early returns — it is a fixed pair of strings,
 not computed per request.
+
+### `GET /api/marketing/google/search-terms`
+
+**What people actually typed**, as opposed to what was bid on — the one
+Google report that says where money is leaking, and one that cannot be
+derived from anything else stored. **Query:** adds `campaignId` and
+`parentId` (an ad group's id, both optional). Same spend-sorted,
+50-per-page paging as `/ads` — and here that ordering *is* the product: the
+terms at the top are the ones costing the most, which is exactly the list
+someone mining for negative keywords wants.
+
+**Response:** `{ state, rows[], nextCursor, excludedAccounts[], windowDays,
+effectiveSince, windowClamped }`. Each row is the ad-group-tier shape plus
+`parentId`, `keywordText` (the keyword that CAUGHT the term — the link that
+makes a term actionable, `null` for Performance Max, which has no keywords at
+all), `matchType`, and `termStatus` (Google's `ADDED`/`EXCLUDED`/`NONE` —
+whether anyone has already acted on it; without it the same rubbish term is
+re-reported as actionable every month after it has been excluded).
+
+`id` and `name` are both the **search term text**. Google gives a search term
+no id of its own because it is not an object in the account — it is a string
+a stranger typed — so the text is the identity, and (ad group, text, day) is
+the unique key the deep-grain writer conflicts on.
+
+**This is the ONLY tier with a window of its own.** `windowDays` is `30`,
+not the 92 every other deep grain holds: (term × ad group × day) is an order
+of magnitude more rows than any other grain, and the report is one acted on
+for recent traffic. The clamp is **reported, never silent** — `windowDays`
+comes from the server so the page cannot claim a period the sync does not
+pull.
+
+### `GET /api/marketing/google/lead-performance`
+
+What the Google spend actually bought: cost per lead, per booking and per
+**accepted patient**, at practice grain AND per campaign. Not a grain tier —
+the page renders it above the tab strip, true regardless of which tab is
+open. **Query:** `since`, `until`, `practice_id` (all optional, same
+semantics as above). **Permission:** `marketing.view`.
+
+Unlike the five grain tiers, this window is **not** clamped to 92 days:
+`ad_metrics` holds ~15 months and leads/calls/appointments/invoices have no
+deep-grain cap, so a year-wide request is answered as asked
+(`windowClamped` is always `false` here).
+
+**Response:** `{ state, practices[], total, practicesAll[], totalAll,
+campaigns[], campaignsAll[], attribution, leads[], googlePipelinesMapped,
+acceptanceMinPaidPence, effectiveSince, windowClamped }`.
+
+**A lead** is a GoHighLevel lead in a pipeline this org has explicitly mapped
+to the `google_ads` channel, OR a CallRail call, **deduplicated by phone
+number keeping the earliest touch** — one person is one funnel entry, not
+two. **Booked** means that phone matches a Dentally patient with a
+non-cancelled appointment on or after the lead's own London *day*.
+**Accepted** means settled payments attributable to that patient, net of
+refunds, **exceed** `acceptanceMinPaidPence` (£40 today — the server's own
+figure, so the UI never hardcodes a copy that can drift). A floor rather than
+"> £0" because without one every routine exam fee reads as a treatment
+acceptance: measured live, 62 of 64 booked leads had paid *something*.
+
+`booked` and `accepted` have **no upper bound** — both are COHORT questions
+("of the leads this window's spend bought, how many have converted"), so a
+past period's figures IMPROVE as its leads convert. Deliberate: a funnel
+whose two halves answer different questions is worse than one that moves.
+
+`practices`/`total` count booked/accepted for **new patients only** (the
+owner's own definition); `practicesAll`/`totalAll` count every match. Both
+come from ONE fetch, so the UI's toggle costs no request and the two figures
+cannot drift apart.
+
+#### Per-campaign attribution (migration `000165`)
+
+`campaigns[]`/`campaignsAll[]` divide each campaign's OWN spend by its OWN
+leads: `{ campaignId, campaignName, channelType, attributed, spendPence,
+impressions, clicks, conversions, ctr, leads, booked, accepted, paidPence,
+cplPence, cpbPence, cpaPence, returnOnSpend }`.
+
+This supersedes `000158`'s stated position that a per-campaign Google cost
+per patient was not buildable "because CallRail calls carry no ad/campaign
+linkage at all". They carry three: the campaign **name**, the bid **keyword**
+and the **gclid**, all captured from the click. Measured on the reference org
+(448 calls): campaign name on 402, gclid on 410, keyword on 201.
+
+- **Exactly one row has `attributed: false`** — the leads that could not be
+  tied to a campaign. It is RETURNED, not dropped, so the campaign rows still
+  sum to the totals above; dropping it would overstate every campaign's
+  conversion rate by a denominator smaller than the truth. Its four cost
+  fields and `returnOnSpend` are `null`, never `0` — it has no spend of its
+  own, and £0.00 per lead would read as the cheapest campaign in the table.
+- `paidPence` is money actually collected from that campaign's patients,
+  counted for every eligible lead rather than only those over the acceptance
+  floor: a patient who paid £35 paid £35.
+- `returnOnSpend` is `paidPence / spendPence`, `null` on zero spend.
+
+`attribution` states the coverage rather than asking anyone to trust it:
+`{ total, attributed, byRoute, unattributedBySource }`. `byRoute` keys are
+`callrail_keyword` (campaign + ad group + keyword — the full chain),
+`callrail_campaign` (campaign only, and the correct answer for Performance
+Max, which has no keywords) and `ghl_campaign` (the landing page's
+`gad_campaignid`, accepted only if it resolves against THIS org's Google
+campaigns — that column also holds Meta campaign ids).
+`unattributedBySource` splits the remainder by `ghl`/`callrail`, because the
+two gaps have different causes and different fixes.
+
+**Campaign names are matched through the campaign's whole rename history**,
+not its current name. Advertisers rename constantly (the reference org
+appends the monthly budget), CallRail stamps the name as it stood at click
+time and never revises it, and `ad_metrics` keeps one row per campaign-day
+with the name of that day — so the rename history is already stored and is
+read as a set of aliases. A current-name-only lookup resolved 115 of 331
+deduplicated calls; the alias lookup resolves 375 of 553 leads. Rows are
+LABELLED with the campaign's current name so one campaign never appears twice.
+
+`leads[]` is every deduplicated lead behind the figures, for the
+click-through list: `{ practiceId, practiceName, source, leadAt, phone, name,
+email, treatment, booked, accepted, paidPence, isNewPatient, campaignId,
+campaignName, adGroupId, adGroupName, keywordId, keywordText, gclid,
+attribution }`. `paidPence` is money **to date** since the lead landed, not
+money inside the period, and can be negative when refunds exceed payments.
+`gclid` is carried but not yet read — it is the key a future `click_view`
+lookup needs to resolve a lead down to the individual **ad**, the one grain
+nothing stored can reach today (Google limits `click_view` to 90 days and one
+day per query).
+
+`googlePipelinesMapped` is `false` when this org has mapped no GoHighLevel
+pipeline to `google_ads` at all — a leads figure of 0 then means "not
+configured", not "quiet period", and the UI must say so rather than showing a
+silent zero.

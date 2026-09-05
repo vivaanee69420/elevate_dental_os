@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { supaRec } from './setup.js';
 
-const { adGrainRepository, GRAINS } = await import('../src/repositories/ad-grain.repository.js');
+const { adGrainRepository, GRAINS, GOOGLE_GRAINS } = await import('../src/repositories/ad-grain.repository.js');
 
 const ORG = '11111111-1111-1111-1111-111111111111';
 
@@ -14,8 +14,28 @@ beforeEach(() => {
 });
 
 describe('grain allowlist', () => {
-    it('names exactly the five supported grains', () => {
-        expect([...GRAINS]).toEqual(['meta_adset', 'meta_ad', 'google_adgroup', 'google_ad', 'google_keyword']);
+    it('names exactly the six supported grains', () => {
+        expect([...GRAINS]).toEqual([
+            'meta_adset', 'meta_ad',
+            'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term',
+        ]);
+    });
+
+    // GOOGLE_GRAINS gates googleRollup, which reads ad_google_rollup — a
+    // function that RAISES on a non-Google table rather than returning
+    // nothing. Pinned as a subset of GRAINS so the two lists cannot drift into
+    // naming a grain the other has never heard of.
+    it('lists the Google grains as a subset of the full allowlist', () => {
+        expect([...GOOGLE_GRAINS]).toEqual([
+            'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term',
+        ]);
+        for (const g of GOOGLE_GRAINS) expect(GRAINS).toContain(g);
+    });
+
+    it('refuses a Meta grain on the Google-only read path', async () => {
+        await expect(adGrainRepository.googleRollup(ORG, 'meta_ad', { since: '2026-08-01', until: '2026-08-31' }))
+            .rejects.toThrow(/not a Google grain/i);
+        expect(supaRec.rpcCalls).toHaveLength(0);
     });
 
     it('refuses an unknown grain before it reaches the database', async () => {
