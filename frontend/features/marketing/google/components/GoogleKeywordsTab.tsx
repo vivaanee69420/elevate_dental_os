@@ -21,6 +21,7 @@ import { SectionHead, FootNote } from '../../_shared/StatRail';
 import { Chip, humanise } from '../../_shared/Bars';
 import { num, DASH } from '../../_shared/format';
 import { nameColumn, deliveryColumns, impressionShareColumn } from './columns';
+import { BestPerformer, bestByCostPerConversion, unrankedNote } from '../../_shared/BestPerformer';
 import { GoogleTabFrame, ShowMore } from './GoogleTabFrame';
 import { useGoogleKeywords } from '../hooks';
 import type { GoogleKeywordRow } from '../api';
@@ -100,7 +101,26 @@ export function GoogleKeywordsTab({ parentId }: { parentId: string | null }) {
         </>
       )}
     >
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-4">
+        {/* Quality Score rides along as `extra` rather than as the ranking:
+            it is Google's opinion of the keyword, not a result, and a 10/10
+            keyword nobody converts on is not the best keyword. */}
+        <BestPerformer
+          label="Best keyword"
+          row={bestByCostPerConversion(rows.map((r) => ({
+            id: r.id, name: r.name, spendPence: r.spendPence,
+            conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+          })))}
+          fallbackName="Unnamed keyword"
+          extra={(() => {
+            const best = bestByCostPerConversion(rows.map((r) => ({
+              id: r.id, name: r.name, spendPence: r.spendPence,
+              conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+            })));
+            const full = best ? rows.find((r) => r.id === best.id) : null;
+            return full?.qualityScore == null ? null : `quality ${full.qualityScore}/10`;
+          })()}
+        />
         <SectionHead
           title="Keywords"
           note="What you bid on. What people actually typed is on the Search terms tab."

@@ -34,6 +34,7 @@ import { SectionHead } from '../../_shared/StatRail';
 import { Chip, humanise } from '../../_shared/Bars';
 import { money0, num, DASH } from '../../_shared/format';
 import { nameColumn, deliveryColumns, impressionShareColumn } from './columns';
+import { BestPerformer, bestByCostPerConversion, unrankedNote } from '../../_shared/BestPerformer';
 import { GoogleTabFrame } from './GoogleTabFrame';
 import { useGoogleAds, useGoogleKeywords } from '../hooks';
 import type { GoogleAdGroupsPayload, GoogleAdGroupRow } from '../api';
@@ -166,7 +167,24 @@ export function GoogleAdGroupsTab({
       effectiveSince={data?.effectiveSince}
       excludedAccounts={data?.excludedAccounts}
     >
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-4">
+        {/* Ranked on Google's own conversions, not patients — only 52 of 262
+            leads in a live month resolve to an ad group, which is enough to
+            SHOW on a row and nowhere near enough to rank on. The card says so
+            on its face. */}
+        <BestPerformer
+          label="Best ad group"
+          row={bestByCostPerConversion(rows.map((r) => ({
+            id: r.id, name: r.name,
+            spendPence: r.spendPence, conversions: r.conversions,
+            costPerConversionPence: r.costPerConversionPence,
+          })))}
+          fallbackName="Unnamed ad group"
+          note={unrankedNote(rows.map((r) => ({
+            id: r.id, name: r.name, spendPence: r.spendPence,
+            conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+          })))}
+        />
         <SectionHead
           title="Ad groups"
           note="Open a row to see the ads and the keywords inside it — they sit side by side under an ad group, so neither is hidden behind the other."

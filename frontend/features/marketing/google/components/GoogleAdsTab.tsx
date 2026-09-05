@@ -16,6 +16,7 @@ import { SectionHead } from '../../_shared/StatRail';
 import { Chip, humanise } from '../../_shared/Bars';
 import { num, DASH } from '../../_shared/format';
 import { nameColumn, deliveryColumns } from './columns';
+import { BestPerformer, bestByCostPerConversion, unrankedNote } from '../../_shared/BestPerformer';
 import { GoogleTabFrame, ShowMore } from './GoogleTabFrame';
 import { useGoogleAds } from '../hooks';
 import type { GoogleAdRow } from '../api';
@@ -132,7 +133,22 @@ export function GoogleAdsTab({ parentId }: { parentId: string | null }) {
         />
       )}
     >
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-4">
+        {/* Google's conversions are the ONLY basis available here, not a
+            second-best one: no lead in this system resolves to an individual
+            ad, and none can until a click_view lookup by gclid is built. */}
+        <BestPerformer
+          label="Best ad"
+          row={bestByCostPerConversion(rows.map((r) => ({
+            id: r.id, name: r.name, spendPence: r.spendPence,
+            conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+          })))}
+          fallbackName="Unnamed ad"
+          note={unrankedNote(rows.map((r) => ({
+            id: r.id, name: r.name, spendPence: r.spendPence,
+            conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+          })))}
+        />
         <SectionHead
           title="Ads"
           note="Open a row to read the headlines and descriptions Google draws the ad from."
