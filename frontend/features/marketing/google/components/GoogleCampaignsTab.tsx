@@ -39,6 +39,7 @@ import { ShareBar, FunnelBar, ImpressionShareBar, Chip, humanise } from '../../_
 import {
   money, money0, num, ctr, multiple, conversions as fmtConversions, DASH,
 } from '../../_shared/format';
+import { DetailModal } from '../../_shared/DetailModal';
 import { GoogleTabFrame } from './GoogleTabFrame';
 import { CampaignHighlights } from './CampaignHighlights';
 import { CampaignLeads } from './CampaignLeads';
@@ -153,10 +154,10 @@ export function GoogleCampaignsTab({
   // key, so this costs no request. Reading it here rather than threading the
   // rows down as props keeps the tab able to render on its own.
   const perf = useGoogleLeadPerformance();
-  // Set by the highlight cards, which name a campaign and then hand the reader
-  // straight to its row already open — rather than dropping them at the top of
-  // the table to go and find it.
-  const [openKey, setOpenKey] = useState<string | null>(null);
+  // The row whose detail dialog is open. Held as the ROW, not an id, so a
+  // highlight card and a table click open exactly the same dialog with exactly
+  // the same data instead of two paths that can drift.
+  const [selected, setSelected] = useState<MergedRow | null>(null);
 
   const allLeads: GoogleLeadRow[] = perf.data?.state === 'ok' ? perf.data.leads : [];
 
@@ -281,7 +282,10 @@ export function GoogleCampaignsTab({
             strip. A card naming a campaign in one place and a table listing it
             in another is how this page ended up showing the same six campaigns
             twice; keeping them together is the rule now, at every tier. */}
-        <CampaignHighlights campaigns={performance} onOpenCampaign={setOpenKey} />
+        <CampaignHighlights
+          campaigns={performance}
+          onOpenCampaign={(id) => setSelected(rows.find((r) => r.campaignId === id) ?? null)}
+        />
         <SectionHead
           title="Campaigns"
           note="What each campaign cost and what it produced. Open a row for Google's own delivery and the people it brought in."
@@ -299,34 +303,43 @@ export function GoogleCampaignsTab({
             // a click that silently picked one is exactly the behaviour that
             // made the old ad-group row feel arbitrary. The panel shows the
             // first and offers the second as an explicit link.
-            openKey={openKey}
-            renderExpanded={(r) => (
-              <div className="flex flex-col gap-5">
-                <Delivery row={r} />
-                {/* THE PEOPLE BEHIND THE NUMBER. The row says a campaign
-                    produced 5 patients; this says who they were, what they
-                    came for and what they have paid. The rows are already
-                    fetched — each lead carries its own campaignId (migration
-                    000165) — so opening this costs no request. */}
-                <CampaignLeads
-                  leads={allLeads}
-                  campaignId={r.campaignId}
-                  attributed={r.attributed}
-                />
-                {r.attributed && r.campaignId && (
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); onSelectCampaign(r.campaignId!); }}
-                    className="w-fit text-[12.5px] font-medium text-brand hover:underline"
-                  >
-                    View this campaign&apos;s ad groups →
-                  </button>
-                )}
-              </div>
-            )}
+            onRowClick={setSelected}
           />
         </DeferUntilVisible>
       </div>
+
+      <DetailModal
+        open={selected !== null}
+        title={selected?.campaignName ?? (selected?.attributed ? (selected?.campaignId ?? '') : 'Not attributed')}
+        subtitle={selected && (selected.attributed
+          ? `${money0(selected.spendPence)} spent · ${num(selected.leads)} leads · ${num(selected.accepted)} patients · ${money0(selected.paidPence)} collected`
+          : 'Leads that could not be tied to a campaign')}
+        onClose={() => setSelected(null)}
+      >
+        {selected && (
+          <div className="flex flex-col gap-5">
+            <Delivery row={selected} />
+            {/* THE PEOPLE BEHIND THE NUMBER. The row says a campaign produced
+                5 patients; this says who they were, what they came for and
+                what they have paid. Already fetched — every lead carries its
+                own campaignId (migration 000165) — so this costs no request. */}
+            <CampaignLeads
+              leads={allLeads}
+              campaignId={selected.campaignId}
+              attributed={selected.attributed}
+            />
+            {selected.attributed && selected.campaignId && (
+              <button
+                type="button"
+                onClick={() => { const id = selected.campaignId!; setSelected(null); onSelectCampaign(id); }}
+                className="w-fit text-[12.5px] font-medium text-brand hover:underline"
+              >
+                View this campaign&apos;s ad groups →
+              </button>
+            )}
+          </div>
+        )}
+      </DetailModal>
     </GoogleTabFrame>
   );
 }

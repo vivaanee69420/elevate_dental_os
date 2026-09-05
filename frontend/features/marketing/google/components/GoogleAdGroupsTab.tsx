@@ -26,6 +26,7 @@
 // The child queries live in a component that only mounts when a row opens, so
 // a closed table issues no requests for children at all.
 // ============================================================================
+import { useState } from 'react';
 import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import type { UseQueryResult } from '@tanstack/react-query';
@@ -35,6 +36,7 @@ import { Chip, humanise } from '../../_shared/Bars';
 import { money0, num, DASH } from '../../_shared/format';
 import { nameColumn, deliveryColumns, impressionShareColumn } from './columns';
 import { BestPerformer, bestByCostPerConversion, unrankedNote } from '../../_shared/BestPerformer';
+import { DetailModal } from '../../_shared/DetailModal';
 import { GoogleTabFrame } from './GoogleTabFrame';
 import { useGoogleAds, useGoogleKeywords } from '../hooks';
 import type { GoogleAdGroupsPayload, GoogleAdGroupRow } from '../api';
@@ -141,6 +143,7 @@ export function GoogleAdGroupsTab({
   query: UseQueryResult<GoogleAdGroupsPayload>;
 }) {
   const { data, isLoading, isError, error } = query;
+  const [selected, setSelected] = useState<GoogleAdGroupRow | null>(null);
   const rows = data?.rows ?? [];
   const maxSpend = rows.reduce((m, r) => Math.max(m, r.spendPence), 0);
 
@@ -173,6 +176,13 @@ export function GoogleAdGroupsTab({
             SHOW on a row and nowhere near enough to rank on. The card says so
             on its face. */}
         <BestPerformer
+          onOpen={() => {
+            const best = bestByCostPerConversion(rows.map((r) => ({
+              id: r.id, name: r.name, spendPence: r.spendPence,
+              conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+            })));
+            setSelected(rows.find((r) => r.id === best?.id) ?? null);
+          }}
           label="Best ad group"
           row={bestByCostPerConversion(rows.map((r) => ({
             id: r.id, name: r.name,
@@ -197,10 +207,24 @@ export function GoogleAdGroupsTab({
             rowKey={(r) => `${r.id}-${r.parentId ?? ''}`}
             emptyState={<EmptyState message="No Google ad group spend in this window." />}
             rowTone={(r) => (r.spendPence > 0 ? 'default' : 'muted')}
-            renderExpanded={(r) => (r.id ? <AdGroupChildren adGroupId={r.id} /> : null)}
+            onRowClick={setSelected}
           />
         </DeferUntilVisible>
       </div>
+
+      {/* Both children of the ad group, side by side — the fork in Google's
+          hierarchy that made a navigating row click arbitrary in the first
+          place. Mounted only while the dialog is open, so a closed table
+          issues no requests for children at all. */}
+      <DetailModal
+        open={selected !== null}
+        title={selected?.name ?? selected?.id ?? 'Ad group'}
+        subtitle={selected && [selected.campaignName, `${money0(selected.spendPence)} spent`]
+          .filter(Boolean).join(' · ')}
+        onClose={() => setSelected(null)}
+      >
+        {selected?.id && <AdGroupChildren adGroupId={selected.id} />}
+      </DetailModal>
     </GoogleTabFrame>
   );
 }

@@ -3,6 +3,11 @@
 // organisation_id explicitly (rule 3).
 import * as supabase_1 from '../lib/supabase.js';
 import { londonYmd } from '../lib/tz.js';
+import { GRAIN_TABLES } from './ad-grain.repository.js';
+
+// Values only — see hasGrainMetrics for why this is derived rather than
+// re-typed here.
+const DEEP_GRAIN_TABLE_SET = new Set(Object.values(GRAIN_TABLES));
 
 export const marketingRepository = {
     // Spend per campaign per provider over the window. ad_metrics is campaign x
@@ -217,10 +222,17 @@ export const marketingRepository = {
     // above already carries for ad_metrics, so it stays beside it rather
     // than inside the file whose whole point is "no direct selects here".
     async hasGrainMetrics(orgId, table) {
-        const DEEP_GRAIN_TABLES = new Set([
-            'ad_meta_adsets', 'ad_meta_ads', 'ad_google_adgroups', 'ad_google_ads', 'ad_google_keywords',
-        ]);
-        if (!DEEP_GRAIN_TABLES.has(table)) {
+        // Derived from the grain registry, NEVER re-listed here. A hardcoded
+        // copy of these five names is what took the Search terms tab down: the
+        // sixth grain was registered in ad-grain.repository.js, this allowlist
+        // was not updated, and the probe threw for every window in which the
+        // table was empty — which is every window before the first sync, i.e.
+        // exactly when this probe is the thing being asked.
+        //
+        // The allowlist itself stays: `table` reaches a .from() call, so it
+        // must never be caller-shaped. Deriving it keeps that guarantee while
+        // removing the copy that could drift.
+        if (!DEEP_GRAIN_TABLE_SET.has(table)) {
             throw new Error(`hasGrainMetrics: unknown deep-grain table '${table}'`);
         }
         const { data, error } = await supabase_1.serviceClient

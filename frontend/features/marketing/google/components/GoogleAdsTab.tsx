@@ -9,14 +9,16 @@
 // the ad's first responsive-search headline, so the first column finally says
 // what the ad actually says, and the rest of the creative is one click away in
 // the expansion panel.
+import { useState } from 'react';
 import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
 import { SectionHead } from '../../_shared/StatRail';
 import { Chip, humanise } from '../../_shared/Bars';
-import { num, DASH } from '../../_shared/format';
+import { money0, num, DASH } from '../../_shared/format';
 import { nameColumn, deliveryColumns } from './columns';
 import { BestPerformer, bestByCostPerConversion, unrankedNote } from '../../_shared/BestPerformer';
+import { DetailModal } from '../../_shared/DetailModal';
 import { GoogleTabFrame, ShowMore } from './GoogleTabFrame';
 import { useGoogleAds } from '../hooks';
 import type { GoogleAdRow } from '../api';
@@ -98,6 +100,7 @@ export function GoogleAdsTab({ parentId }: { parentId: string | null }) {
     data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
   } = useGoogleAds(parentId);
 
+  const [selected, setSelected] = useState<GoogleAdRow | null>(null);
   const first = data?.pages[0];
   const rows = data?.pages.flatMap((p) => p.rows) ?? [];
   const maxSpend = rows.reduce((m, r) => Math.max(m, r.spendPence), 0);
@@ -138,6 +141,13 @@ export function GoogleAdsTab({ parentId }: { parentId: string | null }) {
             second-best one: no lead in this system resolves to an individual
             ad, and none can until a click_view lookup by gclid is built. */}
         <BestPerformer
+          onOpen={() => {
+            const best = bestByCostPerConversion(rows.map((r) => ({
+              id: r.id, name: r.name, spendPence: r.spendPence,
+              conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+            })));
+            setSelected(rows.find((r) => r.id === best?.id) ?? null);
+          }}
           label="Best ad"
           row={bestByCostPerConversion(rows.map((r) => ({
             id: r.id, name: r.name, spendPence: r.spendPence,
@@ -161,10 +171,20 @@ export function GoogleAdsTab({ parentId }: { parentId: string | null }) {
             rowKey={(r) => `${r.id}-${r.parentId ?? ''}`}
             emptyState={<EmptyState message="No ads with spend in this window." />}
             rowTone={(r) => (r.spendPence > 0 ? 'default' : 'muted')}
-            renderExpanded={(r) => <AdCreative row={r} />}
+            onRowClick={setSelected}
           />
         </DeferUntilVisible>
       </div>
+
+      <DetailModal
+        open={selected !== null}
+        title={selected?.name ?? selected?.id ?? 'Ad'}
+        subtitle={selected && [selected.campaignName, selected.parentName,
+          `${money0(selected.spendPence)} spent`].filter(Boolean).join(' · ')}
+        onClose={() => setSelected(null)}
+      >
+        {selected && <AdCreative row={selected} />}
+      </DetailModal>
     </GoogleTabFrame>
   );
 }

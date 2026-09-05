@@ -27,18 +27,17 @@
 //    conversion under a spend) instead of the table growing another column
 //    that nobody reads.
 //
-//  * EXPANDABLE ROWS. `renderExpanded` opens a panel underneath the row, in
-//    place. This exists specifically because Google's hierarchy forks — an ad
-//    group has BOTH ads and keywords under it — so a click that navigated to
-//    one of them had to pick arbitrarily, which is exactly the behaviour that
-//    prompted this rewrite. Expanding shows both, and leaves the reader where
-//    they were.
+//  * A ROW CLICK OPENS A DIALOG, and this component does not own it. Detail
+//    used to expand in place here; it pushed the rest of the table down, and
+//    an expanded row had no close affordance, no Escape and nothing to return
+//    focus to — you could get in and not out. `onRowClick` hands the row to
+//    the caller, which renders ../_shared/DetailModal. See that file.
 //
 // The em-dash contract still lives in ./format.ts and is applied by the
 // caller's render functions, not here: this component lays out a grid and
 // takes no view on what a null means.
 // ============================================================================
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 
 export type GridColumn<R> = {
   key: string;
@@ -78,10 +77,8 @@ export function DataGrid<R>({
   rowKey,
   emptyState,
   defaultSort,
-  renderExpanded,
   onRowClick,
   rowTone,
-  openKey = null,
 }: {
   columns: GridColumn<R>[];
   rows: R[];
@@ -89,32 +86,14 @@ export function DataGrid<R>({
   rowKey: (row: R, index: number) => string;
   emptyState: ReactNode;
   defaultSort?: { key: string; dir: 'asc' | 'desc' };
-  /** When given, every row becomes expandable and this renders the panel. */
-  renderExpanded?: (row: R) => ReactNode;
-  /** Navigate on click instead of expanding. Mutually exclusive with
-   *  renderExpanded in practice — a row that both expands AND navigates gives
-   *  the reader no way to predict what a click does, which is the exact
-   *  complaint that started this rewrite. */
+  /** Called with the clicked row. The caller opens a dialog with it — this
+   *  component takes no view on what the detail looks like. */
   onRowClick?: (row: R) => void;
   /** 'muted' greys a row back — used for the "Not attributed" bucket, which
    *  belongs in the table but is not a campaign competing in it. */
   rowTone?: (row: R) => 'default' | 'muted';
-  /** Row keys to open on mount, and whenever this changes. Lets something
-   *  OUTSIDE the table — a highlight card naming one campaign — hand the
-   *  reader straight to that row already open, instead of dropping them at
-   *  the top of a table and leaving them to find it. */
-  openKey?: string | null;
 }) {
   const [sort, setSort] = useState<SortState>(defaultSort ?? null);
-  const [open, setOpen] = useState<Set<string>>(() => new Set(openKey ? [openKey] : []));
-
-  // ADDITIVE, never a replacement: this opens the requested row and leaves
-  // anything the reader opened themselves alone. Collapsing their work to
-  // honour a prop would be the table undoing what they just did.
-  useEffect(() => {
-    if (!openKey) return;
-    setOpen((cur) => (cur.has(openKey) ? cur : new Set(cur).add(openKey)));
-  }, [openKey]);
 
   const sorted = useMemo(() => {
     if (!sort) return rows;
@@ -172,72 +151,40 @@ export function DataGrid<R>({
                 </th>
               );
             })}
-            {(renderExpanded || onRowClick) && (
-              <th className="sticky top-0 z-10 w-8 border-b border-border bg-surface" />
-            )}
+            {onRowClick && <th className="sticky top-0 z-10 w-8 border-b border-border bg-surface" />}
           </tr>
         </thead>
         <tbody>
           {sorted.map((row, i) => {
             const key = rowKey(row, i);
-            const isOpen = open.has(key);
             const muted = rowTone?.(row) === 'muted';
             return (
-              // Fragment with a key, not a bare <>: a row and its expansion
-              // panel are two sibling <tr>s and React needs one key across
-              // both, or reordering after a sort re-mounts every open panel.
-              <Fragment key={key}>
-                <tr
-                  className={`group border-b border-border/70 transition-colors ${
-                    renderExpanded || onRowClick ? 'cursor-pointer hover:bg-brand-50/40' : ''
-                  } ${muted ? 'text-ink-muted' : ''}`}
-                  onClick={(() => {
-                    if (onRowClick) return () => onRowClick(row);
-                    if (!renderExpanded) return undefined;
-                    return () => setOpen((cur) => {
-                      const next = new Set(cur);
-                      if (next.has(key)) next.delete(key); else next.add(key);
-                      return next;
-                    });
-                  })()}
-                >
-                  {columns.map((c) => (
-                    <td
-                      key={c.key}
-                      className={`border-b border-border/70 px-3 py-2.5 align-top text-[13px] ${
-                        c.align === 'right' ? 'text-right tabular-nums' : 'text-left'
-                      } ${muted ? '' : 'text-ink'}`}
-                    >
-                      <div className="leading-tight">{c.render(row)}</div>
-                      {c.sub && (
-                        <div className="mt-0.5 text-[11px] leading-tight text-ink-muted">{c.sub(row)}</div>
-                      )}
-                    </td>
-                  ))}
-                  {(renderExpanded || onRowClick) && (
-                    <td className="border-b border-border/70 px-2 py-2.5 align-top text-ink-muted">
-                      {/* The affordance says which of the two things a click
-                          does: a chevron that ROTATES opens in place, a
-                          chevron that does not navigates. */}
-                      <span
-                        aria-hidden
-                        className={`inline-block transition-transform group-hover:text-brand ${
-                          renderExpanded && isOpen ? 'rotate-90' : ''
-                        }`}
-                      >
-                        ›
-                      </span>
-                    </td>
-                  )}
-                </tr>
-                {renderExpanded && isOpen && (
-                  <tr>
-                    <td colSpan={columns.length + 1} className="border-b border-border bg-bg/60 px-3 py-3">
-                      {renderExpanded(row)}
-                    </td>
-                  </tr>
+              <tr
+                key={key}
+                className={`group border-b border-border/70 transition-colors ${
+                  onRowClick ? 'cursor-pointer hover:bg-brand-50/40' : ''
+                } ${muted ? 'text-ink-muted' : ''}`}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
+              >
+                {columns.map((c) => (
+                  <td
+                    key={c.key}
+                    className={`border-b border-border/70 px-3 py-2.5 align-top text-[13px] ${
+                      c.align === 'right' ? 'text-right tabular-nums' : 'text-left'
+                    } ${muted ? '' : 'text-ink'}`}
+                  >
+                    <div className="leading-tight">{c.render(row)}</div>
+                    {c.sub && (
+                      <div className="mt-0.5 text-[11px] leading-tight text-ink-muted">{c.sub(row)}</div>
+                    )}
+                  </td>
+                ))}
+                {onRowClick && (
+                  <td className="border-b border-border/70 px-2 py-2.5 align-top text-ink-muted">
+                    <span aria-hidden className="inline-block transition-colors group-hover:text-brand">›</span>
+                  </td>
                 )}
-              </Fragment>
+              </tr>
             );
           })}
         </tbody>
