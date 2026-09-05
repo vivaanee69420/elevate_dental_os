@@ -460,25 +460,69 @@ async function loadPractitionerPracticeMap(orgId) {
 }
 
 // Build { dentally patient id -> contacts.id } for the org (source='dentally').
-// Paginated: PostgREST caps a select at 1000 rows, so without ranging the map
+// Paginated: PostgREST caps a select at 1000 rows, so without paging the map
 // would silently drop patients beyond the first 1000 and their payments/appts
 // would never link a contact.
-async function loadContactMap(orgId) {
+//
+// Paged by KEY, not by OFFSET. .range() makes the server re-walk every skipped
+// row, so building one whole-org map is quadratic in contact count — measured
+// on the live project, page 28 of a 28k-contact org cost 16,819 shared buffers
+// / 29.4ms, against 576 buffers / 5.2ms for the same page fetched by key.
+// pms_external_id is the third column of uq_contacts_src_ext and unique within
+// (organisation_id, source), so "the rows after the last one I saw" is both
+// well defined — no row skipped or repeated at a page boundary — and a plain
+// index seek. NULLs are excluded, so the cursor is never null.
+//
+// Only callers that genuinely need the WHOLE map should use this. To resolve
+// the handful of patients one event references, use contactMapFor.
+export async function loadContactMap(orgId) {
     const map = new Map();
     const PAGE = 1000;
-    for (let from = 0; ; from += PAGE) {
-        const { data, error } = await supabase_1.serviceClient
+    let after = null;
+    for (;;) {
+        let query = supabase_1.serviceClient
             .from('contacts')
             .select('id, pms_external_id')
             .eq('organisation_id', orgId)
             .eq('source', 'dentally')
             .not('pms_external_id', 'is', null)
-            .range(from, from + PAGE - 1);
+            .order('pms_external_id', { ascending: true })
+            .limit(PAGE);
+        if (after !== null) query = query.gt('pms_external_id', after);
+        const { data, error } = await query;
         if (error) throw new Error(error.message);
         const rows = data ?? [];
         for (const c of rows) map.set(String(c.pms_external_id), c.id);
         if (rows.length < PAGE) break;
+        after = rows[rows.length - 1].pms_external_id;
     }
+    return map;
+}
+
+// Resolve JUST the contacts one webhook event references, keyed exactly as
+// loadContactMap keys its map so the row builders below are untouched.
+//
+// The webhook path used to call loadContactMap(orgId) to answer a ONE-patient
+// question, paging the org's entire contact table to do it. On the live project
+// that single query was 65.6% of all database time (1,733,431 calls @ 114.9ms).
+// This lookup is covered end to end by uq_contacts_src_ext (organisation_id,
+// source, pms_external_id): measured at 3 shared buffers / 0.13ms against the
+// ~400,000 buffers and 2.5-3.5s a full map build costs for a 28k-contact org.
+//
+// An event with no patient (a diary block, a standalone invoice_item) issues no
+// query at all rather than a lookup that can only return nothing.
+async function contactMapFor(orgId, patientIds) {
+    const ids = [...new Set(patientIds.filter((v) => v != null).map(String))];
+    const map = new Map();
+    if (!ids.length) return map;
+    const { data, error } = await supabase_1.serviceClient
+        .from('contacts')
+        .select('id, pms_external_id')
+        .eq('organisation_id', orgId)
+        .eq('source', 'dentally')
+        .in('pms_external_id', ids);
+    if (error) throw new Error(`contact lookup: ${error.message}`);
+    for (const c of data ?? []) map.set(String(c.pms_external_id), c.id);
     return map;
 }
 
@@ -1443,7 +1487,10 @@ export async function applyWebhookEvent(orgId, resourceType, record, action = 'u
         await relinkPatientAppointments(orgId, record.id);
         return { table: 'contacts', applied: 1 };
     }
-    const contactMap = await loadContactMap(orgId);
+    // One event, one patient — not the whole org's contact table (see
+    // contactMapFor). invoice_item carries no patient_id and resolves its
+    // context from the parent invoice, so it issues no contact query at all.
+    const contactMap = await contactMapFor(orgId, [record.patient_id]);
     if (resourceType === 'appointment') {
         const practitionerMap = await loadPractitionerMap(orgId);
         const row = appointmentRow(orgId, record, siteMap, contactMap, practitionerMap);

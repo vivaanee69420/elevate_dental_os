@@ -42,11 +42,35 @@ const METRICS = 'metrics.cost_micros, metrics.impressions, metrics.clicks, metri
 // extensions among them, which for a dental practice is most of the point.
 const VALUE_METRICS = 'metrics.conversions_value, metrics.all_conversions';
 
-// The five impression-share ratios. search_impression_share alone says you
-// missed traffic; the two LOST shares say WHY, and they are different
-// instructions: budget-lost means raise the budget, rank-lost means raise the
-// bid or fix the ad. Google does not report any of them for an individual ad.
-const SHARE_METRICS = [
+// ============================================================================
+// WHICH METRIC EACH RESOURCE ACCEPTS — MEASURED AGAINST THE LIVE API, NOT
+// ASSUMED. Probed field by field on 2026-09-05 (customer 6846708190):
+//
+//                     conv_value  all_conv  phone_calls  impr_share  budget_lost  rank_lost
+//   campaign              yes       yes        yes          yes          YES        yes
+//   ad_group              yes       yes        yes          yes          no         yes
+//   ad_group_ad           yes       yes        no           no           no         no
+//   keyword_view          yes       yes        yes          yes          no         yes
+//   search_term_view      yes       yes        no           no           no         no
+//
+// search_budget_lost_impression_share is CAMPAIGN-ONLY, and that is not an
+// arbitrary API limit — a budget is a campaign-level object, so "share lost to
+// budget" is a fact about the campaign that an ad group merely inherits.
+//
+// THIS TABLE EXISTS BECAUSE GUESSING IT COST A REAL PULL. GAQL rejects the
+// WHOLE query on one unsupported field rather than omitting that column, so a
+// single wrong name takes the entire grain down. The first version of this
+// file asked every share of ad_group AND hedged by removing two from
+// keyword_view — both wrong, in opposite directions. All three ad-group pulls
+// fell back to the degraded shape and lost their conversion value with it,
+// while keywords silently went without a rank-lost share the API was happy to
+// give. Do not add a field to any list below without probing it first.
+// ============================================================================
+
+// Campaign grain only — see the table above. EXPORTED because the campaign
+// pull lives in google-ads-sync.js, and a second copy of this list there is
+// exactly the duplication that produced the degraded ad-group pull.
+export const CAMPAIGN_SHARE_METRICS = [
     'metrics.search_impression_share',
     'metrics.search_top_impression_share',
     'metrics.search_absolute_top_impression_share',
@@ -54,27 +78,15 @@ const SHARE_METRICS = [
     'metrics.search_rank_lost_impression_share',
 ].join(', ');
 
-// KEYWORDS GET THE THREE PROVEN ONES ONLY, NOT ALL FIVE. Deliberate, and the
-// reasoning matters more than the field list.
-//
-// The three below are the exact set 000148 has been pulling successfully since
-// it shipped. The two LOST shares are documented at campaign and ad group
-// grain; whether keyword_view accepts them is not something this codebase can
-// verify without a live call, and GAQL rejects an unknown or
-// grain-incompatible field by failing the WHOLE query rather than omitting the
-// column. Guessing wrong would therefore not lose two ratios — it would send
-// every keyword pull down the degraded fallback path permanently, costing the
-// keyword tier its conversion VALUE too, for a figure that is barely
-// meaningful there anyway: a budget is a campaign-level constraint, so
-// "budget-lost share" is a campaign fact that a keyword merely inherits.
-//
-// The rule this follows: an unverified field is only worth adding where being
-// wrong costs nothing. Here it would cost a working pull, so it waits until
-// someone can confirm it against the live API.
-const KEYWORD_SHARE_METRICS = [
+// Ad group AND keyword: everything except the budget-lost share. The
+// rank-lost one IS supported at both, and it is the more actionable of the
+// two at this depth anyway — it says raise the bid or improve the ad, which
+// is a decision an ad group can act on, where a budget is not.
+const SHARE_METRICS = [
     'metrics.search_impression_share',
     'metrics.search_top_impression_share',
     'metrics.search_absolute_top_impression_share',
+    'metrics.search_rank_lost_impression_share',
 ].join(', ');
 
 // Search terms are what people actually TYPED, as opposed to what we bid on.
@@ -254,7 +266,7 @@ export function buildKeywordGaql(since, until) {
         'ad_group_criterion.quality_info.post_click_quality_score,',
         'ad_group_criterion.quality_info.search_predicted_ctr,',
         'segments.date,', METRICS + ',',
-        VALUE_METRICS + ',', KEYWORD_SHARE_METRICS,
+        VALUE_METRICS + ',', SHARE_METRICS,
         `FROM keyword_view WHERE segments.date BETWEEN '${since}' AND '${until}'`,
     ].join(' ');
 }
@@ -478,7 +490,7 @@ export async function syncGoogleDeep(orgId, { accessToken, customerIds, since, u
 export const __test = {
     microsToPence, moneyToPence, conversions, assetTexts, shareMetrics,
     buildAdGroupGaql, buildAdGaql, buildKeywordGaql, buildSearchTermGaql,
-    SHARE_METRICS, KEYWORD_SHARE_METRICS,
+    SHARE_METRICS, CAMPAIGN_SHARE_METRICS,
     parseAdGroups, parseAds, parseKeywords, parseSearchTerms,
     DEEP_WINDOW_DAYS, SEARCH_TERM_WINDOW_DAYS, BASIC_GAQL,
     STREAM_GRAINS: STREAMS.map((s) => s.grain),

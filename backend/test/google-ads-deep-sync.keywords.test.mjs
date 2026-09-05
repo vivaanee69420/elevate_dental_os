@@ -122,32 +122,47 @@ describe('STREAMS', () => {
 });
 
 describe('impression-share fields by grain', () => {
-    // KEYWORDS ASK FOR THREE SHARES, CAMPAIGN AND AD GROUP ASK FOR FIVE, and
-    // the asymmetry is deliberate rather than an oversight — which is exactly
-    // why it is pinned here. Someone tidying these two constants into one
-    // would not be making a cosmetic change.
-    //
-    // The three on the keyword query are the set 000148 has pulled
-    // successfully since it shipped. Whether keyword_view also accepts the two
-    // LOST shares is not verifiable from this repo, and GAQL rejects an
-    // unknown or grain-incompatible field by failing the WHOLE query — so
-    // guessing wrong would not cost two ratios, it would send every keyword
-    // pull down the degraded fallback path permanently and take that tier's
-    // conversion VALUE with it. A budget is a campaign-level constraint
-    // anyway, so budget-lost share is a campaign fact a keyword only inherits.
-    it('asks keyword_view for only the three shares that are known to work', () => {
-        const gaql = __test.buildKeywordGaql('2026-08-01', '2026-08-31');
-        expect(gaql).toContain('metrics.search_impression_share');
-        expect(gaql).toContain('metrics.search_top_impression_share');
-        expect(gaql).toContain('metrics.search_absolute_top_impression_share');
-        expect(gaql).not.toContain('search_budget_lost_impression_share');
-        expect(gaql).not.toContain('search_rank_lost_impression_share');
+    // THE BUDGET-LOST SHARE IS CAMPAIGN-ONLY, MEASURED AGAINST THE LIVE API.
+    // Not a guess and not a hedge — see the support table in
+    // google-ads-deep-sync.js. GAQL rejects the WHOLE query on one
+    // grain-incompatible field, so asking ad_group for it took all three of
+    // this org's ad-group pulls down to the degraded fallback and cost them
+    // their conversion value too. These tests pin the measurement.
+    it('never asks ad_group or keyword_view for the campaign-only budget-lost share', () => {
+        for (const gaql of [
+            __test.buildAdGroupGaql('2026-08-01', '2026-08-31'),
+            __test.buildKeywordGaql('2026-08-01', '2026-08-31'),
+        ]) {
+            expect(gaql).not.toContain('search_budget_lost_impression_share');
+        }
     });
 
-    it('asks campaign-level grains for all five, including the two that say WHY share was lost', () => {
-        const gaql = __test.buildAdGroupGaql('2026-08-01', '2026-08-31');
-        expect(gaql).toContain('metrics.search_budget_lost_impression_share');
-        expect(gaql).toContain('metrics.search_rank_lost_impression_share');
+    // Supported at both, and the more actionable of the two at this depth: it
+    // says raise the bid or improve the ad, which an ad group can act on.
+    it('asks ad_group and keyword_view for the three shares plus rank-lost', () => {
+        for (const gaql of [
+            __test.buildAdGroupGaql('2026-08-01', '2026-08-31'),
+            __test.buildKeywordGaql('2026-08-01', '2026-08-31'),
+        ]) {
+            expect(gaql).toContain('metrics.search_impression_share');
+            expect(gaql).toContain('metrics.search_top_impression_share');
+            expect(gaql).toContain('metrics.search_absolute_top_impression_share');
+            expect(gaql).toContain('metrics.search_rank_lost_impression_share');
+        }
+    });
+
+    // Campaign is the ONLY grain that gets all five, and its list is imported
+    // from here rather than re-typed in google-ads-sync.js — a second copy is
+    // what caused the outage above.
+    it('keeps all five for campaign grain, budget-lost included', () => {
+        expect(__test.CAMPAIGN_SHARE_METRICS).toContain('search_budget_lost_impression_share');
+        expect(__test.CAMPAIGN_SHARE_METRICS).toContain('search_rank_lost_impression_share');
+    });
+
+    // Neither ads nor search terms accept ANY impression share.
+    it('never asks for an impression share where the resource reports none', () => {
+        expect(__test.buildAdGaql('2026-08-01', '2026-08-31')).not.toContain('impression_share');
+        expect(__test.buildSearchTermGaql('2026-08-01', '2026-08-31')).not.toContain('impression_share');
     });
 
     // Google reports no impression share for an individual ad at all, so

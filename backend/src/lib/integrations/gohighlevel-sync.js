@@ -525,10 +525,45 @@ export async function upsertOpportunity(orgId, opp, practiceId, stageMappings = 
     return { ok: true };
 }
 
+// { ghl_contact_id -> our contacts.id } for the org, and nothing else.
+//
+// The opportunity phases need only this map, but used to get it by building
+// the full dedup set below — pulling email, phone and attribution for every
+// contact in the org to answer a question idx_contacts_ghl_id
+// (organisation_id, ghl_contact_id) answers directly. Keyset-paged on that
+// index: measured at 1,010 shared buffers / 4.1ms per page, against 7,912 and
+// climbing for a deep OFFSET page of the wide select.
+export async function loadGhlContactMap(orgId) {
+    const map = new Map();
+    const PAGE = 1000;
+    let after = null;
+    for (;;) {
+        let query = supabase_1.serviceClient
+            .from('contacts').select('id, ghl_contact_id')
+            .eq('organisation_id', orgId)
+            .not('ghl_contact_id', 'is', null)
+            .order('ghl_contact_id', { ascending: true })
+            .limit(PAGE);
+        if (after !== null) query = query.gt('ghl_contact_id', after);
+        const { data } = await query;
+        const rows = data ?? [];
+        for (const c of rows) map.set(String(c.ghl_contact_id), c.id);
+        if (rows.length < PAGE) break;
+        after = rows[rows.length - 1].ghl_contact_id;
+    }
+    return map;
+}
+
 // Load the org's existing-contact dedup maps in ONE paginated scan, so the
 // contact pull can classify thousands of contacts in memory instead of issuing
 // 3 lookups per contact (which made an 8k-contact pull take ~an hour).
-async function loadContactDedupMaps(orgId) {
+//
+// Paged by KEY, not by OFFSET: .range() makes the server re-walk every skipped
+// row, so the scan was quadratic in contact count. This one covers ALL of the
+// org's contacts (email/phone dedup must see rows GHL has never touched), so
+// the cursor is the primary key rather than a narrower column — constant work
+// per page instead of work that grows with the page number.
+export async function loadContactDedupMaps(orgId) {
     const byGhl = new Map();   // ghl_contact_id -> our id
     const byEmail = new Map(); // lower(email)   -> { id, ghl }
     const byPhone = new Map(); // normphone      -> { id, ghl }
@@ -537,10 +572,15 @@ async function loadContactDedupMaps(orgId) {
     // them costs no extra API call.
     const needsAttribution = new Set();
     const PAGE = 1000;
-    for (let from = 0; ; from += PAGE) {
-        const { data } = await supabase_1.serviceClient
+    let after = null;
+    for (;;) {
+        let query = supabase_1.serviceClient
             .from('contacts').select('id, ghl_contact_id, email, phone, attribution_captured_at')
-            .eq('organisation_id', orgId).range(from, from + PAGE - 1);
+            .eq('organisation_id', orgId)
+            .order('id', { ascending: true })
+            .limit(PAGE);
+        if (after !== null) query = query.gt('id', after);
+        const { data } = await query;
         const rows = data ?? [];
         for (const c of rows) {
             if (c.ghl_contact_id) {
@@ -553,6 +593,7 @@ async function loadContactDedupMaps(orgId) {
             if (np && !byPhone.has(np)) byPhone.set(np, { id: c.id, ghl: c.ghl_contact_id });
         }
         if (rows.length < PAGE) break;
+        after = rows[rows.length - 1].id;
     }
     return { byGhl, byEmail, byPhone, needsAttribution };
 }
@@ -767,7 +808,7 @@ export async function syncOneOrg(orgId, integrationRow, onProgress = () => {}, {
         }
         // Resolve opp contacts from the already-synced contact book (one scan)
         // instead of 3 lookups per opportunity.
-        const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
+        const oppContactMap = await loadGhlContactMap(orgId);
         // Upsert opportunities in bounded-concurrency batches rather than one DB
         // round-trip at a time: a 2.6k-opp account was ~2.6k sequential awaits
         // (minutes of silent work that tripped the UI stall guard). Each upsert is
@@ -968,7 +1009,7 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
         } catch (err) {
             console.warn(`[gohighlevel] account ${accountId} workflows skipped: ${err?.message || err}`);
         }
-        const { byGhl: oppContactMap } = await loadContactDedupMaps(orgId);
+        const oppContactMap = await loadGhlContactMap(orgId);
         const sinceMs = since == null ? null : Date.parse(since);
         let synced = 0;
         for (const opp of opportunities) {
