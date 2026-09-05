@@ -1,43 +1,33 @@
 'use client';
 // ============================================================================
-// Google report — what the money bought.
+// Google report — the summary rail, the per-practice breakdown, and the list
+// of individual people behind any figure on it.
 //
 // Replaces GoogleLeadPerformanceCards. The figures, the comparison arithmetic
-// and every one of its guards are carried over unchanged; what is new is the
-// PER-CAMPAIGN breakdown (migration 000165) and the presentation.
+// and every one of its guards are carried over unchanged.
 //
-// WHAT THIS ANSWERS THAT THE PAGE COULD NOT ANSWER BEFORE
+// WHAT IS DELIBERATELY NOT HERE: the per-campaign table.
 //
-// Until now this section was practice-grain only, and said so at length: the
-// service header stated that a per-campaign Google cost per patient was not
-// buildable, because CallRail calls were believed to carry no ad linkage.
-// They carry three — the campaign name, the bid keyword and the gclid, all
-// captured from the click that produced the call. So the table below divides
-// each campaign's OWN spend by its OWN leads, bookings and accepted patients,
-// and sets the money those patients have actually paid beside it.
+// It was here, directly above the tab strip — and the tab strip's first tab is
+// Campaigns. So the same six campaigns were listed twice on one screen, in two
+// tables with different columns, and a reader had no way to know they were the
+// same rows. That is duplication, not depth.
 //
-// Measured on live data while building it, and this is the whole point of the
-// feature: one campaign took £3,616 and produced 52 leads, 1 accepted patient
-// and £213 collected; another took £1,941, produced 28 leads, 5 accepted
-// patients and £3,920 collected. At practice grain those two are one number.
+// The campaign table now lives on the Campaigns tab, where it carries BOTH the
+// money columns that used to be here and Google's own delivery columns that
+// were already there. One campaign, one row, one place. See
+// GoogleCampaignsTab.
 //
-// THE THREE THINGS THAT KEEP THIS HONEST
-//
-//  1. Leads that could not be tied to a campaign are shown, in their own row,
-//     sorted last. 178 of 553 land there today. Dropping them would make the
-//     campaign rows sum to fewer leads than the rail above and nothing would
-//     say so.
-//  2. That row's cost columns are blank, not £0.00 — it has no spend of its
-//     own, and £0.00 per lead would read as the cheapest campaign in the table.
-//  3. Coverage is stated in a footnote under the table, by resolution route,
-//     so nobody has to take a cost figure on faith.
+// What stays here is what has no campaign grain at all: the group totals, the
+// per-practice split (a practice is not a level of the campaign hierarchy —
+// it is a different axis entirely), and the click-through list of leads.
 // ============================================================================
 import { useMemo, useState } from 'react';
 import { EmptyState, SkeletonTable } from '@/components/ui';
 import { formatDate } from '@/lib/format';
 import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
 import { StatRail, FootNote, SectionHead, type Stat } from '../../_shared/StatRail';
-import { ShareBar, FunnelBar, Chip, humanise } from '../../_shared/Bars';
+import { Chip } from '../../_shared/Bars';
 import { money, money0, num, multiple, DASH } from '../../_shared/format';
 import {
   computeDelta, sourcesComparable, missingSources,
@@ -48,7 +38,7 @@ import { ComparePicker, type CompareWindow } from '../../_shared/ComparePicker';
 import {
   useGoogleLeadPerformance, useGoogleLeadPerformanceFor, useSelectedYmdWindow,
 } from '../hooks';
-import type { GoogleLeadPractice, GoogleLeadRow, GoogleCampaignPerformance } from '../api';
+import type { GoogleLeadPractice, GoogleLeadRow } from '../api';
 
 type Bucket = 'leads' | 'booked' | 'accepted';
 
@@ -103,12 +93,22 @@ function sourceCountsByPractice(leads: GoogleLeadRow[] | undefined): Map<string,
 
 const NO_SOURCES: SourceCounts = { ghl: 0, callrail: 0 };
 
-export function GooglePerformancePanel() {
-  // Owner-requested: off (the default) is the owner's own CPB/CPA definition
-  // (new patients only); on counts every match regardless, to see the
-  // exclusion's effect directly. Pure client-side state: the payload carries
-  // BOTH sets from ONE fetch, so flipping this costs no request.
-  const [includeExisting, setIncludeExisting] = useState(false);
+// `includeExisting` is owned by GoogleReportScreen and passed to BOTH this
+// panel and the Campaigns tab, rather than being local state here.
+//
+// It has to be: the campaign table moved onto the Campaigns tab (it used to
+// sit here, which meant the same campaigns were listed twice on one screen —
+// once above the tab strip and once inside it), and a toggle that changed the
+// rail's definition of "accepted" while the campaign table below kept the
+// other one would be two different questions answered on one page with no
+// sign that they differed.
+export function GooglePerformancePanel({
+  includeExisting,
+  onIncludeExistingChange,
+}: {
+  includeExisting: boolean;
+  onIncludeExistingChange: (v: boolean) => void;
+}) {
   const { data, isLoading, isError } = useGoogleLeadPerformance();
   const [openBucket, setOpenBucket] = useState<Bucket | null>(null);
   const [showPractices, setShowPractices] = useState(false);
@@ -179,6 +179,8 @@ export function GooglePerformancePanel() {
 
   const total = includeExisting ? data.totalAll : data.total;
   const practices = includeExisting ? data.practicesAll : data.practices;
+  // Read only for the Collected figure on the rail. The campaign TABLE lives
+  // on the Campaigns tab now — see this component's own header.
   const campaigns = includeExisting ? data.campaignsAll : data.campaigns;
 
   // A leads figure of 0 is ambiguous between "quiet period" and "nobody has
@@ -354,80 +356,6 @@ export function GooglePerformancePanel() {
     practiceCol('cpa', 'Cost / patient', (r) => r.cpaPence, money, 'lower-better'),
   ];
 
-  // The largest campaign spend in the table, for the share bar behind the name
-  // column. Computed over ATTRIBUTED rows only: the unattributed bucket has no
-  // spend, so including it changes nothing, but saying so here stops anyone
-  // later "fixing" the bar to include a row that can never have a value.
-  const maxCampaignSpend = campaigns.reduce((m, c) => Math.max(m, c.spendPence), 0);
-
-  const campaignColumns: GridColumn<GoogleCampaignPerformance>[] = [
-    {
-      key: 'name', header: 'Campaign', align: 'left', width: 'min-w-[240px]',
-      sortBy: (r) => r.campaignName ?? 'zzzz',
-      render: (r) => (
-        <span className={r.attributed ? 'font-medium text-ink' : 'italic'}>
-          {r.campaignName ?? (r.attributed ? r.campaignId : 'Not attributed')}
-        </span>
-      ),
-      // Channel type is load-bearing rather than decorative: it is what
-      // explains a blank keyword column and a blank impression share on the
-      // SAME row. A reader who can see "Performance max" understands the
-      // blank; one who cannot assumes the data is broken.
-      sub: (r) => (r.attributed
-        ? (
-          <span className="flex items-center gap-2">
-            {r.channelType && <Chip>{humanise(r.channelType)}</Chip>}
-            <ShareBar value={r.spendPence} max={maxCampaignSpend} />
-          </span>
-        )
-        : 'Leads with no resolvable campaign'),
-    },
-    {
-      key: 'spend', header: 'Spend', align: 'right', sortBy: (r) => r.spendPence,
-      render: (r) => (r.attributed ? money0(r.spendPence) : DASH),
-    },
-    {
-      key: 'funnel', header: 'Leads → patients', align: 'left', width: 'w-[132px]',
-      sortBy: (r) => r.leads,
-      render: (r) => (
-        <span className="flex items-baseline gap-1.5 tabular-nums">
-          <span className="font-medium">{num(r.leads)}</span>
-          <span className="text-ink-muted">→</span>
-          <span>{num(r.booked)}</span>
-          <span className="text-ink-muted">→</span>
-          <span className="font-medium">{num(r.accepted)}</span>
-        </span>
-      ),
-      sub: (r) => <FunnelBar leads={r.leads} booked={r.booked} accepted={r.accepted} />,
-    },
-    {
-      key: 'cpl', header: 'Cost / lead', align: 'right', sortBy: (r) => r.cplPence,
-      render: (r) => money(r.cplPence),
-    },
-    {
-      key: 'cpa', header: 'Cost / patient', align: 'right', sortBy: (r) => r.cpaPence,
-      render: (r) => money(r.cpaPence),
-      sub: (r) => (r.cpbPence === null ? null : `${money(r.cpbPence)} / booking`),
-    },
-    {
-      key: 'collected', header: 'Collected', align: 'right', sortBy: (r) => r.paidPence,
-      // Money in, set against money out. The one column on this page that is
-      // an outcome rather than a cost, so it carries the brand colour — and
-      // the only one, because a page where several things are coloured is a
-      // page where none of them mean anything.
-      render: (r) => (
-        <span className={r.paidPence > 0 ? 'font-medium text-brand-700' : ''}>
-          {money0(r.paidPence)}
-        </span>
-      ),
-      sub: (r) => (r.returnOnSpend === null ? null : `${multiple(r.returnOnSpend)} of spend`),
-    },
-  ];
-
-  const coverage = data.attribution;
-  const coveragePct = coverage.total > 0
-    ? Math.round((coverage.attributed / coverage.total) * 100) : null;
-
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -435,7 +363,7 @@ export function GooglePerformancePanel() {
           <input
             type="checkbox"
             checked={includeExisting}
-            onChange={(e) => setIncludeExisting(e.target.checked)}
+            onChange={(e) => onIncludeExistingChange(e.target.checked)}
             className="h-3.5 w-3.5 rounded border-border accent-brand"
           />
           Include existing patients
@@ -496,41 +424,6 @@ export function GooglePerformancePanel() {
           />
         </section>
       )}
-
-      <section className="flex flex-col gap-2">
-        <SectionHead
-          title="By campaign"
-          note="Each campaign's own spend against the patients it actually produced, and the money those patients have paid."
-        />
-        <DataGrid
-          columns={campaignColumns}
-          rows={campaigns}
-          rowKey={(r) => r.campaignId ?? UNMAPPED}
-          rowTone={(r) => (r.attributed ? 'default' : 'muted')}
-          emptyState={<EmptyState message="No Google campaign activity in this window." />}
-        />
-        <FootNote>
-          {coveragePct === null
-            ? 'No leads in this period, so there is nothing to attribute.'
-            : (
-              <>
-                {num(coverage.attributed)} of {num(coverage.total)} leads ({coveragePct}%) could be
-                tied to a campaign
-                {Object.keys(coverage.byRoute).length > 0 && (
-                  <>
-                    {' '}—{' '}
-                    {Object.entries(coverage.byRoute)
-                      .map(([route, n]) => `${num(n)} by ${ROUTE_LABEL[route] ?? route}`)
-                      .join(', ')}
-                  </>
-                )}
-                . The rest are listed as <span className="italic">Not attributed</span> so the rows
-                still add up to the totals above: a call with no campaign recorded, or a web form
-                whose landing page carried no Google campaign id.
-              </>
-            )}
-        </FootNote>
-      </section>
 
       {practiceRows.length > 1 && (
         <section className="flex flex-col gap-2">
