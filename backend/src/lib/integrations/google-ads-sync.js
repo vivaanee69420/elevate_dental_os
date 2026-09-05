@@ -486,6 +486,31 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         }
         if (deep.error) warnings.push(`deep-grain (ad group/ad/keyword) pull failed: ${deep.error}`);
 
+        // 4. A single GRAIN came back short while the rest of the pull
+        //    succeeded. This was the one remaining silent case, and it is not
+        //    hypothetical: three ad-group pulls fell back to their base field
+        //    set for a full run because the enriched query asked ad_group for
+        //    a campaign-only metric. Every count looked healthy, the
+        //    integration stayed green, and the only symptom was two columns
+        //    quietly missing from one tab.
+        //
+        //    DEGRADED IS REPORTED SEPARATELY FROM FAILED, because the two need
+        //    different actions. A failed grain has NO data and next run may
+        //    fix it. A degraded grain has data every night, for ever, minus
+        //    some columns — nothing will fix it but an edit, so it must not
+        //    read as transient.
+        const deepSkipped = deep.skipped ?? [];
+        const degraded = deepSkipped.filter((s) => String(s.grain).endsWith(':degraded'));
+        const grainFailed = deepSkipped.filter((s) => !String(s.grain).endsWith(':degraded'));
+        if (grainFailed.length) {
+            const grains = [...new Set(grainFailed.map((s) => s.grain))].join(', ');
+            warnings.push(`${grainFailed.length} deep-grain pull(s) failed this run (${grains}) — those tabs are serving the previous window.`);
+        }
+        if (degraded.length) {
+            const grains = [...new Set(degraded.map((s) => String(s.grain).replace(':degraded', '')))].join(', ');
+            warnings.push(`${degraded.length} deep-grain pull(s) fell back to base fields (${grains}) — the data is complete but the enriched columns (conversion value, impression share) are missing, and will stay missing every night until the query is fixed.`);
+        }
+
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'google_ads',
             warnings.length ? warnings.join(' | ').slice(0, 500) : null);
