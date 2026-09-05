@@ -38,7 +38,7 @@
 // caller's render functions, not here: this component lays out a grid and
 // takes no view on what a null means.
 // ============================================================================
-import { Fragment, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 export type GridColumn<R> = {
   key: string;
@@ -81,6 +81,7 @@ export function DataGrid<R>({
   renderExpanded,
   onRowClick,
   rowTone,
+  openKey = null,
 }: {
   columns: GridColumn<R>[];
   rows: R[];
@@ -98,9 +99,22 @@ export function DataGrid<R>({
   /** 'muted' greys a row back — used for the "Not attributed" bucket, which
    *  belongs in the table but is not a campaign competing in it. */
   rowTone?: (row: R) => 'default' | 'muted';
+  /** Row keys to open on mount, and whenever this changes. Lets something
+   *  OUTSIDE the table — a highlight card naming one campaign — hand the
+   *  reader straight to that row already open, instead of dropping them at
+   *  the top of a table and leaving them to find it. */
+  openKey?: string | null;
 }) {
   const [sort, setSort] = useState<SortState>(defaultSort ?? null);
-  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  const [open, setOpen] = useState<Set<string>>(() => new Set(openKey ? [openKey] : []));
+
+  // ADDITIVE, never a replacement: this opens the requested row and leaves
+  // anything the reader opened themselves alone. Collapsing their work to
+  // honour a prop would be the table undoing what they just did.
+  useEffect(() => {
+    if (!openKey) return;
+    setOpen((cur) => (cur.has(openKey) ? cur : new Set(cur).add(openKey)));
+  }, [openKey]);
 
   const sorted = useMemo(() => {
     if (!sort) return rows;

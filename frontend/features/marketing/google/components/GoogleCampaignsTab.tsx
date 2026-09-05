@@ -29,6 +29,7 @@
 // can predate the window. Those rows say so in words rather than leaving the
 // reader to wonder why a campaign with no spend has patients.
 // ============================================================================
+import { useState } from 'react';
 import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import type { UseQueryResult } from '@tanstack/react-query';
@@ -39,9 +40,11 @@ import {
   money, money0, num, ctr, multiple, conversions as fmtConversions, DASH,
 } from '../../_shared/format';
 import { GoogleTabFrame } from './GoogleTabFrame';
+import { CampaignHighlights } from './CampaignHighlights';
+import { CampaignLeads } from './CampaignLeads';
 import { useGoogleLeadPerformance } from '../hooks';
 import type {
-  GoogleCampaignsPayload, GoogleCampaignRow, GoogleCampaignPerformance,
+  GoogleCampaignsPayload, GoogleCampaignRow, GoogleCampaignPerformance, GoogleLeadRow,
 } from '../api';
 
 // The unattributed bucket's row key. It has a null campaignId by definition,
@@ -150,6 +153,12 @@ export function GoogleCampaignsTab({
   // key, so this costs no request. Reading it here rather than threading the
   // rows down as props keeps the tab able to render on its own.
   const perf = useGoogleLeadPerformance();
+  // Set by the highlight cards, which name a campaign and then hand the reader
+  // straight to its row already open — rather than dropping them at the top of
+  // the table to go and find it.
+  const [openKey, setOpenKey] = useState<string | null>(null);
+
+  const allLeads: GoogleLeadRow[] = perf.data?.state === 'ok' ? perf.data.leads : [];
 
   const performance = perf.data?.state === 'ok'
     ? (includeExisting ? perf.data.campaignsAll : perf.data.campaigns)
@@ -267,10 +276,15 @@ export function GoogleCampaignsTab({
         </FootNote>
       )}
     >
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-4">
+        {/* The winners sit WITH the table they summarise, not above the tab
+            strip. A card naming a campaign in one place and a table listing it
+            in another is how this page ended up showing the same six campaigns
+            twice; keeping them together is the rule now, at every tier. */}
+        <CampaignHighlights campaigns={performance} onOpenCampaign={setOpenKey} />
         <SectionHead
           title="Campaigns"
-          note="What each campaign cost and what it produced. Open a row for Google's own delivery figures, or to see its ad groups."
+          note="What each campaign cost and what it produced. Open a row for Google's own delivery and the people it brought in."
           right={<span className="text-[12px] text-ink-muted">{num(rows.length)} rows</span>}
         />
         <DeferUntilVisible minHeight={360}>
@@ -285,9 +299,20 @@ export function GoogleCampaignsTab({
             // a click that silently picked one is exactly the behaviour that
             // made the old ad-group row feel arbitrary. The panel shows the
             // first and offers the second as an explicit link.
+            openKey={openKey}
             renderExpanded={(r) => (
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-5">
                 <Delivery row={r} />
+                {/* THE PEOPLE BEHIND THE NUMBER. The row says a campaign
+                    produced 5 patients; this says who they were, what they
+                    came for and what they have paid. The rows are already
+                    fetched — each lead carries its own campaignId (migration
+                    000165) — so opening this costs no request. */}
+                <CampaignLeads
+                  leads={allLeads}
+                  campaignId={r.campaignId}
+                  attributed={r.attributed}
+                />
                 {r.attributed && r.campaignId && (
                   <button
                     type="button"
