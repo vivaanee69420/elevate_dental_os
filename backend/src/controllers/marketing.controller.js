@@ -234,6 +234,21 @@ export async function getGoogleKeywords(req, res, next) {
     } catch (err) { next(err); }
 }
 
+// FIFTH GRAIN, and the only one whose window is its own: search terms are kept
+// for 30 days, not the 92 every other deep grain holds (see the service's
+// clampSearchTermWindow and the connector's SEARCH_TERM_WINDOW_DAYS). The
+// clamp is applied and REPORTED in the payload, never silently.
+export async function getGoogleSearchTerms(req, res, next) {
+    try {
+        const q = GoogleQuerySchema.parse(req.query);
+        const data = await googleReportService.searchTerms(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+            campaignId: q.campaignId ?? null, parentId: q.parentId ?? null, cursor: q.cursor ?? null,
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
 // Same query shape as the four grain routes — since/until optional
 // YYYY-MM-DD, practice_id optional. campaignId/parentId/cursor are accepted
 // (GoogleQuerySchema.strip()) but unused here: this endpoint has no

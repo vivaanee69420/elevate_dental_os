@@ -56,7 +56,37 @@ describe('parseAdGroups', () => {
             parent_id: '7', entity_id: '42', entity_name: 'Exact', entity_status: 'ENABLED',
             metric_date: '2026-08-01',
             spend_pence: 1234, impressions: 900, clicks: 45, conversions: 3.5,
+            // Google reported none of the enriched fields on this row, and
+            // every one of them comes back NULL rather than 0. That is the
+            // assertion worth making: ad_google_rollup filters its weighted
+            // impression-share denominator on exactly this nullness, so a 0
+            // here would drag every reported share downward, and a 0
+            // conversion value would price an unpriceable campaign at nothing.
+            conversions_value_pence: null, all_conversions: null,
+            search_impression_share: null, search_top_impression_share: null,
+            search_absolute_top_impression_share: null,
+            search_budget_lost_impression_share: null, search_rank_lost_impression_share: null,
         }]);
+    });
+
+    it('carries conversion value, all-conversions and all five impression shares', () => {
+        const [row] = __test.parseAdGroups([{ results: [{
+            campaign: { id: 7 }, adGroup: { id: 42 }, segments: { date: '2026-08-01' },
+            metrics: {
+                conversions: 2, conversionsValue: 1234.5, allConversions: 3.5,
+                searchImpressionShare: 0.62, searchTopImpressionShare: 0.41,
+                searchAbsoluteTopImpressionShare: 0.18,
+                searchBudgetLostImpressionShare: 0.25, searchRankLostImpressionShare: 0.13,
+            },
+        }] }], { orgId: ORG, customerId: 'C1' });
+        // Value arrives in whole account-currency units, not micros — pence is
+        // x100, not /10,000. Getting this backwards would be off by 10,000x
+        // and still look like a plausible number.
+        expect(row.conversions_value_pence).toBe(123450);
+        expect(row.all_conversions).toBe(3.5);
+        expect(row.search_impression_share).toBe(0.62);
+        expect(row.search_budget_lost_impression_share).toBe(0.25);
+        expect(row.search_rank_lost_impression_share).toBe(0.13);
     });
 
     it('keeps conversions fractional rather than rounding', () => {
@@ -97,7 +127,94 @@ describe('parseAds', () => {
             parent_id: '42', entity_id: '99', entity_name: 'Headline A', entity_status: 'ENABLED',
             metric_date: '2026-08-01',
             spend_pence: 500, impressions: 10, clicks: 1, conversions: 0,
+            conversions_value_pence: null, all_conversions: null,
+            ad_type: null, ad_strength: null, approval_status: null,
+            final_url: null, headlines: null, descriptions: null,
         }]);
+    });
+
+    // THE REASON THE CREATIVE PULL EXISTS. ad_group_ad.ad.name is an optional
+    // internal label and almost nobody sets one: 0 of 186 ads in this org's
+    // live tables had a name, so the Ads tab rendered a bare 12-digit id on
+    // every row. The first responsive-search headline is what a human calls
+    // that ad, and it is the fallback.
+    it('names an unnamed ad after its first headline', () => {
+        const [row] = __test.parseAds([{ results: [{
+            campaign: { id: 7 }, adGroup: { id: 42 },
+            adGroupAd: {
+                ad: {
+                    id: 99,
+                    type: 'RESPONSIVE_SEARCH_AD',
+                    finalUrls: ['https://example.test/implants', 'https://example.test/alt'],
+                    responsiveSearchAd: {
+                        headlines: [{ text: 'Dental Implants in Ashford' }, { text: 'Book Today' }],
+                        descriptions: [{ text: 'Free consultation.' }],
+                    },
+                },
+                status: 'ENABLED', adStrength: 'GOOD',
+                policySummary: { approvalStatus: 'APPROVED' },
+            },
+            segments: { date: '2026-08-01' },
+            metrics: {},
+        }] }], { orgId: ORG, customerId: 'C1' });
+
+        expect(row.entity_name).toBe('Dental Implants in Ashford');
+        // Flattened to plain strings — no reader should have to know about
+        // Google's {text, pinnedField} asset shape.
+        expect(row.headlines).toEqual(['Dental Implants in Ashford', 'Book Today']);
+        expect(row.descriptions).toEqual(['Free consultation.']);
+        // An ad may declare several final URLs; the FIRST is stored, and the
+        // column is named for what it is rather than pretending to be "the" URL.
+        expect(row.final_url).toBe('https://example.test/implants');
+        expect(row.ad_strength).toBe('GOOD');
+        expect(row.approval_status).toBe('APPROVED');
+    });
+
+    // The advertiser's own label wins when they set one — the headline is a
+    // FALLBACK, not a replacement.
+    it('prefers an explicit ad name over the headline', () => {
+        const [row] = __test.parseAds([{ results: [{
+            campaign: { id: 7 }, adGroup: { id: 42 },
+            adGroupAd: {
+                ad: { id: 99, name: 'Q3 promo', responsiveSearchAd: { headlines: [{ text: 'Book Today' }] } },
+                status: 'ENABLED',
+            },
+            segments: { date: '2026-08-01' }, metrics: {},
+        }] }], { orgId: ORG, customerId: 'C1' });
+        expect(row.entity_name).toBe('Q3 promo');
+    });
+});
+
+describe('parseSearchTerms', () => {
+    it('identifies a search term by its TEXT and parents it on the ad group', () => {
+        const [row] = __test.parseSearchTerms([{ results: [{
+            campaign: { id: 7, name: 'Implants' },
+            adGroup: { id: 42, name: 'Exact' },
+            searchTermView: { searchTerm: 'emergency dentist near me', status: 'NONE' },
+            segments: {
+                date: '2026-08-01',
+                keyword: { info: { text: 'emergency dentist', matchType: 'PHRASE' } },
+            },
+            metrics: { costMicros: '2500000', impressions: '30', clicks: '4', conversions: 1 },
+        }] }], { orgId: ORG, customerId: 'C1' });
+
+        // Google gives a search term no id — it is not an object in the
+        // account, it is a string a stranger typed — so the text IS the
+        // identity, and (ad group, text, day) is the unique key.
+        expect(row.entity_id).toBe('emergency dentist near me');
+        expect(row.parent_id).toBe('42');
+        // The actionable half: which keyword caught this term.
+        expect(row.keyword_text).toBe('emergency dentist');
+        expect(row.match_type).toBe('PHRASE');
+        expect(row.search_term_status).toBe('NONE');
+        expect(row.spend_pence).toBe(250);
+    });
+
+    it('drops a row with no search term text', () => {
+        expect(__test.parseSearchTerms([{ results: [{
+            campaign: { id: 7 }, adGroup: { id: 42 },
+            searchTermView: {}, segments: { date: '2026-08-01' }, metrics: {},
+        }] }], { orgId: ORG, customerId: 'C1' })).toEqual([]);
     });
 });
 

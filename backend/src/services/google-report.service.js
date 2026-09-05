@@ -78,6 +78,11 @@ import { createTtlCache } from "../lib/ttl-cache.js";
 // drift. See clampWindow's own comment in facebook-report.service.js for why
 // the window must be clamped to what the deep-grain tables can cover at all.
 import { clampWindow } from "./facebook-report.service.js";
+// The search-term grain's own, SHALLOWER window. Imported from the connector
+// that fills the table rather than re-declared, so the page can never claim to
+// show a period the sync does not pull.
+import { SEARCH_TERM_WINDOW_DAYS } from "../lib/integrations/google-ads-deep-sync.js";
+import { londonDaysAgo, londonYmd } from "../lib/tz.js";
 
 const PROVIDER = 'google_ads';
 
@@ -187,6 +192,116 @@ function practiceLeadPerformance(spendRows, ledgerRows, includeExisting = false)
     return [...byPractice.values()].map(withLeadCosts);
 }
 
+// The bucket every lead that could not be tied to a campaign falls into.
+//
+// A SENTINEL RATHER THAN A DROP, deliberately. If unattributed leads simply
+// vanished from the per-campaign table, the campaign rows would sum to fewer
+// leads than the practice card directly above them and the difference would be
+// invisible. 178 of 553 leads land here on live data today; hiding them would
+// overstate every campaign's conversion rate by making the denominator smaller
+// than the truth. Same discipline as the reconciliation panel: a visible gap is
+// recoverable, a total that looks right and is not is not.
+const UNATTRIBUTED = '__unattributed__';
+
+// Per-CAMPAIGN cost per lead / booking / accepted patient.
+//
+// This is the figure the Google page has never been able to show. Until
+// migration 000165 the file header said plainly it was not buildable — CallRail
+// calls were believed to carry no campaign linkage. They do: the campaign name,
+// the bid keyword and the gclid, captured from the click.
+//
+// A LEFT-JOIN-SHAPED MERGE, from spend outward. A campaign can legitimately
+// have spend and no leads (a quiet week, a brand campaign) and leads with no
+// spend in the window (someone who clicked last month and rang this month), and
+// both must survive into the output — an inner join would silently delete the
+// most interesting rows in the table.
+function campaignLeadPerformance(campaignRows, ledgerRows, includeExisting = false) {
+    const byCampaign = new Map();
+    const touch = (id, name, extra = {}) => {
+        let row = byCampaign.get(id);
+        if (!row) {
+            row = {
+                campaignId: id === UNATTRIBUTED ? null : id,
+                campaignName: name ?? null,
+                channelType: null,
+                attributed: id !== UNATTRIBUTED,
+                spendPence: 0, impressions: 0, clicks: 0, conversions: 0,
+                leads: 0, booked: 0, accepted: 0, paidPence: 0,
+                ...extra,
+            };
+            byCampaign.set(id, row);
+        }
+        if (!row.campaignName && name) row.campaignName = name;
+        return row;
+    };
+
+    for (const c of campaignRows ?? []) {
+        const row = touch(c.entity_id, c.entity_name);
+        row.channelType = c.objective ?? null;
+        row.spendPence += Number(c.spend_pence ?? 0);
+        row.impressions += Number(c.impressions ?? 0);
+        row.clicks += Number(c.clicks ?? 0);
+        row.conversions += Number(c.conversions ?? 0);
+    }
+
+    for (const l of ledgerRows ?? []) {
+        const row = touch(l.campaign_id ?? UNATTRIBUTED, l.campaign_name);
+        row.leads += 1;
+        const eligible = includeExisting || l.is_new_patient;
+        if (!eligible) continue;
+        if (l.booked) row.booked += 1;
+        if (l.accepted) row.accepted += 1;
+        // Money actually collected from the patients this campaign brought in.
+        // Counted for every eligible lead, not only the ones over the
+        // acceptance floor: a patient who paid £35 paid £35, and zeroing them
+        // because they sit below a threshold set for a DIFFERENT question
+        // would understate real revenue.
+        row.paidPence += Number(l.paid_pence ?? 0);
+    }
+
+    return [...byCampaign.values()].map((r) => {
+        // The unattributed bucket has, by definition, no spend of its own —
+        // its leads' spend is sitting in the real campaign rows. Dividing its
+        // £0 by its leads yields "£0.00 per lead", which reads as the cheapest
+        // campaign in the table and is the exact opposite of what it means.
+        // Unknowable, so null.
+        const costs = r.attributed
+            ? {
+                cplPence: perUnitPence(r.spendPence, r.leads),
+                cpbPence: perUnitPence(r.spendPence, r.booked),
+                cpaPence: perUnitPence(r.spendPence, r.accepted),
+                // Collected money against money spent. Null rather than 0 on
+                // no spend — a return on nothing is not a return of zero.
+                returnOnSpend: r.spendPence > 0 ? r.paidPence / r.spendPence : null,
+            }
+            : { cplPence: null, cpbPence: null, cpaPence: null, returnOnSpend: null };
+        return { ...r, ...costs, ctr: ratio(r.clicks, r.impressions) };
+    });
+}
+
+// How each attributed lead was resolved, and how many were not resolved at all.
+//
+// Published on the payload so the page can STATE its coverage rather than ask
+// anyone to trust a per-campaign cost figure on faith, and so a regression —
+// a campaign renamed in a way the alias lookup misses, a CallRail tracking
+// template someone edits — shows up as a visible shift in this mix instead of
+// as a silent drift in cost per patient.
+function attributionCoverage(ledgerRows) {
+    const out = { total: 0, attributed: 0, byRoute: {}, unattributedBySource: {} };
+    for (const l of ledgerRows ?? []) {
+        out.total += 1;
+        if (l.campaign_id) {
+            out.attributed += 1;
+            const route = l.attribution ?? 'unknown';
+            out.byRoute[route] = (out.byRoute[route] ?? 0) + 1;
+        } else {
+            const src = l.source ?? 'unknown';
+            out.unattributedBySource[src] = (out.unattributedBySource[src] ?? 0) + 1;
+        }
+    }
+    return out;
+}
+
 function sumPracticeRows(rows) {
     const base = (rows ?? []).reduce((acc, r) => ({
         spendPence: acc.spendPence + r.spendPence,
@@ -215,44 +330,35 @@ function withCosts(base, spendPence, impressions, clicks, conversions) {
     };
 }
 
-// RULING A analogue (facebook-report.service.js): ad_metrics is campaign x
-// DAY for google_ads exactly as it is for meta_ads, so
-// campaignSpendByProvider returns one row per campaign per day, never one row
-// per campaign. Collapse before anything downstream treats a row as "the
-// campaign" — same reasoning, same latest-day status pick, plus conversions
-// summed alongside spend/impressions/clicks (the one extra field this task
-// needs that the Facebook collapse does not carry).
-function collapseByCampaign(spendRows) {
-    const byCampaign = new Map();
-    for (const r of spendRows ?? []) {
-        const id = r.campaign_id;
-        const acc = byCampaign.get(id) ?? {
-            campaign_id: id,
-            campaign_name: r.campaign_name ?? null,
-            campaign_status: null,
-            _statusDate: null,
-            spend_pence: 0,
-            impressions: 0,
-            clicks: 0,
-            conversions: 0,
-        };
-        acc.spend_pence += Number(r.spend_pence ?? 0);
-        acc.impressions += Number(r.impressions ?? 0);
-        acc.clicks += Number(r.clicks ?? 0);
-        acc.conversions += Number(r.conversions ?? 0);
-        if (!acc.campaign_name && r.campaign_name) acc.campaign_name = r.campaign_name;
-        // Same per-day stamping quirk as Facebook's collapse: campaign_status
-        // is written as it stood on the day of that row, so the only
-        // defensible collapse is the LATEST day's, picked explicitly by
-        // metric_date — never by row order (ad_metrics.id is a random uuid).
-        const d = r.metric_date ?? null;
-        if (r.campaign_status && (acc._statusDate === null || (d !== null && d >= acc._statusDate))) {
-            acc.campaign_status = r.campaign_status;
-            acc._statusDate = d;
-        }
-        byCampaign.set(id, acc);
-    }
-    return [...byCampaign.values()];
+// The fields migration 000164 added, mapped identically at every grain.
+//
+// EVERY ONE OF THESE CAN LEGITIMATELY BE NULL, and null here means "Google
+// does not report this at this grain", not "zero". Impression share does not
+// exist for an individual ad; conversion value does not exist for a campaign
+// with no value-tracking conversion action configured. Coercing either to 0
+// would render as a confident, wrong number — an ad with 0% impression share
+// reads as "you are invisible", which is a very different claim from "Google
+// does not measure this here".
+//
+// ROAS is derived, not stored, and is null unless BOTH sides are known: a
+// return on spend where the return is unknown is not 0x.
+function googleExtras(g) {
+    const valuePence = numOrNull(g.conversions_value_pence);
+    const spendPence = Number(g.spend_pence ?? 0);
+    return {
+        conversionsValuePence: valuePence,
+        allConversions: numOrNull(g.all_conversions),
+        roas: valuePence !== null && spendPence > 0 ? valuePence / spendPence : null,
+        searchImpressionShare: numOrNull(g.search_impression_share),
+        searchTopImpressionShare: numOrNull(g.search_top_impression_share),
+        searchAbsoluteTopImpressionShare: numOrNull(g.search_absolute_top_impression_share),
+        // The two that say WHY share was missed. They are the actionable half:
+        // budget-lost means raise the budget, rank-lost means raise the bid or
+        // improve the ad. Reporting the headline share without them tells an
+        // owner they have a problem and not which lever moves it.
+        searchBudgetLostImpressionShare: numOrNull(g.search_budget_lost_impression_share),
+        searchRankLostImpressionShare: numOrNull(g.search_rank_lost_impression_share),
+    };
 }
 
 // RULING B analogue: adAccountsForProvider is already provider-scoped and
@@ -291,6 +397,12 @@ function excludedAccountsOf(accounts) {
 // PARENT (the campaign), a different id from the ad/keyword-tier `parentId`
 // argument (an ad group id) — passing it through would filter ad groups by
 // campaign parentage using an ad-group id, which matches nothing.
+//
+// Deliberately on the LIGHTER ad_grain_rollup, not googleRollup: this needs
+// entity_id -> entity_name and nothing else, and ad_google_rollup computes
+// five weighted impression-share averages and a conversion-value sum per row
+// on the way to returning them. Paying for that to read a label would be
+// waste, and the two functions agree on the columns this actually uses.
 async function parentAdGroupNames(orgId, win, practiceId, campaignId) {
     const groupRows = await adGrainRepository.rollup(orgId, 'google_adgroup', {
         since: win.since, until: win.until, practiceId, campaignId,
@@ -389,11 +501,51 @@ async function loadLeadPerformanceData(orgId, since, until) {
     ]));
 }
 
+// Campaign-grain spend for the SAME window the cards use.
+//
+// A SECOND cache rather than a third element of loadLeadPerformanceData's,
+// because this one is practice-PARAMETERISED and those two are not. The pair
+// above is fetched org-wide once and narrowed in JS, so that switching
+// practice costs no request; folding a practice-keyed fetch into the same
+// entry would make every practice switch re-run the ~1s ledger query for no
+// reason.
+const campaignSpendCache = createTtlCache({ ttlMs: 60_000, max: 300 });
+
+async function loadCampaignSpend(orgId, since, until, practiceId) {
+    const key = `${orgId}|${since}|${until}|${practiceId ?? ''}`;
+    const hit = campaignSpendCache.get(key);
+    if (hit) return hit;
+    return campaignSpendCache.set(
+        key,
+        await adGrainRepository.googleCampaignRollup(orgId, { since, until, practiceId }),
+    );
+}
+
 // Test seam and sync hook: drop one org's cached lead-performance data (or
 // all of them) — same shape as facebook-report.service.js's
 // invalidateFunnelCache.
 export function invalidateLeadPerformanceCache(orgId) {
     leadPerformanceCache.invalidate(orgId ? `${orgId}|` : undefined);
+    campaignSpendCache.invalidate(orgId ? `${orgId}|` : undefined);
+}
+
+// clampWindow, but to the SEARCH-TERM table's own 30-day window rather than
+// the 92-day one every other deep grain keeps. Same string-compare-on-
+// YYYY-MM-DD reasoning as clampWindow itself: that format sorts
+// lexicographically, and constructing a Date here would reintroduce a
+// timezone. Deliberately a second function and not a parameter on clampWindow:
+// that one is exported and shared with the Facebook report, and widening its
+// signature to serve one Google tab is how a shared clamp starts drifting.
+function clampSearchTermWindow(since, until) {
+    const floor = londonDaysAgo(SEARCH_TERM_WINDOW_DAYS);
+    const effectiveSince = !since || since < floor ? floor : since;
+    return {
+        since: effectiveSince,
+        until: until || londonYmd(),
+        effectiveSince,
+        windowClamped: Boolean(since) && since < floor,
+        windowDays: SEARCH_TERM_WINDOW_DAYS,
+    };
 }
 
 // The two approximations keywords() carries, stated so the UI can print them
@@ -414,9 +566,15 @@ export const googleReportService = {
         if (accounts.length === 0) return notConnected(win, { totals: null });
 
         const excludedAccounts = excludedAccountsOf(accounts);
-        const spendRowsRaw = await marketingRepository.campaignSpendByProvider(
-            orgId, win.since, win.until, PROVIDER, null, practiceId);
-        const spendRows = collapseByCampaign(spendRowsRaw);
+        // ad_google_campaign_rollup, NOT campaignSpendByProvider +
+        // collapseByCampaign. The impression-share figures are IMPRESSION-
+        // WEIGHTED AVERAGES over the days Google actually reported one, and
+        // that weighting cannot be reconstructed after the fact from rows a
+        // plain select returns — the per-day denominators are gone by then.
+        // Doing it in SQL also drops one JS collapse of campaign x day rows.
+        const spendRows = await adGrainRepository.googleCampaignRollup(orgId, {
+            since: win.since, until: win.until, practiceId,
+        });
         if (spendRows.length === 0) {
             return {
                 state: await emptyWindowState(orgId), rows: [], excludedAccounts, totals: null,
@@ -424,18 +582,51 @@ export const googleReportService = {
             };
         }
 
-        const rows = spendRows.map((s) => withCosts(
-            { id: s.campaign_id, name: s.campaign_name ?? null, status: s.campaign_status ?? null },
-            Number(s.spend_pence ?? 0), Number(s.impressions ?? 0), Number(s.clicks ?? 0), Number(s.conversions ?? 0),
-        ));
+        const rows = spendRows.map((s) => ({
+            ...withCosts(
+                {
+                    id: s.entity_id, name: s.entity_name ?? null, status: s.entity_status ?? null,
+                    // Google's channel type (SEARCH / PERFORMANCE_MAX /
+                    // DISPLAY / VIDEO). Load-bearing on the page, not
+                    // decoration: it is what explains a blank keyword column
+                    // and a blank impression share on the same row, so the
+                    // reader sees "Performance Max has no keywords" instead of
+                    // "our data is missing".
+                    channelType: s.objective ?? null,
+                },
+                Number(s.spend_pence ?? 0), Number(s.impressions ?? 0),
+                Number(s.clicks ?? 0), Number(s.conversions ?? 0),
+            ),
+            ...googleExtras(s),
+            phoneCalls: numOrNull(s.phone_calls),
+        }));
 
-        const totals = withCosts(
-            { id: null, name: null, status: null },
-            rows.reduce((n, r) => n + r.spendPence, 0),
-            rows.reduce((n, r) => n + r.impressions, 0),
-            rows.reduce((n, r) => n + r.clicks, 0),
-            rows.reduce((n, r) => n + r.conversions, 0),
-        );
+        // SUMS ARE SUMMED; RATIOS ARE NOT. Spend, impressions, clicks,
+        // conversions and value add up across campaigns. Impression share does
+        // NOT — it is a proportion of each campaign's own eligible auctions,
+        // and an average of proportions over different denominators is a
+        // number with no referent. So the totals row carries the additive
+        // fields and leaves every share null rather than inventing a
+        // group-level figure Google itself does not publish.
+        const sum = (f) => rows.reduce((n, r) => n + (Number(r[f]) || 0), 0);
+        const anyValue = rows.some((r) => r.conversionsValuePence !== null);
+        const totalValuePence = anyValue ? sum('conversionsValuePence') : null;
+        const totalSpend = sum('spendPence');
+        const totals = {
+            ...withCosts(
+                { id: null, name: null, status: null, channelType: null },
+                totalSpend, sum('impressions'), sum('clicks'), sum('conversions'),
+            ),
+            conversionsValuePence: totalValuePence,
+            allConversions: rows.some((r) => r.allConversions !== null) ? sum('allConversions') : null,
+            roas: totalValuePence !== null && totalSpend > 0 ? totalValuePence / totalSpend : null,
+            phoneCalls: rows.some((r) => r.phoneCalls !== null) ? sum('phoneCalls') : null,
+            searchImpressionShare: null,
+            searchTopImpressionShare: null,
+            searchAbsoluteTopImpressionShare: null,
+            searchBudgetLostImpressionShare: null,
+            searchRankLostImpressionShare: null,
+        };
 
         return {
             state: 'ok', rows, excludedAccounts, totals,
@@ -449,7 +640,7 @@ export const googleReportService = {
         if (accounts.length === 0) return notConnected(win);
 
         const excludedAccounts = excludedAccountsOf(accounts);
-        const grainRows = await adGrainRepository.rollup(orgId, 'google_adgroup', {
+        const grainRows = await adGrainRepository.googleRollup(orgId, 'google_adgroup', {
             since: win.since, until: win.until, practiceId, campaignId,
         });
         if ((grainRows ?? []).length === 0) {
@@ -459,13 +650,16 @@ export const googleReportService = {
             };
         }
 
-        const rows = grainRows.map((g) => withCosts(
-            {
-                id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null,
-                campaignId: g.campaign_id ?? null, campaignName: g.campaign_name ?? null,
-            },
-            Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
-        ));
+        const rows = grainRows.map((g) => ({
+            ...withCosts(
+                {
+                    id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null,
+                    campaignId: g.campaign_id ?? null, campaignName: g.campaign_name ?? null,
+                },
+                Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
+            ),
+            ...googleExtras(g),
+        }));
 
         return {
             state: 'ok', rows, excludedAccounts,
@@ -480,7 +674,7 @@ export const googleReportService = {
         if (accounts.length === 0) return notConnected(win, { nextCursor: null });
 
         const excludedAccounts = excludedAccountsOf(accounts);
-        const grainRows = await adGrainRepository.rollup(orgId, 'google_ad', {
+        const grainRows = await adGrainRepository.googleRollup(orgId, 'google_ad', {
             since: win.since, until: win.until, practiceId, campaignId, parentId,
         });
         if ((grainRows ?? []).length === 0) {
@@ -503,15 +697,35 @@ export const googleReportService = {
             .slice()
             .sort((a, b) => (Number(b.spend_pence ?? 0) - Number(a.spend_pence ?? 0))
                 || String(a.entity_id).localeCompare(String(b.entity_id)))
-            .map((g) => withCosts(
-                {
-                    id: g.entity_id, name: g.entity_name ?? null, status: g.entity_status ?? null,
-                    campaignId: g.campaign_id ?? null, campaignName: g.campaign_name ?? null,
-                    parentId: g.parent_id ?? null,
-                    parentName: groupNames.get(g.parent_id) ?? null,
-                },
-                Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
-            ));
+            .map((g) => ({
+                ...withCosts(
+                    {
+                        id: g.entity_id,
+                        // entity_name is now the advertiser's own ad label if
+                        // they set one, else the ad's FIRST HEADLINE (the
+                        // connector falls back — see google-ads-deep-sync.js).
+                        // Before that fallback existed this was null on every
+                        // ad in this org (0 of 186 named), so the tab was a
+                        // list of 12-digit ids.
+                        name: g.entity_name ?? null,
+                        status: g.entity_status ?? null,
+                        campaignId: g.campaign_id ?? null, campaignName: g.campaign_name ?? null,
+                        parentId: g.parent_id ?? null,
+                        parentName: groupNames.get(g.parent_id) ?? null,
+                    },
+                    Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
+                ),
+                ...googleExtras(g),
+                adType: g.ad_type ?? null,
+                adStrength: g.ad_strength ?? null,
+                approvalStatus: g.approval_status ?? null,
+                finalUrl: g.final_url ?? null,
+                // The creative itself. Arrays of plain strings — the connector
+                // flattens Google's {text, pinnedField} assets so no reader has
+                // to know that shape.
+                headlines: Array.isArray(g.headlines) ? g.headlines : null,
+                descriptions: Array.isArray(g.descriptions) ? g.descriptions : null,
+            }));
 
         const start = cursor ? Number(cursor) : 0;
         const page = all.slice(start, start + PAGE);
@@ -529,7 +743,7 @@ export const googleReportService = {
         if (accounts.length === 0) return notConnected(win, { nextCursor: null, approximate: APPROXIMATE });
 
         const excludedAccounts = excludedAccountsOf(accounts);
-        const grainRows = await adGrainRepository.keywordRollup(orgId, {
+        const grainRows = await adGrainRepository.googleRollup(orgId, 'google_keyword', {
             since: win.since, until: win.until, practiceId, campaignId, parentId,
         });
         if ((grainRows ?? []).length === 0) {
@@ -557,13 +771,12 @@ export const googleReportService = {
                     },
                     Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
                 ),
+                // Impression-weighted averages and conversion value — see
+                // APPROXIMATE and googleExtras.
+                ...googleExtras(g),
                 matchType: g.match_type ?? null,
                 // Latest value in the window, not an average — see APPROXIMATE.
                 qualityScore: numOrNull(g.quality_score),
-                // Impression-weighted averages — see APPROXIMATE.
-                searchImpressionShare: numOrNull(g.search_impression_share),
-                searchTopImpressionShare: numOrNull(g.search_top_impression_share),
-                searchAbsoluteTopImpressionShare: numOrNull(g.search_absolute_top_impression_share),
             }));
 
         const start = cursor ? Number(cursor) : 0;
@@ -571,6 +784,88 @@ export const googleReportService = {
         const nextCursor = start + PAGE < all.length ? String(start + PAGE) : null;
         return {
             state: 'ok', rows: page, nextCursor, excludedAccounts, approximate: APPROXIMATE,
+            effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+        };
+    },
+
+    // ========================================================================
+    // SEARCH TERMS — what people actually typed, as opposed to what we bid on.
+    //
+    // The one Google report that says where money is LEAKING, and it cannot be
+    // derived from anything else stored: a dental group paying for "dental
+    // nurse jobs" or "dentist salary uk" finds out here and nowhere else.
+    //
+    // TWO THINGS THIS TIER DOES DIFFERENTLY, both deliberate:
+    //
+    //  1. A 30-DAY WINDOW, not the 92 every other deep grain keeps. Search
+    //     terms are (term x ad group x day), an order of magnitude more rows
+    //     than any other grain, and the report is one you act on for RECENT
+    //     traffic — you mine last month's terms for negatives, not last
+    //     quarter's. The clamp is reported, not silent, so the page says which
+    //     period it is showing.
+    //
+    //  2. Rows carry the KEYWORD THAT CAUGHT THE TERM and Google's own
+    //     ADDED/EXCLUDED/NONE status. The keyword is the actionable half —
+    //     "this broad-match keyword is pulling in this rubbish" — and the
+    //     status is what stops the same term being re-reported as actionable
+    //     every month after someone has already excluded it.
+    // ========================================================================
+    async searchTerms(orgId, { since, until, practiceId = null, campaignId = null, parentId = null, cursor = null } = {}) {
+        const PAGE = 50;
+        const win = clampSearchTermWindow(since, until);
+        const accounts = await googleAccounts(orgId);
+        if (accounts.length === 0) {
+            return { ...notConnected(win, { nextCursor: null }), windowDays: win.windowDays };
+        }
+
+        const excludedAccounts = excludedAccountsOf(accounts);
+        const grainRows = await adGrainRepository.googleRollup(orgId, 'google_search_term', {
+            since: win.since, until: win.until, practiceId, campaignId, parentId,
+        });
+        if ((grainRows ?? []).length === 0) {
+            return {
+                state: await emptyWindowState(orgId, 'ad_google_search_terms'),
+                rows: [], nextCursor: null, excludedAccounts, windowDays: win.windowDays,
+                effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
+            };
+        }
+
+        const groupNames = await parentAdGroupNames(orgId, win, practiceId, campaignId);
+
+        // SORTED BY SPEND DESCENDING, like every other tier — and here that
+        // ordering IS the product: the terms at the top are the ones costing
+        // the most, which is exactly the list someone mining for negatives
+        // wants. entity_id (the term text) breaks ties deterministically, which
+        // cursor paging depends on across calls.
+        const all = grainRows
+            .slice()
+            .sort((a, b) => (Number(b.spend_pence ?? 0) - Number(a.spend_pence ?? 0))
+                || String(a.entity_id).localeCompare(String(b.entity_id)))
+            .map((g) => ({
+                ...withCosts(
+                    {
+                        // The term text IS the id — Google gives a search term
+                        // no id of its own because it is not an object in the
+                        // account, it is a string a stranger typed.
+                        id: g.entity_id, name: g.entity_name ?? g.entity_id, status: g.entity_status ?? null,
+                        campaignId: g.campaign_id ?? null, campaignName: g.campaign_name ?? null,
+                        parentId: g.parent_id ?? null,
+                        parentName: groupNames.get(g.parent_id) ?? null,
+                    },
+                    Number(g.spend_pence ?? 0), Number(g.impressions ?? 0), Number(g.clicks ?? 0), Number(g.conversions ?? 0),
+                ),
+                ...googleExtras(g),
+                keywordText: g.keyword_text ?? null,
+                matchType: g.match_type ?? null,
+                // ADDED / EXCLUDED / NONE — whether anyone has acted on it.
+                termStatus: g.search_term_status ?? null,
+            }));
+
+        const start = cursor ? Number(cursor) : 0;
+        const page = all.slice(start, start + PAGE);
+        const nextCursor = start + PAGE < all.length ? String(start + PAGE) : null;
+        return {
+            state: 'ok', rows: page, nextCursor, excludedAccounts, windowDays: win.windowDays,
             effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
         };
     },
@@ -631,6 +926,7 @@ export const googleReportService = {
         if (accounts.length === 0) {
             return {
                 state: 'not_connected', practices: [], total: null, practicesAll: [], totalAll: null, leads: [],
+                campaigns: [], campaignsAll: [], attribution: attributionCoverage([]),
                 googlePipelinesMapped,
                 acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
                 effectiveSince: rawSince, windowClamped: false,
@@ -642,7 +938,13 @@ export const googleReportService = {
         // within a minute (or by a second component asking for the same
         // window) — see loadLeadPerformanceData's own comment for what was
         // tried and measured on the query itself.
-        const [spendRowsAll, ledgerRowsAll] = await loadLeadPerformanceData(orgId, rawSince, rawUntil);
+        const [[spendRowsAll, ledgerRowsAll], campaignRows] = await Promise.all([
+            loadLeadPerformanceData(orgId, rawSince, rawUntil),
+            // Practice-scoped at the SOURCE, not filtered afterwards: the
+            // campaign rollup groups by campaign only, so there is no
+            // practice column left to narrow on once it returns.
+            loadCampaignSpend(orgId, rawSince, rawUntil, practiceId),
+        ]);
 
         // practiceId is an OPTIONAL narrowing filter — omitted (the default,
         // "All practices") returns every practice's own row plus a total
@@ -655,6 +957,7 @@ export const googleReportService = {
         if (spendRows.length === 0 && ledgerRows.length === 0) {
             return {
                 state: await emptyWindowState(orgId), practices: [], total: null, practicesAll: [], totalAll: null, leads: [],
+                campaigns: [], campaignsAll: [], attribution: attributionCoverage([]),
                 googlePipelinesMapped,
                 acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
                 effectiveSince: rawSince, windowClamped: false,
@@ -675,10 +978,28 @@ export const googleReportService = {
         const practicesAll = practiceLeadPerformance(spendRows, ledgerRows, true)
             .sort((a, b) => b.spendPence - a.spendPence);
 
+        // PER-CAMPAIGN, the same two ways as per-practice: new patients only
+        // (the owner's own definition) and including existing, both computed
+        // from the SAME already-fetched rows so the toggle costs no request
+        // and the two figures cannot drift apart.
+        //
+        // Sorted by spend descending, with the unattributed bucket LAST
+        // regardless of size — it is a caveat about the table, not a row that
+        // competes in it, and letting it sort to the top on a low-coverage
+        // window would bury the campaigns the reader came for.
+        const byCampaignSpend = (a, b) => (a.attributed === b.attributed
+            ? b.spendPence - a.spendPence
+            : (a.attributed ? -1 : 1));
+        const campaigns = campaignLeadPerformance(campaignRows, ledgerRows, false).sort(byCampaignSpend);
+        const campaignsAll = campaignLeadPerformance(campaignRows, ledgerRows, true).sort(byCampaignSpend);
+
         return {
             state: 'ok',
             practices, total: sumPracticeRows(practices),
             practicesAll, totalAll: sumPracticeRows(practicesAll),
+            campaigns, campaignsAll,
+            // Stated, not implied — see attributionCoverage.
+            attribution: attributionCoverage(ledgerRows),
             leads: ledgerRows.map((l) => ({
                 practiceId: l.practice_id, practiceName: l.practice_name,
                 source: l.source, leadAt: l.lead_at,
@@ -689,6 +1010,14 @@ export const googleReportService = {
                 phone: l.phone10 ? `0${l.phone10}` : null,
                 name: l.name, email: l.email, treatment: l.treatment,
                 booked: l.booked, accepted: l.accepted, isNewPatient: l.is_new_patient,
+                // Which campaign bought this lead, and how we know. Null
+                // campaignId is a real answer — "could not be tied to one" —
+                // and the drill-down says so rather than leaving a blank cell
+                // that reads as a rendering fault.
+                campaignId: l.campaign_id, campaignName: l.campaign_name,
+                adGroupId: l.ad_group_id, adGroupName: l.ad_group_name,
+                keywordId: l.keyword_id, keywordText: l.keyword_text,
+                attribution: l.attribution,
                 // What `accepted` is actually claiming, in money. Shown in
                 // the drill-down so the threshold is visible rather than
                 // implied — £43 and £4,300 are both "Yes" without it.
@@ -705,7 +1034,9 @@ export const googleReportService = {
 };
 
 export const __test = {
-    perUnitPence, ratio, collapseByCampaign, excludedAccountsOf, numOrNull,
+    perUnitPence, ratio, excludedAccountsOf, numOrNull,
     leadLedgerUntil, practiceLeadPerformance, sumPracticeRows, withLeadCosts,
+    campaignLeadPerformance, attributionCoverage, googleExtras,
+    clampSearchTermWindow, UNATTRIBUTED,
     ACCEPTANCE_MIN_PAID_PENCE,
 };

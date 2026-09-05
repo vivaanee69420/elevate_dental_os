@@ -600,6 +600,29 @@ export const marketingRepository = {
             // was actually paid rather than a bare Yes whose threshold the
             // reader cannot see.
             paid_pence: Number(r.paid_pence ?? 0),
+            // WHICH CAMPAIGN BOUGHT THIS LEAD (migration 000165). Null is a
+            // real, meaningful value here and is never coerced to a string:
+            // it means this lead could not be tied to a campaign, and the
+            // reader shows those in an explicit "Not attributed" row rather
+            // than dropping them, so per-campaign totals still reconcile to
+            // the practice-level cards above them.
+            campaign_id: r.campaign_id ?? null,
+            campaign_name: r.campaign_name ?? null,
+            ad_group_id: r.ad_group_id ?? null,
+            ad_group_name: r.ad_group_name ?? null,
+            keyword_id: r.keyword_id ?? null,
+            keyword_text: r.keyword_text ?? null,
+            // The click id. Nothing reads it yet — it is the key a future
+            // click_view lookup needs to resolve a lead down to the
+            // individual AD, which is the one grain nothing stored can reach.
+            gclid: r.gclid ?? null,
+            // HOW the campaign above was resolved: callrail_keyword,
+            // callrail_campaign, ghl_campaign, or null. Surfaced so the page
+            // can state its own coverage instead of asking anyone to trust
+            // it, and so a regression (a renamed campaign, an edited CallRail
+            // tracking template) shows up as a shift in this mix rather than
+            // as a silent drift in cost per patient.
+            attribution: r.attribution ?? null,
         }));
     },
 };

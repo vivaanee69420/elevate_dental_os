@@ -98,7 +98,75 @@ describe('parseKeywords', () => {
 });
 
 describe('STREAMS', () => {
-    it('includes the keyword grain so syncGoogleDeep picks it up unchanged', () => {
-        expect(__test.STREAM_GRAINS).toEqual(['google_adgroup', 'google_ad', 'google_keyword']);
+    it('includes the keyword and search-term grains so syncGoogleDeep picks them up unchanged', () => {
+        expect(__test.STREAM_GRAINS).toEqual([
+            'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term',
+        ]);
+    });
+
+    // The search-term grain is the ONLY one with a window of its own, and it
+    // must be a SHALLOWER one. Pinned because the direction matters: `days`
+    // narrows the caller's window and must never widen it, or a grain quietly
+    // pulls past what the rolling-window contract promises.
+    it('gives search terms a shallower window than the other grains, and only search terms', () => {
+        expect(__test.SEARCH_TERM_WINDOW_DAYS).toBeLessThan(__test.DEEP_WINDOW_DAYS);
+    });
+
+    // A fallback exists for every grain that HAD a working shape before the
+    // enrichment. Search terms are new, so there is nothing to fall back to
+    // and the absence is deliberate, not an oversight.
+    it('has a degraded fallback query for each pre-existing grain, and none for search terms', () => {
+        expect(Object.keys(__test.BASIC_GAQL).sort())
+            .toEqual(['google_ad', 'google_adgroup', 'google_keyword']);
+    });
+});
+
+describe('impression-share fields by grain', () => {
+    // KEYWORDS ASK FOR THREE SHARES, CAMPAIGN AND AD GROUP ASK FOR FIVE, and
+    // the asymmetry is deliberate rather than an oversight — which is exactly
+    // why it is pinned here. Someone tidying these two constants into one
+    // would not be making a cosmetic change.
+    //
+    // The three on the keyword query are the set 000148 has pulled
+    // successfully since it shipped. Whether keyword_view also accepts the two
+    // LOST shares is not verifiable from this repo, and GAQL rejects an
+    // unknown or grain-incompatible field by failing the WHOLE query — so
+    // guessing wrong would not cost two ratios, it would send every keyword
+    // pull down the degraded fallback path permanently and take that tier's
+    // conversion VALUE with it. A budget is a campaign-level constraint
+    // anyway, so budget-lost share is a campaign fact a keyword only inherits.
+    it('asks keyword_view for only the three shares that are known to work', () => {
+        const gaql = __test.buildKeywordGaql('2026-08-01', '2026-08-31');
+        expect(gaql).toContain('metrics.search_impression_share');
+        expect(gaql).toContain('metrics.search_top_impression_share');
+        expect(gaql).toContain('metrics.search_absolute_top_impression_share');
+        expect(gaql).not.toContain('search_budget_lost_impression_share');
+        expect(gaql).not.toContain('search_rank_lost_impression_share');
+    });
+
+    it('asks campaign-level grains for all five, including the two that say WHY share was lost', () => {
+        const gaql = __test.buildAdGroupGaql('2026-08-01', '2026-08-31');
+        expect(gaql).toContain('metrics.search_budget_lost_impression_share');
+        expect(gaql).toContain('metrics.search_rank_lost_impression_share');
+    });
+
+    // Google reports no impression share for an individual ad at all, so
+    // asking for one would fail the ad pull outright.
+    it('never asks for an impression share at ad grain', () => {
+        expect(__test.buildAdGaql('2026-08-01', '2026-08-31')).not.toContain('impression_share');
+    });
+
+    // shareMetrics maps ABSENT to null, never 0 — ad_google_rollup filters its
+    // weighted-average denominator on exactly this nullness, so a 0 here would
+    // drag every reported share downward for every entity in the account.
+    it('maps an unreported share to null rather than zero', () => {
+        expect(__test.shareMetrics({})).toEqual({
+            search_impression_share: null,
+            search_top_impression_share: null,
+            search_absolute_top_impression_share: null,
+            search_budget_lost_impression_share: null,
+            search_rank_lost_impression_share: null,
+        });
+        expect(__test.shareMetrics({ searchImpressionShare: 0 }).search_impression_share).toBe(0);
     });
 });

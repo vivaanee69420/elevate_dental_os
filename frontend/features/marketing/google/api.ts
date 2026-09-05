@@ -76,16 +76,90 @@ export interface GoogleRow {
   parentName?: string | null;
 }
 
-// Keyword rows additionally carry match type, Quality Score and the three
-// impression-share ratios (0-1, or null). See APPROXIMATE below for what
-// "approximate" means for the last four of these.
-export interface GoogleKeywordRow extends GoogleRow {
-  matchType: string | null;
-  /** 1-10, the LATEST value in the window — not an average. null if unknown. */
-  qualityScore: number | null;
+// The fields migration 000164 added, present on every Google row at every
+// grain.
+//
+// EVERY ONE OF THESE CAN BE null, AND null IS NOT ZERO. Google does not report
+// impression share for an individual ad, or conversion value for an account
+// with no value-tracking conversion action. Rendering a null as 0 would claim
+// a measurement nobody took: "0% impression share" reads as "you are
+// invisible", which is a very different statement from "not measured here".
+// Every formatter in ../_shared/format.ts returns an em dash for null for
+// exactly this reason.
+export interface GoogleExtras {
+  /** Google's own tracked conversion VALUE, in integer pence. */
+  conversionsValuePence: number | null;
+  /** Includes the conversion actions Google keeps OUT of the headline
+   *  `conversions` figure — call-extension phone calls among them, which for
+   *  a dental practice is most of the point. */
+  allConversions: number | null;
+  /** conversionsValuePence / spendPence. null unless BOTH are known: a return
+   *  on spend where the return is unknown is not 0x. */
+  roas: number | null;
+  /** 0-1. The share of the auctions you were eligible for that you actually
+   *  showed in. Impression-weighted across the window — approximate, see
+   *  GoogleApproximate. */
   searchImpressionShare: number | null;
   searchTopImpressionShare: number | null;
   searchAbsoluteTopImpressionShare: number | null;
+  /** 0-1, and the actionable half: WHY the rest of the share was missed.
+   *  Budget-lost means raise the budget; rank-lost means raise the bid or
+   *  improve the ad. Together with the share itself these three sum to
+   *  roughly 1. */
+  searchBudgetLostImpressionShare: number | null;
+  searchRankLostImpressionShare: number | null;
+}
+
+// Keyword rows additionally carry match type and Quality Score. See
+// APPROXIMATE below for what "approximate" means for these.
+export interface GoogleKeywordRow extends GoogleRow, GoogleExtras {
+  matchType: string | null;
+  /** 1-10, the LATEST value in the window — not an average. null if unknown. */
+  qualityScore: number | null;
+}
+
+// Campaign rows carry Google's channel type, which is load-bearing rather
+// than decorative: it is what explains a blank keyword column and a blank
+// impression share on the SAME row. A reader who can see "Performance Max"
+// understands the blank; one who cannot assumes the data is broken.
+export interface GoogleCampaignRow extends GoogleRow, GoogleExtras {
+  channelType: string | null;
+  /** Calls straight from a call extension, as Google counts them. */
+  phoneCalls: number | null;
+}
+
+// Ad rows carry the CREATIVE, and that is the point of pulling them.
+// ad_group_ad.ad.name is an optional internal label almost nobody sets —
+// measured on this org, 0 of 186 ads had one — so before this the Ads tab
+// rendered a bare 12-digit id on every row. `name` now falls back to the
+// ad's first responsive-search headline, which is what a human calls it.
+export interface GoogleAdRow extends GoogleRow, GoogleExtras {
+  adType: string | null;
+  /** Google's own POOR / AVERAGE / GOOD / EXCELLENT grade. */
+  adStrength: string | null;
+  /** APPROVED / APPROVED_LIMITED / DISAPPROVED / AREA_OF_INTEREST_ONLY. */
+  approvalStatus: string | null;
+  /** The FIRST of the ad's final URLs. An ad may declare several; the field
+   *  is named for what it is rather than pretending to be "the" URL. */
+  finalUrl: string | null;
+  /** Plain strings — the connector flattens Google's {text, pinnedField}
+   *  assets, so no reader here needs to know that shape. */
+  headlines: string[] | null;
+  descriptions: string[] | null;
+}
+
+// A SEARCH TERM is what somebody actually typed, as opposed to what we bid
+// on. It is not an object in the Google account and has no id of its own, so
+// `id` and `name` are both the term TEXT.
+export interface GoogleSearchTermRow extends GoogleRow, GoogleExtras {
+  /** The keyword that CAUGHT this term — the actionable link. null when
+   *  Google reported none (Performance Max has no keywords at all). */
+  keywordText: string | null;
+  matchType: string | null;
+  /** Google's ADDED / EXCLUDED / NONE: whether anyone has already acted on
+   *  this term. Without it the same rubbish term is re-reported as actionable
+   *  every month after it has been excluded. */
+  termStatus: string | null;
 }
 
 /** The two approximation statements keywords() always carries. Fixed text,
@@ -97,10 +171,16 @@ export interface GoogleApproximate {
 
 export interface GoogleCampaignsPayload {
   state: GoogleState;
-  rows: GoogleRow[];
+  rows: GoogleCampaignRow[];
   excludedAccounts: GoogleExcludedAccount[];
-  /** Same shape as a row's, with id/name/status null. null when rows is empty. */
-  totals: GoogleRow | null;
+  /** Same shape as a row's, with id/name/status null. null when rows is empty.
+   *
+   *  SUMS ARE SUMMED; RATIOS ARE NOT. Spend, impressions, clicks, conversions
+   *  and value add up across campaigns. Impression share does NOT — it is a
+   *  proportion of each campaign's own eligible auctions, and an average of
+   *  proportions over different denominators has no referent — so every share
+   *  is null on this row rather than being invented. */
+  totals: GoogleCampaignRow | null;
   /** The window actually used. The deep-grain tables keep 92 days, so a
    *  longer request is clamped to what the finest grain can cover. */
   effectiveSince: string;
@@ -108,10 +188,12 @@ export interface GoogleCampaignsPayload {
   windowClamped: boolean;
 }
 
+export interface GoogleAdGroupRow extends GoogleRow, GoogleExtras {}
+
 export interface GoogleAdGroupsPayload {
   state: GoogleState;
   /** No totals at this tier — matches the Facebook ad-set tier. */
-  rows: GoogleRow[];
+  rows: GoogleAdGroupRow[];
   excludedAccounts: GoogleExcludedAccount[];
   effectiveSince: string;
   windowClamped: boolean;
@@ -119,7 +201,7 @@ export interface GoogleAdGroupsPayload {
 
 export interface GoogleAdsPage {
   state: GoogleState;
-  rows: GoogleRow[];
+  rows: GoogleAdRow[];
   /** Opaque; pass back verbatim as `cursor`. null on the last page. */
   nextCursor: string | null;
   excludedAccounts: GoogleExcludedAccount[];
@@ -134,6 +216,21 @@ export interface GoogleKeywordsPage {
   excludedAccounts: GoogleExcludedAccount[];
   /** Present on EVERY response, including not_connected/empty-window. */
   approximate: GoogleApproximate;
+  effectiveSince: string;
+  windowClamped: boolean;
+}
+
+export interface GoogleSearchTermsPage {
+  state: GoogleState;
+  rows: GoogleSearchTermRow[];
+  nextCursor: string | null;
+  excludedAccounts: GoogleExcludedAccount[];
+  /** THE ONLY TIER WITH A WINDOW OF ITS OWN: search terms are kept for 30
+   *  days, not the 92 every other deep grain holds. (term x ad group x day) is
+   *  an order of magnitude more rows than any other grain, and the report is
+   *  one you act on for recent traffic. Reported, never silent — the tab
+   *  states the period it is actually showing. */
+  windowDays: number;
   effectiveSince: string;
   windowClamped: boolean;
 }
@@ -173,6 +270,67 @@ export interface GoogleLeadPractice {
   cplPence: number | null;
   cpbPence: number | null;
   cpaPence: number | null;
+}
+
+// WHICH CAMPAIGN BOUGHT WHICH PATIENT — migration 000165, and the figure this
+// page could never show before it. The service header used to say plainly
+// that it was not buildable, on the belief that CallRail calls carried no
+// campaign linkage. They carry three: the campaign name, the bid keyword and
+// the gclid, all captured from the click.
+export interface GoogleCampaignPerformance {
+  /** null on the unattributed bucket ONLY. */
+  campaignId: string | null;
+  campaignName: string | null;
+  /** SEARCH / PERFORMANCE_MAX / DISPLAY / VIDEO — what explains a blank
+   *  keyword or impression share on the same row. */
+  channelType: string | null;
+  /** False on the single "Not attributed" bucket row.
+   *
+   *  THAT ROW IS RETURNED, NEVER DROPPED. If leads with no resolvable campaign
+   *  simply vanished, the campaign rows would sum to fewer leads than the
+   *  practice card above them and nothing would say so — every campaign's
+   *  conversion rate would be overstated by a denominator smaller than the
+   *  truth. It is rendered as an explicit row and sorted LAST regardless of
+   *  size, because it is a caveat about the table rather than a row competing
+   *  in it. */
+  attributed: boolean;
+  spendPence: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  ctr: number | null;
+  leads: number;
+  booked: number;
+  accepted: number;
+  /** Money actually collected from this campaign's patients, in pence. Counted
+   *  for every eligible lead, not only those over the acceptance floor — a
+   *  patient who paid £35 paid £35, and zeroing them because they sit below a
+   *  threshold set for a different question would understate real revenue. */
+  paidPence: number;
+  /** All four are null on the unattributed bucket, which has no spend of its
+   *  own — dividing its £0 by its leads would make the leads we could NOT
+   *  attribute look like the cheapest campaign in the table. */
+  cplPence: number | null;
+  cpbPence: number | null;
+  cpaPence: number | null;
+  /** paidPence / spendPence. null on zero spend — a return on nothing is not
+   *  a return of zero. */
+  returnOnSpend: number | null;
+}
+
+/** How much of the lead list could be tied to a campaign, and by which route.
+ *  Published so the page can STATE its coverage rather than ask anyone to
+ *  trust a per-campaign cost figure on faith — and so a regression (a renamed
+ *  campaign the alias lookup misses, an edited CallRail tracking template)
+ *  shows up as a visible shift here instead of a silent drift in CPA. */
+export interface GoogleAttributionCoverage {
+  total: number;
+  attributed: number;
+  /** callrail_keyword | callrail_campaign | ghl_campaign -> count. */
+  byRoute: Record<string, number>;
+  /** ghl | callrail -> count of leads with no campaign. The two gaps have
+   *  different causes and different fixes. */
+  unattributedBySource: Record<string, number>;
 }
 
 /** One deduplicated lead, for the cards' click-through drill-down list. */
@@ -216,6 +374,16 @@ export interface GoogleLeadRow {
    *  Dentally patient — an unmatched lead is also false here, but that is
    *  moot: booked/accepted are false for it either way. */
   isNewPatient: boolean;
+  /** null means "could not be tied to a campaign" — a real answer, shown as
+   *  such rather than left as a blank cell that reads as a rendering fault. */
+  campaignId: string | null;
+  campaignName: string | null;
+  adGroupId: string | null;
+  adGroupName: string | null;
+  keywordId: string | null;
+  keywordText: string | null;
+  /** Which route resolved the campaign above. null when none did. */
+  attribution: 'callrail_keyword' | 'callrail_campaign' | 'ghl_campaign' | null;
 }
 
 export interface GoogleLeadPerformancePayload {
@@ -241,6 +409,14 @@ export interface GoogleLeadPerformancePayload {
    *  (and `isNewPatient`, matching whichever total is on screen) for a
    *  card's click-through list. */
   leads: GoogleLeadRow[];
+  /** Per-campaign cost per lead / booking / accepted patient, new patients
+   *  only. Always present — `[]` rather than absent on the not-connected and
+   *  empty-window shapes, so the page reads the key unconditionally. */
+  campaigns: GoogleCampaignPerformance[];
+  /** The same, counting existing patients too — the toggle's other half,
+   *  computed from the SAME fetch so flipping it costs no request. */
+  campaignsAll: GoogleCampaignPerformance[];
+  attribution: GoogleAttributionCoverage;
   /** False when this org has not mapped ANY GoHighLevel pipeline to the
    *  google_ads channel (Settings -> Ad attribution) — a leads figure of 0
    *  then means "not configured", not "quiet period", and the cards must say
@@ -287,4 +463,11 @@ export function fetchGoogleAds(qs: string) {
 export function fetchGoogleKeywords(qs: string) {
   const suffix = qs ? `?${qs}` : '';
   return api<GoogleKeywordsPage>(`/api/marketing/google/keywords${suffix}`);
+}
+
+// Search terms — the fifth grain, and the only one with a window of its own.
+// Same optional campaignId/parentId filters as the ad and keyword tiers.
+export function fetchGoogleSearchTerms(qs: string) {
+  const suffix = qs ? `?${qs}` : '';
+  return api<GoogleSearchTermsPage>(`/api/marketing/google/search-terms${suffix}`);
 }

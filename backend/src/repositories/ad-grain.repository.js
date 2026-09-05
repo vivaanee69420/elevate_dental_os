@@ -17,7 +17,16 @@
 import * as supabase_1 from "../lib/supabase.js";
 
 export const GRAINS = Object.freeze([
-    'meta_adset', 'meta_ad', 'google_adgroup', 'google_ad', 'google_keyword',
+    'meta_adset', 'meta_ad',
+    'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term',
+]);
+
+// The Google grains, which read through ad_google_rollup rather than
+// ad_grain_rollup. Kept as its own list rather than derived from a
+// startsWith('google_') test so that adding a grain is one deliberate edit in
+// one place, not a prefix convention a future non-Google grain could trip on.
+export const GOOGLE_GRAINS = Object.freeze([
+    'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term',
 ]);
 
 // Fail here rather than at the database. The RPC also validates, but a bad
@@ -73,6 +82,27 @@ async function pagedRpc(fn, params) {
             .rpc(fn, params)
             .order('entity_id', { ascending: true })
             .order('parent_id', { ascending: true })
+            .range(from, from + PAGE - 1);
+        if (error) throw new Error(`${fn}: ${error.message}`);
+        const page = Array.isArray(data) ? data : [];
+        rows.push(...page);
+        if (page.length === 0) break;
+        from += page.length;
+    }
+    return rows;
+}
+
+// Same paging contract as pagedRpc, for an RPC whose rows are keyed by
+// entity_id ALONE. ad_google_campaign_rollup groups by campaign_id, which is
+// unique in its own result, so there is no parent_id to sort on — and asking
+// PostgREST to order by a column the response does not have is an error, not
+// an ignored hint.
+async function pagedRpcByEntity(fn, params) {
+    const rows = [];
+    for (let from = 0; ;) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc(fn, params)
+            .order('entity_id', { ascending: true })
             .range(from, from + PAGE - 1);
         if (error) throw new Error(`${fn}: ${error.message}`);
         const page = Array.isArray(data) ? data : [];
@@ -156,6 +186,32 @@ export const adGrainRepository = {
         assertGrain(grain);
         return pagedRpc('ad_grain_rollup', {
             p_org: orgId, p_grain: grain, p_since: since, p_until: until, ...filterParams(filters),
+        });
+    },
+
+    // The Google read. Supersedes rollup()/keywordRollup() for Google grains:
+    // ONE RPC serving all four, returning the full Google column superset with
+    // a NULL wherever Google does not report that field at that grain (see
+    // migration 000164 for why every Google table carries the same columns).
+    //
+    // rollup() and keywordRollup() are left in place: rollup() still serves
+    // both Meta grains, and keywordRollup() still has callers.
+    async googleRollup(orgId, grain, { since, until, ...filters } = {}) {
+        if (!GOOGLE_GRAINS.includes(grain)) {
+            throw new Error(`ad-grain: '${grain}' is not a Google grain (expected one of ${GOOGLE_GRAINS.join(', ')})`);
+        }
+        return pagedRpc('ad_google_rollup', {
+            p_org: orgId, p_grain: grain, p_since: since, p_until: until, ...filterParams(filters),
+        });
+    },
+
+    // Campaign grain, from ad_metrics. Aggregated in SQL for the same reason
+    // every other read here is: the weighted impression-share averages cannot
+    // be computed from a plain PostgREST select, and summing day rows in JS
+    // would mean fetching them all past the same 1000-row cap.
+    async googleCampaignRollup(orgId, { since, until, practiceId = null } = {}) {
+        return pagedRpcByEntity('ad_google_campaign_rollup', {
+            p_org: orgId, p_since: since, p_until: until, p_practice: practiceId ?? null,
         });
     },
 

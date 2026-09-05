@@ -1,116 +1,188 @@
 'use client';
-// Google report — Ad groups tab. `campaignId` is an OPTIONAL filter threaded
-// down from the URL (omitted -> every ad group in the window across every
-// campaign); clicking a row calls `onSelectAdGroup`, which the parent
-// GoogleReportScreen turns into a `?tab=ads&parentId=…` filter switch that
-// ALSO applies to the Keywords tab (ads and keywords are siblings under an
-// ad group — see the file header on google-report.service.js).
+// ============================================================================
+// Google report — Ad groups tab.
 //
-// No bucket rows (Facebook's ../facebook/components/FacebookAdSetsTab.tsx
-// has notIdentified/unmatchedLeads because leads must reconcile back up to
-// the campaign total; Google's rows are already fully attributed, so there
-// is nothing to bucket). Rows carry campaignName even when a campaign filter
-// is active, shown as a muted subtitle under the ad group name — most useful
-// on the unfiltered listing (docs/API.md: "so an unfiltered listing across
-// campaigns stays readable"), harmless as a confirmation when filtered.
-import { EmptyState, SkeletonTable } from '@/components/ui';
+// THE ROW CLICK NO LONGER TELEPORTS, AND THAT IS THE POINT OF THIS FILE.
+//
+// It used to set `?tab=ads&parentId=…` — you clicked an ad group and landed on
+// a different tab. Two things were wrong with that, and they compound:
+//
+//   1. Google's hierarchy FORKS here. An ad group has ads AND keywords under
+//      it, as siblings; neither contains the other. Navigating to one of them
+//      is choosing for the reader, and there is no basis for the choice —
+//      keywords are at least as likely to be what they wanted.
+//
+//   2. What you landed on was unreadable. ad_group_ad.ad.name is an optional
+//      internal label almost nobody sets: 0 of 186 ads in this org had one, so
+//      the destination was a list of 12-digit numbers. (Fixed separately — ads
+//      now fall back to their first headline — but the jump was wrong even
+//      once the destination made sense.)
+//
+// So the row EXPANDS IN PLACE and shows both children side by side, with the
+// reader still where they were. The Ads and Keywords tabs remain, unfiltered
+// and independent, for anyone who wants to work through one of them across
+// every ad group at once.
+//
+// The child queries live in a component that only mounts when a row opens, so
+// a closed table issues no requests for children at all.
+// ============================================================================
+import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
-import { formatDate } from '@/lib/format';
 import type { UseQueryResult } from '@tanstack/react-query';
-import { AdMetricTable, type Column } from '../../_shared/AdMetricTable';
-import { money, ctr, num } from '../../_shared/format';
-import { GoogleStateNotice } from './GoogleStateNotice';
-import type { GoogleAdGroupsPayload, GoogleRow } from '../api';
+import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
+import { SectionHead } from '../../_shared/StatRail';
+import { Chip, humanise } from '../../_shared/Bars';
+import { money0, num, DASH } from '../../_shared/format';
+import { nameColumn, deliveryColumns, impressionShareColumn } from './columns';
+import { GoogleTabFrame } from './GoogleTabFrame';
+import { useGoogleAds, useGoogleKeywords } from '../hooks';
+import type { GoogleAdGroupsPayload, GoogleAdGroupRow } from '../api';
 
-// Calm, factual prose — never an error/warning colour.
-function Note({ children }: { children: React.ReactNode }) {
+// A compact list, not a nested DataGrid. An expansion panel containing a
+// second full table — its own sticky header, its own sort controls, its own
+// horizontal scroll — would be a table inside a table row, which is exactly
+// the boxes-inside-boxes problem this redesign is undoing. Five lines of
+// "name … spend" is what the reader needs at this depth; the dedicated tab is
+// one click away for anything more.
+function MiniList({
+  title, empty, loading, items, more,
+}: {
+  title: string;
+  empty: string;
+  loading: boolean;
+  items: { key: string; label: string; note?: string | null; right: string }[];
+  more: number;
+}) {
   return (
-    <p className="rounded-panel border border-border bg-bg px-3 py-2 text-[12.5px] leading-relaxed text-ink-muted">
-      {children}
-    </p>
+    <div className="min-w-0 flex-1">
+      <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+        {title}
+      </p>
+      {loading && <p className="text-[12px] text-ink-muted">Loading…</p>}
+      {!loading && items.length === 0 && <p className="text-[12px] text-ink-muted">{empty}</p>}
+      <ul className="flex flex-col gap-1">
+        {items.map((it) => (
+          <li key={it.key} className="flex items-baseline justify-between gap-3 text-[12.5px]">
+            <span className="min-w-0 truncate text-ink">
+              {it.label}
+              {it.note && <span className="ml-1.5 text-[11px] text-ink-muted">{it.note}</span>}
+            </span>
+            <span className="shrink-0 tabular-nums text-ink-muted">{it.right}</span>
+          </li>
+        ))}
+      </ul>
+      {/* Said out loud rather than silently truncated. A list that stops
+          without saying so is the same class of lie as a truncated total. */}
+      {more > 0 && (
+        <p className="mt-1 text-[11px] text-ink-muted">
+          + {num(more)} more — see the {title.split(' ')[0].toLowerCase()} tab
+        </p>
+      )}
+    </div>
   );
 }
 
-const COLUMNS: Column<GoogleRow>[] = [
-  {
-    key: 'name',
-    header: 'Ad group',
-    align: 'left',
-    render: (r) => (
-      <span className="font-medium text-brand">
-        {r.name ?? r.id ?? 'Unnamed ad group'}
-        {r.campaignName && (
-          <span className="block text-[11px] font-normal text-ink-muted">{r.campaignName}</span>
-        )}
-      </span>
-    ),
-  },
-  { key: 'spend', header: 'Spend', align: 'right', render: (r) => money(r.spendPence) },
-  { key: 'impressions', header: 'Impressions', align: 'right', render: (r) => num(r.impressions) },
-  { key: 'clicks', header: 'Clicks', align: 'right', render: (r) => num(r.clicks) },
-  { key: 'ctr', header: 'CTR', align: 'right', render: (r) => ctr(r.ctr) },
-  { key: 'cpc', header: 'CPC', align: 'right', render: (r) => money(r.cpcPence) },
-  { key: 'conversions', header: 'Conversions', align: 'right', render: (r) => num(r.conversions) },
-  { key: 'costPerConversion', header: 'Cost / conversion', align: 'right', render: (r) => money(r.costPerConversionPence) },
-];
+// Both children of one ad group, fetched only once its row is open.
+//
+// TOP FIVE BY SPEND EACH, not everything. The panel answers "what is inside
+// this ad group and where is its money going", which five rows answer and
+// forty rows bury.
+function AdGroupChildren({ adGroupId }: { adGroupId: string }) {
+  const ads = useGoogleAds(adGroupId);
+  const keywords = useGoogleKeywords(adGroupId);
+
+  // The service already returns each tier sorted by spend descending, so the
+  // first five of the first page ARE the top five — no re-sort needed, and
+  // re-sorting a partial page would produce a "top five" of whatever happened
+  // to be fetched.
+  const adRows = ads.data?.pages.flatMap((p) => p.rows) ?? [];
+  const kwRows = keywords.data?.pages.flatMap((p) => p.rows) ?? [];
+  const LIMIT = 5;
+
+  return (
+    <div className="flex flex-col gap-5 sm:flex-row sm:gap-10">
+      <MiniList
+        title={`Ads${adRows.length ? ` (${num(adRows.length)})` : ''}`}
+        empty="No ads with delivery here."
+        loading={ads.isLoading}
+        more={Math.max(0, adRows.length - LIMIT)}
+        items={adRows.slice(0, LIMIT).map((r) => ({
+          key: r.id ?? '',
+          // The ad's first headline, which is what a person calls an ad — see
+          // this file's header for why the id alone was useless.
+          label: r.name ?? r.id ?? 'Unnamed ad',
+          note: r.adStrength ? humanise(r.adStrength) : null,
+          right: money0(r.spendPence),
+        }))}
+      />
+      <MiniList
+        title={`Keywords${kwRows.length ? ` (${num(kwRows.length)})` : ''}`}
+        // Not a failure. Performance Max campaigns have no keywords at all,
+        // and saying so is the difference between the reader trusting the
+        // blank and reporting it as a bug.
+        empty="No keywords — Performance Max campaigns have none by design."
+        loading={keywords.isLoading}
+        more={Math.max(0, kwRows.length - LIMIT)}
+        items={kwRows.slice(0, LIMIT).map((r) => ({
+          key: `${r.id}-${r.parentId ?? ''}`,
+          label: r.name ?? r.id ?? '',
+          note: r.matchType ? humanise(r.matchType) : null,
+          right: money0(r.spendPence),
+        }))}
+      />
+    </div>
+  );
+}
 
 export function GoogleAdGroupsTab({
   query,
-  onSelectAdGroup,
 }: {
   query: UseQueryResult<GoogleAdGroupsPayload>;
-  onSelectAdGroup: (id: string) => void;
 }) {
   const { data, isLoading, isError, error } = query;
+  const rows = data?.rows ?? [];
+  const maxSpend = rows.reduce((m, r) => Math.max(m, r.spendPence), 0);
 
-  const showTable = data && data.state === 'ok';
-
-  if (isError) {
-    return <EmptyState message={`Couldn't load ad groups: ${(error as Error)?.message ?? 'unknown error'}`} />;
-  }
-  if (isLoading && !data) return <SkeletonTable rows={8} cols={8} />;
-  if (!data) return null;
+  const columns: GridColumn<GoogleAdGroupRow>[] = [
+    nameColumn<GoogleAdGroupRow>('Ad group', maxSpend, 'Unnamed ad group'),
+    ...deliveryColumns<GoogleAdGroupRow>(),
+    {
+      key: 'status', header: 'Status', align: 'right', width: 'w-[100px]',
+      sortBy: (r) => r.status ?? 'zzz',
+      render: (r) => (r.status
+        ? <Chip tone={/PAUSED|REMOVED/i.test(r.status) ? 'muted' : 'neutral'}>{humanise(r.status)}</Chip>
+        : DASH),
+    },
+    impressionShareColumn<GoogleAdGroupRow>(),
+  ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <GoogleStateNotice state={data.state} />
-
-      {data.windowClamped && (
-        <Note>
-          Ad group, ad and keyword detail is kept for 92 days. This period reaches further back
-          than that, so figures below are shown from {formatDate(data.effectiveSince)}
-          {' '}onward rather than the whole period.
-        </Note>
-      )}
-
-      {showTable && (
+    <GoogleTabFrame
+      state={data?.state}
+      isLoading={isLoading}
+      isError={isError}
+      errorLabel={`Couldn't load ad groups: ${(error as Error)?.message ?? 'unknown error'}`}
+      windowClamped={data?.windowClamped}
+      effectiveSince={data?.effectiveSince}
+      excludedAccounts={data?.excludedAccounts}
+    >
+      <div className="flex flex-col gap-2">
+        <SectionHead
+          title="Ad groups"
+          note="Open a row to see the ads and the keywords inside it — they sit side by side under an ad group, so neither is hidden behind the other."
+          right={<span className="text-[12px] text-ink-muted">{num(rows.length)} ad groups</span>}
+        />
         <DeferUntilVisible minHeight={360}>
-          <AdMetricTable
-            columns={COLUMNS}
-            rows={data.rows}
-            onRowClick={(r) => { if (r.id) onSelectAdGroup(r.id); }}
+          <DataGrid
+            columns={columns}
+            rows={rows}
+            rowKey={(r) => `${r.id}-${r.parentId ?? ''}`}
             emptyState={<EmptyState message="No Google ad group spend in this window." />}
+            rowTone={(r) => (r.spendPence > 0 ? 'default' : 'muted')}
+            renderExpanded={(r) => (r.id ? <AdGroupChildren adGroupId={r.id} /> : null)}
           />
         </DeferUntilVisible>
-      )}
-
-      {data.excludedAccounts.length > 0 && (
-        <Note>
-          {data.excludedAccounts.length === 1
-            ? 'One Google account is'
-            : `${data.excludedAccounts.length} Google accounts are`}
-          {' '}not shown here because Elevate does not yet report in{' '}
-          {data.excludedAccounts.length === 1 ? 'its' : 'their'} currency:{' '}
-          {data.excludedAccounts.map((a, i) => (
-            <span key={a.customerId}>
-              {i > 0 ? ', ' : ''}
-              {a.name ?? a.customerId}
-              {a.currency ? ` (${a.currency})` : ''}
-            </span>
-          ))}
-          .
-        </Note>
-      )}
-    </div>
+      </div>
+    </GoogleTabFrame>
   );
 }

@@ -11,9 +11,9 @@ import {
 } from '../_shared/window';
 import {
   fetchGoogleCampaigns, fetchGoogleAdGroups, fetchGoogleAds, fetchGoogleKeywords,
-  fetchGoogleLeadPerformance,
+  fetchGoogleSearchTerms, fetchGoogleLeadPerformance,
   type GoogleCampaignsPayload, type GoogleAdGroupsPayload, type GoogleAdsPage, type GoogleKeywordsPage,
-  type GoogleLeadPerformancePayload,
+  type GoogleSearchTermsPage, type GoogleLeadPerformancePayload,
 } from './api';
 
 // The blended CPL/CPB/CPA cards. Same scope-bar plumbing as every other hook
@@ -161,6 +161,28 @@ export function useGoogleKeywords(parentId: string | null) {
     queryFn: ({ pageParam }) => {
       const cursor = pageParam as string | null;
       return fetchGoogleKeywords(cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base);
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// Search terms — what people actually typed. Same parentId filter and same
+// paging idiom as ads/keywords; the 30-day window is applied and REPORTED by
+// the server (windowDays on the payload), not assumed here, so this tab can
+// never claim a period the sync does not pull.
+export function useGoogleSearchTerms(parentId: string | null) {
+  const { scope, win } = useScopePeriod();
+  const qs = ymdWindowParams(scope, win);
+  const base = parentId ? `${qs}&parentId=${encodeURIComponent(parentId)}` : qs;
+  return useInfiniteQuery<GoogleSearchTermsPage>({
+    queryKey: ['marketing', 'google', 'search-terms', parentId ?? 'all', scopeKey({ scope, win })],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) => {
+      const cursor = pageParam as string | null;
+      return fetchGoogleSearchTerms(cursor ? `${base}&cursor=${encodeURIComponent(cursor)}` : base);
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 5 * 60_000,

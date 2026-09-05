@@ -1,75 +1,23 @@
 'use client';
-// Google report — Campaigns tab. Mirrors
-// ../facebook/components/FacebookCampaignsTab.tsx: clicking a row calls
-// `onSelectCampaign`, which the parent GoogleReportScreen turns into a
-// `?tab=adgroups&campaignId=…` filter switch.
+// Google report — Campaigns tab. The only tier reading ad_metrics rather than
+// a deep-grain table, which is why it has no `detail_not_synced` state and no
+// 92-day clamp of its own.
 //
-// No coverage notice, no unmatched-leads note, no CPL/CPB/CPA columns —
-// Google's rows are already fully attributed by the platform itself (see
-// google-report.service.js's file header, point 1 and point 5). Two columns
-// the Facebook tab does not have instead: Conversions and Cost / conversion,
-// both Google's own tracked figures, present at every grain.
-import { useMemo } from 'react';
-import type { UseQueryResult } from '@tanstack/react-query';
-import { EmptyState, SkeletonTable } from '@/components/ui';
+// Clicking a row filters the Ad groups tab to that campaign — a real drill
+// DOWN, one level, into the thing that has exactly one kind of child. (The Ad
+// groups tab deliberately does not do the same, because an ad group has two
+// kinds of child and picking one for the reader is what made the old
+// behaviour feel arbitrary. See GoogleAdGroupsTab.)
+import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
-import { formatDate } from '@/lib/format';
-import { AdMetricTable, type Column } from '../../_shared/AdMetricTable';
-import { money, ctr, num } from '../../_shared/format';
-import { GoogleStateNotice } from './GoogleStateNotice';
-import type { GoogleCampaignsPayload, GoogleRow } from '../api';
-
-type DisplayRow = { kind: 'data'; row: GoogleRow } | { kind: 'totals'; row: GoogleRow };
-
-// Google's own campaign status (ENABLED, PAUSED, REMOVED…) as the sync
-// stamped it on the latest day in the window. Only the not-running ones are
-// worth a chip — same reasoning as the Facebook tab's StatusChip, just keyed
-// on Google's "ENABLED" rather than Meta's "ACTIVE".
-function StatusChip({ status }: { status: string | null }) {
-  if (!status || status.toUpperCase() === 'ENABLED') return null;
-  const label = status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();
-  return (
-    <span
-      className="ml-2 rounded-full border border-border bg-bg px-2 py-0.5 align-middle text-[11px] font-normal text-ink-muted"
-      title="Campaign status reported by Google on the most recent day in this period."
-    >
-      {label}
-    </span>
-  );
-}
-
-// Calm, factual prose — never an error/warning colour. These are facts about
-// the data, not problems with it.
-function Note({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="rounded-panel border border-border bg-bg px-3 py-2 text-[12.5px] leading-relaxed text-ink-muted">
-      {children}
-    </p>
-  );
-}
-
-const COLUMNS: Column<DisplayRow>[] = [
-  {
-    key: 'name',
-    header: 'Campaign',
-    align: 'left',
-    render: (r) => (r.kind === 'totals' ? (
-      <span className="text-ink">Total</span>
-    ) : (
-      <span className="font-medium text-brand">
-        {r.row.name ?? r.row.id}
-        <StatusChip status={r.row.status} />
-      </span>
-    )),
-  },
-  { key: 'spend', header: 'Spend', align: 'right', render: (r) => money(r.row.spendPence) },
-  { key: 'impressions', header: 'Impressions', align: 'right', render: (r) => num(r.row.impressions) },
-  { key: 'clicks', header: 'Clicks', align: 'right', render: (r) => num(r.row.clicks) },
-  { key: 'ctr', header: 'CTR', align: 'right', render: (r) => ctr(r.row.ctr) },
-  { key: 'cpc', header: 'CPC', align: 'right', render: (r) => money(r.row.cpcPence) },
-  { key: 'conversions', header: 'Conversions', align: 'right', render: (r) => num(r.row.conversions) },
-  { key: 'costPerConversion', header: 'Cost / conversion', align: 'right', render: (r) => money(r.row.costPerConversionPence) },
-];
+import type { UseQueryResult } from '@tanstack/react-query';
+import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
+import { SectionHead } from '../../_shared/StatRail';
+import { Chip, humanise } from '../../_shared/Bars';
+import { num, DASH } from '../../_shared/format';
+import { nameColumn, deliveryColumns, impressionShareColumn } from './columns';
+import { GoogleTabFrame } from './GoogleTabFrame';
+import type { GoogleCampaignsPayload, GoogleCampaignRow } from '../api';
 
 export function GoogleCampaignsTab({
   query,
@@ -79,67 +27,70 @@ export function GoogleCampaignsTab({
   onSelectCampaign: (id: string) => void;
 }) {
   const { data, isLoading, isError, error } = query;
+  const rows = data?.rows ?? [];
+  const maxSpend = rows.reduce((m, r) => Math.max(m, r.spendPence), 0);
 
-  // The three non-ok states all return zero rows from the service, so the
-  // notice replaces the table entirely — same shape as the Facebook tab's
-  // showTable gate, minus the no_ad_id_coverage case Google does not have.
-  const showTable = data && data.state === 'ok';
-
-  const rows: DisplayRow[] = useMemo(() => {
-    if (!data) return [];
-    const out: DisplayRow[] = data.rows.map((row) => ({ kind: 'data' as const, row }));
-    if (data.totals) out.push({ kind: 'totals' as const, row: data.totals });
-    return out;
-  }, [data]);
-
-  if (isError) {
-    return (
-      <EmptyState message={`Couldn't load the Google report: ${(error as Error)?.message ?? 'unknown error'}`} />
-    );
-  }
-  if (isLoading && !data) return <SkeletonTable rows={8} cols={8} />;
-  if (!data) return null;
+  const columns: GridColumn<GoogleCampaignRow>[] = [
+    {
+      ...nameColumn<GoogleCampaignRow>('Campaign', maxSpend, 'Unnamed campaign'),
+      // Channel type sits with the name because it is what makes the rest of
+      // the row legible: a Performance Max campaign has no keywords and
+      // frequently no impression share, and a reader who can see that label
+      // reads those blanks as Google's design rather than as our gap.
+      sub: (r) => (
+        <span className="flex items-center gap-2">
+          {r.channelType && <Chip>{humanise(r.channelType)}</Chip>}
+          {r.status && /PAUSED|REMOVED/i.test(r.status) && <Chip tone="muted">{humanise(r.status)}</Chip>}
+        </span>
+      ),
+    },
+    ...deliveryColumns<GoogleCampaignRow>(),
+    {
+      key: 'calls', header: 'Calls', align: 'right', sortBy: (r) => r.phoneCalls ?? null,
+      // Calls straight from a call extension, as Google counts them —
+      // distinct from the CallRail figure in the rail above, which is a
+      // deduplicated person. Two different questions, deliberately not
+      // reconciled: one is "how many times did someone tap the number in the
+      // ad", the other is "how many people rang us".
+      render: (r) => (r.phoneCalls === null ? DASH : num(r.phoneCalls)),
+    },
+    impressionShareColumn<GoogleCampaignRow>(),
+  ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <GoogleStateNotice state={data.state} />
-
-      {data.windowClamped && (
-        <Note>
-          Ad group, ad and keyword detail is kept for 92 days. This period reaches further back
-          than that, so figures below are shown from {formatDate(data.effectiveSince)}
-          {' '}onward rather than the whole period.
-        </Note>
-      )}
-
-      {showTable && (
+    <GoogleTabFrame
+      state={data?.state}
+      isLoading={isLoading}
+      isError={isError}
+      errorLabel={`Couldn't load campaigns: ${(error as Error)?.message ?? 'unknown error'}`}
+      excludedAccounts={data?.excludedAccounts}
+    >
+      <div className="flex flex-col gap-2">
+        <SectionHead
+          title="Campaigns"
+          note="Google's own delivery and tracked conversions. Click a campaign to see its ad groups."
+          right={data?.totals && (
+            <span className="text-[12px] text-ink-muted">
+              {num(rows.length)} campaigns
+            </span>
+          )}
+        />
         <DeferUntilVisible minHeight={360}>
-          <AdMetricTable
-            columns={COLUMNS}
+          <DataGrid
+            columns={columns}
             rows={rows}
-            onRowClick={(r) => { if (r.kind === 'data' && r.row.id) onSelectCampaign(r.row.id); }}
+            rowKey={(r) => r.id ?? 'x'}
             emptyState={<EmptyState message="No Google campaign spend in this window." />}
+            rowTone={(r) => (r.spendPence > 0 ? 'default' : 'muted')}
+            // A campaign has exactly ONE kind of child, so a click can drill
+            // into it without choosing on the reader's behalf. That is
+            // precisely why the Ad groups tab below does NOT navigate: an ad
+            // group has two kinds of child, and picking one is what made the
+            // old behaviour feel arbitrary.
+            onRowClick={(r) => { if (r.id) onSelectCampaign(r.id); }}
           />
         </DeferUntilVisible>
-      )}
-
-      {data.excludedAccounts.length > 0 && (
-        <Note>
-          {data.excludedAccounts.length === 1
-            ? 'One Google account is'
-            : `${data.excludedAccounts.length} Google accounts are`}
-          {' '}not shown here because Elevate does not yet report in{' '}
-          {data.excludedAccounts.length === 1 ? 'its' : 'their'} currency:{' '}
-          {data.excludedAccounts.map((a, i) => (
-            <span key={a.customerId}>
-              {i > 0 ? ', ' : ''}
-              {a.name ?? a.customerId}
-              {a.currency ? ` (${a.currency})` : ''}
-            </span>
-          ))}
-          .
-        </Note>
-      )}
-    </div>
+      </div>
+    </GoogleTabFrame>
   );
 }
