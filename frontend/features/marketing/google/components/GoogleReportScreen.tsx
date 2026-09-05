@@ -15,16 +15,23 @@
 //    — click an ad group, land on a different tab, looking at a list of ads
 //    that (measured live) had no names at all. An ad group has TWO kinds of
 //    child, so navigating to one was choosing for the reader with no basis for
-//    the choice. It now expands in place and shows both. Only the CAMPAIGN row
-//    still navigates, because a campaign has exactly one kind of child.
+//    the choice. It now expands in place and shows both.
+//
+//    NO ROW ON THIS PAGE NAVIGATES ON CLICK ANY MORE. A campaign row expands
+//    too — it also has two useful destinations, Google's delivery detail and
+//    its ad groups — and offers the second as an explicit link inside the
+//    panel. One rule for the whole page: a click opens, a link moves you.
 //
 //  * `parentId` therefore no longer arrives from a row click. It survives as a
 //    URL filter because Ads, Keywords and Search terms all honour one and a
 //    filtered view stays shareable, but nothing on this page sets it any more.
 //
-//  * The performance panel above the tabs now carries a per-campaign
-//    breakdown (migration 000165) — which campaign bought which patient, and
-//    what those patients have paid. That figure did not exist before.
+//  * ONE CAMPAIGN TABLE, NOT TWO. The per-campaign breakdown (migration
+//    000165) first landed in the panel above the tab strip — while the tab
+//    strip's first tab was already Campaigns. The same six campaigns were
+//    listed twice on one screen in two tables with different columns. They
+//    are merged onto the Campaigns tab, which now carries both the money
+//    columns and Google's own delivery figures.
 //
 // Filters live in the URL beside `tab`, so a view is shareable and the back
 // button works. A tab that cannot honour the current filter clears it rather
@@ -32,7 +39,7 @@
 // /google/ad-groups and parentId on /google/ads, /google/keywords and
 // /google/search-terms (GoogleQuerySchema).
 // ============================================================================
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
@@ -82,6 +89,13 @@ function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void
 
 export default function GoogleReportScreen() {
   const [tab, setTab] = useAdReportTab(TABS);
+  // Owned HERE, not by either consumer, because two of them read it: the
+  // summary rail and the campaign table one tab down. Off (the default) is the
+  // owner's own CPB/CPA definition — new patients only; on counts every match.
+  // Both figures come from ONE already-cached response, so flipping it costs
+  // no request; what it must not do is move the rail's definition of an
+  // accepted patient while the campaign table below keeps the other one.
+  const [includeExisting, setIncludeExisting] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -141,13 +155,14 @@ export default function GoogleReportScreen() {
       />
       <ScopePeriodBar />
 
-      {/* Above the tab strip on purpose: this is the answer to "what did
-          Google cost us", true regardless of which grain tab is open, and it
-          is now per-campaign as well as per-practice. The grain tabs below
-          report Google's OWN tracked conversions, which count something
-          different from the CRM funnel and are deliberately not blended with
-          it anywhere on this page. */}
-      <GooglePerformancePanel />
+      {/* Above the tab strip on purpose: group totals and the per-practice
+          split are true regardless of which grain tab is open, and a practice
+          is not a level of the campaign hierarchy — it is a different axis.
+          Anything with a campaign grain lives in the tabs below. */}
+      <GooglePerformancePanel
+        includeExisting={includeExisting}
+        onIncludeExistingChange={setIncludeExisting}
+      />
 
       <div className="flex flex-col gap-4">
         <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
@@ -166,7 +181,11 @@ export default function GoogleReportScreen() {
         )}
 
         {tab === 'campaigns' && (
-          <GoogleCampaignsTab query={campaigns} onSelectCampaign={filterByCampaign} />
+          <GoogleCampaignsTab
+            query={campaigns}
+            includeExisting={includeExisting}
+            onSelectCampaign={filterByCampaign}
+          />
         )}
         {tab === 'adgroups' && <GoogleAdGroupsTab query={adGroups} />}
         {tab === 'ads' && <GoogleAdsTab parentId={parentId} />}
