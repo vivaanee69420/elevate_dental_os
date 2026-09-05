@@ -24,13 +24,15 @@
 //      is what stops a term already excluded being re-reported as actionable
 //      every month.
 // ============================================================================
+import { useState } from 'react';
 import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
 import { SectionHead, FootNote } from '../../_shared/StatRail';
 import { ShareBar, Chip, humanise } from '../../_shared/Bars';
-import { money, num, DASH } from '../../_shared/format';
+import { money, money0, num, ctr, conversions as fmtConversions, DASH } from '../../_shared/format';
 import { deliveryColumns } from './columns';
+import { DetailModal, Facts } from '../../_shared/DetailModal';
 import { GoogleTabFrame, ShowMore } from './GoogleTabFrame';
 import { useGoogleSearchTerms } from '../hooks';
 import type { GoogleSearchTermRow } from '../api';
@@ -51,6 +53,7 @@ export function GoogleSearchTermsTab({ parentId }: { parentId: string | null }) 
     data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
   } = useGoogleSearchTerms(parentId);
 
+  const [selected, setSelected] = useState<GoogleSearchTermRow | null>(null);
   const first = data?.pages[0];
   const rows = data?.pages.flatMap((p) => p.rows) ?? [];
   const maxSpend = rows.reduce((m, r) => Math.max(m, r.spendPence), 0);
@@ -132,9 +135,46 @@ export function GoogleSearchTermsTab({ parentId }: { parentId: string | null }) 
             rowKey={(r) => `${r.id}-${r.parentId ?? ''}`}
             emptyState={<EmptyState message="No search terms recorded in this window." />}
             rowTone={(r) => (r.spendPence > 0 ? 'default' : 'muted')}
+            onRowClick={setSelected}
           />
         </DeferUntilVisible>
       </div>
+
+      <DetailModal
+        open={selected !== null}
+        title={selected ? `“${selected.name ?? selected.id}”` : ''}
+        subtitle={selected && [selected.campaignName, selected.parentName].filter(Boolean).join(' · ')}
+        onClose={() => setSelected(null)}
+      >
+        {selected && (
+          <div className="flex flex-col gap-4">
+            <Facts items={[
+              { label: 'Spend', value: money0(selected.spendPence),
+                note: selected.cpcPence === null ? undefined : `${money(selected.cpcPence)} / click` },
+              { label: 'Impressions', value: num(selected.impressions),
+                note: `${num(selected.clicks)} clicks · ${ctr(selected.ctr)}` },
+              { label: 'Conversions', value: fmtConversions(selected.conversions),
+                note: selected.costPerConversionPence === null
+                  ? undefined : `${money(selected.costPerConversionPence)} each` },
+              { label: 'Matched keyword',
+                value: selected.keywordText ? `“${selected.keywordText}”` : DASH,
+                note: selected.matchType ? humanise(selected.matchType) ?? undefined : 'Performance Max — no keyword' },
+              { label: 'Status', value: humanise(selected.termStatus) ?? DASH },
+            ]}
+            />
+            {/* The action this report exists for, spelled out. A search term
+                report is only worth reading if the reader knows what to DO
+                with a bad row, and the answer is a negative keyword on the ad
+                group named above — not on the term itself, which is not an
+                object in the account and cannot be edited. */}
+            <p className="text-[11.5px] leading-relaxed text-ink-muted">
+              {selected.termStatus && /EXCLUDED/i.test(selected.termStatus)
+                ? 'This term is already excluded — it is shown so its historic cost stays visible, not because it needs action.'
+                : 'If this term is not worth paying for, add it as a negative keyword on the ad group above. A search term is not an object in the Google account, so it cannot be edited directly.'}
+            </p>
+          </div>
+        )}
+      </DetailModal>
     </GoogleTabFrame>
   );
 }

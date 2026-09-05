@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { supaRec } from './setup.js';
 import { marketingRepository } from '../src/repositories/marketing.repository.js';
+import { GRAINS, GRAIN_TABLES } from '../src/repositories/ad-grain.repository.js';
 
 const ORG = 'org-mkt-1';
 // August 2026 as the scope bar emits it: London-local midnight, in BST (UTC+1).
@@ -625,5 +626,41 @@ describe('leadsByCampaign booking fields', () => {
         const rows = await marketingRepository.leadsByCampaign(ORG, AUG_SINCE, AUG_UNTIL, null);
         expect(rows[0].booked_at).toBeNull();
         expect(rows[0].attended).toBe(false);
+    });
+});
+
+// ============================================================================
+// THE PROBE'S ALLOWLIST MUST COVER EVERY GRAIN, DERIVED AND NOT RE-TYPED.
+//
+// hasGrainMetrics held its own hardcoded copy of the deep-grain table names.
+// A sixth grain (google_search_term) was registered in ad-grain.repository.js
+// and that copy was not updated, so the probe threw "unknown deep-grain table"
+// — and it threw in EXACTLY the situation it exists to answer: an empty table,
+// which is every window before that grain's first sync. The Search terms tab
+// returned a 500 for its entire life up to that point.
+//
+// These two tests pin the shape that prevents it recurring rather than the
+// single missing string.
+// ============================================================================
+describe('hasGrainMetrics — grain allowlist', () => {
+    it('accepts the table behind every registered grain', async () => {
+        for (const grain of GRAINS) {
+            const table = GRAIN_TABLES[grain];
+            expect(table, `no table registered for grain '${grain}'`).toBeTruthy();
+            // Resolves rather than throwing is the whole assertion; the boolean
+            // it returns depends on the stub's rows and is not the point.
+            await expect(marketingRepository.hasGrainMetrics(ORG, table)).resolves.toBeTypeOf('boolean');
+        }
+    });
+
+    // The allowlist is not decoration: `table` is interpolated into a .from()
+    // call, so an unknown name must still be refused outright.
+    it('still refuses a table that is not a registered grain', async () => {
+        await expect(marketingRepository.hasGrainMetrics(ORG, 'contacts'))
+            .rejects.toThrow(/unknown deep-grain table/i);
+    });
+
+    it('registers a table for every grain and no grain the registry does not know', () => {
+        expect(Object.keys(GRAIN_TABLES).sort()).toEqual([...GRAINS].sort());
     });
 });

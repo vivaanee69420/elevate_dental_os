@@ -21,6 +21,24 @@ export const GRAINS = Object.freeze([
     'google_adgroup', 'google_ad', 'google_keyword', 'google_search_term',
 ]);
 
+// grain -> the table behind it. THE ONE PLACE that mapping lives on this side
+// of the wire (the database has its own in _ad_grain_table).
+//
+// It exists because a SECOND copy of it, hardcoded in
+// marketing.repository.js's hasGrainMetrics, is what broke the Search terms
+// tab: that copy listed five tables, the sixth grain was added here, and the
+// probe threw "unknown deep-grain table" for every empty search-term window —
+// which is every window until the first sync lands. A list that must be
+// updated in two files to stay correct will be updated in one.
+export const GRAIN_TABLES = Object.freeze({
+    meta_adset: 'ad_meta_adsets',
+    meta_ad: 'ad_meta_ads',
+    google_adgroup: 'ad_google_adgroups',
+    google_ad: 'ad_google_ads',
+    google_keyword: 'ad_google_keywords',
+    google_search_term: 'ad_google_search_terms',
+});
+
 // The Google grains, which read through ad_google_rollup rather than
 // ad_grain_rollup. Kept as its own list rather than derived from a
 // startsWith('google_') test so that adding a grain is one deliberate edit in

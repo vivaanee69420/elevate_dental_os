@@ -14,14 +14,16 @@
 //     a 1-10 grade, and averaging grades is meaningless.
 //
 // Spend, clicks, impressions and conversions are exact.
+import { useState } from 'react';
 import { EmptyState } from '@/components/ui';
 import { DeferUntilVisible } from '@/components/DeferUntilVisible';
 import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
 import { SectionHead, FootNote } from '../../_shared/StatRail';
-import { Chip, humanise } from '../../_shared/Bars';
-import { num, DASH } from '../../_shared/format';
+import { Chip, humanise, ImpressionShareBar } from '../../_shared/Bars';
+import { money, money0, num, ctr, pct, conversions as fmtConversions, DASH } from '../../_shared/format';
 import { nameColumn, deliveryColumns, impressionShareColumn } from './columns';
 import { BestPerformer, bestByCostPerConversion, unrankedNote } from '../../_shared/BestPerformer';
+import { DetailModal, Facts } from '../../_shared/DetailModal';
 import { GoogleTabFrame, ShowMore } from './GoogleTabFrame';
 import { useGoogleKeywords } from '../hooks';
 import type { GoogleKeywordRow } from '../api';
@@ -42,6 +44,7 @@ export function GoogleKeywordsTab({ parentId }: { parentId: string | null }) {
     data, isLoading, isError, error, hasNextPage, fetchNextPage, isFetchingNextPage,
   } = useGoogleKeywords(parentId);
 
+  const [selected, setSelected] = useState<GoogleKeywordRow | null>(null);
   const first = data?.pages[0];
   const rows = data?.pages.flatMap((p) => p.rows) ?? [];
   const maxSpend = rows.reduce((m, r) => Math.max(m, r.spendPence), 0);
@@ -106,6 +109,13 @@ export function GoogleKeywordsTab({ parentId }: { parentId: string | null }) {
             it is Google's opinion of the keyword, not a result, and a 10/10
             keyword nobody converts on is not the best keyword. */}
         <BestPerformer
+          onOpen={() => {
+            const best = bestByCostPerConversion(rows.map((r) => ({
+              id: r.id, name: r.name, spendPence: r.spendPence,
+              conversions: r.conversions, costPerConversionPence: r.costPerConversionPence,
+            })));
+            setSelected(rows.find((r) => r.id === best?.id) ?? null);
+          }}
           label="Best keyword"
           row={bestByCostPerConversion(rows.map((r) => ({
             id: r.id, name: r.name, spendPence: r.spendPence,
@@ -133,9 +143,58 @@ export function GoogleKeywordsTab({ parentId }: { parentId: string | null }) {
             rowKey={(r) => `${r.id}-${r.parentId ?? ''}`}
             emptyState={<EmptyState message="No keywords with spend in this window." />}
             rowTone={(r) => (r.spendPence > 0 ? 'default' : 'muted')}
+            onRowClick={setSelected}
           />
         </DeferUntilVisible>
       </div>
+
+      <DetailModal
+        open={selected !== null}
+        title={selected?.name ?? selected?.id ?? 'Keyword'}
+        subtitle={selected && [selected.matchType ? humanise(selected.matchType) : null,
+          selected.campaignName, selected.parentName].filter(Boolean).join(' · ')}
+        onClose={() => setSelected(null)}
+      >
+        {selected && (
+          <div className="flex flex-col gap-4">
+            <Facts items={[
+              { label: 'Spend', value: money0(selected.spendPence),
+                note: selected.cpcPence === null ? undefined : `${money(selected.cpcPence)} / click` },
+              { label: 'Impressions', value: num(selected.impressions),
+                note: `${num(selected.clicks)} clicks · ${ctr(selected.ctr)}` },
+              { label: 'Conversions', value: fmtConversions(selected.conversions),
+                note: selected.costPerConversionPence === null
+                  ? undefined : `${money(selected.costPerConversionPence)} each` },
+              { label: 'Quality score',
+                value: selected.qualityScore === null ? DASH : `${selected.qualityScore}/10`,
+                note: 'latest in the window, not an average' },
+              { label: 'Top of page',
+                value: pct(selected.searchTopImpressionShare),
+                note: `absolute top ${pct(selected.searchAbsoluteTopImpressionShare)}` },
+            ]}
+            />
+            <div>
+              <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+                Impression share
+              </p>
+              <ImpressionShareBar
+                won={selected.searchImpressionShare}
+                lostToBudget={selected.searchBudgetLostImpressionShare}
+                lostToRank={selected.searchRankLostImpressionShare}
+              />
+            </div>
+            {/* Restated in the dialog, not only in the footnote under the
+                table: someone who opened one keyword to decide a bid is
+                exactly the reader who must know these two are approximate. */}
+            <p className="text-[11.5px] leading-relaxed text-ink-muted">
+              Impression share is an impression-weighted average over the days Google reported one,
+              so it can differ slightly from Google&apos;s own figure for the same range. Quality
+              Score is the latest value in the window — it is a grade, and averaging grades is
+              meaningless. Spend, clicks and conversions are exact.
+            </p>
+          </div>
+        )}
+      </DetailModal>
     </GoogleTabFrame>
   );
 }
