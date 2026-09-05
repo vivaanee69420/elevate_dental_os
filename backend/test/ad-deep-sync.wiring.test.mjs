@@ -128,6 +128,53 @@ describe('google deep wiring', () => {
         expect(rpcsAtDeepTime).toContain('ad_metrics_replace_window');
     });
 
+    // ========================================================================
+    // A GRAIN THAT COMES BACK SHORT MUST REACH THE OWNER.
+    //
+    // This was the last silent case, and it is not hypothetical: three
+    // ad-group pulls fell back to their base field set for a whole run because
+    // the enriched query asked ad_group for a campaign-only metric. Every
+    // count looked healthy, the integration stayed green, and the only symptom
+    // was two columns quietly missing from one tab. It was found by reading a
+    // sync's return value by hand — which is not a control.
+    // ========================================================================
+    it('warns when a single grain degrades to base fields, and says it will not self-heal', async () => {
+        syncGoogleDeep.mockResolvedValueOnce({
+            counts: { google_adgroup: 3 },
+            skipped: [
+                { customerId: 'c1', grain: 'google_adgroup:degraded', error: 'unsupported metric' },
+                { customerId: 'c2', grain: 'google_adgroup:degraded', error: 'unsupported metric' },
+            ],
+        });
+        await syncOneGoogleOrg(ORG);
+        const warning = integrationRepository.markSynced.mock.calls.at(-1)[2];
+        expect(warning).toMatch(/fell back to base fields/i);
+        expect(warning).toContain('google_adgroup');
+        // The distinguishing half: a degraded pull repeats every night, so the
+        // wording must not read as a transient blip the next run will clear.
+        expect(warning).toMatch(/until the query is fixed/i);
+    });
+
+    it('warns when a grain fails outright, and does NOT call that degraded', async () => {
+        syncGoogleDeep.mockResolvedValueOnce({
+            counts: {},
+            skipped: [{ customerId: 'c1', grain: 'google_keyword', error: 'throttled' }],
+        });
+        await syncOneGoogleOrg(ORG);
+        const warning = integrationRepository.markSynced.mock.calls.at(-1)[2];
+        expect(warning).toMatch(/failed this run/i);
+        expect(warning).toContain('google_keyword');
+        expect(warning).not.toMatch(/fell back/i);
+    });
+
+    // The healthy path must stay silent, or a warning that fires every night
+    // is a warning nobody reads.
+    it('records no warning when every grain pulled cleanly', async () => {
+        await syncOneGoogleOrg(ORG);
+        const warning = integrationRepository.markSynced.mock.calls.at(-1)[2];
+        expect(warning ?? null).toBeNull();
+    });
+
     it('does not fail the campaign sync when the deep pull throws', async () => {
         syncGoogleDeep.mockRejectedValueOnce(new Error('keyword_view exploded'));
         const res = await syncOneGoogleOrg(ORG);
