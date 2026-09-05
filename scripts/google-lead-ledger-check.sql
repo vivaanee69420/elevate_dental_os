@@ -2,8 +2,8 @@
 -- ad_google_lead_ledger — standing correctness checks.
 --
 -- Run against hosted (or any environment with real data) after touching
--- migration 000162, the Google report service, or the Dentally / CallRail /
--- GoHighLevel syncs that feed them:
+-- migration 000162 or 000165, the Google report service, or the Dentally /
+-- CallRail / GoHighLevel syncs that feed them:
 --
 --     psql "$DATABASE_URL" -v org="'<organisation uuid>'" \
 --          -v since="'2026-06-01'" -v until="'2026-09-01'" \
@@ -221,6 +221,55 @@ checks AS (
       WHERE cr.organisation_id = :org::uuid
         AND right(regexp_replace(coalesce(cr.caller_number, ''), '[^0-9]', '', 'g'), 10) = l.phone10
    )
+  UNION ALL
+  -- ==========================================================================
+  -- 8-11. CAMPAIGN ATTRIBUTION (migration 000165).
+  --
+  -- This half of the ledger has no unit test — it is SQL inside a migration,
+  -- verified against real rows or not at all. These four are that verification.
+  -- ==========================================================================
+
+  -- 8. A CAMPAIGN NAMED ON A LEAD MUST BE ONE THIS ORG ACTUALLY HAS. The
+  --    resolution joins CallRail's recorded campaign name to ad_metrics
+  --    through a rename-alias lookup; a campaign_id that matches no row of
+  --    this org's ad_metrics means the join escaped its org scope.
+  SELECT 'lead attributed to a campaign this org does not own', count(*)
+    FROM led l
+   WHERE l.campaign_id IS NOT NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM ad_metrics m
+        WHERE m.organisation_id = :org::uuid
+          AND m.provider = 'google_ads'
+          AND m.campaign_id = l.campaign_id
+     )
+  UNION ALL
+  -- 9. THE ROUTE AND THE RESULT MUST AGREE. `attribution` names how the
+  --    campaign was resolved, and the page prints it as fact. A row with a
+  --    route and no campaign (or a campaign and no route) means the CASE and
+  --    the coalesce that produce them have drifted apart — which would show
+  --    on screen as a confident coverage percentage over rows that carry
+  --    nothing.
+  SELECT 'attribution route disagrees with whether a campaign was resolved', count(*)
+    FROM led l
+   WHERE (l.attribution IS NULL) <> (l.campaign_id IS NULL)
+  UNION ALL
+  -- 10. A KEYWORD-ROUTED LEAD MUST CARRY ITS AD GROUP. callrail_keyword is
+  --     the only route that resolves the full chain, and the ad group comes
+  --     from the SAME gkw row as the keyword. One without the other means the
+  --     join lost a column.
+  SELECT 'keyword-routed lead missing its keyword or ad group', count(*)
+    FROM led l
+   WHERE l.attribution = 'callrail_keyword'
+     AND (l.keyword_id IS NULL OR l.ad_group_id IS NULL)
+  UNION ALL
+  -- 11. NO LEAD MAY BE COUNTED TWICE. The attribution lookups are LEFT JOINs
+  --     against tables where a name or a keyword text can legitimately appear
+  --     more than once; every one of them is wrapped in a DISTINCT ON for
+  --     exactly that reason. If one is ever removed, the ledger fans out and
+  --     every count on the page inflates silently — the campaign rows would
+  --     still sum to a plausible-looking total.
+  SELECT 'ledger returned the same phone more than once', count(*)
+    FROM (SELECT phone10 FROM led GROUP BY phone10 HAVING count(*) > 1) d
 )
 SELECT check_name, should_be_zero,
        CASE WHEN should_be_zero = 0 THEN 'PASS' ELSE 'FAIL' END AS result
