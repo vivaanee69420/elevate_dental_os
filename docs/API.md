@@ -2129,11 +2129,25 @@ the return is unknown is not 0x.
 The two **lost** shares are the actionable half and are the reason the set
 was pulled: the headline share says traffic was missed, budget-lost vs
 rank-lost says *why*, and those are different instructions (raise the budget
-vs raise the bid / improve the ad). They are requested at campaign and
-ad-group grain only — `keyword_view` is asked for the three shares that have
-been pulling successfully since `000148`, because GAQL fails the *whole*
-query on an unknown or grain-incompatible field, and guessing wrong there
-would send every keyword pull down the degraded fallback path permanently.
+vs raise the bid / improve the ad).
+
+Which grain reports which was **measured against the live API**, not assumed —
+GAQL fails the *whole* query on one grain-incompatible field, so a wrong guess
+takes an entire grain down rather than dropping a column:
+
+| grain | conv. value | impression share | budget-lost | rank-lost |
+|---|---|---|---|---|
+| campaign | yes | yes | **yes** | yes |
+| ad group | yes | yes | no | yes |
+| keyword | yes | yes | no | yes |
+| ad | yes | no | no | no |
+| search term | yes | no | no | no |
+
+`searchBudgetLostImpressionShare` is therefore **always null below campaign
+grain**, and that is the correct answer rather than a gap: a budget is a
+campaign-level object, so share lost to it is a campaign fact an ad group
+merely inherits. `phoneCalls` follows the same pattern — campaign, ad group
+and keyword report it; ads and search terms do not.
 
 Impression share is an **impression-weighted average** over the window, with
 the denominator filtered in SQL to the days Google actually reported a share.

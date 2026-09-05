@@ -404,3 +404,106 @@ describe('webhookService.dentally — loop-closing delivery diagnostics', () => 
     expect(r).toMatchObject({ received: true, resourceType: 'patient' });
   });
 });
+
+// ============================================================================
+// A webhook resolves ONE patient. It used to answer that by paging the org's
+// entire contact table into a Map (loadContactMap) — 29 pages for the largest
+// live org, and OFFSET paging re-walks every skipped row, so one event cost
+// ~400k buffers and 2.5-3.5s of database time. On the live project this single
+// query was 65.6% of ALL database time (1,733,431 calls @ 114.9ms).
+//
+// These pin the shape of the fix rather than its speed: one targeted, unpaged,
+// index-covered read per event — and none at all where the map was never used.
+// ============================================================================
+describe('applyWebhookEvent — contact resolution is a targeted lookup, not a full map build', () => {
+  const targetedRead = () => {
+    const reads = [];
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'practices') return { data: [{ id: 'p1', pms_site_id: '5' }], error: null };
+      if (q.table === 'contacts' && q.op === 'select') {
+        reads.push(q);
+        return { data: [{ id: 'c1', pms_external_id: '7' }], error: null };
+      }
+      return { data: [], error: null };
+    };
+    return reads;
+  };
+
+  it('appointment reads only its OWN patient — one unpaged, index-covered query', async () => {
+    const reads = targetedRead();
+    const r = await applyWebhookEvent(ORG, 'appointment', {
+      id: 1, practitioner_site_id: 5, patient_id: 7, start_time: 't',
+    });
+    expect(r).toEqual({ table: 'appointments', applied: 1 });
+
+    expect(reads).toHaveLength(1);
+    const [read] = reads;
+    // No OFFSET paging: the whole-table walk is gone.
+    expect(read.range).toBeUndefined();
+    // Keyed to this event's patient, and scoped so uq_contacts_src_ext
+    // (organisation_id, source, pms_external_id) covers the lookup exactly.
+    expect(read.ins).toEqual([{ col: 'pms_external_id', vals: ['7'] }]);
+    expect(read.eqs).toEqual(expect.arrayContaining([
+      { col: 'organisation_id', val: ORG },
+      { col: 'source', val: 'dentally' },
+    ]));
+  });
+
+  it('appointment still resolves contact_id from that lookup', async () => {
+    targetedRead();
+    await applyWebhookEvent(ORG, 'appointment', {
+      id: 1, practitioner_site_id: 5, patient_id: 7, start_time: 't',
+    });
+    expect(supaRec.last).toMatchObject({ table: 'appointments', op: 'upsert' });
+    expect(supaRec.last.upsertVals[0].contact_id).toBe('c1');
+  });
+
+  it('payment resolves its own patient the same way', async () => {
+    const reads = targetedRead();
+    const r = await applyWebhookEvent(ORG, 'payment', {
+      id: 50, site_id: 5, patient_id: 7, amount: '10.00', dated_on: '2026-01-01',
+    });
+    expect(r).toEqual({ table: 'payments', applied: 1 });
+    expect(reads).toHaveLength(1);
+    expect(reads[0].ins).toEqual([{ col: 'pms_external_id', vals: ['7'] }]);
+    expect(supaRec.last.upsertVals[0].contact_id).toBe('c1');
+  });
+
+  it('treatment_plan resolves its own patient the same way', async () => {
+    const reads = targetedRead();
+    const r = await applyWebhookEvent(ORG, 'treatment_plan', {
+      id: 301, practitioner_id: 11, patient_id: 7, private_treatment_value: '1200.00',
+    });
+    expect(r).toEqual({ table: 'treatment_plans', applied: 1 });
+    expect(reads).toHaveLength(1);
+    expect(reads[0].ins).toEqual([{ col: 'pms_external_id', vals: ['7'] }]);
+  });
+
+  it('a patient-less appointment (a diary block) reads no contacts at all', async () => {
+    const reads = targetedRead();
+    const r = await applyWebhookEvent(ORG, 'appointment', {
+      id: 2, practitioner_site_id: 5, start_time: 't',
+    });
+    expect(r).toEqual({ table: 'appointments', applied: 1 });
+    expect(reads).toHaveLength(0);
+  });
+
+  it('invoice_item reads no contacts — it resolves context from the parent invoice', async () => {
+    let contactReads = 0;
+    supaRec.resultProvider = (q) => {
+      if (q.table === 'contacts' && q.op === 'select') contactReads++;
+      if (q.table === 'invoices') {
+        return {
+          data: [{ external_id: '100', practice_id: 'p1', contact_id: 'c1', dated_on: '2026-01-01', paid: true }],
+          error: null,
+        };
+      }
+      return { data: [], error: null };
+    };
+    const r = await applyWebhookEvent(ORG, 'invoice_item', {
+      id: 201, invoice_id: 100, name: 'Crown', item_price: '500.00', total_price: '500.00', quantity: 1,
+    });
+    expect(r).toEqual({ table: 'invoice_items', applied: 1 });
+    expect(contactReads).toBe(0);
+  });
+});

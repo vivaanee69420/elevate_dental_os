@@ -130,6 +130,15 @@ BEGIN
     EXECUTE format('ALTER TABLE public.%I ADD COLUMN IF NOT EXISTS search_absolute_top_impression_share numeric', t);
     -- The two that say WHY the share was missed. Together with the share
     -- itself these three sum to approximately 1.
+    --
+    -- search_budget_lost_impression_share is STRUCTURALLY NULL on every one of
+    -- these tables and always will be: Google reports it at CAMPAIGN grain
+    -- only (a budget is a campaign-level object, so "share lost to budget" is
+    -- a campaign fact an ad group merely inherits), and asking any other
+    -- resource for it fails the whole GAQL query. Measured against the live
+    -- API — see the support table in google-ads-deep-sync.js. The column stays
+    -- for the uniform-superset reason in this file's header; its nullness here
+    -- is the honest answer, not a gap waiting to be filled.
     EXECUTE format('ALTER TABLE public.%I ADD COLUMN IF NOT EXISTS search_budget_lost_impression_share numeric', t);
     EXECUTE format('ALTER TABLE public.%I ADD COLUMN IF NOT EXISTS search_rank_lost_impression_share numeric', t);
 

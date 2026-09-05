@@ -22,7 +22,7 @@ import { apiBase, fetchWithApiVersion } from './google-ads-version.js';
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
-import { syncGoogleDeep, DEEP_WINDOW_DAYS } from "./google-ads-deep-sync.js";
+import { syncGoogleDeep, DEEP_WINDOW_DAYS, CAMPAIGN_SHARE_METRICS } from "./google-ads-deep-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
 
 const INCREMENTAL_DAYS = 90;  // nightly cron window: trailing 3 months (product rule)
@@ -44,15 +44,15 @@ function buildGaql(sinceDate, untilDate) {
         // Google keeps OUT of the headline figure, call-extension calls
         // included, which for a dental practice is most of the point.
         'metrics.conversions_value, metrics.all_conversions, metrics.phone_calls,',
-        // The five impression-share ratios. The headline share says you missed
-        // traffic; the two LOST shares say why, and they are different
-        // instructions — budget-lost means raise the budget, rank-lost means
-        // raise the bid or fix the ad. Reported as null on campaign types that
-        // do not compete in the search auction (Display, Video), which is
-        // correct and must stay null rather than becoming 0.
-        'metrics.search_impression_share, metrics.search_top_impression_share,',
-        'metrics.search_absolute_top_impression_share,',
-        'metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share',
+        // All FIVE impression-share ratios — campaign is the only grain that
+        // accepts the budget-lost one (a budget is a campaign-level object).
+        // The list is imported, never re-typed here: a second copy of it in
+        // this file is precisely what left the ad-group pull degraded for a
+        // day. See the measured support table in google-ads-deep-sync.js.
+        //
+        // Null on campaign types that do not compete in the search auction
+        // (Display, Video), which is correct and must stay null, never 0.
+        CAMPAIGN_SHARE_METRICS,
         `FROM campaign WHERE segments.date BETWEEN '${sinceDate}' AND '${untilDate}'`,
     ].join(' ');
 }

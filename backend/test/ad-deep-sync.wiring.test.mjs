@@ -26,6 +26,12 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
 // it here supplies the same value to both.
 vi.mock('../src/lib/integrations/google-ads-deep-sync.js', () => ({
     DEEP_WINDOW_DAYS: 92,
+    // Statically imported by google-ads-sync.js's buildGaql, so the mock must
+    // supply it — same reason meta's LEVEL_FIELDS is here. The campaign share
+    // list lives in the deep-sync module because that is where the measured
+    // per-resource support table lives; a second copy in the campaign sync is
+    // what left three ad-group pulls degraded.
+    CAMPAIGN_SHARE_METRICS: 'metrics.search_impression_share',
     syncGoogleDeep: vi.fn(async () => ({ counts: { google_adgroup: 3 }, skipped: [] })),
 }));
 vi.mock('../src/lib/integrations/meta-ads-deep-sync.js', () => ({
