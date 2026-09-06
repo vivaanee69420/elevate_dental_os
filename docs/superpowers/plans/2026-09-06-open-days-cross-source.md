@@ -431,7 +431,7 @@ from ad_meta_lead_ledger('1a5f888a-0dfe-4802-acf8-6003665089ad'::uuid,
   '2026-06-01T00:00:00+01'::timestamptz, '2026-09-01T00:00:00+01'::timestamptz);
 ```
 
-Expected: `leads = 1977` (the meta_ads pipeline pool — no open-day pipelines are mapped yet, so `open_day_leads = 0`), `attributed = 1580`. If `leads` comes back 1865 the pool is still the old ad_id test; if it comes back 3753 the `WHERE` lost its pipeline predicate.
+Expected: `leads = 1843` (contacts whose FIRST lead sits in a meta_ads pipeline — no open-day pipelines are mapped yet, so `open_day_leads = 0`), `attributed = 1497`. If `leads` comes back 1709 the pool is still the old ad_id test; if 3325 the `WHERE` lost its pipeline predicate; if 3753 it also lost the DISTINCT ON.
 
 Also confirm isolation and grants:
 
