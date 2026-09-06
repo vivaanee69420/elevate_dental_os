@@ -125,6 +125,7 @@ export function GoogleAdsTab({ parentId }: { parentId: string | null }) {
       isError={isError}
       errorLabel={`Couldn't load ads: ${(error as Error)?.message ?? 'unknown error'}`}
       windowClamped={first?.windowClamped}
+      freshness={first?.freshness}
       effectiveSince={first?.effectiveSince}
       excludedAccounts={first?.excludedAccounts}
       footer={(

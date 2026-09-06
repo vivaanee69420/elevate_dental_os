@@ -102,6 +102,7 @@ export function GoogleSearchTermsTab({ parentId }: { parentId: string | null }) 
       isError={isError}
       errorLabel={`Couldn't load search terms: ${(error as Error)?.message ?? 'unknown error'}`}
       windowClamped={first?.windowClamped}
+      freshness={first?.freshness}
       effectiveSince={first?.effectiveSince}
       windowDays={first?.windowDays ?? 30}
       excludedAccounts={first?.excludedAccounts}

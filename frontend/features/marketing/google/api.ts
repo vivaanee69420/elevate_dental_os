@@ -22,6 +22,7 @@
 // GROUP's own id, never a campaign id — narrows /ads and /keywords. Both are
 // OPTIONAL, same shape/reasoning as the Facebook client's campaignId/adSetId.
 import { api } from '@/lib/api';
+import type { SpendFreshness } from '@/features/marketing/_shared/SpendFreshnessNote';
 
 // detail_not_synced: the campaign tier (ad_metrics) has real totals for this
 // org, but THIS grain's own deep table (ad_google_adgroups/ad_google_ads/
@@ -186,6 +187,8 @@ export interface GoogleCampaignsPayload {
   effectiveSince: string;
   /** True when the requested window started before that 92-day floor. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface GoogleAdGroupRow extends GoogleRow, GoogleExtras {}
@@ -197,6 +200,8 @@ export interface GoogleAdGroupsPayload {
   excludedAccounts: GoogleExcludedAccount[];
   effectiveSince: string;
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface GoogleAdsPage {
@@ -207,6 +212,8 @@ export interface GoogleAdsPage {
   excludedAccounts: GoogleExcludedAccount[];
   effectiveSince: string;
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface GoogleKeywordsPage {
@@ -218,6 +225,8 @@ export interface GoogleKeywordsPage {
   approximate: GoogleApproximate;
   effectiveSince: string;
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface GoogleSearchTermsPage {
@@ -233,6 +242,8 @@ export interface GoogleSearchTermsPage {
   windowDays: number;
   effectiveSince: string;
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 // Blended CPL/CPB/CPA cards (migration 000158) — PRACTICE grain, not
@@ -431,6 +442,8 @@ export interface GoogleLeadPerformancePayload {
   /** Always false here — leads/calls/appointments/invoices carry no 92-day
    *  deep-grain cap the way the campaign/ad-group/ad/keyword tiers do. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export function fetchGoogleLeadPerformance(qs: string) {

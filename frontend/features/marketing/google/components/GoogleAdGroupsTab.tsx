@@ -167,6 +167,7 @@ export function GoogleAdGroupsTab({
       isError={isError}
       errorLabel={`Couldn't load ad groups: ${(error as Error)?.message ?? 'unknown error'}`}
       windowClamped={data?.windowClamped}
+      freshness={data?.freshness}
       effectiveSince={data?.effectiveSince}
       excludedAccounts={data?.excludedAccounts}
     >
