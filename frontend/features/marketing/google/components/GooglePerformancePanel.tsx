@@ -39,6 +39,7 @@ import {
   useGoogleLeadPerformance, useGoogleLeadPerformanceFor, useSelectedYmdWindow,
 } from '../hooks';
 import type { GoogleLeadPractice, GoogleLeadRow } from '../api';
+import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
 
 type Bucket = 'leads' | 'booked' | 'accepted';
 
@@ -380,6 +381,10 @@ export function GooglePerformancePanel({
       </div>
 
       <StatRail stats={stats} />
+
+      {/* Same reason as the Facebook panel: these cards are sums over the
+          window, so a partial final day understates every one of them. */}
+      <SpendFreshnessNote freshness={data?.freshness} />
 
       {compare && !comparable && (
         <FootNote>
