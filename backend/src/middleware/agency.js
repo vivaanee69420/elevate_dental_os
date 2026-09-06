@@ -46,3 +46,20 @@ function gate(name) {
 
 export const requireAgencyActor = gate('requireAgencyActor');
 export const requireAgencyOwner = gate('requireAgencyOwner');
+
+// Mapping a GHL pipeline is the one mapping a TENANT may do: an open day is
+// their own event and waiting on their agency to categorise its pipeline would
+// make the monthly routine unusable. Owner OR agency actor, never owner-only —
+// an agency admin need not be an owner of the sub-account they administer.
+//
+// Subaccount -> practice and ad account -> practice stay requireAgencyActor:
+// those decide how an agency's client data is attributed.
+export async function requireOwnerOrAgencyActor(req, res, next) {
+    if (req.user?.role === 'owner') return next();
+    try {
+        if (await isAgencyActor(req)) return next();
+    } catch (err) {
+        req.log?.warn({ err }, 'pipeline mapping gate lookup failed');
+    }
+    return res.status(403).json({ error: 'Owner or agency access required', code: 'OWNER_OR_AGENCY' });
+}

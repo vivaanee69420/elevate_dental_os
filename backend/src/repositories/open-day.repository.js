@@ -128,6 +128,43 @@ export const openDayRepository = {
         return { mapped: rows.length };
     },
 
+    // Set or clear ONE campaign's event, without touching any other
+    // campaign's mapping — the difference from setCampaigns above, which
+    // replaces a whole event's set at once. This is what the campaign list
+    // calls: every campaign is shown at once, and moving one must never
+    // disturb the rest.
+    //
+    // Clearing DELETES rather than writing a null open_day_id, same reason
+    // as setPipeline below: the column is NOT NULL and part of the composite
+    // foreign key, and "no row" is already how always-on is spelled — a
+    // nullable event id would give the same state two representations.
+    //
+    // Only one provider is mapped this way today, so it is hardcoded here
+    // rather than threaded through as a parameter the way setCampaigns takes
+    // one — there is nothing yet for a caller to legitimately pass instead.
+    async setCampaign(orgId, { campaignId, customerId, openDayId }) {
+        if (openDayId == null) {
+            const { error } = await supabase_1.serviceClient
+                .from('ad_open_day_campaigns')
+                .delete()
+                .eq('organisation_id', orgId)
+                .eq('provider', 'meta_ads')
+                .eq('campaign_id', String(campaignId));
+            if (error) throw new Error(`ad_open_day_campaigns delete: ${error.message}`);
+            return;
+        }
+        const { error } = await supabase_1.serviceClient
+            .from('ad_open_day_campaigns')
+            .upsert({
+                organisation_id: orgId,
+                open_day_id: openDayId,
+                provider: 'meta_ads',
+                campaign_id: String(campaignId),
+                customer_id: customerId ?? null,
+            }, { onConflict: 'organisation_id,provider,campaign_id' });
+        if (error) throw new Error(`ad_open_day_campaigns upsert: ${error.message}`);
+    },
+
     // pipeline -> event, for every subaccount. Small (one row per mapped
     // pipeline), so it is read whole and joined in memory.
     async pipelineMappings(orgId) {

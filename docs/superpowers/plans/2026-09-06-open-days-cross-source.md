@@ -288,8 +288,8 @@ git commit -m "feat(open-days): read and write pipeline mappings"
 -- ad_channel_pipelines; this brings Facebook into line.
 --
 -- Measured, Plan4growth, Jun-Aug 2026, switching the pool:
---   +397 leads in meta_ads pipelines that Meta never attributed (invisible before)
---   -285 Meta-attributed leads whose pipeline nobody has categorised
+--   +346 leads in meta_ads pipelines that Meta never attributed (invisible before)
+--   -212 Meta-attributed leads whose pipeline nobody has categorised
 -- The second number is a mapping gap the report NAMES rather than swallows.
 --
 -- POOL = leads whose pipeline is mapped channel='meta_ads' (always-on) OR
@@ -431,7 +431,7 @@ from ad_meta_lead_ledger('1a5f888a-0dfe-4802-acf8-6003665089ad'::uuid,
   '2026-06-01T00:00:00+01'::timestamptz, '2026-09-01T00:00:00+01'::timestamptz);
 ```
 
-Expected: `leads = 1977` (the meta_ads pipeline pool — no open-day pipelines are mapped yet, so `open_day_leads = 0`), `attributed = 1580`. If `leads` comes back 1865 the pool is still the old ad_id test; if it comes back 3753 the `WHERE` lost its pipeline predicate.
+Expected: `leads = 1843` (contacts whose FIRST lead sits in a meta_ads pipeline — no open-day pipelines are mapped yet, so `open_day_leads = 0`), `attributed = 1497`. If `leads` comes back 1709 the pool is still the old ad_id test; if 3325 the `WHERE` lost its pipeline predicate; if 3753 it also lost the DISTINCT ON.
 
 Also confirm isolation and grants:
 
@@ -752,11 +752,11 @@ describe('facebookReportService.leadPerformance — GHL pool and coverage', () =
 
     it('publishes how many leads sit in pipelines nobody has categorised', async () => {
         marketingRepository.uncategorisedLeadCounts.mockResolvedValue({
-            leads: 1509, attributed: 280,
+            leads: 1251, attributed: 209,
         });
         const out = await facebookReportService.leadPerformance(ORG, WIN);
         expect(out.coverage).toEqual({
-            uncategorisedLeads: 1509, uncategorisedAttributedLeads: 280,
+            uncategorisedLeads: 1251, uncategorisedAttributedLeads: 209,
         });
     });
 
@@ -866,7 +866,7 @@ Create `supabase/migrations/20260101000172_uncategorised_lead_counts.sql`:
 ```sql
 -- Leads whose GHL pipeline has no channel and no open day. The report states
 -- this instead of silently dropping them: switching the Facebook pool to the
--- GHL mapping leaves 285 Meta-attributed leads out for this org today, and a
+-- GHL mapping leaves 212 Meta-attributed leads out for this org today, and a
 -- number nobody can see is a number nobody will fix.
 DROP FUNCTION IF EXISTS public.ad_uncategorised_lead_counts(uuid, timestamptz, timestamptz);
 
@@ -918,7 +918,7 @@ select * from ad_uncategorised_lead_counts('1a5f888a-0dfe-4802-acf8-6003665089ad
   '2026-06-01T00:00:00+01'::timestamptz, '2026-09-01T00:00:00+01'::timestamptz);
 ```
 
-Expected: `leads = 1509`, `attributed = 280`.
+Expected: `leads = 1251`, `attributed = 209`.
 
 - [ ] **Step 6: Run the whole backend suite and commit**
 
@@ -1499,9 +1499,9 @@ git commit -m "feat(open-days): suggest an event for newly-seen campaigns"
 - [ ] `cd backend && npm run lint && npm run typecheck` — 0 errors
 - [ ] `cd frontend && npm run typecheck && npm run lint && npm run build` — clean
 - [ ] `ggshield secret scan path <changed files>` — no secrets
-- [ ] On hosted, the ledger returns 1,977 leads / 1,580 attributed for
+- [ ] On hosted, the ledger returns 1,843 leads / 1,497 attributed for
       Plan4growth Jun–Aug 2026, and 0 rows for another org
-- [ ] `ad_uncategorised_lead_counts` returns 1,509 / 280 for the same window
+- [ ] `ad_uncategorised_lead_counts` returns 1,251 / 209 for the same window
 - [ ] Map one real open-day pipeline in the UI, reload the Facebook page, and
       confirm the event appears with a lead count matching
       `select count(*) from ad_meta_lead_ledger(...) where open_day_id = '<id>'`

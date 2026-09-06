@@ -15,7 +15,6 @@ export const SETTINGS_ITEMS: { href: string; label: string; routeId: string }[] 
   { href: '/integrations', label: 'Integrations', routeId: 'integrations' },
   { href: '/data-hub', label: 'Data Hub', routeId: 'data-hub' },
   { href: '/settings/billing', label: 'Billing', routeId: 'settings' },
-  { href: '/settings/ad-attribution', label: 'Ad attribution', routeId: 'settings' },
 ];
 
 export function SettingsRail() {

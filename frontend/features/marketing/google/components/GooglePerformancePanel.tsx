@@ -39,6 +39,7 @@ import {
   useGoogleLeadPerformance, useGoogleLeadPerformanceFor, useSelectedYmdWindow,
 } from '../hooks';
 import type { GoogleLeadPractice, GoogleLeadRow } from '../api';
+import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
 
 type Bucket = 'leads' | 'booked' | 'accepted';
 
@@ -201,7 +202,7 @@ export function GooglePerformancePanel({
           Cost per lead, per booking and per accepted patient are not shown yet — no GoHighLevel
           pipeline has been mapped to Google Ads for this organisation, so leads cannot be
           attributed.{' '}
-          <a href="/settings/ad-attribution" className="text-brand hover:underline">
+          <a href="/integrations" className="text-brand hover:underline">
             Set up ad attribution
           </a>{' '}
           to sort pipelines into Google and Facebook.
@@ -380,6 +381,10 @@ export function GooglePerformancePanel({
       </div>
 
       <StatRail stats={stats} />
+
+      {/* Same reason as the Facebook panel: these cards are sums over the
+          window, so a partial final day understates every one of them. */}
+      <SpendFreshnessNote freshness={data?.freshness} />
 
       {compare && !comparable && (
         <FootNote>

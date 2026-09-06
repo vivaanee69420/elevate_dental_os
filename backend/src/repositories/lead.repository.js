@@ -4,6 +4,9 @@
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
 import { crmHidden } from "../lib/integration-gating.js";
+
+const EXPORT_PAGE = 1000; // PostgREST hard cap per request
+
 export const leadRepository = {
     async list(orgId, q) {
         if (await crmHidden(orgId)) return [];
@@ -34,6 +37,69 @@ export const leadRepository = {
         if (error)
             throw new Error(error.message);
         return data;
+    },
+    // CSV export — ALL matching leads, paged past PostgREST's 1000-row cap.
+    //
+    // `list()` above is the trap: it takes a caller-chosen `limit` and hands
+    // back ONE page. An export must never do that — a pipeline holding more
+    // than one page would silently lose the tail with no error, which reads
+    // as a complete file. So this pages by `.range()` until a SHORT page
+    // (fewer than EXPORT_PAGE rows) proves there is nothing left, ordered by
+    // `id` (unique) so a page boundary can never skip or duplicate a row the
+    // way ordering by a non-unique column could.
+    //
+    // `onBatch` receives each page's rows as they arrive so the controller can
+    // stream them straight to the response instead of buffering the whole
+    // export in memory. Returns `{ rows, reads }` — `reads` is the number of
+    // `.range()` requests actually issued, which is what a test should assert
+    // to prove paging happened (a single-page org would report rows correctly
+    // even with a page-blind bug; `reads` cannot).
+    async exportBatches(orgId, q, onBatch) {
+        if (await crmHidden(orgId))
+            return { rows: 0, reads: 0 };
+        let offset = 0;
+        let rows = 0;
+        let reads = 0;
+        for (;;) {
+            let query = supabase_1.serviceClient
+                .from('leads')
+                .select(`
+          id, created_at, status, treatment, estimated_value_pence,
+          source, utm_source, utm_medium, utm_campaign,
+          ghl_pipeline_id, ghl_pipeline_stage_id, ghl_stage_name,
+          contact:contacts(first_name, last_name, email, phone),
+          practice:practices(name),
+          assignee:users!leads_assigned_to_fkey(full_name, email)
+        `)
+                .eq('organisation_id', orgId)
+                .order('id', { ascending: true })
+                .range(offset, offset + EXPORT_PAGE - 1);
+            if (q.status)
+                query = query.eq('status', q.status);
+            if (q.practice_id)
+                query = query.eq('practice_id', q.practice_id);
+            if (q.integration_account_id)
+                query = query.eq('integration_account_id', q.integration_account_id);
+            if (q.assigned_to)
+                query = query.eq('assigned_to', q.assigned_to);
+            if (q.ghl_pipeline_id)
+                query = query.eq('ghl_pipeline_id', q.ghl_pipeline_id);
+            if (q.since)
+                query = query.gte('created_at', q.since);
+            const { data, error } = await query;
+            reads += 1;
+            if (error)
+                throw new Error(error.message);
+            const batch = data ?? [];
+            if (batch.length) {
+                onBatch(batch);
+                rows += batch.length;
+            }
+            if (batch.length < EXPORT_PAGE)
+                break;
+            offset += EXPORT_PAGE;
+        }
+        return { rows, reads };
     },
     async getById(orgId, id) {
         const { data, error } = await supabase_1.serviceClient

@@ -18,6 +18,9 @@
 // ============================================================================
 import { openDayRepository } from "../repositories/open-day.repository.js";
 import { marketingRepository } from "../repositories/marketing.repository.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
+import { AppError } from "../middleware/errors.js";
+import { suggestOpenDay } from "../lib/marketing/open-day-suggest.js";
 
 const PROVIDER = 'meta_ads';
 
@@ -54,11 +57,23 @@ export const openDayService = {
                 `${m.integrationAccountId}|${m.ghlPipelineId}`, m.openDayId,
             ]),
         );
+        // A SUGGESTION, never a mapping — nothing is written here. Only
+        // unmapped campaigns get one; an already-assigned campaign has
+        // nothing left to propose. Reads only this org's own events/names, so
+        // a tenant's naming convention never leaks into another tenant's
+        // suggestions.
+        const suggestions = {};
+        for (const c of campaigns) {
+            if (assignedTo[c.campaignId]) continue;
+            const id = suggestOpenDay(c.campaignName, events);
+            if (id) suggestions[c.campaignId] = id;
+        }
         return {
             openDays: events.map((e) => ({ ...e, campaignIds: byEvent.get(e.id) ?? [] })),
             campaigns,
             assignedTo,
             pipelineAssignedTo,
+            suggestions,
         };
     },
 
@@ -86,7 +101,27 @@ export const openDayService = {
         return openDayRepository.setCampaigns(orgId, id, PROVIDER, campaigns);
     },
 
+    // Set or clear one campaign's event from the always-visible campaign
+    // list. Thin, like setPipeline below — campaignId carries no foreign
+    // key of its own (campaigns are not a table, only rows in ad_metrics),
+    // so unlike setPipeline's integrationAccountId there is nothing here to
+    // look up before delegating; openDayId is still guarded by the
+    // database's composite foreign key on ad_open_day_campaigns.
+    async setCampaign(orgId, args) {
+        await openDayRepository.setCampaign(orgId, args);
+        return { ok: true };
+    },
+
     async setPipeline(orgId, args) {
+        // openDayId is already guarded by the database — ad_open_day_pipelines
+        // carries FOREIGN KEY (organisation_id, open_day_id) referencing
+        // ad_open_days, so a cross-org id has no matching parent and the write
+        // fails outright. integrationAccountId carries no such key, so it is
+        // guarded here the same way ad-attribution.service.js's
+        // setPipelineChannel guards accountId: an org-scoped lookup, 404 on
+        // a miss rather than the default 500 a bare Error gets.
+        const account = await integrationAccountRepository.getById(orgId, args.integrationAccountId);
+        if (!account) throw new AppError('Unknown subaccount', 404);
         await openDayRepository.setPipeline(orgId, args);
         return { ok: true };
     },

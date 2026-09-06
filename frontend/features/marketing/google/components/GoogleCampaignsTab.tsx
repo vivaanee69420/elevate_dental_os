@@ -253,6 +253,7 @@ export function GoogleCampaignsTab({
       isError={isError}
       errorLabel={`Couldn't load campaigns: ${(error as Error)?.message ?? 'unknown error'}`}
       excludedAccounts={data?.excludedAccounts}
+      freshness={data?.freshness}
       footer={coverage && (
         <FootNote>
           {coveragePct === null

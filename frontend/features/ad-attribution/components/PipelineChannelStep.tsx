@@ -1,5 +1,11 @@
 'use client';
-// Step 2 of ad attribution: put each pipeline in a channel.
+// Categorise each GoHighLevel pipeline. Lives in the GoHighLevel card on the
+// Integrations page and nowhere else.
+//
+// Pipelines are nested under the subaccount that owns them, collapsed by
+// default: that IS the hierarchy GoHighLevel has, and a pipeline id means
+// nothing outside its Location. There is deliberately no practice mapping
+// here.
 //
 // SCALE: this org has ~113 pipelines across 7 subaccounts and about half have
 // no leads at all, so the list is grouped by subaccount, sorted by lead volume
@@ -13,13 +19,32 @@
 import { useMemo, useState } from 'react';
 import { Card } from '@/components/ui';
 import { useSetPipelineChannel } from '../hooks';
+import { useSetOpenDayPipeline, useCreateOpenDay } from '@/features/marketing/facebook/hooks';
 import type { AdAttributionConfig, AdChannel, PipelineRow } from '../api';
 
 const CHANNEL_LABEL: Record<string, string> = {
   google_ads: 'Google Ads',
   meta_ads: 'Facebook Ads',
+  open_day: 'Open day',
   unassigned: 'Unassigned',
 };
+
+// Open day sits in the SAME segmented control as Google and Facebook rather
+// than in a separate dropdown, because the previous shape was a dead end: the
+// open-day picker only rendered once the pipeline was already Facebook AND at
+// least one event existed, so an org with no events saw no way to mark one and
+// every row read "Always-on" with nothing to change it to.
+//
+// The four states are mutually exclusive as DISPLAYED, and open day wins the
+// display when both are set — matching the reporting rule that a pipeline
+// mapped to an event counts as that event's, never as always-on.
+type PipelineMark = AdChannel | 'open_day' | null;
+
+// The generic name a first event gets when somebody marks a pipeline or
+// campaign as an open day before naming any event. Deliberately not derived
+// from the pipeline's own name: a name read off the data is a guess, and this
+// one is a placeholder the owner renames, not an answer.
+const FIRST_EVENT_NAME = 'Open day';
 
 // Pipeline ids are only unique within a GoHighLevel Location, so every key,
 // map lookup and comparison must be the composite accountId|pipelineId —
@@ -28,25 +53,30 @@ function pipelineKey(accountId: string, pipelineId: string) {
   return `${accountId}|${pipelineId}`;
 }
 
-function ChannelButtons({ row, onSet, busy }: {
+// Never disabled while saving: the optimistic write flips the state on click,
+// so greying the control out would only make a finished action look pending.
+function ChannelButtons({ row, isOpenDay, onSet }: {
   row: PipelineRow;
-  onSet: (channel: AdChannel | null) => void;
-  busy: boolean;
+  isOpenDay: boolean;
+  onSet: (mark: PipelineMark) => void;
 }) {
-  const options: Array<{ value: AdChannel | null; label: string }> = [
+  const options: Array<{ value: PipelineMark; label: string }> = [
     { value: 'google_ads', label: 'Google' },
     { value: 'meta_ads', label: 'Facebook' },
+    { value: 'open_day', label: 'Open day' },
     { value: null, label: 'Unassigned' },
   ];
+  // An open-day mapping outranks the channel here exactly as it does in the
+  // report, so a pipeline carrying both never renders as two active buttons.
+  const current: PipelineMark = isOpenDay ? 'open_day' : (row.channel ?? null);
   return (
     <span className="inline-flex overflow-hidden rounded border border-slate-300">
       {options.map((o) => {
-        const active = (row.channel ?? null) === o.value;
+        const active = current === o.value;
         return (
           <button
             key={o.label}
             type="button"
-            disabled={busy}
             onClick={() => onSet(o.value)}
             className={`px-2 py-1 text-[12px] ${
               active ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
@@ -60,11 +90,22 @@ function ChannelButtons({ row, onSet, busy }: {
   );
 }
 
-export default function PipelineChannelStep({ config }: { config: AdAttributionConfig }) {
+export default function PipelineChannelStep({ config, openDays, openDayAssignedTo }: {
+  config: AdAttributionConfig;
+  openDays?: { id: string; name: string }[];
+  /** `${accountId}|${pipelineId}` -> open day id. */
+  openDayAssignedTo?: Record<string, string>;
+}) {
   const setChannel = useSetPipelineChannel();
-  const [busy, setBusy] = useState<string | null>(null);
+  const setPipeline = useSetOpenDayPipeline();
+  const createOpenDay = useCreateOpenDay();
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
+  // Subaccounts collapse by default: 113 pipelines across 7 Locations is a
+  // wall of rows, and the question being answered is "what is in THIS
+  // subaccount". A search expands everything, because a hit inside a closed
+  // section would otherwise be invisible and read as "no results".
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
   const groups = useMemo(() => {
@@ -87,22 +128,58 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
     );
   }, [config.pipelines, search, hideEmpty]);
 
+  // Counted the same way the buttons render — open day first, so the tallies
+  // and the highlighted buttons can never disagree about a pipeline.
   const counts = useMemo(() => {
-    const c = { google_ads: 0, meta_ads: 0, unassigned: 0 };
-    for (const p of config.pipelines) c[p.channel ?? 'unassigned'] += 1;
+    const c = { google_ads: 0, meta_ads: 0, open_day: 0, unassigned: 0 };
+    for (const p of config.pipelines) {
+      if (openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)]) c.open_day += 1;
+      else c[p.channel ?? 'unassigned'] += 1;
+    }
     return c;
-  }, [config.pipelines]);
+  }, [config.pipelines, openDayAssignedTo]);
 
-  async function handle(row: PipelineRow, channel: AdChannel | null) {
+  // A section is open when the operator opened it, or whenever a search is
+  // active — a match hidden inside a collapsed section reads as no match.
+  const searching = search.trim().length > 0;
+  const isOpen = (accountId: string) => searching || Boolean(opened[accountId]);
+
+  // Marking a pipeline as an open day must work from a cold start, so when the
+  // org has no events yet the first mark creates one. Without this the button
+  // would have nothing to write to (open_day_id is NOT NULL and a foreign key)
+  // and would silently do nothing — the dead end this control replaces.
+  async function ensureOpenDayId(): Promise<string> {
+    const existing = openDays?.[0]?.id;
+    if (existing) return existing;
+    const made = await createOpenDay.mutateAsync({ name: FIRST_EVENT_NAME, eventDate: null });
+    return (made as { id: string }).id;
+  }
+
+  async function handle(row: PipelineRow, mark: PipelineMark) {
     const key = pipelineKey(row.accountId, row.pipelineId);
-    setBusy(key);
     setError(null);
     try {
-      await setChannel.mutateAsync({ accountId: row.accountId, pipelineId: row.pipelineId, channel });
+      if (mark === 'open_day') {
+        await setPipeline.mutateAsync({
+          integrationAccountId: row.accountId,
+          ghlPipelineId: row.pipelineId,
+          openDayId: await ensureOpenDayId(),
+        });
+      } else {
+        // Clear any open-day mapping BEFORE writing the channel. A pipeline
+        // left mapped to an event while also carrying a channel is counted
+        // under both, and the always-on + open days = total identity breaks.
+        if (openDayAssignedTo?.[key]) {
+          await setPipeline.mutateAsync({
+            integrationAccountId: row.accountId,
+            ghlPipelineId: row.pipelineId,
+            openDayId: null,
+          });
+        }
+        await setChannel.mutateAsync({ accountId: row.accountId, pipelineId: row.pipelineId, channel: mark });
+      }
     } catch (e) {
       setError(`${row.pipelineName}: ${(e as Error).message || 'Could not save that change. Please try again.'}`);
-    } finally {
-      setBusy(null);
     }
   }
 
@@ -112,8 +189,9 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
         Step 2 — Sort pipelines into channels
       </h2>
       <p className="mb-3 text-[13px] text-slate-600">
-        Leads are counted as Google or Facebook based only on the pipeline they arrive in.
-        Anything you leave unassigned is reported separately, never guessed at.
+        Open a subaccount to see its pipelines. Leads are counted as Google, Facebook
+        or an open day based only on the pipeline they arrive in — anything you leave
+        unassigned is reported separately, never guessed at.
       </p>
 
       {error && (
@@ -121,7 +199,7 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
       )}
 
       <div className="mb-3 flex flex-wrap items-center gap-3">
-        {(['google_ads', 'meta_ads', 'unassigned'] as const).map((c) => (
+        {(['google_ads', 'meta_ads', 'open_day', 'unassigned'] as const).map((c) => (
           <span key={c} className="text-[12px] text-slate-600">
             {CHANNEL_LABEL[c]}: <strong className="text-slate-900">{counts[c]}</strong>
           </span>
@@ -139,14 +217,22 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
       </div>
 
       {groups.map((g) => (
-        <div key={g.accountId} className="mb-4">
-          <div className="mb-1 flex items-baseline gap-2">
+        <div key={g.accountId} className="mb-2 rounded border border-slate-200">
+          <button
+            type="button"
+            onClick={() => setOpened((o) => ({ ...o, [g.accountId]: !isOpen(g.accountId) }))}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
+          >
+            <span className="text-[12px] text-slate-500">{isOpen(g.accountId) ? '▾' : '▸'}</span>
             <h3 className="text-[13px] font-semibold text-slate-900">{g.label}</h3>
             <span className="text-[12px] text-slate-500">
-              {g.practiceName ?? 'Not connected to a practice — excluded from ad performance'}
+              {g.rows.length} pipeline{g.rows.length === 1 ? '' : 's'}
             </span>
-          </div>
-          <div className="overflow-x-auto">
+            <span className="ml-auto text-[12px] text-slate-500">
+              {g.rows.reduce((n, r) => n + r.leadCount, 0).toLocaleString('en-GB')} leads
+            </span>
+          </button>
+          <div className={`overflow-x-auto px-3 pb-2 ${isOpen(g.accountId) ? '' : 'hidden'}`}>
             <table className="w-full min-w-[520px] border-collapse text-[13px]">
               <tbody>
                 {g.rows.map((p) => (
@@ -158,9 +244,28 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
                     <td className="py-2 text-right">
                       <ChannelButtons
                         row={p}
-                        busy={busy === pipelineKey(p.accountId, p.pipelineId)}
+                        isOpenDay={Boolean(openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)])}
                         onSet={(c) => handle(p, c)}
                       />
+                    </td>
+                    {/* WHICH event, shown only once the row IS an open day.
+                        Never a gate on the marking itself — that was the bug:
+                        the picker used to be the only way in, and it rendered
+                        for nobody until an event already existed. */}
+                    <td className="py-2 pl-3 text-right">
+                      {openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)] ? (
+                        <select
+                          className="rounded-panel border border-border bg-white px-2 py-1 text-[12.5px] text-ink"
+                          value={openDayAssignedTo[pipelineKey(p.accountId, p.pipelineId)]}
+                          onChange={(e) => setPipeline.mutate({
+                            integrationAccountId: p.accountId,
+                            ghlPipelineId: p.pipelineId,
+                            openDayId: e.target.value || null,
+                          })}
+                        >
+                          {(openDays ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                      ) : null}
                     </td>
                   </tr>
                 ))}

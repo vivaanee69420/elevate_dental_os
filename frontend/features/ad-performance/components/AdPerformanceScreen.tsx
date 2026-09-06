@@ -157,7 +157,7 @@ export default function AdPerformanceScreen() {
       {nothingMapped ? (
         <div className={cx(s.notice, s.noticeWarn)}>
           No pipelines are assigned to a channel yet, so there is nothing to report.{' '}
-          <a className="underline" href="/settings/ad-attribution">Set up ad attribution</a>.
+          <a className="underline" href="/integrations">Set up ad attribution</a>.
         </div>
       ) : null}
 
@@ -266,7 +266,7 @@ export default function AdPerformanceScreen() {
             ) : null}
           </ul>
           <p className="mt-2 text-[12px] text-slate-500">
-            <a className="underline" href="/settings/ad-attribution">Review ad attribution</a> to
+            <a className="underline" href="/integrations">Review ad attribution</a> to
             close these gaps.
           </p>
         </SectionCard>

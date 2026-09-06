@@ -411,18 +411,24 @@ export const facebookReportService = {
         // An org with no open days mapped gets this shape, and so does one that
         // is not connected at all: zeroed buckets and no events, so the page
         // renders exactly as it did before open days existed.
-        const noSplit = () => splitByOpenDay([], new Map());
-        const empty = (state) => ({
+        const noSplit = () => splitByOpenDay([], [], []);
+        // A tenant with nothing else still gets its own coverage figure —
+        // zeroed by default (the not_connected path, before anything is
+        // fetched), overridden with the real counts once known — never
+        // omitted, so the page can always render the "N leads sit in
+        // uncategorised pipelines" line.
+        const empty = (state, coverage = { uncategorisedLeads: 0, uncategorisedAttributedLeads: 0 }) => ({
             state, practices: [], total: null, practicesAll: [], totalAll: null,
             campaigns: [], campaignsAll: [], leads: [],
             openDays: noSplit(), openDaysAll: noSplit(),
+            coverage,
             excludedAccounts: accounts.length ? excludedAccountsOf(accounts) : [],
             acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
             effectiveSince: rawSince, windowClamped: false,
         });
         if (accounts.length === 0) return empty('not_connected');
 
-        const [[spendRowsAll, ledgerRowsAll], campaignRows, openDayEvents, openDayMappings] =
+        const [[spendRowsAll, ledgerRowsAll], campaignRows, openDayEvents, openDayMappings, uncategorised] =
             await Promise.all([
                 loadMetaLeadPerformanceData(orgId, rawSince, rawUntil),
                 loadMetaCampaignSpend(orgId, rawSince, rawUntil, practiceId),
@@ -431,6 +437,17 @@ export const facebookReportService = {
                 // round trip that can only come back empty.
                 openDayRepository.list(orgId),
                 openDayRepository.mappings(orgId, 'meta_ads'),
+                // Leads Meta CAN see (via the campaign-derived ad_id join) but
+                // whose GHL pipeline nobody has put in the channel or open-day
+                // map — the honest coverage figure the GHL-pool switch owes,
+                // same funnelUntil conversion as the ledger read above it.
+                // PRACTICE-SCOPED, like everything it sits beside. Org-wide,
+                // a five-practice group filtered to ONE practice read "1,251
+                // uncategorised" next to that practice's ~200 — a coverage
+                // line that contradicts the report it is explaining.
+                marketingRepository.uncategorisedLeadCounts(
+                    orgId, rawSince, funnelUntil(rawUntil), practiceId,
+                ),
             ]);
 
         // Narrowed in JS from the org-wide pair, so both sides of every ratio
@@ -440,7 +457,10 @@ export const facebookReportService = {
         const ledgerRows = practiceId ? ledgerRowsAll.filter((r) => r.practice_id === practiceId) : ledgerRowsAll;
 
         if (spendRows.length === 0 && ledgerRows.length === 0) {
-            return empty(await emptyWindowState(orgId));
+            return empty(await emptyWindowState(orgId), {
+                uncategorisedLeads: uncategorised.leads,
+                uncategorisedAttributedLeads: uncategorised.attributed,
+            });
         }
 
         const bySpend = (a, b) => b.spendPence - a.spendPence;
@@ -452,8 +472,26 @@ export const facebookReportService = {
         const byCampaignSpend = (a, b) => (a.attributed === b.attributed
             ? b.spendPence - a.spendPence
             : (a.attributed ? -1 : 1));
-        const campaigns = campaignLeadPerformance(campaignRows, ledgerRows, false).sort(byCampaignSpend);
-        const campaignsAll = campaignLeadPerformance(campaignRows, ledgerRows, true).sort(byCampaignSpend);
+        // A LEAD META CANNOT ACCOUNT FOR HAS NO CAMPAIGN, WHATEVER COLUMN IT
+        // CARRIES. Migration 000171 returns campaign_id from the contact
+        // whenever one is present, including when meta_attributed is false —
+        // the campaign is absent from this org's Meta metrics entirely. Passed
+        // through, campaignLeadPerformance mints a row with attributed: true,
+        // a null name, no spend and cplPence 0, which sorts to the TOP of the
+        // Campaigns tab as the cheapest campaign in the account. Such a lead
+        // belongs in the existing, visible "Not attributed" bucket, whose
+        // costs are already null by design.
+        //
+        // Done HERE and not in lead-performance.js (the Google report shares
+        // that helper and has no meta_attributed column), and not in the
+        // migration (the open-day split below reads meta_attributed as a
+        // column, and the lead drill-down still shows the lead's own campaign
+        // name). ledgerRows itself is untouched for exactly that reason.
+        const campaignLedgerRows = ledgerRows.map((r) => (r.meta_attributed === false
+            ? { ...r, campaign_id: null, campaign_name: null }
+            : r));
+        const campaigns = campaignLeadPerformance(campaignRows, campaignLedgerRows, false).sort(byCampaignSpend);
+        const campaignsAll = campaignLeadPerformance(campaignRows, campaignLedgerRows, true).sort(byCampaignSpend);
 
         // --- open days ------------------------------------------------------
         // A campaign absent from this map is always-on; that is the entire
@@ -482,24 +520,45 @@ export const facebookReportService = {
             if (!practicesByEvent.has(m.openDayId)) practicesByEvent.set(m.openDayId, new Set());
             practicesByEvent.get(m.openDayId).add(practice);
         }
-        const withPractices = (split) => ({
-            ...split,
-            events: split.events.map((e) => ({
-                ...e,
-                practices: practicesByEvent.get(e.openDayId)?.size ?? 0,
-            })),
-        });
+        // Spend still comes from the campaign rows above (via eventByCampaign);
+        // leads now come from the ledger's own open_day_id — its GHL pipeline,
+        // not the campaign it happens to be Meta-attributed to. `includeExisting`
+        // is threaded through exactly like campaignLeadPerformance's own
+        // boolean above, so the split beneath the cards moves with the
+        // "Include existing patients" toggle instead of half-working.
+        const splitOf = (campaignRows, rows, includeExisting) => {
+            const split = splitByOpenDay(campaignRows, rows, openDayEvents, {
+                eventByCampaign, includeExisting,
+            });
+            return {
+                ...split,
+                events: split.events.map((e) => ({
+                    ...e,
+                    practices: practicesByEvent.get(e.openDayId)?.size ?? 0,
+                })),
+            };
+        };
 
         return {
             state: 'ok',
             practices, total: sumPracticeRows(practices),
             practicesAll, totalAll: sumPracticeRows(practicesAll),
             campaigns, campaignsAll,
-            // Always-on vs named events. Derived from the SAME campaign rows
-            // the table above renders, so the page's "= Meta total" identity
-            // is arithmetic rather than a second computation that could drift.
-            openDays: withPractices(splitByOpenDay(campaigns, eventByCampaign)),
-            openDaysAll: withPractices(splitByOpenDay(campaignsAll, eventByCampaign)),
+            // Always-on vs named events. Spend reconciles to the SAME campaign
+            // rows the table above renders; leads reconcile to the SAME
+            // ledger rows the cards above are built from — so the page's
+            // "= Meta total" identity is arithmetic rather than a second,
+            // potentially-drifted computation.
+            openDays: splitOf(campaigns, ledgerRows, false),
+            openDaysAll: splitOf(campaignsAll, ledgerRows, true),
+            // Leads sitting in GHL pipelines nobody has categorised (no
+            // channel, no open day) — this tenant's own figure, so the report
+            // states what the GHL-pool switch leaves out instead of going
+            // quiet about it.
+            coverage: {
+                uncategorisedLeads: uncategorised.leads,
+                uncategorisedAttributedLeads: uncategorised.attributed,
+            },
             // The people behind the numbers, so a card click-through lists
             // them without a second, potentially-drifted computation.
             leads: ledgerRows,

@@ -85,6 +85,7 @@ export function GoogleKeywordsTab({ parentId }: { parentId: string | null }) {
       isError={isError}
       errorLabel={`Couldn't load keywords: ${(error as Error)?.message ?? 'unknown error'}`}
       windowClamped={first?.windowClamped}
+      freshness={first?.freshness}
       effectiveSince={first?.effectiveSince}
       excludedAccounts={first?.excludedAccounts}
       footer={(

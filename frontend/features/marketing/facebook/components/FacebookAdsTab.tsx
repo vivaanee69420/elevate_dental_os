@@ -29,6 +29,7 @@ import { money, ctr, num } from '../../_shared/format';
 import { FacebookStateNotice } from './FacebookStateNotice';
 import { useFacebookAds } from '../hooks';
 import type { FacebookRow, FacebookNoticeScope } from '../api';
+import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
 
 // Calm, factual prose — never an error/warning colour. These are facts about
 // the data, not problems with it.
@@ -100,6 +101,8 @@ export function FacebookAdsTab({
   return (
     <div className="flex flex-col gap-4">
       <FacebookStateNotice state={firstPage.state} coverage={null} scope={noticeScope} />
+
+      <SpendFreshnessNote freshness={firstPage.freshness} />
 
       {firstPage.windowClamped && (
         <Note>
