@@ -33,8 +33,16 @@ import { getQuickBooksOverview } from '@/features/finance/quickbooks-api';
 import { useGhlDashboard } from '@/features/ghl/hooks';
 import { QuickBooksGroupSection } from './QuickBooksGroupSection';
 import { GhlSummaryCards } from '@/features/ghl/components/GhlSummaryCards';
+import { DeltaBadge } from '@/features/marketing/_shared/DeltaBadge';
+import { computeDelta, pointsDelta, type Polarity } from '@/features/marketing/_shared/compare';
 
 const DASH = '—';
+
+// The delta chip is SHARED with the ad reports rather than rewritten here: it
+// already separates arrow-direction from colour-polarity (a rising no-show rate
+// is a RED up-arrow), renders an unknowable delta as "no comparison" instead of
+// 0%, and says "new" rather than an infinite percentage against a zero base.
+// A second copy would be a second set of those judgements, free to drift.
 
 type HeadlineKpi = {
   label: string; value: string; sub: string; chip: { text: string; tone: ChipColour } | null;
@@ -43,6 +51,22 @@ type HeadlineKpi = {
   // Optional navigation: clicking the tile routes to a detail page (scope/period
   // query already appended). Mutually exclusive with onClick.
   href?: string;
+  // Where this figure can be checked in the source system, shown on hover only.
+  // Cards the owner cannot verify are cards the owner stops trusting, and the
+  // two money cards here were previously computed on a filter Dentally has no
+  // equivalent of — so their totals appeared in no Dentally screen at all.
+  source?: string;
+  // Optional period-over-period comparison, rendered under the chip. `previous`
+  // is null when that figure is unknowable for the prior window (a no-show rate
+  // with no appointments behind it), which reads as "no comparison" rather than
+  // a confident 0%.
+  compare?: {
+    current: number | null; previous: number | null;
+    polarity: Polarity; format: (n: number) => string;
+    /** True when the card's own value is a percentage, so the change is
+     *  measured in percentage points rather than as a percent of a percent. */
+    isRate?: boolean;
+  };
 };
 
 // n/d as a percentage, rounded to `dp` decimals (default integer). 0 when d<=0.
@@ -68,10 +92,19 @@ function SectionLabel({ children }: { children: string }) {
 function HeadlineCard({ c }: { c: HeadlineKpi }) {
   const body = (
     <>
-      <div className="text-xs text-ink-muted uppercase tracking-wide">{c.label}</div>
+      <div className="text-xs text-ink-muted uppercase tracking-wide" title={c.source}>
+        {c.label}
+        {c.source && <span className="ml-1 text-ink-muted/70 normal-case" aria-hidden="true">ⓘ</span>}
+      </div>
       <div className="text-xl font-bold tabular-nums tracking-tight mt-1">{c.value}</div>
       <div className="text-xs text-ink-muted mt-1">{c.sub}</div>
       {c.chip && <div className="mt-2"><Chip colour={c.chip.tone}>{c.chip.text}</Chip></div>}
+      {c.compare && (
+        <DeltaBadge
+          delta={(c.compare.isRate ? pointsDelta : computeDelta)(c.compare.current, c.compare.previous, c.compare.polarity)}
+          previousLabel={c.compare.previous == null ? DASH : c.compare.format(c.compare.previous)}
+        />
+      )}
       {c.hint && <div className="text-[11px] text-brand mt-2">{c.hint}</div>}
     </>
   );
@@ -155,7 +188,13 @@ export function GroupPerformanceScreen() {
   if (isError || !data) return <AlertRow tone="bad" title="Couldn't load group performance" />;
 
   const g = data.group;
-  const windowLabel = data.period.label ?? `last ${data.period.days}d`;
+  // The window the FIGURES cover, which is not always the one that was picked:
+  // a running month is clamped to today, so "Sep 2026" reads "1–6 Sep 2026" on
+  // the 6th. Naming the picked period there would put a full month's name over
+  // six days of data. Falls back to the picker's own label if an older payload
+  // arrives without a comparison.
+  const cmp = g.compare;
+  const windowLabel = cmp?.current.label ?? data.period.label ?? `last ${data.period.days}d`;
   // Scope -> which practices the Business Performance table shows. Turnover IS
   // per-practice, so a specific practice narrows the table to that row (+ the
   // group total). The funnel KPIs above stay group-wide (treatment plans + leads
@@ -177,6 +216,20 @@ export function GroupPerformanceScreen() {
   // Takings = settled payments received (matches the Patient Payments "Received"
   // tile). Per-practice when scoped, group total otherwise.
   const takingsPence = scopedRow ? scopedRow.takingsPence : g.takingsPence;
+  // Dentally Invoice Timeline figures, following the practice pills like every
+  // other card on this row.
+  const invoicedPence = scopedRow ? scopedRow.invoicedPence : g.invoicedPence;
+  const outstandingPence = scopedRow ? scopedRow.invoiceOutstandingPence : g.invoiceOutstandingPence;
+  const settledPence = scopedRow ? scopedRow.invoiceSettledPence : g.invoiceSettledPence;
+  const invoiceCount = scopedRow ? scopedRow.invoiceCount : g.invoiceCount;
+  const settledPct = pctOf(settledPence, invoicedPence);
+  // Invoices arrive only in the nightly PMS pull, so these cards can cover fewer
+  // days than the period picker asked for. Label them with the days they really
+  // hold rather than the days that were requested — an owner comparing against
+  // Dentally at 4pm otherwise sees a shortfall with nothing to explain it.
+  const invWindowLabel = g.invoiceCoverage?.complete === false
+    ? (g.invoiceCoverage.label ?? 'no invoices yet')
+    : windowLabel;
 
   // Treatments Accepted (Emergent) — practice-attributed via the per-practice
   // breakdown. A selected practice scopes the card to that row (0 if it has no
@@ -211,17 +264,87 @@ export function GroupPerformanceScreen() {
   // Treatments started is a COUNT, not a % of leads: Dentally treatment plans
   // (existing patients) and GHL leads (new marketing) are different populations,
   // so "started ÷ leads" can exceed 100% and means nothing.
-  const revPerLead = g.leads > 0 ? Math.round(g.treatmentsClosedPence / g.leads) : 0;
   const costPerStart = connected && g.treatmentsStarted > 0 ? Math.round(spendPence / g.treatmentsStarted) : 0;
+  // Is an ad-account filter actually applied? The ROI feed honours it (spend,
+  // leads and revenue all scope to the practices those accounts run); the
+  // business-hub feed never receives it. Cards fed by the latter therefore say
+  // "group-wide" while a filter is on, rather than looking filtered and not
+  // being — which is how blended ROAS came to divide the whole group's revenue
+  // by one account's spend and still read "Strong".
+  const adFilterOn = accountIds.length > 0;
+  const adScopeLabel = 'selected ad accounts';
+  // The Dentally-fed numerators (plan fees, new patients) live per practice on
+  // the business-hub payload, so an ad-account filter CAN narrow them — using
+  // the practice set the ROI feed says it scoped to. Where a figure has no
+  // per-practice form (treatment plans are not reliably practice-attributed) it
+  // stays group-wide and says so, rather than dividing a group numerator by a
+  // scoped denominator.
+  // THE MARKETING BLOCK IS AD-ATTRIBUTED, ALWAYS.
+  //
+  // It used to scope by PRACTICE, so filtering to Meta/Ashford + Google/Rochester
+  // counted every enquiry those practices received — walk-ins, referrals, other
+  // channels — 200 leads where the Facebook and Google pages counted the 66 those
+  // accounts actually bought. Three screens, three answers. These cards now read
+  // the funnel computed from the same per-lead ledgers those pages use, so they
+  // cannot drift from them.
+  const fun = roi?.adFunnel ?? null;
+  const adScopePids = adFilterOn ? (roi?.scopePracticeIds ?? null) : null;
+  const inAdScope = (p: HubPractice) => !adScopePids || adScopePids.includes(p.practiceId);
+  const sumScoped = (pick: (p: HubPractice) => number) =>
+    data.practices.filter(inAdScope).reduce((s, p) => s + (pick(p) || 0), 0);
+  const scopedClosedPence = adScopePids ? sumScoped((p) => p.treatmentsClosedPence) : closedPence;
+  const scopedNewPatients = adScopePids ? sumScoped((p) => p.newPatients) : newPts;
+  // treatments_started has no per-practice form, so anything divided by it stays
+  // group-wide however the filter is set.
+  const groupWideNote = adFilterOn ? ' · group-wide, not filtered' : '';
+  // Leads as the ad-account filter sees them — the denominator every ratio below
+  // divides by, so its numerator must be scoped to match.
+  const mktLeads = fun ? fun.leads : (adFilterOn ? (roi?.totalLeads ?? 0) : g.leads);
+  // Money EARNED FROM THOSE LEADS, not the group's plan fees. A rate with no
+  // denominator is unknowable, not zero.
+  const attributedPence = fun ? fun.paidPence : scopedClosedPence;
+  const revPerLead = mktLeads > 0 ? Math.round(attributedPence / mktLeads) : null;
+  const mktNewPatients = fun ? fun.newPatients : scopedNewPatients;
+  const mktConversionPct = mktLeads > 0 ? Math.round((mktNewPatients / mktLeads) * 1000) / 10 : null;
+  // ROAS on the same footing: money from these leads over the spend that bought
+  // them. The old figure divided the group's whole settled revenue by one
+  // account's spend and read 32x.
+  const attributedRoas = spendPence > 0 && fun ? Math.round((attributedPence / spendPence) * 100) / 100 : null;
+
+  const adConvFiltered = (roi?.channels ?? []).reduce((s, c) => s + (c.adConversions || 0), 0);
+  // Withheld rather than wrong: an account with no practice mapped has spend but
+  // no revenue scope to divide by.
+  const roasWithheld = !!roi?.roasUnavailableReason;
   const roasTone: ChipColour = roas >= 4 ? 'emerald' : roas >= 2 ? 'amber' : 'rose';
   const roasLabel = roas >= 4 ? 'Strong' : roas >= 2 ? 'Watch' : 'Weak';
 
-  // Period-over-period delta chips — turnover and cash vs the prior same-length
-  // window (server-side, like-for-like). null base => no chip. Up = emerald.
-  const deltaChip = (pct: number | null): { text: string; tone: ChipColour } | null =>
-    pct == null ? null : { text: `${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct)}% vs ${g.prevPeriodLabel}`, tone: pct >= 0 ? 'emerald' : 'rose' };
-  // Takings delta = settled-receipts (cash) delta vs the prior same-length period.
-  const cashChip = deltaChip(g.cashDeltaPct);
+  // Period-over-period comparison for the Dentally cards. Every card gets one,
+  // measured over `cmp.previous` — the previous CALENDAR period when the
+  // selected one has finished (Aug against the whole of July), or the same
+  // elapsed days of it while the selected one is still running (1–6 Sep against
+  // 1–6 Aug). The window is resolved once, server-side, and both its bounds and
+  // its label come back with the figures, so nothing here re-derives a date.
+  //
+  // `previousLabel` carries the prior VALUE and the days it covers, so the badge
+  // reads "▼ 81.2% vs £309,793 · 1–6 Aug 2026" — the reader can see what the
+  // percentage was measured against instead of taking it on trust.
+  const cmpFor = (
+    current: number | null, previous: number | null,
+    polarity: Polarity, format: (n: number) => string, isRate = false,
+  ): HeadlineKpi['compare'] => (cmp ? {
+    current, previous,
+    polarity,
+    isRate,
+    format: (n) => `${format(n)} · ${cmp.previous.label}`,
+  } : undefined);
+  // Priors follow the practice pills, which filter this payload in the browser:
+  // a scoped card reads its own site's prior figure, so the percentage never
+  // compares one practice against the whole group. A practice with no prior row
+  // at all (added since) has no comparison rather than a fabricated one.
+  const prev = cmp
+    ? (isGroupScope ? cmp.prev : cmp.prev.byPractice.find((r) => r.practiceId === scope) ?? null)
+    : null;
+  const countOf = (n: number) => formatNumber(n);
 
   // Merged-in Group-Overview metrics (appointments / no-show / leads), scoped to
   // the selected practice where the feed is practice-attributed.
@@ -236,11 +359,15 @@ export function GroupPerformanceScreen() {
   // Dentally — payments (takings), treatment plans, appointments, invoiced fees.
   const dentallyCards: HeadlineKpi[] = [
     // Takings = settled payments received (same feed as the Patient Payments
-    // "Received" tile, so the two screens reconcile); chip = like-for-like delta.
+    // "Received" tile, so the two screens reconcile).
     { label: 'Takings', value: formatPence(takingsPence), sub: `Settled payments received · ${windowLabel}`,
-      chip: cashChip, href: to('/payments'), hint: 'Open Payments →' },
-    { label: 'Treatments Completed', value: formatNumber(completedCount), sub: `Completed by practitioners · ${windowLabel}`,
+      chip: null, compare: cmpFor(takingsPence, prev?.takingsPence ?? null, 'higher-better', formatPence),
+      href: to('/payments'), hint: 'Open Payments →' },
+    // dentally_treatment_items is pulled nightly like invoices, so it carries the
+    // same lag and must be labelled with the same window.
+    { label: 'Treatments Completed', value: formatNumber(completedCount), sub: `Completed by practitioners · ${invWindowLabel}`,
       chip: completedValuePence > 0 ? { text: `${formatPence(completedValuePence)} of work done`, tone: 'emerald' } : null,
+      compare: cmpFor(completedCount, prev?.treatmentsCompleted ?? null, 'higher-better', countOf),
       href: to('/clinicians'), hint: 'Open Clinicians →' },
     // Treatments Accepted is sourced from the Emergent ops app, but grouped here
     // with the other treatment cards. Placeholder until Emergent is connected.
@@ -250,23 +377,50 @@ export function GroupPerformanceScreen() {
     { label: 'Treatments Accepted', value: acceptedCount > 0 ? formatNumber(acceptedCount) : DASH,
       sub: g.treatmentsAcceptedCount > 0 ? `Accepted (Emergent) · ${acceptedScopeLabel} · ${windowLabel}` : 'Connect Emergent to track acceptance',
       chip: acceptedValuePence > 0 ? { text: `${formatPence(acceptedValuePence)} value`, tone: 'emerald' } : null,
+      compare: cmpFor(acceptedCount, prev?.treatmentsAcceptedCount ?? null, 'higher-better', countOf),
       onClick: acceptedRows.length > 0 ? () => setAcceptedOpen((v) => !v) : undefined,
       active: acceptedOpen,
       hint: acceptedRows.length > 0 ? (acceptedOpen ? 'Hide breakdown' : 'Click for practice breakdown') : undefined },
-    { label: 'Treatments Closed', value: formatPence(closedPence), sub: `Plan fees billed · ${windowLabel}`,
-      chip: closedPctTurnover > 0 ? { text: `${closedPctTurnover}% of turnover from plans`, tone: 'emerald' } : null,
+    // These two mirror Dentally's Invoice Timeline exactly — Total, then Paid
+    // with Unpaid carried as the chip. They used to be built from invoice LINES
+    // filtered to those carrying a treatment plan, a cut Dentally does not make,
+    // so neither total appeared in any Dentally screen: Rochester 1-6 Sep read
+    // £11,781.22 against Dentally's £11,877.62 with nothing on screen explaining
+    // the £136.40. Now both are whole invoices, and both can be checked.
+    { label: 'Invoiced', value: formatPence(invoicedPence), sub: `${formatNumber(invoiceCount)} invoices raised · ${invWindowLabel}`,
+      chip: outstandingPence > 0
+        ? { text: `${formatPence(outstandingPence)} still owed`, tone: 'amber' }
+        : (invoicedPence > 0 ? { text: 'Nothing outstanding', tone: 'emerald' } : null),
+      compare: cmpFor(invoicedPence, prev?.invoicedPence ?? null, 'higher-better', formatPence),
+      source: 'Dentally → Invoices → Invoice Timeline → "Total", with Location set to this practice.',
       href: to('/treatments'), hint: 'Open Treatments →' },
-    { label: 'Treatment Plan Fees Collected', value: formatPence(paidPence), sub: `Collected on treatment plans · ${windowLabel}`,
-      chip: collectedPct > 0 ? { text: `${collectedPct}% of billed paid`, tone: collectedPct >= 80 ? 'emerald' : 'amber' } : null,
+    // "Settled", not "collected". Dentally clears an invoice with a payment OR an
+    // adjustment (write-off, plan allocation, insurance credit) and the balance
+    // does not say which — so this must not claim cash was received. Payment-dated
+    // collection needs the linkage scoped in
+    // docs/superpowers/specs/2026-09-06-payment-invoice-linkage-scope.md.
+    { label: 'Invoices Paid', value: formatPence(settledPence), sub: `Excludes what is still owed · ${invWindowLabel}`,
+      chip: settledPct > 0 ? { text: `${settledPct}% of invoiced`, tone: settledPct >= 80 ? 'emerald' : 'amber' } : null,
+      compare: cmpFor(settledPence, prev?.invoiceSettledPence ?? null, 'higher-better', formatPence),
+      source: 'Dentally → Invoices → Invoice Timeline → "Paid", with Location set to this practice. Counts invoices cleared by a write-off, plan or insurance credit as well as by payment — for cash received in the period, use Takings.',
       onClick: paidPence > 0 ? () => setPlansOpen((v) => !v) : undefined,
       active: plansOpen,
       hint: paidPence > 0 ? (plansOpen ? 'Hide invoice lines' : 'Click to see every plan line') : undefined },
     { label: 'Appointments', value: formatNumber(apptCount), sub: `${formatNumber(apptCompleted)} completed · ${windowLabel}`,
-      chip: null, href: to('/appointments'), hint: 'Open Appointments →' },
+      chip: null, compare: cmpFor(apptCount, prev?.appointments ?? null, 'higher-better', countOf),
+      href: to('/appointments'), hint: 'Open Appointments →' },
+    // A no-show rate that RISES is bad news, so this is the one card whose
+    // up-arrow renders red — the polarity, not the direction, decides the
+    // colour. Null when never tracked, or when the previous window booked
+    // nothing: a rate with no denominator is unknowable, not zero.
     { label: 'No-show rate', value: g.noShowTracked ? `${noShowRateVal}%` : DASH, sub: g.noShowTracked ? 'Missed appointments' : 'Not tracked in Dentally',
-      chip: null, href: g.noShowTracked ? to('/appointments') : undefined, hint: g.noShowTracked ? 'Open Appointments →' : undefined },
+      chip: null,
+      compare: g.noShowTracked
+        ? cmpFor(noShowRateVal, prev?.noShowRate ?? null, 'lower-better', (n) => `${n}%`, true) : undefined,
+      href: g.noShowTracked ? to('/appointments') : undefined, hint: g.noShowTracked ? 'Open Appointments →' : undefined },
     { label: 'New Patients', value: formatNumber(newPts), sub: avgPatientValuePence > 0 ? `${formatPence(avgPatientValuePence)} avg value` : 'New-patient exams booked (Dentally)',
       chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null,
+      compare: cmpFor(newPts, prev?.newPatients ?? null, 'higher-better', countOf),
       href: to('/patients'), hint: 'Open Patients →' },
   ];
   // QuickBooks / Xero — P&L actuals (profit + net margin).
@@ -278,20 +432,51 @@ export function GroupPerformanceScreen() {
   ];
   // Marketing — paid spend/ROAS + the lead→treatment acquisition funnel.
   const marketingCards: HeadlineKpi[] = [
-    { label: 'Leads', value: formatNumber(g.leads), sub: leadsBreakdown || 'Google · Meta · GHL',
-      chip: null },
-    { label: 'Conversion', value: `${g.conversionRate}%`, sub: 'Leads → new patients booked',
-      chip: null },
+    // Enquiries, split by the channel that bought them. NOT platform-reported
+    // conversions — that figure has its own card below, because a "conversion"
+    // is any optimised action and on the live org it reads about 4.6x the real
+    // CRM intake. Mixing the two is what made this whole section disagree with
+    // the Facebook report by 5.6x.
+    // Both of these follow the ad-account filter, because the ROI feed scopes
+    // leads and revenue to the practices the chosen accounts run. The business
+    // hub feed below does NOT take that filter, which is why the cards after
+    // these say so on their face instead of implying a scope they do not have.
+    { label: 'Leads', value: formatNumber(mktLeads),
+      sub: fun
+        ? `${formatNumber(fun.booked)} booked · ${adFilterOn ? 'selected ad accounts' : 'all ad accounts'}`
+        : (leadsBreakdown || 'No CRM enquiries in this period'),
+      chip: null,
+      source: 'Leads bought by these ad accounts, counted through the same per-lead ledgers the Facebook and Google report pages use — so this figure matches those pages for the same accounts and window.' },
+    { label: 'Ad Platform Conversions', value: formatNumber(adFilterOn ? adConvFiltered : (g.adPlatformConversions ?? 0)),
+      sub: adFilterOn ? `Reported by the selected accounts · not enquiries` : 'Reported by Google and Meta · not enquiries',
+      chip: null,
+      source: 'Google Ads and Meta report these against their own campaigns. A "conversion" is any action the campaign optimises for — a form, a click-to-call, a messaging start — so it counts actions, not people, and is normally far higher than the enquiries your CRM records. Use Leads for enquiries.' },
+    { label: 'Conversion', value: mktConversionPct == null ? DASH : `${mktConversionPct}%`,
+      sub: fun ? 'Leads → new patients, from these accounts' : 'Leads → new patients booked',
+      chip: null,
+      source: 'New patients among the leads these ad accounts bought, counted through the same ledgers the Facebook and Google report pages use.' },
     { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
       chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
-    { label: 'Blended Paid ROAS', value: roas > 0 ? `${roas.toFixed(2)}×` : DASH, sub: 'Paid revenue ÷ paid spend',
-      chip: roas > 0 ? { text: roasLabel, tone: roasTone } : null },
-    { label: 'Lead → Start Rate', value: `${g.leadToStartRate}%`, sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads`,
+    { label: 'Blended Paid ROAS', value: attributedRoas == null ? DASH : `${attributedRoas.toFixed(2)}×`,
+      sub: fun
+        ? 'Money from these leads ÷ spend that bought them'
+        : 'Settled revenue ÷ paid spend, same scope both sides',
+      chip: attributedRoas != null && attributedRoas > 0
+        ? { text: attributedRoas >= 4 ? 'Strong' : attributedRoas >= 2 ? 'Watch' : 'Weak',
+            tone: attributedRoas >= 4 ? 'emerald' : attributedRoas >= 2 ? 'amber' : 'rose' }
+        : null,
+      source: 'Settled payments from the leads these accounts bought, divided by their spend. Over a short window this is near zero and that is correct — a lead takes weeks to become a paying patient. The old figure divided the whole group\'s revenue by one account\'s spend and read 32x.' },
+    { label: 'Lead → Start Rate', value: g.leadToStartRate == null ? DASH : `${g.leadToStartRate}%`,
+      sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads${groupWideNote}`,
+      source: 'Treatments started comes from Dentally treatment plans, which carry no reliable practice, so BOTH sides of this rate stay group-wide however the ad-account filter is set. That is why its lead count can differ from the Leads card above.',
       chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} completed`, tone: 'emerald' } : null },
-    { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: 'Paid spend ÷ treatments started',
+    { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: `Paid spend ÷ treatments started${groupWideNote}`,
+      source: 'Treatments started comes from Dentally treatment plans, which carry no reliable practice — so this one figure stays group-wide however the ad-account filter is set, while the spend above it follows the filter. Read the two accordingly.',
       chip: connected && spendPence > 0 ? { text: `${formatPence(spendPence)} paid`, tone: 'amber' } : null },
-    { label: 'Revenue / Lead', value: formatPence(revPerLead), sub: 'Dentally plan fees ÷ leads (Google · Meta · GHL)',
-      chip: g.treatmentsClosedPence > 0 ? { text: `${formatPence(g.treatmentsClosedPence)} plan revenue`, tone: 'emerald' } : null },
+    { label: 'Revenue / Lead', value: revPerLead == null ? DASH : formatPence(revPerLead),
+      sub: fun ? 'Settled money from these leads ÷ leads' : 'Dentally plan fees ÷ leads',
+      chip: attributedPence > 0 ? { text: `${formatPence(attributedPence)} attributed`, tone: 'emerald' } : null,
+      source: 'Settled payments from the leads these ad accounts bought. This is NOT the group\'s plan fees — it is money traced to these leads, so on a short window it is near zero, which is honest rather than broken.' },
   ];
 
   // Paid channels only (Google + Meta) — real spend/leads from ad_metrics.
@@ -369,8 +554,13 @@ export function GroupPerformanceScreen() {
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-3">
                     <ChannelStat label="Spend" value={formatPence(c.spendPence)} />
-                    <ChannelStat label="Cost / lead" value={c.costPerAdConvPence ? formatPence(c.costPerAdConvPence) : DASH} />
-                    <ChannelStat label="Leads" value={formatNumber(c.adConversions)} />
+                    {/* These are `adConversions` — PLATFORM-reported actions, not
+                        enquiries. Labelling them "Leads" made this panel
+                        contradict the Leads card directly above it: 365 + 20
+                        here against 200 there, because the two used the same
+                        word for different things. */}
+                    <ChannelStat label="Cost / conversion" value={c.costPerAdConvPence ? formatPence(c.costPerAdConvPence) : DASH} />
+                    <ChannelStat label="Conversions" value={formatNumber(c.adConversions)} />
                     <ChannelStat label="Clicks" value={formatNumber(c.clicks)} />
                   </div>
                 </div>

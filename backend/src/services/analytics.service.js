@@ -27,6 +27,8 @@ import { fetchPeriodReach } from "../lib/integrations/meta-reach.js";
 import { londonParts, londonMonthKey } from "../lib/tz.js";
 import { dayWindowISO } from "../lib/date-window.js";
 import * as async_pool_1 from "../lib/async-pool.js";
+import { comparisonWindows, windowLabel } from "../lib/analytics/compare-window.js";
+import { londonYmd } from "../lib/tz.js";
 import * as dashboard_cache_1 from "../lib/dashboard-cache.js";
 import { createTtlCache } from "../lib/ttl-cache.js";
 
@@ -35,6 +37,19 @@ import { createTtlCache } from "../lib/ttl-cache.js";
 // two panels on one screen). 60s is short enough that a finished sync shows up
 // promptly and long enough to collapse a burst into one computation.
 const businessHubCache = createTtlCache({ ttlMs: 60_000, max: 300 });
+
+// Shape version for the cached payload. BUMP THIS whenever a field is added to,
+// removed from, or redefined in the businessHub response.
+//
+// The Postgres tier below survives deploys and is shared across instances, and
+// it held only org + window — so a payload written by the PREVIOUS release was
+// served to the next one for up to 10 minutes on a live window and SIX HOURS on
+// a closed one, with every newly added field reading `undefined` in the browser.
+// Observed live: `dashboard_cache` holding entries without `compare` beside
+// fresh ones with it, and a card rendering "213.2% vs undefined" off exactly
+// that mismatch. Versioning the key makes a shape change MISS the old entry
+// instead of trusting it; the stale rows simply expire unread.
+export const HUB_PAYLOAD_VERSION = 'v3';
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -903,19 +918,51 @@ export const analyticsService = {
             : await integration_repository_1.selectedAdAccountIds(orgId, null);
 
         const pids = resolved.practiceIds; // null = whole org
-        const [adRows, leads, revRows, practices, adAccounts] = await Promise.all([
+        const [adRows, leads, revRows, practices, adAccounts, adFunnel] = await Promise.all([
             analytics_repository_1.analyticsRepository.adMetricsInWindow(orgId, fromDate, toDate, pids, accountIds),
             analytics_repository_1.analyticsRepository.leadsForMarketing(orgId, since, until, pids),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since, until),
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             integration_repository_1.listAdAccounts(orgId, null),
+            // The funnel the Facebook/Google report pages show, for these
+            // accounts. Read through their own ledgers so the three screens
+            // cannot disagree about what a lead, a booking or a patient is.
+            analytics_repository_1.analyticsRepository.adAccountMarketing(orgId, since, until, accountIds),
         ]);
         // Each practice runs its own ad account, so account.practice_id is how
         // spend + platform conversions attribute to a site (see migration 000069).
         const acctPractice = new Map();
         for (const a of adAccounts) if (a.practice_id) acctPractice.set(`${a.provider}::${a.customer_id}`, a.practice_id);
         const nameById = new Map(practices.map((p) => [p.id, p.name]));
-        const inScopeRev = revRows.filter((r) => !pids || pids.includes(r.practice_id));
+
+        // AN AD-ACCOUNT FILTER SCOPES THE WHOLE BLOCK, NOT JUST SPEND.
+        //
+        // `adRows` was filtered by accountIds while leads and revenue were
+        // filtered only by the scope picker's practices, so picking one account
+        // narrowed the DENOMINATOR of blended ROAS and left the numerator
+        // org-wide. Live proof: the card read 32.36x on £1,801.08 of spend, and
+        // 32.36 x 1,801.08 = £58,283 — the group's entire takings. It would have
+        // read "Strong" however badly that one account performed.
+        //
+        // Each practice runs its own ad account (migration 000069), so a chosen
+        // account implies a practice. Narrow ONLY on an explicit filter: the
+        // fallback `selectedAdAccountIds` is the org's saved default, and using
+        // it here would silently drop practices that run no ads from revenue.
+        const explicitAccountFilter = typeof accountIdsArg === 'string' && accountIdsArg.trim().length > 0;
+        const accountPractices = explicitAccountFilter
+            ? [...new Set(adAccounts.filter((a) => accountIds.includes(a.customer_id) && a.practice_id).map((a) => a.practice_id))]
+            : null;
+        // An account with no practice mapped tells us nothing about which
+        // revenue it earned. Spend still counts; ROAS is withheld below rather
+        // than divided by a scope we cannot pin down.
+        const unmappedSelectedAccount = explicitAccountFilter
+            && adAccounts.some((a) => accountIds.includes(a.customer_id) && !a.practice_id);
+        const scopePids = accountPractices
+            ? (pids ? pids.filter((id) => accountPractices.includes(id)) : accountPractices)
+            : pids;
+        const practiceOf = (l) => l.practice_id ?? l.contact?.practice_id ?? null;
+        const inScopeLeads = scopePids ? leads.filter((l) => scopePids.includes(practiceOf(l))) : leads;
+        const inScopeRev = revRows.filter((r) => !scopePids || scopePids.includes(r.practice_id));
 
         // Per-channel accumulators (spend from ad_metrics; leads/conversions from CRM).
         // `conversions`/`leads` on a channel are the CRM funnel (lead -> patient).
@@ -933,7 +980,7 @@ export const analyticsService = {
             c.reach += a.reach || 0;
             c.adConversions += a.conversions || 0;
         }
-        for (const l of leads) {
+        for (const l of inScopeLeads) {
             const c = ch.get(attributeChannel(l));
             if (!c) continue;
             c.leads += 1;
@@ -960,7 +1007,7 @@ export const analyticsService = {
             fromDate, toDate,
         );
 
-        const totalLeads = leads.length;
+        const totalLeads = inScopeLeads.length;
         const channels = [...ch.values()]
             .filter((c) => c.leads > 0 || c.spendPence > 0)
             .map((c) => {
@@ -986,8 +1033,12 @@ export const analyticsService = {
         const paidSpendPence = channels.filter((c) => c.paid).reduce((s, c) => s + c.spendPence, 0);
         const totalConversions = channels.reduce((s, c) => s + c.conversions, 0);
         const settledRevenuePence = inScopeRev.reduce((s, r) => s + (Number(r.pence) || 0), 0);
-        const blendedRoas = paidSpendPence ? Math.round((settledRevenuePence / paidSpendPence) * 100) / 100 : null;
-        const blendedRoiPct = paidSpendPence ? Math.round(((settledRevenuePence - paidSpendPence) / paidSpendPence) * 100) : null;
+        // Withheld, not fudged, when a chosen account has no practice behind it:
+        // there is no honest revenue scope to divide by.
+        const roasUnavailableReason = unmappedSelectedAccount ? 'unmapped_ad_account' : null;
+        const canRoas = paidSpendPence > 0 && !roasUnavailableReason;
+        const blendedRoas = canRoas ? Math.round((settledRevenuePence / paidSpendPence) * 100) / 100 : null;
+        const blendedRoiPct = canRoas ? Math.round(((settledRevenuePence - paidSpendPence) / paidSpendPence) * 100) : null;
 
         const google = channels.find((c) => c.key === 'google_ads') || null;
         const meta = channels.find((c) => c.key === 'meta_ads') || null;
@@ -1077,6 +1128,16 @@ export const analyticsService = {
             channels,
             paidSpendPence,
             totalLeads,
+            roasUnavailableReason, // non-null => blendedRoas withheld, and why
+            // The practices this response is scoped to (null = whole org). The
+            // page uses it to narrow the Dentally-fed cards — plan fees, new
+            // patients — that this feed does not carry, so their numerator and
+            // denominator end up on the same footing.
+            scopePracticeIds: scopePids ?? null,
+            // Attributed funnel + money for the selected accounts. Near-zero on a
+            // short window is CORRECT, not broken: a lead takes weeks to become a
+            // paying patient, so six days of acquisition revenue really is ~nil.
+            adFunnel,
             totalConversions,
             settledRevenuePence,
             blendedRoas,
@@ -2664,7 +2725,11 @@ export const analyticsService = {
     async businessHub(orgId, opts = {}) {
         if (opts.now) return this._businessHubUncached(orgId, opts);
         const { days = 90, since = null, until = null, label = null, practiceId = null } = opts;
-        const key = `${orgId}|${days}|${since}|${until}|${label}|${practiceId}`;
+        // Version sits AFTER the org id on purpose: invalidateBusinessHub() drops
+        // entries by the prefix `${orgId}|`, so a version in front of it would
+        // silently stop every post-sync invalidation from matching and leave
+        // stale numbers up for the full TTL.
+        const key = `${orgId}|${HUB_PAYLOAD_VERSION}|${days}|${since}|${until}|${label}|${practiceId}`;
 
         // Tier 1 — in-process. Fastest, but per-instance and lost on deploy.
         const hot = businessHubCache.get(key);
@@ -2701,7 +2766,18 @@ export const analyticsService = {
         // Window: an explicit [since, until] (a picked month/day) takes priority;
         // otherwise fall back to the trailing N-day window (until open).
         const sinceISO = since || new Date(now().getTime() - days * 86400000).toISOString();
-        const untilISO = until || null;
+        const selectedUntilISO = until || null;
+        // The two windows every card's comparison is measured across, resolved
+        // in Europe/London. `cmp.current.until` CLAMPS a still-running period to
+        // the end of today, and every read below uses it rather than the selected
+        // bound: appointments and invoices carry FUTURE rows, so an unclamped
+        // "Sep 2026" counted the whole month's forward bookings (1,391 booked
+        // against 258 actually completed) and would have compared them with six
+        // days of August. One window, one meaning — a card's value and the
+        // percentage beneath it describe the same span. A finished period is
+        // untouched, and so is the label the caller picked.
+        const cmp = comparisonWindows({ since: sinceISO, until: selectedUntilISO, now: now() });
+        const untilISO = cmp.current.until;
         // Leads are windowed like everything else. This used to be
         // `untilISO ? sinceISO : null` — in trailing-days mode the lead rollup
         // ran ALL-TIME while revenue, appointments and payments beside it covered
@@ -2713,7 +2789,15 @@ export const analyticsService = {
         const leadSinceISO = sinceISO;
         // Ad-platform lead window as YYYY-MM-DD (ad_metrics.metric_date is a date).
         // Upper bound is inclusive of the last full day; trailing mode runs to today.
-        const adFromDate = sinceISO.slice(0, 10);
+        // londonYmd, NOT sinceISO.slice(0,10): the period pickers send London
+        // midnight, which through BST is 23:00Z on the PREVIOUS day, so slicing
+        // the UTC string started the ad window a day early for seven months of
+        // the year. Measured on the live org: the Meta lead figure read 1,270
+        // for "1-6 Sep" against 1,047 actually in the window — 223 conversions
+        // belonging to 31 August, inflating Leads and diluting every rate
+        // divided by it. The upper bound below already avoided this; the lower
+        // bound did not.
+        const adFromDate = londonYmd(new Date(sinceISO));
         // The last calendar DAY inside the window. Derived as `until - 1ms`,
         // which is correct whichever convention the caller used — an exclusive
         // next-day-midnight, an inclusive end-of-day, or a UTC-midnight bound.
@@ -2723,12 +2807,14 @@ export const analyticsService = {
         // a browser carry the user's offset, so for a UK user in BST `until`
         // arrives as 23:00Z; minus 24h lands on the previous day and the ad
         // window silently lost its final day for most of the year.
-        const adToDate = (untilISO ? new Date(new Date(untilISO).getTime() - 1) : now())
-            .toISOString().slice(0, 10);
+        const adToDate = londonYmd(untilISO ? new Date(new Date(untilISO).getTime() - 1) : now());
         // Bounded fan-out. These are 16 heavy aggregates; firing them all at
         // once starved individual statements past the 8s statement_timeout
         // (panels failed while their neighbours on the same page loaded).
-        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg, acceptedByPractice, completedRows] = await (0, async_pool_1.mapWithConcurrency)([
+        const prevSinceISO = cmp.previous.since;
+        const prevUntilISO = cmp.previous.until;
+        let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg, acceptedByPractice, completedRows, invoiceTotalRows, pmsSyncedAt, leadChannelRows,
+            prevCashRowsAll, prevBillRowsAll, prevApptRowsAll, prevClosedRowsAll, prevCompletedRowsAll, prevNewPatientRowsAll, prevAcceptedRowsAll, prevInvoiceRowsAll] = await (0, async_pool_1.mapWithConcurrency)([
             () => analytics_repository_1.analyticsRepository.practicesFull(orgId),
             () => analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             () => analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -2763,6 +2849,26 @@ export const analyticsService = {
             // count (plan headers + planned-estimate value) so the card matches
             // Dentally's report and scopes per practice.
             () => analytics_repository_1.analyticsRepository.treatmentsCompletedByPractice(orgId, sinceISO, untilISO),
+            // Invoiced / outstanding / settled per practice — the three columns of
+            // Dentally's Invoice Timeline, so the money cards can be checked
+            // against a screen the owner already has.
+            () => analytics_repository_1.analyticsRepository.invoiceTotalsByPractice(orgId, sinceISO, untilISO),
+            () => analytics_repository_1.analyticsRepository.pmsLastSyncAt(orgId),
+            () => analytics_repository_1.analyticsRepository.leadCountsByChannel(orgId, sinceISO, untilISO, practiceId),
+            // ---- PRIOR PERIOD -------------------------------------------------
+            // The same seven feeds over `cmp.previous`, so every Dentally card can
+            // state what it is comparing against. They belong in THIS pool, not a
+            // second Promise.all beside it: these are the same heavy aggregates as
+            // the ones above, and an unbounded fan-out on this endpoint is what
+            // pushed statements past the 8s statement_timeout before.
+            () => analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentsClosedRevenueByPractice(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentsCompletedByPractice(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.newPatientsRegisteredByPractice(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentAcceptedByPractice(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.invoiceTotalsByPractice(orgId, prevSinceISO, prevUntilISO),
         ], 4);
         // Practice name lookup BEFORE the practiceId filter narrows `practices`, so
         // the accepted breakdown can name every practice even under a scoped call.
@@ -2784,6 +2890,7 @@ export const analyticsService = {
             revLineRows = revLineRows.filter(mine);
             newPatientRows = newPatientRows.filter(mine);
             completedRows = (completedRows || []).filter(mine);
+            invoiceTotalRows = (invoiceTotalRows || []).filter(mine);
             treatments = { started: 0, completed: 0, closed_value_pence: 0 };
             adLeadsBy = new Map();
         }
@@ -2821,6 +2928,35 @@ export const analyticsService = {
         // completed treatments + their value, attributed via the practitioner's site
         // so the card scopes to a selected practice. Null-practice rows (practitioner
         // with no mapped site) fold into the group total only, not any practice row.
+        // How far the invoice figures actually reach. Invoices, invoice_items and
+        // treatment_items arrive ONLY in the nightly pull (Dentally's webhooks
+        // carry contacts, appointments and payments and never those three), so a
+        // sync that finished at 03:01 leaves everything invoiced later that day
+        // missing. Complete through the London day BEFORE the sync's own day —
+        // conservative by design: a pull cannot vouch for the day it ran in.
+        //
+        // Null `throughYmd` means the PMS has never synced, and `complete` stays
+        // true so the UI shows no coverage claim at all rather than a date it
+        // cannot support.
+        const invoiceCoverage = (() => {
+            if (!pmsSyncedAt) return { throughYmd: null, label: null, complete: true };
+            const syncDay = londonYmd(new Date(pmsSyncedAt));
+            const throughYmd = londonYmd(new Date(Date.parse(`${syncDay}T12:00:00Z`) - 86400000));
+            const windowFirst = londonYmd(new Date(sinceISO));
+            const windowLast = londonYmd(new Date(new Date(untilISO).getTime() - 1));
+            if (throughYmd >= windowLast) return { throughYmd, label: windowLabel(windowFirst, windowLast), complete: true };
+            return {
+                throughYmd,
+                // Below the window start there is nothing to label — the whole
+                // window post-dates the last sync.
+                label: throughYmd >= windowFirst ? windowLabel(windowFirst, throughYmd) : null,
+                complete: false,
+            };
+        })();
+
+        // Invoiced / outstanding / settled per practice (Dentally Invoice Timeline).
+        const invoiceTotalBy = new Map();
+        for (const r of (invoiceTotalRows || [])) invoiceTotalBy.set(r.practice_id, r);
         const completedCountBy = new Map();
         const completedValueBy = new Map();
         for (const r of (completedRows || [])) {
@@ -2883,6 +3019,13 @@ export const analyticsService = {
                 crmConverted: converted,
                 crmConversionRate: leads ? rate(converted, leads) : null,
                 newPatients: newPatientsBy.get(p.id) || 0, // Dentally registrations, this practice
+                // Dentally Invoice Timeline, this practice. `invoiceSettledPence`
+                // is the balance cleared by ANY means (payment or adjustment) —
+                // not proof of cash received.
+                invoicedPence: num(invoiceTotalBy.get(p.id)?.invoiced_pence),
+                invoiceOutstandingPence: num(invoiceTotalBy.get(p.id)?.outstanding_pence),
+                invoiceSettledPence: num(invoiceTotalBy.get(p.id)?.settled_pence),
+                invoiceCount: num(invoiceTotalBy.get(p.id)?.invoice_count),
             };
         }).sort((a, b) => b.revenuePence - a.revenuePence);
 
@@ -2900,14 +3043,35 @@ export const analyticsService = {
         // the card isn't just the (often-empty) GHL/CRM feed: Google Ads + Meta
         // report lead-form / pixel conversions in ad_metrics; GHL is the CRM
         // enquiry feed. Total = sum of every source.
-        const googleLeads = num(adLeadsBy.get('google_ads'));
-        const metaLeads = num(adLeadsBy.get('meta_ads'));
+        // LEADS ARE ENQUIRIES, not platform-reported conversions.
+        //
+        // This used to be `sum(ad_metrics.conversions) + CRM leads`, and a
+        // platform "conversion" is any optimised action — Meta reports it per
+        // action type, so a roll-up and its own components were both counted.
+        // Live for 1-6 Sep 2026 that read 1,391 while the CRM took 303 enquiries
+        // and our own Facebook report attributed 187 of them to Meta: the same
+        // product answering the same question 5.6x apart, and Conversion,
+        // Lead -> Start and Revenue / Lead all divided by the inflated figure.
+        //
+        // The total is now the CRM count, split by the channel that bought each
+        // lead using the SAME structural test the Facebook report uses (the
+        // lead's campaign must resolve to one of this org's own ad_metrics
+        // campaigns). The remainder is derived here rather than read, so the
+        // parts on screen always add up to the total above them — attribution
+        // and the CRM rollup are separate queries and can disagree.
+        const leadChannel = new Map((leadChannelRows || []).map((r) => [r.channel, num(r.leads)]));
+        const googleLeads = num(leadChannel.get('google_ads'));
+        const metaLeads = num(leadChannel.get('meta_ads'));
+        const totalLeads = crmLeads;
         const leadsBySource = [
             { source: 'Google Ads', leads: googleLeads },
             { source: 'Meta Ads', leads: metaLeads },
-            { source: 'GHL / CRM', leads: crmLeads },
+            // Floored at zero: a negative remainder is nonsense on a card.
+            { source: 'Direct / other', leads: Math.max(0, totalLeads - googleLeads - metaLeads) },
         ];
-        const totalLeads = leadsBySource.reduce((s, x) => s + x.leads, 0);
+        // Kept, and kept SEPARATE. For an org with no CRM this is the only
+        // lead-ish figure there is; it simply must not be called leads.
+        const adPlatformConversions = num(adLeadsBy.get('google_ads')) + num(adLeadsBy.get('meta_ads'));
         // New patients = patients registered (Dentally "joined" date) in the
         // window — matches Dentally's New Patients report, NOT the old CRM
         // "converted leads" proxy (0 for Dentally-only orgs). Group total sums
@@ -2949,28 +3113,76 @@ export const analyticsService = {
         // Cash banked = sum of settled receipts in the window (real payments).
         const cashCollectedPence = cashRows.reduce((s, r) => s + num(r.pence), 0);
 
-        // Period-over-period deltas — turnover and cash vs the SAME-LENGTH window
-        // immediately before the selected one (Jun vs May, this-year vs last-year,
-        // trailing-30d vs the prior 30d). Compared like-for-like (in-window vs
-        // in-window of equal length), so unlike cash-vs-turnover this is an honest
-        // ratio. Same RPCs, shifted window.
-        const winMs = untilISO
-            ? (new Date(untilISO).getTime() - new Date(sinceISO).getTime())
-            : days * 86400000;
-        const prevUntilISO = sinceISO;
-        const prevSinceISO = new Date(new Date(sinceISO).getTime() - winMs).toISOString();
-        const [prevBillRowsAll, prevCashRows] = await Promise.all([
-            analytics_repository_1.analyticsRepository.treatmentRevenueMatrix(orgId, prevSinceISO, prevUntilISO),
-            analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, prevSinceISO, practiceId, prevUntilISO),
-        ]);
-        const prevBillRows = practiceId ? prevBillRowsAll.filter((r) => r.practice_id === practiceId) : prevBillRowsAll;
-        const prevRevenuePence = prevBillRows.reduce((s, r) => s + num(r.fee_pence), 0);
-        const prevCashPence = prevCashRows.reduce((s, r) => s + num(r.pence), 0);
+        // Period-over-period figures. Every Dentally card carries one, read from
+        // the SAME repository feed as the current-window number it sits beside —
+        // a prior figure sourced from anywhere else would silently compare two
+        // different metrics, and no percentage on the card could then be right.
+        // The windows come from `cmp` (resolved once, in London) rather than
+        // being re-derived here, so the labels the UI shows cannot disagree with
+        // the rows these reads returned.
+        const mine = (rows) => (practiceId ? (rows || []).filter((r) => r.practice_id === practiceId) : (rows || []));
+        const prevCashRows = mine(prevCashRowsAll);
+        const prevBillRows = mine(prevBillRowsAll);
+        const prevApptRows = mine(prevApptRowsAll);
+        const prevClosedRows = mine(prevClosedRowsAll);
+        const prevCompletedRows = mine(prevCompletedRowsAll);
+        const prevNewPatientRows = mine(prevNewPatientRowsAll);
+        const prevAcceptedRows = mine(prevAcceptedRowsAll);
+        const prevInvoiceRows = mine(prevInvoiceRowsAll);
+        const totalOf = (rows, key) => rows.reduce((s, r) => s + num(r[key]), 0);
+
+        const prevRevenuePence = totalOf(prevBillRows, 'fee_pence');
+        const prevCashPence = totalOf(prevCashRows, 'pence');
+        const prevAppointments = totalOf(prevApptRows, 'total');
+        const prevNoShows = totalOf(prevApptRows, 'no_shows');
+        // A rate with no denominator is UNKNOWABLE, not zero: a previous window
+        // with no appointments must show no comparison rather than a confident
+        // "no-shows were zero". Same rule as the live figure beside it.
+        const prevNoShowRate = (appts, misses) => (noShowKnown ? rateOrNull(misses, appts) : null);
+        const prevCompare = {
+            takingsPence: prevCashPence,
+            turnoverPence: prevRevenuePence,
+            treatmentsCompleted: totalOf(prevCompletedRows, 'completed_count'),
+            treatmentsAcceptedCount: totalOf(prevAcceptedRows, 'count'),
+            treatmentsClosedPence: totalOf(prevClosedRows, 'closed_value_pence'),
+            treatmentsPaidPence: totalOf(prevClosedRows, 'paid_value_pence'),
+            appointments: prevAppointments,
+            noShowRate: prevNoShowRate(prevAppointments, prevNoShows),
+            newPatients: totalOf(prevNewPatientRows, 'new_patients'),
+            invoicedPence: totalOf(prevInvoiceRows, 'invoiced_pence'),
+            invoiceOutstandingPence: totalOf(prevInvoiceRows, 'outstanding_pence'),
+            invoiceSettledPence: totalOf(prevInvoiceRows, 'settled_pence'),
+            // Per-practice priors as well as the group totals. The Business Hub
+            // is fetched ONCE, group-wide, and the practice pills filter that
+            // payload in the browser — so a group-only prior would sit a single
+            // site's current figure over the whole group's previous one, and
+            // every card would be wrong by the size of the group for as long as
+            // a practice stayed selected. Same seven reads, grouped instead of
+            // summed; a practice absent from a feed reports 0 for it, which is
+            // what "no rows" means for a count.
+            byPractice: practiceRows.map((row) => {
+                const at = (rows) => rows.filter((r) => r.practice_id === row.practiceId);
+                const appts = totalOf(at(prevApptRows), 'total');
+                return {
+                    practiceId: row.practiceId,
+                    takingsPence: totalOf(at(prevCashRows), 'pence'),
+                    treatmentsCompleted: totalOf(at(prevCompletedRows), 'completed_count'),
+                    treatmentsAcceptedCount: totalOf(at(prevAcceptedRows), 'count'),
+                    treatmentsClosedPence: totalOf(at(prevClosedRows), 'closed_value_pence'),
+                    treatmentsPaidPence: totalOf(at(prevClosedRows), 'paid_value_pence'),
+                    appointments: appts,
+                    noShowRate: prevNoShowRate(appts, totalOf(at(prevApptRows), 'no_shows')),
+                    newPatients: totalOf(at(prevNewPatientRows), 'new_patients'),
+                    invoicedPence: totalOf(at(prevInvoiceRows), 'invoiced_pence'),
+                    invoiceOutstandingPence: totalOf(at(prevInvoiceRows), 'outstanding_pence'),
+                    invoiceSettledPence: totalOf(at(prevInvoiceRows), 'settled_pence'),
+                };
+            }),
+        };
         // null when there's no prior-period base (don't show ±∞ / a fake 0%).
         const pctDelta = (cur, prev) => (prev > 0 ? Math.round(((cur - prev) / prev) * 1000) / 10 : null);
         const turnoverDeltaPct = pctDelta(totalRevenue, prevRevenuePence);
         const cashDeltaPct = pctDelta(cashCollectedPence, prevCashPence);
-        const prevPeriodLabel = prevWindowLabel(sinceISO, untilISO, days);
 
         // Revenue by clinical line — bucket the per-treatment invoiced fee feed
         // (invoice_items, real Dentally data) into ~8 clinical categories. Group-
@@ -3006,9 +3218,13 @@ export const analyticsService = {
         // slice is the owner's stated goal.
         const b = health?.baseline || {};
         const revenueTargetAnnualPence = b.revenue ? Math.round(b.revenue * 100) : 0;
-        const windowDays = untilISO
-            ? Math.max(1, (new Date(untilISO).getTime() - new Date(sinceISO).getTime()) / 86400000)
-            : days;
+        // Pro-rate over the window the REVENUE above actually covers, which is the
+        // clamped one. Measuring the goal over the selected window while revenue
+        // covers only the elapsed part of it is the same mismatch this card was
+        // built to fix: a group two thirds of the way through the year would be
+        // compared against a full year's target and read as hopelessly behind.
+        // Trailing mode keeps the caller's stated length — `days` is the window.
+        const windowDays = selectedUntilISO ? cmp.current.days : days;
         const revenueTargetPence = revenueTargetAnnualPence
             ? Math.round((revenueTargetAnnualPence * windowDays) / 365)
             : 0;
@@ -3048,7 +3264,8 @@ export const analyticsService = {
                 noShowRate: noShowKnown ? rateOrNull(totalNoShows, totalAppts) : null,
                 noShowTracked: noShowKnown, // false => no_show state never synced; show "—" not 0%
                 leads: totalLeads,
-                leadsBySource, // named per-source breakdown (Google / Meta / GHL)
+                leadsBySource, // CRM leads by the channel that bought them + remainder
+                adPlatformConversions, // platform-reported conversions; NOT leads
                 // CRM-only lead total. The per-practice rows below carry CRM leads
                 // ONLY — ad-platform conversions have no reliable practice
                 // attribution (one account per group is the norm), so they are
@@ -3067,14 +3284,34 @@ export const analyticsService = {
                 treatmentsClosedPence, // billed (sold) plan fees
                 treatmentsPaidPence,   // collected (paid) plan fees
                 takingsPence: cashCollectedPence, // Takings = settled payments received (matches Patient Payments "Received")
+                // Dentally Invoice Timeline, group level: Total / Unpaid / Paid.
+                // Summed from the per-practice rows so the practice table and the
+                // headline card can always be reconciled against each other.
+                invoicedPence: sum('invoicedPence'),
+                invoiceOutstandingPence: sum('invoiceOutstandingPence'),
+                invoiceSettledPence: sum('invoiceSettledPence'),
+                invoiceCount: sum('invoiceCount'),
+                invoiceCoverage,
                 cashCollectedPence, // settled receipts banked in window (== takings)
-                // Like-for-like deltas vs the prior same-length period (null when
-                // no prior base). prevPeriodLabel names it for the chip ("May 2026").
+                // Like-for-like deltas vs the prior period (null when no prior
+                // base). Kept for the two callers that read them directly; every
+                // card's own comparison comes from `compare` below.
                 turnoverDeltaPct,
                 cashDeltaPct,
-                prevPeriodLabel,
                 prevRevenuePence,
                 prevCashPence,
+                // DEPRECATED, kept only so the two services can deploy in either
+                // order. The card that read this directly rendered a live chip as
+                // "213.2% vs undefined" the moment the field disappeared, because
+                // backend and frontend are separate Railway services and do not
+                // ship atomically. Reads should use `compare.previous.label`.
+                prevPeriodLabel: cmp.previous.label,
+                // The comparison itself: both windows with their own bounds and
+                // labels, and one prior figure per Dentally card. `complete` is
+                // false while the selected period is still running, in which case
+                // both windows cover the same elapsed span (1–6 Sep vs 1–6 Aug)
+                // instead of six days measured against a whole month.
+                compare: { ...cmp, prev: prevCompare },
                 leadToStartRate: rateOrNull(treatmentsStarted, totalLeads),
             },
             practices: practiceRows,
@@ -3679,28 +3916,6 @@ function categoriseTreatmentLine(name) {
         if (rx.test(n)) return line;
     }
     return 'Other';
-}
-
-// Human label for the comparison (previous) window of a period-over-period delta.
-// Recognises calendar month / year / single day; falls back to "prev Nd" for a
-// trailing-days window or "prev period" otherwise. All UTC (windows are ISO/UTC).
-function prevWindowLabel(sinceISO, untilISO, days) {
-    const d = new Date(sinceISO);
-    if (untilISO) {
-        const spanDays = Math.round((new Date(untilISO).getTime() - d.getTime()) / 86400000);
-        if (spanDays <= 1) { // single day
-            const p = new Date(d.getTime() - 86400000);
-            return p.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
-        }
-        if (d.getUTCDate() === 1 && spanDays >= 27 && spanDays <= 31) { // calendar month
-            const p = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
-            return p.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' });
-        }
-        if (d.getUTCMonth() === 0 && d.getUTCDate() === 1 && spanDays >= 360) // calendar year
-            return String(d.getUTCFullYear() - 1);
-        return 'prev period';
-    }
-    return `prev ${days}d`;
 }
 
 // ----------------------------------------------------------------------------

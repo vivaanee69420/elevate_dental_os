@@ -1,8 +1,10 @@
 import express from 'express';
-import { requirePermission } from '../middleware/auth.js';
+import { requirePermission, requireRole } from '../middleware/auth.js';
+import { openDayController } from '../controllers/open-day.controller.js';
 import {
     getPerformance, getTrend, getLeads, getReconciliation,
     getFacebookCampaigns, getFacebookAdSets, getFacebookAds,
+    getFacebookLeadPerformance,
     getGoogleCampaigns, getGoogleAdGroups, getGoogleAds, getGoogleKeywords,
     getGoogleSearchTerms,
     getGoogleLeadPerformance,
@@ -25,6 +27,23 @@ router.get('/facebook/campaigns', requirePermission('marketing.view'), getFacebo
 // practice_id does on all three).
 router.get('/facebook/ad-sets', requirePermission('marketing.view'), getFacebookAdSets);   // ?campaignId=
 router.get('/facebook/ads', requirePermission('marketing.view'), getFacebookAds);          // ?adSetId=
+// Blended CPL / cost-per-booking / cost-per-accepted-patient for Meta, on the
+// same money-paid acceptance rule as /google/lead-performance. ?practice_id=
+router.get('/facebook/lead-performance', requirePermission('marketing.view'), getFacebookLeadPerformance);
+
+// Open days (000168) — named events and the campaigns that promoted them.
+//
+// Reads sit behind the report's own permission so a practice manager can see
+// the events behind the numbers. Writes are requireRole('owner') rather than
+// requireAgencyActor, which is the gate every OTHER mapping mutation in this
+// codebase uses: an open day is the tenant's own event, and making them ask
+// their agency to record one would make the feature useless. Deliberate
+// exception — see open-day.service.js's header before "fixing" it.
+router.get('/facebook/open-days', requirePermission('marketing.view'), openDayController.list);
+router.post('/facebook/open-days', requireRole('owner'), openDayController.create);
+router.patch('/facebook/open-days/:id', requireRole('owner'), openDayController.update);
+router.delete('/facebook/open-days/:id', requireRole('owner'), openDayController.remove);
+router.put('/facebook/open-days/:id/campaigns', requireRole('owner'), openDayController.setCampaigns);
 
 // Google's hierarchy is Campaign -> Ad Group -> { Ads, Keywords } — ads and
 // keywords are SIBLINGS under an ad group (neither contains the other), which

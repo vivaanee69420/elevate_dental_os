@@ -637,4 +637,84 @@ export const marketingRepository = {
             attribution: r.attribution ?? null,
         }));
     },
+
+    // Every campaign this org has metrics for, ONE ROW EACH — the open-day
+    // mapping screen's pick list (000169).
+    //
+    // An RPC, not a table read: ad_metrics holds campaign x DAY, tens of
+    // thousands of rows, and PostgREST truncates at 1000 in silence. Folding
+    // in JS would work in testing and lose most of the list in production.
+    // The aggregate returns ~84 rows and cannot be truncated.
+    async campaignCatalogue(orgId, provider) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('ad_campaign_catalogue', { p_org: orgId, p_provider: provider });
+        if (error) throw new Error(`ad_campaign_catalogue: ${error.message}`);
+        return (data ?? []).map((r) => ({
+            campaignId: String(r.campaign_id),
+            campaignName: r.campaign_name ?? null,
+            customerId: r.customer_id ?? null,
+            accountName: r.account_name ?? null,
+            firstDay: r.first_day ?? null,
+            lastDay: r.last_day ?? null,
+            spendPence: Number(r.spend_pence ?? 0),
+        }));
+    },
+
+    // The Facebook report's lead ledger (000167): one row per Meta lead in
+    // the window, with acceptance defined as MONEY PAID — the same rule the
+    // Google ledger uses, so the two pages' "cost per acquired patient" mean
+    // the same thing. A lead is Meta because its campaign resolves inside
+    // this org's own Meta ad_metrics rows, the identical structural test
+    // ad_meta_funnel applies; no CRM label decides it.
+    //
+    // Paged exactly like googleLeadLedger above: PostgREST truncates a
+    // set-returning function at 1000 rows in silence, and this returns one
+    // row per lead (1,708 for a live quarter). The server's own exact count
+    // ends the loop, with the empty page kept as the fallback — asking for
+    // one more page to prove there is nothing there re-runs the whole
+    // function and throws the result away.
+    async metaLeadLedger(orgId, since, until, minPaidPence) {
+        const PAGE = 1000;
+        const MAX_PAGES = 500; // a bound against a faulty server, not real data
+        const rows = [];
+        let total = null;
+        for (let from = 0, pages = 0; pages < MAX_PAGES; pages++) {
+            const { data, error, count } = await supabase_1.serviceClient
+                .rpc('ad_meta_lead_ledger', {
+                    p_org: orgId, p_since: since, p_until: until,
+                    p_min_paid_pence: minPaidPence,
+                }, { count: 'exact' })
+                .order('contact_id', { ascending: true, nullsFirst: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw new Error(`ad_meta_lead_ledger: ${error.message}`);
+            const page = data ?? [];
+            rows.push(...page);
+            if (typeof count === 'number') total = count;
+            if (page.length === 0) break;
+            if (total !== null && rows.length >= total) break;
+            from += page.length;
+        }
+        return rows.map((r) => ({
+            contact_id: r.contact_id ?? null,
+            practice_id: r.practice_id ?? null,
+            practice_name: r.practice_name ?? null,
+            // Null is a real value on ad_set_id — the ad is older than the
+            // deep tables' rolling 92-day window, or was deleted. Those leads
+            // belong in an explicit "not identified" bucket, never dropped.
+            campaign_id: r.campaign_id ?? null,
+            campaign_name: r.campaign_name ?? null,
+            ad_set_id: r.ad_set_id ?? null,
+            ad_id: r.ad_id ?? null,
+            lead_at: r.lead_at ?? null,
+            name: r.name ?? null,
+            email: r.email ?? null,
+            treatment: r.treatment ?? null,
+            booked: Boolean(r.booked),
+            accepted: Boolean(r.accepted),
+            is_new_patient: Boolean(r.is_new_patient),
+            // The money behind `accepted`, so the drill-down shows what was
+            // actually paid rather than a bare Yes whose threshold is hidden.
+            paid_pence: Number(r.paid_pence ?? 0),
+        }));
+    },
 };

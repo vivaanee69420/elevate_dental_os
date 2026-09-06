@@ -153,7 +153,10 @@ export default function GoogleReportScreen() {
         title="Google"
         subtitle="What the spend bought — from the campaign down to the words people typed."
       />
-      <ScopePeriodBar />
+      {/* Scoped to practices with a mapped Google Ads account. One without an
+          account can only ever render £0, which reads as "we spent nothing
+          here" rather than "this practice is not connected". */}
+      <ScopePeriodBar adProvider="google_ads" />
 
       {/* Above the tab strip on purpose: group totals and the per-practice
           split are true regardless of which grain tab is open, and a practice

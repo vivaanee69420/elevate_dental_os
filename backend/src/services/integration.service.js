@@ -90,6 +90,23 @@ const REFRESH_ALL_PROVIDERS = ['dentally', 'gohighlevel', 'google_ads', 'meta_ad
 export const integrationService = {
     async list(orgId) {
         const connected = await integration_repository_1.integrationRepository.list(orgId);
+        // Report the newest sync that actually happened, wherever it was
+        // recorded. For the per-account providers the nightly poll stamps the
+        // ACCOUNT row, so reading the marker row alone told the owner
+        // GoHighLevel and QuickBooks had been dead for 6 and 86 days while
+        // both were syncing hourly and nightly. A poll that pulled no new
+        // records is still a sync: it asked, and the answer was "nothing new".
+        const newestByProvider = await integrationAccountRepository
+            .newestSyncByProvider(orgId)
+            .catch(() => new Map()); // never let the badge break the page
+        const withAccountSync = connected.map((row) => {
+            const fromAccounts = newestByProvider.get(row.provider);
+            if (!fromAccounts) return row;
+            const parent = row.last_sync_at ? Date.parse(row.last_sync_at) : 0;
+            return Date.parse(fromAccounts) > parent
+                ? { ...row, last_sync_at: fromAccounts }
+                : row;
+        });
         // A feature-bound provider (emergent, google_sheets, google_sheets_writer)
         // the org lacks must not appear as a connectable card — already-connected
         // rows stay visible in `integrations` (disconnect must still work), only
@@ -98,7 +115,7 @@ export const integrationService = {
         for (const meta of listProviders()) {
             if (await featuresService.orgHasProviderFeature(orgId, meta.id)) available.push(meta);
         }
-        return { integrations: connected, available };
+        return { integrations: withAccountSync, available };
     },
     async startConnect(orgId, provider, extra = {}) {
         await assertProviderFeature(orgId, provider);

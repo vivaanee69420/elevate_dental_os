@@ -18,16 +18,48 @@ import { idParamSchema } from "../models/common.model.js";
 const router = (0, express_1.Router)();
 
 router.get('/', (0, async_handler_1.asyncHandler)(async (req, res) => {
+    const orgId = req.user.organisation_id;
     // kind='practice' (T2): the clinical practice list (Dentally mapping, scope
     // dropdown). Academy/Lab are separate scope options, not practices here.
     const { data, error } = await supabase_1.serviceClient
         .from('practices')
         .select('id, name, chairs, postcode, pms_site_id')
-        .eq('organisation_id', req.user.organisation_id)
+        .eq('organisation_id', orgId)
         .eq('kind', 'practice')
         .order('created_at', { ascending: true });
     if (error) throw new Error(error.message);
-    res.json({ practices: data ?? [] });
+
+    // Which ad providers each practice is mapped to. The provider-specific
+    // Marketing pages use this to drop practices that provider knows nothing
+    // about: offering one renders a confident £0 that reads as "we spent
+    // nothing here" rather than "this practice is not connected".
+    //
+    // Its own org-scoped query, NOT a PostgREST embed: under the service client
+    // an embed resolves the foreign key as a join with no org predicate of its
+    // own (see docs/ISOLATION_AUDIT.md). ad_accounts is a handful of rows per
+    // org, so this costs a single indexed read on an already-cached endpoint.
+    const { data: accounts, error: accountsError } = await supabase_1.serviceClient
+        .from('ad_accounts')
+        .select('practice_id, provider')
+        .eq('organisation_id', orgId);
+    if (accountsError) throw new Error(accountsError.message);
+    const providersByPractice = new Map();
+    for (const a of accounts ?? []) {
+        // An account mapped to no practice attributes its spend to nothing, so
+        // it belongs to no practice's provider list either.
+        if (!a.practice_id || !a.provider) continue;
+        const seen = providersByPractice.get(a.practice_id) ?? new Set();
+        seen.add(a.provider);
+        providersByPractice.set(a.practice_id, seen);
+    }
+    // Always an array, never absent: an undefined field reads as "unknown" at
+    // the call site and gets rendered anyway, which is the bug this closes.
+    res.json({
+        practices: (data ?? []).map((p) => ({
+            ...p,
+            ad_providers: [...(providersByPractice.get(p.id) ?? [])],
+        })),
+    });
 }));
 
 const createSchema = zod_1.z.object({

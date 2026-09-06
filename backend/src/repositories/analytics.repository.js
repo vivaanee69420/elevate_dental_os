@@ -517,6 +517,81 @@ export const analyticsRepository = {
     // returns zeros, so the card renders a "Connect Emergent" placeholder and we
     // don't need the (still-blocked) table/RPC applied on hosted yet.
     // Rows: { accepted_count, accepted_value_pence }.
+    // Invoiced / outstanding / settled per practice — the three columns Dentally
+    // prints in Invoices -> Invoice Timeline, read from `invoices` so a card can
+    // be checked against that screen. Deliberately NOT invoice_items: the cards
+    // this replaces filtered lines to those carrying a treatment_plan_id, a cut
+    // that exists nowhere in Dentally, so their totals matched no Dentally report
+    // and could not be verified by the owner.
+    //
+    // "settled" means the balance reached zero by ANY means. Dentally clears an
+    // invoice with a payment OR an adjustment (write-off, plan allocation,
+    // insurance credit) and `amount_outstanding` does not say which, so this is
+    // not evidence of cash. Rows: { practice_id, invoiced_pence,
+    // outstanding_pence, settled_pence, invoice_count }.
+    // When the PMS pull last completed. Invoices/invoice_items/treatment_items
+    // arrive ONLY in that nightly pull — Dentally's webhooks carry contacts,
+    // appointments and payments but never those — so this is what says how far
+    // the invoice figures actually reach. Null when never synced.
+    // CRM leads split by the ad channel that bought them (migration 000172).
+    // Channel is STRUCTURAL — the lead's campaign must resolve to one of this
+    // org's own ad_metrics campaigns under that provider — never a CRM
+    // attribution label, which another tenant may spell differently or not use
+    // at all. Same test the Facebook report uses, so the two agree.
+    // Attributed channels only; the caller owns the total and the remainder.
+    // Rows: { channel, leads }.
+    // Marketing funnel for the given ad accounts, read THROUGH the same per-lead
+    // ledgers the Facebook and Google report pages use (migration 000173), so
+    // the Business Hub cannot drift from them. accountIds null => every account.
+    // Returns { leads, booked, patients, newPatients, paidPence }.
+    async adAccountMarketing(orgId, sinceISO, untilISO, accountIds = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('ad_account_marketing', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO,
+            p_accounts: accountIds && accountIds.length ? accountIds : null,
+        });
+        if (error) {
+            console.warn(`[analytics] ad_account_marketing unavailable: ${error.message}`);
+            return null;
+        }
+        const r = (Array.isArray(data) ? data[0] : data) || {};
+        return {
+            leads: Number(r.leads || 0),
+            booked: Number(r.booked || 0),
+            patients: Number(r.patients || 0),
+            newPatients: Number(r.new_patients || 0),
+            paidPence: Number(r.paid_pence || 0),
+        };
+    },
+    async leadCountsByChannel(orgId, sinceISO, untilISO = null, practiceId = null) {
+        const { data, error } = await supabase_1.serviceClient.rpc('lead_counts_by_channel', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null, p_practice: practiceId ?? null,
+        });
+        if (error) {
+            // Advisory split: a card without its breakdown beats a page that 500s.
+            console.warn(`[analytics] lead_counts_by_channel unavailable: ${error.message}`);
+            return [];
+        }
+        return Array.isArray(data) ? data : [];
+    },
+    async pmsLastSyncAt(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .from('integrations')
+            .select('last_sync_at')
+            .eq('organisation_id', orgId)
+            .eq('provider', 'dentally')
+            .eq('status', 'active')
+            .maybeSingle();
+        if (error) return null; // freshness is advisory; never fail the page for it
+        return data?.last_sync_at ?? null;
+    },
+    async invoiceTotalsByPractice(orgId, sinceISO, untilISO = null) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('invoice_totals_by_practice', {
+            p_org: orgId, p_since: sinceISO, p_until: untilISO ?? null,
+        });
+        if (error) throw new Error(error.message);
+        return Array.isArray(data) ? data : [];
+    },
     async treatmentAcceptedRollup(orgId, sinceISO, untilISO = null, practiceId = null) {
         if (!(await emergentConnected(orgId))) return { count: 0, value_pence: 0 };
         const { data, error } = await supabase_1.serviceClient.rpc('treatment_accepted_aggregate', {

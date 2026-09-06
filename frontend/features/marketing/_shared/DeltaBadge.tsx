@@ -49,7 +49,11 @@ export function DeltaBadge({
     // "was zero, now isn't". An infinite rise has no percentage; saying so
     // beats printing a number that cannot be right.
     ? 'new'
-    : `${Math.abs(delta.pct).toFixed(1)}%`;
+    // A points move is an absolute change in a figure that is already a
+    // percentage, so it is labelled "pp": "▼ 0.6 pp" beside a headline of
+    // "5.6%" is checkable, where a bare "▼ 0.6%" invites the reader to
+    // subtract it from the value above.
+    : `${Math.abs(delta.pct).toFixed(1)}${delta.unit === 'points' ? ' pp' : '%'}`;
 
   return (
     <p className={`mt-1 text-[11.5px] ${TONE_CLASS[delta.tone]}`}>

@@ -47,10 +47,28 @@
 // young, which is why the card says "no patients YET" and the caveat below
 // says money keeps arriving after a period closes.
 // ============================================================================
-import { money0, money, num, multiple } from '../../_shared/format';
-import type { GoogleCampaignPerformance } from '../api';
+import { money0, money, num, multiple } from './format';
 
-function pickBest(rows: GoogleCampaignPerformance[]): GoogleCampaignPerformance | null {
+// STRUCTURAL, not tied to one platform. Google and Facebook both produce
+// campaign rows in this shape (lib/marketing/lead-performance.js builds both),
+// and the "best return / most spent, no patients yet" judgement is identical
+// either way — a second copy would be a second definition of "best" free to
+// drift from this one.
+export interface HighlightCampaign {
+  campaignId: string | null;
+  campaignName: string | null;
+  attributed: boolean;
+  spendPence: number;
+  leads: number;
+  booked: number;
+  accepted: number;
+  paidPence: number;
+  returnOnSpend: number | null;
+  cplPence: number | null;
+  cpaPence: number | null;
+}
+
+function pickBest(rows: HighlightCampaign[]): HighlightCampaign | null {
   const eligible = rows.filter(
     (r) => r.attributed && r.spendPence > 0 && r.accepted > 0 && r.returnOnSpend !== null,
   );
@@ -63,7 +81,7 @@ function pickBest(rows: GoogleCampaignPerformance[]): GoogleCampaignPerformance 
     || (b.spendPence - a.spendPence))[0];
 }
 
-function pickWatch(rows: GoogleCampaignPerformance[]): GoogleCampaignPerformance | null {
+function pickWatch(rows: HighlightCampaign[]): HighlightCampaign | null {
   const eligible = rows.filter((r) => r.attributed && r.spendPence > 0 && r.accepted === 0);
   if (eligible.length === 0) return null;
   return eligible.sort((a, b) => b.spendPence - a.spendPence)[0];
@@ -111,7 +129,7 @@ export function CampaignHighlights({
   campaigns,
   onOpenCampaign,
 }: {
-  campaigns: GoogleCampaignPerformance[];
+  campaigns: HighlightCampaign[];
   /** Switches to the Campaigns tab and opens that campaign's row. */
   onOpenCampaign: (campaignId: string) => void;
 }) {

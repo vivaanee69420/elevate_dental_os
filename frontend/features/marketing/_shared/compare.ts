@@ -105,6 +105,10 @@ export interface Delta {
   pct: number | null;
   /** What colour the badge should be, after applying the metric's polarity. */
   tone: Tone;
+  /** How to read `pct`. 'percent' is a proportional change; 'points' is an
+   *  absolute move in a figure that is ALREADY a percentage. The badge prints
+   *  the unit, because "▼ 0.6" means nothing without it. */
+  unit: 'percent' | 'points';
 }
 
 // ---------------------------------------------------------------------------
@@ -182,15 +186,47 @@ export function computeDelta(
 
   if (previous === 0) {
     // Nothing to nothing. Genuinely flat, and 0% is the honest figure.
-    if (current === 0) return { direction: 'flat', pct: 0, tone: 'neutral' };
+    if (current === 0) return { direction: 'flat', pct: 0, tone: 'neutral', unit: 'percent' };
     // Something from nothing: the rise is infinite, so there is no
     // percentage. The direction is still real, and the badge says "new".
-    return { direction: 'up', pct: null, tone: toneFor('up', polarity) };
+    return { direction: 'up', pct: null, tone: toneFor('up', polarity), unit: 'percent' };
   }
 
-  if (current === previous) return { direction: 'flat', pct: 0, tone: 'neutral' };
+  if (current === previous) return { direction: 'flat', pct: 0, tone: 'neutral', unit: 'percent' };
 
   const pct = ((current - previous) / previous) * 100;
   const direction: Delta['direction'] = current > previous ? 'up' : 'down';
-  return { direction, pct, tone: toneFor(direction, polarity) };
+  return { direction, pct, tone: toneFor(direction, polarity), unit: 'percent' };
+}
+
+/**
+ * Compare a metric that is ITSELF a percentage, in percentage points.
+ *
+ * A no-show rate moving 6.2% -> 5.6% is a fall of 0.6 POINTS. computeDelta
+ * would report -9.7%, which is arithmetically correct and unreadable on a card
+ * whose headline value is "5.6%": the two percentages are measuring different
+ * things and nothing on screen says so. Points are the figure a reader can
+ * actually check against the number above them.
+ *
+ * Zero is treated as a real value here, not as an absent denominator. A
+ * practice that missed no appointments genuinely had a 0% rate, so a rise from
+ * it is 3.7 points — not the "new" that computeDelta reports for a zero base,
+ * which exists because there is no such thing as a percentage of nothing.
+ * Unknowable stays null: a rate with no appointments behind it is absent, and
+ * the caller must render that as "no comparison".
+ */
+export function pointsDelta(
+  current: number | null | undefined,
+  previous: number | null | undefined,
+  polarity: Polarity,
+): Delta | null {
+  if (current === null || current === undefined) return null;
+  if (previous === null || previous === undefined) return null;
+
+  // Rounded before the comparison, so a float artefact cannot render as a
+  // "change" of 0.0000001 points with a confident arrow beside it.
+  const pct = Math.round((current - previous) * 10) / 10;
+  if (pct === 0) return { direction: 'flat', pct: 0, tone: 'neutral', unit: 'points' };
+  const direction: Delta['direction'] = pct > 0 ? 'up' : 'down';
+  return { direction, pct, tone: toneFor(direction, polarity), unit: 'points' };
 }

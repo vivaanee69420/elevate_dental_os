@@ -38,6 +38,15 @@ import { isSupportedCurrency } from "../lib/integrations/ad-currency.js";
 import { londonDaysAgo, londonYmd } from "../lib/tz.js";
 import { DEEP_WINDOW_DAYS } from "../lib/integrations/google-ads-deep-sync.js";
 import { createTtlCache } from "../lib/ttl-cache.js";
+// The CPL/CPB/CPA arithmetic, shared with the Google report so the two pages
+// cannot drift into two definitions of an acquired patient — see that file's
+// header, and migration 000167 for the 8x understatement that forced it.
+import {
+    ACCEPTANCE_MIN_PAID_PENCE, practiceLeadPerformance,
+    campaignLeadPerformance, sumPracticeRows,
+} from "../lib/marketing/lead-performance.js";
+import { splitByOpenDay } from "../lib/marketing/open-days.js";
+import { openDayRepository } from "../repositories/open-day.repository.js";
 
 // ---------------------------------------------------------------------------
 // The funnel and the spend readers disagree about `until` ON PURPOSE, and the
@@ -302,7 +311,204 @@ export function clampWindow(since, until) {
     };
 }
 
+// The cards' two org-wide reads, cached together for a minute.
+//
+// Fetched ORG-WIDE and narrowed in JS, so switching practice costs no request.
+// The acceptance floor is part of the cache key, not just of the query: it is
+// a constant today, but the moment it becomes per-tenant a key without it
+// serves one org's rows for another org's threshold, and a wrong `accepted`
+// from a warm cache looks exactly like a right one.
+const leadPerformanceCache = createTtlCache({ ttlMs: 60_000, max: 300 });
+
+// Campaign-grain Meta spend, folded from campaign x day to campaign and
+// reshaped into what campaignLeadPerformance expects. A SECOND cache because
+// this one is practice-parameterised and the pair above is not.
+const metaCampaignSpendCache = createTtlCache({ ttlMs: 60_000, max: 300 });
+
+
+export function invalidateMetaLeadPerformanceCache(orgId) {
+    const prefix = orgId ? `${orgId}|` : undefined;
+    // BOTH caches, always. They are keyed the same way and feed two halves of
+    // one payload; clearing only the ledger would leave the per-campaign table
+    // computed against a stale spend side while the cards moved.
+    leadPerformanceCache.invalidate(prefix);
+    metaCampaignSpendCache.invalidate(prefix);
+}
+
+async function loadMetaLeadPerformanceData(orgId, since, until) {
+    const key = `${orgId}|${since}|${until}|${ACCEPTANCE_MIN_PAID_PENCE}`;
+    const hit = leadPerformanceCache.get(key);
+    if (hit) return hit;
+    return leadPerformanceCache.set(key, await Promise.all([
+        marketingRepository.adSpendByPractice(orgId, 'meta_ads', since, until),
+        // funnelUntil, not the raw bound: adSpendByPractice is inclusive
+        // (metric_date IS a date) while the ledger bounds `< until` (a lead
+        // carries a time). Handing the same inclusive date to both drops the
+        // last day's leads beside that day's spend — the exact defect this
+        // file's header documents finding on the funnel.
+        marketingRepository.metaLeadLedger(
+            orgId, since, funnelUntil(until), ACCEPTANCE_MIN_PAID_PENCE,
+        ),
+    ]));
+}
+
+async function loadMetaCampaignSpend(orgId, since, until, practiceId) {
+    const key = `${orgId}|${since}|${until}|${practiceId ?? ''}`;
+    const hit = metaCampaignSpendCache.get(key);
+    if (hit) return hit;
+    const rows = await marketingRepository.campaignSpendByProvider(
+        orgId, since, until, 'meta_ads', null, practiceId,
+    );
+    const byCampaign = new Map();
+    for (const r of rows ?? []) {
+        const id = r.campaign_id ?? null;
+        if (id == null) continue;
+        let row = byCampaign.get(id);
+        if (!row) {
+            row = {
+                entity_id: id, entity_name: r.campaign_name ?? null,
+                objective: null, spend_pence: 0, impressions: 0, clicks: 0,
+                // Meta's own reported conversions are never requested at this
+                // grain, so this stays 0 and the page reads the CRM funnel
+                // instead — the same reason the Facebook tabs carry no
+                // platform-conversions column below campaign level.
+                conversions: 0,
+            };
+            byCampaign.set(id, row);
+        }
+        if (!row.entity_name && r.campaign_name) row.entity_name = r.campaign_name;
+        row.spend_pence += Number(r.spend_pence ?? 0);
+        row.impressions += Number(r.impressions ?? 0);
+        row.clicks += Number(r.clicks ?? 0);
+    }
+    return metaCampaignSpendCache.set(key, [...byCampaign.values()]);
+}
+
 export const facebookReportService = {
+    // Blended CPL / cost-per-booking / cost-per-accepted-patient — practice
+    // grain for the cards, campaign grain for the table beneath them, BOTH
+    // derived from ONE ledger call so they cannot disagree.
+    //
+    // `accepted` here means what it means on the Google report: settled
+    // payments attributable to the lead, net of refunds, from the lead's own
+    // London day onward, above the consultation floor (migration 000167).
+    // The Facebook page previously counted a patient the moment a lead
+    // resolved to any Dentally record — measured live for Jun-Aug 2026 that
+    // was 267 "patients" against 230 bookings and 33 who had actually paid,
+    // so cost per patient read ~8x cheaper than the Google page beside it.
+    async leadPerformance(orgId, { since, until, practiceId = null } = {}) {
+        const win = clampWindow(since, until);
+        // The 92-day clamp exists for the DEEP-GRAIN tables. ad_metrics holds
+        // ~15 months, and leads/appointments/payments have no such cap, so
+        // these cards take the RAW requested window — the same reasoning as
+        // the Google report's leadPerformance. A lead whose ad predates the
+        // deep window simply reports a null ad set, which is already the
+        // report's explicit "not identified" bucket rather than a loss.
+        const rawSince = since ?? win.effectiveSince;
+        const rawUntil = until ?? win.until;
+
+        const accounts = await metaAccounts(orgId);
+        // An org with no open days mapped gets this shape, and so does one that
+        // is not connected at all: zeroed buckets and no events, so the page
+        // renders exactly as it did before open days existed.
+        const noSplit = () => splitByOpenDay([], new Map());
+        const empty = (state) => ({
+            state, practices: [], total: null, practicesAll: [], totalAll: null,
+            campaigns: [], campaignsAll: [], leads: [],
+            openDays: noSplit(), openDaysAll: noSplit(),
+            excludedAccounts: accounts.length ? excludedAccountsOf(accounts) : [],
+            acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
+            effectiveSince: rawSince, windowClamped: false,
+        });
+        if (accounts.length === 0) return empty('not_connected');
+
+        const [[spendRowsAll, ledgerRowsAll], campaignRows, openDayEvents, openDayMappings] =
+            await Promise.all([
+                loadMetaLeadPerformanceData(orgId, rawSince, rawUntil),
+                loadMetaCampaignSpend(orgId, rawSince, rawUntil, practiceId),
+                // Read AFTER the not_connected return above: an org with no
+                // Meta account has no Meta campaigns to map, so asking is a
+                // round trip that can only come back empty.
+                openDayRepository.list(orgId),
+                openDayRepository.mappings(orgId, 'meta_ads'),
+            ]);
+
+        // Narrowed in JS from the org-wide pair, so both sides of every ratio
+        // are the SAME practice — the asymmetry that once divided a whole
+        // group's spend by one practice's leads.
+        const spendRows = practiceId ? spendRowsAll.filter((r) => r.practice_id === practiceId) : spendRowsAll;
+        const ledgerRows = practiceId ? ledgerRowsAll.filter((r) => r.practice_id === practiceId) : ledgerRowsAll;
+
+        if (spendRows.length === 0 && ledgerRows.length === 0) {
+            return empty(await emptyWindowState(orgId));
+        }
+
+        const bySpend = (a, b) => b.spendPence - a.spendPence;
+        const practices = practiceLeadPerformance(spendRows, ledgerRows, false).sort(bySpend);
+        const practicesAll = practiceLeadPerformance(spendRows, ledgerRows, true).sort(bySpend);
+
+        // Unattributed campaigns sort last whatever their spend: the bucket is
+        // a statement about coverage, not a campaign competing for budget.
+        const byCampaignSpend = (a, b) => (a.attributed === b.attributed
+            ? b.spendPence - a.spendPence
+            : (a.attributed ? -1 : 1));
+        const campaigns = campaignLeadPerformance(campaignRows, ledgerRows, false).sort(byCampaignSpend);
+        const campaignsAll = campaignLeadPerformance(campaignRows, ledgerRows, true).sort(byCampaignSpend);
+
+        // --- open days ------------------------------------------------------
+        // A campaign absent from this map is always-on; that is the entire
+        // definition, which is why "unmapped" needs no storage of its own.
+        const eventById = new Map(openDayEvents.map((e) => [e.id, e]));
+        const eventByCampaign = new Map();
+        for (const m of openDayMappings) {
+            const event = eventById.get(m.openDayId);
+            if (event) eventByCampaign.set(m.campaignId, event);
+        }
+        // Which practices ran each event. Taken from the AD ACCOUNT that owns
+        // each mapped campaign — "which practices ran this open day" is a
+        // question about spend, not about where the leads happened to route.
+        // Counted only over campaigns present in THIS window, so a practice
+        // filter narrows the count with the numbers beside it rather than
+        // claiming three practices next to one practice's figures.
+        const practiceByCustomer = new Map(
+            accounts.map((a) => [String(a.customer_id), a.practice_id ?? null]),
+        );
+        const windowCampaignIds = new Set(campaigns.map((c) => c.campaignId).filter(Boolean));
+        const practicesByEvent = new Map();
+        for (const m of openDayMappings) {
+            if (!windowCampaignIds.has(m.campaignId)) continue;
+            const practice = practiceByCustomer.get(String(m.customerId));
+            if (!practice) continue;
+            if (!practicesByEvent.has(m.openDayId)) practicesByEvent.set(m.openDayId, new Set());
+            practicesByEvent.get(m.openDayId).add(practice);
+        }
+        const withPractices = (split) => ({
+            ...split,
+            events: split.events.map((e) => ({
+                ...e,
+                practices: practicesByEvent.get(e.openDayId)?.size ?? 0,
+            })),
+        });
+
+        return {
+            state: 'ok',
+            practices, total: sumPracticeRows(practices),
+            practicesAll, totalAll: sumPracticeRows(practicesAll),
+            campaigns, campaignsAll,
+            // Always-on vs named events. Derived from the SAME campaign rows
+            // the table above renders, so the page's "= Meta total" identity
+            // is arithmetic rather than a second computation that could drift.
+            openDays: withPractices(splitByOpenDay(campaigns, eventByCampaign)),
+            openDaysAll: withPractices(splitByOpenDay(campaignsAll, eventByCampaign)),
+            // The people behind the numbers, so a card click-through lists
+            // them without a second, potentially-drifted computation.
+            leads: ledgerRows,
+            excludedAccounts: excludedAccountsOf(accounts),
+            acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
+            effectiveSince: rawSince, windowClamped: false,
+        };
+    },
+
     async campaigns(orgId, { since, until, practiceId = null } = {}) {
         const win = clampWindow(since, until);
         const accounts = await metaAccounts(orgId);
