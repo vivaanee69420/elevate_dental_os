@@ -1,6 +1,8 @@
 'use client';
-// Facebook report — one page, three tabs (Campaigns / Ad sets / Ads),
-// replacing the old two-route drill-down (a campaign list, then
+// Facebook report — one page, three tabs (Campaigns / Ad sets / Ads), plus a
+// fourth (Open days) shown only to tenants that map campaigns to at least one
+// event — see hasOpenDays below. Replacing the old two-route drill-down (a
+// campaign list, then
 // /marketing-facebook/[campaignId] listing that campaign's ad sets with ads
 // expanding in place — both deleted, Task 3). The owner asked for tabs
 // ("1 facebook page and 3 tabs inside it for campaigns, ads and ad sets"),
@@ -40,12 +42,13 @@ import { PageHeader } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { FacebookPerformancePanel } from './FacebookPerformancePanel';
 import { AdReportTabs, useAdReportTab, type AdReportTab } from '../../_shared/AdReportTabs';
-import { useFacebookCampaigns, useFacebookAdSets } from '../hooks';
+import { useFacebookCampaigns, useFacebookAdSets, useFacebookLeadPerformance } from '../hooks';
 import { FacebookCampaignsTab } from './FacebookCampaignsTab';
 import { FacebookAdSetsTab } from './FacebookAdSetsTab';
 import { FacebookAdsTab } from './FacebookAdsTab';
+import { FacebookOpenDaysTab } from './FacebookOpenDaysTab';
 
-const TABS: AdReportTab[] = [
+const BASE_TABS: AdReportTab[] = [
   { id: 'campaigns', label: 'Campaigns' },
   { id: 'adsets', label: 'Ad sets' },
   { id: 'ads', label: 'Ads' },
@@ -56,6 +59,7 @@ const FILTER_PARAM: Record<string, 'campaignId' | 'adSetId' | null> = {
   campaigns: null,
   adsets: 'campaignId',
   ads: 'adSetId',
+  opendays: null,
 };
 
 function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void }) {
@@ -75,6 +79,15 @@ function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void
 }
 
 export default function FacebookReportScreen() {
+  const { data: perf } = useFacebookLeadPerformance();
+  // Only for tenants that actually run open days. Computed from this
+  // tenant's own rows, never assumed — an always-empty tab is noise for
+  // every tenant that doesn't map campaigns to events.
+  const hasOpenDays = (perf?.openDays.events.length ?? 0) > 0;
+  const TABS = hasOpenDays
+    ? [...BASE_TABS, { id: 'opendays', label: 'Open days' }]
+    : BASE_TABS;
+
   const [tab, setTab] = useAdReportTab(TABS);
   const router = useRouter();
   const pathname = usePathname();
@@ -178,6 +191,7 @@ export default function FacebookReportScreen() {
       {tab === 'ads' && (
         <FacebookAdsTab adSetId={adSetId} />
       )}
+      {tab === 'opendays' && <FacebookOpenDaysTab />}
     </div>
   );
 }
