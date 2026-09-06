@@ -75,6 +75,27 @@ export function listLeads(filters: LeadsListFilters = {}): Promise<LeadsListResp
   return api<LeadsListResponse>(`/api/leads?${params.toString()}`);
 }
 
+// ---------------------------------------------------------------------------
+// CSV export — same-origin download href, exactly like the Data Room's
+// `dataRoomExportUrl` (an <a download> that streams; NOT a fetch-and-blob
+// path). Server-side, this pages through every matching row past
+// PostgREST's 1000-row cap, so it never truncates a pipeline the way reading
+// off the board's capped `listLeads` array would.
+// ---------------------------------------------------------------------------
+const PROXY = '/api/backend';
+
+export interface LeadsExportFilters {
+  ghl_pipeline_id?: string | null;
+  integration_account_id?: string | null;
+}
+
+export function leadsExportUrl(filters: LeadsExportFilters = {}): string {
+  const params = new URLSearchParams();
+  if (filters.ghl_pipeline_id) params.set('ghl_pipeline_id', filters.ghl_pipeline_id);
+  if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
+  return `${PROXY}/api/leads/export.csv?${params.toString()}`;
+}
+
 // GoHighLevel pipeline definitions (cached from the sync) — drives the dynamic
 // Pipeline-screen columns + the pipeline selector.
 export interface GhlPipelineStage {

@@ -9,7 +9,7 @@
 
 import { useMemo, useState } from 'react';
 import { useLeads, usePipelines } from '@/features/leads/hooks';
-import type { Lead, LeadStatus } from '@/features/leads/api';
+import { leadsExportUrl, type Lead, type LeadStatus } from '@/features/leads/api';
 import { formatPence } from '@/lib/format';
 import { CRM_TEAL, agoLabel } from '../data';
 import { useGhlAccounts } from '@/features/integrations/hooks';
@@ -106,6 +106,29 @@ export default function PipelineScreen() {
                 </option>
               ))}
             </select>
+            {/* Hidden (never disabled) with no pipeline selected — an export
+                must carry the same filter as the board, never an ambiguous
+                "everything". Server-side and unpaginated: it pages past
+                PostgREST's 1000-row cap itself, so it can't silently
+                truncate the way building a CSV from `leads` (capped at 500
+                here) would. */}
+            {selectedId && (
+              <a
+                href={leadsExportUrl({ ghl_pipeline_id: selectedId, integration_account_id: accountId })}
+                download
+                style={{
+                  padding: '6px 12px',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: 'white',
+                  background: CRM_TEAL,
+                  borderRadius: 6,
+                  textDecoration: 'none',
+                }}
+              >
+                Export CSV
+              </a>
+            )}
           </div>
         )}
       </div>
