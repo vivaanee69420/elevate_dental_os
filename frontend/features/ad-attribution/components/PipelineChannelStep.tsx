@@ -13,6 +13,7 @@
 import { useMemo, useState } from 'react';
 import { Card } from '@/components/ui';
 import { useSetPipelineChannel } from '../hooks';
+import { useSetOpenDayPipeline } from '@/features/marketing/facebook/hooks';
 import type { AdAttributionConfig, AdChannel, PipelineRow } from '../api';
 
 const CHANNEL_LABEL: Record<string, string> = {
@@ -60,8 +61,14 @@ function ChannelButtons({ row, onSet, busy }: {
   );
 }
 
-export default function PipelineChannelStep({ config }: { config: AdAttributionConfig }) {
+export default function PipelineChannelStep({ config, openDays, openDayAssignedTo }: {
+  config: AdAttributionConfig;
+  openDays?: { id: string; name: string }[];
+  /** `${accountId}|${pipelineId}` -> open day id. */
+  openDayAssignedTo?: Record<string, string>;
+}) {
   const setChannel = useSetPipelineChannel();
+  const setPipeline = useSetOpenDayPipeline();
   const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
@@ -162,6 +169,22 @@ export default function PipelineChannelStep({ config }: { config: AdAttributionC
                         onSet={(c) => handle(p, c)}
                       />
                     </td>
+                    {p.channel === 'meta_ads' && (openDays?.length ?? 0) > 0 && (
+                      <td className="py-2 pl-3 text-right">
+                        <select
+                          className="rounded-panel border border-border bg-white px-2 py-1 text-[12.5px] text-ink"
+                          value={openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)] ?? ''}
+                          onChange={(e) => setPipeline.mutate({
+                            integrationAccountId: p.accountId,
+                            ghlPipelineId: p.pipelineId,
+                            openDayId: e.target.value || null,
+                          })}
+                        >
+                          <option value="">Always-on</option>
+                          {openDays!.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                        </select>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

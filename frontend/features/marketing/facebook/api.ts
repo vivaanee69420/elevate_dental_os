@@ -359,3 +359,11 @@ export function setOpenDayCampaigns(
     method: 'PUT', body: JSON.stringify({ campaigns }),
   });
 }
+
+export function setOpenDayPipeline(body: {
+  integrationAccountId: string; ghlPipelineId: string; openDayId: string | null;
+}) {
+  return api('/api/marketing/facebook/open-days/pipelines', {
+    method: 'PUT', body: JSON.stringify(body),
+  });
+}

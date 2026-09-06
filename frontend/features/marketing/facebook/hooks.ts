@@ -33,6 +33,7 @@ import {
   type FacebookCampaignsPayload, type FacebookAdSetsPayload, type FacebookAdsPage,
   type FacebookLeadPerformancePayload,
   fetchOpenDays, createOpenDay, updateOpenDay, deleteOpenDay, setOpenDayCampaigns,
+  setOpenDayPipeline,
   type OpenDayManagePayload,
 } from './api';
 
@@ -93,6 +94,11 @@ export function useDeleteOpenDay() {
 export function useSetOpenDayCampaigns() {
   return useOpenDayMutation((a: { id: string; campaigns: { campaign_id: string; customer_id: string | null }[] }) =>
     setOpenDayCampaigns(a.id, a.campaigns));
+}
+export function useSetOpenDayPipeline() {
+  return useOpenDayMutation((a: {
+    integrationAccountId: string; ghlPipelineId: string; openDayId: string | null;
+  }) => setOpenDayPipeline(a));
 }
 
 // The blended cards. One fetch carries BOTH the new-patients-only and the
