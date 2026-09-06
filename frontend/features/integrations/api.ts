@@ -148,6 +148,14 @@ export interface PracticeRow {
   id: string;
   name: string;
   pms_site_id: string | null;
+  /**
+   * Ad providers this practice has a mapped account for ('google_ads',
+   * 'meta_ads'). Always present from the API, optional here only so an older
+   * cached response does not fail the type. A provider-scoped scope picker
+   * treats an ABSENT list as "unknown, show it" and an EMPTY one as "connected
+   * to nothing, hide it" — see ScopePeriodBar.
+   */
+  ad_providers?: string[];
 }
 
 export function listPractices() {

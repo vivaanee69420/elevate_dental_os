@@ -44,6 +44,7 @@ import CallRailPanel from '@/features/integrations/components/CallRailPanel';
 import EmergentPanel from '@/features/integrations/components/EmergentPanel';
 import GoogleSheetsPanel from '@/features/integrations/components/GoogleSheetsPanel';
 import GoogleSheetsWriterPanel from '@/features/integrations/components/GoogleSheetsWriterPanel';
+import OpenDaysPanel from '@/features/integrations/components/OpenDaysPanel';
 import EmergentPracticeMapping from '@/features/integrations/components/EmergentPracticeMapping';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
 import IntegrationTile, { type TileMenuItem } from '@/features/integrations/components/IntegrationTile';
@@ -550,6 +551,10 @@ export default function IntegrationsScreen() {
           <>
             <AdAccountSelector provider="meta_ads" label="Meta Ads" />
             <AdReconciliationPanel provider="meta_ads" />
+            {/* Open-day mapping sits with the other mappings rather than on the
+                report: it is setup, done once, and a tenant who runs no open
+                days simply never opens it. */}
+            <OpenDaysPanel />
           </>
         ) : undefined,
       });
