@@ -1,5 +1,6 @@
 import express from 'express';
 import { requirePermission, requireRole } from '../middleware/auth.js';
+import { requireOwnerOrAgencyActor } from '../middleware/agency.js';
 import { openDayController } from '../controllers/open-day.controller.js';
 import {
     getPerformance, getTrend, getLeads, getReconciliation,
@@ -44,6 +45,11 @@ router.post('/facebook/open-days', requireRole('owner'), openDayController.creat
 router.patch('/facebook/open-days/:id', requireRole('owner'), openDayController.update);
 router.delete('/facebook/open-days/:id', requireRole('owner'), openDayController.remove);
 router.put('/facebook/open-days/:id/campaigns', requireRole('owner'), openDayController.setCampaigns);
+// Mapping a GHL pipeline to an open day is owner-OR-agency-actor, not
+// owner-only like the routes above: an agency admin need not be an owner of
+// the sub-account they administer, and owner-only would lock them out. See
+// requireOwnerOrAgencyActor's header in middleware/agency.js.
+router.put('/facebook/open-days/pipelines', requireOwnerOrAgencyActor, openDayController.setPipeline);
 
 // Google's hierarchy is Campaign -> Ad Group -> { Ads, Keywords } — ads and
 // keywords are SIBLINGS under an ad group (neither contains the other), which

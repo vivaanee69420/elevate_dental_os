@@ -112,3 +112,18 @@ describe('open-day routes', () => {
         expect(openDayService.setCampaigns).not.toHaveBeenCalled();
     });
 });
+
+describe('pipeline mapping gate', () => {
+    it('lets a tenant owner map a pipeline, and an agency actor who is not an owner', async () => {
+        const { requireOwnerOrAgencyActor } = await import('../src/middleware/agency.js');
+        const run = (user) => new Promise((resolve) => {
+            const res = { status() { return this; }, json() { resolve({ blocked: true }); return this; } };
+            requireOwnerOrAgencyActor({ user }, res, () => resolve({ blocked: false }));
+        });
+        await expect(run({ role: 'owner', organisation_id: 'o' })).resolves.toMatchObject({ blocked: false });
+        await expect(run({ role: 'practice_manager', organisation_id: 'o', is_agency_admin: true }))
+            .resolves.toMatchObject({ blocked: false });
+        await expect(run({ role: 'practice_manager', organisation_id: 'o' }))
+            .resolves.toMatchObject({ blocked: true });
+    });
+});
