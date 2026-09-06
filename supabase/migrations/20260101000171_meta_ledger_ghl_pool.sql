@@ -8,8 +8,8 @@
 -- ad_channel_pipelines; this brings Facebook into line.
 --
 -- Measured, Plan4growth, Jun-Aug 2026, switching the pool:
---   +397 leads in meta_ads pipelines that Meta never attributed (invisible before)
---   -285 Meta-attributed leads whose pipeline nobody has categorised
+--   +346 leads in meta_ads pipelines that Meta never attributed (invisible before)
+--   -212 Meta-attributed leads whose pipeline nobody has categorised
 -- The second number is a mapping gap the report NAMES rather than swallows.
 --
 -- POOL = leads whose pipeline is mapped channel='meta_ads' (always-on) OR
