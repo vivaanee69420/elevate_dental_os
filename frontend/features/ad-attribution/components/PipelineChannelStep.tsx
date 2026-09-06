@@ -13,14 +13,32 @@
 import { useMemo, useState } from 'react';
 import { Card } from '@/components/ui';
 import { useSetPipelineChannel } from '../hooks';
-import { useSetOpenDayPipeline } from '@/features/marketing/facebook/hooks';
+import { useSetOpenDayPipeline, useCreateOpenDay } from '@/features/marketing/facebook/hooks';
 import type { AdAttributionConfig, AdChannel, PipelineRow } from '../api';
 
 const CHANNEL_LABEL: Record<string, string> = {
   google_ads: 'Google Ads',
   meta_ads: 'Facebook Ads',
+  open_day: 'Open day',
   unassigned: 'Unassigned',
 };
+
+// Open day sits in the SAME segmented control as Google and Facebook rather
+// than in a separate dropdown, because the previous shape was a dead end: the
+// open-day picker only rendered once the pipeline was already Facebook AND at
+// least one event existed, so an org with no events saw no way to mark one and
+// every row read "Always-on" with nothing to change it to.
+//
+// The four states are mutually exclusive as DISPLAYED, and open day wins the
+// display when both are set — matching the reporting rule that a pipeline
+// mapped to an event counts as that event's, never as always-on.
+type PipelineMark = AdChannel | 'open_day' | null;
+
+// The generic name a first event gets when somebody marks a pipeline or
+// campaign as an open day before naming any event. Deliberately not derived
+// from the pipeline's own name: a name read off the data is a guess, and this
+// one is a placeholder the owner renames, not an answer.
+const FIRST_EVENT_NAME = 'Open day';
 
 // Pipeline ids are only unique within a GoHighLevel Location, so every key,
 // map lookup and comparison must be the composite accountId|pipelineId —
@@ -29,20 +47,25 @@ function pipelineKey(accountId: string, pipelineId: string) {
   return `${accountId}|${pipelineId}`;
 }
 
-function ChannelButtons({ row, onSet, busy }: {
+function ChannelButtons({ row, isOpenDay, onSet, busy }: {
   row: PipelineRow;
-  onSet: (channel: AdChannel | null) => void;
+  isOpenDay: boolean;
+  onSet: (mark: PipelineMark) => void;
   busy: boolean;
 }) {
-  const options: Array<{ value: AdChannel | null; label: string }> = [
+  const options: Array<{ value: PipelineMark; label: string }> = [
     { value: 'google_ads', label: 'Google' },
     { value: 'meta_ads', label: 'Facebook' },
+    { value: 'open_day', label: 'Open day' },
     { value: null, label: 'Unassigned' },
   ];
+  // An open-day mapping outranks the channel here exactly as it does in the
+  // report, so a pipeline carrying both never renders as two active buttons.
+  const current: PipelineMark = isOpenDay ? 'open_day' : (row.channel ?? null);
   return (
     <span className="inline-flex overflow-hidden rounded border border-slate-300">
       {options.map((o) => {
-        const active = (row.channel ?? null) === o.value;
+        const active = current === o.value;
         return (
           <button
             key={o.label}
@@ -69,6 +92,7 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
 }) {
   const setChannel = useSetPipelineChannel();
   const setPipeline = useSetOpenDayPipeline();
+  const createOpenDay = useCreateOpenDay();
   const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
@@ -94,18 +118,52 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
     );
   }, [config.pipelines, search, hideEmpty]);
 
+  // Counted the same way the buttons render — open day first, so the tallies
+  // and the highlighted buttons can never disagree about a pipeline.
   const counts = useMemo(() => {
-    const c = { google_ads: 0, meta_ads: 0, unassigned: 0 };
-    for (const p of config.pipelines) c[p.channel ?? 'unassigned'] += 1;
+    const c = { google_ads: 0, meta_ads: 0, open_day: 0, unassigned: 0 };
+    for (const p of config.pipelines) {
+      if (openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)]) c.open_day += 1;
+      else c[p.channel ?? 'unassigned'] += 1;
+    }
     return c;
-  }, [config.pipelines]);
+  }, [config.pipelines, openDayAssignedTo]);
 
-  async function handle(row: PipelineRow, channel: AdChannel | null) {
+  // Marking a pipeline as an open day must work from a cold start, so when the
+  // org has no events yet the first mark creates one. Without this the button
+  // would have nothing to write to (open_day_id is NOT NULL and a foreign key)
+  // and would silently do nothing — the dead end this control replaces.
+  async function ensureOpenDayId(): Promise<string> {
+    const existing = openDays?.[0]?.id;
+    if (existing) return existing;
+    const made = await createOpenDay.mutateAsync({ name: FIRST_EVENT_NAME, eventDate: null });
+    return (made as { id: string }).id;
+  }
+
+  async function handle(row: PipelineRow, mark: PipelineMark) {
     const key = pipelineKey(row.accountId, row.pipelineId);
     setBusy(key);
     setError(null);
     try {
-      await setChannel.mutateAsync({ accountId: row.accountId, pipelineId: row.pipelineId, channel });
+      if (mark === 'open_day') {
+        await setPipeline.mutateAsync({
+          integrationAccountId: row.accountId,
+          ghlPipelineId: row.pipelineId,
+          openDayId: await ensureOpenDayId(),
+        });
+      } else {
+        // Clear any open-day mapping BEFORE writing the channel. A pipeline
+        // left mapped to an event while also carrying a channel is counted
+        // under both, and the always-on + open days = total identity breaks.
+        if (openDayAssignedTo?.[key]) {
+          await setPipeline.mutateAsync({
+            integrationAccountId: row.accountId,
+            ghlPipelineId: row.pipelineId,
+            openDayId: null,
+          });
+        }
+        await setChannel.mutateAsync({ accountId: row.accountId, pipelineId: row.pipelineId, channel: mark });
+      }
     } catch (e) {
       setError(`${row.pipelineName}: ${(e as Error).message || 'Could not save that change. Please try again.'}`);
     } finally {
@@ -119,8 +177,10 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
         Step 2 — Sort pipelines into channels
       </h2>
       <p className="mb-3 text-[13px] text-slate-600">
-        Leads are counted as Google or Facebook based only on the pipeline they arrive in.
-        Anything you leave unassigned is reported separately, never guessed at.
+        Leads are counted as Google, Facebook or an open day based only on the pipeline
+        they arrive in. Anything you leave unassigned is reported separately, never
+        guessed at. Marking a pipeline as an open day puts its leads under that event
+        rather than your always-on advertising.
       </p>
 
       {error && (
@@ -128,7 +188,7 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
       )}
 
       <div className="mb-3 flex flex-wrap items-center gap-3">
-        {(['google_ads', 'meta_ads', 'unassigned'] as const).map((c) => (
+        {(['google_ads', 'meta_ads', 'open_day', 'unassigned'] as const).map((c) => (
           <span key={c} className="text-[12px] text-slate-600">
             {CHANNEL_LABEL[c]}: <strong className="text-slate-900">{counts[c]}</strong>
           </span>
@@ -165,26 +225,30 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
                     <td className="py-2 text-right">
                       <ChannelButtons
                         row={p}
+                        isOpenDay={Boolean(openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)])}
                         busy={busy === pipelineKey(p.accountId, p.pipelineId)}
                         onSet={(c) => handle(p, c)}
                       />
                     </td>
-                    {p.channel === 'meta_ads' && (openDays?.length ?? 0) > 0 && (
-                      <td className="py-2 pl-3 text-right">
+                    {/* WHICH event, shown only once the row IS an open day.
+                        Never a gate on the marking itself — that was the bug:
+                        the picker used to be the only way in, and it rendered
+                        for nobody until an event already existed. */}
+                    <td className="py-2 pl-3 text-right">
+                      {openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)] ? (
                         <select
                           className="rounded-panel border border-border bg-white px-2 py-1 text-[12.5px] text-ink"
-                          value={openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)] ?? ''}
+                          value={openDayAssignedTo[pipelineKey(p.accountId, p.pipelineId)]}
                           onChange={(e) => setPipeline.mutate({
                             integrationAccountId: p.accountId,
                             ghlPipelineId: p.pipelineId,
                             openDayId: e.target.value || null,
                           })}
                         >
-                          <option value="">Always-on</option>
-                          {openDays!.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                          {(openDays ?? []).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                         </select>
-                      </td>
-                    )}
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>

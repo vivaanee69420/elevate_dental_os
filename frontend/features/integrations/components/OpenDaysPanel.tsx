@@ -15,9 +15,12 @@
 // account grouping, which is what the filter box and the per-account
 // headings below are.
 //
-// No event has to exist first and no chip has to be clicked: every campaign
-// row carries its own "Always-on"-or-event dropdown, so an owner can see and
-// categorise all 84 campaigns without inventing an event to unlock them.
+// EVERY ROW CARRIES THE SAME SEGMENTED CONTROL THE GOHIGHLEVEL PIPELINE LIST
+// USES — [ Always-on | Open day ] — because the previous dropdown offered
+// "Always-on" and nothing else until an event already existed. An org with no
+// events therefore saw 84 campaigns all reading Always-on with no way to
+// change any of them: the control looked live and was inert. Marking the first
+// campaign now CREATES the first event, so the feature works from cold.
 // ============================================================================
 import { useMemo, useState } from 'react';
 import { SkeletonTable } from '@/components/ui';
@@ -32,11 +35,49 @@ import {
 // its metrics remain), and blank reads as a rendering bug.
 const DASH_ACCOUNT = 'Unknown account';
 
+// Placeholder name for the first event, created when somebody marks a campaign
+// before naming any event. Deliberately NOT read off the campaign name — a
+// name derived from the data is a guess; this is a label the owner renames.
+const FIRST_EVENT_NAME = 'Open day';
+
 interface AccountGroup {
   key: string;
   accountName: string;
   spendPence: number;
   campaigns: OpenDayCampaignOption[];
+}
+
+// Same shape as ChannelButtons in PipelineChannelStep, deliberately: marking a
+// Meta campaign and marking a GoHighLevel pipeline are the same act, so they
+// should not be two different controls.
+function MarkButtons({ isOpenDay, busy, onSet }: {
+  isOpenDay: boolean;
+  busy: boolean;
+  onSet: (openDay: boolean) => void;
+}) {
+  const options = [
+    { value: false, label: 'Always-on' },
+    { value: true, label: 'Open day' },
+  ];
+  return (
+    <span className="inline-flex overflow-hidden rounded border border-slate-300">
+      {options.map((o) => (
+        <button
+          key={o.label}
+          type="button"
+          disabled={busy}
+          onClick={() => onSet(o.value)}
+          className={`px-2 py-1 text-[12px] ${
+            isOpenDay === o.value
+              ? 'bg-slate-900 text-white'
+              : 'bg-white text-slate-600 hover:bg-slate-50'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </span>
+  );
 }
 
 export default function OpenDaysPanel() {
@@ -50,6 +91,8 @@ export default function OpenDaysPanel() {
   const [newName, setNewName] = useState('');
   const [newDate, setNewDate] = useState('');
   const [filter, setFilter] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Unmapped campaigns, newest activity first — a new open-day campaign lands
   // at the top the day after its first spend. `suggestions` pre-ticks; nothing
@@ -84,6 +127,33 @@ export default function OpenDaysPanel() {
     }
     setConfirmed({});
   };
+
+  // Marking works from cold: with no events yet, the first mark CREATES one.
+  // open_day_id is NOT NULL and a foreign key, so without this the button
+  // would have nothing to write to and would silently do nothing.
+  async function ensureOpenDayId(preferred: string | null): Promise<string> {
+    if (preferred) return preferred;
+    const existing = data?.openDays?.[0]?.id;
+    if (existing) return existing;
+    const made = await create.mutateAsync({ name: FIRST_EVENT_NAME, eventDate: null });
+    return (made as unknown as { id: string }).id;
+  }
+
+  async function mark(c: OpenDayCampaignOption, openDay: boolean, suggestedId: string | null = null) {
+    setBusy(c.campaignId);
+    setError(null);
+    try {
+      await setCampaign.mutateAsync({
+        campaignId: c.campaignId,
+        customerId: c.customerId,
+        openDayId: openDay ? await ensureOpenDayId(suggestedId) : null,
+      });
+    } catch (e) {
+      setError(`${c.campaignName ?? c.campaignId}: ${(e as Error).message || 'Could not save that change.'}`);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   // Every campaign, filtered by the search box, grouped by account. Accounts
   // order by total spend descending; within an account, campaigns order by
@@ -126,55 +196,41 @@ export default function OpenDaysPanel() {
         </p>
       </div>
 
-      {/* --- new since you last mapped, with suggestions -------------------- */}
+      {error && <p className="text-[13px] text-danger">{error}</p>}
+
+      {/* --- new since you last mapped ------------------------------------
+          Actionable rows, not a checkbox list. The old block ticked only
+          campaigns the server had SUGGESTED and disabled the rest, so an org
+          with no events (where nothing can be suggested) saw all 84 rows
+          greyed out above a "Confirm 0 mapping(s)" button. The suggestion is
+          still shown, as a hint beside a control that always works. */}
       {unmapped.length > 0 && (
         <div className="flex flex-col gap-2 border-b border-border pb-3">
           <p className="text-[13px] font-medium">New since you last mapped ({unmapped.length})</p>
-          {/* ONLY A CAMPAIGN THE SERVER ACTUALLY SUGGESTED CAN BE TICKED.
-              This checkbox used to fall back to `openDays[0].id` when there
-              was no suggestion — one click, and the campaign was mapped to
-              whichever event happened to sort first, spend and leads carved
-              into an event it never promoted. A wrong event is worse than an
-              unmapped one: an unmapped campaign is visibly always-on, a
-              wrongly-mapped one is a confident lie. Nothing is lost by
-              refusing here — the full list below carries a per-campaign
-              dropdown for exactly this. */}
           {unmapped.slice(0, 20).map((c) => {
             const suggestedId = data?.suggestions?.[c.campaignId] ?? null;
             const suggestedName = suggestedId
-              ? data?.openDays.find((d) => d.id === suggestedId)?.name
+              ? data?.openDays.find((d) => d.id === suggestedId)?.name ?? null
               : null;
             return (
-              <label key={c.campaignId} className="flex items-center gap-2 text-[13px]">
-                <input
-                  type="checkbox"
-                  disabled={!suggestedId}
-                  checked={Boolean(proposed[c.campaignId])}
-                  onChange={(e) => setConfirmed((v) => ({
-                    ...v,
-                    [c.campaignId]: e.target.checked ? (suggestedId ?? '') : '',
-                  }))}
-                />
+              <div key={c.campaignId} className="flex items-center gap-2 text-[13px]">
                 <span className="flex-1">{c.campaignName ?? c.campaignId}</span>
-                <span className="text-ink-2">{c.accountName ?? DASH_ACCOUNT} · {c.lastDay ?? ''}</span>
-                {suggestedId ? (
-                  <span className="text-[12px] text-brand">suggested: {suggestedName}</span>
-                ) : (
-                  <span className="text-[12px] text-ink-2">
-                    no suggestion — set it in the list below
+                <span className="text-ink-2 whitespace-nowrap">
+                  {c.accountName ?? DASH_ACCOUNT} · {c.lastDay ?? ''}
+                </span>
+                {suggestedName && (
+                  <span className="text-[12px] text-brand whitespace-nowrap">
+                    looks like {suggestedName}
                   </span>
                 )}
-              </label>
+                <MarkButtons
+                  isOpenDay={false}
+                  busy={busy === c.campaignId}
+                  onSet={(v) => mark(c, v, suggestedId)}
+                />
+              </div>
             );
           })}
-          <button
-            type="button"
-            className="self-start px-3 py-1.5 rounded-lg bg-brand text-white text-[13px] disabled:opacity-50"
-            disabled={Object.values(proposed).filter(Boolean).length === 0 || setCampaigns.isPending}
-            onClick={confirmSuggestions}
-          >
-            Confirm {Object.values(proposed).filter(Boolean).length} mapping(s)
-          </button>
         </div>
       )}
 
@@ -258,21 +314,29 @@ export default function OpenDaysPanel() {
                 <div key={c.campaignId} className="flex items-center gap-2 text-[13px] py-0.5">
                   <span className="flex-1">{c.campaignName ?? c.campaignId}</span>
                   <span className="text-ink-2 whitespace-nowrap">{c.lastDay ?? ''} · {money0(c.spendPence)}</span>
-                  <select
-                    className="border border-border rounded-lg px-2 py-1 text-[13px]"
-                    value={data?.assignedTo[c.campaignId] ?? ''}
-                    disabled={setCampaign.isPending}
-                    onChange={(e) => setCampaign.mutate({
-                      campaignId: c.campaignId,
-                      customerId: c.customerId,
-                      openDayId: e.target.value || null,
-                    })}
-                  >
-                    <option value="">Always-on</option>
-                    {(data?.openDays ?? []).map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </select>
+                  <MarkButtons
+                    isOpenDay={Boolean(data?.assignedTo[c.campaignId])}
+                    busy={busy === c.campaignId}
+                    onSet={(v) => mark(c, v)}
+                  />
+                  {/* WHICH event — shown only once the campaign IS an open
+                      day, so it can never be the only way in. */}
+                  {data?.assignedTo[c.campaignId] && (data?.openDays.length ?? 0) > 1 && (
+                    <select
+                      className="border border-border rounded-lg px-2 py-1 text-[13px]"
+                      value={data.assignedTo[c.campaignId]}
+                      disabled={setCampaign.isPending}
+                      onChange={(e) => setCampaign.mutate({
+                        campaignId: c.campaignId,
+                        customerId: c.customerId,
+                        openDayId: e.target.value || null,
+                      })}
+                    >
+                      {(data?.openDays ?? []).map((d) => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               ))}
             </div>
