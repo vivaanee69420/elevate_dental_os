@@ -201,7 +201,7 @@ export function GooglePerformancePanel({
           Cost per lead, per booking and per accepted patient are not shown yet — no GoHighLevel
           pipeline has been mapped to Google Ads for this organisation, so leads cannot be
           attributed.{' '}
-          <a href="/settings/ad-attribution" className="text-brand hover:underline">
+          <a href="/integrations" className="text-brand hover:underline">
             Set up ad attribution
           </a>{' '}
           to sort pipelines into Google and Facebook.

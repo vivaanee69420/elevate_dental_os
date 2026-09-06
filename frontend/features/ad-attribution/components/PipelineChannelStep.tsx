@@ -1,5 +1,11 @@
 'use client';
-// Step 2 of ad attribution: put each pipeline in a channel.
+// Categorise each GoHighLevel pipeline. Lives in the GoHighLevel card on the
+// Integrations page and nowhere else.
+//
+// Pipelines are nested under the subaccount that owns them, collapsed by
+// default: that IS the hierarchy GoHighLevel has, and a pipeline id means
+// nothing outside its Location. There is deliberately no practice mapping
+// here.
 //
 // SCALE: this org has ~113 pipelines across 7 subaccounts and about half have
 // no leads at all, so the list is grouped by subaccount, sorted by lead volume
@@ -96,6 +102,11 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
   const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
+  // Subaccounts collapse by default: 113 pipelines across 7 Locations is a
+  // wall of rows, and the question being answered is "what is in THIS
+  // subaccount". A search expands everything, because a hit inside a closed
+  // section would otherwise be invisible and read as "no results".
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
   const groups = useMemo(() => {
@@ -128,6 +139,11 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
     }
     return c;
   }, [config.pipelines, openDayAssignedTo]);
+
+  // A section is open when the operator opened it, or whenever a search is
+  // active — a match hidden inside a collapsed section reads as no match.
+  const searching = search.trim().length > 0;
+  const isOpen = (accountId: string) => searching || Boolean(opened[accountId]);
 
   // Marking a pipeline as an open day must work from a cold start, so when the
   // org has no events yet the first mark creates one. Without this the button
@@ -177,10 +193,9 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
         Step 2 — Sort pipelines into channels
       </h2>
       <p className="mb-3 text-[13px] text-slate-600">
-        Leads are counted as Google, Facebook or an open day based only on the pipeline
-        they arrive in. Anything you leave unassigned is reported separately, never
-        guessed at. Marking a pipeline as an open day puts its leads under that event
-        rather than your always-on advertising.
+        Open a subaccount to see its pipelines. Leads are counted as Google, Facebook
+        or an open day based only on the pipeline they arrive in — anything you leave
+        unassigned is reported separately, never guessed at.
       </p>
 
       {error && (
@@ -206,14 +221,22 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
       </div>
 
       {groups.map((g) => (
-        <div key={g.accountId} className="mb-4">
-          <div className="mb-1 flex items-baseline gap-2">
+        <div key={g.accountId} className="mb-2 rounded border border-slate-200">
+          <button
+            type="button"
+            onClick={() => setOpened((o) => ({ ...o, [g.accountId]: !isOpen(g.accountId) }))}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
+          >
+            <span className="text-[12px] text-slate-500">{isOpen(g.accountId) ? '▾' : '▸'}</span>
             <h3 className="text-[13px] font-semibold text-slate-900">{g.label}</h3>
             <span className="text-[12px] text-slate-500">
-              {g.practiceName ?? 'Not connected to a practice — excluded from ad performance'}
+              {g.rows.length} pipeline{g.rows.length === 1 ? '' : 's'}
             </span>
-          </div>
-          <div className="overflow-x-auto">
+            <span className="ml-auto text-[12px] text-slate-500">
+              {g.rows.reduce((n, r) => n + r.leadCount, 0).toLocaleString('en-GB')} leads
+            </span>
+          </button>
+          <div className={`overflow-x-auto px-3 pb-2 ${isOpen(g.accountId) ? '' : 'hidden'}`}>
             <table className="w-full min-w-[520px] border-collapse text-[13px]">
               <tbody>
                 {g.rows.map((p) => (
