@@ -112,6 +112,51 @@ export const authRepository = {
             .eq('organisation_id', orgId)
             .order('created_at', { ascending: true });
     },
+    // Members of SEVERAL orgs (the agency-wide team list). Paged: PostgREST
+    // truncates at 1000 rows without saying so, and an agency with many
+    // sub-accounts passes that quietly. Stop on an EMPTY page — a short page
+    // is not the end.
+    async listMembersForOrgs(orgIds) {
+        if (!orgIds?.length) return [];
+        const PAGE = 500;
+        const out = [];
+        for (let from = 0; ; from += PAGE) {
+            const { data, error } = await supabase_1.serviceClient
+                .from('users')
+                .select('id, organisation_id, email, full_name, phone, role, status, is_agency_admin, last_active_at')
+                .in('organisation_id', orgIds)
+                .order('created_at', { ascending: true })
+                .order('id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw error;
+            if (!data || data.length === 0) break;
+            out.push(...data);
+        }
+        return out;
+    },
+    // One member, but only if they sit in an org this caller administers.
+    // maybeSingle so "not in scope" is null rather than a thrown PGRST116.
+    async getUserInOrgs(orgIds, userId) {
+        if (!orgIds?.length) return null;
+        const { data, error } = await supabase_1.serviceClient
+            .from('users')
+            .select('id, organisation_id, email, full_name, phone, role, status, is_agency_admin, last_active_at, permissions')
+            .in('organisation_id', orgIds)
+            .eq('id', userId)
+            .maybeSingle();
+        if (error) throw error;
+        return data ?? null;
+    },
+    // Org-scoped profile/role/permissions write. The org filter is the tenant
+    // boundary on this table — never update by id alone.
+    async updateMember(orgId, userId, patch) {
+        const { error } = await supabase_1.serviceClient
+            .from('users')
+            .update(patch)
+            .eq('organisation_id', orgId)
+            .eq('id', userId);
+        if (error) throw error;
+    },
     setUserStatus(id, status) {
         return supabase_1.serviceClient.from('users').update({ status }).eq('id', id);
     },

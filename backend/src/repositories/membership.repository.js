@@ -31,6 +31,31 @@ export const membershipRepository = {
         return data ?? [];
     },
 
+    // Memberships for many users at once, scoped to the orgs the caller
+    // administers. Paged for the same reason as listMembersForOrgs.
+    async listForUsers(userIds, orgIds) {
+        const out = new Map();
+        if (!userIds?.length || !orgIds?.length) return out;
+        const PAGE = 500;
+        for (let from = 0; ; from += PAGE) {
+            const { data, error } = await serviceClient
+                .from('user_organisations')
+                .select('user_id, organisation_id, role')
+                .in('user_id', userIds)
+                .in('organisation_id', orgIds)
+                .order('user_id', { ascending: true })
+                .order('organisation_id', { ascending: true })
+                .range(from, from + PAGE - 1);
+            if (error) throw error;
+            if (!data || data.length === 0) break;
+            for (const row of data) {
+                if (!out.has(row.user_id)) out.set(row.user_id, []);
+                out.get(row.user_id).push(row);
+            }
+        }
+        return out;
+    },
+
     // Returns the membership row, or null. The authorisation check for a
     // requested acting org.
     async find(userId, orgId) {
@@ -61,6 +86,30 @@ export const membershipRepository = {
             .delete()
             .eq('user_id', userId)
             .eq('organisation_id', orgId);
+        if (error) throw error;
+    },
+
+    // Batch form of add(). One statement instead of N, so a multi-account
+    // assignment has one failure point rather than one per account. Same
+    // conflict target as add(), so it stays an upsert.
+    async addMany(rows) {
+        if (!rows?.length) return;
+        const { error } = await serviceClient
+            .from('user_organisations')
+            .upsert(rows, { onConflict: 'user_id,organisation_id' });
+        if (error) throw error;
+    },
+
+    // Batch form of remove(), scoped to ONE user and an explicit org list —
+    // never a bare delete on user_id, which would take memberships this
+    // caller cannot see.
+    async removeMany(userId, orgIds) {
+        if (!userId || !orgIds?.length) return;
+        const { error } = await serviceClient
+            .from('user_organisations')
+            .delete()
+            .eq('user_id', userId)
+            .in('organisation_id', orgIds);
         if (error) throw error;
     },
 };
