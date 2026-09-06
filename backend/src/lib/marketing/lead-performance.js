@@ -52,6 +52,13 @@ export const ACCEPTANCE_MIN_PAID_PENCE = 4000;
 // A cost per nothing is unknowable, not free — same guard as withCosts/
 // perUnitPence above, applied to the blended lead figures instead of
 // Google's own tracked conversions.
+//
+// Nulls only on a zero DENOMINATOR (no leads/booked/accepted). A zero
+// NUMERATOR (no spend, but leads exist) prices out at a literal £0.00 here —
+// open-days.js's withOpenDayCosts deliberately nulls that case too, because
+// an event whose campaigns didn't run in the selected window would otherwise
+// read as "free leads". The two rules are knowingly different pending a
+// decision to unify them.
 export function withLeadCosts(row) {
     return {
         ...row,
