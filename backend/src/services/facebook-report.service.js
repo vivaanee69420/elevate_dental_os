@@ -441,7 +441,13 @@ export const facebookReportService = {
                 // whose GHL pipeline nobody has put in the channel or open-day
                 // map — the honest coverage figure the GHL-pool switch owes,
                 // same funnelUntil conversion as the ledger read above it.
-                marketingRepository.uncategorisedLeadCounts(orgId, rawSince, funnelUntil(rawUntil)),
+                // PRACTICE-SCOPED, like everything it sits beside. Org-wide,
+                // a five-practice group filtered to ONE practice read "1,251
+                // uncategorised" next to that practice's ~200 — a coverage
+                // line that contradicts the report it is explaining.
+                marketingRepository.uncategorisedLeadCounts(
+                    orgId, rawSince, funnelUntil(rawUntil), practiceId,
+                ),
             ]);
 
         // Narrowed in JS from the org-wide pair, so both sides of every ratio
@@ -466,8 +472,26 @@ export const facebookReportService = {
         const byCampaignSpend = (a, b) => (a.attributed === b.attributed
             ? b.spendPence - a.spendPence
             : (a.attributed ? -1 : 1));
-        const campaigns = campaignLeadPerformance(campaignRows, ledgerRows, false).sort(byCampaignSpend);
-        const campaignsAll = campaignLeadPerformance(campaignRows, ledgerRows, true).sort(byCampaignSpend);
+        // A LEAD META CANNOT ACCOUNT FOR HAS NO CAMPAIGN, WHATEVER COLUMN IT
+        // CARRIES. Migration 000171 returns campaign_id from the contact
+        // whenever one is present, including when meta_attributed is false —
+        // the campaign is absent from this org's Meta metrics entirely. Passed
+        // through, campaignLeadPerformance mints a row with attributed: true,
+        // a null name, no spend and cplPence 0, which sorts to the TOP of the
+        // Campaigns tab as the cheapest campaign in the account. Such a lead
+        // belongs in the existing, visible "Not attributed" bucket, whose
+        // costs are already null by design.
+        //
+        // Done HERE and not in lead-performance.js (the Google report shares
+        // that helper and has no meta_attributed column), and not in the
+        // migration (the open-day split below reads meta_attributed as a
+        // column, and the lead drill-down still shows the lead's own campaign
+        // name). ledgerRows itself is untouched for exactly that reason.
+        const campaignLedgerRows = ledgerRows.map((r) => (r.meta_attributed === false
+            ? { ...r, campaign_id: null, campaign_name: null }
+            : r));
+        const campaigns = campaignLeadPerformance(campaignRows, campaignLedgerRows, false).sort(byCampaignSpend);
+        const campaignsAll = campaignLeadPerformance(campaignRows, campaignLedgerRows, true).sort(byCampaignSpend);
 
         // --- open days ------------------------------------------------------
         // A campaign absent from this map is always-on; that is the entire

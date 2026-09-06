@@ -79,7 +79,7 @@ function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void
 }
 
 export default function FacebookReportScreen() {
-  const { data: perf } = useFacebookLeadPerformance();
+  const { data: perf, isPending: perfPending } = useFacebookLeadPerformance();
   // Only for tenants that actually run open days. Computed from this
   // tenant's own rows, never assumed — an always-empty tab is noise for
   // every tenant that doesn't map campaigns to events.
@@ -88,7 +88,13 @@ export default function FacebookReportScreen() {
     ? [...BASE_TABS, { id: 'opendays', label: 'Open days' }]
     : BASE_TABS;
 
-  const [tab, setTab] = useAdReportTab(TABS);
+  // The tab list is not final until `perf` lands, so the URL must not be
+  // normalised before then: TABS lacks `opendays` on the first render, and
+  // rewriting ?tab=opendays to ?tab=campaigns there made a bookmarked or
+  // shared open-days link impossible to reload. Once the query settles the
+  // rewrite resumes as before — so a tenant with no open days still never
+  // sees the tab, and its URL is still corrected.
+  const [tab, setTab] = useAdReportTab(TABS, { pending: perfPending });
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();

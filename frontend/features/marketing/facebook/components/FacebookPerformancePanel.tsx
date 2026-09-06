@@ -105,8 +105,26 @@ export function FacebookPerformancePanel() {
       <EmptyState message="Meta Ads is not connected. Connect a Meta ad account on the Integrations page to see cost per lead, booking and acquired patient." />
     );
   }
+  // The sentence the pool switch owes the reader — see the render below. Built
+  // once and shown in BOTH branches: the tenant whose report is entirely empty
+  // because nothing is categorised is precisely the one who needs it.
+  const coverageNote = data.coverage && data.coverage.uncategorisedLeads > 0
+    ? (
+      <p className="text-[12px] leading-relaxed text-ink-muted">
+        {num(data.coverage.uncategorisedLeads)} leads sit in pipelines that have not been
+        categorised, {num(data.coverage.uncategorisedAttributedLeads)} of them carrying Meta
+        attribution. Categorise them on the Integrations page to include them here.
+      </p>
+    )
+    : null;
+
   if (!total || (total.leads === 0 && total.spendPence === 0)) {
-    return <EmptyState message="No Meta spend and no attributed leads landed in the selected window." />;
+    return (
+      <div className="flex flex-col gap-2">
+        <EmptyState message="No Meta spend and no attributed leads landed in the selected window." />
+        {coverageNote}
+      </div>
+    );
   }
 
   const toggle = (b: Bucket) => {
@@ -295,6 +313,15 @@ export function FacebookPerformancePanel() {
       />
 
       {split && <OpenDaySplit split={split} />}
+
+      {/* WHAT THE POOL LEAVES OUT. A lead reaches this page only if its
+          GoHighLevel pipeline has been categorised, which removed 212
+          Meta-attributed leads (-11.5%) for the reference org the day that
+          rule shipped. Stating the loss, with the route to fixing it, is the
+          whole justification for accepting it — a number nobody can see is a
+          number nobody will fix. Rendered only when there is something to
+          report, and never when the server did not send the figure. */}
+      {coverageNote}
 
       {openBucket && (
         <div className="flex flex-col gap-2">

@@ -728,10 +728,14 @@ export const marketingRepository = {
     // Leads in pipelines nobody has categorised — the honest home for the
     // leads the GHL pool leaves out. Aggregated in SQL: PostgREST truncates a
     // table read at 1000 rows in silence and this counts thousands.
-    async uncategorisedLeadCounts(orgId, since, until) {
+    //
+    // Practice-scoped like every figure it is displayed beside (000173). Null
+    // is the whole org, which is what an unfiltered page asks for.
+    async uncategorisedLeadCounts(orgId, since, until, practiceId = null) {
         const { data, error } = await supabase_1.serviceClient
             .rpc('ad_uncategorised_lead_counts', {
                 p_org: orgId, p_since: since, p_until: until,
+                p_practice: practiceId ?? null,
             });
         if (error) throw new Error(`ad_uncategorised_lead_counts: ${error.message}`);
         const row = Array.isArray(data) ? data[0] : data;

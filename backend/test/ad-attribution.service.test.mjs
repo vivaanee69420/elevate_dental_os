@@ -4,6 +4,7 @@ import {
 import { adAttributionRepository } from '../src/repositories/ad-attribution.repository.js';
 import { adChannelPipelineRepository } from '../src/repositories/ad-channel-pipeline.repository.js';
 import { adGrainRepository } from '../src/repositories/ad-grain.repository.js';
+import { openDayRepository } from '../src/repositories/open-day.repository.js';
 import {
   resolveChannel, ratio, computePerformance, adAttributionService, accountPracticeByCustomerId,
   FEED_STALE_AFTER_DAYS,
@@ -33,6 +34,9 @@ vi.mock('../src/repositories/ad-channel-pipeline.repository.js', () => ({
 }));
 vi.mock('../src/repositories/ad-grain.repository.js', () => ({
   adGrainRepository: { restampPractices: vi.fn() },
+}));
+vi.mock('../src/repositories/open-day.repository.js', () => ({
+  openDayRepository: { setPipeline: vi.fn() },
 }));
 
 describe('resolveChannel', () => {
@@ -581,6 +585,41 @@ describe('adAttributionService.setPipelineChannel — unknown subaccount', () =>
     await expect(
       adAttributionService.setPipelineChannel('org1', 'acc-does-not-exist', 'g', 'google_ads'),
     ).rejects.toMatchObject({ statusCode: 404, message: 'Unknown subaccount' });
+  });
+});
+
+describe('adAttributionService.setPipelineChannel — open-day rows follow the channel', () => {
+  const ACCOUNTS = [
+    { id: 'acc-real', label: 'Real', practice_id: 'p1', pipelines: [{ id: 'pl1', name: 'Open Day July' }] },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    adAttributionRepository.ghlAccounts.mockResolvedValue(ACCOUNTS);
+  });
+
+  // Migration 000171's Meta pool is "has an open day OR channel = meta_ads".
+  // A pipeline moved to Google that keeps its open-day row therefore feeds the
+  // Facebook event AND the Google ledger — the same leads counted twice — and
+  // the UI hides the open-day select the moment the channel changes, so it
+  // could not be undone by hand.
+  it('clears the pipeline\'s open day when the channel moves off Facebook', async () => {
+    await adAttributionService.setPipelineChannel('org1', 'acc-real', 'pl1', 'google_ads');
+    expect(openDayRepository.setPipeline).toHaveBeenCalledWith('org1', {
+      integrationAccountId: 'acc-real', ghlPipelineId: 'pl1', openDayId: null,
+    });
+  });
+
+  it('clears it when the channel is removed altogether', async () => {
+    await adAttributionService.setPipelineChannel('org1', 'acc-real', 'pl1', null);
+    expect(openDayRepository.setPipeline).toHaveBeenCalledWith('org1', {
+      integrationAccountId: 'acc-real', ghlPipelineId: 'pl1', openDayId: null,
+    });
+  });
+
+  it('leaves the open day alone while the pipeline is still Facebook', async () => {
+    await adAttributionService.setPipelineChannel('org1', 'acc-real', 'pl1', 'meta_ads');
+    expect(openDayRepository.setPipeline).not.toHaveBeenCalled();
   });
 });
 

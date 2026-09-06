@@ -130,27 +130,43 @@ export default function OpenDaysPanel() {
       {unmapped.length > 0 && (
         <div className="flex flex-col gap-2 border-b border-border pb-3">
           <p className="text-[13px] font-medium">New since you last mapped ({unmapped.length})</p>
-          {unmapped.slice(0, 20).map((c) => (
-            <label key={c.campaignId} className="flex items-center gap-2 text-[13px]">
-              <input
-                type="checkbox"
-                checked={Boolean(proposed[c.campaignId])}
-                onChange={(e) => setConfirmed((v) => ({
-                  ...v,
-                  [c.campaignId]: e.target.checked
-                    ? (proposed[c.campaignId] ?? data?.openDays[0]?.id ?? '')
-                    : '',
-                }))}
-              />
-              <span className="flex-1">{c.campaignName ?? c.campaignId}</span>
-              <span className="text-ink-2">{c.accountName ?? DASH_ACCOUNT} · {c.lastDay ?? ''}</span>
-              {data?.suggestions?.[c.campaignId] && (
-                <span className="text-[12px] text-brand">
-                  suggested: {data.openDays.find((d) => d.id === data.suggestions[c.campaignId])?.name}
-                </span>
-              )}
-            </label>
-          ))}
+          {/* ONLY A CAMPAIGN THE SERVER ACTUALLY SUGGESTED CAN BE TICKED.
+              This checkbox used to fall back to `openDays[0].id` when there
+              was no suggestion — one click, and the campaign was mapped to
+              whichever event happened to sort first, spend and leads carved
+              into an event it never promoted. A wrong event is worse than an
+              unmapped one: an unmapped campaign is visibly always-on, a
+              wrongly-mapped one is a confident lie. Nothing is lost by
+              refusing here — the full list below carries a per-campaign
+              dropdown for exactly this. */}
+          {unmapped.slice(0, 20).map((c) => {
+            const suggestedId = data?.suggestions?.[c.campaignId] ?? null;
+            const suggestedName = suggestedId
+              ? data?.openDays.find((d) => d.id === suggestedId)?.name
+              : null;
+            return (
+              <label key={c.campaignId} className="flex items-center gap-2 text-[13px]">
+                <input
+                  type="checkbox"
+                  disabled={!suggestedId}
+                  checked={Boolean(proposed[c.campaignId])}
+                  onChange={(e) => setConfirmed((v) => ({
+                    ...v,
+                    [c.campaignId]: e.target.checked ? (suggestedId ?? '') : '',
+                  }))}
+                />
+                <span className="flex-1">{c.campaignName ?? c.campaignId}</span>
+                <span className="text-ink-2">{c.accountName ?? DASH_ACCOUNT} · {c.lastDay ?? ''}</span>
+                {suggestedId ? (
+                  <span className="text-[12px] text-brand">suggested: {suggestedName}</span>
+                ) : (
+                  <span className="text-[12px] text-ink-2">
+                    no suggestion — set it in the list below
+                  </span>
+                )}
+              </label>
+            );
+          })}
           <button
             type="button"
             className="self-start px-3 py-1.5 rounded-lg bg-brand text-white text-[13px] disabled:opacity-50"
