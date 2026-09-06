@@ -58,6 +58,16 @@ describe('authenticate active-org', () => {
     expect(req.user.role).toBe('owner');
   });
 
+  // req.activeOrgSwitched is only ever stamped true — it is absent, not
+  // false, when nothing switched the acting org. adminScope() (team.service.js)
+  // relies on this to tell "acting at home" apart from "acting through a
+  // membership", so the stamp needs its own pin here rather than being
+  // trusted just because adminScope's own tests synthesise it on a req.
+  it('does not stamp activeOrgSwitched with no header', async () => {
+    const { req } = await run();
+    expect(req.activeOrgSwitched).toBeUndefined();
+  });
+
   it('switches to another account the login is a MEMBER of', async () => {
     const { req } = await run({ 'x-active-org': OTHER });
     expect(req.user.organisation_id).toBe(OTHER);
@@ -65,10 +75,25 @@ describe('authenticate active-org', () => {
     expect(req.user.role).toBe('practice_manager');
   });
 
+  it('stamps activeOrgSwitched when the switch is honoured', async () => {
+    const { req } = await run({ 'x-active-org': OTHER });
+    expect(req.activeOrgSwitched).toBe(true);
+  });
+
   it('ignores an org the login is NOT a member of', async () => {
     const { req } = await run({ 'x-active-org': STRANGER });
     expect(req.user.organisation_id).toBe(HOME);
     expect(req.user.role).toBe('owner');
+  });
+
+  // The important case: the flag tracks an HONOURED switch, not the mere
+  // presence of the header. A forged or stale x-active-org must not narrow
+  // an agency admin's scope — if it stamped the flag on the header alone,
+  // adminScope would wrongly treat "header present but rejected" the same
+  // as "acting through a real membership".
+  it('does not stamp activeOrgSwitched for an org the login is NOT a member of', async () => {
+    const { req } = await run({ 'x-active-org': STRANGER });
+    expect(req.activeOrgSwitched).toBeUndefined();
   });
 
   it('ignores a malformed header rather than failing the request', async () => {
