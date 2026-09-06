@@ -25,6 +25,12 @@ const campaignsSchema = zod_1.z.object({
         customer_id: zod_1.z.string().min(1).nullable().optional(),
     })),
 });
+const pipelineSchema = zod_1.z.object({
+    integrationAccountId: zod_1.z.string().uuid(),
+    ghlPipelineId: zod_1.z.string().min(1),
+    // null clears the mapping — "always-on" has exactly one representation.
+    openDayId: zod_1.z.string().uuid().nullable(),
+});
 
 export const openDayController = {
     async list(req, res, next) {
@@ -62,6 +68,13 @@ export const openDayController = {
             res.json(await openDayService.setCampaigns(
                 req.user.organisation_id, req.params.id, campaigns,
             ));
+        } catch (err) { next(err); }
+    },
+
+    async setPipeline(req, res, next) {
+        try {
+            const body = pipelineSchema.parse(req.body);
+            res.json(await openDayService.setPipeline(req.user.organisation_id, body));
         } catch (err) { next(err); }
     },
 };

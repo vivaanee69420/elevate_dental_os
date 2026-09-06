@@ -1,13 +1,15 @@
-// Structural: mapping MUTATIONS carry requireAgencyActor; the corresponding
-// reads don't (marketing dashboards consume them). Field-level: GHL account
-// PATCH rejects practice_id changes from non-agency actors.
+// Structural: mapping MUTATIONS carry requireAgencyActor (pipeline-channel
+// carries requireOwnerOrAgencyActor instead — a tenant owner may categorise
+// their own pipeline); the corresponding reads don't (marketing dashboards
+// consume them). Field-level: GHL account PATCH rejects practice_id changes
+// from non-agency actors.
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../src/services/org-meta.service.js', () => ({
   orgMetaService: { getOrgMeta: vi.fn(async () => ({ is_agency: false })) },
 }));
 
-const { requireAgencyActor } = await import('../src/middleware/agency.js');
+const { requireAgencyActor, requireOwnerOrAgencyActor } = await import('../src/middleware/agency.js');
 const adAttribution = (await import('../src/routes/ad-attribution.routes.js')).default;
 const practices = (await import('../src/routes/practices.routes.js')).default;
 const integrations = (await import('../src/routes/integrations.routes.js')).default;
@@ -22,13 +24,17 @@ function routesOf(router) {
     }));
 }
 
-const gated = (routes, method, path) =>
-  routes.some((r) => r.path === path && r.methods.includes(method) && r.handlers.includes(requireAgencyActor));
+const gated = (routes, method, path, fn = requireAgencyActor) =>
+  routes.some((r) => r.path === path && r.methods.includes(method) && r.handlers.includes(fn));
 
 describe('mapping mutation gates', () => {
   it('ad-attribution mutations require an agency actor; reads do not', () => {
     const r = routesOf(adAttribution);
-    expect(gated(r, 'put', '/pipelines/:accountId/:pipelineId')).toBe(true);
+    // Pipeline-channel is the one mapping mutation a tenant OWNER may also do
+    // (e.g. categorising a pipeline for an open day) — owner-or-agency-actor,
+    // not agency-actor only. Subaccount/ad-account mapping are unchanged.
+    expect(gated(r, 'put', '/pipelines/:accountId/:pipelineId', requireOwnerOrAgencyActor)).toBe(true);
+    expect(gated(r, 'put', '/pipelines/:accountId/:pipelineId', requireAgencyActor)).toBe(false);
     expect(gated(r, 'patch', '/subaccounts/:id')).toBe(true);
     expect(gated(r, 'patch', '/ad-accounts/:id')).toBe(true);
     expect(gated(r, 'get', '/performance')).toBe(false);
