@@ -147,6 +147,42 @@ export const integrationAccountRepository = {
         return config;
     },
 
+    /**
+     * Newest per-account sync time, keyed by provider.
+     *
+     * GoHighLevel, QuickBooks and CallRail keep their credentials per account,
+     * and their syncers stamp the ACCOUNT row — never the `integrations`
+     * marker row the Integrations cards read. The parent's `last_sync_at` only
+     * moves when someone runs a provider-level sync, so a nightly poll that
+     * ran two hours ago was being reported as "synced 86d ago" while data
+     * arrived normally underneath.
+     *
+     * Revoked accounts are excluded deliberately: they are paused on purpose,
+     * so how long ago one last ran says nothing about whether the connection
+     * is healthy. A 'failed' account IS counted — its last successful run is
+     * still the honest answer to "when did this last sync", and the failure
+     * surfaces through status/last_error rather than by freezing the clock.
+     */
+    async newestSyncByProvider(orgId) {
+        const { data, error } = await this._client()
+            .from('integration_accounts')
+            .select('provider, last_sync_at')
+            .eq('organisation_id', orgId)
+            .neq('status', 'revoked')
+            .not('last_sync_at', 'is', null);
+        if (error) throw new Error(error.message);
+        const newest = new Map();
+        for (const row of data ?? []) {
+            const at = Date.parse(row.last_sync_at);
+            if (Number.isNaN(at)) continue;
+            const cur = newest.get(row.provider);
+            // Compare as instants, not strings: the two can carry different
+            // UTC offsets and would then sort by text rather than by time.
+            if (!cur || at > Date.parse(cur)) newest.set(row.provider, row.last_sync_at);
+        }
+        return newest;
+    },
+
     async markSynced(orgId, id) {
         const { error } = await this._client()
             .from('integration_accounts')

@@ -1470,11 +1470,30 @@ async function deleteByExternal(table, orgId, idCol, externalId) {
     if (error) throw new Error(`${table} webhook delete: ${error.message}`);
 }
 
+// A record we cannot store must not vanish without a word. Both exits below are
+// returns, not throws, so the caller's try/catch never sees them and nothing is
+// persisted — a whole resource type can stop arriving and look identical to one
+// that was never sent. Measured cost of that blindness: this org has "All
+// events" subscribed at Dentally, 38 appointment rows updated by webhook in a
+// day and ZERO invoice rows touched, and the question "are invoice events being
+// dropped or never sent?" could not be answered from anything we record.
+function warnDropped(orgId, resourceType, reason, detail = {}) {
+    console.warn('[dentally-webhook] record NOT stored', {
+        orgId, resourceType, reason, ...detail,
+    });
+}
+
 export async function applyWebhookEvent(orgId, resourceType, record, action = 'upsert') {
     if (!record || record.id == null) return { ignored: 'no_record_id' };
     if (action === 'delete') {
         const m = WEBHOOK_TABLE[resourceType];
-        if (!m) return { ignored: resourceType };
+        if (!m) {
+            // A DELETE we ignore is not harmless: Dentally removed the record and
+            // we keep ours, which is exactly how a voided invoice stays in the
+            // totals forever.
+            warnDropped(orgId, resourceType, 'unhandled_delete', { recordId: record?.id ?? null });
+            return { ignored: resourceType };
+        }
         await deleteByExternal(m[0], orgId, m[1], record.id);
         return { table: m[0], deleted: 1 };
     }
@@ -1500,13 +1519,19 @@ export async function applyWebhookEvent(orgId, resourceType, record, action = 'u
     }
     if (resourceType === 'payment') {
         const row = paymentRow(orgId, record, siteMap, contactMap);
-        if (!row) return { skipped: 'unmatched_practice' };
+        if (!row) {
+            warnDropped(orgId, 'payment', 'unmatched_practice', { siteId: record?.site_id ?? null, recordId: record?.id ?? null });
+            return { skipped: 'unmatched_practice' };
+        }
         await upsertChunked('payments', [row], 'organisation_id,source,external_id');
         return { table: 'payments', applied: 1 };
     }
     if (resourceType === 'invoice') {
         const row = invoiceRow(orgId, record, siteMap, contactMap);
-        if (!row) return { skipped: 'unmatched_practice' };
+        if (!row) {
+            warnDropped(orgId, 'invoice', 'unmatched_practice', { siteId: record?.site_id ?? null, recordId: record?.id ?? null });
+            return { skipped: 'unmatched_practice' };
+        }
         await upsertChunked('invoices', [row], 'organisation_id,source,external_id');
         // Dentally invoice payloads usually embed their line items. Persist them
         // inline (the REAL per-treatment fees) so production data does not depend
@@ -1547,6 +1572,7 @@ export async function applyWebhookEvent(orgId, resourceType, record, action = 'u
         await upsertChunked('treatment_plans', [row], 'organisation_id,source,pms_external_id');
         return { table: 'treatment_plans', applied: 1 };
     }
+    warnDropped(orgId, resourceType, 'unhandled_resource_type', { recordId: record?.id ?? null });
     return { ignored: resourceType };
 }
 

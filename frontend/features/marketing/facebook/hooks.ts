@@ -13,13 +13,100 @@
 // agree. See that file's header for the full reasoning (BST midnight
 // slicing, the spring-forward-Sunday 24h-subtraction bug, and the 92-day
 // clamp echoed back as effectiveSince/windowClamped).
-import { useQuery, useInfiniteQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useScopePeriod, scopeKey } from '@/features/_shared/scope-context';
-import { ymdWindowParams } from '../_shared/window';
+import {
+  ymdWindowParams, ymdWindowParamsFor, londonDateOf, lastInclusiveLondonDay,
+} from '../_shared/window';
+
+// The selected period as two plain YYYY-MM-DD bounds, both inclusive — what
+// the Compare picker needs to offer "the previous equal-length period".
+// Mirrors the Google report's hook of the same name; the DST-sensitive part
+// (londonDateOf / lastInclusiveLondonDay) is the shared code, not this.
+export function useSelectedYmdWindow(): { since: string; until: string } {
+  const { win } = useScopePeriod();
+  return { since: londonDateOf(win.since), until: lastInclusiveLondonDay(win.until) };
+}
 import {
   fetchFacebookCampaigns, fetchFacebookAdSets, fetchFacebookAds,
+  fetchFacebookLeadPerformance,
   type FacebookCampaignsPayload, type FacebookAdSetsPayload, type FacebookAdsPage,
+  type FacebookLeadPerformancePayload,
+  fetchOpenDays, createOpenDay, updateOpenDay, deleteOpenDay, setOpenDayCampaigns,
+  type OpenDayManagePayload,
 } from './api';
+
+// The SAME cards, for an arbitrary window — the comparison period.
+//
+// A second call to the same endpoint rather than a compare_since/compare_until
+// parameter on the first: both periods are then computed by ONE code path on
+// the server (cached independently, since the service keys its 60s cache on
+// org+window), and the comparison cannot drift from the primary figure because
+// it IS the primary figure, asked for a different fortnight.
+export function useFacebookLeadPerformanceFor(
+  window: { since: string; until: string } | null,
+) {
+  const { scope } = useScopePeriod();
+  const qs = window ? ymdWindowParamsFor(scope, window.since, window.until) : '';
+  return useQuery<FacebookLeadPerformancePayload>({
+    queryKey: ['marketing', 'facebook', 'lead-performance', 'compare', scope, window?.since, window?.until],
+    queryFn: () => fetchFacebookLeadPerformance(qs),
+    enabled: window != null,
+    placeholderData: keepPreviousData,
+  });
+}
+
+// The open-day manager's payload. Window-independent on purpose: an owner
+// recording last November's event needs campaigns that stopped running months
+// ago, so this list is never narrowed by the period pills.
+export function useOpenDays() {
+  return useQuery<OpenDayManagePayload>({
+    queryKey: ['marketing', 'facebook', 'open-days'],
+    queryFn: fetchOpenDays,
+  });
+}
+
+// Every mutation invalidates BOTH the manager and the report: remapping a
+// campaign moves spend between buckets, so leaving the report cached would
+// show a split that no longer matches the mapping that produced it.
+function useOpenDayMutation<TArgs>(fn: (args: TArgs) => Promise<unknown>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['marketing', 'facebook', 'open-days'] });
+      qc.invalidateQueries({ queryKey: ['marketing', 'facebook', 'lead-performance'] });
+    },
+  });
+}
+
+export function useCreateOpenDay() {
+  return useOpenDayMutation((b: { name: string; eventDate: string | null }) => createOpenDay(b));
+}
+export function useUpdateOpenDay() {
+  return useOpenDayMutation((a: { id: string; name?: string; eventDate?: string | null }) =>
+    updateOpenDay(a.id, { name: a.name, eventDate: a.eventDate }));
+}
+export function useDeleteOpenDay() {
+  return useOpenDayMutation((id: string) => deleteOpenDay(id));
+}
+export function useSetOpenDayCampaigns() {
+  return useOpenDayMutation((a: { id: string; campaigns: { campaign_id: string; customer_id: string | null }[] }) =>
+    setOpenDayCampaigns(a.id, a.campaigns));
+}
+
+// The blended cards. One fetch carries BOTH the new-patients-only and the
+// including-existing figures, so the toggle is answered client-side and the
+// two can never be computed differently.
+export function useFacebookLeadPerformance() {
+  const { scope, win } = useScopePeriod();
+  const qs = ymdWindowParams(scope, win);
+  return useQuery<FacebookLeadPerformancePayload>({
+    queryKey: ['marketing', 'facebook', 'lead-performance', scopeKey({ scope, win })],
+    queryFn: () => fetchFacebookLeadPerformance(qs),
+    placeholderData: keepPreviousData,
+  });
+}
 
 export function useFacebookCampaigns() {
   const { scope, win } = useScopePeriod();

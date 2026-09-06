@@ -80,6 +80,18 @@ export interface MarketingRoi {
   channels: MktChannel[];
   paidSpendPence: number;
   totalLeads: number;
+  // Non-null => blendedRoas is withheld, and this says why. A chosen ad account
+  // with no practice mapped gives spend but no revenue scope to divide by.
+  roasUnavailableReason?: string | null;
+  // Practices this response is scoped to (null = whole org). Used to narrow the
+  // Dentally-fed cards this feed does not carry, so their numerator matches the
+  // scope of their denominator.
+  scopePracticeIds?: string[] | null;
+  // The attributed funnel behind the Marketing cards, read through the same
+  // per-lead ledgers the Facebook and Google report pages use, so the three
+  // screens cannot disagree. Null when unavailable. Near-zero money on a short
+  // window is correct — a lead takes weeks to become a paying patient.
+  adFunnel?: { leads: number; booked: number; patients: number; newPatients: number; paidPence: number } | null;
   totalConversions: number;
   settledRevenuePence: number;
   blendedRoas: number | null;
