@@ -28,7 +28,7 @@ import { money0 } from '@/features/marketing/_shared/format';
 import type { OpenDayCampaignOption } from '@/features/marketing/facebook/api';
 import {
   useOpenDays, useCreateOpenDay, useUpdateOpenDay, useDeleteOpenDay,
-  useSetOpenDayCampaigns, useSetOpenDayCampaign,
+  useSetOpenDayCampaign,
 } from '@/features/marketing/facebook/hooks';
 
 // An account with no name is a real state (the account row was removed but
@@ -85,48 +85,17 @@ export default function OpenDaysPanel() {
   const create = useCreateOpenDay();
   const update = useUpdateOpenDay();
   const remove = useDeleteOpenDay();
-  const setCampaigns = useSetOpenDayCampaigns();
   const setCampaign = useSetOpenDayCampaign();
 
   const [newName, setNewName] = useState('');
   const [newDate, setNewDate] = useState('');
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  // Accounts are closed until clicked: the panel answers "what is in THIS ad
+  // account", not "here are all 84 campaigns at once", which is what the flat
+  // list it replaces actually did.
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
-
-  // Unmapped campaigns, newest activity first — a new open-day campaign lands
-  // at the top the day after its first spend. `suggestions` pre-ticks; nothing
-  // is written until Confirm.
-  const unmapped = useMemo(() => (data?.campaigns ?? [])
-    .filter((c) => !data?.assignedTo[c.campaignId])
-    .sort((a, b) => String(b.lastDay ?? '').localeCompare(String(a.lastDay ?? ''))),
-  [data]);
-  const [confirmed, setConfirmed] = useState<Record<string, string>>({});
-  const proposed = { ...(data?.suggestions ?? {}), ...confirmed };
-
-  const confirmSuggestions = async () => {
-    // One request per affected event: setCampaigns replaces an event's whole
-    // set, so the existing ids must be sent alongside the new ones or the
-    // confirm would unmap everything already there.
-    const byEvent = new Map<string, string[]>();
-    for (const [campaignId, eventId] of Object.entries(proposed)) {
-      if (!eventId) continue;
-      if (!byEvent.has(eventId)) {
-        byEvent.set(eventId, [...(data?.openDays.find((d) => d.id === eventId)?.campaignIds ?? [])]);
-      }
-      byEvent.get(eventId)!.push(campaignId);
-    }
-    const byId = new Map((data?.campaigns ?? []).map((c) => [c.campaignId, c]));
-    for (const [eventId, ids] of byEvent) {
-      await setCampaigns.mutateAsync({
-        id: eventId,
-        campaigns: [...new Set(ids)].map((id) => ({
-          campaign_id: id, customer_id: byId.get(id)?.customerId ?? null,
-        })),
-      });
-    }
-    setConfirmed({});
-  };
 
   // Marking works from cold: with no events yet, the first mark CREATES one.
   // open_day_id is NOT NULL and a foreign key, so without this the button
@@ -183,6 +152,11 @@ export default function OpenDaysPanel() {
     return groups;
   }, [data?.campaigns, filter]);
 
+  // A hit inside a closed account would read as no result, so searching opens
+  // every account.
+  const searching = filter.trim().length > 0;
+  const isOpen = (key: string) => searching || Boolean(opened[key]);
+
   if (isLoading) return <SkeletonTable rows={4} />;
 
   return (
@@ -197,42 +171,6 @@ export default function OpenDaysPanel() {
       </div>
 
       {error && <p className="text-[13px] text-danger">{error}</p>}
-
-      {/* --- new since you last mapped ------------------------------------
-          Actionable rows, not a checkbox list. The old block ticked only
-          campaigns the server had SUGGESTED and disabled the rest, so an org
-          with no events (where nothing can be suggested) saw all 84 rows
-          greyed out above a "Confirm 0 mapping(s)" button. The suggestion is
-          still shown, as a hint beside a control that always works. */}
-      {unmapped.length > 0 && (
-        <div className="flex flex-col gap-2 border-b border-border pb-3">
-          <p className="text-[13px] font-medium">New since you last mapped ({unmapped.length})</p>
-          {unmapped.slice(0, 20).map((c) => {
-            const suggestedId = data?.suggestions?.[c.campaignId] ?? null;
-            const suggestedName = suggestedId
-              ? data?.openDays.find((d) => d.id === suggestedId)?.name ?? null
-              : null;
-            return (
-              <div key={c.campaignId} className="flex items-center gap-2 text-[13px]">
-                <span className="flex-1">{c.campaignName ?? c.campaignId}</span>
-                <span className="text-ink-2 whitespace-nowrap">
-                  {c.accountName ?? DASH_ACCOUNT} · {c.lastDay ?? ''}
-                </span>
-                {suggestedName && (
-                  <span className="text-[12px] text-brand whitespace-nowrap">
-                    looks like {suggestedName}
-                  </span>
-                )}
-                <MarkButtons
-                  isOpenDay={false}
-                  busy={busy === c.campaignId}
-                  onSet={(v) => mark(c, v, suggestedId)}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       {/* --- the events ---------------------------------------------------- */}
       <div className="flex flex-col gap-2">
@@ -296,7 +234,8 @@ export default function OpenDaysPanel() {
       {/* --- every campaign, grouped by account ----------------------------- */}
       <div className="flex flex-col gap-3 border-t border-border pt-3">
         <p className="text-[13px]">
-          All campaigns — pick an open day for each, or leave it Always-on.
+          Open an ad account to see its campaigns, then mark each one Always-on or
+          Open day.
         </p>
         <input
           className="border border-border rounded-lg px-3 py-1.5 text-[13px]"
@@ -304,12 +243,22 @@ export default function OpenDaysPanel() {
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
-        <div className="max-h-96 overflow-y-auto flex flex-col gap-3">
+        <div className="max-h-[28rem] overflow-y-auto flex flex-col gap-2">
           {accounts.map((group) => (
-            <div key={group.key} className="flex flex-col gap-1">
-              <p className="text-[13px] font-medium text-ink-2">
-                {group.accountName} ({group.campaigns.length})
-              </p>
+            <div key={group.key} className="rounded border border-border">
+              <button
+                type="button"
+                onClick={() => setOpened((o) => ({ ...o, [group.key]: !isOpen(group.key) }))}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
+              >
+                <span className="text-[12px] text-ink-2">{isOpen(group.key) ? '\u25be' : '\u25b8'}</span>
+                <span className="text-[13px] font-medium">{group.accountName}</span>
+                <span className="text-[12px] text-ink-2">
+                  {group.campaigns.length} campaign{group.campaigns.length === 1 ? '' : 's'}
+                </span>
+                <span className="ml-auto text-[12px] text-ink-2">{money0(group.spendPence)}</span>
+              </button>
+              <div className={`flex-col gap-1 px-3 pb-2 ${isOpen(group.key) ? 'flex' : 'hidden'}`}>
               {group.campaigns.map((c) => (
                 <div key={c.campaignId} className="flex items-center gap-2 text-[13px] py-0.5">
                   <span className="flex-1">{c.campaignName ?? c.campaignId}</span>
@@ -339,6 +288,7 @@ export default function OpenDaysPanel() {
                   )}
                 </div>
               ))}
+              </div>
             </div>
           ))}
           {accounts.length === 0 && (
