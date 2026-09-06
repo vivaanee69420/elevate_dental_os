@@ -16,6 +16,17 @@ export const agencyRepository = {
         return data ?? [];
     },
 
+    // id -> name, for the accounts chips on the team list.
+    async orgNames(orgIds) {
+        if (!orgIds?.length) return new Map();
+        const { data, error } = await serviceClient
+            .from('organisations')
+            .select('id, name')
+            .in('id', orgIds);
+        if (error) throw error;
+        return new Map((data ?? []).map((o) => [o.id, o.name]));
+    },
+
     // Connected-integration summary for the sub-account list. One IN query.
     async orgIntegrations(orgIds) {
         if (!orgIds.length) return [];
