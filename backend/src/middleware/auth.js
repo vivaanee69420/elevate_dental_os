@@ -134,6 +134,11 @@ export async function authenticate(req, res, next) {
     let actingRole = user.role;
     let actingPermissions = permissions;
     let agencyContext;
+    // Acting inside another account reached through a membership. Stamped
+    // so downstream scope decisions can tell this apart from acting at
+    // home — the agency-switch path sets req.agencyContext, this one has
+    // no other signal.
+    let activeOrgSwitched = false;
 
     // Multi-org membership: one login may belong to several accounts. The
     // requested org is honoured ONLY when a membership backs it — the header
@@ -149,6 +154,7 @@ export async function authenticate(req, res, next) {
         // widen (or narrow) what the person can do in their home org.
         actingRole = member.role;
         actingPermissions = resolveEffectivePermissions([], member.permissions, member.role);
+        activeOrgSwitched = true;
       }
       // No membership -> silently stay home; a stale cookie is not an error.
     }
@@ -185,6 +191,7 @@ export async function authenticate(req, res, next) {
     // The org an agency admin administers — /api/agency/* acts on this, NOT on
     // the admin's own organisation_id (they may sit elsewhere).
     if (agencyOrgId) req.agencyOrgId = agencyOrgId;
+    if (activeOrgSwitched) req.activeOrgSwitched = true;
 
     // RLS-scoped client for per-request queries. Lazy: repos use serviceClient
     // (manual org filters), so req.db is read by almost no handler — only build
