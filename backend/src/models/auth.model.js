@@ -43,3 +43,31 @@ export const setPasswordSchema = zod_1.z.object({
 export const switchOrgSchema = zod_1.z.object({
     orgId: zod_1.z.string().uuid(),
 });
+
+// Settings → Team, per-user save. `permissions` values are tri-state:
+// true grants, false explicitly denies, and null REMOVES the override so the
+// row inherits its role again — which is why this is nullable() rather than a
+// plain boolean record. `organisation_ids` is accepted only from an agency
+// admin; the service, not this schema, is what enforces that.
+export const saveMemberSchema = zod_1.z.object({
+    full_name: zod_1.z.string().min(1).optional(),
+    phone: zod_1.z.string().optional(),
+    role: zod_1.z.enum(['owner', 'practice_manager', 'reception', 'analyst']).optional(),
+    permissions: zod_1.z.record(zod_1.z.boolean().nullable()).optional(),
+    organisation_ids: zod_1.z.array(zod_1.z.string().uuid()).optional(),
+});
+
+// Settings → Team, create. `password` present takes the provision path (the
+// member is active at once); absent takes the invite-email path.
+// `home_organisation_id` is where the login LIVES — accepted only from an
+// agency admin, and validated against the orgs they administer.
+export const createMemberSchema = zod_1.z.object({
+    email: zod_1.z.string().email(),
+    full_name: zod_1.z.string().min(1),
+    role: zod_1.z.enum(['owner', 'practice_manager', 'reception', 'analyst']),
+    password: zod_1.z.string().min(8).optional(),
+    phone: zod_1.z.string().optional(),
+    permissions: zod_1.z.record(zod_1.z.boolean()).optional(),
+    home_organisation_id: zod_1.z.string().uuid().optional(),
+    organisation_ids: zod_1.z.array(zod_1.z.string().uuid()).optional(),
+});
