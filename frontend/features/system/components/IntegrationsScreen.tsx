@@ -46,6 +46,9 @@ import GoogleSheetsPanel from '@/features/integrations/components/GoogleSheetsPa
 import GoogleSheetsWriterPanel from '@/features/integrations/components/GoogleSheetsWriterPanel';
 import OpenDaysPanel from '@/features/integrations/components/OpenDaysPanel';
 import EmergentPracticeMapping from '@/features/integrations/components/EmergentPracticeMapping';
+import PipelineChannelStep from '@/features/ad-attribution/components/PipelineChannelStep';
+import { useAdAttributionConfig } from '@/features/ad-attribution/hooks';
+import { useOpenDays } from '@/features/marketing/facebook/hooks';
 import AdAccountSelector from '@/features/integrations/components/AdAccountSelector';
 import IntegrationTile, { type TileMenuItem } from '@/features/integrations/components/IntegrationTile';
 import IntegrationModal from '@/features/integrations/components/IntegrationModal';
@@ -146,6 +149,11 @@ export default function IntegrationsScreen() {
   const sync = useSyncIntegration();
   const { data: callRail } = useCallRailStatus();
   const { data: emergent } = useEmergentStatus();
+  // Pipeline channel + open-day mapping, mounted on the GoHighLevel tile below
+  // — the same config the Settings > Ad attribution page reads, so both
+  // screens edit one mapping rather than drifting apart.
+  const { data: adAttributionConfig } = useAdAttributionConfig();
+  const { data: openDaysData } = useOpenDays();
   // Global sync toast — survives navigation; per-provider button state via active.
   const { start: startSyncToast, active } = useSyncToast();
   const [brokerModal, setBrokerModal] = useState<{
@@ -516,7 +524,21 @@ export default function IntegrationsScreen() {
         primaryDisabled: !ghlPanelVisible && startConnect.isPending,
         onPrimary: () => (ghlPanelVisible ? setOpenTile('gohighlevel') : handleConnect(meta)),
         menu: providerMenu('gohighlevel', meta),
-        body: ghlPanelVisible ? <GoHighLevelPanel /> : undefined,
+        body: ghlPanelVisible ? (
+          <>
+            <GoHighLevelPanel />
+            {/* Pipeline categorisation lives here, beside the connection it
+                describes, as well as on Settings -> Ad attribution. The SAME
+                component, not a copy: two screens editing one mapping drift. */}
+            {adAttributionConfig ? (
+              <PipelineChannelStep
+                config={adAttributionConfig}
+                openDays={openDaysData?.openDays}
+                openDayAssignedTo={openDaysData?.pipelineAssignedTo}
+              />
+            ) : null}
+          </>
+        ) : undefined,
       });
     }
   }
