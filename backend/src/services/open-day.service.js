@@ -18,6 +18,8 @@
 // ============================================================================
 import { openDayRepository } from "../repositories/open-day.repository.js";
 import { marketingRepository } from "../repositories/marketing.repository.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
+import { AppError } from "../middleware/errors.js";
 
 const PROVIDER = 'meta_ads';
 
@@ -87,6 +89,15 @@ export const openDayService = {
     },
 
     async setPipeline(orgId, args) {
+        // openDayId is already guarded by the database — ad_open_day_pipelines
+        // carries FOREIGN KEY (organisation_id, open_day_id) referencing
+        // ad_open_days, so a cross-org id has no matching parent and the write
+        // fails outright. integrationAccountId carries no such key, so it is
+        // guarded here the same way ad-attribution.service.js's
+        // setPipelineChannel guards accountId: an org-scoped lookup, 404 on
+        // a miss rather than the default 500 a bare Error gets.
+        const account = await integrationAccountRepository.getById(orgId, args.integrationAccountId);
+        if (!account) throw new AppError('Unknown subaccount', 404);
         await openDayRepository.setPipeline(orgId, args);
         return { ok: true };
     },
