@@ -17,11 +17,19 @@ const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june',
 
 function monthsIn(text) {
     const found = new Set();
-    for (let i = 0; i < MONTHS.length; i++) {
-        // Three letters is enough ("Aug", "Sept", "October") and avoids
-        // matching "may" inside an unrelated word by requiring a boundary.
-        const stem = MONTHS[i].slice(0, 3);
-        if (new RegExp(`\\b${stem}`, 'i').test(text)) found.add(i + 1);
+    // Whole words only. A leading-boundary stem match ("\bmay") also matches
+    // inside "Mayfair", "Junction", "Marchmont" — real London-district and
+    // plausible campaign/practice names for a UK dental group. A word only
+    // counts as a month when the ENTIRE word is a prefix (>= 3 letters) of
+    // that month's own name, so "Aug"/"August"/"Sept"/"September" all match
+    // but a longer word that merely starts the same way never does.
+    const words = String(text).match(/[A-Za-z]+/g) ?? [];
+    for (const word of words) {
+        const w = word.toLowerCase();
+        if (w.length < 3) continue;
+        for (let i = 0; i < MONTHS.length; i++) {
+            if (MONTHS[i].startsWith(w)) { found.add(i + 1); break; }
+        }
     }
     for (const m of text.matchAll(/\b(0?[1-9]|1[0-2])\s*\/\s*(\d{2,4})\b/g)) {
         found.add(Number(m[1]));
@@ -40,7 +48,10 @@ function yearsIn(text) {
 
 export function suggestOpenDay(name, events) {
     const text = String(name ?? '');
-    if (!/open\s?day/i.test(text)) return null;
+    // Real campaign names vary the separator — "OpenDay", "Open Day",
+    // "Open  Day" (double space), "Open-Day" — but it is still anchored to
+    // the two words themselves, never loosened to match "day" on its own.
+    if (!/open[\s-]*day/i.test(text)) return null;
     if (!events?.length) return null;
 
     const months = monthsIn(text);
