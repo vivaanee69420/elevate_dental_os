@@ -38,3 +38,41 @@ describe('audit agency context', () => {
     expect(row.diff).toBeUndefined();
   });
 });
+
+// An agency admin acting AT HOME writes rows belonging to a sub-account (the
+// Team admin endpoints do exactly that). req.agencyContext is set only while
+// SWITCHED, so those writes used to land in the agency's own log, unmarked —
+// the sub-account owner reviewing their log never saw their user change.
+describe('audit handler-stamped org and marker', () => {
+  it('files the row against the stamped org, marked via_agency', () => {
+    const row = fire({
+      user: { id: 'actor-1', organisation_id: 'agency-1' },
+      auditOrgId: 'sub-9',
+      auditVia: { home_organisation_id: 'agency-1', actor_user_id: 'actor-1' },
+    });
+    expect(row.organisation_id).toBe('sub-9');
+    expect(row.user_id).toBe('actor-1');
+    expect(row.diff).toEqual({
+      via_agency: { home_organisation_id: 'agency-1', actor_user_id: 'actor-1' },
+    });
+  });
+
+  it('a stamped marker wins over the switched-context one', () => {
+    const row = fire({
+      agencyContext: { actorUserId: 'actor-1', homeOrgId: 'agency-1' },
+      auditOrgId: 'sub-9',
+      auditVia: { home_organisation_id: 'agency-2', actor_user_id: 'actor-2' },
+    });
+    expect(row.organisation_id).toBe('sub-9');
+    expect(row.diff).toEqual({
+      via_agency: { home_organisation_id: 'agency-2', actor_user_id: 'actor-2' },
+    });
+  });
+
+  it('behaves exactly as before for a caller that stamps nothing', () => {
+    const row = fire();
+    expect(row.organisation_id).toBe('sub-1');
+    expect(row.user_id).toBe('actor-1');
+    expect(row.diff).toBeUndefined();
+  });
+});
