@@ -33,7 +33,7 @@ import {
   type FacebookCampaignsPayload, type FacebookAdSetsPayload, type FacebookAdsPage,
   type FacebookLeadPerformancePayload,
   fetchOpenDays, createOpenDay, updateOpenDay, deleteOpenDay, setOpenDayCampaigns,
-  setOpenDayPipeline,
+  setOpenDayCampaign, setOpenDayPipeline,
   type OpenDayManagePayload,
 } from './api';
 
@@ -94,6 +94,11 @@ export function useDeleteOpenDay() {
 export function useSetOpenDayCampaigns() {
   return useOpenDayMutation((a: { id: string; campaigns: { campaign_id: string; customer_id: string | null }[] }) =>
     setOpenDayCampaigns(a.id, a.campaigns));
+}
+export function useSetOpenDayCampaign() {
+  return useOpenDayMutation((a: {
+    campaignId: string; customerId: string | null; openDayId: string | null;
+  }) => setOpenDayCampaign(a));
 }
 export function useSetOpenDayPipeline() {
   return useOpenDayMutation((a: {

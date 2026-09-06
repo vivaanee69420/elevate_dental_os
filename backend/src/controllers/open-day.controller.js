@@ -25,6 +25,14 @@ const campaignsSchema = zod_1.z.object({
         customer_id: zod_1.z.string().min(1).nullable().optional(),
     })),
 });
+// One campaign at a time, from the always-visible campaign list — unlike
+// campaignsSchema above, which replaces a whole event's set.
+const setCampaignSchema = zod_1.z.object({
+    campaignId: zod_1.z.string().min(1),
+    customerId: zod_1.z.string().min(1).nullable(),
+    // null clears the mapping — "always-on" has exactly one representation.
+    openDayId: zod_1.z.string().uuid().nullable(),
+});
 const pipelineSchema = zod_1.z.object({
     integrationAccountId: zod_1.z.string().uuid(),
     ghlPipelineId: zod_1.z.string().min(1),
@@ -68,6 +76,13 @@ export const openDayController = {
             res.json(await openDayService.setCampaigns(
                 req.user.organisation_id, req.params.id, campaigns,
             ));
+        } catch (err) { next(err); }
+    },
+
+    async setCampaign(req, res, next) {
+        try {
+            const body = setCampaignSchema.parse(req.body);
+            res.json(await openDayService.setCampaign(req.user.organisation_id, body));
         } catch (err) { next(err); }
     },
 
