@@ -92,6 +92,33 @@ describe('openDayRepository org scoping', () => {
         expect(seen.some((x) => x.op === 'insert' || x.op === 'upsert')).toBe(false);
     });
 
+    it('upserts a single campaign mapping keyed on provider AND campaign', async () => {
+        await openDayRepository.setCampaign(ORG, {
+            campaignId: 'c9', customerId: 'act_9', openDayId: 'e-1',
+        });
+        const q = seen.find((x) => x.upsertVals);
+        expect(q.table).toBe('ad_open_day_campaigns');
+        expect(q.upsertVals).toMatchObject({
+            organisation_id: ORG, provider: 'meta_ads',
+            campaign_id: 'c9', customer_id: 'act_9', open_day_id: 'e-1',
+        });
+        expect(q.upsertOpts.onConflict).toBe('organisation_id,provider,campaign_id');
+    });
+
+    it('clearing a single campaign mapping deletes its row rather than writing a null event', async () => {
+        await openDayRepository.setCampaign(ORG, {
+            campaignId: 'c9', customerId: 'act_9', openDayId: null,
+        });
+        const q = seen.find((x) => x.op === 'delete');
+        expect(q.table).toBe('ad_open_day_campaigns');
+        expect(orgFilterOf(q)).toBe(ORG);
+        expect(q.eqs).toEqual(expect.arrayContaining([
+            { col: 'provider', val: 'meta_ads' },
+            { col: 'campaign_id', val: 'c9' },
+        ]));
+        expect(seen.some((x) => x.upsertVals)).toBe(false);
+    });
+
     it('lists only the caller org\'s pipeline mappings', async () => {
         await openDayRepository.pipelineMappings(ORG);
         const q = seen.find((x) => x.table === 'ad_open_day_pipelines');

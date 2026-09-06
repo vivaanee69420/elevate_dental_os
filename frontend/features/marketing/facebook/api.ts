@@ -370,6 +370,16 @@ export function setOpenDayCampaigns(
   });
 }
 
+// One campaign at a time, for the always-visible campaign list — unlike
+// setOpenDayCampaigns above, which replaces a whole event's set.
+export function setOpenDayCampaign(body: {
+  campaignId: string; customerId: string | null; openDayId: string | null;
+}) {
+  return api('/api/marketing/facebook/open-days/campaigns', {
+    method: 'PUT', body: JSON.stringify(body),
+  });
+}
+
 export function setOpenDayPipeline(body: {
   integrationAccountId: string; ghlPipelineId: string; openDayId: string | null;
 }) {

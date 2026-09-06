@@ -101,6 +101,17 @@ export const openDayService = {
         return openDayRepository.setCampaigns(orgId, id, PROVIDER, campaigns);
     },
 
+    // Set or clear one campaign's event from the always-visible campaign
+    // list. Thin, like setPipeline below — campaignId carries no foreign
+    // key of its own (campaigns are not a table, only rows in ad_metrics),
+    // so unlike setPipeline's integrationAccountId there is nothing here to
+    // look up before delegating; openDayId is still guarded by the
+    // database's composite foreign key on ad_open_day_campaigns.
+    async setCampaign(orgId, args) {
+        await openDayRepository.setCampaign(orgId, args);
+        return { ok: true };
+    },
+
     async setPipeline(orgId, args) {
         // openDayId is already guarded by the database — ad_open_day_pipelines
         // carries FOREIGN KEY (organisation_id, open_day_id) referencing

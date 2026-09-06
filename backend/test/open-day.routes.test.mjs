@@ -16,6 +16,7 @@ vi.mock('../src/services/open-day.service.js', () => ({
         update: vi.fn(async () => ({ ok: true })),
         remove: vi.fn(async () => ({ ok: true })),
         setCampaigns: vi.fn(async () => ({ mapped: 0 })),
+        setCampaign: vi.fn(async () => ({ ok: true })),
         setPipeline: vi.fn(async () => ({ ok: true })),
     },
 }));
@@ -44,6 +45,7 @@ describe('open-day routes', () => {
         expect(layersFor('patch', '/facebook/open-days/:id')).not.toHaveLength(0);
         expect(layersFor('delete', '/facebook/open-days/:id')).not.toHaveLength(0);
         expect(layersFor('put', '/facebook/open-days/:id/campaigns')).not.toHaveLength(0);
+        expect(layersFor('put', '/facebook/open-days/campaigns')).not.toHaveLength(0);
         expect(layersFor('put', '/facebook/open-days/pipelines')).not.toHaveLength(0);
     });
 
@@ -72,6 +74,7 @@ describe('open-day routes', () => {
             ['patch', '/facebook/open-days/:id'],
             ['delete', '/facebook/open-days/:id'],
             ['put', '/facebook/open-days/:id/campaigns'],
+            ['put', '/facebook/open-days/campaigns'],
             // requireOwnerOrAgencyActor, not requireRole('owner') like the
             // rest — but a plain practice manager (no is_agency_admin) is
             // neither an owner nor an agency actor, so it still belongs here.
