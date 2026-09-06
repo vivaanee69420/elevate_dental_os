@@ -528,8 +528,11 @@ export default function IntegrationsScreen() {
           <>
             <GoHighLevelPanel />
             {/* Pipeline categorisation lives here, beside the connection it
-                describes, as well as on Settings -> Ad attribution. The SAME
-                component, not a copy: two screens editing one mapping drift. */}
+                describes, and nowhere else — the Settings > Ad attribution
+                page has been removed, because one mapping editable from two
+                screens is two screens free to drift. GoHighLevel carries NO
+                practice mapping: a pipeline belongs to its subaccount, and
+                that is the whole hierarchy. */}
             {adAttributionConfig ? (
               <PipelineChannelStep
                 config={adAttributionConfig}
