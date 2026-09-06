@@ -37,6 +37,7 @@ import {
 } from '../hooks';
 import { OpenDaySplit } from './OpenDaySplit';
 import type { FacebookLeadPractice, FacebookLeadRow } from '../api';
+import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
 
 type Bucket = 'leads' | 'booked' | 'accepted';
 
@@ -296,6 +297,11 @@ export function FacebookPerformancePanel() {
       </div>
 
       <StatRail stats={stats} />
+
+      {/* The cards above are sums over the window, so a partial final day
+          understates every one of them. Stated here, immediately under the
+          figures it qualifies. */}
+      <SpendFreshnessNote freshness={data?.freshness} />
 
       {compare && !comparable && (
         <p className="text-[12px] leading-relaxed text-ink-muted">
