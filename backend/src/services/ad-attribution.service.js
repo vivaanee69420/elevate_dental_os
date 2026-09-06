@@ -16,6 +16,7 @@ import { adChannelPipelineRepository } from "../repositories/ad-channel-pipeline
 import { adAttributionRepository } from "../repositories/ad-attribution.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { adGrainRepository } from "../repositories/ad-grain.repository.js";
+import { openDayRepository } from "../repositories/open-day.repository.js";
 import { buildAcceptedByKey, matchAcceptedValue } from "../lib/lead-emergent-match.js";
 import { AppError } from "../middleware/errors.js";
 
@@ -565,6 +566,22 @@ export const adAttributionService = {
         await adChannelPipelineRepository.setChannel(
             orgId, accountId, pipelineId, pipeline?.name ?? null, channel,
         );
+        // AN OPEN DAY IS A FACEBOOK CONCEPT, SO IT CANNOT OUTLIVE THE CHANNEL.
+        // Migration 000171 pools a lead into the Meta ledger when its pipeline
+        // has an open day OR its channel is meta_ads, so a pipeline moved to
+        // Google while keeping an open-day row feeds BOTH reports — the same
+        // leads counted twice, once in a Facebook event and once in the Google
+        // ledger. The screen that wrote the row also hides the open-day select
+        // the moment the channel changes, so it could not be cleared by hand
+        // either. Clearing here keeps the two maps consistent at the one place
+        // that can change the channel.
+        if (channel !== 'meta_ads') {
+            await openDayRepository.setPipeline(orgId, {
+                integrationAccountId: accountId,
+                ghlPipelineId: pipelineId,
+                openDayId: null,
+            });
+        }
         return { ok: true };
     },
 

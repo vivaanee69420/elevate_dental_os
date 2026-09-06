@@ -65,6 +65,18 @@ export const leadListQuerySchema = zod_1.z.object({
     ghl_pipeline_id: zod_1.z.string().optional(),
     limit: zod_1.z.coerce.number().default(100),
 });
+// CSV export — same board filters as leadListQuerySchema, minus `limit`: an
+// export has no page size, it returns every matching row (see
+// lead.repository.js `exportBatches`, which pages past PostgREST's 1000-row
+// cap server-side rather than accepting a client-chosen limit).
+export const leadExportQuerySchema = zod_1.z.object({
+    status: zod_1.z.enum(LEAD_STATUSES).optional(),
+    practice_id: zod_1.z.string().uuid().optional(),
+    integration_account_id: zod_1.z.string().uuid().optional(),
+    assigned_to: zod_1.z.string().uuid().optional(),
+    since: zod_1.z.string().optional(),
+    ghl_pipeline_id: zod_1.z.string().optional(),
+});
 // Pipeline definitions are per GHL Location — scope them to one subaccount.
 export const pipelinesQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),

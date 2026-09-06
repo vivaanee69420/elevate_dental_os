@@ -20,6 +20,7 @@ import { formatDate } from '@/lib/format';
 import { FootNote } from '../../_shared/StatRail';
 import { GoogleStateNotice } from './GoogleStateNotice';
 import type { GoogleExcludedAccount, GoogleState } from '../api';
+import SpendFreshnessNote, { type SpendFreshness } from '@/features/marketing/_shared/SpendFreshnessNote';
 
 export function ExcludedAccountsNote({ accounts }: { accounts: GoogleExcludedAccount[] }) {
   if (accounts.length === 0) return null;
@@ -46,6 +47,7 @@ export function GoogleTabFrame({
   isError,
   errorLabel,
   windowClamped,
+  freshness,
   effectiveSince,
   /** How far back this tab's own table actually reaches. 92 for the deep
    *  grains, 30 for search terms — stated rather than assumed, because the
@@ -61,6 +63,7 @@ export function GoogleTabFrame({
   isError: boolean;
   errorLabel: string;
   windowClamped?: boolean;
+  freshness?: SpendFreshness | null;
   effectiveSince?: string;
   windowDays?: number;
   excludedAccounts?: GoogleExcludedAccount[];
@@ -76,6 +79,7 @@ export function GoogleTabFrame({
       <GoogleStateNotice state={state} />
       {state === 'ok' && children}
       {footer}
+      <SpendFreshnessNote freshness={freshness} />
       {windowClamped && effectiveSince && (
         <FootNote>
           This detail is kept for {windowDays} days. The selected period reaches further back, so the

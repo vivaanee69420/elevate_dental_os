@@ -19,93 +19,131 @@ const campaign = (id, over = {}) => ({
     ...over,
 });
 
-const JULY = { id: 'e-july', name: 'July 26', eventDate: '2026-07-15' };
-const APRIL = { id: 'e-april', name: 'April 26', eventDate: '2026-04-18' };
+const lead = (over = {}) => ({
+    open_day_id: null, meta_attributed: true,
+    booked: false, accepted: false, is_new_patient: true, paid_pence: 0,
+    ...over,
+});
+
+const EVENTS = [
+    { id: 'e-july', name: 'July 26', eventDate: '2026-07-15' },
+    { id: 'e-april', name: 'April 26', eventDate: '2026-04-18' },
+];
 
 describe('splitByOpenDay', () => {
-    it('puts mapped campaigns under their event and leaves the rest always-on', () => {
-        const rows = [
-            campaign('c1', { spendPence: 10000, leads: 10, booked: 2, accepted: 1 }),
-            campaign('c2', { spendPence: 20000, leads: 20, booked: 4, accepted: 2 }),
-            campaign('c3', { spendPence: 70000, leads: 30, booked: 6, accepted: 3 }),
+    it('splits spend by campaign and leads by the pipeline the lead came through', () => {
+        const campaigns = [
+            campaign('c1', { spendPence: 40000 }),
+            campaign('c2', { spendPence: 60000 }),
         ];
-        const out = splitByOpenDay(rows, new Map([['c1', JULY], ['c2', JULY]]));
-
-        expect(out.events).toHaveLength(1);
-        expect(out.events[0]).toMatchObject({
-            openDayId: 'e-july', name: 'July 26', eventDate: '2026-07-15',
-            campaigns: 2, spendPence: 30000, leads: 30, booked: 6, accepted: 3,
+        const leads = [
+            lead({ open_day_id: 'e-july', booked: true, accepted: true, paid_pence: 9000 }),
+            lead({ open_day_id: 'e-july' }),
+            lead({}),
+        ];
+        const out = splitByOpenDay(campaigns, leads, EVENTS, {
+            eventByCampaign: new Map([['c1', EVENTS[0]]]),
         });
-        expect(out.openDays).toMatchObject({ spendPence: 30000, leads: 30, booked: 6, accepted: 3 });
-        expect(out.alwaysOn).toMatchObject({ spendPence: 70000, leads: 30, booked: 6, accepted: 3 });
+        expect(out.openDays).toMatchObject({ spendPence: 40000, leads: 2, booked: 1, accepted: 1 });
+        expect(out.alwaysOn).toMatchObject({ spendPence: 60000, leads: 1, booked: 0, accepted: 0 });
+        expect(out.events[0]).toMatchObject({ name: 'July 26', spendPence: 40000, leads: 2 });
     });
 
-    // The claim the page makes in a "= Meta total" row. If this ever fails the
-    // page is asserting an identity that is not true.
     it('partitions: always-on plus open days equals the whole, metric for metric', () => {
-        const rows = [
-            campaign('c1', { spendPence: 1234, impressions: 90, clicks: 9, leads: 7, booked: 3, accepted: 1, paidPence: 500 }),
-            campaign('c2', { spendPence: 5678, impressions: 80, clicks: 8, leads: 6, booked: 2, accepted: 2, paidPence: 900 }),
-            campaign('c3', { spendPence: 9012, impressions: 70, clicks: 7, leads: 5, booked: 1, accepted: 0, paidPence: 0 }),
-            campaign('c4', { spendPence: 3456, impressions: 60, clicks: 6, leads: 4, booked: 0, accepted: 0, paidPence: 0 }),
+        const campaigns = [
+            campaign('c1', { spendPence: 1234, impressions: 90, clicks: 9 }),
+            campaign('c2', { spendPence: 5678, impressions: 80, clicks: 8 }),
         ];
-        const out = splitByOpenDay(rows, new Map([['c2', JULY], ['c4', APRIL]]));
-
-        for (const k of ['spendPence', 'impressions', 'clicks', 'leads', 'booked', 'accepted', 'paidPence']) {
-            const whole = rows.reduce((a, r) => a + r[k], 0);
-            expect(out.alwaysOn[k] + out.openDays[k]).toBe(whole);
+        const leads = [
+            lead({ open_day_id: 'e-july', booked: true, accepted: true, paid_pence: 500 }),
+            lead({ open_day_id: 'e-april', booked: true }),
+            lead({ meta_attributed: false }),
+            lead({}),
+        ];
+        const out = splitByOpenDay(campaigns, leads, EVENTS, {
+            eventByCampaign: new Map([['c2', EVENTS[0]]]),
+        });
+        // Spend metrics must sum to the CAMPAIGN rows.
+        for (const k of ['spendPence', 'impressions', 'clicks']) {
+            expect(out.alwaysOn[k] + out.openDays[k], k)
+                .toBe(campaigns.reduce((a, c) => a + c[k], 0));
         }
-        // And the events themselves sum to the open-day bucket.
-        expect(out.events.reduce((a, e) => a + e.spendPence, 0)).toBe(out.openDays.spendPence);
+        // Lead metrics must sum to the LEDGER rows — a different source, which
+        // is the whole point of the rework and the thing a single loop over
+        // both would have quietly stopped checking.
+        expect(out.alwaysOn.leads + out.openDays.leads).toBe(leads.length);
+        expect(out.alwaysOn.attributedLeads + out.openDays.attributedLeads)
+            .toBe(leads.filter((l) => l.meta_attributed).length);
+        expect(out.alwaysOn.booked + out.openDays.booked)
+            .toBe(leads.filter((l) => l.booked).length);
+    });
+
+    it('counts a lead Meta could not account for, and says so separately', () => {
+        const out = splitByOpenDay([], [
+            lead({ open_day_id: 'e-july', meta_attributed: false }),
+            lead({ open_day_id: 'e-july', meta_attributed: true }),
+        ], EVENTS, { eventByCampaign: new Map() });
+        expect(out.openDays).toMatchObject({ leads: 2, attributedLeads: 1 });
     });
 
     it('recomputes each bucket\'s costs from its own totals, never by averaging', () => {
-        const rows = [
-            campaign('c1', { spendPence: 100000, leads: 4, booked: 2, accepted: 1 }),
-            campaign('c2', { spendPence: 60000, leads: 3, booked: 0, accepted: 0 }),
-        ];
-        const out = splitByOpenDay(rows, new Map([['c1', JULY]]));
-        expect(out.events[0].cplPence).toBe(25000);  // £1000 / 4
-        expect(out.events[0].cpaPence).toBe(100000); // £1000 / 1
-        // A cost per nothing is unknowable, not free.
-        expect(out.alwaysOn.cpbPence).toBeNull();
-        expect(out.alwaysOn.cpaPence).toBeNull();
+        const out = splitByOpenDay(
+            [campaign('c1', { spendPence: 100000 })],
+            [lead({ open_day_id: 'e-july', booked: true, accepted: true }),
+             lead({ open_day_id: 'e-july' }),
+             lead({ open_day_id: 'e-july' }),
+             lead({ open_day_id: 'e-july' })],
+            EVENTS,
+            { eventByCampaign: new Map([['c1', EVENTS[0]]]) },
+        );
+        expect(out.events[0].cplPence).toBe(25000);   // £1000 / 4
+        expect(out.events[0].cpaPence).toBe(100000);  // £1000 / 1
+        expect(out.alwaysOn.cpbPence).toBeNull();     // a cost per nothing is unknowable
     });
 
-    it('orders events newest first, and puts an undated event last rather than dropping it', () => {
-        const UNDATED = { id: 'e-x', name: 'Legacy day', eventDate: null };
-        const rows = [campaign('c1'), campaign('c2'), campaign('c3')];
-        const out = splitByOpenDay(rows, new Map([
-            ['c1', APRIL], ['c2', JULY], ['c3', UNDATED],
-        ]), { keepEmpty: true });
-        expect(out.events.map((e) => e.name)).toEqual(['July 26', 'April 26', 'Legacy day']);
+    it('keeps an event that produced leads but spent nothing this window', () => {
+        const out = splitByOpenDay([], [lead({ open_day_id: 'e-april' })], EVENTS, {
+            eventByCampaign: new Map(),
+        });
+        expect(out.events.map((e) => e.name)).toEqual(['April 26']);
+        expect(out.events[0]).toMatchObject({ spendPence: 0, leads: 1 });
+        expect(out.events[0].cplPence).toBeNull();    // no spend: not "free leads"
     });
 
-    it('omits an event with no spend and no leads in this window', () => {
-        // An org accumulates events forever; one that did nothing in the
-        // selected period is noise, not information.
-        const rows = [campaign('c1', { spendPence: 5000, leads: 2 }), campaign('c2')];
-        const out = splitByOpenDay(rows, new Map([['c1', JULY], ['c2', APRIL]]));
+    it('keeps an event that spent but produced no leads', () => {
+        const out = splitByOpenDay([campaign('c1', { spendPence: 5000 })], [], EVENTS, {
+            eventByCampaign: new Map([['c1', EVENTS[0]]]),
+        });
         expect(out.events.map((e) => e.name)).toEqual(['July 26']);
+        expect(out.events[0]).toMatchObject({ spendPence: 5000, leads: 0 });
+    });
+
+    it('omits an event with neither spend nor leads in this window', () => {
+        const out = splitByOpenDay([], [], EVENTS, { eventByCampaign: new Map() });
+        expect(out.events).toEqual([]);
     });
 
     it('leaves an org that has mapped nothing exactly as it was', () => {
-        const rows = [
-            campaign('c1', { spendPence: 10000, leads: 5, booked: 1, accepted: 1 }),
-            campaign('c2', { spendPence: 20000, leads: 6, booked: 2, accepted: 0 }),
-        ];
-        const out = splitByOpenDay(rows, new Map());
+        const out = splitByOpenDay(
+            [campaign('c1', { spendPence: 30000 })],
+            [lead({}), lead({ booked: true })],
+            [],
+            { eventByCampaign: new Map() },
+        );
         expect(out.events).toEqual([]);
-        expect(out.openDays).toMatchObject({ spendPence: 0, leads: 0, booked: 0, accepted: 0 });
-        expect(out.alwaysOn).toMatchObject({ spendPence: 30000, leads: 11, booked: 3, accepted: 1 });
+        expect(out.openDays).toMatchObject({ spendPence: 0, leads: 0 });
+        expect(out.alwaysOn).toMatchObject({ spendPence: 30000, leads: 2, booked: 1 });
     });
 
-    it('ignores a mapping for a campaign that has no row in this window', () => {
-        // The mapping is historical; the window is not. A mapped campaign that
-        // did not run in this period must not invent an empty row.
-        const rows = [campaign('c1', { spendPence: 10000, leads: 5 })];
-        const out = splitByOpenDay(rows, new Map([['c1', JULY], ['gone', APRIL]]));
-        expect(out.events).toHaveLength(1);
-        expect(out.events[0].name).toBe('July 26');
+    it('counts booked and accepted only for new patients unless told otherwise', () => {
+        const rows = [
+            lead({ open_day_id: 'e-july', booked: true, accepted: true, is_new_patient: true }),
+            lead({ open_day_id: 'e-july', booked: true, accepted: true, is_new_patient: false }),
+        ];
+        const base = { eventByCampaign: new Map() };
+        expect(splitByOpenDay([], rows, EVENTS, base).openDays)
+            .toMatchObject({ leads: 2, booked: 1, accepted: 1 });
+        expect(splitByOpenDay([], rows, EVENTS, { ...base, includeExisting: true }).openDays)
+            .toMatchObject({ leads: 2, booked: 2, accepted: 2 });
     });
 });

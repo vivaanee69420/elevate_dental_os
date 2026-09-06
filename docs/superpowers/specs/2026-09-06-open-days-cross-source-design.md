@@ -23,24 +23,29 @@ opinion and not a CRM text label. This spec brings Facebook into line.
 ## What changes, measured
 
 Every GHL lead for Plan4growth, June–August 2026, grouped by the channel its
-pipeline is mapped to:
+pipeline is mapped to (contact grain — one row per contact, first lead wins):
 
 | Pipeline channel | Leads | of which Meta-attributed |
 |---|---:|---:|
-| `meta_ads` (mapped) | 1,977 | 1,580 |
-| **UNMAPPED** | 1,509 | 280 |
+| `meta_ads` (mapped) | 1,843 | 1,497 |
+| **UNMAPPED** | 1,251 | 209 |
 | `google_ads` | 267 | 5 |
 
 Switching the Facebook pool from "Meta attributed it" to "it is in a Meta
 pipeline":
 
-- **gains 397 leads** (1,977 − 1,580) that are real Facebook leads with no ad
-  attribution and are invisible to the report today;
-- **loses 285** (280 + 5) that Meta attributed but whose pipeline nobody has
-  categorised as Meta.
+- **gains 346 leads** that are real Facebook leads with no ad attribution and
+  are invisible to the report today;
+- **loses 212** that Meta attributed but whose pipeline nobody has categorised.
 
-Those 285 are not a loss to accept quietly — they are a **mapping gap with a
-name**, and the report will say so (see *Coverage*, below). 1,509 leads sit in
+Those are CONTACT-grain figures, which is what the report shows: the ledger is
+one row per contact, first lead wins, matching ad_lead_conversions. An earlier
+draft quoted +397/-285, measured at LEAD-row grain — 3,753 lead rows for 3,325
+contacts in this window, so the two grains genuinely differ and only the
+contact one describes the page.
+
+Those 212 are not a loss to accept quietly — they are a **mapping gap with a
+name**, and the report will say so (see *Coverage*, below). 1,251 leads sit in
 pipelines no one has categorised at all.
 
 ## Open days, measured
@@ -144,11 +149,11 @@ cost per lead rests largely on leads the ads cannot be shown to have bought.
 
 The report states its own coverage rather than asking for trust:
 
-> 1,509 leads sit in pipelines that have not been categorised, 280 of them
+> 1,251 leads sit in pipelines that have not been categorised, 209 of them
 > carrying Meta attribution. Categorise them on Settings → Ad attribution.
 
 Computed per tenant from that tenant's own rows. This is the honest home for
-the 285 leads the pool change drops: they do not vanish, they are named, with
+the 212 leads the pool change drops: they do not vanish, they are named, with
 the action that recovers them.
 
 ## The Facebook Open days tab

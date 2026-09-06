@@ -25,6 +25,7 @@ import { FacebookStateNotice } from './FacebookStateNotice';
 import type {
   FacebookAdSetsPayload, FacebookRow, FacebookFunnelTotals, FacebookNoticeScope,
 } from '../api';
+import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
 
 type DisplayRow =
   | { kind: 'data'; row: FacebookRow }
@@ -133,6 +134,8 @@ export function FacebookAdSetsTab({
   return (
     <div className="flex flex-col gap-4">
       <FacebookStateNotice state={data.state} coverage={data.coverage} scope={noticeScope} />
+
+      <SpendFreshnessNote freshness={data.freshness} />
 
       {data.windowClamped && (
         <Note>

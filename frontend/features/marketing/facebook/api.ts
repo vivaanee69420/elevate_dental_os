@@ -18,6 +18,7 @@
 // sent the same way `/leads` sends it; anything that isn't a UUID is treated
 // as unscoped server-side (`practiceOf` in marketing.controller.js).
 import { api } from '@/lib/api';
+import type { SpendFreshness } from '@/features/marketing/_shared/SpendFreshnessNote';
 
 export type FacebookState =
   | 'not_connected'
@@ -114,6 +115,8 @@ export interface FacebookCampaignsPayload {
    *  page can say what it is showing instead of quietly showing something
    *  other than what was asked for. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface FacebookAdSetsPayload {
@@ -138,6 +141,8 @@ export interface FacebookAdSetsPayload {
    *  page can say what it is showing instead of quietly showing something
    *  other than what was asked for. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface FacebookAdsPage {
@@ -159,6 +164,8 @@ export interface FacebookAdsPage {
    *  page can say what it is showing instead of quietly showing something
    *  other than what was asked for. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export function fetchFacebookCampaigns(qs: string) {
@@ -248,6 +255,11 @@ export interface FacebookOpenDayBucket {
   clicks: number;
   conversions: number;
   leads: number;
+  /** How many of `leads` Meta can actually be shown to have bought — the
+   *  same attribution flag lead-performance.js counts elsewhere. Not
+   *  decoration: a cost per lead resting mostly on the gap between the two
+   *  is a cost the ads cannot be shown to have earned. */
+  attributedLeads: number;
   booked: number;
   accepted: number;
   paidPence: number;
@@ -272,6 +284,21 @@ export interface FacebookOpenDaySplit {
   events: FacebookOpenDayEvent[];
 }
 
+/**
+ * How much of this tenant's lead pool the report cannot see. The Facebook pool
+ * is "the lead's GoHighLevel pipeline is categorised", so leads in pipelines
+ * nobody has sorted are absent from every figure on the page — 212 of them
+ * Meta-attributed for the reference org, an 11.5% drop the page owes the
+ * reader an explanation for.
+ *
+ * Optional because an older server does not send it. Absent means UNKNOWN, and
+ * the panel says nothing rather than inventing a figure.
+ */
+export interface FacebookLeadCoverage {
+  uncategorisedLeads: number;
+  uncategorisedAttributedLeads: number;
+}
+
 export interface FacebookLeadPerformancePayload {
   state: FacebookState;
   practices: FacebookLeadPractice[];
@@ -284,12 +311,16 @@ export interface FacebookLeadPerformancePayload {
   /** alwaysOn + openDays === the totals above, metric for metric. */
   openDays: FacebookOpenDaySplit;
   openDaysAll: FacebookOpenDaySplit;
+  /** What the pool leaves out, so the page can state it. May be absent. */
+  coverage?: FacebookLeadCoverage | null;
   leads: FacebookLeadRow[];
   excludedAccounts: unknown[];
   /** The acceptance floor the SERVER used. Never re-stated as a literal here. */
   acceptanceMinPaidPence: number;
   effectiveSince: string;
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export function fetchFacebookLeadPerformance(qs: string) {
@@ -329,6 +360,11 @@ export interface OpenDayManagePayload {
   assignedTo: Record<string, string>;
   /** `${accountId}|${pipelineId}` -> open day id. */
   pipelineAssignedTo: Record<string, string>;
+  /**
+   * campaignId -> a PROPOSED open day id, for campaigns not yet in
+   * `assignedTo`. Pre-ticks a checkbox; nothing is written until Confirm.
+   */
+  suggestions: Record<string, string>;
 }
 
 export function fetchOpenDays() {
@@ -357,5 +393,23 @@ export function setOpenDayCampaigns(
 ) {
   return api(`/api/marketing/facebook/open-days/${id}/campaigns`, {
     method: 'PUT', body: JSON.stringify({ campaigns }),
+  });
+}
+
+// One campaign at a time, for the always-visible campaign list — unlike
+// setOpenDayCampaigns above, which replaces a whole event's set.
+export function setOpenDayCampaign(body: {
+  campaignId: string; customerId: string | null; openDayId: string | null;
+}) {
+  return api('/api/marketing/facebook/open-days/campaigns', {
+    method: 'PUT', body: JSON.stringify(body),
+  });
+}
+
+export function setOpenDayPipeline(body: {
+  integrationAccountId: string; ghlPipelineId: string; openDayId: string | null;
+}) {
+  return api('/api/marketing/facebook/open-days/pipelines', {
+    method: 'PUT', body: JSON.stringify(body),
   });
 }

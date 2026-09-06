@@ -5,6 +5,8 @@ import { marketingService } from '../services/marketing.service.js';
 import { adReconciliationService } from '../services/ad-reconciliation.service.js';
 import { facebookReportService } from '../services/facebook-report.service.js';
 import { googleReportService } from '../services/google-report.service.js';
+import { marketingRepository } from '../repositories/marketing.repository.js';
+import { spendFreshness } from '../lib/marketing/spend-freshness.js';
 import { londonDaysAgo, londonYmd } from '../lib/tz.js';
 import { DEEP_WINDOW_DAYS } from '../lib/integrations/google-ads-deep-sync.js';
 
@@ -138,13 +140,29 @@ function windowFrom(q) {
     };
 }
 
+// Ad spend is pulled by a nightly sync, so the CURRENT day is only ever
+// captured up to the moment it ran. Every tier of both reports sums spend, so
+// every response says how much of its window is final — attached here, once
+// per request, rather than in each service's several returns.
+//
+// A failure to read freshness must never block a report or, worse, be rendered
+// as "complete": on error the fields go null, which the UI states as unknown.
+async function withFreshness(data, orgId, provider, until) {
+    try {
+        const raw = await marketingRepository.spendFreshnessByProvider(orgId, provider);
+        return { ...data, freshness: spendFreshness({ ...raw, until }) };
+    } catch {
+        return { ...data, freshness: { syncedAt: null, completeTo: null, partial: false } };
+    }
+}
+
 export async function getFacebookCampaigns(req, res, next) {
     try {
         const q = FacebookQuerySchema.parse(req.query);
         const data = await facebookReportService.campaigns(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -154,7 +172,7 @@ export async function getFacebookAdSets(req, res, next) {
         const data = await facebookReportService.adSets(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), campaignId: q.campaignId ?? null,
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -164,7 +182,7 @@ export async function getFacebookAds(req, res, next) {
         const data = await facebookReportService.ads(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), adSetId: q.adSetId ?? null, cursor: q.cursor ?? null,
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -198,7 +216,7 @@ export async function getGoogleCampaigns(req, res, next) {
         const data = await googleReportService.campaigns(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'google_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -208,7 +226,7 @@ export async function getGoogleAdGroups(req, res, next) {
         const data = await googleReportService.adGroups(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), campaignId: q.campaignId ?? null,
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'google_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -219,7 +237,7 @@ export async function getGoogleAds(req, res, next) {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
             campaignId: q.campaignId ?? null, parentId: q.parentId ?? null, cursor: q.cursor ?? null,
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'google_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -230,7 +248,7 @@ export async function getGoogleKeywords(req, res, next) {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
             campaignId: q.campaignId ?? null, parentId: q.parentId ?? null, cursor: q.cursor ?? null,
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'google_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -245,7 +263,7 @@ export async function getGoogleSearchTerms(req, res, next) {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
             campaignId: q.campaignId ?? null, parentId: q.parentId ?? null, cursor: q.cursor ?? null,
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'google_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 
@@ -263,9 +281,10 @@ export async function getFacebookLeadPerformance(req, res, next) {
         const data = await facebookReportService.leadPerformance(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
+
 
 // Same query shape as the four grain routes — since/until optional
 // YYYY-MM-DD, practice_id optional. campaignId/parentId/cursor are accepted
@@ -284,7 +303,7 @@ export async function getGoogleLeadPerformance(req, res, next) {
         const data = await googleReportService.leadPerformance(req.user.organisation_id, {
             ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
         });
-        res.json(data);
+        res.json(await withFreshness(data, req.user.organisation_id, 'google_ads', windowFrom(q).until));
     } catch (err) { next(err); }
 }
 

@@ -58,7 +58,18 @@ export function AdReportTabs({
 // writes the id back with `router.replace` (not `push`, so switching tabs
 // doesn't spam browser history) — same pattern as the dataset pill row in
 // DataRoomScreen and the ScopePeriod engine in features/_shared/scope-context.
-export function useAdReportTab(tabs: AdReportTab[]): [string, (id: string) => void] {
+//
+// `pending` says the tab LIST is not final yet — Facebook's Open days tab
+// only exists once the performance query says this tenant runs open days.
+// While it is true the URL is left exactly as the reader wrote it: without
+// this, a bookmarked ?tab=opendays was rewritten to ?tab=campaigns on the
+// first render, before the data that would have recognised it arrived, so the
+// tab could never be reloaded or shared. The page still RENDERS the fallback
+// tab meanwhile; only the rewrite waits.
+export function useAdReportTab(
+  tabs: AdReportTab[],
+  { pending = false }: { pending?: boolean } = {},
+): [string, (id: string) => void] {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -79,8 +90,9 @@ export function useAdReportTab(tabs: AdReportTab[]): [string, (id: string) => vo
   // page still renders correctly; this backfills the URL itself so a shared
   // or bookmarked link always names the tab actually shown.
   useEffect(() => {
+    if (pending) return;
     if (active && requested !== active) setActive(active);
-  }, [active, requested, setActive]);
+  }, [pending, active, requested, setActive]);
 
   return [active, setActive];
 }

@@ -16,6 +16,8 @@ vi.mock('../src/services/open-day.service.js', () => ({
         update: vi.fn(async () => ({ ok: true })),
         remove: vi.fn(async () => ({ ok: true })),
         setCampaigns: vi.fn(async () => ({ mapped: 0 })),
+        setCampaign: vi.fn(async () => ({ ok: true })),
+        setPipeline: vi.fn(async () => ({ ok: true })),
     },
 }));
 
@@ -43,6 +45,8 @@ describe('open-day routes', () => {
         expect(layersFor('patch', '/facebook/open-days/:id')).not.toHaveLength(0);
         expect(layersFor('delete', '/facebook/open-days/:id')).not.toHaveLength(0);
         expect(layersFor('put', '/facebook/open-days/:id/campaigns')).not.toHaveLength(0);
+        expect(layersFor('put', '/facebook/open-days/campaigns')).not.toHaveLength(0);
+        expect(layersFor('put', '/facebook/open-days/pipelines')).not.toHaveLength(0);
     });
 
     // A practice manager reading the report must see the events behind its
@@ -70,6 +74,11 @@ describe('open-day routes', () => {
             ['patch', '/facebook/open-days/:id'],
             ['delete', '/facebook/open-days/:id'],
             ['put', '/facebook/open-days/:id/campaigns'],
+            ['put', '/facebook/open-days/campaigns'],
+            // requireOwnerOrAgencyActor, not requireRole('owner') like the
+            // rest — but a plain practice manager (no is_agency_admin) is
+            // neither an owner nor an agency actor, so it still belongs here.
+            ['put', '/facebook/open-days/pipelines'],
         ]) {
             const gate = layersFor(m, p)[0];
             await expect(runGate(gate, PM), `${m} ${p}`).resolves.toMatchObject({ blocked: true, status: 403 });
@@ -110,5 +119,40 @@ describe('open-day routes', () => {
         );
         expect(next).toHaveBeenCalled();
         expect(openDayService.setCampaigns).not.toHaveBeenCalled();
+    });
+
+    it('takes the organisation from the session, never the body, when mapping a pipeline', async () => {
+        const r = res();
+        await openDayController.setPipeline(
+            req({
+                body: {
+                    integrationAccountId: '11111111-1111-1111-1111-111111111111',
+                    ghlPipelineId: 'g1',
+                    openDayId: '22222222-2222-2222-2222-222222222222',
+                    organisation_id: 'org-somebody-else',
+                },
+            }),
+            r,
+        );
+        expect(openDayService.setPipeline).toHaveBeenCalledWith('org-a', expect.objectContaining({
+            integrationAccountId: '11111111-1111-1111-1111-111111111111',
+        }));
+        const [, payload] = openDayService.setPipeline.mock.calls[0];
+        expect(payload).not.toHaveProperty('organisation_id');
+    });
+});
+
+describe('pipeline mapping gate', () => {
+    it('lets a tenant owner map a pipeline, and an agency actor who is not an owner', async () => {
+        const { requireOwnerOrAgencyActor } = await import('../src/middleware/agency.js');
+        const run = (user) => new Promise((resolve) => {
+            const res = { status() { return this; }, json() { resolve({ blocked: true }); return this; } };
+            requireOwnerOrAgencyActor({ user }, res, () => resolve({ blocked: false }));
+        });
+        await expect(run({ role: 'owner', organisation_id: 'o' })).resolves.toMatchObject({ blocked: false });
+        await expect(run({ role: 'practice_manager', organisation_id: 'o', is_agency_admin: true }))
+            .resolves.toMatchObject({ blocked: false });
+        await expect(run({ role: 'practice_manager', organisation_id: 'o' }))
+            .resolves.toMatchObject({ blocked: true });
     });
 });
