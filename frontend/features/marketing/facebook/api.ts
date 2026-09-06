@@ -248,6 +248,11 @@ export interface FacebookOpenDayBucket {
   clicks: number;
   conversions: number;
   leads: number;
+  /** How many of `leads` Meta can actually be shown to have bought — the
+   *  same attribution flag lead-performance.js counts elsewhere. Not
+   *  decoration: a cost per lead resting mostly on the gap between the two
+   *  is a cost the ads cannot be shown to have earned. */
+  attributedLeads: number;
   booked: number;
   accepted: number;
   paidPence: number;
