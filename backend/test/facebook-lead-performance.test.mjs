@@ -24,6 +24,7 @@ vi.mock('../src/repositories/marketing.repository.js', () => ({
         hasProviderMetrics: vi.fn(),
         hasGrainMetrics: vi.fn(),
         campaignSpendByProvider: vi.fn(() => Promise.resolve([])),
+        uncategorisedLeadCounts: vi.fn(() => Promise.resolve({ leads: 0, attributed: 0 })),
     },
 }));
 vi.mock('../src/repositories/open-day.repository.js', () => ({
@@ -52,6 +53,7 @@ const ledgerRow = (over) => ({
     campaign_id: 'cmp1', campaign_name: 'Implants', ad_set_id: 'as1', ad_id: 'ad1',
     lead_at: '2026-06-10T09:00:00Z', name: 'A B', email: 'a@b.dev', treatment: null,
     booked: false, accepted: false, is_new_patient: true, paid_pence: 0,
+    open_day_id: null, meta_attributed: true,
     ...over,
 });
 
@@ -213,7 +215,10 @@ describe('facebookReportService.leadPerformance — open days', () => {
             { campaign_id: 'c2', campaign_name: 'Always On', spend_pence: 60000, impressions: 6, clicks: 3, conversions: 0 },
         ]);
         marketingRepository.metaLeadLedger.mockResolvedValue([
-            ledgerRow({ campaign_id: 'c1', booked: true, accepted: true, paid_pence: 9000 }),
+            // Its own pipeline routes it to the event, same as the campaign
+            // it happens to be Meta-attributed to — spend and leads carve
+            // out together only when both agree, which this row does.
+            ledgerRow({ campaign_id: 'c1', open_day_id: 'e1', booked: true, accepted: true, paid_pence: 9000 }),
             ledgerRow({ campaign_id: 'c2' }),
             ledgerRow({ campaign_id: 'c2', booked: true }),
         ]);
@@ -282,5 +287,55 @@ describe('facebookReportService.leadPerformance — open days', () => {
         expect(out.state).toBe('not_connected');
         expect(out.openDays).toMatchObject({ events: [] });
         expect(openDayRepository.mappings).not.toHaveBeenCalled();
+    });
+});
+
+describe('facebookReportService.leadPerformance — GHL pool and coverage', () => {
+    it('buckets a lead by its own open_day_id, not by its campaign', async () => {
+        marketingRepository.adSpendByPractice.mockResolvedValue([
+            { practice_id: P1, practice_name: 'Rochester', spend_pence: 100000, impressions: 1, clicks: 1 },
+        ]);
+        marketingRepository.campaignSpendByProvider.mockResolvedValue([
+            { campaign_id: 'c1', campaign_name: 'Always On', spend_pence: 100000, impressions: 1, clicks: 1, conversions: 0 },
+        ]);
+        // Attributed to an ALWAYS-ON campaign, but arrived through an
+        // open-day pipeline: the pipeline wins.
+        marketingRepository.metaLeadLedger.mockResolvedValue([
+            ledgerRow({ campaign_id: 'c1', open_day_id: 'e1', meta_attributed: true }),
+        ]);
+        openDayRepository.list.mockResolvedValue([{ id: 'e1', name: 'July 26', eventDate: '2026-07-15' }]);
+        openDayRepository.mappings.mockResolvedValue([]);
+        const out = await facebookReportService.leadPerformance(ORG, WIN);
+        expect(out.openDays.openDays.leads).toBe(1);
+        expect(out.openDays.alwaysOn.leads).toBe(0);
+        // Its SPEND is still always-on: no campaign is mapped to the event.
+        expect(out.openDays.alwaysOn.spendPence).toBe(100000);
+    });
+
+    it('publishes how many leads sit in pipelines nobody has categorised', async () => {
+        marketingRepository.uncategorisedLeadCounts.mockResolvedValue({
+            leads: 1251, attributed: 209,
+        });
+        const out = await facebookReportService.leadPerformance(ORG, WIN);
+        expect(out.coverage).toEqual({
+            uncategorisedLeads: 1251, uncategorisedAttributedLeads: 209,
+        });
+    });
+
+    // The spec's requirement: an org with nothing mapped must get an empty
+    // report that says WHY, not a zeroed one that looks healthy.
+    it('an org with no categorised pipelines reports zero leads and names the reason', async () => {
+        marketingRepository.metaLeadLedger.mockResolvedValue([]);
+        marketingRepository.uncategorisedLeadCounts.mockResolvedValue({
+            leads: 640, attributed: 91,
+        });
+        marketingRepository.adSpendByPractice.mockResolvedValue([
+            { practice_id: P1, practice_name: 'Rochester', spend_pence: 50000, impressions: 1, clicks: 1 },
+        ]);
+        const out = await facebookReportService.leadPerformance(ORG, WIN);
+        expect(out.total.leads).toBe(0);
+        // Spend with no leads is a real state, so the cost is unknowable, not free.
+        expect(out.total.cplPence).toBeNull();
+        expect(out.coverage.uncategorisedLeads).toBe(640);
     });
 });

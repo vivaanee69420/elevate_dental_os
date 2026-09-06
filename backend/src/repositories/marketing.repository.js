@@ -715,6 +715,29 @@ export const marketingRepository = {
             // The money behind `accepted`, so the drill-down shows what was
             // actually paid rather than a bare Yes whose threshold is hidden.
             paid_pence: Number(r.paid_pence ?? 0),
+            // Which open day this lead's PIPELINE belongs to (000171). Null is
+            // always-on and is the common case.
+            open_day_id: r.open_day_id ?? null,
+            // Whether Meta can account for this lead. A column, not a filter:
+            // the report states how much of a cost figure rests on leads the
+            // ads cannot be shown to have bought.
+            meta_attributed: Boolean(r.meta_attributed),
         }));
+    },
+
+    // Leads in pipelines nobody has categorised — the honest home for the
+    // leads the GHL pool leaves out. Aggregated in SQL: PostgREST truncates a
+    // table read at 1000 rows in silence and this counts thousands.
+    async uncategorisedLeadCounts(orgId, since, until) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('ad_uncategorised_lead_counts', {
+                p_org: orgId, p_since: since, p_until: until,
+            });
+        if (error) throw new Error(`ad_uncategorised_lead_counts: ${error.message}`);
+        const row = Array.isArray(data) ? data[0] : data;
+        return {
+            leads: Number(row?.leads ?? 0),
+            attributed: Number(row?.attributed ?? 0),
+        };
     },
 };
