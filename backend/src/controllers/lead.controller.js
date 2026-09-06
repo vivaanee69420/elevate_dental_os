@@ -7,6 +7,36 @@ export const leadController = {
         const leads = await lead_service_1.leadService.list(req.user.organisation_id, q);
         res.json({ leads });
     },
+    // Streams every matching lead as CSV. Headers are only set on the FIRST
+    // write, so a validation/service error raised before any row is written
+    // still answers a JSON status via errorHandler rather than a headers-sent
+    // exception — same idiom as the Data Room's exportCsv.
+    async exportCsv(req, res) {
+        const q = lead_model_1.leadExportQuerySchema.parse(req.query);
+        let started = false;
+        const sink = {
+            write(chunk) {
+                if (!started) {
+                    started = true;
+                    res.status(200);
+                    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+                    res.setHeader('Content-Disposition', `attachment; filename="${lead_service_1.leadService.exportFilename(q)}"`);
+                    res.setHeader('Cache-Control', 'no-store');
+                }
+                res.write(chunk);
+            },
+            end() { res.end(); },
+        };
+        try {
+            await lead_service_1.leadService.streamExportCsv(req.user.organisation_id, q, sink);
+        }
+        catch (err) {
+            if (!started)
+                throw err; // JSON error via errorHandler
+            req.log?.error({ err }, 'Lead export failed mid-stream');
+            res.end();
+        }
+    },
     async funnel(req, res) {
         const q = lead_model_1.leadFunnelQuerySchema.parse(req.query);
         res.json(await lead_service_1.leadService.funnel(req.user.organisation_id, {

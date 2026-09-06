@@ -9,9 +9,65 @@ import * as date_window_1 from "../lib/date-window.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { assertOrgOwns } from "../lib/tenant-guard.js";
+// Reused as-is: RFC 4180 quoting (quotes/commas/newlines in a name or note)
+// and the UTF-8 BOM Excel needs, exactly like the Data Room's CSV export.
+// Pure string encoding, nothing Data-Room-specific about it.
+import { BOM, csvLine, rowsToCsv } from "../lib/data-room/csv.js";
+
+// Column order for the Pipeline export. Flat names for the nested
+// contact/practice/assignee embeds `exportBatches` selects.
+const EXPORT_COLUMNS = [
+    'id', 'created_at', 'status', 'treatment', 'estimated_value_pence',
+    'source', 'utm_source', 'utm_medium', 'utm_campaign',
+    'ghl_pipeline_id', 'ghl_pipeline_stage_id', 'ghl_stage_name',
+    'practice', 'contact_first_name', 'contact_last_name', 'contact_email',
+    'contact_phone', 'assigned_to_name', 'assigned_to_email',
+];
+function toExportRow(l) {
+    return {
+        id: l.id,
+        created_at: l.created_at,
+        status: l.status,
+        treatment: l.treatment,
+        estimated_value_pence: l.estimated_value_pence,
+        source: l.source,
+        utm_source: l.utm_source,
+        utm_medium: l.utm_medium,
+        utm_campaign: l.utm_campaign,
+        ghl_pipeline_id: l.ghl_pipeline_id,
+        ghl_pipeline_stage_id: l.ghl_pipeline_stage_id,
+        ghl_stage_name: l.ghl_stage_name,
+        practice: l.practice?.name ?? '',
+        contact_first_name: l.contact?.first_name ?? '',
+        contact_last_name: l.contact?.last_name ?? '',
+        contact_email: l.contact?.email ?? '',
+        contact_phone: l.contact?.phone ?? '',
+        assigned_to_name: l.assignee?.full_name ?? '',
+        assigned_to_email: l.assignee?.email ?? '',
+    };
+}
 export const leadService = {
     list(orgId, q) {
         return lead_repository_1.leadRepository.list(orgId, q);
+    },
+    // Filename for the Pipeline export: the pipeline it was filtered to (or
+    // "all" when none was given) plus today's London date, matching the Data
+    // Room's `${dataset}_${date}.csv` naming.
+    exportFilename(q) {
+        const pipeline = q.ghl_pipeline_id || 'all';
+        const date = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/London' });
+        return `pipeline-leads_${pipeline}_${date}.csv`;
+    },
+    // Stream every lead matching `q` as CSV through `sink` ({ write, end }).
+    // All paging happens in the repository (`exportBatches`); this only knows
+    // how to turn a page of rows into CSV text.
+    async streamExportCsv(orgId, q, sink) {
+        sink.write(BOM + csvLine(EXPORT_COLUMNS));
+        const { rows } = await lead_repository_1.leadRepository.exportBatches(orgId, q, (batch) => {
+            sink.write(rowsToCsv(EXPORT_COLUMNS, batch.map(toExportRow)));
+        });
+        sink.end();
+        return { rows };
     },
     // GoHighLevel pipeline definitions (id/name + ordered stages), cached on each
     // subaccount's config by the sync. Drives the dynamic Pipeline-screen columns.
