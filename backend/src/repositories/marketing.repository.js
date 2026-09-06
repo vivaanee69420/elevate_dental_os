@@ -129,6 +129,36 @@ export const marketingRepository = {
     // the Facebook report's campaign tier needs it, because its funnel is
     // practice-scoped and dividing group-wide spend by one practice's leads
     // makes every cost figure wrong by the number of practices.
+    // When this provider's spend was last written, and the newest day held.
+    //
+    // Two single-row reads, not an aggregate: ad_metrics is campaign x day and
+    // PostgREST truncates a table read at 1000 rows in silence, so anything
+    // that scans would quietly answer from a slice. An ordered limit(1) is
+    // answered from the index and cannot be truncated.
+    //
+    // Org-scoped like every read here: this repository runs on the service
+    // client, which bypasses RLS, so the filter IS the tenant boundary.
+    async spendFreshnessByProvider(orgId, provider) {
+        const base = () => supabase_1.serviceClient
+            .from('ad_metrics')
+            .select('metric_date, updated_at')
+            .eq('organisation_id', orgId)
+            .eq('provider', provider)
+            .limit(1);
+
+        const [written, latest] = await Promise.all([
+            base().order('updated_at', { ascending: false }),
+            base().order('metric_date', { ascending: false }),
+        ]);
+        if (written.error) throw new Error(`ad_metrics freshness: ${written.error.message}`);
+        if (latest.error) throw new Error(`ad_metrics latest day: ${latest.error.message}`);
+
+        return {
+            syncedAt: written.data?.[0]?.updated_at ?? null,
+            latestDay: latest.data?.[0]?.metric_date ?? null,
+        };
+    },
+
     async campaignSpendByProvider(orgId, since, until, provider, customerIds = null, practiceId = null) {
         const PAGE = 1000;
         const MAX_PAGES = 500;   // a bound against a faulty server, not real data

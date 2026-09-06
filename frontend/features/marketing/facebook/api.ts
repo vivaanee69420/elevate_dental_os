@@ -18,6 +18,7 @@
 // sent the same way `/leads` sends it; anything that isn't a UUID is treated
 // as unscoped server-side (`practiceOf` in marketing.controller.js).
 import { api } from '@/lib/api';
+import type { SpendFreshness } from '@/features/marketing/_shared/SpendFreshnessNote';
 
 export type FacebookState =
   | 'not_connected'
@@ -114,6 +115,8 @@ export interface FacebookCampaignsPayload {
    *  page can say what it is showing instead of quietly showing something
    *  other than what was asked for. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface FacebookAdSetsPayload {
@@ -138,6 +141,8 @@ export interface FacebookAdSetsPayload {
    *  page can say what it is showing instead of quietly showing something
    *  other than what was asked for. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export interface FacebookAdsPage {
@@ -159,6 +164,8 @@ export interface FacebookAdsPage {
    *  page can say what it is showing instead of quietly showing something
    *  other than what was asked for. */
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export function fetchFacebookCampaigns(qs: string) {
@@ -312,6 +319,8 @@ export interface FacebookLeadPerformancePayload {
   acceptanceMinPaidPence: number;
   effectiveSince: string;
   windowClamped: boolean;
+  /** How much of the window's spend is final — see SpendFreshnessNote. */
+  freshness?: SpendFreshness | null;
 }
 
 export function fetchFacebookLeadPerformance(qs: string) {
