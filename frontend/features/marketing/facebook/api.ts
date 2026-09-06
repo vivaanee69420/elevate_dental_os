@@ -277,6 +277,21 @@ export interface FacebookOpenDaySplit {
   events: FacebookOpenDayEvent[];
 }
 
+/**
+ * How much of this tenant's lead pool the report cannot see. The Facebook pool
+ * is "the lead's GoHighLevel pipeline is categorised", so leads in pipelines
+ * nobody has sorted are absent from every figure on the page — 212 of them
+ * Meta-attributed for the reference org, an 11.5% drop the page owes the
+ * reader an explanation for.
+ *
+ * Optional because an older server does not send it. Absent means UNKNOWN, and
+ * the panel says nothing rather than inventing a figure.
+ */
+export interface FacebookLeadCoverage {
+  uncategorisedLeads: number;
+  uncategorisedAttributedLeads: number;
+}
+
 export interface FacebookLeadPerformancePayload {
   state: FacebookState;
   practices: FacebookLeadPractice[];
@@ -289,6 +304,8 @@ export interface FacebookLeadPerformancePayload {
   /** alwaysOn + openDays === the totals above, metric for metric. */
   openDays: FacebookOpenDaySplit;
   openDaysAll: FacebookOpenDaySplit;
+  /** What the pool leaves out, so the page can state it. May be absent. */
+  coverage?: FacebookLeadCoverage | null;
   leads: FacebookLeadRow[];
   excludedAccounts: unknown[];
   /** The acceptance floor the SERVER used. Never re-stated as a literal here. */

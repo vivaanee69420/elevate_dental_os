@@ -312,11 +312,22 @@ describe('facebookReportService.leadPerformance — GHL pool and coverage', () =
         expect(out.openDays.alwaysOn.spendPence).toBe(100000);
     });
 
+    // EVERY TEST BELOW SETS ITS OWN SPEND AND LEDGER AND ASSERTS THE STATE.
+    // vitest.config.js sets clearMocks, not mockReset, so a test that leans on
+    // an earlier one's mocks is a test that can pass on a path it never meant
+    // to exercise: with no spend and no ledger the service returns early on
+    // empty(), which publishes the SAME coverage field — so these two once
+    // asserted coverage without ever reaching the report they describe.
     it('publishes how many leads sit in pipelines nobody has categorised', async () => {
+        marketingRepository.adSpendByPractice.mockResolvedValue([
+            { practice_id: P1, practice_name: 'Rochester', spend_pence: 100000, impressions: 1, clicks: 1 },
+        ]);
+        marketingRepository.metaLeadLedger.mockResolvedValue([ledgerRow({})]);
         marketingRepository.uncategorisedLeadCounts.mockResolvedValue({
             leads: 1251, attributed: 209,
         });
         const out = await facebookReportService.leadPerformance(ORG, WIN);
+        expect(out.state).toBe('ok');
         expect(out.coverage).toEqual({
             uncategorisedLeads: 1251, uncategorisedAttributedLeads: 209,
         });
@@ -333,9 +344,66 @@ describe('facebookReportService.leadPerformance — GHL pool and coverage', () =
             { practice_id: P1, practice_name: 'Rochester', spend_pence: 50000, impressions: 1, clicks: 1 },
         ]);
         const out = await facebookReportService.leadPerformance(ORG, WIN);
+        // Spend but no leads is a REPORT, not an empty state — the distinction
+        // this assertion pins.
+        expect(out.state).toBe('ok');
         expect(out.total.leads).toBe(0);
         // Spend with no leads is a real state, so the cost is unknowable, not free.
         expect(out.total.cplPence).toBeNull();
         expect(out.coverage.uncategorisedLeads).toBe(640);
+    });
+
+    // The coverage line is rendered BESIDE practice-scoped cards, so it has to
+    // be counted the same way. Org-wide it read "1,251 uncategorised" next to
+    // one practice's ~200 leads.
+    it('scopes the uncategorised count to the selected practice', async () => {
+        marketingRepository.adSpendByPractice.mockResolvedValue([
+            { practice_id: P1, practice_name: 'Rochester', spend_pence: 100000, impressions: 1, clicks: 1 },
+        ]);
+        marketingRepository.metaLeadLedger.mockResolvedValue([ledgerRow({})]);
+        await facebookReportService.leadPerformance(ORG, { ...WIN, practiceId: P1 });
+        expect(marketingRepository.uncategorisedLeadCounts)
+            .toHaveBeenCalledWith(ORG, WIN.since, expect.anything(), P1);
+    });
+
+    // Migration 000171 returns campaign_id from the CONTACT even when Meta
+    // cannot account for the lead. Passed straight through, that minted a
+    // campaign row with attributed: true, a null name, no spend and a £0.00
+    // cost per lead — which sorted to the TOP of the Campaigns tab as the
+    // cheapest campaign in the account.
+    it('keeps a lead Meta cannot account for out of the campaign table', async () => {
+        marketingRepository.adSpendByPractice.mockResolvedValue([
+            { practice_id: P1, practice_name: 'Rochester', spend_pence: 100000, impressions: 1, clicks: 1 },
+        ]);
+        marketingRepository.campaignSpendByProvider.mockResolvedValue([
+            { campaign_id: 'c1', campaign_name: 'Implants', spend_pence: 100000, impressions: 1, clicks: 1, conversions: 0 },
+        ]);
+        marketingRepository.metaLeadLedger.mockResolvedValue([
+            ledgerRow({ campaign_id: 'c1', campaign_name: 'Implants', meta_attributed: true }),
+            // A Google campaign id on the contact, absent from this org's Meta
+            // metrics — hence meta_attributed false.
+            ledgerRow({ campaign_id: 'g-999', campaign_name: null, meta_attributed: false }),
+        ]);
+        const out = await facebookReportService.leadPerformance(ORG, WIN);
+        expect(out.state).toBe('ok');
+        expect(out.campaigns.find((c) => c.campaignId === 'g-999')).toBeUndefined();
+
+        // It lands in the existing, visible bucket instead, whose costs are
+        // null rather than a confident £0.00.
+        const unattributed = out.campaigns.find((c) => !c.attributed);
+        expect(unattributed).toMatchObject({ campaignId: null, leads: 1 });
+        expect(unattributed.cplPence).toBeNull();
+
+        // And no attributed row is a phantom: a zero-spend campaign row with
+        // leads is exactly the £0.00-per-lead artefact this prevents.
+        for (const c of out.campaigns.filter((r) => r.attributed)) {
+            expect(c.spendPence).toBeGreaterThan(0);
+            expect(c.cplPence).not.toBe(0);
+        }
+        // The lead itself is untouched in the drill-down — it still shows the
+        // campaign the CRM recorded.
+        expect(out.leads.find((l) => l.campaign_id === 'g-999')).toBeTruthy();
+        // Nothing was lost: the table's leads still reconcile to the cards.
+        expect(out.campaigns.reduce((a, c) => a + c.leads, 0)).toBe(out.total.leads);
     });
 });
