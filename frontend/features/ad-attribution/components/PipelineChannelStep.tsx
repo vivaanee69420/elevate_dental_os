@@ -53,11 +53,12 @@ function pipelineKey(accountId: string, pipelineId: string) {
   return `${accountId}|${pipelineId}`;
 }
 
-function ChannelButtons({ row, isOpenDay, onSet, busy }: {
+// Never disabled while saving: the optimistic write flips the state on click,
+// so greying the control out would only make a finished action look pending.
+function ChannelButtons({ row, isOpenDay, onSet }: {
   row: PipelineRow;
   isOpenDay: boolean;
   onSet: (mark: PipelineMark) => void;
-  busy: boolean;
 }) {
   const options: Array<{ value: PipelineMark; label: string }> = [
     { value: 'google_ads', label: 'Google' },
@@ -76,7 +77,6 @@ function ChannelButtons({ row, isOpenDay, onSet, busy }: {
           <button
             key={o.label}
             type="button"
-            disabled={busy}
             onClick={() => onSet(o.value)}
             className={`px-2 py-1 text-[12px] ${
               active ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
@@ -99,7 +99,6 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
   const setChannel = useSetPipelineChannel();
   const setPipeline = useSetOpenDayPipeline();
   const createOpenDay = useCreateOpenDay();
-  const [busy, setBusy] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
   // Subaccounts collapse by default: 113 pipelines across 7 Locations is a
@@ -158,7 +157,6 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
 
   async function handle(row: PipelineRow, mark: PipelineMark) {
     const key = pipelineKey(row.accountId, row.pipelineId);
-    setBusy(key);
     setError(null);
     try {
       if (mark === 'open_day') {
@@ -182,8 +180,6 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
       }
     } catch (e) {
       setError(`${row.pipelineName}: ${(e as Error).message || 'Could not save that change. Please try again.'}`);
-    } finally {
-      setBusy(null);
     }
   }
 
@@ -249,7 +245,6 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
                       <ChannelButtons
                         row={p}
                         isOpenDay={Boolean(openDayAssignedTo?.[pipelineKey(p.accountId, p.pipelineId)])}
-                        busy={busy === pipelineKey(p.accountId, p.pipelineId)}
                         onSet={(c) => handle(p, c)}
                       />
                     </td>

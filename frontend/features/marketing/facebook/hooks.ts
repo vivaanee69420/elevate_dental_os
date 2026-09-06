@@ -60,9 +60,11 @@ export function useFacebookLeadPerformanceFor(
 // The open-day manager's payload. Window-independent on purpose: an owner
 // recording last November's event needs campaigns that stopped running months
 // ago, so this list is never narrowed by the period pills.
+const OPEN_DAYS_KEY = ['marketing', 'facebook', 'open-days'] as const;
+
 export function useOpenDays() {
   return useQuery<OpenDayManagePayload>({
-    queryKey: ['marketing', 'facebook', 'open-days'],
+    queryKey: OPEN_DAYS_KEY,
     queryFn: fetchOpenDays,
   });
 }
@@ -95,15 +97,62 @@ export function useSetOpenDayCampaigns() {
   return useOpenDayMutation((a: { id: string; campaigns: { campaign_id: string; customer_id: string | null }[] }) =>
     setOpenDayCampaigns(a.id, a.campaigns));
 }
+// Marking is OPTIMISTIC. The write plus a refetch of the whole manager payload
+// (84 campaigns, 113 pipelines) is a visible pause on every click, and the
+// buttons used to grey out for its duration — one toggle felt like work. The
+// button now flips on click and rolls back only if the write actually fails.
+function useOptimisticOpenDayMutation<TArgs>(
+  fn: (args: TArgs) => Promise<unknown>,
+  patch: (payload: OpenDayManagePayload, args: TArgs) => OpenDayManagePayload,
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onMutate: async (args: TArgs) => {
+      // Stop an in-flight refetch from landing on top of the optimistic write.
+      await qc.cancelQueries({ queryKey: OPEN_DAYS_KEY });
+      const previous = qc.getQueryData<OpenDayManagePayload>(OPEN_DAYS_KEY);
+      if (previous) qc.setQueryData<OpenDayManagePayload>(OPEN_DAYS_KEY, patch(previous, args));
+      return { previous };
+    },
+    onError: (_e, _args, ctx) => {
+      // Put the old mapping back, so a failed write never leaves the button
+      // showing a state the database does not have.
+      if (ctx?.previous) qc.setQueryData(OPEN_DAYS_KEY, ctx.previous);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: OPEN_DAYS_KEY });
+      qc.invalidateQueries({ queryKey: ['marketing', 'facebook', 'lead-performance'] });
+    },
+  });
+}
+
 export function useSetOpenDayCampaign() {
-  return useOpenDayMutation((a: {
-    campaignId: string; customerId: string | null; openDayId: string | null;
-  }) => setOpenDayCampaign(a));
+  return useOptimisticOpenDayMutation(
+    (a: { campaignId: string; customerId: string | null; openDayId: string | null }) =>
+      setOpenDayCampaign(a),
+    (payload, a) => {
+      const assignedTo = { ...payload.assignedTo };
+      if (a.openDayId) assignedTo[a.campaignId] = a.openDayId;
+      else delete assignedTo[a.campaignId];
+      return { ...payload, assignedTo };
+    },
+  );
 }
 export function useSetOpenDayPipeline() {
-  return useOpenDayMutation((a: {
-    integrationAccountId: string; ghlPipelineId: string; openDayId: string | null;
-  }) => setOpenDayPipeline(a));
+  return useOptimisticOpenDayMutation(
+    (a: { integrationAccountId: string; ghlPipelineId: string; openDayId: string | null }) =>
+      setOpenDayPipeline(a),
+    (payload, a) => {
+      // Pipeline ids are unique only within a Location, so the map is keyed by
+      // the composite accountId|pipelineId — the same key the list renders by.
+      const key = `${a.integrationAccountId}|${a.ghlPipelineId}`;
+      const pipelineAssignedTo = { ...payload.pipelineAssignedTo };
+      if (a.openDayId) pipelineAssignedTo[key] = a.openDayId;
+      else delete pipelineAssignedTo[key];
+      return { ...payload, pipelineAssignedTo };
+    },
+  );
 }
 
 // The blended cards. One fetch carries BOTH the new-patients-only and the

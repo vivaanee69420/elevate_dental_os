@@ -50,9 +50,9 @@ interface AccountGroup {
 // Same shape as ChannelButtons in PipelineChannelStep, deliberately: marking a
 // Meta campaign and marking a GoHighLevel pipeline are the same act, so they
 // should not be two different controls.
-function MarkButtons({ isOpenDay, busy, onSet }: {
+// Never disabled while saving — see ChannelButtons in PipelineChannelStep.
+function MarkButtons({ isOpenDay, onSet }: {
   isOpenDay: boolean;
-  busy: boolean;
   onSet: (openDay: boolean) => void;
 }) {
   const options = [
@@ -65,7 +65,6 @@ function MarkButtons({ isOpenDay, busy, onSet }: {
         <button
           key={o.label}
           type="button"
-          disabled={busy}
           onClick={() => onSet(o.value)}
           className={`px-2 py-1 text-[12px] ${
             isOpenDay === o.value
@@ -90,7 +89,6 @@ export default function OpenDaysPanel() {
   const [newName, setNewName] = useState('');
   const [newDate, setNewDate] = useState('');
   const [filter, setFilter] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
   // Accounts are closed until clicked: the panel answers "what is in THIS ad
   // account", not "here are all 84 campaigns at once", which is what the flat
   // list it replaces actually did.
@@ -109,7 +107,6 @@ export default function OpenDaysPanel() {
   }
 
   async function mark(c: OpenDayCampaignOption, openDay: boolean, suggestedId: string | null = null) {
-    setBusy(c.campaignId);
     setError(null);
     try {
       await setCampaign.mutateAsync({
@@ -119,8 +116,6 @@ export default function OpenDaysPanel() {
       });
     } catch (e) {
       setError(`${c.campaignName ?? c.campaignId}: ${(e as Error).message || 'Could not save that change.'}`);
-    } finally {
-      setBusy(null);
     }
   }
 
@@ -265,7 +260,6 @@ export default function OpenDaysPanel() {
                   <span className="text-ink-2 whitespace-nowrap">{c.lastDay ?? ''} · {money0(c.spendPence)}</span>
                   <MarkButtons
                     isOpenDay={Boolean(data?.assignedTo[c.campaignId])}
-                    busy={busy === c.campaignId}
                     onSet={(v) => mark(c, v)}
                   />
                   {/* WHICH event — shown only once the campaign IS an open
