@@ -181,3 +181,181 @@ export function fetchFacebookAds(qs: string) {
   const suffix = qs ? `?${qs}` : '';
   return api<FacebookAdsPage>(`/api/marketing/facebook/ads${suffix}`);
 }
+
+
+// ---------------------------------------------------------------------------
+// Blended CPL / CPB / CPA (migration 000167).
+//
+// `accepted` here is the SAME rule the Google report uses — settled payments
+// attributable to the lead, net of refunds, from the lead's own London day
+// onward, above acceptanceMinPaidPence. It is deliberately NOT the campaign
+// tab's `patients`, which counts a lead that resolved to any Dentally record
+// whether or not money ever changed hands.
+// ---------------------------------------------------------------------------
+export interface FacebookLeadPractice {
+  practiceId: string | null;
+  practiceName: string | null;
+  spendPence: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  booked: number;
+  accepted: number;
+  /** null, never 0: a cost per nothing is unknowable, not free. */
+  cplPence: number | null;
+  cpbPence: number | null;
+  cpaPence: number | null;
+}
+
+export interface FacebookLeadCampaign extends Omit<FacebookLeadPractice, 'practiceId' | 'practiceName'> {
+  campaignId: string | null;
+  campaignName: string | null;
+  channelType: string | null;
+  /** false for the "not attributed" bucket, which owns no spend of its own. */
+  attributed: boolean;
+  conversions: number;
+  paidPence: number;
+  returnOnSpend: number | null;
+  ctr: number | null;
+}
+
+export interface FacebookLeadRow {
+  contact_id: string | null;
+  practice_id: string | null;
+  practice_name: string | null;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  ad_set_id: string | null;
+  ad_id: string | null;
+  lead_at: string | null;
+  name: string | null;
+  email: string | null;
+  treatment: string | null;
+  booked: boolean;
+  accepted: boolean;
+  is_new_patient: boolean;
+  paid_pence: number;
+}
+
+// ---------------------------------------------------------------------------
+// Open days (migration 000168). A named event, and the campaigns that promoted
+// it. Always-on is simply "not mapped to an event", which is why the two
+// buckets provably cover every campaign exactly once.
+// ---------------------------------------------------------------------------
+export interface FacebookOpenDayBucket {
+  spendPence: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  leads: number;
+  booked: number;
+  accepted: number;
+  paidPence: number;
+  cplPence: number | null;
+  cpbPence: number | null;
+  cpaPence: number | null;
+}
+
+export interface FacebookOpenDayEvent extends FacebookOpenDayBucket {
+  openDayId: string;
+  name: string | null;
+  eventDate: string | null;
+  /** Campaigns of this event that ran in the SELECTED window, not all mapped. */
+  campaigns: number;
+  /** Practices that ran it, from the ad account each campaign belongs to. */
+  practices: number;
+}
+
+export interface FacebookOpenDaySplit {
+  alwaysOn: FacebookOpenDayBucket;
+  openDays: FacebookOpenDayBucket;
+  events: FacebookOpenDayEvent[];
+}
+
+export interface FacebookLeadPerformancePayload {
+  state: FacebookState;
+  practices: FacebookLeadPractice[];
+  total: FacebookLeadPractice | null;
+  /** The same figures counting existing patients too — one fetch, both views. */
+  practicesAll: FacebookLeadPractice[];
+  totalAll: FacebookLeadPractice | null;
+  campaigns: FacebookLeadCampaign[];
+  campaignsAll: FacebookLeadCampaign[];
+  /** alwaysOn + openDays === the totals above, metric for metric. */
+  openDays: FacebookOpenDaySplit;
+  openDaysAll: FacebookOpenDaySplit;
+  leads: FacebookLeadRow[];
+  excludedAccounts: unknown[];
+  /** The acceptance floor the SERVER used. Never re-stated as a literal here. */
+  acceptanceMinPaidPence: number;
+  effectiveSince: string;
+  windowClamped: boolean;
+}
+
+export function fetchFacebookLeadPerformance(qs: string) {
+  // ymdWindowParams returns `since=..&until=..` with NO leading '?', so the
+  // separator belongs here — same as every fetcher above. Interpolating qs
+  // raw produced `/lead-performancesince=2026-09-01`, which 404s SILENTLY:
+  // React Query errors, data is undefined, and the panel rendered nothing at
+  // all rather than an error. That is how this shipped unnoticed.
+  const suffix = qs ? `?${qs}` : '';
+  return api<FacebookLeadPerformancePayload>(`/api/marketing/facebook/lead-performance${suffix}`);
+}
+
+
+// --- open-day management ----------------------------------------------------
+export interface OpenDayRecord {
+  id: string;
+  name: string;
+  eventDate: string | null;
+  campaignIds: string[];
+}
+
+export interface OpenDayCampaignOption {
+  campaignId: string;
+  campaignName: string | null;
+  customerId: string | null;
+  accountName: string | null;
+  firstDay: string | null;
+  lastDay: string | null;
+  spendPence: number;
+}
+
+export interface OpenDayManagePayload {
+  openDays: OpenDayRecord[];
+  /** Every Meta campaign the org has metrics for — not just this window's. */
+  campaigns: OpenDayCampaignOption[];
+  /** campaignId -> the event it already belongs to, so a move is visible. */
+  assignedTo: Record<string, string>;
+  /** `${accountId}|${pipelineId}` -> open day id. */
+  pipelineAssignedTo: Record<string, string>;
+}
+
+export function fetchOpenDays() {
+  return api<OpenDayManagePayload>('/api/marketing/facebook/open-days');
+}
+
+export function createOpenDay(body: { name: string; eventDate: string | null }) {
+  return api<{ id: string }>('/api/marketing/facebook/open-days', {
+    method: 'POST', body: JSON.stringify(body),
+  });
+}
+
+export function updateOpenDay(id: string, body: { name?: string; eventDate?: string | null }) {
+  return api(`/api/marketing/facebook/open-days/${id}`, {
+    method: 'PATCH', body: JSON.stringify(body),
+  });
+}
+
+export function deleteOpenDay(id: string) {
+  return api(`/api/marketing/facebook/open-days/${id}`, { method: 'DELETE' });
+}
+
+export function setOpenDayCampaigns(
+  id: string,
+  campaigns: { campaign_id: string; customer_id: string | null }[],
+) {
+  return api(`/api/marketing/facebook/open-days/${id}/campaigns`, {
+    method: 'PUT', body: JSON.stringify({ campaigns }),
+  });
+}
