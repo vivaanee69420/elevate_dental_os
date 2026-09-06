@@ -249,6 +249,24 @@ export async function getGoogleSearchTerms(req, res, next) {
     } catch (err) { next(err); }
 }
 
+// Blended CPL/CPB/CPA for Meta, on the SAME acceptance rule as the Google
+// endpoint below (migration 000167). Same query shape as the Facebook grain
+// routes; campaignId/adSetId/cursor are accepted and unused — this endpoint
+// returns every grain it has in one payload.
+export async function getFacebookLeadPerformance(req, res, next) {
+    try {
+        const q = FacebookQuerySchema.parse(req.query);
+        // No include_existing param, for the same reason as Google's: the
+        // "new patients only" vs "including existing" toggle is answered
+        // client-side from ONE fetch that carries both, so flipping it costs
+        // nothing and the two figures can never be computed differently.
+        const data = await facebookReportService.leadPerformance(req.user.organisation_id, {
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+        });
+        res.json(data);
+    } catch (err) { next(err); }
+}
+
 // Same query shape as the four grain routes — since/until optional
 // YYYY-MM-DD, practice_id optional. campaignId/parentId/cursor are accepted
 // (GoogleQuerySchema.strip()) but unused here: this endpoint has no

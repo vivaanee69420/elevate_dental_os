@@ -38,6 +38,7 @@ import { useCallback, useEffect } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { FacebookPerformancePanel } from './FacebookPerformancePanel';
 import { AdReportTabs, useAdReportTab, type AdReportTab } from '../../_shared/AdReportTabs';
 import { useFacebookCampaigns, useFacebookAdSets } from '../hooks';
 import { FacebookCampaignsTab } from './FacebookCampaignsTab';
@@ -142,7 +143,16 @@ export default function FacebookReportScreen() {
         title="Facebook"
         subtitle="Meta ad performance, from spend down to the patient it produced. Attendance is recorded in Dentally only."
       />
-      <ScopePeriodBar />
+      {/* Scoped to practices with a mapped Meta account. One without an
+          account can only ever render £0, which reads as "we spent nothing
+          here" rather than "this practice is not connected". */}
+      <ScopePeriodBar adProvider="meta_ads" />
+
+      {/* Cost per lead / booking / acquired patient, on the same money-paid
+          rule as the Google report (000167). Above the tabs because it is the
+          figure to compare across platforms; the Campaigns tab's own patient
+          count answers a narrower question. */}
+      <FacebookPerformancePanel />
 
       <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
 

@@ -5,7 +5,7 @@
 // and Period (Recent / This month / This year / Pick month / Custom). Writes the
 // URL-synced ScopePeriod state; every mode resolves to a [since, until) window.
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { usePractices } from '@/features/practices/hooks';
 import { useScopePeriod } from './scope-context';
 
@@ -45,23 +45,67 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
+/** An ad platform a page can be scoped to. Matches ad_accounts.provider. */
+export type AdProvider = 'google_ads' | 'meta_ads';
+
 export function ScopePeriodBar({
   hideScope = false,
   hidePeriod = false,
   dentallyOnly = false,
-}: { hideScope?: boolean; hidePeriod?: boolean; dentallyOnly?: boolean } = {}) {
+  adProvider,
+}: {
+  hideScope?: boolean;
+  hidePeriod?: boolean;
+  dentallyOnly?: boolean;
+  /**
+   * Scope the row to practices that have an account with THIS ad platform.
+   * A practice the platform knows nothing about renders a confident £0 that
+   * reads as "we spent nothing here" rather than "this practice is not
+   * connected", so it is not offered at all.
+   */
+  adProvider?: AdProvider;
+} = {}) {
   const {
     scope, mode, monthKey, customSince, customUntil,
     setScope, setMonthKey, setYearKey, setCustom,
   } = useScopePeriod();
   const { data } = usePractices();
+  const loaded = data?.practices != null;
   // By default the scope row lists every practice (Business Hub + Elevate CRM
   // want the GoHighLevel subaccounts visible). GoHighLevel auto-creates
   // pms_site_id-null pseudo-practices for CRM scoping; analytics views pass
   // `dentallyOnly` to drop those and show only real Dentally-mapped sites.
-  const practices = dentallyOnly
-    ? data?.practices?.filter((p) => p.pms_site_id != null)
-    : data?.practices;
+  const practices = useMemo(() => {
+    let rows = data?.practices;
+    if (dentallyOnly) rows = rows?.filter((p) => p.pms_site_id != null);
+    if (adProvider) {
+      // An ABSENT ad_providers list means an older cached response that cannot
+      // answer the question — show the practice rather than silently drop it.
+      // An EMPTY list is a definite "mapped to nothing" and is dropped.
+      rows = rows?.filter((p) => !p.ad_providers || p.ad_providers.includes(adProvider));
+    }
+    return rows;
+  }, [data?.practices, dentallyOnly, adProvider]);
+
+  // Scope lives in the URL and ScopePeriodProvider spans the whole dashboard,
+  // so a practice picked on one page survives the move to another. Selecting
+  // Bexleyheath on /marketing-facebook and navigating to /marketing-google
+  // would leave that filter APPLIED with its chip gone — the page would report
+  // zeros for a practice with no Google account. Drop back to the group view
+  // whenever the current scope is not one this page can offer.
+  const offered = practices?.map((p) => p.id).join(',') ?? '';
+  useEffect(() => {
+    if (!adProvider || !loaded || scope === 'all') return;
+    if (!offered.split(',').includes(scope)) setScope('all');
+    // setScope is re-created per render by the provider; the guards above make
+    // this idempotent (it converges the moment scope becomes 'all').
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adProvider, loaded, scope, offered]);
+
+  // A provider-scoped page for an org with no connected practices shows no
+  // scope row at all — a lone "All practices" pill is a control with nothing
+  // to control. The page's own not_connected state does the explaining.
+  const hideScopeRow = hideScope || (!!adProvider && loaded && (practices?.length ?? 0) === 0);
 
   const months = useMemo(() => recentMonths(12), []);
   const curMonth = currentMonthKey();
@@ -71,7 +115,7 @@ export function ScopePeriodBar({
   return (
     <div className="flex flex-col gap-2.5 mb-4">
       {/* Scope pills — All practices + every synced practice (data-driven). */}
-      {!hideScope && (
+      {!hideScopeRow && (
         <div className="flex gap-2 flex-wrap items-center">
           <Pill active={scope === 'all'} onClick={() => setScope('all')}>
             All practices

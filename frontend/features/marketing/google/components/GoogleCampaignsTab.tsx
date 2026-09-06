@@ -41,7 +41,7 @@ import {
 } from '../../_shared/format';
 import { DetailModal } from '../../_shared/DetailModal';
 import { GoogleTabFrame } from './GoogleTabFrame';
-import { CampaignHighlights } from './CampaignHighlights';
+import { CampaignHighlights } from '../../_shared/CampaignHighlights';
 import { CampaignLeads } from './CampaignLeads';
 import { useGoogleLeadPerformance } from '../hooks';
 import type {
