@@ -20,6 +20,7 @@ import { openDayRepository } from "../repositories/open-day.repository.js";
 import { marketingRepository } from "../repositories/marketing.repository.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { AppError } from "../middleware/errors.js";
+import { suggestOpenDay } from "../lib/marketing/open-day-suggest.js";
 
 const PROVIDER = 'meta_ads';
 
@@ -56,11 +57,23 @@ export const openDayService = {
                 `${m.integrationAccountId}|${m.ghlPipelineId}`, m.openDayId,
             ]),
         );
+        // A SUGGESTION, never a mapping — nothing is written here. Only
+        // unmapped campaigns get one; an already-assigned campaign has
+        // nothing left to propose. Reads only this org's own events/names, so
+        // a tenant's naming convention never leaks into another tenant's
+        // suggestions.
+        const suggestions = {};
+        for (const c of campaigns) {
+            if (assignedTo[c.campaignId]) continue;
+            const id = suggestOpenDay(c.campaignName, events);
+            if (id) suggestions[c.campaignId] = id;
+        }
         return {
             openDays: events.map((e) => ({ ...e, campaignIds: byEvent.get(e.id) ?? [] })),
             campaigns,
             assignedTo,
             pipelineAssignedTo,
+            suggestions,
         };
     },
 

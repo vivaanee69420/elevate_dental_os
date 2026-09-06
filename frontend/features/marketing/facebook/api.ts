@@ -334,6 +334,11 @@ export interface OpenDayManagePayload {
   assignedTo: Record<string, string>;
   /** `${accountId}|${pipelineId}` -> open day id. */
   pipelineAssignedTo: Record<string, string>;
+  /**
+   * campaignId -> a PROPOSED open day id, for campaigns not yet in
+   * `assignedTo`. Pre-ticks a checkbox; nothing is written until Confirm.
+   */
+  suggestions: Record<string, string>;
 }
 
 export function fetchOpenDays() {

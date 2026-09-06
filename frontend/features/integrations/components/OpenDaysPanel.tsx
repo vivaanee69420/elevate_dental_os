@@ -42,6 +42,40 @@ export default function OpenDaysPanel() {
 
   const selected = data?.openDays.find((d) => d.id === selectedId) ?? null;
 
+  // Unmapped campaigns, newest activity first — a new open-day campaign lands
+  // at the top the day after its first spend. `suggestions` pre-ticks; nothing
+  // is written until Confirm.
+  const unmapped = useMemo(() => (data?.campaigns ?? [])
+    .filter((c) => !data?.assignedTo[c.campaignId])
+    .sort((a, b) => String(b.lastDay ?? '').localeCompare(String(a.lastDay ?? ''))),
+  [data]);
+  const [confirmed, setConfirmed] = useState<Record<string, string>>({});
+  const proposed = { ...(data?.suggestions ?? {}), ...confirmed };
+
+  const confirmSuggestions = async () => {
+    // One request per affected event: setCampaigns replaces an event's whole
+    // set, so the existing ids must be sent alongside the new ones or the
+    // confirm would unmap everything already there.
+    const byEvent = new Map<string, string[]>();
+    for (const [campaignId, eventId] of Object.entries(proposed)) {
+      if (!eventId) continue;
+      if (!byEvent.has(eventId)) {
+        byEvent.set(eventId, [...(data?.openDays.find((d) => d.id === eventId)?.campaignIds ?? [])]);
+      }
+      byEvent.get(eventId)!.push(campaignId);
+    }
+    const byId = new Map((data?.campaigns ?? []).map((c) => [c.campaignId, c]));
+    for (const [eventId, ids] of byEvent) {
+      await setCampaigns.mutateAsync({
+        id: eventId,
+        campaigns: [...new Set(ids)].map((id) => ({
+          campaign_id: id, customer_id: byId.get(id)?.customerId ?? null,
+        })),
+      });
+    }
+    setConfirmed({});
+  };
+
   const openEvent = (id: string) => {
     setSelectedId(id);
     const ev = data?.openDays.find((d) => d.id === id);
@@ -83,6 +117,42 @@ export default function OpenDaysPanel() {
           do not run open days — nothing else changes.
         </p>
       </div>
+
+      {/* --- new since you last mapped, with suggestions -------------------- */}
+      {unmapped.length > 0 && (
+        <div className="flex flex-col gap-2 border-b border-border pb-3">
+          <p className="text-[13px] font-medium">New since you last mapped ({unmapped.length})</p>
+          {unmapped.slice(0, 20).map((c) => (
+            <label key={c.campaignId} className="flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={Boolean(proposed[c.campaignId])}
+                onChange={(e) => setConfirmed((v) => ({
+                  ...v,
+                  [c.campaignId]: e.target.checked
+                    ? (proposed[c.campaignId] ?? data?.openDays[0]?.id ?? '')
+                    : '',
+                }))}
+              />
+              <span className="flex-1">{c.campaignName ?? c.campaignId}</span>
+              <span className="text-ink-2">{c.accountName ?? DASH_ACCOUNT} · {c.lastDay ?? ''}</span>
+              {data?.suggestions?.[c.campaignId] && (
+                <span className="text-[12px] text-brand">
+                  suggested: {data.openDays.find((d) => d.id === data.suggestions[c.campaignId])?.name}
+                </span>
+              )}
+            </label>
+          ))}
+          <button
+            type="button"
+            className="self-start px-3 py-1.5 rounded-lg bg-brand text-white text-[13px] disabled:opacity-50"
+            disabled={Object.values(proposed).filter(Boolean).length === 0 || setCampaigns.isPending}
+            onClick={confirmSuggestions}
+          >
+            Confirm {Object.values(proposed).filter(Boolean).length} mapping(s)
+          </button>
+        </div>
+      )}
 
       {/* --- the events ---------------------------------------------------- */}
       <div className="flex flex-col gap-2">
