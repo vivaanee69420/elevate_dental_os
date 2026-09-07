@@ -1,4 +1,4 @@
-"use client";
+'use client';
 // Facebook's data adapter for the shared summary view.
 //
 // Every fetch here is the Facebook report page's OWN hook, so the two surfaces
@@ -11,31 +11,32 @@
 // mean "everything in this window" rather than "nothing" — the same call the
 // report page's unfiltered tab makes.
 
-import { useRouter } from "next/navigation";
-import { previousPeriod } from "@/features/marketing/_shared/compare";
+import { useRouter } from 'next/navigation';
+import { previousPeriod } from '@/features/marketing/_shared/compare';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import {
   bestByCostPerConversion,
   type Performer,
-} from "@/features/marketing/_shared/BestPerformer";
-import type { FacebookRow } from "@/features/marketing/facebook/api";
+} from '@/features/marketing/_shared/BestPerformer';
+import type { FacebookRow } from '@/features/marketing/facebook/api';
 import {
   useFacebookLeadPerformance,
   useFacebookLeadPerformanceFor,
   useFacebookCampaigns,
   useFacebookAdSets,
   useFacebookAds,
-} from "@/features/marketing/facebook/hooks";
-import { useSelectedYmdWindow } from "@/features/marketing/facebook/hooks";
-import { ChannelSummaryView, type Grain } from "./ChannelSummaryView";
+} from '@/features/marketing/facebook/hooks';
+import { useSelectedYmdWindow } from '@/features/marketing/facebook/hooks';
+import { ChannelSummaryView, type Grain } from './ChannelSummaryView';
 
 // Each state is a DIFFERENT problem with a different fix, so each says so
 // rather than sharing one "no data" line the owner cannot act on.
 const NOT_OK: Record<string, string> = {
   not_connected:
-    "Facebook Ads is not connected, so there is nothing to report yet.",
-  never_synced: "Facebook Ads is connected but has not synced yet.",
+    'Facebook Ads is not connected, so there is nothing to report yet.',
+  never_synced: 'Facebook Ads is connected but has not synced yet.',
   no_ad_id_coverage:
-    "Facebook leads are arriving without an ad id, so spend cannot yet be tied to the leads it produced.",
+    'Facebook leads are arriving without an ad id, so spend cannot yet be tied to the leads it produced.',
 };
 
 /**
@@ -102,36 +103,42 @@ export function FacebookSummary() {
 
   const grains: Grain[] = [
     {
-      label: "Best campaign · cost per patient",
+      label: 'Best campaign · cost per patient',
       row: bestCampaign,
-      fallbackName: "Unnamed campaign",
+      fallbackName: 'Unnamed campaign',
       note: noteFor(campaigns.data?.rows, bestCampaign),
-      href: "/marketing-facebook?tab=campaigns",
+      href: '/marketing-facebook?tab=campaigns',
     },
     {
-      label: "Best ad set · cost per patient",
+      label: 'Best ad set · cost per patient',
       row: bestAdSet,
-      fallbackName: "Unnamed ad set",
+      fallbackName: 'Unnamed ad set',
       note: noteFor(adSets.data?.rows, bestAdSet),
-      href: "/marketing-facebook?tab=adsets",
+      href: '/marketing-facebook?tab=adsets',
     },
     {
-      label: "Best ad · cost per patient",
+      label: 'Best ad · cost per patient',
       row: bestAd,
-      fallbackName: "Unnamed ad",
+      fallbackName: 'Unnamed ad',
       note: noteFor(adRows, bestAd),
-      href: "/marketing-facebook?tab=ads",
+      href: '/marketing-facebook?tab=ads',
     },
   ];
 
   return (
-    <ChannelSummaryView
+    <div className="flex flex-col gap-4">
+      {/* The accounts this channel actually runs. Only practices with a
+          mapped Facebook account are offered — one without can render nothing
+          but a confident zero. The period comes from the page's global
+          filter, so this row narrows WHOSE spend, never WHEN. */}
+      <ScopePeriodBar hidePeriod adProvider="meta_ads" />
+      <ChannelSummaryView
       title="Facebook"
       reportHref="/marketing-facebook"
       isPending={isPending}
       error={(error as Error) ?? null}
       notConnected={
-        data && data.state !== "ok" ? (NOT_OK[data.state] ?? null) : null
+        data && data.state !== 'ok' ? (NOT_OK[data.state] ?? null) : null
       }
       total={data?.total ?? null}
       previous={prev.data?.total ?? null}
@@ -143,7 +150,8 @@ export function FacebookSummary() {
           `/marketing-facebook?tab=campaigns&campaignId=${encodeURIComponent(campaignId)}`,
         )
       }
-      onOpenGrain={(href) => router.push(href)}
-    />
+        onOpenGrain={(href) => router.push(href)}
+      />
+    </div>
   );
 }

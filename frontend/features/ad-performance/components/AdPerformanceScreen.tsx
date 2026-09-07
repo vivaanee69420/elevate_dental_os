@@ -43,10 +43,13 @@ export default function AdPerformanceScreen() {
         subtitle="What the spend bought, and which campaign, ad set, ad or keyword deserves a decision. Open a channel's full report for the tables beneath."
       />
 
-      {/* ONE filter row, for the whole page. Practices are NOT narrowed to a
-          single provider's accounts here, because the block below it spans both
-          channels; each tab surfaces its own coverage caveats. */}
-      <ScopePeriodBar />
+      {/* The GLOBAL period, once, for the whole page. Practices are chosen
+          inside each channel instead: which practices are offerable depends on
+          which have an account with THAT platform, so one row here would list
+          practices a channel knows nothing about — and a practice with no Meta
+          account renders a confident £0 that reads as "we spent nothing here"
+          rather than "this practice is not connected". */}
+      <ScopePeriodBar hideScope />
 
       <GroupTotalBlock />
 

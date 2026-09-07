@@ -1,4 +1,4 @@
-"use client";
+'use client';
 // Google's data adapter. Same contract as FacebookSummary: fetch with the
 // report page's own hooks, rank each grain with the same helper it ranks by,
 // render the one shared layout — so the two channels answer the same question
@@ -10,9 +10,10 @@
 // keywords that were bid on, which is a different question with a different
 // answer.
 
-import { useRouter } from "next/navigation";
-import { previousPeriod } from "@/features/marketing/_shared/compare";
-import { bestByCostPerConversion } from "@/features/marketing/_shared/BestPerformer";
+import { useRouter } from 'next/navigation';
+import { previousPeriod } from '@/features/marketing/_shared/compare';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { bestByCostPerConversion } from '@/features/marketing/_shared/BestPerformer';
 import {
   useGoogleLeadPerformance,
   useGoogleLeadPerformanceFor,
@@ -22,13 +23,13 @@ import {
   useGoogleAds,
   useGoogleKeywords,
   useGoogleSearchTerms,
-} from "@/features/marketing/google/hooks";
-import { ChannelSummaryView, type Grain } from "./ChannelSummaryView";
+} from '@/features/marketing/google/hooks';
+import { ChannelSummaryView, type Grain } from './ChannelSummaryView';
 
 const NOT_OK: Record<string, string> = {
   not_connected:
-    "Google Ads is not connected, so there is nothing to report yet.",
-  never_synced: "Google Ads is connected but has not synced yet.",
+    'Google Ads is not connected, so there is nothing to report yet.',
+  never_synced: 'Google Ads is connected but has not synced yet.',
 };
 
 function noteFor(rows: unknown[] | undefined, best: unknown) {
@@ -81,50 +82,56 @@ export function GoogleSummary() {
 
   const grains: Grain[] = [
     {
-      label: "Best campaign · cost per conversion",
+      label: 'Best campaign · cost per conversion',
       row: bestCampaign,
-      fallbackName: "Unnamed campaign",
+      fallbackName: 'Unnamed campaign',
       note: noteFor(campaigns.data?.rows, bestCampaign),
-      href: "/marketing-google?tab=campaigns",
+      href: '/marketing-google?tab=campaigns',
     },
     {
-      label: "Best ad group · cost per conversion",
+      label: 'Best ad group · cost per conversion',
       row: bestAdGroup,
-      fallbackName: "Unnamed ad group",
+      fallbackName: 'Unnamed ad group',
       note: noteFor(adGroups.data?.rows, bestAdGroup),
-      href: "/marketing-google?tab=adgroups",
+      href: '/marketing-google?tab=adgroups',
     },
     {
-      label: "Best ad · cost per conversion",
+      label: 'Best ad · cost per conversion',
       row: bestAd,
-      fallbackName: "Unnamed ad",
+      fallbackName: 'Unnamed ad',
       note: noteFor(adRows, bestAd),
-      href: "/marketing-google?tab=ads",
+      href: '/marketing-google?tab=ads',
     },
     {
-      label: "Best keyword · cost per conversion",
+      label: 'Best keyword · cost per conversion',
       row: bestKeyword,
-      fallbackName: "Unnamed keyword",
+      fallbackName: 'Unnamed keyword',
       note: noteFor(keywordRows, bestKeyword),
-      href: "/marketing-google?tab=keywords",
+      href: '/marketing-google?tab=keywords',
     },
     {
-      label: "Best search term · cost per conversion",
+      label: 'Best search term · cost per conversion',
       row: bestTerm,
-      fallbackName: "Unnamed search term",
+      fallbackName: 'Unnamed search term',
       note: noteFor(termRows, bestTerm),
-      href: "/marketing-google?tab=searchterms",
+      href: '/marketing-google?tab=searchterms',
     },
   ];
 
   return (
-    <ChannelSummaryView
+    <div className="flex flex-col gap-4">
+      {/* The accounts this channel actually runs. Only practices with a
+          mapped Google account are offered — one without can render nothing
+          but a confident zero. The period comes from the page's global
+          filter, so this row narrows WHOSE spend, never WHEN. */}
+      <ScopePeriodBar hidePeriod adProvider="google_ads" />
+      <ChannelSummaryView
       title="Google"
       reportHref="/marketing-google"
       isPending={isPending}
       error={(error as Error) ?? null}
       notConnected={
-        data && data.state !== "ok" ? (NOT_OK[data.state] ?? null) : null
+        data && data.state !== 'ok' ? (NOT_OK[data.state] ?? null) : null
       }
       total={data?.total ?? null}
       previous={prev.data?.total ?? null}
@@ -136,7 +143,8 @@ export function GoogleSummary() {
           `/marketing-google?tab=campaigns&campaignId=${encodeURIComponent(campaignId)}`,
         )
       }
-      onOpenGrain={(href) => router.push(href)}
-    />
+        onOpenGrain={(href) => router.push(href)}
+      />
+    </div>
   );
 }

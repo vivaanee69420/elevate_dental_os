@@ -19,7 +19,6 @@ import { useQuery } from '@tanstack/react-query';
 import { SectionCard, SecHead, EmptyState, Skeleton } from '@/components/ui';
 import { StatRail } from '@/features/marketing/_shared/StatRail';
 import { useScopePeriod } from '@/features/_shared/scope-context';
-import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { api } from '@/lib/api';
 
 interface GroupTotal {
@@ -61,7 +60,6 @@ export function GroupTotalBlock() {
         title="Both channels, people counted once"
         desc="Someone who appears in Google and in Facebook counts once here, which is why this is smaller than the two blocks added together."
       />
-      <ScopePeriodBar />
 
       {isPending && <Skeleton className="h-24 w-full" />}
 
