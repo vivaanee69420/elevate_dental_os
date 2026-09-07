@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { visibleNavSections, type Permissions } from '@/lib/permissions';
 import type { NavSection } from '@/lib/nav';
 import { useMe } from '@/hooks/useMe';
-import { AgencyDialog } from '@/features/agency/components/AgencyDialog';
+import { AccountSwitcher } from '@/features/agency/components/AccountSwitcher';
 import { AccountPicker } from '@/features/agency/components/AccountPicker';
 import { useSidebar, HamburgerIcon } from '@/components/layout/sidebar-context';
 
@@ -212,9 +212,10 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* Account switcher — agency actors only. Top-left, GHL-style: opens the
-          one dialog that switches into a sub-account and manages it. */}
-      <AgencyDialog />
+      {/* Account switcher — agency actors only. Top-left, GHL-style: search,
+          recents and pins. Switching ONLY; configuring a sub-account lives at
+          Settings -> Sub-accounts. */}
+      <AccountSwitcher />
 
       {/* Account picker — only for a login that belongs to several accounts.
           Separate from the agency dialog above: these are accounts the person

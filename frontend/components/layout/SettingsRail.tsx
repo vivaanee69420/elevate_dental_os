@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useMe } from '@/hooks/useMe';
+import { useMe, isAgencyActor } from '@/hooks/useMe';
 import { canAccessRoute, featureAllowsSection } from '@/lib/permissions';
 
 // The Settings menu. Each row names the route id it is gated by, so the rail
@@ -25,6 +25,16 @@ export function SettingsRail() {
     ? SETTINGS_ITEMS.filter((i) => canAccessRoute(i.routeId, me?.permissions))
     : [];
 
+  // Sub-accounts is the agency administering its clients, not the tenant
+  // administering itself, so it hangs off the per-user agency grant and not
+  // off a permission key. It is appended OUTSIDE the Settings feature filter
+  // deliberately: an agency actor switched into a sub-account that has the
+  // Settings module turned off must still be able to turn it back on — the
+  // backend already lets agency actors past module gates for the same reason.
+  const items = isAgencyActor(me)
+    ? [...allowed, { href: '/settings/sub-accounts', label: 'Sub-accounts', routeId: 'settings' }]
+    : allowed;
+
   return (
     <aside className="w-64 shrink-0 bg-card h-screen sticky top-0 flex flex-col border-r border-border">
       <div className="p-3 border-b border-border">
@@ -41,7 +51,7 @@ export function SettingsRail() {
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-        {allowed.map((item) => {
+        {items.map((item) => {
           const active = pathname === item.href;
           return (
             <Link
@@ -58,7 +68,7 @@ export function SettingsRail() {
             </Link>
           );
         })}
-        {allowed.length === 0 && (
+        {items.length === 0 && (
           <p className="px-3 py-2 text-[13px] text-ink-muted">
             You do not have access to any settings.
           </p>
