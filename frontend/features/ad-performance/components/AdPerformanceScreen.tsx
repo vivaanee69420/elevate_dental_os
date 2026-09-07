@@ -24,6 +24,8 @@
 import { PageHeader } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { AdReportTabs, useAdReportTab, type AdReportTab } from '@/features/marketing/_shared/AdReportTabs';
+import { useFacebookLeadPerformance } from '@/features/marketing/facebook/hooks';
+import { useGoogleLeadPerformance } from '@/features/marketing/google/hooks';
 import { GroupTotalBlock } from './GroupTotalBlock';
 import { FacebookSummary } from './FacebookSummary';
 import { GoogleSummary } from './GoogleSummary';
@@ -33,11 +35,31 @@ const TABS: AdReportTab[] = [
   { id: 'google', label: 'Google' },
 ];
 
+/**
+ * Warms BOTH channels' headline figures while one is on screen.
+ *
+ * The hooks cache for five minutes, so only the FIRST switch was slow — and it
+ * was slow for a reason worth keeping: opening Google fires seven cold queries
+ * (its headline, its comparison, and five grains). Fetching the two headline
+ * queries up front means the cards are already there when the tab changes, and
+ * only the grains stream in behind them. Renders nothing; it exists for its
+ * cache entries, which the tab's own hooks then read instead of refetching.
+ *
+ * Deliberately NOT the grains too: those are five more requests per channel for
+ * a tab the reader may never open, and the cards are what makes a switch feel
+ * immediate.
+ */
+function WarmBothChannels() {
+  useFacebookLeadPerformance();
+  useGoogleLeadPerformance();
+  return null;
+}
+
 export default function AdPerformanceScreen() {
   const [tab, setTab] = useAdReportTab(TABS);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Ad performance"
         subtitle="What the spend bought, and which campaign, ad set, ad or keyword deserves a decision. Open a channel's full report for the tables beneath."
@@ -51,6 +73,7 @@ export default function AdPerformanceScreen() {
           rather than "this practice is not connected". */}
       <ScopePeriodBar hideScope />
 
+      <WarmBothChannels />
       <GroupTotalBlock />
 
       <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />

@@ -20,11 +20,10 @@ import {
 } from 'recharts';
 import { formatPence } from '@/lib/format';
 import { EmptyState, Skeleton } from '@/components/ui';
-import { StatRail } from '@/features/marketing/_shared/StatRail';
-import { DeltaBadge } from '@/features/marketing/_shared/DeltaBadge';
+import { HeadlineCard, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
 import { CampaignHighlights, type HighlightCampaign } from '@/features/marketing/_shared/CampaignHighlights';
 import { BestPerformer, type Performer } from '@/features/marketing/_shared/BestPerformer';
-import { computeDelta, type Delta } from '@/features/marketing/_shared/compare';
+import type { Polarity } from '@/features/marketing/_shared/compare';
 
 export interface ChannelTotals {
   spendPence: number;
@@ -147,80 +146,96 @@ export function ChannelSummaryView({
   })));
   const sliceTotal = slices.reduce((a, s) => a + s.value, 0);
 
-  // "£100,147.90 · 1-7 Aug 2026" — the value the percentage is measured
-  // against, named, so the reader can check it rather than trust it.
-  const was = (prev: ChannelTotals | null, fmt: (t: ChannelTotals) => string) =>
-    (prev ? `${fmt(prev)} · ${previousLabel}` : previousLabel);
+  // The Business Hub's own card, not a second one. It already separates arrow
+  // DIRECTION from colour POLARITY (a rising cost per patient is a red
+  // up-arrow), renders an unknowable delta as "no comparison" rather than 0%,
+  // and says "new" instead of an infinite percentage against a zero base. A
+  // second implementation would be a second set of those judgements, free to
+  // drift from the cards the owner already reads every day.
+  const cmp = (
+    current: number | null, previous_: number | null,
+    polarity: Polarity, format: (n: number) => string,
+  ): HeadlineKpi['compare'] => (previous ? {
+    current, previous: previous_, polarity,
+    format: (n) => `${format(n)} · ${previousLabel}`,
+  } : undefined);
 
-  // Polarity matters more than direction: spend rising is neutral, cost per
-  // patient rising is bad, patients rising is good. An arrow coloured by
-  // direction alone would praise a channel for getting more expensive.
-  const d = (pick: (t: ChannelTotals) => number | null, polarity: Parameters<typeof computeDelta>[2]): Delta | null =>
-    previous ? computeDelta(pick(total), pick(previous), polarity) : null;
+  const money = (n: number) => formatPence(n);
+  const count = (n: number) => nf.format(n);
+
+  const cards: HeadlineKpi[] = [
+    {
+      label: 'Spend', value: formatPence(total.spendPence), sub: `Ad spend · ${title}`,
+      chip: null,
+      compare: cmp(total.spendPence, previous?.spendPence ?? null, 'neutral', money),
+    },
+    {
+      label: 'Leads', value: nf.format(total.leads), sub: 'Enquiries attributed to this channel',
+      // The tag carries the figure the headline cannot: what a lead cost.
+      chip: total.cplPence === null ? null : { text: `${formatPence(total.cplPence)} per lead`, tone: 'emerald' },
+      compare: cmp(total.leads, previous?.leads ?? null, 'higher-better', count),
+    },
+    {
+      label: 'Booked', value: nf.format(total.booked), sub: 'Leads that took an appointment',
+      chip: total.leads > 0
+        ? { text: `${((total.booked / total.leads) * 100).toFixed(1)}% of leads`, tone: 'emerald' }
+        : null,
+      compare: cmp(total.booked, previous?.booked ?? null, 'higher-better', count),
+    },
+    {
+      label: 'Patients', value: nf.format(total.accepted), sub: 'Paid over the acceptance floor',
+      chip: total.booked > 0
+        ? { text: `${((total.accepted / total.booked) * 100).toFixed(1)}% of booked`, tone: 'emerald' }
+        : null,
+      compare: cmp(total.accepted, previous?.accepted ?? null, 'higher-better', count),
+    },
+    {
+      // Null, never £0: a cost per no patients is unknowable, not free.
+      label: 'Cost per patient',
+      value: total.cpaPence === null ? '—' : formatPence(total.cpaPence),
+      sub: total.cpaPence === null ? 'No patients yet in this period' : 'Spend ÷ patients acquired',
+      chip: null,
+      compare: cmp(total.cpaPence, previous?.cpaPence ?? null, 'lower-better', money),
+    },
+  ];
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       <div className="flex justify-end">
         <Link href={reportHref} className="text-[12.5px] font-medium text-brand hover:underline">
           Open the full {title} report →
         </Link>
       </div>
 
-      {/* Every card carries its own arrow, always. Direction is half the
-          information in any of these figures — £4,584 of spend means nothing
-          until you know it was £2,100 last month — and behind a button most
-          readers never see it. */}
-      <StatRail
-        stats={[
-          {
-            label: 'Spend', value: formatPence(total.spendPence), accent: true,
-            sub: (
-              <DeltaBadge
-                delta={d((t) => t.spendPence, 'neutral')}
-                previousLabel={was(previous, (t) => formatPence(t.spendPence))}
-              />
-            ),
-          },
-          {
-            label: 'Leads', value: nf.format(total.leads),
-            sub: (
-              <DeltaBadge
-                delta={d((t) => t.leads, 'higher-better')}
-                previousLabel={was(previous, (t) => nf.format(t.leads))}
-              />
-            ),
-          },
-          {
-            label: 'Booked', value: nf.format(total.booked),
-            sub: (
-              <DeltaBadge
-                delta={d((t) => t.booked, 'higher-better')}
-                previousLabel={was(previous, (t) => nf.format(t.booked))}
-              />
-            ),
-          },
-          {
-            label: 'Patients', value: nf.format(total.accepted),
-            sub: (
-              <DeltaBadge
-                delta={d((t) => t.accepted, 'higher-better')}
-                previousLabel={was(previous, (t) => nf.format(t.accepted))}
-              />
-            ),
-          },
-          {
-            // Null, never £0: a cost per no patients is unknowable, not free.
-            label: 'Cost per patient',
-            value: total.cpaPence === null ? '—' : formatPence(total.cpaPence),
-            sub: (
-              <DeltaBadge
-                delta={d((t) => t.cpaPence, 'lower-better')}
-                previousLabel={was(previous, (t) => (t.cpaPence === null ? 'no patients' : formatPence(t.cpaPence)))}
-              />
-            ),
-          },
-        ]}
-      />
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+        {cards.map((c) => <HeadlineCard key={c.label} c={c} />)}
+      </div>
+
+      {/* The winners come BEFORE the charts. A name and a cost is a decision;
+          a chart is context for it, and context read first is just decoration. */}
+      <div>
+        <p className="mb-2 text-[12.5px] font-medium text-ink">Best performer at each level</p>
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
+          {grains.map((g) => (
+            <BestPerformer
+              key={g.href}
+              label={g.label}
+              row={g.row}
+              fallbackName={g.fallbackName}
+              note={g.note ?? null}
+              onOpen={() => onOpenGrain(g.href)}
+            />
+          ))}
+        </div>
+        {grains.every((g) => !g.row) && (
+          <p className="text-[12.5px] text-ink-muted">
+            Nothing converted in this period, so there is no best performer to name yet.
+          </p>
+        )}
+      </div>
+
+      {/* The two campaigns worth a decision this period. */}
+      <CampaignHighlights campaigns={campaigns} onOpenCampaign={onOpenCampaign} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="rounded-panel border border-border bg-surface p-4">
@@ -268,35 +283,6 @@ export function ChannelSummaryView({
         </div>
       </div>
 
-      {/* The two campaigns worth a decision this period. Clicking opens that
-          campaign's leads on the full report rather than a dead end here. */}
-      <CampaignHighlights campaigns={campaigns} onOpenCampaign={onOpenCampaign} />
-
-      {/* What is winning at each grain, and the way through to the table. A
-          bare link told you nothing; the name of the best ad set at the cost
-          it achieved is the decision. Ranked by cost per conversion — the same
-          basis the report pages rank by, so the two cannot disagree about
-          which row is best. */}
-      <div>
-        <p className="mb-2 text-[12.5px] font-medium text-ink">Best performer at each level</p>
-        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
-          {grains.map((g) => (
-            <BestPerformer
-              key={g.href}
-              label={g.label}
-              row={g.row}
-              fallbackName={g.fallbackName}
-              note={g.note ?? null}
-              onOpen={() => onOpenGrain(g.href)}
-            />
-          ))}
-        </div>
-        {grains.every((g) => !g.row) && (
-          <p className="text-[12.5px] text-ink-muted">
-            Nothing converted in this period, so there is no best performer to name yet.
-          </p>
-        )}
-      </div>
     </div>
   );
 }
