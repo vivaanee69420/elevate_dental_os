@@ -74,6 +74,10 @@ export function ImportSummary({ provider }: { provider: string }) {
   });
 
   if (isLoading || error || !data) return null;
+  // An unknown provider must render nothing rather than claim emptiness: "no
+  // rows" and "no registry entry" look identical from here and mean opposite
+  // things to the person reading it.
+  if (!data.known) return null;
 
   const total = data.rows.reduce<number>((a, r) => a + (r.count ?? 0), 0);
   // A run whose progress stopped being written is not running, whatever the

@@ -122,7 +122,14 @@ export const importSummaryRepository = {
 
     /** Row counts per resource for one provider, plus the range its data covers. */
     async summary(orgId, provider) {
-        const resources = PROVIDER_RESOURCES[provider] ?? [];
+        const resources = PROVIDER_RESOURCES[provider];
+        // A provider with no registry entry is UNKNOWN, which is not the same
+        // as empty. Reporting zero rows for it would state, confidently, that a
+        // working integration has pulled nothing — which is exactly what the
+        // Google tile did: its id is `google` (it fronts three separate Google
+        // connections) while the registry key is `google_ads`, so the panel
+        // said "Nothing pulled yet" over 2,961 metric rows.
+        if (!resources) return { known: false, rows: [], span: null };
         const counts = await Promise.all(resources.map((r) => this._count(orgId, r)));
         const rows = resources.map((r, i) => ({ key: r.table, label: r.label, count: counts[i] }));
 
@@ -135,6 +142,6 @@ export const importSummaryRepository = {
                 this._edge(orgId, span, false),
             ]);
         }
-        return { rows, span: span ? { label: span.label, from, to } : null };
+        return { known: true, rows, span: span ? { label: span.label, from, to } : null };
     },
 };

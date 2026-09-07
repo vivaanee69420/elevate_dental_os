@@ -719,6 +719,8 @@ export interface ImportSummaryRow {
 
 export interface ImportSummary {
   provider: string;
+  /** False when the provider has no resource registry — unknown, not empty. */
+  known: boolean;
   rows: ImportSummaryRow[];
   /** The date range this provider's data covers, where one is meaningful. */
   span: { label: string; from: string | null; to: string | null } | null;
