@@ -848,8 +848,20 @@ export const googleReportService = {
                 // that reads as a rendering fault.
                 campaignId: l.campaign_id, campaignName: l.campaign_name,
                 adGroupId: l.ad_group_id, adGroupName: l.ad_group_name,
+                // The individual ad, reachable only through the gclid looked
+                // up in click_view (000178). Null means NOT KNOWN, never "no
+                // ad" — a Performance Max lead is null here for good, because
+                // PMax has asset groups rather than ads.
+                adId: l.ad_id, adName: l.ad_name,
                 keywordId: l.keyword_id, keywordText: l.keyword_text,
                 attribution: l.attribution,
+                // Whether Google gave this lead a click id at all — NOT the id
+                // itself. The front end needs to tell the two causes of an
+                // unattributed lead apart ("never had a click id" vs "had one
+                // we never captured"), and that is a boolean's worth of
+                // information; shipping ~100 characters per lead to answer it
+                // would be a payload's worth.
+                hasClickId: Boolean(l.gclid),
                 // What `accepted` is actually claiming, in money. Shown in
                 // the drill-down so the threshold is visible rather than
                 // implied — £43 and £4,300 are both "Yes" without it.

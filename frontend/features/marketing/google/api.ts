@@ -337,7 +337,8 @@ export interface GoogleCampaignPerformance {
 export interface GoogleAttributionCoverage {
   total: number;
   attributed: number;
-  /** callrail_keyword | callrail_campaign | ghl_campaign -> count. */
+  /** gclid_click | callrail_keyword | callrail_campaign | ghl_campaign ->
+   *  count. */
   byRoute: Record<string, number>;
   /** ghl | callrail -> count of leads with no campaign. The two gaps have
    *  different causes and different fixes. */
@@ -391,10 +392,24 @@ export interface GoogleLeadRow {
   campaignName: string | null;
   adGroupId: string | null;
   adGroupName: string | null;
+  /** The individual ad, from the gclid looked up in click_view (migration
+   *  000178). Only the click route can reach this grain, so null means "not
+   *  known" — never "no ad". A Performance Max lead is null here permanently:
+   *  PMax has asset groups, not ads. */
+  adId: string | null;
+  /** May be null while adId is not: an ad that has not run inside the deep
+   *  tables' rolling 92-day window has no name to look up. */
+  adName: string | null;
   keywordId: string | null;
   keywordText: string | null;
   /** Which route resolved the campaign above. null when none did. */
-  attribution: 'callrail_keyword' | 'callrail_campaign' | 'ghl_campaign' | null;
+  attribution: 'gclid_click' | 'callrail_keyword' | 'callrail_campaign' | 'ghl_campaign' | null;
+  /** Whether Google gave this lead a click id at all. Separates the two causes
+   *  of an unattributed lead: no click id means no route could ever have
+   *  reached it (an iOS click carries gbraid, which click_view cannot look
+   *  up); a click id we could not resolve means the click predates the 90-day
+   *  retention window we started capturing inside. */
+  hasClickId: boolean;
 }
 
 export interface GoogleLeadPerformancePayload {

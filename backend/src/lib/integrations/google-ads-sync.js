@@ -23,6 +23,7 @@ import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 import { londonDaysAgo, londonYmd } from "../tz.js";
 import { syncGoogleDeep, DEEP_WINDOW_DAYS, CAMPAIGN_SHARE_METRICS } from "./google-ads-deep-sync.js";
+import { syncGoogleClicks } from "./google-ads-clicks-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
 
 const INCREMENTAL_DAYS = 90;  // nightly cron window: trailing 3 months (product rule)
@@ -473,6 +474,35 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
             deep = { counts: {}, skipped: [], unsupportedCurrency: [], error: String(err.message).slice(0, 200) };
         }
 
+        // The click behind each lead (google_clicks, migration 000177). Wrapped
+        // exactly like the deep pull and for the same reason: it feeds ad-grain
+        // LEAD attribution, which tolerates being a day stale, and must never
+        // cost the day's spend.
+        //
+        // Accounts: the ones that actually returned campaign rows. An account
+        // with no spend in the window has no clicks to fetch, and the click
+        // sync costs one query PER DAY per account — so including a dead
+        // account would spend 90 doomed requests a night on it.
+        //
+        // Currency is not consulted, unlike the deep pull. A click carries no
+        // money; its ad identity is the same whatever the account bills in, so
+        // partitionAccountsByCurrency would exclude accounts for no reason.
+        let clicks = { clicks: 0, inserted: 0, queries: 0, skipped: [] };
+        try {
+            if (cidsWithRows.length) {
+                report('clicks', 90, { count: cidsWithRows.length });
+                clicks = await syncGoogleClicks(orgId, {
+                    accessToken: access_token,
+                    customerIds: cidsWithRows,
+                    until: untilDate,
+                    queryCustomer: (cid, tok, gaql) => queryCustomer(cid, tok, gaql, customerLogins[cid] ?? null),
+                });
+            }
+        } catch (err) {
+            console.error('[google_ads] click_view sync failed:', err.message);
+            clicks = { clicks: 0, inserted: 0, queries: 0, skipped: [], error: String(err.message).slice(0, 200) };
+        }
+
         // A sync that pulled SOME of what it should have is not a healthy sync,
         // and until now it was recorded as one. Three ways a pull comes back
         // short, all of them previously silent:
@@ -502,6 +532,18 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
             warnings.push(`${skipped.length} account(s) failed this run: ${skipped.map((s) => `${s.cid}: ${s.error}`).join('; ')}`);
         }
         if (deep.error) warnings.push(`deep-grain (ad group/ad/keyword) pull failed: ${deep.error}`);
+        if (clicks.error) warnings.push(`click_view pull failed: ${clicks.error} — leads keep their campaign-level attribution, but new clicks are not being captured, and click_view retains only 90 days.`);
+        // A day lost here is lost PERMANENTLY once it ages past Google's 90-day
+        // retention, so a partial click pull is worth a warning where a partial
+        // spend pull would not be: spend can always be re-fetched, a click
+        // cannot. Days, not accounts — the same account can fail on one day and
+        // succeed on the next.
+        if ((clicks.skipped ?? []).length) {
+            const dayFails = clicks.skipped.filter((s) => s.day);
+            if (dayFails.length) {
+                warnings.push(`${dayFails.length} click_view day-pull(s) failed this run — those days are retried until they age past Google's 90-day retention, after which they are unrecoverable.`);
+            }
+        }
 
         // 4. A single GRAIN came back short while the rest of the pull
         //    succeeded. This was the one remaining silent case, and it is not
@@ -531,7 +573,7 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'google_ads',
             warnings.length ? warnings.join(' | ').slice(0, 500) : null);
-        return { rows: all.length, customers: customerIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), permanentlySkipped: [...permanent], deep };
+        return { rows: all.length, customers: customerIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), permanentlySkipped: [...permanent], deep, clicks };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'google_ads', String(err.message).slice(0, 500));
         throw err;

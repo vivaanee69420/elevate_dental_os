@@ -83,12 +83,15 @@ export function CampaignLeads({
                 </td>
                 <td className="py-1.5 pr-3 align-top">
                   {/* The exact search that bought this person, where we have
-                      it. Only calls carry a keyword, and Performance Max never
-                      does, so the ad group is the honest fallback and a plain
-                      dash is the honest last resort. */}
+                      it — then the ad, then the ad group it sits in. Since
+                      migration 000178 the keyword comes from the click itself
+                      rather than only from calls, so this is populated for web
+                      form leads too. Performance Max reaches none of the three
+                      (it has asset groups, not ads), and a plain dash is the
+                      honest last resort there. */}
                   {l.keywordText
                     ? <span className="text-ink">&ldquo;{l.keywordText}&rdquo;</span>
-                    : <span className="text-ink-muted">{l.adGroupName ?? DASH}</span>}
+                    : <span className="text-ink-muted">{l.adName ?? l.adGroupName ?? DASH}</span>}
                   <span className="block text-[11px] text-ink-muted">
                     {l.source === 'callrail' ? 'Call' : 'Web form'}
                   </span>

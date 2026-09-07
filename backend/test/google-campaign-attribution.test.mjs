@@ -65,6 +65,7 @@ function lead(overrides = {}) {
         treatment: null, booked: true, accepted: true, is_new_patient: true, paid_pence: 20000,
         campaign_id: 'CMP1', campaign_name: 'Implants',
         ad_group_id: 'AG1', ad_group_name: 'Exact', keyword_id: 'K1', keyword_text: 'dental implants',
+        ad_id: 'AD1', ad_name: 'Dental Implants - Barnet',
         gclid: 'abc', attribution: 'callrail_keyword',
         ...overrides,
     };
@@ -193,20 +194,80 @@ describe('campaignLeadPerformance', () => {
     });
 });
 
+// Migration 000178: the click route. The ledger resolves these in SQL, so what
+// is testable here is that the service carries the ad grain through intact and
+// does not quietly turn "not known" into "no ad".
+describe('ad grain from the click route', () => {
+    it('passes the ad id and name through to the lead row', async () => {
+        marketingRepository.googleLeadLedger.mockResolvedValue([
+            lead({ attribution: 'gclid_click' }),
+        ]);
+        const out = await googleReportService.leadPerformance(ORG, { since: '2026-08-01', until: '2026-08-31' });
+        expect(out.leads[0]).toMatchObject({
+            adId: 'AD1', adName: 'Dental Implants - Barnet', attribution: 'gclid_click',
+        });
+    });
+
+    // A PMax lead: campaign known, nothing below it, for good. The row must
+    // carry nulls rather than be dropped or defaulted — its campaign spend is
+    // real and its absence from the ad tier is the honest answer.
+    it('keeps a PMax lead with a campaign and a null ad', async () => {
+        marketingRepository.googleLeadLedger.mockResolvedValue([
+            lead({
+                campaign_id: 'PMAX1', campaign_name: 'PMAX Cosmetic',
+                ad_group_id: null, ad_group_name: null, ad_id: null, ad_name: null,
+                keyword_id: null, keyword_text: null, attribution: 'gclid_click',
+            }),
+        ]);
+        const out = await googleReportService.leadPerformance(ORG, { since: '2026-08-01', until: '2026-08-31' });
+        expect(out.leads).toHaveLength(1);
+        expect(out.leads[0].adId).toBeNull();
+        expect(out.leads[0].campaignId).toBe('PMAX1');
+    });
+
+    // An ad that has not run inside the deep tables' 92-day window has an id
+    // but no name. The id must survive: it is pasteable into Google, which a
+    // blank is not.
+    it('keeps the ad id when the name could not be looked up', async () => {
+        marketingRepository.googleLeadLedger.mockResolvedValue([
+            lead({ ad_id: 'AD9', ad_name: null, attribution: 'gclid_click' }),
+        ]);
+        const out = await googleReportService.leadPerformance(ORG, { since: '2026-08-01', until: '2026-08-31' });
+        expect(out.leads[0]).toMatchObject({ adId: 'AD9', adName: null });
+    });
+
+    // hasClickId is what the "Not attributed" card uses to separate a lead
+    // nothing could ever have reached from one whose click aged out. It must
+    // be a boolean, never the id itself — the id is ~100 characters per lead
+    // and the front end has no use for it.
+    it('reports whether a click id exists without shipping the id', async () => {
+        marketingRepository.googleLeadLedger.mockResolvedValue([
+            lead({ phone10: '1', gclid: 'abc' }),
+            lead({ phone10: '2', gclid: null, campaign_id: null, attribution: null }),
+        ]);
+        const out = await googleReportService.leadPerformance(ORG, { since: '2026-08-01', until: '2026-08-31' });
+        expect(out.leads.map((l) => l.hasClickId)).toEqual([true, false]);
+        expect(out.leads[0]).not.toHaveProperty('gclid');
+    });
+});
+
 describe('attributionCoverage', () => {
     const { attributionCoverage } = __test;
 
     it('counts each resolution route and the unattributed remainder by source', () => {
         const out = attributionCoverage([
+            lead({ phone10: '0', attribution: 'gclid_click' }),
             lead({ phone10: '1', attribution: 'callrail_keyword' }),
             lead({ phone10: '2', attribution: 'callrail_campaign' }),
             lead({ phone10: '3', source: 'ghl', attribution: 'ghl_campaign' }),
             lead({ phone10: '4', source: 'ghl', campaign_id: null, attribution: null }),
             lead({ phone10: '5', source: 'callrail', campaign_id: null, attribution: null }),
         ]);
-        expect(out.total).toBe(5);
-        expect(out.attributed).toBe(3);
-        expect(out.byRoute).toEqual({ callrail_keyword: 1, callrail_campaign: 1, ghl_campaign: 1 });
+        expect(out.total).toBe(6);
+        expect(out.attributed).toBe(4);
+        expect(out.byRoute).toEqual({
+            gclid_click: 1, callrail_keyword: 1, callrail_campaign: 1, ghl_campaign: 1,
+        });
         // Split BY SOURCE because the two gaps have different causes and
         // different fixes: a CallRail miss is a tracking-template problem, a
         // GoHighLevel miss is a landing-page/ValueTrack problem.

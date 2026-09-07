@@ -59,12 +59,13 @@ function asCards(rows: Stat[]): HeadlineKpi[] {
   }));
 }
 
-type Bucket = 'leads' | 'booked' | 'accepted';
+type Bucket = 'leads' | 'booked' | 'accepted' | 'unattributed';
 
 const BUCKET_LABEL: Record<Bucket, string> = {
   leads: 'Leads',
   booked: 'Booked',
   accepted: 'Accepted patients',
+  unattributed: 'Leads with no campaign',
 };
 
 // How each lead was tied to a campaign, in words. Shown in the drill-down so
@@ -73,6 +74,11 @@ const BUCKET_LABEL: Record<Bucket, string> = {
 // the patient, a campaign match names only the campaign, and Performance Max
 // can never do better than the second because it has no keywords at all.
 const ROUTE_LABEL: Record<string, string> = {
+  // Named for the EVIDENCE, not the source system, because that is the
+  // difference a reader needs: the click route is Google's own record of what
+  // was clicked, the other three are inferences about it from a campaign name
+  // or a URL parameter.
+  gclid_click: 'Click (Google)',
   callrail_keyword: 'Keyword (call)',
   callrail_campaign: 'Campaign (call)',
   ghl_campaign: 'Campaign (form)',
@@ -146,6 +152,11 @@ export function GooglePerformancePanel({
     // otherwise — the same `eligible` gate the service applied.
     const eligible = (l: GoogleLeadRow) => includeExisting || l.isNewPatient;
     if (openBucket === 'booked') return data.leads.filter((l) => l.booked && eligible(l));
+    // NOT gated by `eligible`: this bucket counts an attribution gap, and a
+    // returning patient's lead is exactly as unattributed as a new one's.
+    // Gating it would make the card disagree with its own list whenever the
+    // existing-patients toggle moved.
+    if (openBucket === 'unattributed') return data.leads.filter((l) => !l.campaignId);
     return data.leads.filter((l) => l.accepted && eligible(l));
   }, [data, openBucket, includeExisting]);
 
@@ -308,6 +319,32 @@ export function GooglePerformancePanel({
     },
   ];
 
+  // ATTRIBUTION COVERAGE, not performance — which is why it sits apart from
+  // the five cost cards above and carries no comparison badge. An arrow on it
+  // would imply a verdict ("attribution improved 12%") on a figure that moves
+  // with how much PMax ran and how many callers withheld a number.
+  //
+  // Counted from data.leads rather than read from data.attribution, so the
+  // card and the list it opens are the SAME filter and cannot drift apart.
+  // data.leads is the complete deduplicated set — the repository pages the
+  // ledger RPC to exhaustion — so this is a population, not a page (see
+  // aggregate-from-a-capped-list).
+  const unattributed = (data?.leads ?? []).filter((l) => !l.campaignId);
+  const noClickId = unattributed.filter((l) => !l.hasClickId).length;
+  const coverageStat: Stat = {
+    label: 'Not attributed',
+    value: num(unattributed.length),
+    // Says WHY, not just how many. A lead with no gclid was never reachable
+    // by any route; one WITH a gclid whose click we never captured is the
+    // 90-day retention floor, and that number should fall as google_clicks
+    // fills. Two different causes, two different things to do about them.
+    sub: unattributed.length === 0
+      ? `Every lead tied to a campaign`
+      : `of ${num(total.leads)} leads · ${num(noClickId)} with no click id`,
+    onClick: () => toggle('unattributed'),
+    active: openBucket === 'unattributed',
+  };
+
   // Rows are the UNION of both periods, not just this one. The service builds
   // a practice row only where there was spend or a lead, so a practice that
   // spent last period and nothing this one is simply absent — and dropping it
@@ -400,7 +437,7 @@ export function GooglePerformancePanel({
       </div>
 
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
-        {asCards(stats).map((c) => <HeadlineCard key={c.label} c={c} />)}
+        {asCards([...stats, coverageStat]).map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
 
       {/* Same reason as the Facebook panel: these cards are sums over the
@@ -503,7 +540,13 @@ const LEAD_COLUMNS: GridColumn<GoogleLeadRow>[] = [
     // when there is no keyword (Performance Max never has one).
     sub: (r) => (r.keywordText
       ? <span>&ldquo;{r.keywordText}&rdquo;</span>
-      : (r.adGroupName ?? (r.attribution ? ROUTE_LABEL[r.attribution] : null))),
+      // Falling back through the hierarchy, most specific first. The ad is
+      // named by its own label or its first headline (see parseAds), so it
+      // reads as something a person wrote — worth more here than the ad group
+      // it sits in. The route label is the last resort: when we can name
+      // nothing below the campaign, say HOW the campaign was decided rather
+      // than leaving the line blank.
+      : (r.adName ?? r.adGroupName ?? (r.attribution ? ROUTE_LABEL[r.attribution] : null))),
   },
   {
     key: 'treatment', header: 'Treatment (Dentally)', align: 'left',
