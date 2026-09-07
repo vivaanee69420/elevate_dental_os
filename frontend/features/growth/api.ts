@@ -302,16 +302,39 @@ export interface MarketingRoiResponse {
   impressions: number;
   clicks: number;
   conversions: number;
+  // Real, whole people from the Facebook/Google lead ledgers — the same source
+  // those two report pages use. It used to be a sum of ad_metrics.conversions,
+  // the platforms' own modelled conversion count, which is why the card could
+  // show a FRACTIONAL "4,692.66 ad leads" against a true 735.
   leads_from_ads: number;
+  leads_basis: 'crm_ledger' | 'none';
+  // What the ad platforms themselves claimed. Still useful, no longer pretending
+  // to be people.
+  platform_conversions: number;
+  paid_by_provider: {
+    provider: 'google_ads' | 'meta_ads';
+    state: string;
+    spendPence: number; leads: number; booked: number; accepted: number;
+    cplPence: number | null; cpbPence: number | null; cpaPence: number | null;
+  }[];
+  // Spend on ad accounts mapped to no practice — excluded from spend_pence,
+  // reported so it is never silently dropped.
+  unmapped_spend_pence: number;
   total_leads: number;
   new_patients: number;
   revenue_pence: number;
-  roas: number;            // revenue / spend
+  roas: number;            // ALL settled revenue / spend — not ad-attributed
   cac_pence: number;       // spend / new patients
   ltv_pence: number;       // patient LTV from baseline (0 if no baseline)
   ltv_cac_ratio: number;   // ltv / cac (0 when either is unavailable)
-  cpl_pence: number;       // spend / ad-attributed leads
-  cpa_pence: number;       // spend / conversions
+  // null, never 0, when there are no attributed leads: a cost per nothing is
+  // unknowable, and formatPence renders 0 as a confident "£0.00".
+  cpl_pence: number | null;             // spend / ledger leads
+  cost_per_booking_pence: number | null;
+  cost_per_accepted_pence: number | null;
+  booked_from_ads: number;
+  accepted_from_ads: number;
+  cpa_pence: number;       // spend / platform conversions
   cpc_pence: number;
   account_filter: string[] | null; // null = all; [] = none
   by_provider: AdProviderRoi[];
