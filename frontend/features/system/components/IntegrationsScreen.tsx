@@ -198,6 +198,10 @@ export default function IntegrationsScreen() {
     const provider = params.get('provider') ?? connected ?? '';
     if (connected) {
       setNotice({ kind: 'success', title: 'Connected', message: `${connected} is now connected.` });
+      // GoHighLevel's consent authorises ONE location, and the new subaccount
+      // still needs mapping to a practice — so land the owner on the panel
+      // that shows it rather than on a tile they have to find and open.
+      if (connected === 'gohighlevel') setOpenTile('gohighlevel');
     } else if (err) {
       setNotice({ kind: 'error', ...explainOauthError(err, provider) });
     }

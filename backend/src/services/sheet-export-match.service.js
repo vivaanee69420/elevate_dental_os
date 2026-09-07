@@ -54,9 +54,9 @@ async function refreshAccountPipelines(orgId, accountId) {
     try {
         const acc = await integrationAccountRepository.getByIdWithSecrets(orgId, accountId);
         if (!acc?.secrets) return out;
-        const { decryptSecret } = await import('../lib/crypto.js');
-        const { detectPipelinesForToken } = await import('../lib/integrations/gohighlevel-sync.js');
-        const { access_token } = JSON.parse(decryptSecret(acc.secrets));
+        const { detectPipelinesForToken, ensureAccountToken } = await import('../lib/integrations/gohighlevel-sync.js');
+        // Refreshes an OAuth account's token first; a PIT account is untouched.
+        const access_token = await ensureAccountToken(orgId, acc);
         const { pipelines = [] } = await detectPipelinesForToken(access_token, acc.external_account_id);
         if (pipelines.length) {
             await integrationAccountRepository.mergeConfig(orgId, accountId, { pipelines });

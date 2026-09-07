@@ -14,7 +14,26 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     },
 }));
 
+vi.mock('../src/repositories/integration-account.repository.js', () => ({
+    integrationAccountRepository: {
+        getByLocation: vi.fn().mockResolvedValue(null),
+        insert: vi.fn(async (orgId, fields) => ({ id: 'acct-1', ...fields })),
+        update: vi.fn(async (orgId, id, patch) => ({ id, ...patch })),
+    },
+}));
+
+// The OAuth callback fires a first pull; stub the sync so the test does not
+// reach the network, and so the bootstrap call itself can be asserted.
+const bootstrapAccount = vi.fn().mockResolvedValue({});
+const fetchLocation = vi.fn().mockResolvedValue({ id: 'loc-9', name: 'Rochester' });
+vi.mock('../src/lib/integrations/gohighlevel-sync.js', () => ({
+    bootstrapAccount: (...a) => bootstrapAccount(...a),
+    fetchLocation: (...a) => fetchLocation(...a),
+    syncOneOrg: vi.fn().mockResolvedValue({}),
+}));
+
 import { integrationRepository } from '../src/repositories/integration.repository.js';
+import { integrationAccountRepository } from '../src/repositories/integration-account.repository.js';
 import { GoHighLevelProvider } from '../src/lib/integrations/gohighlevel-provider.js';
 import { decryptSecret, encryptSecret } from '../src/lib/crypto.js';
 
@@ -58,7 +77,7 @@ describe('authorize — broker fallback when OAuth not configured', () => {
 });
 
 describe('callback — OAuth code exchange', () => {
-    it('exchanges the code and persists tokens + locationId from GHL', async () => {
+    it('stores the connection as an integration_accounts row, NOT on the marker row', async () => {
         Object.assign(process.env, OAUTH_ENV);
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true,
@@ -70,7 +89,7 @@ describe('callback — OAuth code exchange', () => {
         vi.stubGlobal('fetch', fetchMock);
 
         const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
-        expect(res).toMatchObject({ ok: true, locationId: 'loc-9' });
+        expect(res).toMatchObject({ ok: true, locationId: 'loc-9', accountId: 'acct-1' });
 
         // Token endpoint hit with form-urlencoded grant_type + matching redirect_uri.
         const [url, opts] = fetchMock.mock.calls[0];
@@ -79,11 +98,59 @@ describe('callback — OAuth code exchange', () => {
         expect(opts.body).toContain('user_type=Location');
         expect(opts.body).toContain(encodeURIComponent('https://api.example.com/oauth/leadconnector/callback'));
 
-        const arg = integrationRepository.upsertSecrets.mock.calls[0][2];
-        expect(arg.config.locationId).toBe('loc-9');
-        expect(arg.status).toBe('active');
-        expect(arg.expires_at).toBeTruthy();
-        expect(JSON.parse(decryptSecret(arg.secrets))).toEqual({ access_token: 'at-1', refresh_token: 'rt-1' });
+        // THE point of this test. The nightly worker iterates
+        // integration_accounts and never reads the marker row, so tokens
+        // written there would authenticate, show "Connected", and never sync.
+        expect(integrationRepository.upsertSecrets).not.toHaveBeenCalled();
+        const [orgId, fields] = integrationAccountRepository.insert.mock.calls[0];
+        expect(orgId).toBe('org-1');
+        expect(fields.provider).toBe('gohighlevel');
+        expect(fields.external_account_id).toBe('loc-9');
+        expect(fields.status).toBe('active');
+        expect(fields.webhook_token).toMatch(/^[0-9a-f]{48}$/);
+        expect(JSON.parse(decryptSecret(fields.secrets))).toEqual({ access_token: 'at-1', refresh_token: 'rt-1' });
+        // config.auth is what tells the sync this token expires.
+        expect(fields.config.auth).toBe('oauth');
+        expect(fields.config.companyId).toBe('co-1');
+        expect(Date.parse(fields.config.expires_at)).toBeGreaterThan(Date.now());
+        // Marker row still flips to active — that is what the tile reads.
+        expect(integrationRepository.upsert).toHaveBeenCalledWith('org-1', 'gohighlevel', { status: 'active', last_error: null });
+        // And the first pull runs, exactly as adding a token does.
+        await new Promise((r) => setImmediate(r));
+        expect(bootstrapAccount).toHaveBeenCalledWith('org-1', 'acct-1');
+    });
+
+    it('re-authorising a connected Location updates that row instead of adding a second', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        integrationAccountRepository.getByLocation.mockResolvedValueOnce({
+            id: 'acct-existing', config: { practice_hint: 'keep-me' },
+        });
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 86399, locationId: 'loc-9' }),
+        }));
+
+        await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
+
+        // A second row for one Location would double every figure it feeds.
+        expect(integrationAccountRepository.insert).not.toHaveBeenCalled();
+        const [, id, patch] = integrationAccountRepository.update.mock.calls[0];
+        expect(id).toBe('acct-existing');
+        expect(patch.status).toBe('active');
+        // Existing config survives — the practice mapping lives there.
+        expect(patch.config.practice_hint).toBe('keep-me');
+        expect(patch.config.auth).toBe('oauth');
+    });
+
+    it('refuses an authorisation that returns no locationId', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+            ok: true, json: async () => ({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 86399 }),
+        }));
+        // Without a Location there is nothing to sync, and a row keyed on null
+        // would collide with the next one.
+        await expect(GoHighLevelProvider.callback('org-1', { code: 'x' })).rejects.toThrow(/locationId/i);
+        expect(integrationAccountRepository.insert).not.toHaveBeenCalled();
     });
 
     it('marks the row failed and throws on a token error', async () => {
@@ -93,7 +160,18 @@ describe('callback — OAuth code exchange', () => {
         }));
         await expect(GoHighLevelProvider.callback('org-1', { code: 'x' })).rejects.toThrow(/bad code/);
         expect(integrationRepository.markFailed).toHaveBeenCalled();
-        expect(integrationRepository.upsertSecrets).not.toHaveBeenCalled();
+        expect(integrationAccountRepository.insert).not.toHaveBeenCalled();
+    });
+});
+
+describe('authStyle — the token path stays reachable', () => {
+    it('offers the key paste when the owner asks for it, even with OAuth configured', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        // Declaring plain 'oauth' would make this unreachable for a FIRST
+        // connection, because the tile's Connect button redirects immediately.
+        const res = await GoHighLevelProvider.authorize('org-1', { method: 'key' });
+        expect(res).toMatchObject({ requiresKeyPaste: true, requiresLocationId: true });
+        expect(res.redirectUrl).toBeUndefined();
     });
 });
 

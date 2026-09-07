@@ -5,9 +5,8 @@ import { verifyState } from "../lib/oauth-state.js";
 import { deleteAccountPermanently, accountDeleteImpact } from "../services/integration-account-delete.service.js";
 import { ghlAccountService } from "../services/ghl-account.service.js";
 import { quickbooksAccountService } from "../services/quickbooks-account.service.js";
-import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
+import { syncAccount, detectPipelinesForToken, ensureAccountToken } from "../lib/integrations/gohighlevel-sync.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
-import { decryptSecret } from "../lib/crypto.js";
 import { ghlAccountCreateSchema, ghlAccountUpdateSchema, ghlDashboardQuerySchema, callrailAccountCreateSchema, callrailAccountUpdateSchema, callrailDiscoverSchema, callrailBulkConnectSchema } from "../models/integration.model.js";
 import { isAgencyActor } from "../middleware/agency.js";
 import { ghlDashboardService } from "../services/ghl-dashboard.service.js";
@@ -347,7 +346,10 @@ export const integrationController = {
         const orgId = req.user.organisation_id;
         const acc = await integrationAccountRepository.getByIdWithSecrets(orgId, id);
         if (!acc || !acc.secrets) { res.json({ pipelines: [], error: 'no_auth' }); return; }
-        const { access_token } = JSON.parse(decryptSecret(acc.secrets));
+        // Through ensureAccountToken, not straight off the row: an OAuth
+        // account's token is a day old at most, and reading it raw would empty
+        // the stage-mapping picker for any account connected by OAuth.
+        const access_token = await ensureAccountToken(orgId, acc);
         res.json(await detectPipelinesForToken(access_token, acc.external_account_id));
     },
     async ghlAccountStageMappings(req, res) {

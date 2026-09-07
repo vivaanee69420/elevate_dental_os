@@ -27,6 +27,10 @@ vi.mock('../src/lib/crypto.js', () => ({
 }));
 vi.mock('../src/lib/integrations/gohighlevel-sync.js', () => ({
   detectPipelinesForToken: vi.fn(async () => ({ pipelines: [] })),
+  // The account's token now goes through the refresh seam, so an OAuth
+  // subaccount's expired token is rolled forward before GHL is called. A
+  // token account passes straight through, which is what this stub models.
+  ensureAccountToken: vi.fn(async () => 'tok-live'),
 }));
 
 vi.mock('../src/repositories/integration.repository.js', () => ({

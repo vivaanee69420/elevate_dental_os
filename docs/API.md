@@ -775,6 +775,12 @@ on failure redirects with `?error=<message>&provider=<provider>`. Used by GoHigh
 Requires env: `OAUTH_STATE_SECRET`, `BACKEND_PUBLIC_URL`, plus per-provider
 `GHL_CLIENT_ID` / `GHL_CLIENT_SECRET`.
 
+**GoHighLevel's public slug is `leadconnector`, not `gohighlevel`.** Its callback
+is `GET /oauth/leadconnector/callback`, because GHL's marketplace rejects any
+redirect URI containing "highlevel" or "ghl". The controller aliases the slug
+back to the internal provider key, and the signed state carries `gohighlevel`
+either way. Register `${BACKEND_PUBLIC_URL}/oauth/leadconnector/callback`.
+
 ## Integrations (authenticated — owner only)
 
 ### `POST /api/integrations/connect`
@@ -785,6 +791,40 @@ sends the browser there). GoHighLevel → `marketplace.leadconnectorhq.com/oauth
 Dentally accepts both connect methods, selected by `method` on the body:
 - `{ provider: 'dentally', method: 'oauth' }` (default when `method` omitted) → `{ redirectUrl }` to `https://api.dentally.co/oauth/authorize`. The browser returns to the public `GET /oauth/dentally/callback` (no auth; org from signed state), which exchanges the code, stores the rotating `{access_token, refresh_token}` (encrypted) with `expires_at`, and redirects to `${FRONTEND_URL}/integrations?connected=dentally`. First connect then runs the Dentally bootstrap (detect sites → map practices → pull).
 - `{ provider: 'dentally', method: 'key' }` → `{ requiresKeyPaste: true, pasteHint }`. Post the token to `POST /api/integrations/dentally/callback` with `{ apiKey }` (stored encrypted, `expires_at: null` — long-lived, never refreshed).
+
+#### GoHighLevel — OAuth2 or Private Integration Token (hybrid, one subaccount per connect)
+`GHL_CLIENT_ID` being set is the whole switch: with it the provider reports
+`authStyle: 'oauth_or_key'`, without it `broker_key`, and the tile follows.
+
+- `{ provider: 'gohighlevel' }` → `{ redirectUrl }` to
+  `marketplace.gohighlevel.com/oauth/chooselocation`. One consent authorises ONE
+  Location, so the callback writes an **`integration_accounts` row** — the same
+  place a pasted token lands — with `secrets {access_token, refresh_token}` and
+  `config.auth = 'oauth'`, then fires the same first pull `addAccount` does. The
+  single `integrations` row is only flipped to `active` as the tile's connected
+  marker; it holds **no OAuth secrets**, because the nightly worker iterates
+  `integration_accounts` (`listAllSyncable`) and never reads the marker row.
+  Re-authorising a Location already connected UPDATES that row rather than
+  adding a second (its practice mapping and webhook token survive).
+- `{ provider: 'gohighlevel', method: 'key' }` → `{ requiresKeyPaste: true,
+  requiresLocationId: true, pasteHint }`, unchanged. Still the only route for a
+  Location the person setting this up cannot sign in to, so it stays offered
+  once OAuth is configured — via the tile menu, and as "Add with token" in the
+  subaccount panel.
+
+OAuth and token subaccounts coexist and sync identically. Refresh happens in the
+sync path: `ensureAccountToken` (`gohighlevel-sync.js`) rolls an OAuth token
+forward when it is within 10 minutes of expiry — or carries no expiry — under
+`integrationAccountRepository.claimRefresh`, because GHL rotates the refresh
+token on use and two concurrent syncs would otherwise each spend it. A token row
+has no `refresh_token` and passes through untouched. `integration_accounts` has
+no `expires_at` column, so the expiry lives in `config.expires_at`.
+
+Scopes requested (all read-only, exactly what the sync calls): `contacts.readonly`,
+`opportunities.readonly`, `locations.readonly`, `workflows.readonly`,
+`calendars.readonly`, `calendars/events.readonly`, `conversations.readonly`,
+`conversations/message.readonly`. Override with `GHL_SCOPES`; `GHL_AUTH_BASE` and
+`GHL_TOKEN_URL` default to production.
 
 Token refresh is automatic in the sync path: `resolveDentallyAuth` refreshes a near-expiry OAuth access token (5-min skew) under a single-use-refresh-token claim guard, and the long backfill pagers retry once on a 401 by refreshing. API-key rows never refresh. `POST /api/integrations/dentally/refresh` forces a manual refresh. Env: `DENTALLY_CLIENT_ID`/`DENTALLY_CLIENT_SECRET`, optional `DENTALLY_AUTH_BASE` (default `https://api.dentally.co`) / `DENTALLY_SCOPES`; prod `BACKEND_PUBLIC_URL` must equal the host registered as the Dentally redirect URI (exact match) or OAuth is rejected.
 

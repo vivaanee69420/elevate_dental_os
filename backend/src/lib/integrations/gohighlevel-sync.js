@@ -31,7 +31,8 @@ import { integrationRepository } from '../../repositories/integration.repository
 import { markBootstrapStarted, markBootstrapFinished } from './bootstrap-recovery.js';
 import { integrationAccountRepository } from '../../repositories/integration-account.repository.js';
 import { ghlAppointmentRepository } from '../../repositories/ghl-appointment.repository.js';
-import { decryptSecret } from '../crypto.js';
+import { decryptSecret, encryptSecret } from '../crypto.js';
+import { exchangeRefreshToken } from './gohighlevel-provider.js';
 import { GoHighLevelProvider } from './gohighlevel-provider.js';
 import { syncConversations } from './gohighlevel-conversations.js';
 import { extractAttribution } from './ghl-attribution.js';
@@ -43,6 +44,9 @@ import * as Sentry from '@sentry/node';
 const API_BASE = 'https://services.leadconnectorhq.com';
 const API_VERSION = '2021-07-28';
 const PER_PAGE = 100;
+// Refresh an OAuth token this far ahead of its expiry, so a token cannot go
+// stale part-way through a pull that runs for minutes.
+export const TOKEN_SKEW_MS = 10 * 60 * 1000;
 export const MAX_PAGES = 50;            // routine/incremental cap (~5k rows/resource) — bounded so a foreground Refresh stays fast
 const BOOTSTRAP_MAX_PAGES = 500; // full-history / on-connect pull cap (~50k rows/resource)
 // Contacts get their OWN cap, and it is the full one on every run.
@@ -1030,6 +1034,63 @@ export async function pullAppointments(orgId, account, accessToken, locationId, 
     return { appointments: total, calendars: calendars.length };
 }
 
+/**
+ * Return a usable access token for an account row, refreshing first if the
+ * row's OAuth token is spent.
+ *
+ * A Private Integration Token does not expire, so the original code read
+ * `secrets.access_token` once and used it — correct for every account that
+ * existed when it was written. An OAuth access token lasts about a day, so
+ * without this the nightly worker would authenticate for one day and then fail
+ * every night after, with a row still marked active.
+ *
+ * A PIT row has no refresh_token and is returned untouched.
+ *
+ * GHL rotates the refresh token on use: the response's refresh_token replaces
+ * the one just spent, and using a spent token invalidates the connection. Two
+ * concurrent syncs of one account would each spend it, so the refresh is
+ * guarded by the repository's claim flag and the loser reuses the token it
+ * already holds — still valid, since we refresh on a skew margin rather than
+ * at the instant of expiry.
+ */
+export async function ensureAccountToken(orgId, account) {
+    const secrets = JSON.parse(decryptSecret(account.secrets));
+    const refreshToken = secrets.refresh_token;
+    if (account.config?.auth !== 'oauth' || !refreshToken) return secrets.access_token;
+
+    const expiresAt = account.config?.expires_at ? Date.parse(account.config.expires_at) : 0;
+    // Refresh a token that is merely CLOSE to expiry, so a long pull cannot
+    // expire mid-run, and so an unparseable/absent expiry refreshes rather
+    // than gambles on a token we cannot date.
+    if (Number.isFinite(expiresAt) && expiresAt - Date.now() > TOKEN_SKEW_MS) {
+        return secrets.access_token;
+    }
+
+    const claimed = await integrationAccountRepository.claimRefresh(orgId, account.id);
+    if (!claimed) return secrets.access_token;
+    try {
+        const body = await exchangeRefreshToken(refreshToken);
+        await integrationAccountRepository.update(orgId, account.id, {
+            secrets: encryptSecret(JSON.stringify({
+                access_token: body.access_token,
+                // GHL may omit a new refresh token; keeping the current one is
+                // right in that case and fatal to drop.
+                refresh_token: body.refresh_token ?? refreshToken,
+            })),
+        });
+        await integrationAccountRepository.mergeConfig(orgId, account.id, {
+            expires_at: body.expires_in
+                ? new Date(Date.now() + body.expires_in * 1000).toISOString()
+                : null,
+        });
+        return body.access_token;
+    } finally {
+        // Always released: a stuck claim flag would block every future refresh
+        // for this account, which fails silently a day later.
+        await integrationAccountRepository.clearRefresh(orgId, account.id);
+    }
+}
+
 // Account-driven sync: same pull/upsert engine as syncOneOrg, but creds come
 // from an integration_accounts row (its own PIT + locationId), pipelines/last_sync
 // persist to the account row. This is the multi-subaccount path.
@@ -1038,7 +1099,7 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
     if (!account || account.status === 'revoked' || !account.secrets) {
         return { synced: 0, skipped: 'inactive' };
     }
-    const { access_token } = JSON.parse(decryptSecret(account.secrets));
+    const access_token = await ensureAccountToken(orgId, account);
     const locationId = account.external_account_id;
     if (!access_token || !locationId) return { synced: 0, skipped: 'no_location' };
     const stageMappings = account.config?.stage_mappings ?? {};
@@ -1109,7 +1170,13 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
         // newest-first + `since` keeps routine runs to what actually changed.
         let convResult = { conversations: 0, messages: 0 };
         try {
-            convResult = await syncConversations(orgId, { secrets: account.secrets, config: { locationId } }, {
+            // The LIVE token, re-wrapped in the shape syncConversations reads —
+            // never `account.secrets`, which is the blob as it was loaded and is
+            // stale the moment an OAuth token gets refreshed above. The phase is
+            // defensive, so a 401 here would have shown up as zero conversations
+            // rather than an error.
+            const convAuth = { secrets: encryptSecret(JSON.stringify({ access_token })), config: { locationId } };
+            convResult = await syncConversations(orgId, convAuth, {
                 since, integrationAccountId: accountId, onProgress,
                 maxConversations: (full || recent) ? 5000 : 1000,
             });
