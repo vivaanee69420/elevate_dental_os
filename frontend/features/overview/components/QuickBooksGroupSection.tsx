@@ -31,14 +31,34 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine,
 } from 'recharts';
 import { ChevronRight } from 'lucide-react';
-import { Card } from '@/components/ui';
-import { SectionFilterPills } from '@/features/_shared/SectionFilterPills';
+import { Card, Chip, type ChipColour } from '@/components/ui';
+import { SectionFilterPills, PillRow, Pill } from '@/features/_shared/SectionFilterPills';
+import { HeadlineCard, SectionLabel } from './HeadlineCard';
 import { useScopePeriod, londonMonthWindow } from '@/features/_shared/scope-context';
 import { getQuickBooksOverview, type QbMethod } from '@/features/finance/quickbooks-api';
 
 const DASH = '—';
 
-const gbp = (pence: number) => '£' + Math.round((pence || 0) / 100).toLocaleString('en-GB');
+// Straight from the theme (tailwind.config: brand / danger). The greens and
+// reds used here before were stock Tailwind hexes that belong to no token in
+// this design system, so money read in a different green from every other
+// accent on the page.
+const POSITIVE = '#1D6E5F'; // brand
+const NEGATIVE = '#C25F4D'; // danger
+const BAR_REVENUE = '#9FCBBC'; // brand-200
+const GRID = '#DCE4DF'; // border
+
+// -£19,466, never "£-19,466". A bank balance and a loss-making company both
+// go negative here, and the sign belongs in front of the amount.
+const gbp = (pence: number) => {
+  const n = Math.round((pence || 0) / 100);
+  return `${n < 0 ? '-' : ''}£${Math.abs(n).toLocaleString('en-GB')}`;
+};
+
+// Net margin as a number, for tone thresholds. Zero revenue -> 0, and the
+// caller must not render a chip at all in that case (see marginOf).
+const marginPct = (s: { netProfitPence: number; revenuePence: number }): number =>
+  s.revenuePence > 0 ? (s.netProfitPence / s.revenuePence) * 100 : 0;
 
 // A margin needs a denominator. Zero revenue makes it unknowable, not 0%.
 const marginOf = (netPence: number, revPence: number): string =>
@@ -103,7 +123,7 @@ export function QuickBooksGroupSection() {
     return (
       <Card>
         <SectionLabel>QuickBooks</SectionLabel>
-        <p className="text-sm" style={{ color: '#B91C1C' }}>
+        <p className="text-sm" style={{ color: NEGATIVE }}>
           Could not load QuickBooks: {(error as Error).message}
         </p>
       </Card>
@@ -136,21 +156,22 @@ export function QuickBooksGroupSection() {
 
   return (
     <Card>
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <SectionLabel>QuickBooks</SectionLabel>
-          <p className="text-sm text-ink-muted -mt-1">
-            {span} · {accounts.length} connected {accounts.length === 1 ? 'company' : 'companies'}
-            {widened && <> · whole {data.window.fromPeriod === data.window.toPeriod ? 'month' : 'months'} — QuickBooks reports monthly, so it cannot answer a part-month window</>}
-          </p>
-        </div>
-        <BasisToggle value={method} onChange={setMethod} />
-      </div>
+      <SectionLabel>QuickBooks</SectionLabel>
 
-      <div className="mt-3">
-        <SectionFilterPills label="Company" options={options}
-          selectedId={accountId} onSelect={setAccountId} allLabel="All companies" />
-      </div>
+      <p className="text-xs text-ink-muted mb-3">
+        {span} · {accounts.length} connected {accounts.length === 1 ? 'company' : 'companies'}
+        {widened && <> · whole {data.window.fromPeriod === data.window.toPeriod ? 'month' : 'months'} — QuickBooks reports monthly, so it cannot answer a part-month window</>}
+      </p>
+
+      <SectionFilterPills label="Company" options={options}
+        selectedId={accountId} onSelect={setAccountId} allLabel="All companies" />
+      <PillRow label="Basis">
+        {(['accrual', 'cash'] as QbMethod[]).map((m) => (
+          <Pill key={m} active={method === m} onClick={() => setMethod(m)}>
+            {m === 'accrual' ? 'Accrual' : 'Cash'}
+          </Pill>
+        ))}
+      </PillRow>
 
       {/* ── The statement. Three lines that add up, in that order. ─────────── */}
       <div className="rounded-xl border border-border overflow-hidden">
@@ -165,25 +186,28 @@ export function QuickBooksGroupSection() {
         {costsOpen && (
           <div className="bg-[#FAFAFA] border-t border-border px-4 py-2">
             {costBuckets.map((c) => (
-              <div key={c.key} className="flex items-center justify-between py-1 text-sm">
-                <span className="text-ink-muted pl-4">{c.label}</span>
-                <span className="tabular-nums">{gbp(c.pence)}</span>
+              <div key={c.key} className="flex items-center justify-between py-1.5 text-sm">
+                <span className="text-ink-muted pl-5">{c.label}</span>
+                <span className="tabular-nums tracking-tight">{gbp(c.pence)}</span>
               </div>
             ))}
             {/* The categories are the costs — if they ever stop summing to the
                 line above, the panel is claiming an arithmetic it does not do. */}
-            <div className="flex items-center justify-between py-1 text-sm border-t border-border mt-1 pt-1.5">
-              <span className="text-ink-muted pl-4">Total</span>
-              <span className="tabular-nums font-semibold">
+            <div className="flex items-center justify-between py-1.5 text-sm border-t border-border mt-1 pt-2">
+              <span className="text-ink-muted pl-5">Total</span>
+              <span className="tabular-nums tracking-tight font-semibold">
                 {gbp(costBuckets.reduce((n, c) => n + c.pence, 0))}
               </span>
             </div>
           </div>
         )}
         <StatementRow
-          label="= Net profit"
+          label="Net profit"
           value={gbp(s.netProfitPence)}
-          note={`${marginOf(s.netProfitPence, s.revenuePence)} margin`}
+          chip={s.revenuePence > 0
+            ? { text: `${marginOf(s.netProfitPence, s.revenuePence)} margin`,
+                tone: s.netProfitPence < 0 ? 'rose' : marginPct(s) >= 18 ? 'emerald' : 'amber' }
+            : null}
           tone={s.netProfitPence >= 0 ? 'good' : 'bad'}
           total
         />
@@ -193,19 +217,25 @@ export function QuickBooksGroupSection() {
              a balance sitting beside windowed figures reads as windowed. ──── */}
       <div className="mt-4">
         <div className="text-xs text-ink-muted uppercase tracking-wide mb-2">Position</div>
-        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-          <PositionTile
-            label="Cash at bank"
-            value={gbp(s.cashAtBankPence)}
-            sub={s.cashAsOf && s.cashAsOf !== 'latest'
-              ? `Month-end balance, ${fmtMonth(s.cashAsOf)}`
-              : 'Latest synced balance — no month-end history for this window yet'}
-          />
-          <PositionTile
-            label="Outstanding debtors"
-            value={gbp(s.receivablesPence)}
-            sub="Unpaid QuickBooks invoices, as they stand today"
-          />
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+          <HeadlineCard c={{
+            label: 'Cash at bank',
+            value: gbp(s.cashAtBankPence),
+            sub: s.cashAsOf && s.cashAsOf !== 'latest'
+              ? `Month-end balance · ${fmtMonth(s.cashAsOf)}`
+              : 'Latest synced balance — no month-end history yet',
+            // A negative balance is an overdrawn account, not a rounding
+            // artefact, so it is chipped rather than left to the reader.
+            chip: s.cashAtBankPence < 0 ? { text: 'Overdrawn', tone: 'rose' } : null,
+            source: 'QuickBooks bank accounts. A point-in-time balance, not a figure for the selected window.',
+          }} />
+          <HeadlineCard c={{
+            label: 'Outstanding debtors',
+            value: gbp(s.receivablesPence),
+            sub: 'Unpaid invoices, as they stand today',
+            chip: null,
+            source: 'Unpaid QuickBooks invoices across the selected companies. Point-in-time, not windowed.',
+          }} />
         </div>
       </div>
 
@@ -217,15 +247,15 @@ export function QuickBooksGroupSection() {
           <div style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={trend} margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#EEE" />
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={GRID} />
                 <XAxis dataKey="period" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false}
                   tickFormatter={(v: number) => `£${Math.round(v / 1000)}k`} width={52} />
                 <Tooltip formatter={(v: number) => `£${Number(v).toLocaleString('en-GB')}`} />
                 {/* A loss-making month sits below this line — visible, not implied. */}
-                <ReferenceLine y={0} stroke="#CBD5E1" />
-                <Bar dataKey="Revenue" fill="#CBD5E1" radius={[3, 3, 0, 0]} />
-                <Bar dataKey="Profit" fill="#047857" radius={[3, 3, 0, 0]} />
+                <ReferenceLine y={0} stroke={GRID} />
+                <Bar dataKey="Revenue" fill={BAR_REVENUE} radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Profit" fill={POSITIVE} radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -256,7 +286,7 @@ export function QuickBooksGroupSection() {
                     <td><strong>{c.companyName}</strong></td>
                     <td className="right tabular-nums">{gbp(c.revenuePence)}</td>
                     <td className="right tabular-nums">{gbp(c.expensesPence)}</td>
-                    <td className="right tabular-nums" style={{ color: c.netProfitPence >= 0 ? '#047857' : '#B91C1C' }}>
+                    <td className="right tabular-nums" style={{ color: c.netProfitPence >= 0 ? POSITIVE : NEGATIVE }}>
                       {gbp(c.netProfitPence)}
                     </td>
                     <td className="right tabular-nums">{marginOf(c.netProfitPence, c.revenuePence)}</td>
@@ -289,73 +319,45 @@ export function QuickBooksGroupSection() {
   );
 }
 
-function SectionLabel({ children }: { children: string }) {
-  return <h3 className="display text-lg font-semibold mb-2">{children}</h3>;
-}
-
-// Accrual vs cash is not a display preference — QuickBooks syncs a full P&L
-// under each, and the same window legitimately reports two different profits.
-// The chosen basis is named on the block rather than assumed.
-function BasisToggle({ value, onChange }: { value: QbMethod; onChange: (m: QbMethod) => void }) {
-  return (
-    <div className="inline-flex rounded-lg border border-border overflow-hidden text-sm" role="group" aria-label="Accounting basis">
-      {(['accrual', 'cash'] as QbMethod[]).map((m) => (
-        <button
-          key={m}
-          type="button"
-          onClick={() => onChange(m)}
-          aria-pressed={value === m}
-          className={`px-3 py-1.5 capitalize ${value === m ? 'bg-ink text-white' : 'bg-white text-ink-muted hover:bg-[#F5F5F5]'}`}
-        >
-          {m}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function StatementRow({
-  label, value, note, tone, total, onClick, open, hint,
+  label, value, chip, tone, total, onClick, open, hint,
 }: {
-  label: string; value: string; note?: string;
+  label: string; value: string; chip?: { text: string; tone: ChipColour } | null;
   tone?: 'good' | 'bad'; total?: boolean;
   onClick?: () => void; open?: boolean; hint?: string;
 }) {
-  const colour = tone === 'good' ? '#047857' : tone === 'bad' ? '#B91C1C' : undefined;
+  const colour = tone === 'good' ? POSITIVE : tone === 'bad' ? NEGATIVE : undefined;
   const Wrapper = onClick ? 'button' : 'div';
   return (
     <Wrapper
       {...(onClick ? { type: 'button' as const, onClick, 'aria-expanded': !!open } : {})}
-      className={`w-full text-left flex items-center justify-between gap-3 px-4 py-3 ${
+      className={`w-full text-left flex items-center justify-between gap-3 px-4 ${total ? 'py-3.5' : 'py-3'} ${
         total ? 'border-t-2 border-ink bg-[#FAFAFA]' : 'border-b border-border'
-      } ${onClick ? 'hover:bg-[#FAFAFA]' : ''}`}
+      } ${onClick ? 'transition-colors hover:bg-[#FAFAFA]' : ''}`}
     >
-      <span className="flex items-center gap-1.5 text-sm text-ink-muted">
+      {/* Same label treatment as every headline tile on this page: small, muted,
+          uppercase, tracked — not a heading in the serif display face. */}
+      <span className="flex items-center gap-1.5 text-xs text-ink-muted uppercase tracking-wide">
         {onClick && (
-          <ChevronRight size={14} style={{ transform: open ? 'rotate(90deg)' : undefined, transition: 'transform .12s' }} />
+          <ChevronRight size={14} className="shrink-0"
+            style={{ transform: open ? 'rotate(90deg)' : undefined, transition: 'transform .12s' }} />
         )}
         {label}
-        {hint && <span className="text-xs text-ink-muted">· {hint}</span>}
+        {hint && <span className="normal-case tracking-normal text-ink-muted/80">· {hint}</span>}
       </span>
-      <span className="flex items-baseline gap-2">
-        {note && <span className="text-xs text-ink-muted">{note}</span>}
+      <span className="flex items-center gap-2.5">
+        {chip && <Chip colour={chip.tone}>{chip.text}</Chip>}
+        {/* tabular-nums + tracking-tight, matching HeadlineCard. The serif
+            `.display` face used here before was the only place on the page a
+            figure was not set in the tile typeface. */}
         <span
-          className={`display tabular-nums ${total ? 'text-2xl font-bold' : 'text-xl font-semibold'}`}
+          className={`tabular-nums tracking-tight font-bold ${total ? 'text-2xl' : 'text-xl'}`}
           style={colour ? { color: colour } : undefined}
         >
           {value}
         </span>
       </span>
     </Wrapper>
-  );
-}
-
-function PositionTile({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div className="rounded-xl border border-border p-4">
-      <div className="text-xs text-ink-muted">{label}</div>
-      <div className="display text-2xl font-bold mt-1 tabular-nums">{value}</div>
-      <div className="text-xs text-ink-muted mt-1">{sub}</div>
-    </div>
   );
 }
