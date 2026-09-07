@@ -73,26 +73,46 @@ export default function MarketingOverviewScreen() {
             <KpiTile label="Ad spend" value={money(t.spendPence)} />
             <KpiTile label="Leads" value={t.leads.toLocaleString('en-GB')} />
             <KpiTile label="Cost per lead" value={money(t.costPerLeadPence)} />
-            <KpiTile label="Became patients" value={t.patients.toLocaleString('en-GB')} />
+            {/* Same rule as the Facebook and Google pages: a new patient whose
+                settled payments exceed the acceptance floor. It used to mean
+                "matched any Dentally record", which read 729 here against 86 on
+                those pages for the same window. */}
+            <KpiTile
+              label="Patients from ads"
+              value={t.patients.toLocaleString('en-GB')}
+              delta={`Paid over ${money(data.acceptanceMinPaidPence)} after enquiring`}
+            />
             <KpiTile label="Cost per patient" value={money(t.costPerPatientPence)} />
           </div>
 
           {t.unattributedLeads > 0 ? (
             <p className="text-[13px] text-ink-muted">
-              Leads and patients count everyone who enquired in this window, however they
-              found you.
+              <strong className="font-medium text-ink">Leads</strong>
+              {' '}
+              counts everyone who enquired in this window, however they found you.
               {' '}
               {t.attributedLeads.toLocaleString('en-GB')}
               {' '}
-              of them are matched to a campaign with spend
-              {t.patients > 0 ? `, ${t.attributedPatients.toLocaleString('en-GB')} of the ${t.patients.toLocaleString('en-GB')} patients among them` : ''}
-              , and only those are used as the denominators for cost per lead and cost per
-              patient — charging paid spend against organic enquiries would understate both.
-              The other
+              of them came from a Google or Meta ad — those are the ones the cost
+              figures divide by, since charging paid spend against organic enquiries
+              would understate every one of them. The other
               {' '}
               {t.unattributedLeads.toLocaleString('en-GB')}
               {' '}
-              carry no ad tracking. The cards below split all of it by channel.
+              carry no ad tracking.
+              {' '}
+              <strong className="font-medium text-ink">Patients from ads</strong>
+              {' '}
+              counts only those attributed leads who went on to pay more than
+              {' '}
+              {money(data.acceptanceMinPaidPence)}
+              , the same rule the Facebook and Google pages use — so the two figures
+              describe different populations on purpose. The campaign table below
+              shows the
+              {' '}
+              {t.campaignMatchedLeads.toLocaleString('en-GB')}
+              {' '}
+              of those leads whose campaign also spent in this window.
             </p>
           ) : null}
 

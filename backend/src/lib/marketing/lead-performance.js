@@ -83,6 +83,23 @@ export function withLeadCosts(row) {
 // two figures can be compared side by side without a second, differently-
 // computed query — both read the SAME booked/accepted/is_new_patient
 // columns from ONE ledger call, they just gate on is_new_patient differently.
+// Does this lead's OUTCOME count?
+//
+// A returning patient who books and pays is real and is NOT an acquisition, so
+// by default only a new patient's booking/acceptance is charged against ad
+// spend — the owner's own definition, and the difference is not cosmetic
+// (Ashford: 36 accepted rows, 33 of them new).
+//
+// Exported because the Marketing section needs the SAME rule. Re-expressing it
+// there would be a second definition free to drift, which is precisely the bug
+// this file's header describes: two surfaces counting "patient" differently and
+// both on screen at once.
+//
+// Note it gates OUTCOMES only. A lead is a lead whoever it came from.
+export function eligibleForOutcome(lead, includeExisting = false) {
+    return includeExisting || Boolean(lead?.is_new_patient);
+}
+
 export function practiceLeadPerformance(spendRows, ledgerRows, includeExisting = false) {
     const byPractice = new Map();
     const touch = (id, name) => {
@@ -110,9 +127,8 @@ export function practiceLeadPerformance(spendRows, ledgerRows, includeExisting =
     for (const l of ledgerRows ?? []) {
         const row = touch(l.practice_id, l.practice_name);
         row.leads += 1;
-        const eligible = includeExisting || l.is_new_patient;
-        if (l.booked && eligible) row.booked += 1;
-        if (l.accepted && eligible) row.accepted += 1;
+        if (l.booked && eligibleForOutcome(l, includeExisting)) row.booked += 1;
+        if (l.accepted && eligibleForOutcome(l, includeExisting)) row.accepted += 1;
     }
     return [...byPractice.values()].map(withLeadCosts);
 }

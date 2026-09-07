@@ -33,18 +33,30 @@ export interface MarketingTotals {
   platformConversions: number;
   /** Everyone who enquired in the window — organic and unattributed included. */
   leads: number;
-  /** Only the people matched to a campaign with spend: the cost denominator. */
+  /**
+   * Everyone an ad ledger claims — the SAME population the Facebook and Google
+   * report pages count, and the cost-per-lead denominator. Includes leads whose
+   * campaign has no spend in this window: the ad still bought them.
+   */
   attributedLeads: number;
-  /** Held a GoHighLevel calendar slot or a Dentally appointment after enquiring. */
+  /** Booked, on the report pages' rule: a new patient with an appointment. */
   booked: number;
-  /** Of the booked, matched to a campaign with spend: the cost-per-booking denominator. */
   attributedBooked: number;
   /** Dentally-only: a completed appointment. Never derived from GoHighLevel. */
   attended: number;
-  /** Everyone in the lead population who became a patient. */
+  /**
+   * Patients the ADS bought, on the same rule as the Facebook and Google pages:
+   * a new patient whose settled payments exceed `acceptanceMinPaidPence`. This
+   * used to mean "matched any Dentally record", which read 729 against those
+   * pages' 86 for the same window.
+   */
   patients: number;
-  /** Patients whose campaign we hold spend for: the cost-per-patient denominator. */
   attributedPatients: number;
+  /** The narrower subset the per-campaign TABLE sums to: leads and patients on
+   * a campaign that also has spend in this window. Lets the screen reconcile
+   * the table against the tiles without calling the difference unattributed. */
+  campaignMatchedLeads: number;
+  campaignMatchedPatients: number;
   /** Of those patients, the ones with no appointment before this window. */
   newPatients: number;
   /** New patients whose campaign we hold spend for: the cost-per-new-patient denominator. */
@@ -64,9 +76,14 @@ export type Channel = 'google_ads' | 'meta_ads' | 'other';
  * Google account spent nothing this month still sees its Google leads instead
  * of having them silently folded into a single blended number.
  *
- * Every lead lands in exactly one channel, so `leads` across the rows sums to
- * the lead total. `other` is organic social, referral, direct and untracked
- * traffic — it carries leads and patients but never a cost.
+ * A PAID channel row is the same claim its report page makes — leads, bookings,
+ * patients and spend all from that platform's own ledger and mapped spend — so
+ * the card and the page cannot disagree.
+ *
+ * `other` is organic social, referral, direct and untracked traffic. It has no
+ * ad ledger by definition, so its bookings and patients are NULL (unknowable on
+ * a money rule) rather than 0, which would claim no organic enquiry ever became
+ * a patient. It never carries a cost.
  */
 export interface ChannelRow {
   channel: Channel;
@@ -75,11 +92,12 @@ export interface ChannelRow {
   clicks: number;
   platformConversions: number;
   leads: number;
-  /** Held a GoHighLevel calendar slot or a Dentally appointment after enquiring. */
-  booked: number;
+  /** null on the organic channel — unknowable, not zero. */
+  booked: number | null;
   /** Dentally-only: a completed appointment. Never derived from GoHighLevel. */
   attended: number;
-  patients: number;
+  /** null on the organic channel — unknowable, not zero. */
+  patients: number | null;
   campaigns: number;
   costPerLeadPence: number | null;
   costPerBookingPence: number | null;
@@ -114,13 +132,17 @@ export interface MarketingCoverage {
 export interface PracticeRow {
   practiceId: string | null;
   spendPence: number;
+  /** Every enquiry at this practice, organic included. */
   leads: number;
-  /** Held a GoHighLevel calendar slot or a Dentally appointment after enquiring. */
+  /** The subset an ad ledger claims — what every cost here divides by. */
+  attributedLeads: number;
   booked: number;
   patients: number;
   newPatients: number;
   channels: Record<Channel, number>;
   costPerLeadPence: number | null;
+  costPerBookingPence: number | null;
+  costPerPatientPence: number | null;
   costPerNewPatientPence: number | null;
 }
 
@@ -131,6 +153,10 @@ export interface MarketingPerformance {
   byPractice: PracticeRow[];
   series: SpendDay[];
   coverage: MarketingCoverage;
+  /** The settled-payment threshold `patients` was counted against, so the screen
+   * can state it rather than leave the reader guessing what "became a patient"
+   * means — £43 and £4,300 are both "Yes" without it. */
+  acceptanceMinPaidPence: number;
 }
 
 export interface TrendChannel {
@@ -202,6 +228,7 @@ export const EMPTY_PERFORMANCE: MarketingPerformance = {
     spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
     leads: 0, attributedLeads: 0, booked: 0, attended: 0, attributedBooked: 0,
     patients: 0, attributedPatients: 0, newPatients: 0, attributedNewPatients: 0,
+    campaignMatchedLeads: 0, campaignMatchedPatients: 0,
     unattributedLeads: 0,
     costPerLeadPence: null, costPerBookingPence: null,
     costPerPatientPence: null, costPerNewPatientPence: null,
@@ -213,6 +240,9 @@ export const EMPTY_PERFORMANCE: MarketingPerformance = {
     totalAccounts: 0, mappedAccounts: 0, unmappedAccounts: 0,
     unmappedAccountNames: [], unmappedSpendPence: 0, practiceHasMappedAccount: null,
   },
+  // 4000 = the £40 acceptance floor the backend uses; only ever a placeholder
+  // for the pre-load empty state, which renders no patient figure anyway.
+  acceptanceMinPaidPence: 4000,
 };
 
 export const CHANNEL_LABEL: Record<string, string> = {

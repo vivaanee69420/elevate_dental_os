@@ -55,9 +55,14 @@ export default function PracticesScreen() {
   const totals = rows.reduce((a, r) => ({
     spendPence: a.spendPence + r.spendPence,
     leads: a.leads + r.leads,
+    // The cost denominator: leads an ad ledger claims, not every enquiry at the
+    // practice. The Group row used to divide by `leads` while each practice row
+    // divided by its attributed count, so the footer disagreed with the column
+    // above it.
+    attributedLeads: a.attributedLeads + r.attributedLeads,
     patients: a.patients + r.patients,
     newPatients: a.newPatients + r.newPatients,
-  }), { spendPence: 0, leads: 0, patients: 0, newPatients: 0 });
+  }), { spendPence: 0, leads: 0, attributedLeads: 0, patients: 0, newPatients: 0 });
 
   return (
     <div className="flex flex-col gap-4">
@@ -85,7 +90,7 @@ export default function PracticesScreen() {
                   <th className="px-4 py-3 text-left font-medium text-ink-muted">Channel mix</th>
                   <th className="px-4 py-3 text-right font-medium text-ink-muted">Cost per lead</th>
                   <th className="px-4 py-3 text-right font-medium text-ink-muted">New patients</th>
-                  <th className="px-4 py-3 text-right font-medium text-ink-muted">Existing</th>
+                  <th className="px-4 py-3 text-right font-medium text-ink-muted">Patients from ads</th>
                   <th className="px-4 py-3 text-right font-medium text-ink-muted">Cost per new patient</th>
                 </tr>
               </thead>
@@ -100,8 +105,14 @@ export default function PracticesScreen() {
                     <td className="px-4 py-3"><ChannelMix row={r} /></td>
                     <td className="px-4 py-3 text-right tabular-nums">{money(r.costPerLeadPence)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{num(r.newPatients)}</td>
+                    {/* Was `patients - newPatients` to mean "existing". Those
+                        are no longer one population — `patients` counts ad
+                        acquisitions (paid above the floor, new only) while
+                        `newPatients` counts first-ever Dentally attendance — so
+                        the subtraction could render a negative count. Shows the
+                        ad figure itself instead. */}
                     <td className="px-4 py-3 text-right tabular-nums text-ink-muted">
-                      {num(r.patients - r.newPatients)}
+                      {num(r.patients)}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">{money(r.costPerNewPatientPence)}</td>
                   </tr>
@@ -114,12 +125,12 @@ export default function PracticesScreen() {
                   <td className="px-4 py-3 text-right tabular-nums">{num(totals.leads)}</td>
                   <td className="px-4 py-3" />
                   <td className="px-4 py-3 text-right tabular-nums">
-                    {totals.leads > 0 && totals.spendPence > 0
-                      ? money(Math.round(totals.spendPence / totals.leads)) : '—'}
+                    {totals.attributedLeads > 0 && totals.spendPence > 0
+                      ? money(Math.round(totals.spendPence / totals.attributedLeads)) : '—'}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums">{num(totals.newPatients)}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-ink-muted">
-                    {num(totals.patients - totals.newPatients)}
+                    {num(totals.patients)}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums">
                     {totals.newPatients > 0 && totals.spendPence > 0

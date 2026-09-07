@@ -32,6 +32,16 @@ export const marketingRepository = {
                 // half-open comparison itself is right and is kept.
                 .gte('metric_date', londonYmd(since))
                 .lt('metric_date', londonYmd(until))
+                // ORDERED, because .range() without one is not paging. Postgres
+                // may return an unordered scan in ANY order and need not repeat
+                // it between pages, so a row can land on two pages (counted
+                // twice) while another lands on none. Measured live: this read
+                // reported GBP 129,054.92 of Jun-Aug spend against the
+                // GBP 122,649.08 actually in the table — GBP 6,405.84 of
+                // double-counted rows over five pages, and every cost-per-unit
+                // on the Marketing overview divided by the inflated figure.
+                // `id` is the primary key, so the order is total.
+                .order('id', { ascending: true })
                 .range(from, from + PAGE - 1);
             if (practiceId) q = q.eq('practice_id', practiceId);
             const { data, error } = await q;
