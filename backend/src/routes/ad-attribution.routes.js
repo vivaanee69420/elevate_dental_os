@@ -13,6 +13,11 @@ const gate = (0, auth_1.requireRole)('owner', 'practice_manager');
 
 router.get('/config', gate, (0, async_handler_1.asyncHandler)(adAttributionController.config));
 router.get('/performance', gate, (0, async_handler_1.asyncHandler)(adAttributionController.performance));
+// The rebuilt page: one block per channel, each delegating to that channel's
+// own report service, plus the deduped cross-channel total. Registered BEFORE
+// any param route, as the header requires.
+router.get('/group-total', gate, (0, async_handler_1.asyncHandler)(adAttributionController.groupTotal));
+router.get('/channel/:channel', gate, (0, async_handler_1.asyncHandler)(adAttributionController.channelPerformance));
 router.get('/leads', gate, (0, async_handler_1.asyncHandler)(adAttributionController.leads));
 router.get('/mapping-health', gate, (0, async_handler_1.asyncHandler)(adAttributionController.mappingHealth));
 router.get('/spend', gate, (0, async_handler_1.asyncHandler)(adAttributionController.spend));
