@@ -29,8 +29,11 @@ export interface ChannelTotals {
   leads: number;
   booked: number;
   accepted: number;
-  cpaPence: number | null;
+  /** All three are null, never 0, when their denominator is zero: a cost per
+   *  nothing is unknowable rather than free. */
   cplPence: number | null;
+  cpbPence: number | null;
+  cpaPence: number | null;
 }
 
 /** One grain of the hierarchy — campaign, ad set, ad group, ad, keyword,
@@ -165,50 +168,52 @@ export function ChannelSummaryView({
   const money = (n: number) => formatPence(n);
   const count = (n: number) => nf.format(n);
 
+  // An em dash, never £0. A cost per nothing is unknowable, and a zero there
+  // would read as the cheapest possible result rather than the absence of one.
+  const perTag = (pence: number | null, unit: string) =>
+    (pence === null ? null : { text: `${formatPence(pence)} ${unit}`, tone: 'emerald' as const });
+
+  // The cost rides on the card whose figure it prices — cost per lead under
+  // Leads, per booking under Booked, per patient under Patients — so the number
+  // and what it cost are read together rather than in two places. The
+  // conversion moves into the sub-line, which is where a denominator belongs.
   const cards: HeadlineKpi[] = [
     {
       label: 'Spend', value: formatPence(total.spendPence), sub: `Ad spend · ${title}`,
       chip: null,
       compare: cmp(total.spendPence, previous?.spendPence ?? null, 'neutral', money),
-      href: campaignsHref, hint: 'Spend by campaign →',
+      href: campaignsHref, hint: 'By campaign →',
     },
     {
-      label: 'Leads', value: nf.format(total.leads), sub: 'Enquiries attributed to this channel',
-      // The tag carries the figure the headline cannot: what a lead cost.
-      chip: total.cplPence === null ? null : { text: `${formatPence(total.cplPence)} per lead`, tone: 'emerald' },
+      label: 'Leads', value: nf.format(total.leads),
+      sub: 'Enquiries attributed to this channel',
+      chip: perTag(total.cplPence, 'per lead'),
       compare: cmp(total.leads, previous?.leads ?? null, 'higher-better', count),
-      href: campaignsHref, hint: 'Leads by campaign →',
+      href: campaignsHref, hint: 'By campaign →',
     },
     {
-      label: 'Booked', value: nf.format(total.booked), sub: 'Leads that took an appointment',
-      chip: total.leads > 0
-        ? { text: `${((total.booked / total.leads) * 100).toFixed(1)}% of leads`, tone: 'emerald' }
-        : null,
+      label: 'Booked', value: nf.format(total.booked),
+      sub: total.leads > 0
+        ? `${((total.booked / total.leads) * 100).toFixed(1)}% of leads booked`
+        : 'Leads that took an appointment',
+      chip: perTag(total.cpbPence, 'per booking'),
       compare: cmp(total.booked, previous?.booked ?? null, 'higher-better', count),
-      href: campaignsHref, hint: 'Bookings by campaign →',
+      href: campaignsHref, hint: 'By campaign →',
     },
     {
-      label: 'Patients', value: nf.format(total.accepted), sub: 'Paid over the acceptance floor',
-      chip: total.booked > 0
-        ? { text: `${((total.accepted / total.booked) * 100).toFixed(1)}% of booked`, tone: 'emerald' }
-        : null,
+      label: 'Patients', value: nf.format(total.accepted),
+      sub: total.booked > 0
+        ? `${((total.accepted / total.booked) * 100).toFixed(1)}% of booked became patients`
+        : 'Paid over the acceptance floor',
+      chip: perTag(total.cpaPence, 'per patient'),
       compare: cmp(total.accepted, previous?.accepted ?? null, 'higher-better', count),
-      href: campaignsHref, hint: 'Patients by campaign →',
-    },
-    {
-      // Null, never £0: a cost per no patients is unknowable, not free.
-      label: 'Cost per patient',
-      value: total.cpaPence === null ? '—' : formatPence(total.cpaPence),
-      sub: total.cpaPence === null ? 'No patients yet in this period' : 'Spend ÷ patients acquired',
-      chip: null,
-      compare: cmp(total.cpaPence, previous?.cpaPence ?? null, 'lower-better', money),
-      href: campaignsHref, hint: 'Cost by campaign →',
+      href: campaignsHref, hint: 'By campaign →',
     },
   ];
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {cards.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
 

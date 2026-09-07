@@ -73,24 +73,28 @@ export default function AdPerformanceScreen() {
 
       <WarmBothChannels />
 
-      {/* The tab strip and the way out on ONE row. As its own line the link
-          cost a full row of vertical space to say four words. */}
-      <div className="flex items-end justify-between gap-3 border-b border-border">
-        <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
-        <Link
-          href={tab === 'facebook' ? '/marketing-facebook' : '/marketing-google'}
-          className="shrink-0 pb-2.5 text-[12.5px] font-medium text-brand hover:underline"
-        >
-          Open the full {tab === 'facebook' ? 'Facebook' : 'Google'} report →
-        </Link>
+      {/* Tabs, the way out, and the channel's accounts as ONE control block.
+          Loose on the page background these read as three unrelated things
+          floating in whitespace; inside a single surface they read as what
+          they are — the choices that govern everything below. */}
+      <div className="card overflow-hidden">
+        <div className="flex items-end justify-between gap-3 border-b border-border px-4">
+          <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
+          <Link
+            href={tab === 'facebook' ? '/marketing-facebook' : '/marketing-google'}
+            className="shrink-0 pb-2.5 text-[12.5px] font-medium text-brand hover:underline"
+          >
+            Open the full {tab === 'facebook' ? 'Facebook' : 'Google'} report →
+          </Link>
+        </div>
+        {/* The channel's OWN accounts, directly under the tab that selects
+            them. Only practices with an account on this platform are offered —
+            one without can render nothing but a confident zero, which reads as
+            "we spent nothing here" rather than "not connected". */}
+        <div className="px-4 py-3">
+          <ScopePeriodBar hidePeriod adProvider={tab === 'facebook' ? 'meta_ads' : 'google_ads'} />
+        </div>
       </div>
-
-      {/* The channel's OWN accounts, directly under its tab, because that is
-          what the tab just selected. Only practices with an account on this
-          platform are offered — one without can render nothing but a confident
-          zero, which reads as "we spent nothing here" rather than "this
-          practice is not connected". */}
-      <ScopePeriodBar hidePeriod adProvider={tab === 'facebook' ? 'meta_ads' : 'google_ads'} />
 
       {/* Below the choice it depends on: the cross-channel figures answer for
           whichever practices are selected above. */}
