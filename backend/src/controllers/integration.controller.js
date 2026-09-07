@@ -48,11 +48,13 @@ export const integrationController = {
             req.user.organisation_id, { since: body.since, until: body.until },
         ));
     },
-    async dentallyImportSummary(req, res) {
-        res.json(await integration_service_1.integrationService.dentallyImportSummary(req.user.organisation_id));
+    async importSummary(req, res) {
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.importSummary(req.user.organisation_id, provider));
     },
-    async dentallyResumeImport(req, res) {
-        res.json(await integration_service_1.integrationService.dentallyResumeImport(req.user.organisation_id));
+    async resumeImport(req, res) {
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.resumeImport(req.user.organisation_id, provider));
     },
     async dentallySites(req, res) {
         res.json(await integration_service_1.integrationService.dentallySites(req.user.organisation_id));

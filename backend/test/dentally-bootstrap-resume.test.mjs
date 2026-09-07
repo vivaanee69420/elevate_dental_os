@@ -14,8 +14,11 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), mergeConfig: vi.fn() },
 }));
 
-const { bootstrapOnConnect, resumeInterruptedBootstraps } =
-    await import('../src/lib/integrations/dentally-sync.js');
+const { bootstrapOnConnect } = await import('../src/lib/integrations/dentally-sync.js');
+// The sweep is provider-generic now — one implementation covers Dentally and
+// GoHighLevel, the two providers with a first pull long enough to be worth
+// resuming.
+const { resumeInterruptedImports } = await import('../src/lib/integrations/bootstrap-recovery.js');
 const { integrationRepository } = await import('../src/repositories/integration.repository.js');
 
 const page = (body) => ({ ok: true, status: 200, json: async () => body });
@@ -82,7 +85,7 @@ describe('bootstrap in-flight marker', () => {
     });
 });
 
-describe('resumeInterruptedBootstraps', () => {
+describe('resumeInterruptedImports', () => {
     function rows(list) {
         supaRec.resultProvider = (q) =>
             q.table === 'integrations' ? { data: list, error: null } : { data: [], error: null };
@@ -94,7 +97,7 @@ describe('resumeInterruptedBootstraps', () => {
             organisation_id: 'org-live', provider: 'dentally', status: 'active', secrets: SECRETS,
             config: { bootstrap: { started_at: new Date(Date.now() - MINUTE).toISOString(), attempts: 1 } },
         }]);
-        const res = await resumeInterruptedBootstraps();
+        const res = await resumeInterruptedImports({ providers: ['dentally'] });
         expect(res.resumed).toBe(0);
     });
 
@@ -103,7 +106,7 @@ describe('resumeInterruptedBootstraps', () => {
             organisation_id: 'org-done', provider: 'dentally', status: 'active',
             secrets: SECRETS, config: { history_backfilled: true },
         }]);
-        expect((await resumeInterruptedBootstraps()).resumed).toBe(0);
+        expect((await resumeInterruptedImports({ providers: ['dentally'] })).resumed).toBe(0);
     });
 
     it('gives up after too many attempts instead of restarting on every boot', async () => {
@@ -113,7 +116,7 @@ describe('resumeInterruptedBootstraps', () => {
             organisation_id: 'org-cursed', provider: 'dentally', status: 'active', secrets: SECRETS,
             config: { bootstrap: { started_at: new Date(Date.now() - 60 * MINUTE).toISOString(), attempts: 4 } },
         }]);
-        expect((await resumeInterruptedBootstraps()).resumed).toBe(0);
+        expect((await resumeInterruptedImports({ providers: ['dentally'] })).resumed).toBe(0);
     });
 
     it('resumes a pull whose marker went stale — the restart case', async () => {
@@ -145,10 +148,20 @@ describe('resumeInterruptedBootstraps', () => {
             return page({});
         });
 
-        const res = await resumeInterruptedBootstraps();
+        const res = await resumeInterruptedImports({ providers: ['dentally'] });
         expect(res.resumed).toBe(1);
         expect(res.details[0].orgId).toBe('org-dead');
         // It ran the pull rather than only rewriting bookkeeping.
         expect(created).toEqual(['S1']);
+    });
+});
+
+describe('the sweep covers every provider with a resumable first pull', () => {
+    it('lists Dentally and GoHighLevel — the two long first pulls', async () => {
+        const { RESUMABLE_PROVIDERS } = await import('../src/lib/integrations/bootstrap-recovery.js');
+        // The others sync in seconds: a restart during one costs the next
+        // scheduled run, not a half-filled tenant, so a Resume button there
+        // would be a control with nothing to control.
+        expect([...RESUMABLE_PROVIDERS].sort()).toEqual(['dentally', 'gohighlevel']);
     });
 });

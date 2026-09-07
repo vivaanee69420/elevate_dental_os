@@ -8,7 +8,7 @@ import "../lib/integrations/index.js";
 import { getProvider, listProviders } from "../lib/integrations/provider-interface.js";
 import * as errors_1 from "../middleware/errors.js";
 import * as dentally_sync_1 from "../lib/integrations/dentally-sync.js";
-import * as pms_import_repository_1 from "../repositories/pms-import.repository.js";
+import * as import_summary_repository_1 from "../repositories/import-summary.repository.js";
 import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
 import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
@@ -87,6 +87,27 @@ const ON_DEMAND_SYNCERS = {
 // Google Ads, Meta Ads, QuickBooks. Always INCREMENTAL (latest data only, never
 // a full/historical backfill).
 const REFRESH_ALL_PROVIDERS = ['dentally', 'gohighlevel', 'google_ads', 'meta_ads', 'quickbooks'];
+
+// Provider names as the owner sees them, for messages that name the upstream.
+const PROVIDER_LABEL = {
+    dentally: 'Dentally',
+    gohighlevel: 'GoHighLevel',
+    quickbooks: 'QuickBooks',
+    xero: 'Xero',
+    google_ads: 'Google Ads',
+    meta_ads: 'Meta Ads',
+    callrail: 'CallRail',
+    emergent: 'Emergent',
+};
+
+// The providers whose FIRST pull is long enough to be worth resuming, mapped to
+// the bootstrap that resumes it. The others sync in seconds: a restart during
+// one costs the next scheduled run, not a half-filled tenant, so offering a
+// Resume button there would be a control with nothing to control.
+const RESUMABLE_BOOTSTRAPS = {
+    dentally: (svc, orgId) => svc.bootstrapDentally(orgId),
+    gohighlevel: (svc, orgId) => svc.bootstrapGohighlevel(orgId),
+};
 
 export const integrationService = {
     async list(orgId) {
@@ -329,57 +350,61 @@ export const integrationService = {
         return { ok: true, provider: 'dentally', site_ids: wanted, started: true };
     },
 
-    // What this organisation actually holds from the PMS, and whether a pull is
-    // in flight. The panel used to read only last_sync_at, which is stamped on
-    // completion — so a run 4,000 rows in read "Synced never", identical to one
-    // that never started.
-    async dentallyImportSummary(orgId) {
+    // What this organisation actually holds from ONE provider, and whether a
+    // pull is in flight, finished, or stopped. The tiles used to read only
+    // last_sync_at, which is stamped on completion — so a run several thousand
+    // rows in read "Synced never", identical to one that never started.
+    async importSummary(orgId, provider) {
         const [summary, integration] = await Promise.all([
-            pms_import_repository_1.pmsImportRepository.summary(orgId, 'dentally'),
-            integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally'),
+            import_summary_repository_1.importSummaryRepository.summary(orgId, provider),
+            integration_repository_1.integrationRepository.getByProvider(orgId, provider),
         ]);
-        const running = getProgress(orgId, 'dentally')?.running === true;
+        const running = getProgress(orgId, provider)?.running === true;
         const mark = integration?.config?.bootstrap;
-        // A first pull is INTERRUPTED when a marker says one started, nothing is
-        // running now, and no completion was ever recorded. That third clause
-        // matters: without it a finished run whose marker failed to clear would
-        // be reported as broken.
+        // INTERRUPTED means a first pull started, nothing is running now, and no
+        // completion was ever recorded. That third clause matters: without it a
+        // finished run whose marker failed to clear reads as broken forever.
         const interrupted = Boolean(mark?.started_at) && !running && !integration?.last_sync_at;
+        const label = PROVIDER_LABEL[provider] ?? provider;
         return {
             ...summary,
+            provider,
             last_sync_at: integration?.last_sync_at ?? null,
             status: integration?.status ?? null,
             last_error: integration?.last_error ?? null,
             running,
             interrupted,
-            // Why it stopped, in the owner's terms. An upstream failure records
-            // itself; a killed process cannot, so absence of an error beside a
-            // stale marker IS the diagnosis — the server went away mid-pull.
+            // An upstream failure records itself; a killed process cannot — so
+            // an absent error beside a stale marker IS the diagnosis.
             stopped_reason: interrupted
                 ? (integration?.last_error
-                    ? `Dentally returned an error: ${integration.last_error}`
+                    ? `${label} returned an error: ${integration.last_error}`
                     : 'The server restarted while the import was running, which happens on a deploy.')
                 : null,
             attempts: Number(mark?.attempts ?? 0),
-            can_resume: interrupted && Number(mark?.attempts ?? 0) < 8,
+            // Only the providers with a resumable first pull offer the button.
+            can_resume: interrupted
+                && Number(mark?.attempts ?? 0) < 8
+                && Boolean(RESUMABLE_BOOTSTRAPS[provider]),
         };
     },
 
-    // Continue a first pull that stopped. Not a fresh start: syncOneOrg keeps a
-    // per-phase checkpoint, so phases that finished are skipped and the run
-    // picks up where it left off.
-    async dentallyResumeImport(orgId) {
-        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally');
+    // Continue a first pull that stopped. Not a fresh start: the syncers keep a
+    // per-phase checkpoint, so phases that finished are skipped.
+    async resumeImport(orgId, provider) {
+        const run = RESUMABLE_BOOTSTRAPS[provider];
+        if (!run) throw new errors_1.AppError(`${provider} has no resumable import`, 400);
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
         if (!integration || integration.status === 'revoked' || !integration.secrets)
-            throw new errors_1.AppError('dentally is not connected', 409);
-        const active = getProgress(orgId, 'dentally');
+            throw new errors_1.AppError(`${provider} is not connected`, 409);
+        const active = getProgress(orgId, provider);
         if (active?.running && active.at && Date.now() - active.at < 10 * 60 * 1000) {
             return { ok: true, alreadyRunning: true };
         }
         // Fire-and-forget for the same reason the connect path is: this runs for
         // minutes and the UI polls progress rather than holding the request open.
-        this.bootstrapDentally(orgId).catch((err) => {
-            console.error('[integrations] dentally resume failed:', err?.message || err);
+        run(this, orgId).catch((err) => {
+            console.error(`[integrations] ${provider} resume failed:`, err?.message || err);
         });
         return { ok: true, started: true };
     },

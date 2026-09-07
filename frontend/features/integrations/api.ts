@@ -706,23 +706,22 @@ export function selectDentallySites(siteIds: string[]) {
   });
 }
 
-// --- Dentally: what has actually landed -------------------------------------
+// --- What has actually landed, per provider ---------------------------------
 // `last_sync_at` is stamped once, on completion, so it cannot answer "is
 // anything here yet" during a pull or after one that died partway. These are
 // row counts, read without loading any row bodies.
-export interface DentallyImportSummary {
-  counts: {
-    contacts: number | null;
-    appointments: number | null;
-    payments: number | null;
-    invoices: number | null;
-    treatment_plans: number | null;
-    associates: number | null;
-    staff: number | null;
-    practices: number | null;
-  };
-  appointments_from: string | null;
-  appointments_to: string | null;
+export interface ImportSummaryRow {
+  key: string;
+  label: string;
+  /** null means the count could not be read — which is not the same as zero. */
+  count: number | null;
+}
+
+export interface ImportSummary {
+  provider: string;
+  rows: ImportSummaryRow[];
+  /** The date range this provider's data covers, where one is meaningful. */
+  span: { label: string; from: string | null; to: string | null } | null;
   last_sync_at: string | null;
   status: string | null;
   last_error: string | null;
@@ -735,15 +734,15 @@ export interface DentallyImportSummary {
   can_resume: boolean;
 }
 
-export function getDentallyImportSummary() {
-  return api<DentallyImportSummary>('/api/integrations/dentally/import-summary');
+export function getImportSummary(provider: string) {
+  return api<ImportSummary>(`/api/integrations/${provider}/import-summary`);
 }
 
 // Continues a stopped first pull from its checkpoint — finished phases are
 // skipped, so this is not a fresh start.
-export function resumeDentallyImport() {
+export function resumeImport(provider: string) {
   return api<{ ok: boolean; started?: boolean; alreadyRunning?: boolean }>(
-    '/api/integrations/dentally/resume-import',
+    `/api/integrations/${provider}/resume-import`,
     { method: 'POST' },
   );
 }

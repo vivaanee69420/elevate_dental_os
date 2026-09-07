@@ -41,8 +41,12 @@ router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requireRole)(
 // "is the data here yet", which is not an owner-only question, and it returns
 // counts only — no patient rows are read to render it.
 // Continue a first pull that a restart killed. Owner-only: it starts work.
-router.post('/dentally/resume-import', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyResumeImport));
-router.get('/dentally/import-summary', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyImportSummary));
+// How much has actually landed, per provider. Practice managers see it too:
+// "is the data here yet" is not an owner-only question, and it returns counts
+// only — no row bodies are read to render it.
+router.get('/:provider/import-summary', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.importSummary));
+// Continue a first pull a restart killed. Owner-only: it starts work.
+router.post('/:provider/resume-import', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.resumeImport));
 router.get('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySites));
 router.post('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySelectSites));
 router.post('/dentally/repair-payments', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyRepairPayments));

@@ -23,6 +23,7 @@
 // helpers if a field differs. The fetch/paginate/resolve/upsert structure is stable.
 
 import { integrationRepository } from "../../repositories/integration.repository.js";
+import { markBootstrapStarted, markBootstrapFinished } from './bootstrap-recovery.js';
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 
@@ -2810,76 +2811,15 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
     // knows: last_sync_at is only stamped on completion, so a process restart
     // mid-bootstrap (a deploy will do it) leaves a half-filled tenant that looks
     // identical to one that was never connected. This marker is what
-    // resumeInterruptedBootstraps finds afterwards.
-    try {
-        await integrationRepository.mergeConfig(orgId, 'dentally', {
-            bootstrap: {
-                started_at: new Date().toISOString(),
-                attempts: Number(integration.config?.bootstrap?.attempts ?? 0) + 1,
-            },
-        });
-    } catch (err) {
-        // Bookkeeping must never block the pull it is describing.
-        console.warn(`[dentally] bootstrap marker write skipped: ${err?.message || err}`);
-    }
+    // resumeInterruptedImports finds afterwards.
+    await markBootstrapStarted(orgId, 'dentally', integration);
 
     const result = await syncOneOrg(orgId, integration, onProgress, { recent: true });
 
     // Finished — nothing to resume. An errored run keeps the marker so the
     // sweep retries it.
-    if (!result?.error) {
-        try {
-            await integrationRepository.mergeConfig(orgId, 'dentally', { bootstrap: null });
-        } catch (err) {
-            console.warn(`[dentally] bootstrap marker clear skipped: ${err?.message || err}`);
-        }
-    }
+    if (!result?.error) await markBootstrapFinished(orgId, 'dentally');
     return { sitesDetected: siteIds.length, practicesCreated, ...result };
-}
-
-// How long a bootstrap marker must sit untouched before the sweep treats its run
-// as gone. Long enough that a live run is never restarted underneath itself.
-const BOOTSTRAP_STALE_MS = 3 * 60 * 1000;
-// A bootstrap that has died this many times is not going to succeed by being
-// run again — it needs a person. Without a cap, a process that crashes DURING
-// the pull restarts it on every boot, forever.
-const BOOTSTRAP_MAX_ATTEMPTS = 4;
-
-/**
- * Finish first pulls that a restart interrupted.
- *
- * The sync is an in-process job, so a deploy, an OOM or a dyno recycle kills it
- * with no record beyond the rows already written. Called on boot and from the
- * nightly cron: it finds bootstraps still marked in flight, whose marker has
- * gone stale, and runs them again. syncOneOrg resumes from its phase checkpoint,
- * so a run that died after patients does not re-pull them.
- */
-export async function resumeInterruptedBootstraps({ now = Date.now() } = {}) {
-    const { data: rows, error } = await supabase_1.serviceClient
-        .from('integrations')
-        .select('*')
-        .eq('provider', 'dentally')
-        .in('status', ['active', 'failed']);
-    if (error) return { checked: 0, resumed: 0, error: error.message };
-
-    const resumed = [];
-    for (const row of rows ?? []) {
-        const mark = row.config?.bootstrap;
-        if (!mark?.started_at) continue;                       // nothing in flight
-        if (now - Date.parse(mark.started_at) < BOOTSTRAP_STALE_MS) continue; // may still be alive
-        if (Number(mark.attempts ?? 0) >= BOOTSTRAP_MAX_ATTEMPTS) {
-            console.warn(`[dentally] bootstrap for ${row.organisation_id} gave up after ${mark.attempts} attempts`);
-            continue;
-        }
-        try {
-            console.log(`[dentally] resuming interrupted first pull for ${row.organisation_id}`);
-            const r = await bootstrapOnConnect(row.organisation_id, row);
-            resumed.push({ orgId: row.organisation_id, error: r?.error ?? null });
-        } catch (err) {
-            console.error(`[dentally] bootstrap resume failed for ${row.organisation_id}: ${err?.message || err}`);
-        }
-    }
-    return { checked: (rows ?? []).length, resumed: resumed.length, details: resumed };
 }
 
 // Resumable, per-run-bounded one-time backfill of the COMPLETED treatment_plan_items
@@ -3013,7 +2953,8 @@ export async function syncAllOrgs() {
     // Boot covers the deploy case; this covers a run that died some other way
     // (OOM, an upstream stall) on a process that never restarted.
     try {
-        await resumeInterruptedBootstraps();
+        const { resumeInterruptedImports } = await import('./bootstrap-recovery.js');
+        await resumeInterruptedImports();
     } catch (err) {
         console.error(`[dentally] nightly bootstrap sweep failed: ${err?.message || err}`);
     }

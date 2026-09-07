@@ -1,5 +1,5 @@
 'use client';
-// What has actually landed from Dentally, updating while it lands.
+// What has actually landed from ONE integration, updating while it lands.
 //
 // The tile's only signal used to be `last_sync_at`, which is stamped once, on
 // completion. A pull 4,000 rows in and a pull that never started both read
@@ -15,7 +15,7 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getDentallyImportSummary, getSyncProgress, resumeDentallyImport } from '../api';
+import { getImportSummary, getSyncProgress, resumeImport } from '../api';
 import { useSyncToast } from '../sync-toast';
 
 // A progress record whose last write is older than this is treated as dead: the
@@ -24,17 +24,6 @@ import { useSyncToast } from '../sync-toast';
 const STALE_MS = 120_000;
 const COUNTS_MS = 3000;
 const PROGRESS_MS = 2000;
-
-const FIELDS = [
-  ['practices', 'Practices'],
-  ['contacts', 'Patients'],
-  ['appointments', 'Appointments'],
-  ['payments', 'Payments'],
-  ['invoices', 'Invoices'],
-  ['treatment_plans', 'Treatment plans'],
-  ['associates', 'Clinicians'],
-  ['staff', 'Staff'],
-] as const;
 
 const nf = new Intl.NumberFormat('en-GB');
 
@@ -51,16 +40,16 @@ function phaseLabel(phase: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : '';
 }
 
-export function DentallyImportSummary() {
+export function ImportSummary({ provider }: { provider: string }) {
   const { active, start } = useSyncToast();
   const qc = useQueryClient();
-  const startedHere = active.has('dentally');
+  const startedHere = active.has(provider);
   const [resuming, setResuming] = useState(false);
   const [resumeErr, setResumeErr] = useState('');
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['integrations', 'dentally', 'import-summary'],
-    queryFn: getDentallyImportSummary,
+    queryKey: ['integrations', provider, 'import-summary'],
+    queryFn: () => getImportSummary(provider),
     // The server decides whether to keep polling, so this survives a reload.
     refetchInterval: (q) => (q.state.data?.running || startedHere ? COUNTS_MS : false),
     refetchIntervalInBackground: true,
@@ -73,8 +62,8 @@ export function DentallyImportSummary() {
   // Phase and percentage, so the panel says WHAT it is pulling, not only that
   // something is happening. Only fetched while a run is actually in flight.
   const { data: progress } = useQuery({
-    queryKey: ['integrations', 'dentally', 'sync-progress'],
-    queryFn: () => getSyncProgress('dentally'),
+    queryKey: ['integrations', provider, 'sync-progress'],
+    queryFn: () => getSyncProgress(provider),
     enabled: live,
     refetchInterval: live ? PROGRESS_MS : false,
     // Same reason as useSyncProgress: a background tab must not freeze a view
@@ -86,7 +75,7 @@ export function DentallyImportSummary() {
 
   if (isLoading || error || !data) return null;
 
-  const total = Object.values(data.counts).reduce<number>((a, b) => a + (b ?? 0), 0);
+  const total = data.rows.reduce<number>((a, r) => a + (r.count ?? 0), 0);
   // A run whose progress stopped being written is not running, whatever the
   // flag says. Saying "Pulling now" over a dead process is the same lie as
   // "Synced never" over 4,000 rows, pointed the other way.
@@ -165,10 +154,10 @@ export function DentallyImportSummary() {
               gap: 10,
             }}
           >
-            {FIELDS.map(([key, label]) => {
-              const n = data.counts[key];
+            {data.rows.map((r) => {
+              const n = r.count;
               return (
-                <div key={key}>
+                <div key={r.key}>
                   <div
                     className="text-ink"
                     style={{
@@ -179,15 +168,15 @@ export function DentallyImportSummary() {
                     {/* null means the count could not be read — not zero. */}
                     {n === null ? '—' : nf.format(n)}
                   </div>
-                  <div className="text-ink-muted" style={{ fontSize: 11.5 }}>{label}</div>
+                  <div className="text-ink-muted" style={{ fontSize: 11.5 }}>{r.label}</div>
                 </div>
               );
             })}
           </div>
 
-          {data.appointments_from && data.appointments_to && (
+          {data.span?.from && data.span?.to && (
             <p className="text-ink-muted" style={{ fontSize: 12, marginTop: 10 }}>
-              Appointments span {when(data.appointments_from)} to {when(data.appointments_to)}.
+              {data.span.label} span {when(data.span.from)} to {when(data.span.to)}.
             </p>
           )}
         </>
@@ -230,9 +219,9 @@ export function DentallyImportSummary() {
                 setResuming(true);
                 setResumeErr('');
                 try {
-                  await resumeDentallyImport();
-                  start('dentally');
-                  await qc.invalidateQueries({ queryKey: ['integrations', 'dentally'] });
+                  await resumeImport(provider);
+                  start(provider);
+                  await qc.invalidateQueries({ queryKey: ['integrations', provider] });
                 } catch (e) {
                   setResumeErr((e as Error).message);
                 } finally {

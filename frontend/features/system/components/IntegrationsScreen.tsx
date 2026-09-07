@@ -37,7 +37,7 @@ import type {
   ProviderMeta,
 } from '@/features/integrations/api';
 import { DentallySitePicker } from '@/features/integrations/components/DentallySitePicker';
-import { DentallyImportSummary } from '@/features/integrations/components/DentallyImportSummary';
+import { ImportSummary } from '@/features/integrations/components/ImportSummary';
 import DentallyPracticeMapping from '@/features/integrations/components/DentallyPracticeMapping';
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
@@ -505,7 +505,6 @@ export default function IntegrationsScreen() {
                 mapping below only decides where pulled rows land, so it answers
                 a narrower question and belongs after this one. */}
             <DentallySitePicker />
-            <DentallyImportSummary />
             <DentallyPracticeMapping />
             <DentallyWebhookPanel />
           </>
@@ -739,13 +738,18 @@ export default function IntegrationsScreen() {
         ))}
       </div>
 
-      {open?.body && (
+      {/* A connected integration opens even with no panel of its own: the
+          question every one of them has to answer first is "is the data here
+          yet", and that is the same panel each time. Injecting it once here
+          rather than adding it to seven tile bodies keeps them from drifting. */}
+      {open && (open.body || open.connected) && (
         <IntegrationModal
           title={open.label}
           subtitle={open.dialogSubtitle ?? open.status}
           icon={<ProviderIcon id={open.id} label={open.label} size={28} />}
           onClose={() => setOpenTile(null)}
         >
+          {open.connected && <ImportSummary provider={open.id} />}
           {open.body}
         </IntegrationModal>
       )}

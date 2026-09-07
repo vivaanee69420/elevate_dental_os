@@ -22,6 +22,7 @@ vi.mock('../src/lib/supabase.js', () => {
             _table: table, _filters: {},
             select(_cols, opts) { this._opts = opts; return this; },
             eq(col, val) { this._filters[col] = val; return this; },
+            not() { return this; },
             order(col, opts) { this._order = { col, ...opts }; return this; },
             limit() { return this; },
             maybeSingle() {
@@ -41,23 +42,24 @@ vi.mock('../src/lib/supabase.js', () => {
     return { serviceClient: { from: (t) => makeQuery(t) } };
 });
 
-const { pmsImportRepository } = await import('../src/repositories/pms-import.repository.js');
+const { importSummaryRepository } = await import('../src/repositories/import-summary.repository.js');
 
 const ORG = 'org-1';
 beforeEach(() => { calls.list = []; });
 
-describe('pmsImportRepository.summary', () => {
+describe('importSummaryRepository.summary', () => {
     it('counts every resource the PMS writes', async () => {
-        const res = await pmsImportRepository.summary(ORG, 'dentally');
-        expect(res.counts).toMatchObject({
+        const res = await importSummaryRepository.summary(ORG, 'dentally');
+        const by = Object.fromEntries(res.rows.map((r) => [r.key, r.count]));
+        expect(by).toMatchObject({
             contacts: 4060, appointments: 14463, associates: 75, staff: 99, practices: 1,
         });
-        expect(res.appointments_from).toBe('2024-01-04');
-        expect(res.appointments_to).toBe('2026-11-20');
+        expect(res.span.from).toBe('2024-01-04');
+        expect(res.span.to).toBe('2026-11-20');
     });
 
     it('scopes every count to the organisation', async () => {
-        await pmsImportRepository.summary(ORG, 'dentally');
+        await importSummaryRepository.summary(ORG, 'dentally');
         // There is no RLS on the serviceClient path, so a missing filter here
         // would count another tenant's rows into this tenant's panel.
         expect(calls.list.length).toBeGreaterThan(0);
@@ -65,7 +67,7 @@ describe('pmsImportRepository.summary', () => {
     });
 
     it('filters the imported tables by source, and does NOT filter the provisioned ones', async () => {
-        await pmsImportRepository.summary(ORG, 'dentally');
+        await importSummaryRepository.summary(ORG, 'dentally');
         const byTable = Object.fromEntries(calls.list.map((c) => [c.table, c.filters]));
         // An org with both Dentally and GoHighLevel contacts must see the
         // Dentally figure on the Dentally tile, not a combined total.
@@ -78,7 +80,7 @@ describe('pmsImportRepository.summary', () => {
     });
 
     it('reads counts only — never row bodies', async () => {
-        await pmsImportRepository.summary(ORG, 'dentally');
+        await importSummaryRepository.summary(ORG, 'dentally');
         const counted = calls.list.filter((c) => c.opts);
         expect(counted.length).toBeGreaterThan(0);
         for (const c of counted) {
@@ -90,13 +92,43 @@ describe('pmsImportRepository.summary', () => {
 
 describe('a count that cannot be read', () => {
     it('reports null, not zero — "unknown" and "none" are different answers', async () => {
-        const broken = { ...pmsImportRepository, _client: () => ({
+        const broken = { ...importSummaryRepository, _client: () => ({
             from: () => ({
                 select() { return this; },
                 eq() { return this; },
                 then(resolve) { return Promise.resolve(resolve({ count: null, error: { message: 'boom' } })); },
             }),
         }) };
-        expect(await broken._count('contacts', ORG, 'dentally')).toBeNull();
+        expect(await broken._count(ORG, { table: 'contacts', source: 'dentally' })).toBeNull();
+    });
+});
+
+describe('the provider registry', () => {
+    it('covers every provider with a tile, and tells same-table rows apart', async () => {
+        const { PROVIDER_RESOURCES } = await import('../src/repositories/import-summary.repository.js');
+        // Dentally and GoHighLevel both write `contacts`; QuickBooks and Xero
+        // both write `monthly_financials`. Without a discriminator each tile
+        // would show a combined total that matches neither.
+        const shared = ['contacts', 'monthly_financials', 'ad_metrics', 'ad_accounts'];
+        for (const [provider, resources] of Object.entries(PROVIDER_RESOURCES)) {
+            for (const r of resources) {
+                if (shared.includes(r.table)) {
+                    expect(
+                        Boolean(r.source || r.provider),
+                        `${provider}.${r.table} shares a table and needs a source/provider filter`,
+                    ).toBe(true);
+                }
+            }
+            // A tile with no resources would render an empty panel.
+            expect(resources.length, `${provider} has no resources`).toBeGreaterThan(0);
+        }
+    });
+
+    it('never lists the same table twice for one provider', async () => {
+        const { PROVIDER_RESOURCES } = await import('../src/repositories/import-summary.repository.js');
+        for (const [provider, resources] of Object.entries(PROVIDER_RESOURCES)) {
+            const keys = resources.map((r) => r.table);
+            expect(new Set(keys).size, `${provider} lists a table twice`).toBe(keys.length);
+        }
     });
 });
