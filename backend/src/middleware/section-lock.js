@@ -76,6 +76,11 @@ export const SECTIONS = [
   { prefix: '/monthly-financials', keys: ['finance.view'] },
   { prefix: '/finance/quickbooks', keys: ['finance.view'] },
   { prefix: '/payments', keys: ['finance.view'] },
+  // Tax reads the same revenue and profit the P&L does, so it takes the same
+  // key — Reception is CRM-only (rule 5) and must never see a tax position.
+  // Its WRITES are owner-only at the route: entity type and VAT liability are
+  // declarations about the business, not a finance viewer's call.
+  { prefix: '/tax', keys: ['finance.view'] },
 
   // CROSSOVER: Command Centre is a finance.view page and reads the lead funnel
   // and the setup banner (features/dashboard/components/DashboardScreen.tsx),
