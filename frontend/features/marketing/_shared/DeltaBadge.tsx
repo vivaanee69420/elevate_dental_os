@@ -9,23 +9,8 @@
 // A null delta renders as an em dash with the reason beside it, never as
 // "0%": the two say different things, and the whole point of the comparison
 // is that the reader can trust the number next to the arrow.
-import { ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { TrendArrow as Arrow } from '@/features/_shared/TrendArrow';
 import type { Delta } from './compare';
-
-// Real icons, not glyphs. This was ▲ / ▼ / – , chosen over ↑↓ because the
-// arrow CHARACTERS render thin enough in the system stack to be missed at a
-// glance — but the triangles solved that by being blunt rather than legible,
-// and they inherit whatever weight and baseline the font happens to give them.
-// An SVG has neither problem: it is the same shape in every font stack, sits
-// on the text baseline because we put it there, and carries its own stroke
-// weight independent of the surrounding type.
-function Arrow({ direction, size = 13 }: { direction: Delta['direction']; size?: number }) {
-  const Icon = direction === 'up' ? ArrowUp : direction === 'down' ? ArrowDown : Minus;
-  return (
-    <Icon size={size} strokeWidth={2.75} aria-hidden="true"
-      className="inline-block shrink-0 relative -top-px" />
-  );
-}
 
 // No dark-mode variants: rule 1, light only.
 const TONE_CLASS: Record<Delta['tone'], string> = {
@@ -91,7 +76,7 @@ export function DeltaInline({ delta }: { delta: Delta | null }) {
   return (
     <span className={`block text-[11px] leading-tight ${TONE_CLASS[delta.tone]}`}>
       <span className="inline-flex items-center gap-0.5 align-middle">
-        <Arrow direction={delta.direction} size={11} />
+        <Arrow direction={delta.direction} size={12} />
         {pct}
       </span>
     </span>

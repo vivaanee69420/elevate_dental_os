@@ -18,7 +18,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
+import { AlertTriangle, Gem, TrendingDown, TrendingUp } from 'lucide-react';
 import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type ChipColour } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useBusinessHub, usePlanFeesLines, type HubPractice, type HubComparePrev, type RevenueLine, type PlanFeeLine } from '../business-hub-api';
@@ -591,13 +591,13 @@ export function GroupPerformanceScreen() {
           and a roll-up beneath it reading /api/finance/quickbooks over a period
           dropdown of its own. Two windows and two definitions of profit, with a
           company filter wired to only one of them. */}
-      <QuickBooksGroupSection />
+      <QuickBooksGroupSection compare={cmp} />
 
       <Card>
         <SectionLabel>GoHighLevel</SectionLabel>
         <SectionFilterPills label="Subaccount" options={ghlOptions}
           selectedId={ghlAccountId} onSelect={setGhlAccountId} allLabel="All subaccounts" />
-        <GhlSummaryCards since={win.since} until={win.until} accountId={ghlAccountId} />
+        <GhlSummaryCards since={win.since} until={win.until} accountId={ghlAccountId} compare={cmp} />
       </Card>
 
       {!isGroupScope && (
@@ -869,7 +869,7 @@ function buildLens(rows: HubPractice[], marginPct: number, roi: MarketingRoi | u
   const out: Lens[] = [];
 
   const topRev = [...rows].sort((a, b) => b.revenuePence - a.revenuePence)[0];
-  out.push({ tone: 'good', icon: <ArrowUpRight size={16} />, title: `${topRev.name} leads on turnover`, body: `${formatPence(topRev.revenuePence)} in the window — protect its diary and replicate the mix.` });
+  out.push({ tone: 'good', icon: <TrendingUp size={16} />, title: `${topRev.name} leads on turnover`, body: `${formatPence(topRev.revenuePence)} in the window — protect its diary and replicate the mix.` });
 
   // noShowRate is null when the rate is unknowable — no appointments in the
   // window, or a tenant whose PMS has never synced a no-show state. Such a

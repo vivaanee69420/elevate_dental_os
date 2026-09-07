@@ -59,8 +59,16 @@ export const ghlDashboardService = {
         lastSyncAt: a.last_sync_at ?? null,
         lastError: a.last_error ?? null,
         contacts: num(r.contacts_total),
+        // The window's own intake, beside the cumulative count. `contacts` is
+        // every GHL contact on the books up to the end of the window and does
+        // not answer to the period filter above it; `contactsNew` does.
+        contactsNew: num(r.contacts_new),
         leads: num(r.leads_total),
         pipelineValuePence: num(r.pipeline_value_pence),
+        // Money still in play — the all-statuses figure above includes leads
+        // already marked not_proceeding or failed_to_attend. Zero rather than
+        // undefined on a deploy where migration 000170 has not landed.
+        pipelineOpenValuePence: num(r.pipeline_open_value_pence),
         conversionPct: conversionPct(num(r.leads_won), num(r.leads_lost)),
         conversations: num(r.conversations_total),
         appointments: num(ar.appts_total),
@@ -84,8 +92,10 @@ export const ghlDashboardService = {
         lastSyncAt: null,
         lastError: null,
         contacts: u.reduce((s, r) => s + num(r.contacts_total), 0),
+        contactsNew: u.reduce((s, r) => s + num(r.contacts_new), 0),
         leads: u.reduce((s, r) => s + num(r.leads_total), 0),
         pipelineValuePence: u.reduce((s, r) => s + num(r.pipeline_value_pence), 0),
+        pipelineOpenValuePence: u.reduce((s, r) => s + num(r.pipeline_open_value_pence), 0),
         conversionPct: conversionPct(
           u.reduce((s, r) => s + num(r.leads_won), 0),
           u.reduce((s, r) => s + num(r.leads_lost), 0),
@@ -114,6 +124,7 @@ export const ghlDashboardService = {
         won: wonTotal,
         lost: lostTotal,
         pipelineValuePence: sum('pipeline_value_pence'),
+        pipelineOpenValuePence: sum('pipeline_open_value_pence'),
         conversionPct: conversionPct(wonTotal, lostTotal),
         byStage: mergeCounts(rows.map((r) => r.leads_by_stage), 'stage'),
       },

@@ -20,6 +20,7 @@ import {
 } from 'recharts';
 import { useState } from 'react';
 import { Skeleton } from '@/components/ui';
+import { TrendTag } from '@/features/_shared/TrendArrow';
 import { poundsCompact, monthShort } from '../mock';
 import { useCashflow, useCashflowOutlook } from '../hooks';
 import { useBusinessHub, type HubWindow } from '@/features/overview/business-hub-api';
@@ -57,7 +58,9 @@ function StripKpi({
   label: string;
   value: string;
   sub?: string;
-  tag?: string;
+  // ReactNode, not string: the tag carries a trend arrow, and an SVG cannot be
+  // interpolated into a template literal.
+  tag?: React.ReactNode;
   tone?: 'good' | 'warn' | 'muted';
 }) {
   const tagBg = tone === 'good' ? 'var(--success-50, #DCFCE7)' : tone === 'warn' ? '#FEF3C7' : 'var(--bg)';
@@ -183,7 +186,11 @@ export default function CashflowScreen() {
               label={practiceId ? 'Takings' : 'Group takings'}
               value={gbp(takings)}
               sub={`Settled receipts · ${periodSub}`}
-              tag={vsTarget != null ? `${vsTarget >= 0 ? '▲' : '▼'} ${Math.abs(vsTarget).toFixed(0)}% vs target` : undefined}
+              tag={vsTarget != null ? (
+                <TrendTag direction={vsTarget === 0 ? 'flat' : vsTarget > 0 ? 'up' : 'down'} size={12}>
+                  {Math.abs(vsTarget).toFixed(0)}% vs target
+                </TrendTag>
+              ) : undefined}
               tone={vsTarget != null && vsTarget >= 0 ? 'good' : 'warn'}
             />
             <StripKpi

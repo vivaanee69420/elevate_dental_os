@@ -136,3 +136,57 @@ describe('getDashboard', () => {
     expect(apptSpy).toHaveBeenCalledWith('org-1', WINDOW.since, WINDOW.until, null, 'a2');
   });
 });
+
+// ============================================================================
+// "GHL Pipeline" on the Business Hub summed estimated_value_pence over EVERY
+// lead created in the window, whatever its status. Measured on the live org for
+// August 2026: £587,500 shown, of which £190,000 belonged to 481 leads already
+// marked not_proceeding or failed_to_attend. A third of the "pipeline" was
+// money from leads that had said no.
+//
+// Migration 000170 adds pipeline_open_value_pence beside the existing total
+// rather than redefining it, so a caller states which of the two it means.
+// ============================================================================
+describe('getDashboard — open pipeline is separate from decided pipeline', () => {
+  it('carries the open-only figure alongside the all-statuses total', async () => {
+    stubAccounts([{ id: 'a1', label: 'Ashford', practice_id: 'p1', status: 'active', last_sync_at: null, last_error: null }]);
+    stubAggregate([{
+      integration_account_id: 'a1', practice_id: 'p1',
+      contacts_total: 900, contacts_new: 40, contacts_by_source: {},
+      leads_total: 20, leads_new: 20, leads_open: 12, leads_won: 3, leads_lost: 5,
+      pipeline_value_pence: 500000, pipeline_open_value_pence: 300000,
+      leads_by_stage: {},
+      conversations_total: 0, conversations_inbound: 0, conversations_outbound: 0, conversations_last7d: 0,
+    }]);
+    stubAppointments([]);
+
+    const out = await ghlDashboardService.getDashboard('org-1', WINDOW);
+
+    expect(out.totals.leads.pipelineValuePence).toBe(500000);
+    expect(out.totals.leads.pipelineOpenValuePence).toBe(300000);
+    expect(out.perAccount[0].pipelineOpenValuePence).toBe(300000);
+    // The windowed intake stays available beside the cumulative count, so a
+    // card under a period filter can show the figure that answers to it: 40
+    // contacts arrived in the window, against 900 on the books.
+    expect(out.totals.contacts.new).toBe(40);
+    expect(out.totals.contacts.total).toBe(900);
+    expect(out.perAccount[0].contactsNew).toBe(40);
+  });
+
+  it('reports zero rather than undefined when the RPC predates the column', async () => {
+    // A deploy where the migration has not landed yet must render £0, not a
+    // blank card and not NaN.
+    stubAccounts([{ id: 'a1', label: 'Ashford', practice_id: null, status: 'active', last_sync_at: null, last_error: null }]);
+    stubAggregate([{
+      integration_account_id: 'a1', contacts_total: 5, contacts_new: 5, contacts_by_source: {},
+      leads_total: 2, leads_new: 2, leads_open: 2, leads_won: 0, leads_lost: 0,
+      pipeline_value_pence: 1000, leads_by_stage: {},
+      conversations_total: 0, conversations_inbound: 0, conversations_outbound: 0, conversations_last7d: 0,
+    }]);
+    stubAppointments([]);
+
+    const out = await ghlDashboardService.getDashboard('org-1', WINDOW);
+    expect(out.totals.leads.pipelineOpenValuePence).toBe(0);
+    expect(out.perAccount[0].pipelineOpenValuePence).toBe(0);
+  });
+});

@@ -33,7 +33,10 @@ import {
 import { ChevronRight } from 'lucide-react';
 import { Card, Chip, type ChipColour } from '@/components/ui';
 import { SectionFilterPills, PillRow, Pill } from '@/features/_shared/SectionFilterPills';
-import { HeadlineCard, SectionLabel } from './HeadlineCard';
+import { HeadlineCard, SectionLabel, type HeadlineKpi } from './HeadlineCard';
+import type { Polarity } from '@/features/marketing/_shared/compare';
+import { DeltaBadge } from '@/features/marketing/_shared/DeltaBadge';
+import { computeDelta } from '@/features/marketing/_shared/compare';
 import { useScopePeriod, londonMonthWindow } from '@/features/_shared/scope-context';
 import { getQuickBooksOverview, type QbMethod } from '@/features/finance/quickbooks-api';
 
@@ -92,7 +95,13 @@ type QbByBucket = {
   overhead: number; tax: number; other: number;
 };
 
-export function QuickBooksGroupSection() {
+export function QuickBooksGroupSection({
+  compare = null,
+}: {
+  /** The page's own comparison window, so this section measures across exactly
+   *  the same bounds as the Dentally, Marketing and GoHighLevel sections. */
+  compare?: { previous: { since: string; until: string; label: string } } | null;
+} = {}) {
   const { win } = useScopePeriod();
   const [accountId, setAccountId] = useState<string | null>(null);
   const [method, setMethod] = useState<QbMethod>('accrual');
@@ -111,6 +120,23 @@ export function QuickBooksGroupSection() {
       to: `${toPeriod}-01`,
       method,
     }),
+  });
+
+  // The comparison window, resolved to months the same way — a second call to
+  // the SAME endpoint, so the prior figure cannot drift from the one it is
+  // measured against because it IS that figure asked for a different month.
+  const prev = compare
+    ? londonMonthWindow({ since: compare.previous.since, until: compare.previous.until })
+    : null;
+  const { data: was } = useQuery({
+    queryKey: ['qbo-finance', 'hub-prev', accountId ?? 'all', method, prev?.fromPeriod, prev?.toPeriod],
+    queryFn: () => getQuickBooksOverview({
+      accountId: accountId ?? undefined,
+      from: `${prev!.fromPeriod}-01`,
+      to: `${prev!.toPeriod}-01`,
+      method,
+    }),
+    enabled: !!prev,
   });
 
   const accounts = useMemo(() => data?.accounts ?? [], [data]);
@@ -148,6 +174,18 @@ export function QuickBooksGroupSection() {
     .filter((c) => c.pence !== 0)
     .sort((x, y) => y.pence - x.pence);
 
+  // The prior summary. Null until BOTH reads have landed, so a card shows no
+  // comparison rather than one measured against half a period.
+  const p = compare && was ? was.summary : null;
+  const delta = (
+    current: number | null, previous: number | null,
+    polarity: Polarity, format: (n: number) => string,
+  ) => (p && compare
+    ? <DeltaBadge
+        delta={computeDelta(current, previous, polarity)}
+        previousLabel={previous == null ? DASH : `${format(previous)} · ${compare.previous.label}`} />
+    : null);
+
   const trend = (data.trend ?? []).map((t) => ({
     period: fmtMonth(t.period).replace(' ', ' '),
     Revenue: Math.round(t.revenuePence / 100),
@@ -175,13 +213,20 @@ export function QuickBooksGroupSection() {
 
       {/* ── The statement. Three lines that add up, in that order. ─────────── */}
       <div className="rounded-xl border border-border overflow-hidden">
-        <StatementRow label="Revenue" value={gbp(s.revenuePence)} />
+        <StatementRow label="Revenue" value={gbp(s.revenuePence)}
+          delta={delta(s.revenuePence, p?.revenuePence ?? null, 'higher-better', gbp)} />
         <StatementRow
           label="Less running costs"
           value={gbp(s.expensesPence)}
           onClick={costBuckets.length ? () => setCostsOpen((v) => !v) : undefined}
           open={costsOpen}
           hint={costBuckets.length ? `${costBuckets.length} categories` : undefined}
+          // NEUTRAL, deliberately. Costs rising alongside rising revenue is not
+          // bad news, and costs falling because the practice did less work is
+          // not good news — the judgement lives in the margin below, which has
+          // both sides of it. Colouring this line would assert one the number
+          // cannot support on its own.
+          delta={delta(s.expensesPence, p?.expensesPence ?? null, 'neutral', gbp)}
         />
         {costsOpen && (
           <div className="bg-[#FAFAFA] border-t border-border px-4 py-2">
@@ -209,6 +254,7 @@ export function QuickBooksGroupSection() {
                 tone: s.netProfitPence < 0 ? 'rose' : marginPct(s) >= 18 ? 'emerald' : 'amber' }
             : null}
           tone={s.netProfitPence >= 0 ? 'good' : 'bad'}
+          delta={delta(s.netProfitPence, p?.netProfitPence ?? null, 'higher-better', gbp)}
           total
         />
       </div>
@@ -224,6 +270,15 @@ export function QuickBooksGroupSection() {
             sub: s.cashAsOf && s.cashAsOf !== 'latest'
               ? `Month-end balance · ${fmtMonth(s.cashAsOf)}`
               : 'Latest synced balance — no month-end history yet',
+            // Compared ONLY when both windows resolved a real month-end
+            // snapshot. Without history both fall back to the same live
+            // balance, and the card would render a confident "flat 0%" that is
+            // an artefact of asking the same question twice.
+            compare: compare && p && s.cashAsOf !== 'latest' && p.cashAsOf !== 'latest' ? {
+              current: s.cashAtBankPence, previous: p.cashAtBankPence,
+              polarity: 'higher-better' as Polarity, isRate: false,
+              format: (n: number) => `${gbp(n)} · ${compare.previous.label}`,
+            } : undefined,
             // A negative balance is an overdrawn account, not a rounding
             // artefact, so it is chipped rather than left to the reader.
             chip: s.cashAtBankPence < 0 ? { text: 'Overdrawn', tone: 'rose' } : null,
@@ -232,7 +287,10 @@ export function QuickBooksGroupSection() {
           <HeadlineCard c={{
             label: 'Outstanding debtors',
             value: gbp(s.receivablesPence),
-            sub: 'Unpaid invoices, as they stand today',
+            // Point-in-time and NOT windowed: the same unpaid invoices are
+            // returned whatever period is asked for, so there is no prior to
+            // compare against. A delta here would always read "flat 0%".
+            sub: 'Unpaid invoices, as they stand today — not windowed',
             chip: null,
             source: 'Unpaid QuickBooks invoices across the selected companies. Point-in-time, not windowed.',
           }} />
@@ -321,11 +379,13 @@ export function QuickBooksGroupSection() {
 
 
 function StatementRow({
-  label, value, chip, tone, total, onClick, open, hint,
+  label, value, chip, tone, total, onClick, open, hint, delta,
 }: {
   label: string; value: string; chip?: { text: string; tone: ChipColour } | null;
   tone?: 'good' | 'bad'; total?: boolean;
   onClick?: () => void; open?: boolean; hint?: string;
+  /** The period comparison, rendered under the figure. */
+  delta?: React.ReactNode;
 }) {
   const colour = tone === 'good' ? POSITIVE : tone === 'bad' ? NEGATIVE : undefined;
   const Wrapper = onClick ? 'button' : 'div';
@@ -348,14 +408,17 @@ function StatementRow({
       </span>
       <span className="flex items-center gap-2.5">
         {chip && <Chip colour={chip.tone}>{chip.text}</Chip>}
-        {/* tabular-nums + tracking-tight, matching HeadlineCard. The serif
-            `.display` face used here before was the only place on the page a
-            figure was not set in the tile typeface. */}
-        <span
-          className={`tabular-nums tracking-tight font-bold ${total ? 'text-2xl' : 'text-xl'}`}
-          style={colour ? { color: colour } : undefined}
-        >
-          {value}
+        <span className="text-right">
+          {/* tabular-nums + tracking-tight, matching HeadlineCard. The serif
+              `.display` face used here before was the only place on the page a
+              figure was not set in the tile typeface. */}
+          <span
+            className={`block tabular-nums tracking-tight font-bold ${total ? 'text-2xl' : 'text-xl'}`}
+            style={colour ? { color: colour } : undefined}
+          >
+            {value}
+          </span>
+          {delta}
         </span>
       </span>
     </Wrapper>

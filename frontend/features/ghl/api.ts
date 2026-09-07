@@ -8,7 +8,13 @@ export interface GhlTotals {
   contacts: { total: number; new: number; bySource: CountEntry[] };
   leads: {
     total: number; new: number; open: number; won: number; lost: number;
-    pipelineValuePence: number; conversionPct: number; byStage: CountEntry[];
+    pipelineValuePence: number;
+    /** Estimated value of leads NOT yet decided — the figure a "pipeline" card
+     *  means. `pipelineValuePence` above includes leads already marked
+     *  not_proceeding or failed_to_attend; on the live org for August 2026 that
+     *  was £190,000 of £587,500. */
+    pipelineOpenValuePence: number;
+    conversionPct: number; byStage: CountEntry[];
   };
   conversations: { total: number; inbound: number; outbound: number; last7d: number };
   appointments: {
@@ -26,9 +32,13 @@ export interface GhlPerAccount {
   status: string | null;
   lastSyncAt: string | null;
   lastError: string | null;
+  /** CUMULATIVE — every GHL contact up to the end of the window, not the
+   *  window's own intake. `contactsNew` is the windowed figure. */
   contacts: number;
+  contactsNew: number;
   leads: number;
   pipelineValuePence: number;
+  pipelineOpenValuePence: number;
   conversionPct: number;
   conversations: number;
   appointments: number;
