@@ -316,7 +316,16 @@ export const integrationService = {
             site_ids: wanted,
             awaiting_site_selection: false,
         });
-        return this.bootstrapDentally(orgId);
+        // Fire-and-forget, for the same reason the connect path above is: the
+        // bootstrap is a full pull that runs for minutes, so awaiting it here
+        // holds the HTTP response open and leaves the button reading
+        // "Starting…" with no progress until it finishes. The UI polls the
+        // progress overlay instead, and last_sync_at / last_error land on the
+        // row either way.
+        this.bootstrapDentally(orgId).catch((err) => {
+            console.error('[integrations] dentally bootstrap failed:', err?.message || err);
+        });
+        return { ok: true, provider: 'dentally', site_ids: wanted, started: true };
     },
 
     // GoHighLevel first-connect automation: full-history pull of contacts +
