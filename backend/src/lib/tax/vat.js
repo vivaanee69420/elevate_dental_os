@@ -25,6 +25,16 @@
 // figure that guessed would be a VAT return built on a guess.
 // ============================================================================
 
+// Treatment names arrive from the PMS with whatever whitespace and casing the
+// practice typed: this org has "Composite Filling " and "Zirconia Implant
+// Crown  " with trailing spaces. Keying the mapping on the raw string makes
+// the same treatment appear twice, one copy mapped and one silently unmapped —
+// the identical trap that inflated accepted value by GBP 1m on the Emergent
+// feed. Normalise on the way in and on the way out, always through here.
+export function normaliseDescription(value) {
+    return String(value ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
 export const LIABILITY = Object.freeze({
     EXEMPT: 'exempt',
     STANDARD: 'standard',
@@ -46,7 +56,7 @@ export function splitRevenueByLiability(lines, liabilityByDescription = {}) {
 
     for (const line of lines ?? []) {
         const amount = Number(line?.amountPence) || 0;
-        const key = String(line?.description ?? '');
+        const key = normaliseDescription(line?.description);
         const liability = liabilityByDescription[key];
 
         if (liability === LIABILITY.EXEMPT) exemptPence += amount;
@@ -54,7 +64,10 @@ export function splitRevenueByLiability(lines, liabilityByDescription = {}) {
         else if (liability === LIABILITY.OUTSIDE_SCOPE) outsideScopePence += amount;
         else {
             unmappedPence += amount;
-            unmappedBy.set(key, (unmappedBy.get(key) ?? 0) + amount);
+            // Report the name as the practice wrote it, but group by the
+            // normalised key so two spellings are one row to map.
+            const label = String(line?.description ?? '').trim();
+            unmappedBy.set(label, (unmappedBy.get(label) ?? 0) + amount);
         }
     }
 

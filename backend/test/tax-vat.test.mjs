@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitRevenueByLiability, outputVat, registrationStatus, LIABILITY } from '../src/lib/tax/vat.js';
+import { splitRevenueByLiability, outputVat, registrationStatus, LIABILITY, normaliseDescription } from '../src/lib/tax/vat.js';
 
 const RATES = { standardRatePct: 20, registrationThresholdPence: 90_000_00, deregistrationThresholdPence: 88_000_00 };
 
@@ -10,10 +10,12 @@ describe('splitRevenueByLiability', () => {
         { description: 'Toothbrush', amountPence: 900_00 },
         { description: 'Composite bonding', amountPence: 41_200_00 },
     ];
+    // Keys are stored normalised (lower-case, whitespace collapsed) — the
+    // repository writes them that way, so the fixture must too.
     const mapping = {
-        Examination: LIABILITY.EXEMPT,
-        'Teeth whitening': LIABILITY.STANDARD,
-        Toothbrush: LIABILITY.STANDARD,
+        examination: LIABILITY.EXEMPT,
+        'teeth whitening': LIABILITY.STANDARD,
+        toothbrush: LIABILITY.STANDARD,
         // 'Composite bonding' deliberately unmapped
     };
 
@@ -101,5 +103,32 @@ describe('registrationStatus', () => {
         const reg = registrationStatus({ ...RATES, taxableTurnover12mPence: 1_000_00, isRegistered: true });
         expect(notReg.belowDeregistrationThreshold).toBe(false);
         expect(reg.belowDeregistrationThreshold).toBe(true);
+    });
+});
+
+describe('normaliseDescription', () => {
+    // Real names from this org's PMS carry trailing and doubled whitespace.
+    it('collapses whitespace and case so one treatment is one key', () => {
+        expect(normaliseDescription('Composite Filling ')).toBe('composite filling');
+        expect(normaliseDescription('Zirconia Implant Crown  ')).toBe('zirconia implant crown');
+        expect(normaliseDescription('COMPOSITE  filling')).toBe('composite filling');
+    });
+
+    it('matches a mapping stored under the normalised key', () => {
+        const r = splitRevenueByLiability(
+            [{ description: 'Composite Filling ', amountPence: 1000 }],
+            { 'composite filling': LIABILITY.EXEMPT },
+        );
+        expect(r.exemptPence).toBe(1000);
+        expect(r.unmappedPence).toBe(0);
+    });
+
+    it('groups two spellings into ONE unmapped row, not two', () => {
+        const r = splitRevenueByLiability([
+            { description: 'Scale & Polish', amountPence: 500 },
+            { description: 'Scale & Polish ', amountPence: 500 },
+        ], {});
+        expect(r.unmapped).toHaveLength(1);
+        expect(r.unmapped[0].amountPence).toBe(1000);
     });
 });
