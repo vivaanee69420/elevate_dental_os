@@ -62,8 +62,11 @@ describe('dentally mappers', () => {
         expect(__test.mapPaymentMethod('BACS')).toBe('bank_transfer');
         expect(__test.mapPaymentMethod('Direct Debit')).toBe('direct_debit');
         expect(__test.mapPaymentMethod('CARD')).toBe('card');
-        // Unknown but real method: preserve as a slug, never silently null.
-        expect(__test.mapPaymentMethod('Crypto Wallet')).toBe('crypto_wallet');
+        // Unknown but real method: bucketed as 'other', never silently null and
+        // never slugified. A slug is not in payments_method_check, so the row was
+        // REJECTED and the payment disappeared — see the mapPaymentMethod
+        // contract block below for the 183 payments this cost.
+        expect(__test.mapPaymentMethod('Crypto Wallet')).toBe('other');
         // Only genuinely empty values map to null.
         expect(__test.mapPaymentMethod('')).toBeNull();
         expect(__test.mapPaymentMethod(null)).toBeNull();
@@ -125,6 +128,67 @@ describe('resolveDentallyAuth', () => {
     it('returns null on garbage', async () => {
         const integ = { secrets: 'not-encrypted', expires_at: null };
         expect(await resolveDentallyAuth('org1', integ)).toBeNull();
+    });
+});
+
+// ============================================================================
+// mapPaymentMethod must only ever emit a value the DB will accept.
+//
+// `payments.method` carries a CHECK constraint, and the mapper's fallback
+// slugified ANY unrecognised label ("Other" -> 'other', "American Express" ->
+// 'american_express'). Those rows are rejected by Postgres, upsertChunked logs
+// "skipped N unstorable row(s)" and the sync moves on — so the payment is
+// dropped, silently, and Takings is short by exactly that much forever.
+//
+// Measured live over 12 months: 183 payments worth GBP 7,540.45 could not be
+// stored — 181 "Other" (GBP 7,446.45), 1 "American Express", 1 "Cheque". Note
+// 'cheque' was in the mapper's own canon table yet absent from the constraint,
+// which is the clearest sign the two lists were never checked against each
+// other.
+//
+// The constraint list is repeated here deliberately: it is the contract the
+// mapper has to satisfy, and pinning it means widening one without the other
+// fails a test instead of losing money in production.
+// ============================================================================
+describe('mapPaymentMethod — the emitted value must satisfy payments_method_check', () => {
+    const { mapPaymentMethod } = __test;
+    const ALLOWED = [
+        'card', 'apple_pay', 'google_pay', 'bank_transfer', 'cash',
+        'direct_debit', 'finance', 'card_on_file', 'pay_link', 'cheque',
+        'amex', 'other',
+    ];
+    // Every method the live Dentally account actually sends, by volume.
+    const LIVE_METHODS = [
+        'Debit Card', 'Credit Card', 'Stripe', 'Cash', 'Other',
+        'BACS', 'Finance', 'Bank Transfer', 'American Express', 'Cheque',
+    ];
+
+    it('maps every method Dentally actually sends to an accepted value', () => {
+        for (const m of LIVE_METHODS) {
+            expect(ALLOWED, `${m} -> ${mapPaymentMethod(m)}`).toContain(mapPaymentMethod(m));
+        }
+    });
+
+    it('buckets an unrecognised method as "other" rather than inventing a slug', () => {
+        // A label we have never seen must not cost us the payment. The money is
+        // what matters; the label is a detail we can bucket honestly.
+        expect(mapPaymentMethod('Klarna Pay In 3')).toBe('other');
+        expect(mapPaymentMethod('Other')).toBe('other');
+    });
+
+    it('keeps cheque and amex as themselves, not as "card"', () => {
+        // Both were being lost. Folding them into 'card' would store the money
+        // but misreport how it arrived, so they get their own accepted values.
+        expect(mapPaymentMethod('Cheque')).toBe('cheque');
+        expect(mapPaymentMethod('American Express')).toBe('amex');
+        expect(mapPaymentMethod('amex')).toBe('amex');
+    });
+
+    it('still returns null for a genuinely absent method', () => {
+        // The column is nullable; null is "not stated", which is different from
+        // "stated as something we do not recognise".
+        expect(mapPaymentMethod(null)).toBeNull();
+        expect(mapPaymentMethod('')).toBeNull();
     });
 });
 

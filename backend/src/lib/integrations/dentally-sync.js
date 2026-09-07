@@ -401,14 +401,32 @@ function mapPaymentStatus(p) {
 // every value that didn't match verbatim — ~94% of real rows. Normalise the
 // known labels to our canonical set; for anything unrecognised keep a slug of
 // the raw value rather than dropping the taxonomy. Only empty -> null.
+// The values `payments.method` will actually accept — payments_method_check.
+// This list is the CONTRACT, and mapPaymentMethod must never emit anything
+// outside it: a rejected row is not a mislabelled payment, it is a payment that
+// vanishes. upsertChunked retries the chunk row-by-row, logs "skipped N
+// unstorable row(s)" and carries on, so the loss is silent and permanent.
+// Measured live over 12 months before this was closed: 183 payments worth
+// GBP 7,540.45 that could never be stored — 181 "Other", 1 "American Express"
+// and 1 "Cheque", the last of which the canon table below already knew about
+// while the constraint did not.
+const PAYMENT_METHODS = new Set([
+    'card', 'apple_pay', 'google_pay', 'bank_transfer', 'cash',
+    'direct_debit', 'finance', 'card_on_file', 'pay_link', 'cheque',
+    'amex', 'other',
+]);
+
 function mapPaymentMethod(m) {
     const v = String(m ?? '').trim().toLowerCase();
+    // Nullable by design: "not stated" is a different fact from "stated as
+    // something we do not recognise", and only the latter becomes 'other'.
     if (!v) return null;
     const canon = {
         'card': 'card', 'credit card': 'card', 'debit card': 'card',
         'card on file': 'card', 'card_on_file': 'card', 'stripe': 'card',
         'cash': 'cash',
         'cheque': 'cheque', 'check': 'cheque',
+        'american express': 'amex', 'amex': 'amex',
         'bacs': 'bank_transfer', 'bank transfer': 'bank_transfer',
         'bank_transfer': 'bank_transfer', 'direct credit': 'bank_transfer',
         'direct debit': 'direct_debit', 'direct_debit': 'direct_debit',
@@ -416,8 +434,13 @@ function mapPaymentMethod(m) {
         'apple pay': 'apple_pay', 'apple_pay': 'apple_pay',
         'google pay': 'google_pay', 'google_pay': 'google_pay',
         'pay link': 'pay_link', 'pay_link': 'pay_link',
+        'other': 'other',
     };
-    return canon[v] ?? v.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const mapped = canon[v] ?? v.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    // Closed set. An unrecognised label is bucketed honestly as 'other' rather
+    // than slugified into a value the database will refuse — the money matters
+    // more than the label, and a payment we cannot describe is still a payment.
+    return PAYMENT_METHODS.has(mapped) ? mapped : 'other';
 }
 
 function toPence(amount) {
@@ -1123,8 +1146,14 @@ export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO
 // Generic over the resource, because this is not an appointments problem — every
 // `updated_after` feed in this file has the same one-way ratchet.
 // ============================================================================
+// `prepare` is an optional per-PAGE hook returning context the row builder
+// needs but the record does not carry — an invoice_item holds only invoice_id
+// and has to resolve its parent's practice / contact / date / paid status. Per
+// page, not per row: one lookup for a hundred ids instead of a hundred lookups,
+// and without holding a whole-org map in memory. The poll path solves the same
+// problem the same way (loadInvoiceContext).
 export async function reconcileMissingRecords(orgId, base, auth, {
-    path, params = {}, table, idCol, onConflict, buildRow,
+    path, params = {}, table, idCol, onConflict, buildRow, prepare = null,
     maxPages = WINDOW_RECON_MAX_PAGES, collectRemoteIds = false,
 } = {}) {
     let restored = 0;
@@ -1158,10 +1187,13 @@ export async function reconcileMissingRecords(orgId, base, auth, {
                 .in(idCol, ids);
             if (error) return { restored, skippedUnmapped, scanned, truncated: true, aborted: 'db_read_error' };
             const have = new Set((existing ?? []).map((r) => String(r[idCol])));
+            const wanted = items.filter((rec) => !have.has(String(rec.id)));
+            // Resolve context only for what we are actually going to write — a
+            // page where we already hold everything costs no extra query.
+            const ctx = prepare && wanted.length ? await prepare(wanted) : null;
             const rows = [];
-            for (const rec of items) {
-                if (have.has(String(rec.id))) continue;
-                const row = buildRow(rec);
+            for (const rec of wanted) {
+                const row = buildRow(rec, ctx);
                 if (!row) { skippedUnmapped++; continue; } // e.g. practice_id is NOT NULL
                 rows.push(row);
             }
@@ -1229,6 +1261,23 @@ export async function reconcileMissingInvoices(orgId, base, auth, { maxPages = I
         buildRow: (inv) => invoiceRow(orgId, inv, siteMap, contactMap),
         maxPages,
         collectRemoteIds,
+    });
+}
+
+// Invoice items — the per-treatment fee lines behind each invoice. Not windowed
+// for the same reason as invoices (Dentally ignores the date filters), and each
+// item needs its parent invoice's practice/contact/date, resolved a page at a
+// time through the same loadInvoiceContext the webhook path uses.
+export async function reconcileMissingInvoiceItems(orgId, base, auth, { maxPages = INVOICE_RECON_MAX_PAGES } = {}) {
+    const practitionerMap = await loadPractitionerMap(orgId);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/invoice_items',
+        table: 'invoice_items',
+        idCol: 'pms_external_id',
+        onConflict: 'organisation_id,source,pms_external_id',
+        prepare: (items) => loadInvoiceContext(orgId, items.map((it) => it.invoice_id)),
+        buildRow: (it, ctx) => invoiceItemRow(orgId, it, ctx ?? new Map(), practitionerMap),
+        maxPages,
     });
 }
 
@@ -1409,16 +1458,19 @@ export async function reconcileDeletedInvoices(orgId, base, auth, { maxPages = I
 
     const { ids: staleIds, externalIds, aborted } = selectStaleInvoiceIds(ourRows, remoteIds);
     if (aborted) return { deleted: 0, aborted, remote: remoteIds.size, scanned: ourRows.length };
-    if (!staleIds.length) return { deleted: 0, itemsDeleted: 0, remote: remoteIds.size, scanned: ourRows.length };
+    if (!staleIds.length) return { deleted: 0, invoicesCleared: 0, remote: remoteIds.size, scanned: ourRows.length };
 
-    let itemsDeleted = 0;
+    // Counts INVOICES whose fee lines were cleared, not fee lines — a PostgREST
+    // delete does not report how many rows it removed, and reporting a chunk
+    // length as a row count would overstate or understate it every time.
+    let invoicesCleared = 0;
     for (let i = 0; i < externalIds.length; i += 500) {
         const chunk = externalIds.slice(i, i + 500);
         const { error } = await supabase_1.serviceClient
             .from('invoice_items').delete()
             .eq('organisation_id', orgId).eq('source', 'dentally')
             .in('pms_invoice_id', chunk);
-        if (!error) itemsDeleted += chunk.length;
+        if (!error) invoicesCleared += chunk.length;
     }
     let deleted = 0;
     for (let i = 0; i < staleIds.length; i += 500) {
@@ -1429,7 +1481,7 @@ export async function reconcileDeletedInvoices(orgId, base, auth, { maxPages = I
             .in('id', chunk);
         if (!error) deleted += chunk.length;
     }
-    return { deleted, itemsDeleted, remote: remoteIds.size, scanned: ourRows.length };
+    return { deleted, invoicesCleared, remote: remoteIds.size, scanned: ourRows.length };
 }
 
 // ============================================================================
@@ -2214,13 +2266,22 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 // night rather than twice.
                 const back = await reconcileMissingInvoices(orgId, base, auth, { collectRemoteIds: true });
                 if (back.restored) console.warn(`[dentally] invoice backfill restored ${back.restored} row(s) the incremental feed had missed`);
+                // Fee lines too, or the two tables drift apart: `invoices` would
+                // carry a period that `invoice_items` has no lines for, and the
+                // money cards built on each would stop reconciling.
+                try {
+                    const bi = await reconcileMissingInvoiceItems(orgId, base, auth);
+                    if (bi.restored) console.warn(`[dentally] invoice_item backfill restored ${bi.restored} fee line(s)`);
+                } catch (err) {
+                    console.warn(`[dentally] invoice_item backfill skipped: ${err?.message || err}`);
+                }
                 prunedInv = await reconcileDeletedInvoices(orgId, base, auth, {
                     remoteIds: back.truncated || back.aborted ? null : back.remoteIds,
                 });
                 if (prunedInv.aborted) {
                     console.warn(`[dentally] invoice prune aborted (${prunedInv.aborted}) — no rows deleted`);
                 } else if (prunedInv.deleted) {
-                    console.warn(`[dentally] invoice prune removed ${prunedInv.deleted} invoice(s) and ${prunedInv.itemsDeleted ?? 0} fee-line batch(es) Dentally no longer has`);
+                    console.warn(`[dentally] invoice prune removed ${prunedInv.deleted} invoice(s) Dentally no longer has, clearing the fee lines of ${prunedInv.invoicesCleared ?? 0} of them`);
                 }
             } catch (err) {
                 console.warn(`[dentally] invoice prune skipped: ${err?.message || err}`);

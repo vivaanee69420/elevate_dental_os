@@ -32,7 +32,7 @@ vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), mergeConfig: vi.fn() },
 }));
 
-const { reconcileMissingAppointments } = await import('../src/lib/integrations/dentally-sync.js');
+const { reconcileMissingAppointments, reconcileMissingRecords } = await import('../src/lib/integrations/dentally-sync.js');
 
 const ORG = 'org-appt-backfill';
 const BASE = 'https://api.dentally.co/v1';
@@ -81,6 +81,55 @@ beforeEach(() => { db(new Set()); });
 afterEach(() => { vi.restoreAllMocks(); });
 
 const rowsUpserted = () => upserts.flatMap((q) => q.upsertVals ?? []);
+
+describe('reconcileMissingRecords — per-page context (invoice_items)', () => {
+    // Some resources cannot be mapped from the record alone. An invoice_item
+    // carries only invoice_id, and needs its parent's practice / contact /
+    // invoiced_on / paid — which is a lookup per PAGE of ids, not per record.
+    // Without the hook the only options are a lookup per row (100x the queries)
+    // or a whole-org map held in memory, and the poll path already solves this
+    // exact problem with loadInvoiceContext.
+    it('hands each page\'s resolved context to the row builder', async () => {
+        const seenIdBatches = [];
+        vi.stubGlobal('fetch', vi.fn(async (url) => {
+            const page = Number(new URL(url).searchParams.get('page') || 1);
+            const items = page === 1 ? [{ id: 'it-1', invoice_id: '900' }] : [];
+            return { ok: true, status: 200, json: async () => ({ invoice_items: items }) };
+        }));
+        upserts = [];
+        supaRec.resultProvider = (q) => {
+            if (q.op === 'upsert') { upserts.push(q); return { data: [], error: null }; }
+            return { data: [], error: null };
+        };
+
+        const res = await reconcileMissingRecords(ORG, BASE, AUTH, {
+            path: '/invoice_items',
+            table: 'invoice_items',
+            idCol: 'pms_external_id',
+            onConflict: 'organisation_id,source,pms_external_id',
+            prepare: async (items) => {
+                seenIdBatches.push(items.map((i) => i.invoice_id));
+                return new Map([['900', { practice_id: 'prac-roch', dated_on: '2026-08-01' }]]);
+            },
+            buildRow: (it, ctx) => ({
+                organisation_id: ORG, source: 'dentally', pms_external_id: String(it.id),
+                practice_id: ctx.get(String(it.invoice_id))?.practice_id ?? null,
+            }),
+        });
+
+        expect(res.restored).toBe(1);
+        expect(seenIdBatches).toEqual([['900']]);
+        expect(upserts[0].upsertVals[0].practice_id).toBe('prac-roch');
+    });
+
+    it('still works for resources that need no context', async () => {
+        // The hook is optional — the appointment/payment/invoice reconcilers
+        // pass nothing and must be unaffected.
+        vi.stubGlobal('fetch', serveRemote([[appt('c1')]]));
+        const res = await reconcileMissingAppointments(ORG, BASE, AUTH, { sinceISO: SINCE, untilISO: UNTIL });
+        expect(res.restored).toBe(1);
+    });
+});
 
 describe('reconcileMissingAppointments', () => {
     it('stores the appointments Dentally has that we never got', async () => {
