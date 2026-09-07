@@ -140,10 +140,13 @@ export function FacebookPerformancePanel() {
   // because nothing is categorised is precisely the one who needs it.
   const coverageNote = data.coverage && data.coverage.uncategorisedLeads > 0
     ? (
-      <p className="text-[12px] leading-relaxed text-ink-muted">
-        {num(data.coverage.uncategorisedLeads)} leads sit in pipelines that have not been
-        categorised, {num(data.coverage.uncategorisedAttributedLeads)} of them carrying Meta
-        attribution. Categorise them on the Integrations page to include them here.
+      // The count and the route to fixing it. The explanation of what
+      // "uncategorised" means was three lines the reader has to get past to
+      // reach the tabs, and the link teaches it faster.
+      <p className="text-[12px] text-ink-muted">
+        {num(data.coverage.uncategorisedLeads)} leads not categorised
+        {' '}({num(data.coverage.uncategorisedAttributedLeads)} with Meta attribution).{' '}
+        <a href="/integrations" className="text-brand hover:underline">Categorise them</a>
       </p>
     )
     : null;
@@ -425,14 +428,22 @@ export function FacebookPerformancePanel() {
         />
       )}
 
-      <FootNote>
-        A patient is a lead whose settled payments, net of refunds, exceed
-        {' '}{money(data.acceptanceMinPaidPence)} from the day the lead arrived — the same rule the
-        Google report uses, so the two pages&rsquo; cost per patient mean the same thing. This
-        differs from the Campaigns tab&rsquo;s patient count, which asks only whether the lead
-        exists in Dentally. Acceptance is counted to date rather than within the period, so a past
-        period&rsquo;s figure improves as its leads convert.
-      </FootNote>
+      {/* The definition still has to be reachable — a cost per patient is
+          meaningless without knowing what counts as one — but four sentences
+          of it sat between the reader and the tabs. One line states the rule;
+          the rest is a click away. */}
+      <details className="text-[12px] text-ink-muted">
+        <summary className="cursor-pointer marker:text-ink-muted">
+          A patient is a lead who has paid more than {money(data.acceptanceMinPaidPence)}.
+        </summary>
+        <p className="mt-1.5 leading-snug">
+          Settled payments net of refunds, from the day the lead arrived — the same rule the
+          Google report uses, so the two pages&rsquo; cost per patient mean the same thing. It
+          differs from the Campaigns tab&rsquo;s patient count, which asks only whether the lead
+          exists in Dentally. Counted to date rather than within the period, so a past
+          period&rsquo;s figure improves as its leads convert.
+        </p>
+      </details>
     </div>
   );
 }

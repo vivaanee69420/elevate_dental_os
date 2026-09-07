@@ -429,10 +429,12 @@ export function GooglePerformancePanel({
 
       {compare && (
         <FootNote>
-          Comparing {selected.since} → {selected.until} ({num(bySource.ghl + bySource.callrail)} leads)
-          against {compare.since} → {compare.until} ({num(cmpBySource.ghl + cmpBySource.callrail)} leads).
-          Arrows point the way each figure moved
-          {comparable ? '; the colour says whether that is good news — for a cost, down is good.' : '.'}
+          {/* The windows are already named by the picker above; repeating them
+              here in ISO adds a line and no information. What the COLOUR means
+              is the part a reader cannot infer. */}
+          {comparable
+            ? 'Arrows show the move; colour shows whether it is good news — for a cost, down is good.'
+            : 'Arrows show the move. The two periods are not like for like, so colour is withheld.'}
         </FootNote>
       )}
 

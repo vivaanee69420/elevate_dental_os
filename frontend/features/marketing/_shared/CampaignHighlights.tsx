@@ -173,8 +173,8 @@ export function CampaignHighlights({
           one that ran all period. Stated because the "no patients yet" card
           would otherwise read as a verdict on a campaign two weeks old. */}
       <p className="text-[11px] leading-relaxed text-ink-muted">
-        Money collected keeps arriving after a period closes, so a campaign that started recently
-        has had less time to show a return than one that ran throughout.
+        Collected money keeps arriving after a period closes, so a recent campaign has had
+        less time to show a return.
       </p>
     </div>
   );

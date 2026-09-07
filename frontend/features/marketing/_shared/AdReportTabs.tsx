@@ -28,7 +28,7 @@ export function AdReportTabs({
   onChange: (id: string) => void;
 }) {
   return (
-    <div className="flex gap-2 border-b border-border">
+    <div className="flex flex-wrap gap-1 border-b border-border">
       {tabs.map((t) => {
         const isActive = t.id === active;
         return (
@@ -39,10 +39,13 @@ export function AdReportTabs({
             // Active vs inactive is never colour alone: the underline
             // (border-b-2, present or transparent) and the font weight both
             // change alongside the ink/ink-muted text colour.
-            className={`-mb-px border-b-2 px-4 py-2 text-sm ${
+            // outline-none + focus-visible, not focus: a mouse click left the
+            // browser's default blue box sitting on the tab afterwards, which
+            // read as an error state. Keyboard focus still shows a ring.
+            className={`-mb-px rounded-t-md border-b-2 px-4 py-2 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand/40 ${
               isActive
-                ? 'border-ink font-semibold text-ink'
-                : 'border-transparent font-medium text-ink-muted hover:text-ink'
+                ? 'border-brand font-semibold text-brand'
+                : 'border-transparent font-medium text-ink-muted hover:bg-bg hover:text-ink'
             }`}
           >
             {t.label}

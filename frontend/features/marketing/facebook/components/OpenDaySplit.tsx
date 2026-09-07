@@ -122,7 +122,10 @@ export function OpenDaySplit({ split }: { split: FacebookOpenDaySplit }) {
           still gets to it, and the heading keeps it discoverable. */}
       <SectionHead
         title="Always-on and open days"
-        note="Every campaign sits in exactly one of these, so the two add up to the whole."
+        // The explainer belongs WITH the table it explains: printed under a
+        // collapsed heading it is a sentence about something the reader
+        // cannot see.
+        note={open ? 'Every campaign sits in exactly one of these, so the two add up to the whole.' : undefined}
         right={(
           <span className="flex items-center gap-3">
             <Link href="/integrations" className="text-[13px] text-brand underline">
