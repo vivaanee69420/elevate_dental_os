@@ -9,6 +9,7 @@
 // Everything below the tiles reads the SAME payload as the tiles — one query,
 // one window, one set of campaigns — so no panel on this page can disagree
 // with another.
+import Link from 'next/link';
 import {
   PageHeader, KpiTile, EmptyState, SkeletonKpiRow, SkeletonChart,
 } from '@/components/ui';
@@ -85,36 +86,39 @@ export default function MarketingOverviewScreen() {
             <KpiTile label="Cost per patient" value={money(t.costPerPatientPence)} />
           </div>
 
-          {t.unattributedLeads > 0 ? (
-            <p className="text-[13px] text-ink-muted">
-              <strong className="font-medium text-ink">Leads</strong>
-              {' '}
-              counts everyone who enquired in this window, however they found you.
-              {' '}
-              {t.attributedLeads.toLocaleString('en-GB')}
-              {' '}
-              of them came from a Google or Meta ad — those are the ones the cost
-              figures divide by, since charging paid spend against organic enquiries
-              would understate every one of them. The other
-              {' '}
-              {t.unattributedLeads.toLocaleString('en-GB')}
-              {' '}
-              carry no ad tracking.
-              {' '}
-              <strong className="font-medium text-ink">Patients from ads</strong>
-              {' '}
-              counts only those attributed leads who went on to pay more than
-              {' '}
-              {money(data.acceptanceMinPaidPence)}
-              , the same rule the Facebook and Google pages use — so the two figures
-              describe different populations on purpose. The campaign table below
-              shows the
-              {' '}
-              {t.campaignMatchedLeads.toLocaleString('en-GB')}
-              {' '}
-              of those leads whose campaign also spent in this window.
-            </p>
-          ) : null}
+          <p className="text-[13px] text-ink-muted">
+            Every figure here is Facebook and Google only — the same numbers as the
+            {' '}
+            <Link href="/marketing-facebook" className="underline">Facebook</Link>
+            {' '}
+            and
+            {' '}
+            <Link href="/marketing-google" className="underline">Google</Link>
+            {' '}
+            pages, for the practice and period selected above.
+            {' '}
+            <strong className="font-medium text-ink">Patients from ads</strong>
+            {' '}
+            counts a lead who went on to pay more than
+            {' '}
+            {money(data.acceptanceMinPaidPence)}
+            .
+            {t.unattributedLeads > 0 ? (
+              <>
+                {' '}
+                A further
+                {' '}
+                {t.unattributedLeads.toLocaleString('en-GB')}
+                {' '}
+                enquiries arrived with no ad tracking; they are not advertising
+                results, so they are excluded here and listed on the
+                {' '}
+                <Link href="/marketing-leads" className="underline">Leads</Link>
+                {' '}
+                page.
+              </>
+            ) : null}
+          </p>
 
           <ChannelCards rows={data.byChannel} />
 

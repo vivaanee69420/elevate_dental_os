@@ -122,6 +122,11 @@ function channelSplit(spendRows, funnelRows, campaignProvider, accepted, mappedS
 
     return CHANNEL_ORDER
         .map((c) => by.get(c))
+        // Facebook and Google only. The organic bucket is not an advertising
+        // channel and counting it here made the cards sum to more than the tile
+        // above them. Its leads are still reported as totals.unattributedLeads
+        // and listed on the Leads page.
+        .filter((e) => e.channel !== 'other')
         // Drop a channel that has neither spend nor leads — an empty Google row
         // on an account that has never run Google is noise, not information.
         .filter((e) => e.spendPence > 0 || e.leads > 0)
@@ -229,7 +234,7 @@ function practiceSplit(spendByPractice, funnelRows, campaignProvider, accepted) 
 // per person. ad_lead_conversions emits exactly one row per contact, so every
 // person lands in exactly one group and summing group counts is exact. That is
 // what lets this stop paging ten thousand rows in order to count them.
-function joinSpendToLeads(spendRows, funnelRows, accepted, spendTotals) {
+function joinSpendToLeads(spendRows, funnelRows, accepted, spendTotals, campaignProvider) {
     // Collapse the groups to campaign for the table.
     const byCampaign = new Map();
     const blank = () => ({ leads: 0, booked: 0, attended: 0, patients: 0, newPatients: 0 });
@@ -285,6 +290,20 @@ function joinSpendToLeads(spendRows, funnelRows, accepted, spendTotals) {
         };
     }).sort((a, b) => b.spendPence - a.spendPence);
 
+    // Organic, referral, direct, walk-in — the only part of the lead population
+    // ad_campaign_funnel is the better source for, since the ad ledgers cannot
+    // see it by definition.
+    //
+    // Counted through resolveLeadChannel, the SAME function the channel cards
+    // use, not by "has no campaign id". They are not the same set: a lead whose
+    // attribution_source says Paid Social but that carries no campaign id is
+    // paid, not organic. Defining it independently here put 90 in the tile
+    // against 88 on the card, and the tile stopped being the sum of the cards
+    // by two leads.
+    const organicLeads = funnelRows
+        .filter((g) => resolveLeadChannel(g, campaignProvider) === 'other')
+        .reduce((n, g) => n + g.leads, 0);
+
     // The whole population, organic and unattributed included.
     const all = funnelRows.reduce((n, g) => ({
         leads: n.leads + g.leads,
@@ -307,10 +326,16 @@ function joinSpendToLeads(spendRows, funnelRows, accepted, spendTotals) {
         impressions: spendTotals.impressions,
         clicks: spendTotals.clicks,
         platformConversions: rows.reduce((n, r) => n + r.platformConversions, 0),
-        // Honest and shown on the screen — but NOT a denominator for paid spend.
-        // `leads` stays every enquiry however it arrived, which is what the
-        // Overview says it is counting.
-        leads: all.leads,
+        // FACEBOOK AND GOOGLE ONLY. This section reports paid advertising, so
+        // every figure on it is what the two ad platforms bought — the same
+        // people the Facebook and Google report pages count, and nobody else.
+        //
+        // It used to add the funnel's organic enquiries in, which made the tile
+        // answer a different question from every card beneath it and from the
+        // two pages it is supposed to agree with. Organic enquiries are real and
+        // are not hidden: `unattributedLeads` still reports them and the Leads
+        // page lists them. They are simply not an advertising result.
+        leads: accepted.total.leads,
         attended: all.attended,
         newPatients: all.newPatients,
         // Outcomes on the report pages' rule: settled payments above the
@@ -341,11 +366,11 @@ function joinSpendToLeads(spendRows, funnelRows, accepted, spendTotals) {
         // implying the difference is unattributed.
         campaignMatchedLeads: attributed.leads,
         campaignMatchedPatients: attributed.patients,
-        // Clamped at zero: the two figures come from different reads (every
-        // enquiry vs the ad ledgers), and a ledger lead whose enquiry falls a
-        // moment outside the funnel's window would otherwise render a NEGATIVE
-        // "carry no ad tracking" count on the Overview.
-        unattributedLeads: Math.max(0, all.leads - accepted.total.leads),
+        // Reported, NOT counted in `leads` above: enquiries that reached the
+        // practice without any ad attribution. Kept so the page can say how many
+        // it is leaving out rather than leave the reader wondering where they
+        // went.
+        unattributedLeads: organicLeads,
     };
     totals.costPerLeadPence = perUnitPence(totals.spendPence, totals.attributedLeads);
     totals.costPerBookingPence = perUnitPence(totals.spendPence, totals.attributedBooked);
@@ -618,13 +643,12 @@ export const marketingService = {
             ['google_ads', sumField(mappedRows(googleSpend), 'spend_pence')],
             ['meta_ads', sumField(mappedRows(metaSpend), 'spend_pence')],
         ]);
-        const payload = joinSpendToLeads(spend.campaigns, funnel, accepted, spendTotals);
-        // campaign id -> provider, from the campaigns we hold spend for. This is
-        // the definitive arm of channel resolution, so it is built from the same
-        // spend rows the table is built from.
+        // Built before the join, not after: the lead totals now need it to count
+        // the organic channel the same way the channel cards do.
         const campaignProvider = new Map(
             spend.campaigns.map((c) => [c.campaign_id, c.provider]),
         );
+        const payload = joinSpendToLeads(spend.campaigns, funnel, accepted, spendTotals, campaignProvider);
         payload.byChannel = channelSplit(payload.rows, funnel, campaignProvider, accepted, mappedSpendByProvider);
         payload.byPractice = practiceSplit(spend.spendByPractice, funnel, campaignProvider, accepted);
         // The threshold the patient counts were computed against, so the screen
