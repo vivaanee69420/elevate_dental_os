@@ -78,6 +78,9 @@ export default function TaxScreen() {
   const setLiability = useSetTreatmentLiability();
   const [filter, setFilter] = useState('');
   const [showAll, setShowAll] = useState(false);
+  // Closed by default: this is refinement, not a gate. Leading with it is what
+  // made the page look like a data-entry form rather than an answer.
+  const [mapOpen, setMapOpen] = useState(false);
 
   const rows = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -173,17 +176,39 @@ export default function TaxScreen() {
         )}
       </Card>
 
-      {d?.state === 'not_configured' && (
+      {/* ── the answer, first ────────────────────────────────────────────
+          This page exists to say what the revenue costs in tax. It used to
+          show nothing at all until a 431-row mapping exercise was finished,
+          which answered the question with a blank page. It now answers from
+          the data already held and names what it assumed. */}
+      {d?.state === 'ok' && (
         <Card className="mb-4">
-          <p className="text-[13px]">
-            Set your entity type and year end above to see figures. Nothing is estimated until then —
-            a limited company pays Corporation Tax and a sole trader pays Income Tax with Class 4 NIC,
-            and guessing which would be quoting the wrong tax entirely.
-          </p>
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-muted">
+                Estimated tax on this year
+              </p>
+              <p className="display mt-1 text-[34px] font-bold leading-none">{gbp(d.totalTaxPence)}</p>
+              <p className="mt-1.5 text-[12.5px] text-ink-muted">
+                on {gbp(d.revenuePence)} revenue
+                {d.profitPence !== null && d.profitPence !== undefined && <> · {gbp(d.profitPence)} profit</>}
+              </p>
+            </div>
+            <div className="text-[12.5px] text-ink-muted">
+              {ct?.state === 'ok' && <div>Corporation Tax {gbp(ct.taxPence)}</div>}
+              {vat?.state === 'ok' && s?.vat_registered && <div>VAT {gbp(vat.outputVatPence)}</div>}
+              {vat?.state === 'ok' && !s?.vat_registered && <div>VAT — not registered</div>}
+            </div>
+          </div>
+          {(d.assumptions?.length ?? 0) > 0 && (
+            <ul className="mt-3 list-disc space-y-0.5 border-t border-border pl-5 pt-3 text-[12px] text-ink-muted">
+              {d.assumptions!.map((a) => <li key={a}>{a}</li>)}
+            </ul>
+          )}
         </Card>
       )}
 
-      {/* ── the headline figures ─────────────────────────────────────────── */}
+      {/* ── the components ──────────────────────────────────────────────── */}
       {d?.state === 'ok' && (
         <div className="mb-4 grid gap-3 sm:grid-cols-3">
           <Stat
@@ -248,10 +273,18 @@ export default function TaxScreen() {
       <Card className="mb-4">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="display text-[15px] font-bold">VAT liability by treatment</h3>
+            <button
+              type="button"
+              className="display flex items-center gap-2 text-[15px] font-bold"
+              onClick={() => setMapOpen((v) => !v)}
+            >
+              <span className="text-[12px] text-ink-muted">{mapOpen ? '\u25be' : '\u25b8'}</span>
+              Refine the VAT split
+            </button>
             <p className="text-[12px] text-ink-muted">
-              Nothing is guessed from the name — HMRC requires each case on its own facts. Richest
-              first, so the figures become meaningful long before the list ends.
+              Everything is counted as exempt dental care unless you say otherwise — HMRC&rsquo;s
+              position is that dental work is rarely purely cosmetic. Mark the standalone cosmetic
+              work and retail sales here; the figures above update as you do.
             </p>
           </div>
           {treatments.data && (
@@ -260,6 +293,8 @@ export default function TaxScreen() {
             </span>
           )}
         </div>
+        {mapOpen && (
+        <>
         <input
           className="mb-2 w-full rounded-lg border border-border px-3 py-1.5 text-[13px]"
           placeholder="Search treatments"
@@ -272,13 +307,17 @@ export default function TaxScreen() {
               <span className="min-w-0 flex-1 truncate">{t.description || '(no name)'}</span>
               <span className="whitespace-nowrap tabular-nums text-ink-muted">{gbp(t.amountPence)}</span>
               <span className="inline-flex overflow-hidden rounded border border-slate-300">
-                {([['exempt', 'Exempt'], ['standard', 'Standard'], [null, 'Unset']] as const).map(([v, l]) => (
+                {([['exempt', 'Exempt'], ['standard', 'Standard']] as const).map(([v, l]) => (
                   <button
                     key={l}
                     type="button"
                     onClick={() => setLiability.mutate({ description: t.description, liability: v as Liability | null })}
                     className={`px-2 py-1 text-[12px] ${
-                      (t.liability ?? null) === v ? 'bg-slate-900 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                      (t.liability ?? null) === v
+                        ? 'bg-slate-900 text-white'
+                        : v === 'exempt' && t.liability == null
+                          ? 'bg-slate-100 text-slate-500'   // counted as exempt by default
+                          : 'bg-white text-slate-600 hover:bg-slate-50'
                     }`}
                   >
                     {l}
@@ -293,6 +332,8 @@ export default function TaxScreen() {
           <button type="button" className="mt-2 text-[12.5px] text-brand underline" onClick={() => setShowAll(true)}>
             Show all {treatments.data?.treatments.length} treatments
           </button>
+        )}
+        </>
         )}
       </Card>
 

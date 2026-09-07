@@ -19,33 +19,49 @@ describe('splitRevenueByLiability', () => {
         // 'Composite bonding' deliberately unmapped
     };
 
-    it('splits using the practice mapping only', () => {
+    it('splits using the practice mapping, defaulting the rest to exempt', () => {
         const r = splitRevenueByLiability(lines, mapping);
-        expect(r.exemptPence).toBe(142_300_00);
+        // 142,300 mapped exempt + 41,200 defaulted exempt.
+        expect(r.exemptPence).toBe(142_300_00 + 41_200_00);
         expect(r.standardNetPence).toBe(19_800_00);
     });
 
-    // The heart of it: unmapped revenue must never be quietly treated as
-    // exempt, which is the assumption that understates a VAT bill to zero.
-    it('reports unmapped revenue separately, never as exempt', () => {
+    // Unmapped revenue is COUNTED as exempt — HMRC's stated position is that
+    // dental work is rarely purely cosmetic — but is always reported as
+    // assumed, so an assumption can never be mistaken for a decision.
+    it('counts unmapped revenue as exempt and reports it as assumed', () => {
         const r = splitRevenueByLiability(lines, mapping);
-        expect(r.unmappedPence).toBe(41_200_00);
+        expect(r.assumedPence).toBe(41_200_00);
+        expect(r.exemptPence).toBe(142_300_00 + 41_200_00);
         expect(r.unmapped[0]).toEqual({ description: 'Composite bonding', amountPence: 41_200_00 });
-        expect(r.exemptPence).not.toContain?.(41_200_00);
+    });
+
+    it('honours an explicit standard rating over the default', () => {
+        const r = splitRevenueByLiability(lines, mapping);
+        expect(r.standardNetPence).toBe(19_800_00);
     });
 
     it('accounts for every penny across the buckets', () => {
         const r = splitRevenueByLiability(lines, mapping);
-        const sum = r.exemptPence + r.standardNetPence + r.outsideScopePence + r.unmappedPence;
+        const sum = r.exemptPence + r.standardNetPence + r.outsideScopePence;
         expect(sum).toBe(r.totalPence);
         expect(sum).toBe(lines.reduce((n, l) => n + l.amountPence, 0));
     });
 
-    it('treats an empty mapping as everything unmapped, not everything exempt', () => {
+    it('with no mapping at all, everything is exempt and all of it is assumed', () => {
+        const total = lines.reduce((n, l) => n + l.amountPence, 0);
         const r = splitRevenueByLiability(lines, {});
-        expect(r.exemptPence).toBe(0);
+        expect(r.exemptPence).toBe(total);
         expect(r.standardNetPence).toBe(0);
-        expect(r.unmappedPence).toBe(lines.reduce((n, l) => n + l.amountPence, 0));
+        expect(r.assumedPence).toBe(total);
+    });
+
+    // The default must be overridable, or a practice that IS mostly cosmetic
+    // could never be represented.
+    it('accepts a different default', () => {
+        const r = splitRevenueByLiability(lines, {}, { defaultLiability: 'standard' });
+        expect(r.standardNetPence).toBe(lines.reduce((n, l) => n + l.amountPence, 0));
+        expect(r.exemptPence).toBe(0);
     });
 });
 
@@ -120,7 +136,7 @@ describe('normaliseDescription', () => {
             { 'composite filling': LIABILITY.EXEMPT },
         );
         expect(r.exemptPence).toBe(1000);
-        expect(r.unmappedPence).toBe(0);
+        expect(r.assumedPence).toBe(0);
     });
 
     it('groups two spellings into ONE unmapped row, not two', () => {

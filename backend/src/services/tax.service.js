@@ -87,6 +87,10 @@ export const taxService = {
                 // HMRC requires cosmetic cases to be judged on their own facts,
                 // so a name-derived hint here would be read as an answer.
                 liability: map[normalise(r.description)] ?? null,
+                // What it is being COUNTED as right now, whether or not anyone
+                // has said so — the page shows this, so a reader is never
+                // guessing which bucket an unmarked treatment fell into.
+                effectiveLiability: map[normalise(r.description)] ?? 'exempt',
                 cumulativeSharePct: totalPence > 0 ? round1((cumulative / totalPence) * 100) : null,
             };
         });
@@ -108,30 +112,58 @@ export const taxService = {
     async overview(orgId, { onDate = londonYmd(), practiceId = null } = {}) {
         const settings = await taxRepository.settings(orgId);
 
-        // No settings at all is a first-run state, not a zero bill.
-        if (!settings || !settings.entity_type) {
-            return {
-                state: 'not_configured',
-                settings: settings ?? null,
-                vat: null, corporationTax: null,
-                caveats: ['Tell us your entity type and year end on Settings → Tax to see any figures.'],
-            };
+        // ASSUME AND LABEL, never block. The first version returned
+        // `not_configured` and no figures at all until the owner filled in a
+        // form, which meant the page answered "what tax do I owe" with nothing.
+        // The question is answerable from data already held, so it is answered,
+        // with every assumption named and changeable.
+        //
+        // Limited company and 31 March are the commonest UK dental group shape;
+        // both are one dropdown away from correct, and a labelled assumption is
+        // worth far more than a blank page.
+        const assumptions = [];
+        const entityType = settings?.entity_type ?? 'limited_company';
+        if (!settings?.entity_type) {
+            assumptions.push('Assumed a limited company. Change it above if you are a sole trader, partnership or LLP — they pay Income Tax and Class 4 NIC instead.');
         }
+        const yearEndDay = settings?.year_end_day ?? 31;
+        const yearEndMonth = settings?.year_end_month ?? 3;
+        if (!settings?.year_end_day || !settings?.year_end_month) {
+            assumptions.push('Assumed a 31 March year end.');
+        }
+        const effective = {
+            ...(settings ?? {}),
+            entity_type: entityType,
+            year_end_day: yearEndDay,
+            year_end_month: yearEndMonth,
+            associated_companies: settings?.associated_companies ?? 1,
+            prices_include_vat: settings?.prices_include_vat !== false,
+            vat_registered: Boolean(settings?.vat_registered),
+        };
 
         const period = accountingPeriod(
-            { yearEndDay: settings.year_end_day, yearEndMonth: settings.year_end_month },
+            { yearEndDay, yearEndMonth },
             onDate,
         );
 
         const [vat, ct] = await Promise.all([
-            this._vat(orgId, settings, onDate, practiceId),
-            this._corporationTax(orgId, settings, period),
+            this._vat(orgId, effective, onDate, practiceId),
+            this._corporationTax(orgId, effective, period),
         ]);
+
+        // The headline the page was asked for: what this revenue costs in tax.
+        const totalTaxPence = (ct?.state === 'ok' ? ct.taxPence : 0)
+            + (vat?.state === 'ok' ? vat.outputVatPence : 0);
 
         return {
             state: 'ok',
-            settings,
+            settings: settings ?? null,
+            effectiveSettings: effective,
+            assumptions,
             period,
+            revenuePence: vat?.totalPence ?? null,
+            profitPence: ct?.state === 'ok' ? ct.profitPence : null,
+            totalTaxPence,
             vat,
             corporationTax: ct,
             caveats: [
@@ -169,9 +201,9 @@ export const taxService = {
         });
 
         const caveats = [];
-        if (split.unmappedPence > 0) {
+        if (split.assumedPence > 0) {
             caveats.push(
-                `£${pounds(split.unmappedPence)} of revenue has no VAT liability set, so it is excluded from both buckets. Map it on Settings → Tax.`,
+                `£${pounds(split.assumedPence)} of revenue is treated as exempt dental care by default — HMRC's position is that dental work is rarely purely cosmetic. Mark any standalone cosmetic or retail sales below and the VAT figure updates.`,
             );
         }
         if (reg.indeterminate) {
@@ -188,6 +220,11 @@ export const taxService = {
             standardPence: split.standardNetPence,
             outsideScopePence: split.outsideScopePence,
             unmappedPence: split.unmappedPence,
+            // How much of the split rests on the default rather than a
+            // decision. Surfaced so the page can say it, and so a reader can
+            // never mistake an assumption for a classification.
+            assumedPence: split.assumedPence,
+            assumedLiability: split.assumedLiability,
             totalPence: split.totalPence,
             outputVatPence: settings.vat_registered ? out.vatPence : 0,
             pricesIncludeVat: settings.prices_include_vat !== false,

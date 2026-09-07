@@ -19,10 +19,18 @@
 // healthcare context is standard-rated, and "each case will need to be
 // considered on its own facts".
 //
-// So there is no name rule here, and deliberately no default. A treatment's
-// liability is whatever the practice has explicitly mapped it to; anything
-// unmapped is reported AS unmapped and never folded into either bucket. A
-// figure that guessed would be a VAT return built on a guess.
+// WHAT THAT MEANS FOR THE DEFAULT — and this corrects an earlier reading of
+// the same guidance. There is no NAME rule: nothing here inspects a treatment's
+// words to decide its liability. But HMRC's stated position IS that dental work
+// is overwhelmingly exempt, so EXEMPT is the honest default and the practice
+// marks the exceptions — the standalone cosmetic work and the retail sales.
+//
+// The first version defaulted to "unmapped" and folded nothing into either
+// bucket, which was defensible and useless: it made a 431-treatment data-entry
+// chore the price of seeing any figure at all, and the page showed a tax
+// position of nothing until it was finished. Defaulting to the documented norm
+// gives a real number immediately and still tracks exactly how much of it rests
+// on the assumption, so the number is never mistaken for a mapped one.
 // ============================================================================
 
 // Treatment names arrive from the PMS with whatever whitespace and casing the
@@ -50,25 +58,31 @@ export const LIABILITY = Object.freeze({
  *            unmappedPence: number, unmapped: Array<{description: string, amountPence: number}>,
  *            totalPence: number}}
  */
-export function splitRevenueByLiability(lines, liabilityByDescription = {}) {
-    let exemptPence = 0, standardNetPence = 0, outsideScopePence = 0, unmappedPence = 0;
+export function splitRevenueByLiability(lines, liabilityByDescription = {}, {
+    defaultLiability = LIABILITY.EXEMPT,
+} = {}) {
+    let exemptPence = 0, standardNetPence = 0, outsideScopePence = 0;
+    // Revenue counted under the DEFAULT rather than an explicit decision. It is
+    // inside the buckets (so the figures are real) and reported separately (so
+    // nobody mistakes an assumption for a classification).
+    let assumedPence = 0;
     const unmappedBy = new Map();
 
     for (const line of lines ?? []) {
         const amount = Number(line?.amountPence) || 0;
         const key = normaliseDescription(line?.description);
-        const liability = liabilityByDescription[key];
+        const explicit = liabilityByDescription[key];
+        const liability = explicit ?? defaultLiability;
+
+        if (!explicit) {
+            assumedPence += amount;
+            const label = String(line?.description ?? '').trim();
+            unmappedBy.set(label, (unmappedBy.get(label) ?? 0) + amount);
+        }
 
         if (liability === LIABILITY.EXEMPT) exemptPence += amount;
         else if (liability === LIABILITY.STANDARD) standardNetPence += amount;
         else if (liability === LIABILITY.OUTSIDE_SCOPE) outsideScopePence += amount;
-        else {
-            unmappedPence += amount;
-            // Report the name as the practice wrote it, but group by the
-            // normalised key so two spellings are one row to map.
-            const label = String(line?.description ?? '').trim();
-            unmappedBy.set(label, (unmappedBy.get(label) ?? 0) + amount);
-        }
     }
 
     const unmapped = [...unmappedBy.entries()]
@@ -76,8 +90,13 @@ export function splitRevenueByLiability(lines, liabilityByDescription = {}) {
         .sort((a, b) => b.amountPence - a.amountPence);
 
     return {
-        exemptPence, standardNetPence, outsideScopePence, unmappedPence, unmapped,
-        totalPence: exemptPence + standardNetPence + outsideScopePence + unmappedPence,
+        exemptPence, standardNetPence, outsideScopePence,
+        // Kept under its old name so callers reading "how much is not decided"
+        // still work; it is now the amount resting on the default.
+        unmappedPence: assumedPence,
+        assumedPence, assumedLiability: defaultLiability,
+        unmapped,
+        totalPence: exemptPence + standardNetPence + outsideScopePence,
     };
 }
 

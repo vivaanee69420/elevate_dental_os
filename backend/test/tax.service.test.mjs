@@ -76,25 +76,40 @@ describe('taxService.overview', () => {
         analyticsService.plMargin = orig.plMargin;
     });
 
-    // An org that has not told us its entity type must not be quoted a tax
-    // bill computed on a guessed regime.
-    it('is not_configured until the entity type is known', async () => {
+    // The page's whole job is to say what the revenue costs in tax, so an org
+    // with no settings still gets figures — computed on a stated assumption,
+    // never on silence. The earlier version returned nothing at all here,
+    // which answered the question with a blank page.
+    it('still answers with no settings, and names what it assumed', async () => {
         taxRepository.settings = async () => null;
         const r = await taxService.overview(ORG, { onDate: '2026-09-07' });
-        expect(r.state).toBe('not_configured');
-        expect(r.corporationTax).toBeNull();
-        expect(r.vat).toBeNull();
+        expect(r.state).toBe('ok');
+        expect(r.corporationTax.state).toBe('ok');
+        expect(r.totalTaxPence).toBeGreaterThan(0);
+        expect(r.assumptions.join(' ')).toMatch(/limited company/i);
+        expect(r.assumptions.join(' ')).toMatch(/31 March/i);
     });
 
-    it('computes VAT on the mapped split and reports the rest as unmapped', async () => {
+    // …but a real setting must always beat the assumption.
+    it('prefers a stored entity type over the assumed one', async () => {
+        taxRepository.settings = async () => ({ ...LTD, entity_type: 'sole_trader' });
+        const r = await taxService.overview(ORG, { onDate: '2026-09-07' });
+        expect(r.assumptions).toEqual([]);
+        expect(r.corporationTax.state).toBe('not_applicable');
+    });
+
+    it('computes VAT on the mapped split, defaulting the rest to exempt', async () => {
         taxRepository.settings = async () => LTD;
         const r = await taxService.overview(ORG, { onDate: '2026-09-07' });
-        expect(r.vat.exemptPence).toBe(100_000_00);
         expect(r.vat.standardPence).toBe(12_000_00);
-        expect(r.vat.unmappedPence).toBe(30_000_00);
+        // Unmapped revenue is now COUNTED as exempt (HMRC's stated norm for
+        // dental work) and reported as assumed, rather than excluded from both
+        // buckets and rendering the VAT figure meaningless.
+        expect(r.vat.assumedPence).toBe(30_000_00);
+        expect(r.vat.exemptPence).toBe(130_000_00);
         // Prices include VAT, so the VAT is the 1/6 fraction of the gross.
         expect(r.vat.outputVatPence).toBe(2_000_00);
-        expect(r.caveats.join(' ')).toMatch(/no VAT liability set/);
+        expect(r.caveats.join(' ')).toMatch(/treated as exempt dental care by default/);
     });
 
     // The threshold test must use TAXABLE turnover. £100k of exempt dental
@@ -126,10 +141,12 @@ describe('taxService.overview', () => {
         expect(r.corporationTax.taxPence).toBeUndefined();
     });
 
-    it('says so rather than guessing when the year end is unset', async () => {
+    it('assumes a 31 March year end when none is set, and says so', async () => {
         taxRepository.settings = async () => ({ ...LTD, year_end_day: null, year_end_month: null });
         const r = await taxService.overview(ORG, { onDate: '2026-09-07' });
-        expect(r.corporationTax.state).toBe('no_period');
+        expect(r.corporationTax.state).toBe('ok');
+        expect(r.period.end).toBe('2027-03-31');
+        expect(r.assumptions.join(' ')).toMatch(/31 March/i);
     });
 
     // MULTI-TENANCY: every read is asked for the caller's own org, and one

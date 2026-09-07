@@ -26,6 +26,8 @@ export interface VatBlock {
   standardPence: number;
   outsideScopePence: number;
   unmappedPence: number;
+  /** Revenue counted under the default rather than an explicit decision. */
+  assumedPence?: number;
   totalPence: number;
   outputVatPence: number;
   pricesIncludeVat: boolean;
@@ -64,6 +66,13 @@ export interface CtBlock {
 export interface TaxOverview {
   state: 'ok' | 'not_configured';
   settings: TaxSettings | null;
+  /** What was actually used, including any assumed value. */
+  effectiveSettings?: TaxSettings;
+  /** Plain-English list of what was assumed, empty when everything is set. */
+  assumptions?: string[];
+  revenuePence?: number | null;
+  profitPence?: number | null;
+  totalTaxPence?: number;
   period?: { start: string; end: string; days: number } | null;
   vat: VatBlock | null;
   corporationTax: CtBlock | null;
@@ -75,6 +84,8 @@ export interface TreatmentRow {
   amountPence: number;
   lineCount: number;
   liability: Liability | null;
+  /** What it is counted as right now, mapped or defaulted. */
+  effectiveLiability?: Liability;
   cumulativeSharePct: number | null;
 }
 
