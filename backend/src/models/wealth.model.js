@@ -102,19 +102,10 @@ export const exitPlanInputSchema = zod_1.z.object({
 
 // Full persisted blob (PUT /inputs). Every section defaults so a partial body
 // is valid and a never-configured org reads sane empties.
-export const wealthInputsSchema = zod_1.z.object({
-    assets: zod_1.z.array(assetSchema).max(100).default([]),
-    liabilities: zod_1.z.array(liabilitySchema).max(100).default([]),
-    pensions: zod_1.z.array(pensionSchema).max(100).default([]),
-    properties: zod_1.z.array(propertySchema).max(100).default([]),
-    exit: exitPlanInputSchema.default({}),
-});
-
-// Pure recompute body for the Exit Plan sliders (audit-exempt). The screen posts
-// the full input; currentValuePence is whatever it last seeded from /fire.
-export const exitPlanComputeSchema = exitPlanInputSchema;
-
-// ── pure /compute bodies ─────────────────────────────────────────────────────
+// Declared BEFORE wealthInputsSchema, which references it: these are plain
+// `const`s evaluated top to bottom, so a forward reference is a ReferenceError
+// at import — and `npm run typecheck` is `node --check`, which parses but never
+// evaluates, so it cannot catch that. Only importing the module does.
 export const saleWaterfallSchema = zod_1.z.object({
     enterpriseValuePence: PENCE.default(0),
     businessDebtPence: PENCE.default(0),
@@ -123,6 +114,26 @@ export const saleWaterfallSchema = zod_1.z.object({
     freeholdEquityPence: PENCE.default(0),
     badrLifetimeUsedPence: PENCE.default(0),
 });
+
+// NO DEFAULTS on the sections. A default turns "the caller did not send this"
+// into "the caller sent an empty one", and the service writes what it is given
+// — which is how saving the Exit Plan used to wipe the whole balance sheet.
+// Every section is optional; the service writes only what arrives. Line-item
+// defaults inside each array element are unaffected.
+export const wealthInputsSchema = zod_1.z.object({
+    assets: zod_1.z.array(assetSchema).max(100).optional(),
+    liabilities: zod_1.z.array(liabilitySchema).max(100).optional(),
+    pensions: zod_1.z.array(pensionSchema).max(100).optional(),
+    properties: zod_1.z.array(propertySchema).max(100).optional(),
+    exit: exitPlanInputSchema.optional(),
+    sale: saleWaterfallSchema.optional(),
+});
+
+// Pure recompute body for the Exit Plan sliders (audit-exempt). The screen posts
+// the full input; currentValuePence is whatever it last seeded from /fire.
+export const exitPlanComputeSchema = exitPlanInputSchema;
+
+// ── pure /compute bodies ─────────────────────────────────────────────────────
 
 export const firePlanSchema = zod_1.z.object({
     liquidAssetsPence: PENCE.default(0),

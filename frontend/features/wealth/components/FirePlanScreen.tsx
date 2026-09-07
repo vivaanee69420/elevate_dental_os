@@ -214,6 +214,11 @@ export default function FirePlanScreen() {
   const [inp, setInp] = useState<ExitPlanInput | null>(null);
   const [result, setResult] = useState<ExitPlanResult | null>(null);
   const [showBreak, setShowBreak] = useState(false);
+  // The plan as it was last persisted, so "unsaved changes" is a comparison
+  // against the server's copy rather than a flag someone has to remember to
+  // set on every edit path.
+  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Seed the editable inputs + initial plan from /fire (already resolved: live
@@ -223,6 +228,9 @@ export default function FirePlanScreen() {
       const { baseYear: _b, ...rest } = seed.data.inputs;
       setInp(rest);
       setResult(seed.data.plan);
+      // Whatever the server seeded IS the saved state; without this baseline
+      // the page would open claiming unsaved changes before anything is typed.
+      setSavedSnapshot(JSON.stringify(rest));
     }
   }, [seed.data, inp]);
 
@@ -268,7 +276,27 @@ export default function FirePlanScreen() {
   const setIncomeShown = (pounds: number) =>
     set({ incomePence: toPence(inp.incomePer === 'month' ? pounds * 12 : pounds) });
 
-  const onSave = () => save.mutate({ exit: inp });
+  const dirty = inp !== null && savedSnapshot !== null && JSON.stringify(inp) !== savedSnapshot;
+
+  // The plan takes real effort to fill in and every field recomputes live, so
+  // it is easy to believe it persisted. Warn before the tab is closed or
+  // reloaded with changes still unsaved.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+
+  const onSave = () => {
+    if (!inp) return;
+    // Snapshot the exact object sent, taken at send time: an edit made while
+    // the request is in flight must still count as unsaved afterwards.
+    const sent = JSON.stringify(inp);
+    save.mutate({ exit: inp }, {
+      onSuccess: () => { setSavedSnapshot(sent); setSavedAt(new Date()); },
+    });
+  };
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1100 }}>
@@ -279,10 +307,31 @@ export default function FirePlanScreen() {
             Your personal endgame — the income you want to retire on, the 4%-rule pot it demands, what the sale and freehold rent cover, and exactly what to build to get there.
           </p>
         </div>
-        <button onClick={onSave} disabled={save.isPending} className="chip"
-          style={{ padding: '8px 16px', fontWeight: 600, cursor: 'pointer', opacity: save.isPending ? 0.6 : 1 }}>
-          {save.isPending ? 'Saving…' : 'Save plan'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* Say which of the three states the plan is in. Before this the
+              button returned to "Save plan" on success exactly as it looked
+              before the click, so a save that worked and a save that never
+              happened were indistinguishable. */}
+          <span className="text-ink-muted" style={{ fontSize: 12 }} aria-live="polite">
+            {save.isPending ? 'Saving…'
+              : dirty ? 'Unsaved changes'
+              : savedAt ? `Saved ${savedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`
+              : 'No changes since last save'}
+          </span>
+          <button
+            onClick={onSave}
+            disabled={save.isPending || !dirty}
+            className="chip"
+            title={dirty ? 'Save this plan' : 'Nothing has changed since the last save'}
+            style={{
+              padding: '8px 16px', fontWeight: 600,
+              cursor: save.isPending || !dirty ? 'default' : 'pointer',
+              opacity: save.isPending || !dirty ? 0.5 : 1,
+            }}
+          >
+            {save.isPending ? 'Saving…' : 'Save plan'}
+          </button>
+        </div>
       </div>
 
       {/* Verdict */}
@@ -526,7 +575,12 @@ export default function FirePlanScreen() {
       <p className="text-ink-muted" style={{ fontSize: 11 }}>
         UK income-tax bands 2025/26 used for the gross-up (allowance £12,570, 20/40/45%; allowance tapers over £100k). The 4% rule draws the withdrawal rate of the balance each year; with returns above it the pot keeps growing. Sale assumes the agent fee + CGT rate you set ({valuationSource === 'live' ? 'group value from the live valuation midpoint' : 'manual group value'}). Planning estimates — confirm tax and returns with your accountant &amp; IFA.
       </p>
-      {save.isError && <p style={{ color: '#b91c1c', fontSize: 12, marginTop: 8 }}>Save failed: {String(save.error?.message ?? '')}</p>}
+      {save.isError && (
+        <p style={{ color: '#b91c1c', fontSize: 12, marginTop: 8 }} role="alert">
+          Could not save your plan{save.error?.message ? ` — ${save.error.message}` : ''}. Your
+          changes are still here; press Save plan to try again.
+        </p>
+      )}
     </div>
   );
 }

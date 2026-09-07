@@ -40,15 +40,28 @@ export const wealthService = {
 
     // Persist the validated blob (wealthInputsSchema output) then read it back.
     // Exit Plan state is stored in the `fire` column; legacy `sale` is cleared.
+    // PARTIAL BY SECTION. The Exit Plan screen sends only { exit }; the Wealth
+    // screen sends only the balance sheet. Writing every column on every call
+    // meant an Exit Plan save wiped assets, liabilities, pensions, properties
+    // and the sale block — wealthInputsSchema defaults those arrays to [], so
+    // the destructive write looked like a legitimate empty one and nothing
+    // errored.
+    //
+    // Keyed off which sections the CALLER SENT, never off whether the value is
+    // empty: deleting your last asset is a real instruction that must persist,
+    // and [] and "absent" have to mean different things for that to work.
     async saveInputs(orgId, inputs, userId) {
-        await wealth_repository_1.wealthRepository.upsert(orgId, {
-            assets: inputs.assets,
-            liabilities: inputs.liabilities,
-            pensions: inputs.pensions,
-            properties: inputs.properties,
-            fire: inputs.exit,
-            sale: {},
-        }, userId);
+        const fields = {};
+        for (const key of ['assets', 'liabilities', 'pensions', 'properties']) {
+            if (inputs[key] !== undefined) fields[key] = inputs[key];
+        }
+        if (inputs.exit !== undefined) fields.fire = inputs.exit;
+        if (inputs.sale !== undefined) fields.sale = inputs.sale;
+
+        // Nothing sent is a no-op, not an empty write.
+        if (Object.keys(fields).length > 0) {
+            await wealth_repository_1.wealthRepository.upsert(orgId, fields, userId);
+        }
         return this.getInputs(orgId);
     },
 
