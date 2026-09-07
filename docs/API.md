@@ -819,8 +819,11 @@ Dentally accepts both connect methods, selected by `method` on the body:
   sub-account authorises the COMPANY, so GHL returns `companyId` and NO
   `locationId`. That one consent becomes N subaccounts: the agency token (the
   only renewable credential here) is stored on the org's `integrations` row via
-  `persistTokens`, `GET /oauth/installedLocations` lists the Locations the app
-  was installed into, and each gets an `integration_accounts` row whose token is
+  `persistTokens`, `GET /oauth/installedLocations` lists the agency's Locations —
+  **every** one, each flagged `isInstalled`, despite the endpoint's name; only
+  the flagged ones can mint a token, and asking for the rest fails once per
+  location and buries the connection that worked (measured live: 10 returned,
+  1 installed). The count of the rest is returned as `available` — and each gets an `integration_accounts` row whose token is
   minted by `POST /oauth/locationToken`. Those minted tokens carry **no refresh
   token**, so the row records `config.auth = 'oauth_company'` and
   `ensureAccountToken` RE-MINTS it from the agency token instead of refreshing

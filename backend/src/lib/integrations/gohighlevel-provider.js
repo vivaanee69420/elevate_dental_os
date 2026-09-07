@@ -154,9 +154,22 @@ export async function listInstalledLocations(agencyToken, companyId) {
     const qs = new URLSearchParams({ companyId: String(companyId), appId: appId() });
     const body = await ghlOAuthGet(`/oauth/installedLocations?${qs}`, agencyToken);
     const rows = body.locations ?? body.data ?? [];
-    return rows
-        .map((l) => ({ id: String(l._id ?? l.id ?? ''), name: l.name ?? null }))
+    const mapped = rows
+        .map((l) => ({
+            id: String(l._id ?? l.id ?? ''),
+            name: l.name ?? null,
+            installed: l.isInstalled === true,
+        }))
         .filter((l) => l.id);
+    // Despite the endpoint's name it returns EVERY location the agency has,
+    // each carrying isInstalled. Ignoring that flag asks GHL to mint a token
+    // for locations the app was never installed on — which fails, once per
+    // location, and buries the one that worked under nine errors the owner
+    // cannot act on. Measured on this agency: 10 returned, 1 installed.
+    return {
+        installed: mapped.filter((l) => l.installed),
+        available: mapped.filter((l) => !l.installed).length,
+    };
 }
 
 /**
@@ -324,9 +337,10 @@ async function finishAgencyConnect(orgId, body) {
     const companyId = String(body.companyId);
 
     let locations = [];
+    let available = 0;
     try {
-        locations = await listInstalledLocations(body.access_token, companyId);
-        console.log(`[gohighlevel] agency ${companyId}: ${locations.length} installed location(s)`,
+        ({ installed: locations, available } = await listInstalledLocations(body.access_token, companyId));
+        console.log(`[gohighlevel] agency ${companyId}: ${locations.length} installed, ${available} not installed`,
             JSON.stringify(locations.map((l) => l.name ?? l.id)));
     } catch (err) {
         await integrationsRepository.markFailed(orgId, 'gohighlevel', err.message);
@@ -336,7 +350,7 @@ async function finishAgencyConnect(orgId, body) {
         // The consent worked; the app just is not on any sub-account yet, and
         // that is a thing the owner fixes in GoHighLevel, not a failure here.
         await integrationsRepository.upsert(orgId, 'gohighlevel', { status: 'active', last_error: null });
-        return { ok: true, companyId, accounts: [], locations: 0 };
+        return { ok: true, companyId, accounts: [], locations: 0, available };
     }
 
     const accounts = [];
@@ -383,7 +397,7 @@ async function finishAgencyConnect(orgId, body) {
             .then(({ bootstrapAccount }) => bootstrapAccount(orgId, accounts[0]))
             .catch((err) => console.error('[gohighlevel] agency bootstrap failed:', err?.message || err));
     }
-    return { ok: true, companyId, accounts, locations: locations.length, failed, autoPull };
+    return { ok: true, companyId, accounts, locations: locations.length, failed, autoPull, available };
 }
 
 export const GoHighLevelProvider = {

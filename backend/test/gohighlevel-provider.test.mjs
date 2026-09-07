@@ -244,6 +244,9 @@ describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
             if (u.includes('/oauth/installedLocations')) {
                 return { ok: true, json: async () => ({ locations }) };
             }
+            if (u.includes('/locations/')) {
+                return { ok: true, json: async () => ({ location: { id: 'loc', name: 'X' } }) };
+            }
             if (u.endsWith('/oauth/locationToken')) {
                 const locId = new URLSearchParams(opts.body).get('locationId');
                 if (mintFails.includes(locId)) {
@@ -260,7 +263,8 @@ describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
     it('creates one subaccount per installed location and keeps the agency token separate', async () => {
         Object.assign(process.env, OAUTH_ENV);
         const fetchMock = routeFetch({ locations: [
-            { _id: 'loc-1', name: 'Rochester' }, { _id: 'loc-2', name: 'Ashford' },
+            { _id: 'loc-1', name: 'Rochester', isInstalled: true },
+            { _id: 'loc-2', name: 'Ashford', isInstalled: true },
         ] });
         vi.stubGlobal('fetch', fetchMock);
 
@@ -296,7 +300,7 @@ describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
 
     it('pulls straight away when there is exactly one location', async () => {
         Object.assign(process.env, OAUTH_ENV);
-        vi.stubGlobal('fetch', routeFetch({ locations: [{ _id: 'loc-1', name: 'Rochester' }] }));
+        vi.stubGlobal('fetch', routeFetch({ locations: [{ _id: 'loc-1', name: 'Rochester', isInstalled: true }] }));
         // One location is not a decision — the same rule dentally-sync applies
         // to a single site.
         const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
@@ -306,7 +310,10 @@ describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
     it('connects the locations that work and names the ones that do not', async () => {
         Object.assign(process.env, OAUTH_ENV);
         vi.stubGlobal('fetch', routeFetch({
-            locations: [{ _id: 'loc-1', name: 'Rochester' }, { _id: 'loc-2', name: 'Ashford' }],
+            locations: [
+                { _id: 'loc-1', name: 'Rochester', isInstalled: true },
+                { _id: 'loc-2', name: 'Ashford', isInstalled: true },
+            ],
             mintFails: ['loc-2'],
         }));
         const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
@@ -316,6 +323,26 @@ describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
         expect(res.failed[0]).toMatch(/Ashford/);
         const marker = integrationRepository.upsert.mock.calls.at(-1)[2];
         expect(marker.last_error).toMatch(/Ashford/);
+    });
+
+    it('skips the locations the app was never installed on', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        // Despite its name the endpoint returns EVERY location the agency has,
+        // flagged. Measured on the live agency: 10 returned, 1 installed. Minting
+        // for the other 9 fails once each and buries the one that worked under
+        // errors the owner cannot act on.
+        vi.stubGlobal('fetch', routeFetch({ locations: [
+            { _id: 'loc-1', name: 'GM Dental And Implant Centre', isInstalled: true },
+            { _id: 'loc-2', name: 'Missing Teeth', isInstalled: false },
+            { _id: 'loc-3', name: 'Plan4Growth', isInstalled: false },
+        ] }));
+        const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
+        expect(res).toMatchObject({ locations: 1, available: 2, autoPull: true });
+        expect(res.failed).toEqual([]);
+        const rows = integrationAccountRepository.insert.mock.calls.map((c) => c[1]);
+        expect(rows.map((r) => r.external_account_id)).toEqual(['loc-1']);
+        // And the tile must not read "Needs attention" over a healthy connection.
+        expect(integrationRepository.upsert.mock.calls.at(-1)[2].last_error).toBeNull();
     });
 
     it('succeeds with zero locations rather than reporting a broken connection', async () => {
