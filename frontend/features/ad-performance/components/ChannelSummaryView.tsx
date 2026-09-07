@@ -23,6 +23,7 @@ import { EmptyState, Skeleton } from '@/components/ui';
 import { StatRail } from '@/features/marketing/_shared/StatRail';
 import { DeltaInline } from '@/features/marketing/_shared/DeltaBadge';
 import { CampaignHighlights, type HighlightCampaign } from '@/features/marketing/_shared/CampaignHighlights';
+import { BestPerformer, type Performer } from '@/features/marketing/_shared/BestPerformer';
 import { computeDelta, type Delta } from '@/features/marketing/_shared/compare';
 
 export interface ChannelTotals {
@@ -34,10 +35,19 @@ export interface ChannelTotals {
   cplPence: number | null;
 }
 
-export interface TierLink {
+/** One grain of the hierarchy — campaign, ad set, ad group, ad, keyword,
+ *  search term — and the row currently winning it. */
+export interface Grain {
   label: string;
-  /** What this grain answers, in one line. Never a fabricated count. */
-  hint: string;
+  /** Best by cost per conversion, or null when nothing in this grain
+   *  converted. A card is not rendered for a null row: "nothing converted" is
+   *  a fact the table below already shows, and repeating it in a highlight
+   *  takes the eye first for no gain. */
+  row: Performer | null;
+  fallbackName: string;
+  /** Shown when the grain has rows but none converted, so the card's absence
+   *  is explained rather than looking like a loading failure. */
+  note?: string | null;
   href: string;
 }
 
@@ -105,7 +115,7 @@ function FunnelChart({ total }: { total: ChannelTotals }) {
 
 export function ChannelSummaryView({
   title, reportHref, isPending, error, notConnected,
-  total, previous, campaigns, tiers, comparisonLabel, onOpenCampaign,
+  total, previous, campaigns, grains, comparisonLabel, onOpenCampaign, onOpenGrain,
 }: {
   title: string;
   reportHref: string;
@@ -117,9 +127,10 @@ export function ChannelSummaryView({
   /** Null when comparison is off — the arrows then simply do not render. */
   previous: ChannelTotals | null;
   campaigns: HighlightCampaign[];
-  tiers: TierLink[];
+  grains: Grain[];
   comparisonLabel: string | null;
   onOpenCampaign: (campaignId: string) => void;
+  onOpenGrain: (href: string) => void;
 }) {
   if (isPending) return <Skeleton className="h-64 w-full" />;
   if (error) return <EmptyState message={`${title}: ${error.message}`} />;
@@ -139,8 +150,7 @@ export function ChannelSummaryView({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 className="font-display text-[17px] font-semibold text-ink">{title}</h3>
+      <div className="flex justify-end">
         <Link href={reportHref} className="text-[12.5px] font-medium text-brand hover:underline">
           Open the full {title} report →
         </Link>
@@ -225,23 +235,30 @@ export function ChannelSummaryView({
           campaign's leads on the full report rather than a dead end here. */}
       <CampaignHighlights campaigns={campaigns} onOpenCampaign={onOpenCampaign} />
 
-      {/* The way through to the detail. These carry no numbers deliberately:
-          a count here would need the deep tables this page exists NOT to load,
-          and an invented one is worse than an honest label. */}
-      <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(160px,1fr))]">
-        {tiers.map((t) => (
-          <Link
-            key={t.href}
-            href={t.href}
-            className="group rounded-panel border border-border bg-surface px-4 py-3 transition-colors hover:border-brand-200 hover:bg-brand-50/30"
-          >
-            <p className="text-[13px] font-medium text-ink">{t.label}</p>
-            <p className="mt-0.5 text-[11.5px] leading-snug text-ink-muted">{t.hint}</p>
-            <p className="mt-1.5 text-[11.5px] text-brand opacity-0 transition-opacity group-hover:opacity-100">
-              Open →
-            </p>
-          </Link>
-        ))}
+      {/* What is winning at each grain, and the way through to the table. A
+          bare link told you nothing; the name of the best ad set at the cost
+          it achieved is the decision. Ranked by cost per conversion — the same
+          basis the report pages rank by, so the two cannot disagree about
+          which row is best. */}
+      <div>
+        <p className="mb-2 text-[12.5px] font-medium text-ink">Best performer at each level</p>
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
+          {grains.map((g) => (
+            <BestPerformer
+              key={g.href}
+              label={g.label}
+              row={g.row}
+              fallbackName={g.fallbackName}
+              note={g.note ?? null}
+              onOpen={() => onOpenGrain(g.href)}
+            />
+          ))}
+        </div>
+        {grains.every((g) => !g.row) && (
+          <p className="text-[12.5px] text-ink-muted">
+            Nothing converted in this period, so there is no best performer to name yet.
+          </p>
+        )}
       </div>
     </div>
   );
