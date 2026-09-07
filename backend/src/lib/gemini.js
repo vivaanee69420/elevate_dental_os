@@ -5,6 +5,7 @@ import { getProvider } from "./ai/index.js";
 import { delimit } from "./ai/guardrails.js";
 import { runToolLoop } from "./ai/tool-loop.js";
 import { getMetricsTool, makeGetMetricsExecutor } from "./ai/tools/get-metrics.js";
+import { assertNoPatientData } from "./ai/pii-guard.js";
 const SYSTEM_PROMPT = `You are Plan4Growth AI, the AI coach inside Elevate Dental OS — a business intelligence platform for UK dental practice groups.
 
 Your role:
@@ -29,6 +30,7 @@ Never:
 - Give medical advice`;
 
 export async function askPlan4GrowthAI(orgId, userMessage, context, conversationHistory = []) {
+    assertNoPatientData(context, 'chat coach');
     const contextString = `
 USER'S BUSINESS DATA:
 ${context.baseline ? `Baseline (when they joined): ${JSON.stringify(context.baseline)}` : 'No baseline set'}
@@ -60,6 +62,7 @@ ${context.liveData ? `Current Live Data (P&L actuals, aged debt, revenue leakage
 // PLAN4GROWTH AI INSIGHTS — Generates the initial business health analysis
 // ============================================================================
 export async function generateHealthInsights(baseline, targets) {
+    assertNoPatientData({ baseline, targets }, 'health insights');
     const prompt = `Analyse this UK dental practice group's baseline data and generate exactly 5 specific, prioritised insights.
 
 For each insight, return:
@@ -103,6 +106,7 @@ const SEV_MAP = { good: 'good', positive: 'good', warn: 'warn', warning: 'warn',
 function normSev(s) { return SEV_MAP[String(s || '').toLowerCase()] || 'info'; }
 
 export async function askAnalyst(orgId, question, summary) {
+    assertNoPatientData(summary, 'analyst');
     const prompt = `A UK dental practice group owner asks a question about their LIVE numbers. Answer using ONLY the data provided — reference the actual figures, never invent numbers. Money is shown in pence; talk in £.
 
 SCOPE: ${summary.scopeLabel} · ${summary.periodLabel}
@@ -164,6 +168,7 @@ const RAG_MAP = { red: 'red', amber: 'amber', green: 'green', good: 'green', war
 function normRag(s) { return RAG_MAP[String(s || '').toLowerCase()] || 'amber'; }
 
 export async function generateBoardReport(orgId, bundle) {
+    assertNoPatientData(bundle?.data, 'board report');
     const prompt = `Write a board pack for a UK dental practice group from its LIVE numbers. Use ONLY the data provided — reference the actual figures, never invent. Money is integer pence; talk in £ (round sensibly). British English.
 
 SCOPE: ${bundle.scopeLabel} · ${bundle.periodLabel}
@@ -215,6 +220,7 @@ Give exactly 3 priorities ranked red→green by urgency. Lead with the biggest r
 // caller can fall back to the deterministic rule-based insights.
 // ============================================================================
 export async function generateDataInsights(orgId, ctx) {
+    assertNoPatientData(ctx, 'data insights');
     const prompt = `You are analysing a UK dental practice group's LIVE data. Generate 4-6 specific, prioritised insights a practice owner can act on. Reference the actual numbers — never generic advice.
 
 Baseline (annual, £ pounds; cost_* are % of revenue): ${JSON.stringify(ctx.baseline ?? {})}
@@ -273,6 +279,7 @@ const LENS_FOCUS = {
     day: 'cash collection: receipts banked by day, collection pace vs the prior period, and overdue/outstanding balances.',
 };
 export async function generateDecisionLens(orgId, { surface = 'group', scopeLabel = 'Group', periodLabel = 'this period', data = {} } = {}) {
+    assertNoPatientData(data, 'decision lens');
     const focus = LENS_FOCUS[surface] || LENS_FOCUS.group;
     const prompt = `You are advising a UK dental practice group. Scope: ${scopeLabel}. Period: ${periodLabel}.
 Write 3-4 prioritised "Decision Lens" cards — the most important things to act on NOW for ${focus}
@@ -323,6 +330,7 @@ Return ONLY a valid JSON object {"items": [...]} with 3-4 items. No prose, no co
 // returns actionable tasks to improve practice performance.
 // ============================================================================
 export async function generateTasksFromData(orgId, liveData, members) {
+    assertNoPatientData(liveData, 'task generation');
     const today = new Date().toISOString().split('T')[0];
     const prompt = `You are a professional UK dental business consultant. Analyze this practice group's live context data and suggest exactly 3-5 high-impact, actionable tasks to improve practice performance (e.g., addressing revenue leakage, aged debt, low chair occupancy, or low marketing ROAS).
     
