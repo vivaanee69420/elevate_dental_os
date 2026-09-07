@@ -87,8 +87,8 @@ function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void
   );
 }
 
-export function GoogleReportBody({ tabKey = 'tab' }: { tabKey?: string }) {
-  const [tab, setTab] = useAdReportTab(TABS, { key: tabKey });
+export default function GoogleReportScreen() {
+  const [tab, setTab] = useAdReportTab(TABS);
   // Owned HERE, not by either consumer, because two of them read it: the
   // summary rail and the campaign table one tab down. Off (the default) is the
   // owner's own CPB/CPA definition — new patients only; on counts every match.
@@ -149,6 +149,10 @@ export function GoogleReportBody({ tabKey = 'tab' }: { tabKey?: string }) {
 
   return (
     <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Google"
+        subtitle="What the spend bought — from the campaign down to the words people typed."
+      />
       {/* Scoped to practices with a mapped Google Ads account. One without an
           account can only ever render £0, which reads as "we spent nothing
           here" rather than "this practice is not connected". */}
@@ -191,23 +195,6 @@ export function GoogleReportBody({ tabKey = 'tab' }: { tabKey?: string }) {
         {tab === 'keywords' && <GoogleKeywordsTab parentId={parentId} />}
         {tab === 'searchterms' && <GoogleSearchTermsTab parentId={parentId} />}
       </div>
-    </div>
-  );
-}
-
-
-// The page. Everything below the title is GoogleReportBody, which Ad
-// performance renders too — inside its own scope — so campaigns, ad groups, ads
-// and keywords come from the same fetches on both surfaces rather than from a
-// second implementation free to drift.
-export default function GoogleReportScreen() {
-  return (
-    <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Google"
-        subtitle="What the spend bought — from the campaign down to the words people typed."
-      />
-      <GoogleReportBody />
     </div>
   );
 }

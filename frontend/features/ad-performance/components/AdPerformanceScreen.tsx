@@ -14,21 +14,24 @@
 // hold a rolling 92 days, Google's do not), so a single window either clamps
 // Google needlessly or clamps Facebook silently.
 //
-// WHAT IT IS NOW. Each block renders the marketing section's OWN report body —
-// the same components, hooks and endpoints the Facebook and Google pages use —
-// inside its own ScopePeriodProvider. That is what makes the three surfaces
-// incapable of disagreeing: there is one implementation, rendered three times,
-// not three implementations of one idea. Each block therefore brings its full
-// hierarchy with it: campaigns, ad sets and ads for Facebook; campaigns, ad
-// groups, ads and keywords for Google.
+// WHAT IT IS NOW. A decision summary, not a second copy of the report pages.
+// Each block shows the figures worth acting on — spend, the lead-to-patient
+// funnel, where the money went, what changed since last period, and the two
+// campaigns that deserve attention — then hands over to the full report for the
+// grain beneath it. Reproducing those tables here made one long page that
+// answered neither question well.
+//
+// It fetches with the report pages' OWN hooks, so the summary is a smaller view
+// of one dataset rather than a second calculation of it, and the two surfaces
+// cannot disagree about the same window.
 //
 // Above them sits the one figure neither report can produce, because each knows
 // only its own channel: how many PEOPLE, once someone in both is counted once.
 
 import { PageHeader, SectionCard, SecHead } from '@/components/ui';
 import { ScopePeriodProvider } from '@/features/_shared/scope-context';
-import { FacebookReportBody } from '@/features/marketing/facebook/components/FacebookReportScreen';
-import { GoogleReportBody } from '@/features/marketing/google/components/GoogleReportScreen';
+import { FacebookSummary } from './FacebookSummary';
+import { GoogleSummary } from './GoogleSummary';
 import { GroupTotalBlock } from './GroupTotalBlock';
 
 export default function AdPerformanceScreen() {
@@ -44,30 +47,30 @@ export default function AdPerformanceScreen() {
           needs both channels at once, and the only one not delegated. */}
       <GroupTotalBlock />
 
-      {/* Facebook. Its own scope, its own tab state — `fb_` and `fbtab` — so
-          changing the window or opening "Ads" here cannot move Google. */}
+      {/* Facebook, in its own scope (`fb_`), so changing its window or
+          practice cannot move Google. */}
       <SectionCard>
         <SecHead
           n={2}
           title="Facebook"
-          desc="Campaigns, ad sets and ads. The same figures as the Facebook page, from the same fetches."
+          desc="Spend, funnel and the campaigns worth a decision. Open the full report for ad sets and ads."
         />
         <ScopePeriodProvider prefix="fb">
-          <FacebookReportBody tabKey="fbtab" />
+          <FacebookSummary />
         </ScopePeriodProvider>
       </SectionCard>
 
-      {/* Google. Google has one tier more than Facebook — ads and keywords are
-          SIBLINGS under an ad group, not nested — which is why the two blocks
-          show a different number of tabs. */}
+      {/* Google, in its own scope (`g_`). It offers one way in more than
+          Facebook: its ads and keywords are SIBLINGS under an ad group rather
+          than nested, so neither is reachable through the other. */}
       <SectionCard>
         <SecHead
           n={3}
           title="Google"
-          desc="Campaigns, ad groups, ads and keywords. The same figures as the Google page, from the same fetches."
+          desc="Spend, funnel and the campaigns worth a decision. Open the full report for ad groups, ads and keywords."
         />
         <ScopePeriodProvider prefix="g">
-          <GoogleReportBody tabKey="gtab" />
+          <GoogleSummary />
         </ScopePeriodProvider>
       </SectionCard>
     </div>

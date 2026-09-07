@@ -66,32 +66,24 @@ export function AdReportTabs({
 // first render, before the data that would have recognised it arrived, so the
 // tab could never be reloaded or shared. The page still RENDERS the fallback
 // tab meanwhile; only the rewrite waits.
-/**
- * `key` names the URL parameter holding the active tab.
- *
- * Ad performance puts the Facebook and Google reports on ONE page, so two tab
- * strips exist at once. Sharing `?tab=` would make selecting "Keywords" on
- * Google silently move Facebook to whichever of its tabs matched — and where
- * none matched, snap it back to the first. Each strip names its own key.
- */
 export function useAdReportTab(
   tabs: AdReportTab[],
-  { pending = false, key = 'tab' }: { pending?: boolean; key?: string } = {},
+  { pending = false }: { pending?: boolean } = {},
 ): [string, (id: string) => void] {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
 
-  const requested = params.get(key);
+  const requested = params.get('tab');
   const active = tabs.find((t) => t.id === requested)?.id ?? tabs[0]?.id ?? '';
 
   const setActive = useCallback(
     (id: string) => {
       const sp = new URLSearchParams(params.toString());
-      sp.set(key, id);
+      sp.set('tab', id);
       router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
     },
-    [params, pathname, router, key],
+    [params, pathname, router],
   );
 
   // Absent or unrecognised ?tab= resolves silently to the first tab so the

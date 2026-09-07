@@ -78,7 +78,7 @@ function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void
   );
 }
 
-export function FacebookReportBody({ tabKey = 'tab' }: { tabKey?: string }) {
+export default function FacebookReportScreen() {
   const { data: perf, isPending: perfPending } = useFacebookLeadPerformance();
   // Only for tenants that actually run open days. Computed from this
   // tenant's own rows, never assumed — an always-empty tab is noise for
@@ -94,7 +94,7 @@ export function FacebookReportBody({ tabKey = 'tab' }: { tabKey?: string }) {
   // shared open-days link impossible to reload. Once the query settles the
   // rewrite resumes as before — so a tenant with no open days still never
   // sees the tab, and its URL is still corrected.
-  const [tab, setTab] = useAdReportTab(TABS, { pending: perfPending, key: tabKey });
+  const [tab, setTab] = useAdReportTab(TABS, { pending: perfPending });
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -158,6 +158,10 @@ export function FacebookReportBody({ tabKey = 'tab' }: { tabKey?: string }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <PageHeader
+        title="Facebook"
+        subtitle="Meta ad performance, from spend down to the patient it produced. Attendance is recorded in Dentally only."
+      />
       {/* Scoped to practices with a mapped Meta account. One without an
           account can only ever render £0, which reads as "we spent nothing
           here" rather than "this practice is not connected". */}
@@ -194,23 +198,6 @@ export function FacebookReportBody({ tabKey = 'tab' }: { tabKey?: string }) {
         <FacebookAdsTab adSetId={adSetId} />
       )}
       {tab === 'opendays' && <FacebookOpenDaysTab />}
-    </div>
-  );
-}
-
-
-// The page. Everything below the title is FacebookReportBody, which Ad
-// performance renders too — inside its own scope — so the two surfaces show the
-// same campaigns, ad sets and ads from the same fetches rather than from a
-// second implementation that could drift.
-export default function FacebookReportScreen() {
-  return (
-    <div className="flex flex-col gap-4">
-      <PageHeader
-        title="Facebook"
-        subtitle="Meta ad performance, from spend down to the patient it produced. Attendance is recorded in Dentally only."
-      />
-      <FacebookReportBody />
     </div>
   );
 }
