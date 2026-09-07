@@ -33,6 +33,8 @@ const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
 const REQUEST_TIMEOUT_MS = 30000; // abort a hung Dentally request, never hang forever
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
+const WINDOW_RECON_MAX_PAGES = 400; // window-scoped reconciliation (~40k rows). Deliberately NOT MAX_PAGES: Dentally ignores `before` on /appointments, so a +/-35-day window pull actually returns everything from `after` onward INCLUDING the whole future diary — measured at 17,505 rows (176 pages) for this org, which silently blew the 100-page MAX_PAGES and made the delete prune abort with 'page_cap' every single night.
+const INVOICE_RECON_MAX_PAGES = 1000; // invoice delete-reconciliation pages the WHOLE collection (Dentally ignores date filters on /invoices) — ~240 pages at 23.7k invoices today, so this is a runaway guard with room to grow, not a target. Hitting it ABORTS the prune rather than acting on a partial remote set.
 const BACKFILL_MAX_PAGES = 15000; // full backfill ceiling (~1.5M rows/resource) — one-off, pulls the 6-month window. MUST exceed the largest collection: /treatment_plan_items returns ~725k rows (7.2k pages) and Dentally IGNORES the completed/date filters, so the whole collection must be paged to find the completed subset. The old 5000-page (500k-row) cap truncated the oldest ~225k items, silently dropping completed treatments scattered across past months (the "Treatments Completed undercount" bug). The page loop self-terminates at the real end (items.length < PER_PAGE), so this is only a runaway guard, not a target.
 const BACKFILL_MONTHS = 6;       // nightly full-backfill cap: most-recent 6 months of history, no deeper (product rule — the nightly cron stays light; on-connect already landed the full year)
 // Rolling 6-month updated_after for full pulls. Dentally requires the param; we
@@ -88,6 +90,32 @@ async function isRateLimited(res) {
     } catch {
         return false;
     }
+}
+
+// One page fetch for the reconcilers, with Dentally's TWO rate-limit signals
+// handled. The reconcilers page long collections (the invoice pass alone is
+// ~240 pages), which is exactly the workload that trips Dentally's sustained cap
+// — and that cap arrives as a 403 with a "Rate limit exceeded" body, NOT a 429.
+// Treating it as a hard failure would abort the reconcile every night for the
+// biggest orgs, which are the ones with the most to reconcile. Bounded attempts,
+// so a genuine 403/permission error still fails fast instead of spinning.
+async function fetchReconcilePage(url, auth, maxAttempts = 6) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        let res;
+        try {
+            res = await fetchWithTimeout(url, { headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' } });
+        } catch {
+            return { res: null, aborted: 'fetch_error' };
+        }
+        if (await isRateLimited(res)) {
+            const ra = Number(res.headers?.get?.('retry-after'));
+            await sleep(ra ? ra * 1000 : Math.min(60000, 2000 * 2 ** attempt));
+            continue;
+        }
+        if (!res.ok) return { res: null, aborted: `http_${res.status}` };
+        return { res, aborted: null };
+    }
+    return { res: null, aborted: 'rate_limited' };
 }
 
 // Refresh ~5 min before the OAuth token's stated expiry to avoid mid-call 401s.
@@ -1016,14 +1044,8 @@ export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO
     for (;;) {
         const url = new URL(`${base}/appointments`);
         for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
-        let res = null;
-        try {
-            res = await fetchWithTimeout(url, { headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' } });
-        } catch {
-            return { deleted: 0, aborted: 'fetch_error' }; // partial -> never delete
-        }
-        if (res.status === 429) { const ra = Number(res.headers.get('retry-after')) || 2; await sleep(ra * 1000); continue; }
-        if (!res.ok) return { deleted: 0, aborted: `http_${res.status}` };
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { deleted: 0, aborted: fetchAborted }; // partial -> never delete
         const body = await res.json();
         const key = Object.keys(body).find((k) => Array.isArray(body[k]));
         const items = key ? body[key] : [];
@@ -1066,6 +1088,150 @@ export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO
     return { deleted, remote: remoteIds.size, scanned: ourRows.length };
 }
 
+// ============================================================================
+// BACKFILL reconciliation — the missing half of an `updated_after` sync.
+//
+// Every heavy pull in this file is driven by `updated_after`, so it only ever
+// sees what Dentally CHANGED since the last run. That makes any miss permanent:
+// if a record never lands (or is removed after the fact), its `updated_at` stays
+// frozen in the past while our cursor moves forward, and no future incremental
+// pull can ever return it again. There is delete-reconciliation for rows
+// Dentally REMOVED and, until now, nothing at all for rows we simply do not
+// have — so the error could only accumulate, which is exactly why the gap grows
+// the further back you look.
+//
+// Measured on the live project 2026-09-07, Rochester August 2026: Dentally
+// reported 620 patient appointments against our 605. All 15 still exist in
+// Dentally, all carry a mapped site, a valid start/finish and a patient we hold
+// as a contact, and replaying the sync's own pull shape returned all 15 across
+// 54 complete pages with no duplicates. Nothing about the fetch or the mapping
+// was wrong — the rows just were not in the table, and the cursor could never go
+// back for them.
+//
+// DELIBERATE ASYMMETRY with the delete prunes above. Those are fail-CLOSED: a
+// partial remote set makes healthy rows look deleted, so they abort rather than
+// act on incomplete data. This is fail-OPEN: writing back a record Dentally just
+// handed us cannot destroy anything, so a short pull restores what it saw and
+// the next run picks up the rest. Getting these two backwards in either
+// direction is the dangerous mistake.
+//
+// Only rows we do NOT already hold are written. A blanket re-upsert of the
+// window would be simpler and wrong: it would rewrite thousands of rows a night,
+// and could blank a column the row builder has no value for, to fix a handful of
+// gaps.
+//
+// Generic over the resource, because this is not an appointments problem — every
+// `updated_after` feed in this file has the same one-way ratchet.
+// ============================================================================
+export async function reconcileMissingRecords(orgId, base, auth, {
+    path, params = {}, table, idCol, onConflict, buildRow,
+    maxPages = WINDOW_RECON_MAX_PAGES, collectRemoteIds = false,
+} = {}) {
+    let restored = 0;
+    let skippedUnmapped = 0;
+    let scanned = 0;
+    let truncated = false;
+    const remoteIds = collectRemoteIds ? new Set() : null;
+    let page = 1;
+    for (;;) {
+        const url = new URL(`${base}${path}`);
+        for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { restored, skippedUnmapped, scanned, truncated: true, aborted: fetchAborted };
+        const body = await res.json();
+        const key = Object.keys(body).find((k) => Array.isArray(body[k]));
+        const items = (key ? body[key] : []).filter((r) => r && r.id != null);
+        scanned += items.length;
+        if (remoteIds) for (const r of items) remoteIds.add(String(r.id));
+
+        if (items.length) {
+            // One small indexed probe per page: which of these do we already
+            // hold? Org- AND source-scoped, because the pms id is only unique
+            // within a tenant — an unscoped probe would see another tenant's row
+            // and conclude we already have a record we do not.
+            const ids = items.map((r) => String(r.id));
+            const { data: existing, error } = await supabase_1.serviceClient
+                .from(table)
+                .select(idCol)
+                .eq('organisation_id', orgId)
+                .eq('source', 'dentally')
+                .in(idCol, ids);
+            if (error) return { restored, skippedUnmapped, scanned, truncated: true, aborted: 'db_read_error' };
+            const have = new Set((existing ?? []).map((r) => String(r[idCol])));
+            const rows = [];
+            for (const rec of items) {
+                if (have.has(String(rec.id))) continue;
+                const row = buildRow(rec);
+                if (!row) { skippedUnmapped++; continue; } // e.g. practice_id is NOT NULL
+                rows.push(row);
+            }
+            if (rows.length) restored += await upsertChunked(table, rows, onConflict);
+        }
+
+        const totalPages = body.meta?.total_pages;
+        const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
+        if (done) break;
+        if (page >= maxPages) { truncated = true; break; }
+        page++;
+        await sleep(RATE_DELAY_MS);
+    }
+    return { restored, skippedUnmapped, scanned, truncated, ...(remoteIds ? { remoteIds } : {}) };
+}
+
+// Appointments. Windowed on appointment DATE via after/before — note Dentally
+// ignores `before` (verified live: a before-only query returns the whole
+// 263,926-row collection), so the window is effectively open-ended forward.
+// That only ever makes the pull a SUPERSET of the window, which is harmless
+// here: a restored row outside the window is still a row Dentally has.
+export async function reconcileMissingAppointments(orgId, base, auth, { sinceISO, untilISO, maxPages = WINDOW_RECON_MAX_PAGES } = {}) {
+    const siteMap = await loadSiteMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    const practitionerMap = await loadPractitionerMap(orgId);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/appointments',
+        params: { after: sinceISO, before: untilISO, cancelled: true },
+        table: 'appointments',
+        idCol: 'pms_external_id',
+        onConflict: 'organisation_id,source,pms_external_id',
+        buildRow: (a) => appointmentRow(orgId, a, siteMap, contactMap, practitionerMap),
+        maxPages,
+    });
+}
+
+// Payments. /payments filters on dated_on (a DATE) via dated_after/dated_before.
+export async function reconcileMissingPayments(orgId, base, auth, { sinceISO, untilISO, maxPages = WINDOW_RECON_MAX_PAGES } = {}) {
+    const siteMap = await loadSiteMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/payments',
+        params: { dated_after: String(sinceISO).slice(0, 10), dated_before: String(untilISO).slice(0, 10) },
+        table: 'payments',
+        idCol: 'external_id',
+        onConflict: 'organisation_id,source,external_id',
+        buildRow: (p) => paymentRow(orgId, p, siteMap, contactMap),
+        maxPages,
+    });
+}
+
+// Invoices. NOT windowed: Dentally ignores every date filter on /invoices
+// (verified live — dated_after/dated_before, dated_from/dated_to and
+// filter[dated_from]/filter[dated_to] all return the identical full collection).
+// Passing collectRemoteIds lets the caller reuse this single page-through for
+// the delete prune too, instead of paging the whole collection twice a night.
+export async function reconcileMissingInvoices(orgId, base, auth, { maxPages = INVOICE_RECON_MAX_PAGES, collectRemoteIds = false } = {}) {
+    const siteMap = await loadSiteMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/invoices',
+        table: 'invoices',
+        idCol: 'external_id',
+        onConflict: 'organisation_id,source,external_id',
+        buildRow: (inv) => invoiceRow(orgId, inv, siteMap, contactMap),
+        maxPages,
+        collectRemoteIds,
+    });
+}
+
 // Pure decision step for the payment delete-reconciliation, mirroring
 // selectStaleAppointmentIds. Payments key on `external_id`. Same fail-closed
 // guards: never act on an empty remote set, never delete more than
@@ -1106,14 +1272,8 @@ export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, un
     for (;;) {
         const url = new URL(`${base}/payments`);
         for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
-        let res = null;
-        try {
-            res = await fetchWithTimeout(url, { headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' } });
-        } catch {
-            return { deleted: 0, aborted: 'fetch_error' }; // partial -> never delete
-        }
-        if (res.status === 429) { const ra = Number(res.headers.get('retry-after')) || 2; await sleep(ra * 1000); continue; }
-        if (!res.ok) return { deleted: 0, aborted: `http_${res.status}` };
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { deleted: 0, aborted: fetchAborted }; // partial -> never delete
         const body = await res.json();
         const key = Object.keys(body).find((k) => Array.isArray(body[k]));
         const items = key ? body[key] : [];
@@ -1153,6 +1313,123 @@ export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, un
         if (!error) deleted += chunk.length;
     }
     return { deleted, remote: remoteIds.size, scanned: ourRows.length };
+}
+
+// Pure decision step for the invoice delete-reconciliation, mirroring
+// selectStalePaymentIds. Invoices key on `external_id`. Returns the external
+// ids alongside our row ids because invoice_items reference the DENTALLY
+// invoice id (pms_invoice_id), not our row id, so the fee-line cascade cannot
+// be done from `ids` alone. Same fail-closed guards: never act on an empty
+// remote set, never delete more than maxDeleteShare of the collection.
+export function selectStaleInvoiceIds(ourRows, remoteIdSet, { maxDeleteShare = 0.5 } = {}) {
+    const stale = (ourRows || []).filter((r) => r.external_id != null && !remoteIdSet.has(String(r.external_id)));
+    if (!ourRows || ourRows.length === 0) return { ids: [], externalIds: [], aborted: null };
+    if (remoteIdSet.size === 0) return { ids: [], externalIds: [], aborted: 'empty_remote' };
+    if (stale.length > ourRows.length * maxDeleteShare) return { ids: [], externalIds: [], aborted: 'safety_threshold' };
+    return { ids: stale.map((r) => r.id), externalIds: stale.map((r) => String(r.external_id)), aborted: null };
+}
+
+// Whole-collection delete reconciliation for invoices.
+//
+// WHY IT IS NOT WINDOWED like its two siblings above: Dentally's /invoices
+// endpoint SILENTLY IGNORES every date filter. Verified against the live API —
+// dated_after/dated_before, dated_from/dated_to and filter[dated_from]/
+// filter[dated_to] each return the identical full collection; only `site_id`
+// narrows it. A windowed prune here would therefore be a windowed LOCAL read
+// compared against a FULL remote set, which is merely wasteful today, but the
+// day Dentally starts honouring those filters it inverts into a full local read
+// against a windowed remote set — i.e. "delete every invoice outside the
+// window". Both sides are read at the same (full) scope so the comparison can
+// never drift into that. The extra cost is one full page-through per nightly
+// sync (~240 pages at 23.7k invoices), and the payoff is that it also reaches
+// deletions older than any rolling window would: of the 150 stale invoices
+// found on the live project, 130 predated a 35-day window.
+//
+// Safety (this function deletes financial rows, so it is fail-closed):
+//   - only ever touches rows with source='dentally' in this organisation;
+//   - ABORTS (deletes nothing) on any page-cap hit, HTTP error, fetch error or
+//     ambiguous body — an incomplete remote set makes every unseen invoice look
+//     deleted, which is exactly the failure that would wipe real money;
+//   - the pure selectStaleInvoiceIds guard aborts on an empty remote set or an
+//     implausibly large delete share.
+// Fee lines are deleted BEFORE their invoice: invoice_items are found by the
+// Dentally invoice id, so removing the invoice first would strand them.
+export async function reconcileDeletedInvoices(orgId, base, auth, { maxPages = INVOICE_RECON_MAX_PAGES, remoteIds: suppliedIds } = {}) {
+    // The backfill reconciler already walks this exact collection, so it can hand
+    // its id set over rather than make us pay for a second ~240-page pass. It
+    // passes null when ITS own pull was truncated or errored — a partial set must
+    // never be mistaken for an authoritative one, which is the whole reason this
+    // function is fail-closed.
+    const remoteIds = suppliedIds instanceof Set ? suppliedIds : new Set();
+    let page = 1;
+    let complete = suppliedIds instanceof Set;
+    for (; !complete;) {
+        const url = new URL(`${base}/invoices`);
+        url.searchParams.set('page', String(page));
+        url.searchParams.set('per_page', String(PER_PAGE));
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { deleted: 0, aborted: fetchAborted }; // partial -> never delete
+        const body = await res.json();
+        const key = Object.keys(body).find((k) => Array.isArray(body[k]));
+        const items = key ? body[key] : [];
+        for (const inv of items) if (inv?.id != null) remoteIds.add(String(inv.id));
+        const totalPages = body.meta?.total_pages;
+        const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
+        if (done) { complete = true; break; }
+        if (page >= maxPages) break; // collection too big to fully page -> abort below
+        page++;
+        await sleep(RATE_DELAY_MS);
+    }
+    if (!complete) return { deleted: 0, aborted: 'page_cap' };
+
+    // Our dentally invoices, ALL of them — same scope as the remote set above.
+    // Keyset-paged on external_id (unique within org+source, and the third
+    // column of the upsert's conflict target) rather than .range(): OFFSET makes
+    // the server re-walk every skipped row, which is quadratic in table size.
+    const ourRows = [];
+    let cursor = null;
+    for (;;) {
+        let q = supabase_1.serviceClient
+            .from('invoices')
+            .select('id, external_id')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .not('external_id', 'is', null)
+            .order('external_id', { ascending: true })
+            .limit(1000);
+        if (cursor != null) q = q.gt('external_id', cursor);
+        const { data, error } = await q;
+        if (error) return { deleted: 0, aborted: 'db_read_error' };
+        const rows = data ?? [];
+        if (!rows.length) break;
+        ourRows.push(...rows);
+        cursor = rows[rows.length - 1].external_id;
+        if (rows.length < 1000) break;
+    }
+
+    const { ids: staleIds, externalIds, aborted } = selectStaleInvoiceIds(ourRows, remoteIds);
+    if (aborted) return { deleted: 0, aborted, remote: remoteIds.size, scanned: ourRows.length };
+    if (!staleIds.length) return { deleted: 0, itemsDeleted: 0, remote: remoteIds.size, scanned: ourRows.length };
+
+    let itemsDeleted = 0;
+    for (let i = 0; i < externalIds.length; i += 500) {
+        const chunk = externalIds.slice(i, i + 500);
+        const { error } = await supabase_1.serviceClient
+            .from('invoice_items').delete()
+            .eq('organisation_id', orgId).eq('source', 'dentally')
+            .in('pms_invoice_id', chunk);
+        if (!error) itemsDeleted += chunk.length;
+    }
+    let deleted = 0;
+    for (let i = 0; i < staleIds.length; i += 500) {
+        const chunk = staleIds.slice(i, i + 500);
+        const { error } = await supabase_1.serviceClient
+            .from('invoices').delete()
+            .eq('organisation_id', orgId)
+            .in('id', chunk);
+        if (!error) deleted += chunk.length;
+    }
+    return { deleted, itemsDeleted, remote: remoteIds.size, scanned: ourRows.length };
 }
 
 // ============================================================================
@@ -1802,7 +2079,17 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 const wMs = 35 * 86400000;
                 const reconSince = new Date(Date.now() - wMs).toISOString();
                 const reconUntil = new Date(Date.now() + wMs).toISOString();
-                pruned = await reconcileDeletedAppointments(orgId, base, auth, { sinceISO: reconSince, untilISO: reconUntil, maxPages });
+                pruned = await reconcileDeletedAppointments(orgId, base, auth, {
+                    sinceISO: reconSince,
+                    untilISO: reconUntil,
+                    // NOT `maxPages`. Dentally ignores `before` here, so this
+                    // window pull actually returns everything from `after`
+                    // onward including the whole future diary — 17,505 rows for
+                    // this org against a 100-page (10,000-row) MAX_PAGES. The
+                    // prune is fail-closed, so it was aborting on 'page_cap'
+                    // every night and had never deleted anything.
+                    maxPages: full ? maxPages : WINDOW_RECON_MAX_PAGES,
+                });
                 if (pruned.aborted) {
                     console.warn(`[dentally] appointment prune aborted (${pruned.aborted}) — no rows deleted`);
                 } else if (pruned.deleted) {
@@ -1842,6 +2129,36 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 console.warn(`[dentally] payment prune skipped: ${err?.message || err}`);
             }
         }
+        // BACKFILL reconciliation — the other direction. The prunes above remove
+        // what Dentally deleted; these restore what we never received. An
+        // `updated_after` feed can only move forward, so without this a record
+        // missed once is missed forever and the gap compounds month by month
+        // (measured: 15 of Rochester's 620 August appointments absent, every one
+        // still live in Dentally). Fail-open by design — see
+        // reconcileMissingRecords. Skipped on the bootstrap (recent) pull, whose
+        // dataset is deliberately partial; non-fatal like every reconciler here.
+        if (!recent) {
+            const wMs = 35 * 86400000;
+            const backSince = full ? backfillSince() : new Date(Date.now() - wMs).toISOString();
+            const backUntil = new Date(Date.now() + wMs).toISOString();
+            if (want('appointments')) {
+                try {
+                    const b = await reconcileMissingAppointments(orgId, base, auth, { sinceISO: backSince, untilISO: backUntil });
+                    if (b.restored) console.warn(`[dentally] appointment backfill restored ${b.restored} row(s) the incremental feed had missed`);
+                    if (b.skippedUnmapped) console.warn(`[dentally] appointment backfill skipped ${b.skippedUnmapped} row(s) with an unmapped site`);
+                } catch (err) {
+                    console.warn(`[dentally] appointment backfill skipped: ${err?.message || err}`);
+                }
+            }
+            if (want('payments')) {
+                try {
+                    const b = await reconcileMissingPayments(orgId, base, auth, { sinceISO: backSince, untilISO: backUntil });
+                    if (b.restored) console.warn(`[dentally] payment backfill restored ${b.restored} row(s) the incremental feed had missed`);
+                } catch (err) {
+                    console.warn(`[dentally] payment backfill skipped: ${err?.message || err}`);
+                }
+            }
+        }
         // Treatment plans = production per practitioner (for the Associate Pay
         // Run). Same window as payments; reuse the practitioner + contact maps to
         // resolve associate_id / contact_id. Weighted phase 3; never fail the
@@ -1879,6 +2196,35 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             }
             await markPhaseDone('invoices');
             await markPhaseDone('invoice_items');
+        }
+        // Delete-reconciliation for invoices: prune invoices Dentally has REMOVED
+        // but our upsert-only pull still holds. Unlike the appointment/payment
+        // prunes above this is NOT windowed — Dentally ignores date filters on
+        // /invoices, so both sides are read at full scope (see
+        // reconcileDeletedInvoices for why a windowed version is unsafe here).
+        // Skipped on the bootstrap (recent) pull, whose invoice set is
+        // deliberately partial. Non-fatal: a prune failure must never abort the
+        // sync, and the reconciler itself deletes nothing unless it fully paged.
+        let prunedInv = { deleted: 0 };
+        if (!recent && want('invoices')) {
+            try {
+                // ONE page-through of the whole collection serves both
+                // directions: it restores invoices we never received and hands
+                // its id set to the prune, so the 240-page walk happens once a
+                // night rather than twice.
+                const back = await reconcileMissingInvoices(orgId, base, auth, { collectRemoteIds: true });
+                if (back.restored) console.warn(`[dentally] invoice backfill restored ${back.restored} row(s) the incremental feed had missed`);
+                prunedInv = await reconcileDeletedInvoices(orgId, base, auth, {
+                    remoteIds: back.truncated || back.aborted ? null : back.remoteIds,
+                });
+                if (prunedInv.aborted) {
+                    console.warn(`[dentally] invoice prune aborted (${prunedInv.aborted}) — no rows deleted`);
+                } else if (prunedInv.deleted) {
+                    console.warn(`[dentally] invoice prune removed ${prunedInv.deleted} invoice(s) and ${prunedInv.itemsDeleted ?? 0} fee-line batch(es) Dentally no longer has`);
+                }
+            } catch (err) {
+                console.warn(`[dentally] invoice prune skipped: ${err?.message || err}`);
+            }
         }
         // Treatment plan ITEMS = the completed-treatment feed behind Dentally's
         // Practitioner Activity report (the "Treatments Completed" card). Weighted
@@ -2001,6 +2347,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             relinked_appointment_contacts: relinked,
             relinked_appointment_associates: relinkedAssociates,
             repaid_invoice_items: repaidItems,
+            pruned_invoices: prunedInv.deleted ?? 0,
         };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'dentally', String(err.message).slice(0, 500));

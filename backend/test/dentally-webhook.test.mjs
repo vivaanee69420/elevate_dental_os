@@ -173,7 +173,41 @@ describe('parseDentallyEvent — resource classification (via webhookService)', 
     expect(r).toMatchObject({ resourceType: 'treatment_plan' });
   });
 
-  // An org is paused by flipping its integrations to 'revoked'. That must stop
+  // --- what counts as a DELETE ------------------------------------------
+  // Our Dentally webhook is registered with events: ["all"] (verified on the
+  // live account, webhook 82890), so we receive event names this code has never
+  // seen — unlike the other integrations on that account, which subscribe only
+  // to the created/updated/deleted triplet. The action was decided by testing
+  // the WHOLE event string for /delet|destroy|remov/, which means any event name
+  // merely CONTAINING one of those words removed the record outright. A deleted
+  // appointment is unrecoverable by the nightly sync: its updated_at stays
+  // frozen in the past, so the `updated_after` cursor can never fetch it again.
+  // Match on the trailing action token only.
+  it('deletes on the real delete events', async () => {
+    const r = await fire('appointment.deleted', { id: 1, site_id: 5 });
+    expect(r.results[0]).toMatchObject({ table: 'appointments', deleted: 1 });
+  });
+
+  it('does NOT delete on an event that merely contains "removed"', async () => {
+    // e.g. an appointment taken off the short-notice list — Dentally has such a
+    // list (it is a filter on the Appointments screen) and "all" sends us its
+    // events. Treating that as a deletion silently destroys a live appointment.
+    const r = await fire('appointment.removed_from_short_notice_list', { id: 1, site_id: 5, patient_id: 7, start_time: 't' });
+    expect(r.results[0]).not.toHaveProperty('deleted');
+    expect(r.results[0]).toMatchObject({ table: 'appointments', applied: 1 });
+  });
+
+  it('does NOT delete on a cancellation — a cancelled appointment still exists', async () => {
+    const r = await fire('appointment.cancelled', { id: 1, site_id: 5, patient_id: 7, start_time: 't', state: 'Cancelled' });
+    expect(r.results[0]).toMatchObject({ table: 'appointments', applied: 1 });
+  });
+
+  it('still deletes when the action is the bare verb or underscore-joined', async () => {
+    const bare = await fire('appointment_deleted', { id: 1, site_id: 5 });
+    expect(bare.results[0]).toMatchObject({ deleted: 1 });
+  });
+
+    // An org is paused by flipping its integrations to 'revoked'. That must stop
   // PUSHED deliveries too, not just the nightly pull — a correctly-signed event
   // for a paused org has to be refused before any row is written.
   it('refuses a correctly-signed event once the integration is revoked', async () => {

@@ -378,8 +378,11 @@ describe('syncOneOrg', () => {
         // by the checkpoint — so exactly 1 page-1 hit, not 2.
         expect(pageOneHits['patients']).toBe(1);
         // appointments: not checkpointed -> probe + real pull (2) + the delete-
-        // reconciliation's own windowed id pull (1) = 3 page-1 hits.
-        expect(pageOneHits['appointments']).toBe(3);
+        // reconciliation's own windowed id pull (1) + the BACKFILL
+        // reconciliation's window pull (1) = 4 page-1 hits. The two
+        // reconciliations are separate passes on purpose: one is fail-closed and
+        // keeps only ids, the other is fail-open and needs whole records.
+        expect(pageOneHits['appointments']).toBe(4);
         vi.useRealTimers();
     });
 
@@ -501,21 +504,33 @@ describe('syncOneOrg', () => {
     it('pulls /invoices once (the invoice map is built from the same fetch, not a second pull)', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
-        let invoiceListPulls = 0;
+        let dataPulls = 0;
+        let prunePulls = 0;
         global.fetch = vi.fn(async (url) => {
             const u = new URL(url.toString());
             // Count only the paginating collection pulls of /invoices (page param
             // present), not the up-front page-count probe — both hit the path, but
             // the duplicate we removed was a second *full* pull.
-            if (u.pathname.endsWith('/invoices') && u.searchParams.get('page') === '1') invoiceListPulls++;
+            //
+            // Split by `updated_after`, which is what tells the two remaining
+            // pulls apart: the DATA pull rides the incremental cursor, while the
+            // delete-reconciliation deliberately carries no filter at all (see
+            // reconcileDeletedInvoices — Dentally ignores date filters here, so
+            // both sides must be read at full scope). Counting a bare total would
+            // have let a reintroduced buildInvoiceMap hide behind the prune.
+            if (u.pathname.endsWith('/invoices') && u.searchParams.get('page') === '1') {
+                if (u.searchParams.get('updated_after')) dataPulls++; else prunePulls++;
+            }
             const seg = u.pathname.split('/').pop();
             return page({ [seg]: [], meta: { total_pages: 1 } });
         });
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-01-01T00:00:00Z' });
-        // probe (fetchPageCount) + one real pull = 2 page-1 hits; the old code did
-        // 3 (probe + buildInvoiceMap + pullInvoices).
-        expect(invoiceListPulls).toBe(2);
+        // probe (fetchPageCount) + one real pull = 2 windowed page-1 hits; the old
+        // code did 3 (probe + buildInvoiceMap + pullInvoices).
+        expect(dataPulls).toBe(2);
+        // ...and exactly one unfiltered pass for the delete-reconciliation.
+        expect(prunePulls).toBe(1);
     });
 
     it('recent mode: all three resources pull the same ~12-month updated_after window (no open-only `after`)', async () => {

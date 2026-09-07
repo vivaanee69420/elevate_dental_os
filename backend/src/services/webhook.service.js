@@ -51,7 +51,16 @@ function parseDentallyEvent(body) {
             if (body[k] && typeof body[k] === 'object') { resourceType = k; break; }
         }
     }
-    const action = /delet|destroy|remov/.test(ev) ? 'delete' : 'upsert';
+    // Anchored on the trailing ACTION token, not tested against the whole
+    // string. Our Dentally webhook is registered with events: ["all"], so we get
+    // event names this code has never seen; a bare substring test meant any name
+    // merely CONTAINING "remov"/"delet" — `appointment.removed_from_short_notice_list`,
+    // for instance — deleted the record outright. That loss is unrecoverable by
+    // the nightly sync: a deleted row's `updated_at` stays frozen in the past, so
+    // the `updated_after` cursor can never fetch it again (which is precisely the
+    // one-way ratchet reconcileMissingRecords exists to repair). Matches
+    // `x.deleted`, `x_deleted` and a bare `delete`; not `x.deleted_reason_set`.
+    const action = /(^|[._])(delete|deleted|destroy|destroyed|remove|removed)$/.test(ev) ? 'delete' : 'upsert';
     let data = body.data ?? body.payload ?? body.resource ?? body.record ?? null;
     if (data == null && resourceType && body[resourceType] != null) data = body[resourceType];
     // Bare resource: the body itself is the record (has an id, no envelope keys).
