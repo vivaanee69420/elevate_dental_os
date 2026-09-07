@@ -36,6 +36,7 @@ import type {
   IntegrationRow,
   ProviderMeta,
 } from '@/features/integrations/api';
+import { DentallySitePicker } from '@/features/integrations/components/DentallySitePicker';
 import DentallyPracticeMapping from '@/features/integrations/components/DentallyPracticeMapping';
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
@@ -499,6 +500,10 @@ export default function IntegrationsScreen() {
         menu: providerMenu('dentally', meta),
         body: dentallyConnected ? (
           <>
+            {/* First: which practices this account is allowed to pull. The
+                mapping below only decides where pulled rows land, so it answers
+                a narrower question and belongs after this one. */}
+            <DentallySitePicker />
             <DentallyPracticeMapping />
             <DentallyWebhookPanel />
           </>

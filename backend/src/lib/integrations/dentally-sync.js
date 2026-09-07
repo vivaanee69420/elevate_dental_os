@@ -946,21 +946,54 @@ export function invoiceRow(orgId, inv, siteMap, contactMap) {
     };
 }
 
+// ---- site scoping -----------------------------------------------------------
+
+/**
+ * The Dentally sites this organisation is allowed to pull, or null for "every
+ * site" — which is what an org connected before the picker existed does, and
+ * what a single-site tenant keeps doing. Null is deliberately NOT an empty Set:
+ * the two must never be confused, because an empty Set means "pull nothing".
+ *
+ * This exists because a Dentally OAuth grant is GROUP-wide. A sub-account that
+ * should hold one practice gets a token that can read all of them, and on a
+ * live connect that pulled 9,446 patients and 21,800 appointments belonging to
+ * four other practices into one sub-account before it was stopped.
+ */
+export function allowedSites(integration) {
+    const ids = integration?.config?.site_ids;
+    if (!Array.isArray(ids) || ids.length === 0) return null;
+    return new Set(ids.map(String));
+}
+
+/** True when a record's site is one this organisation pulls. */
+export function keepSite(allowed, siteId) {
+    return !allowed || allowed.has(String(siteId));
+}
+
 // ---- pulls ------------------------------------------------------------------
 
-async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
+// The three pulls below are the ONLY ones that need an explicit site gate.
+// Appointments, payments and invoices already drop a record whose site maps to
+// no practice, because those tables have a NOT NULL practice_id — so limiting
+// which practices exist limits them for free. Patients, practitioners and staff
+// set `practice_id: null` and insert anyway (patientRow line ~607), so without
+// this they land in full whatever the practice list says.
+
+async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages, allowed = null) {
     let synced = 0;
     await streamPages(orgId, base, '/patients', auth, params, async (items) => {
-        const rows = items.map((p) => patientRow(orgId, p, siteMap));
+        const rows = items
+            .filter((p) => keepSite(allowed, p?.site_id))
+            .map((p) => patientRow(orgId, p, siteMap));
         synced += await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
     return { synced };
 }
 
-async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages) {
+async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages, allowed = null) {
     const remote = await fetchAllPages(orgId, base, '/practitioners', auth, params, null, maxPages);
     const rows = remote
-        .filter((p) => p && p.id != null)
+        .filter((p) => p && p.id != null && keepSite(allowed, p.site_id))
         .map((p) => practitionerRow(orgId, p, siteMap));
     // Upsert on the new (organisation_id, pms_external_id) arbiter. pay_pct /
     // lab_split_pct are NOT in the payload, so owner-set values are preserved.
@@ -977,15 +1010,15 @@ export async function syncPractitionersOnly(orgId, integration) {
     const auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) return { error: 'no_auth' };
     const siteMap = await loadSiteMap(orgId);
-    return pullPractitioners(orgId, base, auth, {}, siteMap, BACKFILL_MAX_PAGES);
+    return pullPractitioners(orgId, base, auth, {}, siteMap, BACKFILL_MAX_PAGES, allowedSites(integration));
 }
 
 // Dentally `/users` -> staff roster. Small set (whole-practice team), so one
 // unfiltered pull each sync; upsert is idempotent on (org, source, pms id).
-async function pullUsers(orgId, base, auth, params, siteMap, maxPages) {
+async function pullUsers(orgId, base, auth, params, siteMap, maxPages, allowed = null) {
     const remote = await fetchAllPages(orgId, base, '/users', auth, params, null, maxPages);
     const rows = remote
-        .filter((u) => u && u.id != null)
+        .filter((u) => u && u.id != null && keepSite(allowed, u.site_id))
         .map((u) => staffRow(orgId, u, siteMap));
     const synced = await upsertChunked('staff', rows, 'organisation_id,source,pms_external_id');
     return { synced };
@@ -1922,6 +1955,9 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
     }
+    // Sites this org pulls (null = all). A Dentally grant is group-wide, so
+    // without this a sub-account reads every practice the token can see.
+    const allowed = allowedSites(integration);
     // Window selection — ONE window, shared by patients / appointments /
     // payments (all filtered by `updated_after`):
     //  - full   : the most-recent 6 months (backfillSince()) with a lifted page cap.
@@ -2065,7 +2101,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         if (want('appointments') || want('treatment_plans')) {
             onProgress({ phase: 'practitioners', pct: 0, count: 0 });
             try {
-                practitioners = await pullPractitioners(orgId, base, auth, {}, siteMap, maxPages);
+                practitioners = await pullPractitioners(orgId, base, auth, {}, siteMap, maxPages, allowed);
                 onProgress({ phase: 'practitioners', pct: 0, count: practitioners.synced });
             } catch (err) {
                 console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
@@ -2077,7 +2113,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         onProgress({ phase: 'staff', pct: 0, count: 0 });
         let staff = { synced: 0 };
         try {
-            staff = await pullUsers(orgId, base, auth, {}, siteMap, maxPages);
+            staff = await pullUsers(orgId, base, auth, {}, siteMap, maxPages, allowed);
             onProgress({ phase: 'staff', pct: 0, count: staff.synced });
         } catch (err) {
             console.warn(`[dentally] users pull skipped: ${err?.message || err}`);
@@ -2089,7 +2125,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // doesn't strand appointment contact resolution.
         let patients = { synced: 0 };
         if (want('patients') && !completedPhases.has('patients')) {
-            patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
+            patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages, allowed);
             await markPhaseDone('patients');
         }
         const contactMap = await loadContactMap(orgId);
@@ -2467,8 +2503,21 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
     }
-    // 1. detect sites + 2. create a practice for each unmapped site.
+    // 1. detect sites.
     const { siteIds = [] } = await detectSiteIds(orgId, integration);
+    // 1a. More than one site and nobody has said which to pull? STOP and ask.
+    // A Dentally grant covers the whole group, so pulling on sight is how a
+    // sub-account ends up holding four other practices' patients. Only ask when
+    // there is a choice to make: one site is not a decision.
+    const chosen = allowedSites(integration);
+    if (!chosen && siteIds.length > 1) {
+        await integrationRepository.mergeConfig(orgId, 'dentally', {
+            detected_sites: siteIds,
+            awaiting_site_selection: true,
+        });
+        return { awaitingSiteSelection: true, sitesDetected: siteIds.length, siteIds };
+    }
+    // 2. create a practice for each unmapped site the org actually pulls.
     let practicesCreated = 0;
     if (siteIds.length) {
         const { data: existing } = await supabase_1.serviceClient
@@ -2477,7 +2526,9 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
             .eq('organisation_id', orgId)
             .not('pms_site_id', 'is', null);
         const mapped = new Set((existing ?? []).map((p) => String(p.pms_site_id)));
-        const toCreate = siteIds.filter((s) => !mapped.has(String(s.site_id)));
+        const toCreate = siteIds.filter(
+            (s) => !mapped.has(String(s.site_id)) && keepSite(chosen, s.site_id),
+        );
         for (const s of toCreate) {
             const { error } = await supabase_1.serviceClient.from('practices').insert({
                 organisation_id: orgId,

@@ -129,3 +129,11 @@ export const dentallyPaymentRepairSchema = zod_1.z.object({
     since: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'since must be YYYY-MM-DD'),
     until: zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'until must be YYYY-MM-DD'),
 }).refine((v) => v.since <= v.until, { message: 'since must not be after until' });
+
+// Which Dentally sites an organisation pulls. At least one — an empty list
+// would mean "connected, syncing nothing", which is a disconnect wearing a
+// disguise. Site ids are Dentally's own identifiers and are validated against
+// what the token actually returned, so they are plain strings here.
+export const dentallySiteSelectionSchema = zod_1.z.object({
+    site_ids: zod_1.z.array(zod_1.z.string().min(1)).min(1),
+});

@@ -671,3 +671,32 @@ export interface EmergentStatus {
 export function getEmergentStatus() {
   return api<EmergentStatus>('/api/integrations/emergent');
 }
+
+// --- Dentally site selection ------------------------------------------------
+// A Dentally OAuth grant covers the whole group, so an organisation must say
+// which of its sites it pulls before the first sync runs. `awaiting` is true
+// while the bootstrap is holding, having detected more than one.
+export interface DentallySite {
+  site_id: string;
+  name: string | null;
+  /** How often the site appeared in the detection sample — a rough size hint. */
+  count: number;
+}
+
+export interface DentallySites {
+  sites: DentallySite[];
+  /** null means every site, which is what an org that never chose does. */
+  selected: string[] | null;
+  awaiting: boolean;
+}
+
+export function getDentallySites() {
+  return api<DentallySites>('/api/integrations/dentally/sites');
+}
+
+export function selectDentallySites(siteIds: string[]) {
+  return api<{ ok: boolean }>('/api/integrations/dentally/sites', {
+    method: 'POST',
+    body: JSON.stringify({ site_ids: siteIds }),
+  });
+}

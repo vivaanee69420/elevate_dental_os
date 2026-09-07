@@ -48,6 +48,15 @@ export const integrationController = {
             req.user.organisation_id, { since: body.since, until: body.until },
         ));
     },
+    async dentallySites(req, res) {
+        res.json(await integration_service_1.integrationService.dentallySites(req.user.organisation_id));
+    },
+    async dentallySelectSites(req, res) {
+        const body = integration_model_1.dentallySiteSelectionSchema.parse(req.body);
+        res.json(await integration_service_1.integrationService.dentallySelectSites(
+            req.user.organisation_id, body.site_ids,
+        ));
+    },
     async emergentDisconnect(req, res) {
         res.json(await emergentService.disconnect(req.user.organisation_id));
     },

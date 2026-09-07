@@ -277,6 +277,48 @@ export const integrationService = {
             throw err;
         }
     },
+    // The sites Dentally offered on connect, and the ones this org settled on.
+    // `detected_sites` is written by bootstrapOnConnect when it stops to ask;
+    // re-detecting here would cost another four Dentally calls to answer a
+    // question already answered.
+    async dentallySites(orgId) {
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally');
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('dentally is not connected', 409);
+        let sites = integration.config?.detected_sites;
+        if (!Array.isArray(sites) || sites.length === 0) {
+            ({ siteIds: sites = [] } = await dentally_sync_1.detectSiteIds(orgId, integration));
+        }
+        return {
+            sites,
+            selected: integration.config?.site_ids ?? null,
+            awaiting: integration.config?.awaiting_site_selection === true,
+        };
+    },
+
+    // Record which sites this org pulls, then run the bootstrap that was held
+    // back. Validated against what Dentally actually returned so a caller can
+    // never name a site this token cannot see.
+    async dentallySelectSites(orgId, siteIds) {
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally');
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('dentally is not connected', 409);
+        const detected = Array.isArray(integration.config?.detected_sites)
+            ? integration.config.detected_sites
+            : (await dentally_sync_1.detectSiteIds(orgId, integration)).siteIds ?? [];
+        const known = new Set(detected.map((s) => String(s.site_id)));
+        const wanted = [...new Set(siteIds.map(String))];
+        const unknown = wanted.filter((id) => !known.has(id));
+        if (unknown.length) {
+            throw new errors_1.AppError(`Unknown Dentally site: ${unknown.join(', ')}`, 400);
+        }
+        await integration_repository_1.integrationRepository.mergeConfig(orgId, 'dentally', {
+            site_ids: wanted,
+            awaiting_site_selection: false,
+        });
+        return this.bootstrapDentally(orgId);
+    },
+
     // GoHighLevel first-connect automation: full-history pull of contacts +
     // opportunities as ONE run sharing the same progress key + concurrency guard
     // as syncNow (so the connect overlay shows it land). GHL has no sites to map.
