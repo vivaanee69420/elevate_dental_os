@@ -48,6 +48,9 @@ export const integrationController = {
             req.user.organisation_id, { since: body.since, until: body.until },
         ));
     },
+    async dentallyImportSummary(req, res) {
+        res.json(await integration_service_1.integrationService.dentallyImportSummary(req.user.organisation_id));
+    },
     async dentallySites(req, res) {
         res.json(await integration_service_1.integrationService.dentallySites(req.user.organisation_id));
     },

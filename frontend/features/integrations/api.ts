@@ -700,3 +700,30 @@ export function selectDentallySites(siteIds: string[]) {
     body: JSON.stringify({ site_ids: siteIds }),
   });
 }
+
+// --- Dentally: what has actually landed -------------------------------------
+// `last_sync_at` is stamped once, on completion, so it cannot answer "is
+// anything here yet" during a pull or after one that died partway. These are
+// row counts, read without loading any row bodies.
+export interface DentallyImportSummary {
+  counts: {
+    contacts: number | null;
+    appointments: number | null;
+    payments: number | null;
+    invoices: number | null;
+    treatment_plans: number | null;
+    associates: number | null;
+    staff: number | null;
+    practices: number | null;
+  };
+  appointments_from: string | null;
+  appointments_to: string | null;
+  last_sync_at: string | null;
+  status: string | null;
+  last_error: string | null;
+  running: boolean;
+}
+
+export function getDentallyImportSummary() {
+  return api<DentallyImportSummary>('/api/integrations/dentally/import-summary');
+}

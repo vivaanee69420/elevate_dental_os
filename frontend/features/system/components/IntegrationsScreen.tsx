@@ -37,6 +37,7 @@ import type {
   ProviderMeta,
 } from '@/features/integrations/api';
 import { DentallySitePicker } from '@/features/integrations/components/DentallySitePicker';
+import { DentallyImportSummary } from '@/features/integrations/components/DentallyImportSummary';
 import DentallyPracticeMapping from '@/features/integrations/components/DentallyPracticeMapping';
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
@@ -504,6 +505,7 @@ export default function IntegrationsScreen() {
                 mapping below only decides where pulled rows land, so it answers
                 a narrower question and belongs after this one. */}
             <DentallySitePicker />
+            <DentallyImportSummary />
             <DentallyPracticeMapping />
             <DentallyWebhookPanel />
           </>

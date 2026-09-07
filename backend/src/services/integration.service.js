@@ -8,6 +8,7 @@ import "../lib/integrations/index.js";
 import { getProvider, listProviders } from "../lib/integrations/provider-interface.js";
 import * as errors_1 from "../middleware/errors.js";
 import * as dentally_sync_1 from "../lib/integrations/dentally-sync.js";
+import * as pms_import_repository_1 from "../repositories/pms-import.repository.js";
 import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
 import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
@@ -326,6 +327,24 @@ export const integrationService = {
             console.error('[integrations] dentally bootstrap failed:', err?.message || err);
         });
         return { ok: true, provider: 'dentally', site_ids: wanted, started: true };
+    },
+
+    // What this organisation actually holds from the PMS, and whether a pull is
+    // in flight. The panel used to read only last_sync_at, which is stamped on
+    // completion — so a run 4,000 rows in read "Synced never", identical to one
+    // that never started.
+    async dentallyImportSummary(orgId) {
+        const [summary, integration] = await Promise.all([
+            pms_import_repository_1.pmsImportRepository.summary(orgId, 'dentally'),
+            integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally'),
+        ]);
+        return {
+            ...summary,
+            last_sync_at: integration?.last_sync_at ?? null,
+            status: integration?.status ?? null,
+            last_error: integration?.last_error ?? null,
+            running: getProgress(orgId, 'dentally')?.running === true,
+        };
     },
 
     // GoHighLevel first-connect automation: full-history pull of contacts +

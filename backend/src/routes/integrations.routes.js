@@ -37,6 +37,10 @@ router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requireRole)(
 // so a sub-account must be able to say "only this practice" before any pull
 // runs — bootstrapOnConnect stops and waits on this when it detects more than
 // one site. Owner-only: it decides what data enters the tenant.
+// How much has actually landed. Practice managers see it too: it answers
+// "is the data here yet", which is not an owner-only question, and it returns
+// counts only — no patient rows are read to render it.
+router.get('/dentally/import-summary', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyImportSummary));
 router.get('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySites));
 router.post('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySelectSites));
 router.post('/dentally/repair-payments', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyRepairPayments));
