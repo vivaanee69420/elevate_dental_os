@@ -21,7 +21,7 @@ import {
 import { formatPence } from '@/lib/format';
 import { EmptyState, Skeleton } from '@/components/ui';
 import { StatRail } from '@/features/marketing/_shared/StatRail';
-import { DeltaInline } from '@/features/marketing/_shared/DeltaBadge';
+import { DeltaBadge } from '@/features/marketing/_shared/DeltaBadge';
 import { CampaignHighlights, type HighlightCampaign } from '@/features/marketing/_shared/CampaignHighlights';
 import { BestPerformer, type Performer } from '@/features/marketing/_shared/BestPerformer';
 import { computeDelta, type Delta } from '@/features/marketing/_shared/compare';
@@ -115,7 +115,7 @@ function FunnelChart({ total }: { total: ChannelTotals }) {
 
 export function ChannelSummaryView({
   title, reportHref, isPending, error, notConnected,
-  total, previous, campaigns, grains, comparisonLabel, onOpenCampaign, onOpenGrain,
+  total, previous, campaigns, grains, previousLabel, onOpenCampaign, onOpenGrain,
 }: {
   title: string;
   reportHref: string;
@@ -124,11 +124,16 @@ export function ChannelSummaryView({
   /** A channel with no connection renders one honest line, not a wall of £0. */
   notConnected: string | null;
   total: ChannelTotals | null;
-  /** Null when comparison is off — the arrows then simply do not render. */
+  /** The SAME window one period earlier, always fetched. There is no compare
+   *  button: a figure without a direction is half an answer, and a control the
+   *  reader has to find first means most never see the direction at all. */
   previous: ChannelTotals | null;
   campaigns: HighlightCampaign[];
   grains: Grain[];
-  comparisonLabel: string | null;
+  /** Names the period being compared against, e.g. "1-31 Aug 2026". Shown
+   *  once per card beside the previous value, so the percentage is checkable
+   *  rather than taken on trust. */
+  previousLabel: string;
   onOpenCampaign: (campaignId: string) => void;
   onOpenGrain: (href: string) => void;
 }) {
@@ -141,6 +146,11 @@ export function ChannelSummaryView({
     campaignId: c.campaignId, campaignName: c.campaignName, spendPence: c.spendPence,
   })));
   const sliceTotal = slices.reduce((a, s) => a + s.value, 0);
+
+  // "£100,147.90 · 1-7 Aug 2026" — the value the percentage is measured
+  // against, named, so the reader can check it rather than trust it.
+  const was = (prev: ChannelTotals | null, fmt: (t: ChannelTotals) => string) =>
+    (prev ? `${fmt(prev)} · ${previousLabel}` : previousLabel);
 
   // Polarity matters more than direction: spend rising is neutral, cost per
   // patient rising is bad, patients rising is good. An arrow coloured by
@@ -156,31 +166,58 @@ export function ChannelSummaryView({
         </Link>
       </div>
 
+      {/* Every card carries its own arrow, always. Direction is half the
+          information in any of these figures — £4,584 of spend means nothing
+          until you know it was £2,100 last month — and behind a button most
+          readers never see it. */}
       <StatRail
         stats={[
           {
             label: 'Spend', value: formatPence(total.spendPence), accent: true,
-            sub: comparisonLabel ?? undefined,
-            badge: <DeltaInline delta={d((t) => t.spendPence, 'neutral')} />,
+            sub: (
+              <DeltaBadge
+                delta={d((t) => t.spendPence, 'neutral')}
+                previousLabel={was(previous, (t) => formatPence(t.spendPence))}
+              />
+            ),
           },
           {
             label: 'Leads', value: nf.format(total.leads),
-            badge: <DeltaInline delta={d((t) => t.leads, 'higher-better')} />,
+            sub: (
+              <DeltaBadge
+                delta={d((t) => t.leads, 'higher-better')}
+                previousLabel={was(previous, (t) => nf.format(t.leads))}
+              />
+            ),
           },
           {
             label: 'Booked', value: nf.format(total.booked),
-            badge: <DeltaInline delta={d((t) => t.booked, 'higher-better')} />,
+            sub: (
+              <DeltaBadge
+                delta={d((t) => t.booked, 'higher-better')}
+                previousLabel={was(previous, (t) => nf.format(t.booked))}
+              />
+            ),
           },
           {
             label: 'Patients', value: nf.format(total.accepted),
-            badge: <DeltaInline delta={d((t) => t.accepted, 'higher-better')} />,
+            sub: (
+              <DeltaBadge
+                delta={d((t) => t.accepted, 'higher-better')}
+                previousLabel={was(previous, (t) => nf.format(t.accepted))}
+              />
+            ),
           },
           {
             // Null, never £0: a cost per no patients is unknowable, not free.
             label: 'Cost per patient',
             value: total.cpaPence === null ? '—' : formatPence(total.cpaPence),
-            sub: total.cpaPence === null ? 'No patients yet' : undefined,
-            badge: <DeltaInline delta={d((t) => t.cpaPence, 'lower-better')} />,
+            sub: (
+              <DeltaBadge
+                delta={d((t) => t.cpaPence, 'lower-better')}
+                previousLabel={was(previous, (t) => (t.cpaPence === null ? 'no patients' : formatPence(t.cpaPence)))}
+              />
+            ),
           },
         ]}
       />

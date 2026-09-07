@@ -1,4 +1,4 @@
-'use client';
+"use client";
 // Facebook's data adapter for the shared summary view.
 //
 // Every fetch here is the Facebook report page's OWN hook, so the two surfaces
@@ -11,25 +11,31 @@
 // mean "everything in this window" rather than "nothing" — the same call the
 // report page's unfiltered tab makes.
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { ComparePicker, type CompareWindow } from '@/features/marketing/_shared/ComparePicker';
-import { bestByCostPerConversion, type Performer } from '@/features/marketing/_shared/BestPerformer';
-import type { FacebookRow } from '@/features/marketing/facebook/api';
+import { useRouter } from "next/navigation";
+import { previousPeriod } from "@/features/marketing/_shared/compare";
 import {
-  useFacebookLeadPerformance, useFacebookLeadPerformanceFor,
-  useFacebookCampaigns, useFacebookAdSets, useFacebookAds,
-} from '@/features/marketing/facebook/hooks';
-import { useSelectedYmdWindow } from '@/features/marketing/facebook/hooks';
-import { ChannelSummaryView, type Grain } from './ChannelSummaryView';
+  bestByCostPerConversion,
+  type Performer,
+} from "@/features/marketing/_shared/BestPerformer";
+import type { FacebookRow } from "@/features/marketing/facebook/api";
+import {
+  useFacebookLeadPerformance,
+  useFacebookLeadPerformanceFor,
+  useFacebookCampaigns,
+  useFacebookAdSets,
+  useFacebookAds,
+} from "@/features/marketing/facebook/hooks";
+import { useSelectedYmdWindow } from "@/features/marketing/facebook/hooks";
+import { ChannelSummaryView, type Grain } from "./ChannelSummaryView";
 
 // Each state is a DIFFERENT problem with a different fix, so each says so
 // rather than sharing one "no data" line the owner cannot act on.
 const NOT_OK: Record<string, string> = {
-  not_connected: 'Facebook Ads is not connected, so there is nothing to report yet.',
-  never_synced: 'Facebook Ads is connected but has not synced yet.',
+  not_connected:
+    "Facebook Ads is not connected, so there is nothing to report yet.",
+  never_synced: "Facebook Ads is connected but has not synced yet.",
   no_ad_id_coverage:
-    'Facebook leads are arriving without an ad id, so spend cannot yet be tied to the leads it produced.',
+    "Facebook leads are arriving without an ad id, so spend cannot yet be tied to the leads it produced.",
 };
 
 /**
@@ -43,30 +49,39 @@ const NOT_OK: Record<string, string> = {
  * on purpose, and each card says which measure it used.
  */
 function asPerformers(rows: FacebookRow[] | undefined): Performer[] {
-  return (rows ?? [])
-    // The aggregate `totals` row carries a null id and would otherwise win
-    // every ranking by being the sum of the rows it competes against.
-    .filter((r) => r.id !== null)
-    .map((r) => ({
-      id: r.id,
-      name: r.name,
-      spendPence: r.spendPence,
-      conversions: r.patients,
-      costPerConversionPence: r.cpaPence,
-    }));
+  return (
+    (rows ?? [])
+      // The aggregate `totals` row carries a null id and would otherwise win
+      // every ranking by being the sum of the rows it competes against.
+      .filter((r) => r.id !== null)
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+        spendPence: r.spendPence,
+        conversions: r.patients,
+        costPerConversionPence: r.cpaPence,
+      }))
+  );
 }
 
 /** Rows that exist but none of which converted. Naming that is the difference
  *  between "nothing qualified" and "this failed to load". */
 function noteFor(rows: unknown[] | undefined, best: unknown) {
   if (best || !rows) return null;
-  return rows.length > 0 ? `${rows.length} in this period, none with a conversion yet.` : null;
+  return rows.length > 0
+    ? `${rows.length} in this period, none with a conversion yet.`
+    : null;
 }
 
 export function FacebookSummary() {
   const router = useRouter();
   const { since, until } = useSelectedYmdWindow();
-  const [compare, setCompare] = useState<CompareWindow | null>(null);
+  // ALWAYS the preceding period of the same length. There is no compare
+  // button: a figure without a direction is half an answer, and behind a
+  // control most readers never find it. Same length, so a 7-day view is
+  // measured against 7 days rather than a whole month.
+  const compare = previousPeriod(since, until);
+  const previousLabel = `${compare.since} to ${compare.until}`;
 
   const { data, isPending, error } = useFacebookLeadPerformance();
   const prev = useFacebookLeadPerformanceFor(compare);
@@ -79,46 +94,56 @@ export function FacebookSummary() {
   // Ads paginate, so the rows live across pages rather than on one payload.
   const adRows = ads.data?.pages.flatMap((pg) => pg.rows) ?? [];
 
-  const bestCampaign = bestByCostPerConversion(asPerformers(campaigns.data?.rows));
+  const bestCampaign = bestByCostPerConversion(
+    asPerformers(campaigns.data?.rows),
+  );
   const bestAdSet = bestByCostPerConversion(asPerformers(adSets.data?.rows));
   const bestAd = bestByCostPerConversion(asPerformers(adRows));
 
   const grains: Grain[] = [
     {
-      label: 'Best campaign · cost per patient', row: bestCampaign, fallbackName: 'Unnamed campaign',
+      label: "Best campaign · cost per patient",
+      row: bestCampaign,
+      fallbackName: "Unnamed campaign",
       note: noteFor(campaigns.data?.rows, bestCampaign),
-      href: '/marketing-facebook?tab=campaigns',
+      href: "/marketing-facebook?tab=campaigns",
     },
     {
-      label: 'Best ad set · cost per patient', row: bestAdSet, fallbackName: 'Unnamed ad set',
+      label: "Best ad set · cost per patient",
+      row: bestAdSet,
+      fallbackName: "Unnamed ad set",
       note: noteFor(adSets.data?.rows, bestAdSet),
-      href: '/marketing-facebook?tab=adsets',
+      href: "/marketing-facebook?tab=adsets",
     },
     {
-      label: 'Best ad · cost per patient', row: bestAd, fallbackName: 'Unnamed ad',
+      label: "Best ad · cost per patient",
+      row: bestAd,
+      fallbackName: "Unnamed ad",
       note: noteFor(adRows, bestAd),
-      href: '/marketing-facebook?tab=ads',
+      href: "/marketing-facebook?tab=ads",
     },
   ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <ComparePicker since={since} until={until} value={compare} onChange={setCompare} />
-      <ChannelSummaryView
-        title="Facebook"
-        reportHref="/marketing-facebook"
-        isPending={isPending}
-        error={(error as Error) ?? null}
-        notConnected={data && data.state !== 'ok' ? (NOT_OK[data.state] ?? null) : null}
-        total={data?.total ?? null}
-        previous={prev.data?.total ?? null}
-        campaigns={data?.campaigns ?? []}
-        grains={grains}
-        comparisonLabel={compare ? `vs ${compare.since} to ${compare.until}` : null}
-        onOpenCampaign={(campaignId) =>
-          router.push(`/marketing-facebook?tab=campaigns&campaignId=${encodeURIComponent(campaignId)}`)}
-        onOpenGrain={(href) => router.push(href)}
-      />
-    </div>
+    <ChannelSummaryView
+      title="Facebook"
+      reportHref="/marketing-facebook"
+      isPending={isPending}
+      error={(error as Error) ?? null}
+      notConnected={
+        data && data.state !== "ok" ? (NOT_OK[data.state] ?? null) : null
+      }
+      total={data?.total ?? null}
+      previous={prev.data?.total ?? null}
+      campaigns={data?.campaigns ?? []}
+      grains={grains}
+      previousLabel={previousLabel}
+      onOpenCampaign={(campaignId) =>
+        router.push(
+          `/marketing-facebook?tab=campaigns&campaignId=${encodeURIComponent(campaignId)}`,
+        )
+      }
+      onOpenGrain={(href) => router.push(href)}
+    />
   );
 }
