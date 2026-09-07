@@ -326,6 +326,8 @@ async function finishAgencyConnect(orgId, body) {
     let locations = [];
     try {
         locations = await listInstalledLocations(body.access_token, companyId);
+        console.log(`[gohighlevel] agency ${companyId}: ${locations.length} installed location(s)`,
+            JSON.stringify(locations.map((l) => l.name ?? l.id)));
     } catch (err) {
         await integrationsRepository.markFailed(orgId, 'gohighlevel', err.message);
         throw new Error(`Connected to the agency, but could not list its locations: ${err.message}`);
@@ -352,6 +354,7 @@ async function finishAgencyConnect(orgId, body) {
             }, { label: loc.name || undefined });
             accounts.push(account.id);
         } catch (err) {
+            console.error(`[gohighlevel] location ${loc.id} could not be connected:`, err?.message || err);
             failed.push(`${loc.name || loc.id}: ${err.message}`);
         }
     }
@@ -414,6 +417,19 @@ export const GoHighLevelProvider = {
                 await integrationsRepository.markFailed(orgId, 'gohighlevel', err.message);
                 throw new Error(`GoHighLevel OAuth exchange failed: ${err.message}`);
             }
+            // What GHL sent, minus the credentials. Two rounds of this
+            // connection failed on a response nobody had recorded — the token
+            // body is the one piece of evidence that says which flow this is,
+            // and it is unreachable after the redirect.
+            console.log('[gohighlevel] token response:', JSON.stringify({
+                keys: Object.keys(body).sort(),
+                userType: body.userType ?? null,
+                hasLocationId: Boolean(body.locationId),
+                hasCompanyId: Boolean(body.companyId),
+                hasRefreshToken: Boolean(body.refresh_token),
+                expires_in: body.expires_in ?? null,
+                scope: body.scope ?? null,
+            }));
             // AGENCY consent. Installing the app on the agency authorises the
             // COMPANY, not a Location, so GHL returns companyId and no
             // locationId — which is the natural flow for an agency with many
