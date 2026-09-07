@@ -43,8 +43,18 @@ import * as Sentry from '@sentry/node';
 const API_BASE = 'https://services.leadconnectorhq.com';
 const API_VERSION = '2021-07-28';
 const PER_PAGE = 100;
-const MAX_PAGES = 50;            // routine/incremental cap (~5k rows/resource) — bounded so a foreground Refresh stays fast
+export const MAX_PAGES = 50;            // routine/incremental cap (~5k rows/resource) — bounded so a foreground Refresh stays fast
 const BOOTSTRAP_MAX_PAGES = 500; // full-history / on-connect pull cap (~50k rows/resource)
+// Contacts get their OWN cap, and it is the full one on every run.
+//
+// GHL's /contacts/ list cannot filter server-side (see pullContacts), so the
+// walk is full-length whatever the mode — the incremental saving is entirely in
+// the WRITE, which selectContactsToWrite already does. Capping the READ at 50
+// pages therefore bought nothing and cost the tail of the book: three of this
+// org's four locations hold more than 5,000 contacts (9,832 / 8,057 / 7,311),
+// so everything past that point was never looked at again after the on-connect
+// bootstrap, and an edit or an addition out there simply never arrived.
+export const CONTACT_MAX_PAGES = BOOTSTRAP_MAX_PAGES;
 const UPSERT_CHUNK = 500;
 const OPP_CONCURRENCY = 10;       // parallel opportunity upserts (bounded so we stay under GHL/DB limits)
 
@@ -566,8 +576,11 @@ export async function loadGhlContactMap(orgId) {
 // per page instead of work that grows with the page number.
 export async function loadContactDedupMaps(orgId) {
     const byGhl = new Map();   // ghl_contact_id -> our id
-    const byEmail = new Map(); // lower(email)   -> { id, ghl }
-    const byPhone = new Map(); // normphone      -> { id, ghl }
+    // `account` rides along so the link step can tell a contact that belongs to
+    // no location yet from one another location already owns — see
+    // linkAccountPatch. Without it the link could only overwrite.
+    const byEmail = new Map(); // lower(email)   -> { id, ghl, account }
+    const byPhone = new Map(); // normphone      -> { id, ghl, account }
     // ghl_contact_ids whose attribution has never been captured. Drives the
     // opportunistic fill: the walk already holds these contacts, so writing
     // them costs no extra API call.
@@ -576,7 +589,7 @@ export async function loadContactDedupMaps(orgId) {
     let after = null;
     for (;;) {
         let query = supabase_1.serviceClient
-            .from('contacts').select('id, ghl_contact_id, email, phone, attribution_captured_at')
+            .from('contacts').select('id, ghl_contact_id, email, phone, attribution_captured_at, integration_account_id')
             .eq('organisation_id', orgId)
             .order('id', { ascending: true })
             .limit(PAGE);
@@ -589,9 +602,9 @@ export async function loadContactDedupMaps(orgId) {
                 if (!c.attribution_captured_at) needsAttribution.add(String(c.ghl_contact_id));
             }
             const e = c.email ? String(c.email).toLowerCase() : null;
-            if (e && !byEmail.has(e)) byEmail.set(e, { id: c.id, ghl: c.ghl_contact_id });
+            if (e && !byEmail.has(e)) byEmail.set(e, { id: c.id, ghl: c.ghl_contact_id, account: c.integration_account_id });
             const np = normalizePhone(c.phone);
-            if (np && !byPhone.has(np)) byPhone.set(np, { id: c.id, ghl: c.ghl_contact_id });
+            if (np && !byPhone.has(np)) byPhone.set(np, { id: c.id, ghl: c.ghl_contact_id, account: c.integration_account_id });
         }
         if (rows.length < PAGE) break;
         after = rows[rows.length - 1].id;
@@ -612,6 +625,44 @@ export function selectContactsToWrite(fetched, since, needsAttribution) {
         const t = Date.parse(raw);
         return Number.isNaN(t) || t >= sinceMs;
     });
+}
+
+/**
+ * May this GHL contact be merged into the existing row we matched by email or
+ * phone?
+ *
+ * Only when that row is NOT itself a GoHighLevel contact. The dedup exists to
+ * stop a GHL contact duplicating a person Dentally already knows about; it was
+ * never meant to merge two GoHighLevel contacts together.
+ *
+ * The same person can fill the Rochester form and the Ashford form. That is two
+ * leads, in two locations, and GoHighLevel holds two contacts for them — so we
+ * hold two. Merging them made every per-location count read short (9,832 in
+ * GoHighLevel against 9,707 here, and the same shortfall on all four locations)
+ * and gave one of the two leads the wrong home.
+ *
+ * A legacy row carrying a ghl_contact_id but no subaccount is refused too: it
+ * predates the multi-subaccount split, but it is still somebody's GHL contact.
+ */
+export function canLinkOntoContact(candidate) {
+    return !candidate?.ghl;
+}
+
+/**
+ * The account fields to write when linking a GHL id onto an EXISTING contact.
+ *
+ * Only a NON-GoHighLevel row can be linked onto at all (see canLinkOntoContact),
+ * so in practice this claims a Dentally / manual / CSV contact for the location
+ * that just matched it. The guard matters anyway: it used to overwrite
+ * integration_account_id unconditionally, which under the old org-wide merge
+ * moved a contact between locations on every sync and made each location's
+ * count drift by however many people it shared with its neighbours.
+ *
+ * First location to find a contact keeps it.
+ */
+export function linkAccountPatch(integrationAccountId, existingAccountId) {
+    if (!integrationAccountId || existingAccountId) return {};
+    return { integration_account_id: integrationAccountId };
 }
 
 // A contact we LOOKED AT and found no attribution on still records WHEN it was
@@ -677,8 +728,11 @@ export async function upsertContactRows(rows, onProgress = () => {}) {
 // the same dedup guarantee as upsertContact but at a few dozen queries instead
 // of ~3 per contact — an 8k pull goes from ~an hour to seconds.
 async function pullContacts(orgId, accessToken, locationId, practiceId, onPage = () => {}, maxPages = MAX_PAGES, integrationAccountId = null, since = null) {
+    // `maxPages` is the caller's ROUTINE cap and is deliberately not used for
+    // the read: see CONTACT_MAX_PAGES. It still bounds a runaway walk.
     const fetched = await ghlFetchAll('/contacts/', accessToken, locationId, {
-        arrayKey: 'contacts', locationParam: 'locationId', maxPages, onPage,
+        arrayKey: 'contacts', locationParam: 'locationId',
+        maxPages: Math.max(maxPages, CONTACT_MAX_PAGES), onPage,
     });
     // Incremental window: GHL's /contacts/ list cannot filter server-side, so
     // the walk is unavoidable — but rows unchanged since `since` need no write,
@@ -696,24 +750,32 @@ async function pullContacts(orgId, accessToken, locationId, practiceId, onPage =
         const g = String(r.ghl_contact_id);
         if (byGhl.has(g)) { toUpsert.push(r); continue; } // already linked -> refresh
         const e = r.email ? String(r.email).toLowerCase() : null;
-        if (e && byEmail.has(e)) {
-            const ex = byEmail.get(e);
-            if (String(ex.ghl ?? '') !== g) { toLink.push({ id: ex.id, ghl_contact_id: g }); byGhl.set(g, ex.id); }
+        const ex = (e && byEmail.get(e)) || (byPhone.get(normalizePhone(r.phone)) ?? null);
+        if (ex && canLinkOntoContact(ex)) {
+            toLink.push({ id: ex.id, ghl_contact_id: g, account: ex.account ?? null });
+            byGhl.set(g, ex.id);
+            // The row is now a GHL contact, so no LATER contact in this same
+            // walk may fold into it either — otherwise two contacts sharing an
+            // email would still collapse, just one page further on.
+            if (e) byEmail.set(e, { ...ex, ghl: g });
+            const npx = normalizePhone(r.phone);
+            if (npx) byPhone.set(npx, { ...(byPhone.get(npx) ?? ex), ghl: g });
             continue;
         }
-        const np = normalizePhone(r.phone);
-        if (np && byPhone.has(np)) {
-            const ex = byPhone.get(np);
-            if (String(ex.ghl ?? '') !== g) { toLink.push({ id: ex.id, ghl_contact_id: g }); byGhl.set(g, ex.id); }
-            continue;
-        }
+        // New. Claim its email and phone so a second GoHighLevel contact with
+        // the same details later in the walk inserts as its own row rather than
+        // matching this one — GoHighLevel holds two, so we hold two.
+        if (e && !byEmail.has(e)) byEmail.set(e, { id: null, ghl: g, account: integrationAccountId });
+        const npNew = normalizePhone(r.phone);
+        if (npNew && !byPhone.has(npNew)) byPhone.set(npNew, { id: null, ghl: g, account: integrationAccountId });
         toUpsert.push(r); // new
     }
     const { synced: upserted, failed } = await upsertContactRows(toUpsert, onPage);
     let synced = upserted;
     for (const lk of toLink) {
         const { error } = await supabase_1.serviceClient.from('contacts')
-            .update({ ghl_contact_id: lk.ghl_contact_id, integration_account_id: integrationAccountId || undefined }).eq('id', lk.id).eq('organisation_id', orgId);
+            .update({ ghl_contact_id: lk.ghl_contact_id, ...linkAccountPatch(integrationAccountId, lk.account) })
+            .eq('id', lk.id).eq('organisation_id', orgId);
         if (!error) synced++;
     }
     if (failed) console.warn(`[gohighlevel] contacts: skipped ${failed} unstorable row(s)`);

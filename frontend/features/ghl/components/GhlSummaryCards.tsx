@@ -70,7 +70,11 @@ export function GhlSummaryCards({
       sub: `${formatNumber(t.contacts.total)} on the books in total`,
       chip: null,
       compare: cmp(t.contacts.new, p?.contacts.new ?? null, 'higher-better', countOf),
-      source: 'GoHighLevel contacts created inside the selected period. The total beneath is every contact on the books up to the end of that period, which does not move much month to month — this card counts the arrivals.',
+      // This total is meant to MATCH the contact count GoHighLevel shows for
+      // the same location, and is checked against its API. One GHL contact is
+      // one row here — including the same person in two locations, who filled a
+      // form on each and is a lead in both.
+      source: 'GoHighLevel contacts created inside the selected period. The figure beneath is every contact on the books up to the end of that period, and matches the contact count GoHighLevel shows for the same subaccount.',
       onClick: () => setOpen((v) => !v),
       active: open,
       hint: open ? 'Hide subaccounts' : 'Click for the breakdown',
