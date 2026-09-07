@@ -66,16 +66,12 @@ export default function AdPerformanceScreen() {
         subtitle="What the spend bought, and which campaign, ad set, ad or keyword deserves a decision. Open a channel's full report for the tables beneath."
       />
 
-      {/* The GLOBAL period, once, for the whole page. Practices are chosen
-          inside each channel instead: which practices are offerable depends on
-          which have an account with THAT platform, so one row here would list
-          practices a channel knows nothing about — and a practice with no Meta
-          account renders a confident £0 that reads as "we spent nothing here"
-          rather than "this practice is not connected". */}
+      {/* The GLOBAL period, once. Practices are chosen per channel below,
+          because which ones can honestly be offered depends on which have an
+          account with THAT platform. */}
       <ScopePeriodBar hideScope />
 
       <WarmBothChannels />
-      <GroupTotalBlock />
 
       {/* The tab strip and the way out on ONE row. As its own line the link
           cost a full row of vertical space to say four words. */}
@@ -88,6 +84,18 @@ export default function AdPerformanceScreen() {
           Open the full {tab === 'facebook' ? 'Facebook' : 'Google'} report →
         </Link>
       </div>
+
+      {/* The channel's OWN accounts, directly under its tab, because that is
+          what the tab just selected. Only practices with an account on this
+          platform are offered — one without can render nothing but a confident
+          zero, which reads as "we spent nothing here" rather than "this
+          practice is not connected". */}
+      <ScopePeriodBar hidePeriod adProvider={tab === 'facebook' ? 'meta_ads' : 'google_ads'} />
+
+      {/* Below the choice it depends on: the cross-channel figures answer for
+          whichever practices are selected above. */}
+      <GroupTotalBlock />
+
 
       {tab === 'facebook' && <FacebookSummary />}
       {tab === 'google' && <GoogleSummary />}

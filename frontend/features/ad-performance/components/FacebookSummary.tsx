@@ -13,7 +13,6 @@
 
 import { useRouter } from 'next/navigation';
 import { previousPeriod } from '@/features/marketing/_shared/compare';
-import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import {
   bestByCostPerConversion,
   type Performer,
@@ -126,13 +125,7 @@ export function FacebookSummary() {
   ];
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* The accounts this channel actually runs. Only practices with a
-          mapped Facebook account are offered — one without can render nothing
-          but a confident zero. The period comes from the page's global
-          filter, so this row narrows WHOSE spend, never WHEN. */}
-      <ScopePeriodBar hidePeriod adProvider="meta_ads" />
-      <ChannelSummaryView
+    <ChannelSummaryView
       title="Facebook"
       campaignsHref="/marketing-facebook?tab=campaigns"
       isPending={isPending}
@@ -150,8 +143,7 @@ export function FacebookSummary() {
           `/marketing-facebook?tab=campaigns&campaignId=${encodeURIComponent(campaignId)}`,
         )
       }
-        onOpenGrain={(href) => router.push(href)}
-      />
-    </div>
+      onOpenGrain={(href) => router.push(href)}
+    />
   );
 }
