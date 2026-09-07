@@ -378,16 +378,52 @@ export function FacebookPerformancePanel() {
         }}
       />
 
-      {split && <OpenDaySplit split={split} />}
+      {/* ONE disclosure instead of five stacked headings, notes and toggles.
+          Open days, the per-practice split, the uncategorised-lead count and
+          the acceptance rule are all real and all secondary — stacked above
+          the tabs they pushed the tables most readers come for off the screen,
+          and the page read as a wall of explanation with a report somewhere
+          underneath. Closed, this is one line. */}
+      <details className="text-[12.5px] text-ink-muted">
+        <summary className="cursor-pointer select-none py-1 marker:text-ink-muted hover:text-ink">
+          Open days, by practice, and how a patient is counted
+        </summary>
+        <div className="mt-3 flex flex-col gap-4">
+          {split && <OpenDaySplit split={split} />}
 
-      {/* WHAT THE POOL LEAVES OUT. A lead reaches this page only if its
-          GoHighLevel pipeline has been categorised, which removed 212
-          Meta-attributed leads (-11.5%) for the reference org the day that
-          rule shipped. Stating the loss, with the route to fixing it, is the
-          whole justification for accepting it — a number nobody can see is a
-          number nobody will fix. Rendered only when there is something to
-          report, and never when the server did not send the figure. */}
-      {coverageNote}
+
+          {coverageNote}
+
+          <SectionHead
+            title="By practice"
+            right={(
+              <button
+                    type="button"
+                    className="text-[13px] text-brand underline"
+                    onClick={() => setShowPractices((v) => !v)}
+              >
+                    {showPractices ? 'Hide' : 'Show'}
+              </button>
+            )}
+          />
+          {showPractices && (
+            <DataGrid
+              columns={practiceCols}
+              rows={practiceRows}
+              rowKey={(r) => practiceKey(r.practiceId)}
+              emptyState="No practice has Meta spend or leads in this window."
+            />
+          )}
+
+
+          <p className="text-[12px] leading-snug text-ink-muted">
+            A patient is a lead whose settled payments, net of refunds, exceed
+            {' '}{money(data.acceptanceMinPaidPence)} from the day they arrived — the same rule the
+            Google report uses. Counted to date, so a past period improves as its leads convert.
+          </p>
+
+        </div>
+      </details>
 
       {/* The people behind a card open in a DIALOG, not inline. Expanding in
           place pushed everything below it down the page, so the reader lost
@@ -407,43 +443,6 @@ export function FacebookPerformancePanel() {
         />
       </DetailModal>
 
-      <SectionHead
-        title="By practice"
-        right={(
-          <button
-            type="button"
-            className="text-[13px] text-brand underline"
-            onClick={() => setShowPractices((v) => !v)}
-          >
-            {showPractices ? 'Hide' : 'Show'}
-          </button>
-        )}
-      />
-      {showPractices && (
-        <DataGrid
-          columns={practiceCols}
-          rows={practiceRows}
-          rowKey={(r) => practiceKey(r.practiceId)}
-          emptyState="No practice has Meta spend or leads in this window."
-        />
-      )}
-
-      {/* The definition still has to be reachable — a cost per patient is
-          meaningless without knowing what counts as one — but four sentences
-          of it sat between the reader and the tabs. One line states the rule;
-          the rest is a click away. */}
-      <details className="text-[12px] text-ink-muted">
-        <summary className="cursor-pointer marker:text-ink-muted">
-          A patient is a lead who has paid more than {money(data.acceptanceMinPaidPence)}.
-        </summary>
-        <p className="mt-1.5 leading-snug">
-          Settled payments net of refunds, from the day the lead arrived — the same rule the
-          Google report uses, so the two pages&rsquo; cost per patient mean the same thing. It
-          differs from the Campaigns tab&rsquo;s patient count, which asks only whether the lead
-          exists in Dentally. Counted to date rather than within the period, so a past
-          period&rsquo;s figure improves as its leads convert.
-        </p>
-      </details>
     </div>
   );
 }
