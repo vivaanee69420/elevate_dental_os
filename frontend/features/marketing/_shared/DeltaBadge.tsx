@@ -48,10 +48,10 @@ export function DeltaBadge({
     : `${Math.abs(delta.pct).toFixed(1)}${delta.unit === 'points' ? ' pp' : '%'}`;
 
   return (
-    <p className={`mt-1 text-[11.5px] flex items-center gap-1 flex-wrap ${TONE_CLASS[delta.tone]}`}>
-      <Arrow direction={delta.direction} />
-      <span className="font-semibold">{pct}</span>
-      <span className="text-ink-muted">vs {previousLabel}</span>
+    <p className={`mt-1.5 flex items-center gap-1 flex-wrap text-[12.5px] ${TONE_CLASS[delta.tone]}`}>
+      <Arrow direction={delta.direction} size={14} />
+      <span className="text-[13.5px] font-bold tabular-nums leading-none">{pct}</span>
+      <span className="text-[11.5px] text-ink-muted">vs {previousLabel}</span>
     </p>
   );
 }

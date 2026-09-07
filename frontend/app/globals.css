@@ -53,7 +53,7 @@ h1, h2, h3, .display { font-family: var(--font-display), serif; }
    (preview/elevate-dental-os-v2.html .chip-*). Used app-wide for pipeline
    stages, statuses, and tags. .chip is shape; .chip-<colour> is palette. */
 .chip {
-  @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium;
+  @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12.5px] font-semibold;
 }
 .chip-brand  { background: var(--brand-50); color: var(--brand); }
 .chip-amber  { background: #FEF3C7; color: #92400E; }

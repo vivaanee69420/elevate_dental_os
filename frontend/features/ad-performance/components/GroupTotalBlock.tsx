@@ -18,7 +18,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { EmptyState, Skeleton } from '@/components/ui';
 import { SectionLabel } from '@/features/overview/components/HeadlineCard';
-import { StatRail } from '@/features/marketing/_shared/StatRail';
+import { HeadlineCard, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
+import { previousPeriod, type Polarity } from '@/features/marketing/_shared/compare';
+import { londonDateOf, lastInclusiveLondonDay } from '@/features/marketing/_shared/window';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { api } from '@/lib/api';
 
@@ -44,15 +46,70 @@ export function GroupTotalBlock() {
   const { win, scope } = useScopePeriod();
   const practiceId = scope !== 'all' ? scope : '';
 
+  const fetchWindow = (since: string, until: string) => {
+    const sp = new URLSearchParams({ since, until });
+    if (practiceId) sp.set('practice_id', practiceId);
+    return api<GroupTotal>(`/api/ad-attribution/group-total?${sp.toString()}`);
+  };
+
   const { data, isPending, error } = useQuery<GroupTotal>({
     queryKey: ['ad-performance', 'group-total', win.since, win.until, practiceId],
-    queryFn: () => {
-      const sp = new URLSearchParams({ since: win.since, until: win.until });
-      if (practiceId) sp.set('practice_id', practiceId);
-      return api<GroupTotal>(`/api/ad-attribution/group-total?${sp.toString()}`);
-    },
+    queryFn: () => fetchWindow(win.since, win.until),
     staleTime: 30_000,
   });
+
+  // The SAME window one period earlier. Converted through the London helpers
+  // rather than slicing the ISO string: these are London calendar days, and a
+  // slice of a London instant lands on the wrong date around midnight and
+  // through the BST boundary.
+  const prevWin = previousPeriod(londonDateOf(win.since), lastInclusiveLondonDay(win.until));
+  const previous = useQuery<GroupTotal>({
+    queryKey: ['ad-performance', 'group-total', prevWin.since, prevWin.until, practiceId],
+    queryFn: () => fetchWindow(prevWin.since, prevWin.until),
+    staleTime: 30_000,
+  });
+  const prev = previous.data?.state === 'ok' ? previous.data : null;
+  const previousLabel = `${prevWin.since} to ${prevWin.until}`;
+
+  const cmp = (
+    current: number | null, previous_: number | null, polarity: Polarity,
+  ): HeadlineKpi['compare'] => (prev ? {
+    current, previous: previous_, polarity,
+    format: (n) => nf.format(n),
+  } : undefined);
+
+  const ok = data?.state === 'ok' ? data : null;
+  const groupCards: HeadlineKpi[] = ok ? [
+    {
+      label: 'People', value: nf.format(ok.people), sub: 'Counted once',
+      chip: { text: `${nf.format(ok.booked)} booked`, tone: 'emerald' },
+      compare: cmp(ok.people, prev?.people ?? null, 'higher-better'),
+    },
+    {
+      label: 'In both channels',
+      value: ok.overlapIsLowerBound ? `${nf.format(ok.overlap)}+` : nf.format(ok.overlap),
+      sub: ok.overlapIsLowerBound ? 'At least this many' : 'Exact',
+      chip: null,
+      compare: cmp(ok.overlap, prev?.overlap ?? null, 'neutral'),
+    },
+    {
+      label: 'Facebook', value: nf.format(ok.metaPeople), sub: 'Before deduping',
+      chip: null,
+      compare: cmp(ok.metaPeople, prev?.metaPeople ?? null, 'higher-better'),
+    },
+    {
+      label: 'Google', value: nf.format(ok.googlePeople), sub: 'Before deduping',
+      chip: null,
+      compare: cmp(ok.googlePeople, prev?.googlePeople ?? null, 'higher-better'),
+    },
+    {
+      label: 'Acquired', value: nf.format(ok.accepted), sub: 'Paid over the floor',
+      chip: ok.people > 0
+        ? { text: `${((ok.accepted / ok.people) * 100).toFixed(1)}% of people`, tone: 'emerald' }
+        : null,
+      compare: cmp(ok.accepted, prev?.accepted ?? null, 'higher-better'),
+    },
+  ] : [];
 
   return (
     // No card wrapper and no numbered section head: both added padding and
@@ -63,8 +120,7 @@ export function GroupTotalBlock() {
             row of cards, so a section reads as a section here too. */}
         <SectionLabel>Both channels · people counted once</SectionLabel>
         <p className="-mt-1 mb-1 text-[12px] text-ink-muted">
-          Someone in Google and in Facebook counts once here, which is why this is smaller
-          than the two channels added together.
+          Someone in both channels counts once, so this is smaller than the two added together.
         </p>
       </div>
 
@@ -90,32 +146,28 @@ export function GroupTotalBlock() {
             </p>
           )}
 
-          {/* The same rail the Facebook and Google reports open with, so this
-              page reads as one family rather than a third design. */}
-          <StatRail
-            stats={[
-              { label: 'People', value: nf.format(data.people), sub: `${nf.format(data.booked)} booked`, accent: true },
-              {
-                label: 'In both channels',
-                value: data.overlapIsLowerBound ? `${nf.format(data.overlap)}+` : nf.format(data.overlap),
-                sub: data.overlapIsLowerBound ? 'At least — see below' : 'Exact',
-              },
-              { label: 'Facebook', value: nf.format(data.metaPeople), sub: 'Before deduping' },
-              { label: 'Google', value: nf.format(data.googlePeople), sub: 'Before deduping' },
-              { label: 'Acquired', value: nf.format(data.accepted), sub: 'Paid over the acceptance floor' },
-            ]}
-          />
+          {/* The same card as everywhere else on this page, and as the
+              Business Hub. The flat rail this replaces could carry no
+              comparison at all, so these five numbers were the only ones on
+              the page with no direction — the figures that matter most, and
+              the only ones you could not tell were rising or falling. */}
+          {prev && (
+            <p className="-mb-1 text-[11.5px] text-ink-muted">Compared with {previousLabel}</p>
+          )}
+          <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
+            {groupCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
+          </div>
 
           {/* The caveat, measured. Vague hedging ("this may be an
               undercount") tells the reader nothing they can act on; a count
               tells them exactly how much of the data is blind. */}
           {data.overlapIsLowerBound && (
             <p className="text-[12px] text-ink-muted">
-              {nf.format(data.unmatchable)} lead{data.unmatchable === 1 ? '' : 's'} carry no email
-              address, and email is the only detail both channels record — most often a
-              Google lead that arrived as a phone call. Those cannot be matched to the other
-              channel, so the real overlap is at least {nf.format(data.overlap)} and may be higher.
-              {data.anonymous > 0 && ` ${nf.format(data.anonymous)} have no identifying detail at all: counted as people, never matched.`}
+              {/* The caveat has to survive, because the overlap is genuinely a
+                  lower bound — but it can be one sentence rather than four. */}
+              {nf.format(data.unmatchable)} lead{data.unmatchable === 1 ? '' : 's'} carry no email,
+              the only detail both channels record, so they cannot be matched — the real
+              overlap is at least {nf.format(data.overlap)}.
             </p>
           )}
         </>

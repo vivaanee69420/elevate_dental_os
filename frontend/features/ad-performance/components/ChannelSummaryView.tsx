@@ -162,7 +162,9 @@ export function ChannelSummaryView({
     polarity: Polarity, format: (n: number) => string,
   ): HeadlineKpi['compare'] => (previous ? {
     current, previous: previous_, polarity,
-    format: (n) => `${format(n)} · ${previousLabel}`,
+    // The value only. The window it belongs to is named once above the row
+    // rather than repeated on every card, which is four copies of one fact.
+    format: (n) => format(n),
   } : undefined);
 
   const money = (n: number) => formatPence(n);
@@ -179,41 +181,42 @@ export function ChannelSummaryView({
   // conversion moves into the sub-line, which is where a denominator belongs.
   const cards: HeadlineKpi[] = [
     {
-      label: 'Spend', value: formatPence(total.spendPence), sub: `Ad spend · ${title}`,
+      label: 'Spend', value: formatPence(total.spendPence), sub: 'Ad spend',
       chip: null,
       compare: cmp(total.spendPence, previous?.spendPence ?? null, 'neutral', money),
-      href: campaignsHref, hint: 'By campaign →',
+      href: campaignsHref,
     },
     {
       label: 'Leads', value: nf.format(total.leads),
-      sub: 'Enquiries attributed to this channel',
+      sub: 'Attributed enquiries',
       chip: perTag(total.cplPence, 'per lead'),
       compare: cmp(total.leads, previous?.leads ?? null, 'higher-better', count),
-      href: campaignsHref, hint: 'By campaign →',
+      href: campaignsHref,
     },
     {
       label: 'Booked', value: nf.format(total.booked),
-      sub: total.leads > 0
-        ? `${((total.booked / total.leads) * 100).toFixed(1)}% of leads booked`
-        : 'Leads that took an appointment',
+      sub: total.leads > 0 ? `${((total.booked / total.leads) * 100).toFixed(1)}% of leads` : 'Appointments booked',
       chip: perTag(total.cpbPence, 'per booking'),
       compare: cmp(total.booked, previous?.booked ?? null, 'higher-better', count),
-      href: campaignsHref, hint: 'By campaign →',
+      href: campaignsHref,
     },
     {
       label: 'Patients', value: nf.format(total.accepted),
-      sub: total.booked > 0
-        ? `${((total.accepted / total.booked) * 100).toFixed(1)}% of booked became patients`
-        : 'Paid over the acceptance floor',
+      sub: total.booked > 0 ? `${((total.accepted / total.booked) * 100).toFixed(1)}% of booked` : 'Acquired',
       chip: perTag(total.cpaPence, 'per patient'),
       compare: cmp(total.accepted, previous?.accepted ?? null, 'higher-better', count),
-      href: campaignsHref, hint: 'By campaign →',
+      href: campaignsHref,
     },
   ];
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+      {previous && (
+        <p className="-mb-1 text-[11.5px] text-ink-muted">
+          Compared with {previousLabel}
+        </p>
+      )}
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
         {cards.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
 
