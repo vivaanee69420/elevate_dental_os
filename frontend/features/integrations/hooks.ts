@@ -289,16 +289,41 @@ export function useRemoveGhlAccount() {
   });
 }
 
-// Permanently removes the row, for any provider that keeps its accounts in
-// `integration_accounts`. Every account list is invalidated rather than only
-// this provider's: the three panels sit on one page, and a delete that
-// cascades into invoices or P&L rows changes what the others show.
+// Optimistic removal of an account row, for any provider that keeps its
+// accounts in `integration_accounts`.
+//
+// `drop` takes the row out of the cached lists IMMEDIATELY, so the panel
+// updates on the click rather than when the server finishes. That matters here:
+// deleting the legacy GoHighLevel row cascades 137 calendar bookings and sets
+// 54,368 conversations to null, and there is nothing on screen worth blocking
+// for while that write runs.
+//
+// Invalidating alone would NOT do it — a refetch fired before the delete lands
+// returns the row still present, and it reappears a moment after vanishing.
+// So the cache is edited first, and `settle` re-reads from the server only once
+// the request has actually resolved (or failed, which puts the row back).
+//
+// All three lists are touched rather than just this provider's: the panels sit
+// on one page, and a delete that cascades into invoices or P&L rows changes
+// what the others show. Every one of these payloads is `{ accounts: [...] }`,
+// so one filter serves them all.
+const ACCOUNT_LIST_KEYS = [['ghl-accounts'], ['callrail-status'], ['qbo-accounts'], ['integrations']];
+
 export function useDeleteAccountPermanently() {
   const qc = useQueryClient();
-  return () => {
-    for (const key of [['ghl-accounts'], ['callrail-accounts'], ['qbo-accounts'], ['integrations']]) {
-      qc.invalidateQueries({ queryKey: key });
-    }
+  return {
+    drop(id: string) {
+      for (const key of ACCOUNT_LIST_KEYS) {
+        qc.setQueriesData({ queryKey: key }, (old: unknown) => {
+          const data = old as { accounts?: { id: string }[] } | undefined;
+          if (!data?.accounts) return old;
+          return { ...data, accounts: data.accounts.filter((a) => a.id !== id) };
+        });
+      }
+    },
+    settle() {
+      for (const key of ACCOUNT_LIST_KEYS) qc.invalidateQueries({ queryKey: key });
+    },
   };
 }
 

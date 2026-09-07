@@ -34,6 +34,7 @@ router.post('/gohighlevel/daily-report/send', (0, auth_1.requireRole)('owner'), 
 router.post('/gohighlevel/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountCreate));
 router.patch('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountUpdate));
 router.delete('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountRemove));
+router.get('/gohighlevel/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
 router.delete('/gohighlevel/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
 router.post('/gohighlevel/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountSync));
 router.get('/gohighlevel/accounts/:id/pipelines', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountPipelines));
@@ -82,6 +83,7 @@ router.get('/quickbooks/accounts', (0, auth_1.requireRole)('owner'), (0, async_h
 router.post('/quickbooks/accounts/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountConnect));
 router.post('/quickbooks/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountSync));
 router.delete('/quickbooks/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountRemove));
+router.get('/quickbooks/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
 router.delete('/quickbooks/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
 // CallRail — provider-level status/sync/disconnect (Task 3) plus the
 // per-company /accounts routes (Task 4). STATIC paths: must stay above the
@@ -102,6 +104,7 @@ router.post('/callrail/accounts/bulk', (0, auth_1.requireRole)('owner'), (0, asy
 router.post('/callrail/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountCreate));
 router.patch('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountUpdate));
 router.delete('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountRemove));
+router.get('/callrail/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
 router.delete('/callrail/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
 router.post('/callrail/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountSync));
 router.get('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));

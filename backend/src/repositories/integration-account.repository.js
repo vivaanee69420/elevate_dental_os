@@ -240,17 +240,24 @@ export const integrationAccountRepository = {
             if (error) throw new Error(error.message);
             return Number(count || 0);
         };
+        // ALL of them at once. Written as a sequential loop first, which made a
+        // single delete wait on eleven round trips one after another before it
+        // could even ask the question. They are independent reads against
+        // eleven different tables, every one covered by its own index on
+        // integration_account_id, so the whole probe costs one wave of latency
+        // rather than eleven.
         const tally = async (tables) => {
+            const counts = await Promise.all(tables.map((t) => countIn(t)));
             const out = {};
-            for (const t of tables) {
-                const n = await countIn(t);
+            tables.forEach((t, i) => {
                 // Only non-zero entries: a refusal listing eleven zeroes tells
                 // the owner nothing about what is actually in the way.
-                if (n > 0) out[t] = n;
-            }
+                if (counts[i] > 0) out[t] = counts[i];
+            });
             return out;
         };
-        return { cascade: await tally(CASCADE_TABLES), detach: await tally(DETACH_TABLES) };
+        const [cascade, detach] = await Promise.all([tally(CASCADE_TABLES), tally(DETACH_TABLES)]);
+        return { cascade, detach };
     },
 
     async markRevoked(orgId, id) {

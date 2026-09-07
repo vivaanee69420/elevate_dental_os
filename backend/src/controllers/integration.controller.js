@@ -2,7 +2,7 @@ import * as integration_service_1 from "../services/integration.service.js";
 import * as integration_model_1 from "../models/integration.model.js";
 import { providerParamSchema, idParamSchema } from "../models/common.model.js";
 import { verifyState } from "../lib/oauth-state.js";
-import { deleteAccountPermanently } from "../services/integration-account-delete.service.js";
+import { deleteAccountPermanently, accountDeleteImpact } from "../services/integration-account-delete.service.js";
 import { ghlAccountService } from "../services/ghl-account.service.js";
 import { quickbooksAccountService } from "../services/quickbooks-account.service.js";
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
@@ -308,6 +308,12 @@ export const integrationController = {
     //
     // `?confirm=true` proceeds past the refusal that names what the delete
     // would destroy — the owner's decision, made in front of the counts.
+    // What a delete WOULD do — read-only, so the panel can ask before the owner
+    // clicks and the click itself costs no round trip.
+    async accountDeleteImpact(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await accountDeleteImpact(req.user.organisation_id, id, req.accountProvider));
+    },
     async accountDeletePermanently(req, res) {
         const { id } = idParamSchema.parse(req.params);
         const provider = req.accountProvider;

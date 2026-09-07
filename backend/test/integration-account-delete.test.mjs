@@ -24,7 +24,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import './setup.js';
 
 const { integrationAccountRepository: repo } = await import('../src/repositories/integration-account.repository.js');
-const { deleteAccountPermanently } = await import('../src/services/integration-account-delete.service.js');
+const { deleteAccountPermanently, accountDeleteImpact } = await import('../src/services/integration-account-delete.service.js');
 
 const ORG = 'org-1';
 const ACCOUNT = { id: 'acc-1', provider: 'gohighlevel', label: 'Old location', status: 'revoked' };
@@ -92,5 +92,49 @@ describe('deleteAccountPermanently', () => {
     stub({ ...ACCOUNT, provider: 'quickbooks' }, NOTHING);
     await expect(deleteAccountPermanently(ORG, 'acc-1', 'gohighlevel')).rejects.toMatchObject({ statusCode: 404 });
     expect(repo.deleteById).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// The impact probe as its OWN read, so the panel can ask before the owner
+// clicks. Delete used to discover what was in the way only on the click, which
+// meant a round trip before anything appeared and a second one to confirm.
+// ============================================================================
+describe('accountDeleteImpact', () => {
+  it('reports what a delete would do, without deleting anything', async () => {
+    stub(ACCOUNT, { cascade: { ghl_appointments: 137 }, detach: { communications: 54368 } });
+
+    const out = await accountDeleteImpact(ORG, 'acc-1', 'gohighlevel');
+
+    expect(out).toEqual({
+      deletable: true,
+      needsConfirm: true,
+      cascade: { ghl_appointments: 137 },
+      detach: { communications: 54368 },
+    });
+    expect(repo.deleteById).not.toHaveBeenCalled();
+  });
+
+  it('marks a clean revoked account as deletable with nothing to confirm', async () => {
+    stub(ACCOUNT, NOTHING);
+    expect(await accountDeleteImpact(ORG, 'acc-1', 'gohighlevel'))
+      .toEqual({ deletable: true, needsConfirm: false, cascade: {}, detach: {} });
+  });
+
+  it('marks a still-connected account as not deletable rather than throwing', async () => {
+    // The panel asks about every row it renders; a live one is a normal answer,
+    // not an error, or every render would log failures for rows nobody clicked.
+    stub({ ...ACCOUNT, status: 'active' }, NOTHING);
+    expect(await accountDeleteImpact(ORG, 'acc-1', 'gohighlevel'))
+      .toMatchObject({ deletable: false, needsConfirm: false });
+  });
+
+  it('is org-scoped and provider-scoped like the delete it describes', async () => {
+    vi.spyOn(repo, 'getById').mockResolvedValue(null);
+    vi.spyOn(repo, 'ownedRowCounts').mockResolvedValue(NOTHING);
+    await expect(accountDeleteImpact(ORG, 'other-org-acc', 'gohighlevel')).rejects.toMatchObject({ statusCode: 404 });
+
+    vi.spyOn(repo, 'getById').mockResolvedValue({ ...ACCOUNT, provider: 'quickbooks' });
+    await expect(accountDeleteImpact(ORG, 'acc-1', 'gohighlevel')).rejects.toMatchObject({ statusCode: 404 });
   });
 });

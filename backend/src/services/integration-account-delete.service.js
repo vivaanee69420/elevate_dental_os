@@ -27,6 +27,46 @@ import * as errors_1 from "../middleware/errors.js";
 import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
 import { invalidate as invalidateGating } from "../lib/integration-gating.js";
 
+// Resolve the row for this org AND this provider. Shared by the probe and the
+// delete so the two can never disagree about which account they mean.
+//
+// The routes are per-provider. A QuickBooks id posted to the GoHighLevel route
+// would otherwise reach a company's entire P&L through a panel that never
+// mentions QuickBooks. Reported as 404, not 403: from this route's point of
+// view the account genuinely does not exist.
+async function resolve(orgId, id, provider) {
+    const account = await integrationAccountRepository.getById(orgId, id);
+    if (!account) throw new errors_1.AppError('account not found', 404);
+    if (account.provider !== provider) throw new errors_1.AppError('account not found', 404);
+    return account;
+}
+
+/**
+ * What deleting this account WOULD do — a read, with no side effect.
+ *
+ * Exists so the panel can ask before the owner clicks. Delete used to discover
+ * what was in the way only on the click, which cost a round trip before
+ * anything appeared on screen and a second one to confirm it. The panel now
+ * knows the answer for every revoked row it renders, so the click is instant.
+ *
+ * A still-connected account answers `deletable: false` rather than throwing:
+ * the panel asks about every row, and a live one is a normal answer, not an
+ * error to log on every render.
+ */
+export async function accountDeleteImpact(orgId, id, provider) {
+    const account = await resolve(orgId, id, provider);
+    if (account.status !== 'revoked') {
+        return { deletable: false, needsConfirm: false, cascade: {}, detach: {} };
+    }
+    const { cascade, detach } = await integrationAccountRepository.ownedRowCounts(orgId, id);
+    return {
+        deletable: true,
+        needsConfirm: Object.keys(cascade).length > 0,
+        cascade,
+        detach,
+    };
+}
+
 /**
  * @param {string} orgId
  * @param {string} id        the account row
@@ -34,15 +74,7 @@ import { invalidate as invalidateGating } from "../lib/integration-gating.js";
  * @param {{confirm?: boolean}} opts
  */
 export async function deleteAccountPermanently(orgId, id, provider, { confirm = false } = {}) {
-    // Org-scoped read: a foreign id resolves to nothing, and the delete stops
-    // here rather than falling through to a bare delete by id.
-    const account = await integrationAccountRepository.getById(orgId, id);
-    if (!account) throw new errors_1.AppError('account not found', 404);
-    // The routes are per-provider. A QuickBooks id posted to the GoHighLevel
-    // delete route would otherwise drop a company's entire P&L through a panel
-    // that never mentions QuickBooks. Reported as 404, not 403: from this
-    // route's point of view the account genuinely does not exist.
-    if (account.provider !== provider) throw new errors_1.AppError('account not found', 404);
+    const account = await resolve(orgId, id, provider);
     // Disconnect first, then delete. Two steps, so a live account the owner is
     // still syncing cannot go in one stray click.
     if (account.status !== 'revoked') {

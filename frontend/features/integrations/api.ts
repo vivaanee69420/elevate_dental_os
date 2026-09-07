@@ -775,6 +775,20 @@ export interface AccountDeleteResult extends AccountDeleteImpact {
   deleted: true;
 }
 
+/** What a delete WOULD do — a read, asked before the owner clicks. */
+export interface AccountDeletePreview extends AccountDeleteImpact {
+  /** False while the account is still connected — disconnect first. */
+  deletable: boolean;
+  /** True when the delete would destroy records and must be confirmed. */
+  needsConfirm: boolean;
+}
+
+export function fetchAccountDeleteImpact(provider: AccountDeleteProvider, id: string) {
+  return api<AccountDeletePreview>(
+    `/api/integrations/${provider}/accounts/${id}/delete-impact`,
+  );
+}
+
 export function deleteAccountPermanently(
   provider: AccountDeleteProvider, id: string, confirm = false,
 ) {
