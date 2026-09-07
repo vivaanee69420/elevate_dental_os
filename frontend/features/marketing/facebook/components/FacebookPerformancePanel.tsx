@@ -26,7 +26,9 @@ import { useMemo, useState } from 'react';
 import { EmptyState, SkeletonTable } from '@/components/ui';
 import { formatDate } from '@/lib/format';
 import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
-import { StatRail, FootNote, SectionHead, type Stat } from '../../_shared/StatRail';
+import { FootNote, SectionHead, type Stat } from '../../_shared/StatRail';
+import { HeadlineCard, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
+import { DetailModal } from '../../_shared/DetailModal';
 import { CampaignHighlights } from '../../_shared/CampaignHighlights';
 import { money, money0, num, multiple, DASH } from '../../_shared/format';
 import { computeDelta, sourcesComparable, type Polarity } from '../../_shared/compare';
@@ -38,6 +40,22 @@ import {
 import { OpenDaySplit } from './OpenDaySplit';
 import type { FacebookLeadPractice, FacebookLeadRow } from '../api';
 import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
+
+// The page's cards, from the stats these panels already build. Same component
+// as the Business Hub and Ad performance, so the three surfaces look like one
+// product — and the panel keeps its OWN badge, which carries the comparability
+// guard a rebuilt one here would drop.
+function asCards(rows: Stat[]): HeadlineKpi[] {
+  return rows.map((r) => ({
+    label: r.label,
+    value: String(r.value ?? ''),
+    sub: typeof r.sub === 'string' ? r.sub : '',
+    chip: null,
+    badge: r.badge,
+    onClick: r.onClick,
+    active: r.active,
+  }));
+}
 
 type Bucket = 'leads' | 'booked' | 'accepted';
 
@@ -296,7 +314,9 @@ export function FacebookPerformancePanel() {
         />
       </div>
 
-      <StatRail stats={stats} />
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
+        {asCards(stats).map((c) => <HeadlineCard key={c.label} c={c} />)}
+      </div>
 
       {/* The cards above are sums over the window, so a partial final day
           understates every one of them. Stated here, immediately under the
@@ -329,28 +349,23 @@ export function FacebookPerformancePanel() {
           report, and never when the server did not send the figure. */}
       {coverageNote}
 
-      {openBucket && (
-        <div className="flex flex-col gap-2">
-          <SectionHead
-            title={`${BUCKET_LABEL[openBucket]} · ${num(leadRows.length)}`}
-            right={(
-              <button
-                type="button"
-                className="text-[13px] text-ink-2 underline"
-                onClick={() => { setOpenBucket(null); setCampaignFilter(null); }}
-              >
-                Hide
-              </button>
-            )}
-          />
-          <DataGrid
-            columns={leadCols}
-            rows={leadRows}
-            rowKey={(r, i) => `${r.contact_id ?? 'x'}-${i}`}
-            emptyState="No leads in this bucket."
-          />
-        </div>
-      )}
+      {/* The people behind a card open in a DIALOG, not inline. Expanding in
+          place pushed everything below it down the page, so the reader lost
+          their position in the report to see a list they opened for a moment —
+          and on a long report the list could open off-screen entirely. */}
+      <DetailModal
+        open={openBucket !== null}
+        title={openBucket ? `${BUCKET_LABEL[openBucket]} · ${num(leadRows.length)}` : ''}
+        subtitle={campaignFilter ? `Campaign: ${campaignFilter}` : undefined}
+        onClose={() => { setOpenBucket(null); setCampaignFilter(null); }}
+      >
+        <DataGrid
+          columns={leadCols}
+          rows={leadRows}
+          rowKey={(r, i) => `${r.contact_id ?? 'x'}-${i}`}
+          emptyState="No leads in this bucket."
+        />
+      </DetailModal>
 
       <SectionHead
         title="By practice"

@@ -48,6 +48,14 @@ export type HeadlineKpi = {
   // is null when that figure is unknowable for the prior window (a no-show rate
   // with no appointments behind it), which reads as "no comparison" rather than
   // a confident 0%.
+  // A PREBUILT comparison node, for callers that already own the judgement of
+  // whether the two periods are comparable at all. The marketing panels guard
+  // theirs with sourcesComparable() — a period before this org captured ad
+  // attribution holds zero attributed leads beside real spend, and colouring
+  // that as a collapse would be a lie — so they hand the finished badge over
+  // rather than have it rebuilt here without the guard. Takes precedence over
+  // `compare`.
+  badge?: React.ReactNode;
   compare?: {
     current: number | null; previous: number | null;
     polarity: Polarity; format: (n: number) => string;
@@ -80,7 +88,8 @@ export function HeadlineCard({ c }: { c: HeadlineKpi }) {
       <div className="text-xl font-bold tabular-nums tracking-tight mt-1">{c.value}</div>
       <div className="text-xs text-ink-muted mt-1">{c.sub}</div>
       {c.chip && <div className="mt-2"><Chip colour={c.chip.tone}>{c.chip.text}</Chip></div>}
-      {c.compare && (
+      {c.badge}
+      {!c.badge && c.compare && (
         <DeltaBadge
           delta={(c.compare.isRate ? pointsDelta : computeDelta)(c.compare.current, c.compare.previous, c.compare.polarity)}
           previousLabel={c.compare.previous == null ? DASH : c.compare.format(c.compare.previous)}

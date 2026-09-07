@@ -12,6 +12,7 @@
 
 import { useRouter } from 'next/navigation';
 import { previousPeriod } from '@/features/marketing/_shared/compare';
+import { rangeLabel } from '@/features/marketing/_shared/window';
 import { bestByCostPerConversion } from '@/features/marketing/_shared/BestPerformer';
 import {
   useGoogleLeadPerformance,
@@ -46,7 +47,7 @@ export function GoogleSummary() {
   // control most readers never find it. Same length, so a 7-day view is
   // measured against 7 days rather than a whole month.
   const compare = previousPeriod(since, until);
-  const previousLabel = `${compare.since} to ${compare.until}`;
+  const previousLabel = rangeLabel(compare.since, compare.until);
 
   const { data, isPending, error } = useGoogleLeadPerformance();
   const prev = useGoogleLeadPerformanceFor(compare);

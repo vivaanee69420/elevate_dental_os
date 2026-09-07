@@ -26,7 +26,9 @@ import { useMemo, useState } from 'react';
 import { EmptyState, SkeletonTable } from '@/components/ui';
 import { formatDate } from '@/lib/format';
 import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
-import { StatRail, FootNote, SectionHead, type Stat } from '../../_shared/StatRail';
+import { FootNote, SectionHead, type Stat } from '../../_shared/StatRail';
+import { HeadlineCard, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
+import { DetailModal } from '../../_shared/DetailModal';
 import { Chip } from '../../_shared/Bars';
 import { money, money0, num, multiple, DASH } from '../../_shared/format';
 import {
@@ -40,6 +42,22 @@ import {
 } from '../hooks';
 import type { GoogleLeadPractice, GoogleLeadRow } from '../api';
 import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
+
+// The page's cards, from the stats these panels already build. Same component
+// as the Business Hub and Ad performance, so the three surfaces look like one
+// product — and the panel keeps its OWN badge, which carries the comparability
+// guard a rebuilt one here would drop.
+function asCards(rows: Stat[]): HeadlineKpi[] {
+  return rows.map((r) => ({
+    label: r.label,
+    value: String(r.value ?? ''),
+    sub: typeof r.sub === 'string' ? r.sub : '',
+    chip: null,
+    badge: r.badge,
+    onClick: r.onClick,
+    active: r.active,
+  }));
+}
 
 type Bucket = 'leads' | 'booked' | 'accepted';
 
@@ -191,13 +209,14 @@ export function GooglePerformancePanel({
   if (!data.googlePipelinesMapped) {
     return (
       <div className="flex flex-col gap-3">
-        <StatRail stats={[
-          { label: 'Google spend', value: money0(total.spendPence), sub: 'All practices, this period' },
-          { label: 'Cost per lead', value: DASH, sub: 'Attribution not configured' },
-          { label: 'Cost per booking', value: DASH, sub: 'Attribution not configured' },
-          { label: 'Cost per patient', value: DASH, sub: 'Attribution not configured' },
-        ]}
-        />
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
+          {asCards([
+            { label: 'Google spend', value: money0(total.spendPence), sub: 'All practices, this period' },
+            { label: 'Cost per lead', value: DASH, sub: 'Attribution not configured' },
+            { label: 'Cost per booking', value: DASH, sub: 'Attribution not configured' },
+            { label: 'Cost per patient', value: DASH, sub: 'Attribution not configured' },
+          ]).map((c) => <HeadlineCard key={c.label} c={c} />)}
+        </div>
         <FootNote>
           Cost per lead, per booking and per accepted patient are not shown yet — no GoHighLevel
           pipeline has been mapped to Google Ads for this organisation, so leads cannot be
@@ -380,7 +399,9 @@ export function GooglePerformancePanel({
         />
       </div>
 
-      <StatRail stats={stats} />
+      <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
+        {asCards(stats).map((c) => <HeadlineCard key={c.label} c={c} />)}
+      </div>
 
       {/* Same reason as the Facebook panel: these cards are sums over the
           window, so a partial final day understates every one of them. */}
@@ -415,20 +436,22 @@ export function GooglePerformancePanel({
         </FootNote>
       )}
 
-      {openBucket && (
-        <section className="flex flex-col gap-2">
-          <SectionHead
-            title={`${BUCKET_LABEL[openBucket]} in this period`}
-            right={<span className="text-[12px] text-ink-muted">{num(rows.length)} people</span>}
-          />
-          <DataGrid
-            columns={LEAD_COLUMNS}
-            rows={rows}
-            rowKey={(r, i) => `${r.phone ?? 'x'}-${i}`}
-            emptyState={<EmptyState message="No leads in this bucket for the selected period." />}
-          />
-        </section>
-      )}
+      {/* In a dialog, not inline — the same reason as the Facebook panel:
+          expanding in place pushes the rest of the report down and costs the
+          reader their position to see a list they opened for a moment. */}
+      <DetailModal
+        open={openBucket !== null}
+        title={openBucket ? `${BUCKET_LABEL[openBucket]} in this period` : ''}
+        subtitle={`${num(rows.length)} people`}
+        onClose={() => setOpenBucket(null)}
+      >
+        <DataGrid
+          columns={LEAD_COLUMNS}
+          rows={rows}
+          rowKey={(r, i) => `${r.phone ?? 'x'}-${i}`}
+          emptyState={<EmptyState message="No leads in this bucket for the selected period." />}
+        />
+      </DetailModal>
 
       {practiceRows.length > 1 && (
         <section className="flex flex-col gap-2">

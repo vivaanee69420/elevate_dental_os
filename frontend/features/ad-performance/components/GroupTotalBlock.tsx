@@ -20,7 +20,7 @@ import { EmptyState, Skeleton } from '@/components/ui';
 import { SectionLabel } from '@/features/overview/components/HeadlineCard';
 import { HeadlineCard, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
 import { previousPeriod, type Polarity } from '@/features/marketing/_shared/compare';
-import { londonDateOf, lastInclusiveLondonDay } from '@/features/marketing/_shared/window';
+import { londonDateOf, lastInclusiveLondonDay, rangeLabel } from '@/features/marketing/_shared/window';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { api } from '@/lib/api';
 
@@ -69,7 +69,7 @@ export function GroupTotalBlock() {
     staleTime: 30_000,
   });
   const prev = previous.data?.state === 'ok' ? previous.data : null;
-  const previousLabel = `${prevWin.since} to ${prevWin.until}`;
+  const previousLabel = rangeLabel(prevWin.since, prevWin.until);
 
   const cmp = (
     current: number | null, previous_: number | null, polarity: Polarity,

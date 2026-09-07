@@ -100,3 +100,34 @@ export function ymdWindowParamsFor(scope: string, sinceYmd: string, untilYmd: st
   if (practiceId) sp.set('practice_id', practiceId);
   return sp.toString();
 }
+
+/**
+ * A date range as a person would write it: "2–31 Aug 2026", "28 Jul – 3 Aug
+ * 2026", "28 Dec 2025 – 3 Jan 2026".
+ *
+ * ISO is right for a query string and wrong for a sentence — "2026-08-02 to
+ * 2026-08-31" makes the reader parse two machine dates to learn "last month".
+ * The month and year are printed once when both ends share them, because
+ * repeating them is what makes the long form unreadable.
+ *
+ * Both ends are parsed at MIDDAY UTC. These are London calendar days, and a
+ * midnight parse shifts the date backwards across the BST boundary — the same
+ * trap SpendFreshnessNote guards against.
+ */
+export function rangeLabel(sinceYmd: string, untilYmd: string): string {
+  const at = (ymd: string) => new Date(`${ymd}T12:00:00Z`);
+  const a = at(sinceYmd);
+  const b = at(untilYmd);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return `${sinceYmd} to ${untilYmd}`;
+
+  const day = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', timeZone: 'UTC' });
+  const dayMonth = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const full = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+  const sameYear = a.getUTCFullYear() === b.getUTCFullYear();
+  const sameMonth = sameYear && a.getUTCMonth() === b.getUTCMonth();
+
+  if (sameMonth) return `${day(a)}–${full(b)}`;
+  if (sameYear) return `${dayMonth(a)} – ${full(b)}`;
+  return `${full(a)} – ${full(b)}`;
+}
