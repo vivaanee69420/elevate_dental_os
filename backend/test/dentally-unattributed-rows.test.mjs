@@ -106,3 +106,64 @@ describe('an account that pulls the whole group', () => {
         expect(items.some((r) => !r.practice_id)).toBe(true);
     });
 });
+
+describe('attribution falls back to the patient', () => {
+    // The first version of the gate resolved practice from the PRACTITIONER
+    // alone and dropped anything unresolved. That deleted the account's own
+    // work whenever the practitioner was missing from `associates` — a locum, a
+    // leaver, anyone the roster pull had not reached — and Treatments Completed
+    // fell from too high to too low. A patient we hold is a patient of a
+    // practice we selected, so the patient is the safer second signal.
+    function fixtureUnknownPractitioner() {
+        const upserts = { dentally_treatment_items: [], treatment_plans: [] };
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'practices' && q.op === 'select') {
+                return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            }
+            if (q.table === 'contacts' && q.op === 'select') {
+                // Our patient, stamped with the practice we selected.
+                return { data: [{ id: 'c1', pms_external_id: 'PAT-1', practice_id: 'prac-1' }], error: null };
+            }
+            if (q.op === 'upsert' && upserts[q.table]) {
+                for (const r of [].concat(q.upsertVals ?? [])) upserts[q.table].push(r);
+                return { data: null, error: null };
+            }
+            return { data: [], error: null };
+        };
+        global.fetch = vi.fn(async (url) => {
+            const u = url.toString();
+            if (u.includes('/treatment_plan_items')) {
+                return page({
+                    treatment_plan_items: [
+                        // Practitioner nobody knows, but OUR patient.
+                        { id: 'TI-9', completed: true, practitioner_id: 'PR-UNKNOWN', patient_id: 'PAT-1' },
+                        // Neither known — genuinely another practice's record.
+                        { id: 'TI-8', completed: true, practitioner_id: 'PR-UNKNOWN', patient_id: 'PAT-OTHER' },
+                    ],
+                    meta: { total_pages: 1 },
+                });
+            }
+            return page({});
+        });
+        return upserts;
+    }
+
+    it('keeps a row whose practitioner is unknown but whose patient is ours', async () => {
+        const upserts = fixtureUnknownPractitioner();
+        await syncOneOrg('org-1', {
+            secrets: SECRETS, config: { site_ids: ['S1'] }, last_sync_at: null,
+        }, () => {});
+        const ids = upserts.dentally_treatment_items.map((r) => r.pms_external_id);
+        expect(ids).toContain('TI-9');
+        expect(upserts.dentally_treatment_items.find((r) => r.pms_external_id === 'TI-9').practice_id)
+            .toBe('prac-1');
+    });
+
+    it('still drops a row where neither practitioner nor patient is ours', async () => {
+        const upserts = fixtureUnknownPractitioner();
+        await syncOneOrg('org-1', {
+            secrets: SECRETS, config: { site_ids: ['S1'] }, last_sync_at: null,
+        }, () => {});
+        expect(upserts.dentally_treatment_items.map((r) => r.pms_external_id)).not.toContain('TI-8');
+    });
+});

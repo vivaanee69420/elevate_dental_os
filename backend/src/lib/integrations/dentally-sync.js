@@ -593,6 +593,44 @@ async function loadPractitionerPracticeMap(orgId) {
 //
 // Only callers that genuinely need the WHOLE map should use this. To resolve
 // the handful of patients one event references, use contactMapFor.
+/**
+ * Dentally patient id -> the practice that patient belongs to.
+ *
+ * The SECOND way to attribute a treatment row, and usually the better one. A
+ * treatment item or plan carries only a practitioner, and practice was resolved
+ * from that alone — so any row whose practitioner is missing from `associates`,
+ * or who has no primary_practice_id, came out unattributed even when it was
+ * plainly the account's own work. Its PATIENT is the stronger signal: contacts
+ * are pulled site-filtered, so a patient we hold is a patient of a practice we
+ * selected.
+ *
+ * Only built when an organisation pulls a subset of its practices — an
+ * organisation holding the whole group has nothing to disambiguate.
+ */
+export async function loadContactPracticeMap(orgId) {
+    const map = new Map();
+    const PAGE = 1000;
+    let after = null;
+    for (;;) {
+        let query = supabase_1.serviceClient
+            .from('contacts')
+            .select('pms_external_id, practice_id')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .not('pms_external_id', 'is', null)
+            .order('pms_external_id', { ascending: true })
+            .limit(PAGE);
+        if (after !== null) query = query.gt('pms_external_id', after);
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+        const rows = data ?? [];
+        for (const c of rows) if (c.practice_id) map.set(String(c.pms_external_id), c.practice_id);
+        if (rows.length < PAGE) break;
+        after = rows[rows.length - 1].pms_external_id;
+    }
+    return map;
+}
+
 export async function loadContactMap(orgId) {
     const map = new Map();
     const PAGE = 1000;
@@ -889,14 +927,18 @@ export function paymentRow(orgId, p, siteMap, contactMap) {
 // practitioner's home site — practiceByPractitioner from
 // loadPractitionerPracticeMap; restamp_treatment_plan_practices self-heals
 // rows whose practitioner joined the roster later.
-export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap = new Map(), practiceByPractitioner = new Map()) {
+export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap = new Map(), practiceByPractitioner = new Map(), practiceByContact = new Map()) {
     const numOrNull = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
     const prac = tp.practitioner_id != null ? String(tp.practitioner_id) : null;
+    // Practitioner first, then the patient — see treatmentItemRow.
+    const practiceId = (prac ? practiceByPractitioner.get(prac) : null)
+        ?? practiceByContact.get(String(tp.patient_id))
+        ?? null;
     return {
         organisation_id: orgId,
         source: 'dentally',
         pms_external_id: String(tp.id),
-        practice_id: prac ? (practiceByPractitioner.get(prac) ?? null) : null,
+        practice_id: practiceId,
         pms_practitioner_id: tp.practitioner_id != null ? String(tp.practitioner_id) : null,
         pms_patient_id: tp.patient_id != null ? String(tp.patient_id) : null,
         associate_id: associateMap.get(String(tp.practitioner_id)) ?? null,
@@ -923,16 +965,23 @@ export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap
 // price is a money STRING -> integer pence. base_chart=true rows are tooth/surface
 // charting noise Dentally excludes from the report; we store the flag and let the
 // rollup RPC filter, so both report semantics stay available.
-export function treatmentItemRow(orgId, it, practiceByPractitioner = new Map(), associateMap = new Map(), contactMap = new Map()) {
+export function treatmentItemRow(orgId, it, practiceByPractitioner = new Map(), associateMap = new Map(), contactMap = new Map(), practiceByContact = new Map()) {
     const prac = it.practitioner_id != null ? String(it.practitioner_id) : null;
     const dur = Number(it.duration);
+    // Practitioner first (it names who did the work), patient second. Without
+    // the fallback a practitioner missing from `associates` — a locum, a
+    // leaver, anyone the roster pull has not reached — left the row
+    // unattributed and invisible to every per-practice figure.
+    const practiceId = (prac ? practiceByPractitioner.get(prac) : null)
+        ?? practiceByContact.get(String(it.patient_id))
+        ?? null;
     return {
         organisation_id: orgId,
         source: 'dentally',
         pms_external_id: String(it.id),
         pms_practitioner_id: prac,
         pms_patient_id: it.patient_id != null ? String(it.patient_id) : null,
-        practice_id: prac ? (practiceByPractitioner.get(prac) ?? null) : null,
+        practice_id: practiceId,
         contact_id: contactMap.get(String(it.patient_id)) ?? null,
         associate_id: prac ? (associateMap.get(prac) ?? null) : null,
         treatment_plan_id: it.treatment_plan_id != null ? String(it.treatment_plan_id) : null,
@@ -1810,13 +1859,13 @@ async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPa
     return { synced, skipped };
 }
 
-async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages, practiceByPractitioner = new Map(), allowed = null) {
+async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages, practiceByPractitioner = new Map(), allowed = null, practiceByContact = new Map()) {
     let synced = 0;
     const strict = dropsUnattributed(allowed);
     await streamPages(orgId, base, '/treatment_plans', auth, params, async (items) => {
         const rows = items
             .filter((tp) => tp && tp.id != null)
-            .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap, practiceByPractitioner))
+            .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap, practiceByPractitioner, practiceByContact))
             .filter((r) => !strict || r?.practice_id);
         synced += await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
@@ -1831,13 +1880,13 @@ async function pullTreatmentPlans(orgId, base, auth, params, associateMap, conta
 // metric and would bloat the table (the full collection is ~725k rows); when an
 // item is later completed its updated_at bumps and the incremental cursor re-pulls
 // it. Never fail the whole sync if this resource errors (caller wraps in try).
-async function pullTreatmentItems(orgId, base, auth, params, practiceByPractitioner, associateMap, contactMap, onPage, maxPages, allowed = null) {
+async function pullTreatmentItems(orgId, base, auth, params, practiceByPractitioner, associateMap, contactMap, onPage, maxPages, allowed = null, practiceByContact = new Map()) {
     let synced = 0;
     const strict = dropsUnattributed(allowed);
     await streamPages(orgId, base, '/treatment_plan_items', auth, params, async (items) => {
         const rows = items
             .filter((it) => it && it.id != null && it.completed === true)
-            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap))
+            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap, practiceByContact))
             .filter((r) => !strict || r?.practice_id);
         if (rows.length) synced += await upsertChunked('dentally_treatment_items', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
@@ -2153,6 +2202,12 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // Sites this org pulls (null = all). A Dentally grant is group-wide, so
     // without this a sub-account reads every practice the token can see.
     const allowed = allowedSites(integration);
+    // Patient -> practice, the fallback attribution for treatment rows. Only
+    // built for a scoped org: it costs a paged read of contacts and changes no
+    // answer for an org that holds every practice.
+    const practiceByContact = dropsUnattributed(allowed)
+        ? await loadContactPracticeMap(orgId).catch(() => new Map())
+        : new Map();
     // Window selection — ONE window, shared by patients / appointments /
     // payments (all filtered by `updated_after`):
     //  - full   : the most-recent 6 months (backfillSince()) with a lifted page cap.
@@ -2482,7 +2537,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         if (want('treatment_plans') && !completedPhases.has('treatment_plans')) {
             try {
                 const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
-                treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_after: since }, practitionerMap, contactMap, reporter(3), maxPages, practiceByPractitioner, allowed);
+                treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_after: since }, practitionerMap, contactMap, reporter(3), maxPages, practiceByPractitioner, allowed, practiceByContact);
                 await markPhaseDone('treatment_plans');
             } catch (err) {
                 console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
@@ -2565,7 +2620,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         if (want('treatment_items') && !completedPhases.has('treatment_items')) {
             try {
                 const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
-                treatmentItems = await pullTreatmentItems(orgId, base, auth, { updated_after: since }, practiceByPractitioner, practitionerMap, contactMap, reporter(6), maxPages, allowed);
+                treatmentItems = await pullTreatmentItems(orgId, base, auth, { updated_after: since }, practiceByPractitioner, practitionerMap, contactMap, reporter(6), maxPages, allowed, practiceByContact);
                 await markPhaseDone('treatment_items');
             } catch (err) {
                 console.warn(`[dentally] treatment_items pull skipped: ${err?.message || err}`);
@@ -2855,7 +2910,14 @@ export async function backfillTreatmentItems(orgId, integration) {
     // without the gate it is the single largest source of other practices'
     // records: it alone put 64,165 unattributed items into a one-practice
     // sub-account.
-    const strict = dropsUnattributed(allowedSites(integration));
+    const strictAllowed = allowedSites(integration);
+    const strict = dropsUnattributed(strictAllowed);
+    // Same patient fallback as the windowed pull. Without it this path — which
+    // pages the whole collection — would drop every legitimate row whose
+    // practitioner is not on the roster.
+    const practiceByContact = strict
+        ? await loadContactPracticeMap(orgId).catch(() => new Map())
+        : new Map();
     const associateMap = await loadPractitionerMap(orgId);
     const contactMap = await loadContactMap(orgId);
     const params = { updated_after: backfillSince() };
@@ -2900,7 +2962,7 @@ export async function backfillTreatmentItems(orgId, integration) {
         const items = body.treatment_plan_items || [];
         const rows = items
             .filter((it) => it && it.id != null && it.completed === true)
-            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap))
+            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap, practiceByContact))
             .filter((r) => !strict || r?.practice_id);
         if (rows.length) {
             synced += await upsertChunked('dentally_treatment_items', rows, 'organisation_id,source,pms_external_id');
