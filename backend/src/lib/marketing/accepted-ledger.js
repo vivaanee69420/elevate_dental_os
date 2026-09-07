@@ -62,3 +62,33 @@ export function summariseAccepted(googleRows, metaRows, includeExisting = false)
 
     return { total, attributed, byCampaign, byPractice, byChannel };
 }
+
+// The Business Hub's Marketing block, from the same two ledgers.
+//
+// It was fed by the `ad_account_marketing` RPC — a THIRD definition of a lead,
+// beside ad_campaign_funnel's and the report pages'. Measured live (Rochester's
+// two accounts, August 2026) it returned 372 leads where the Facebook and Google
+// pages showed 341 + 110 = 451. Three screens, three answers, which is the whole
+// complaint this change exists to end.
+//
+// Scoped by AD ACCOUNT rather than practice, because that is the filter the hub
+// offers — and each account maps to a practice (migration 000069), so a chosen
+// account implies the practices whose ledger rows it can claim. The two
+// providers are scoped SEPARATELY: selecting a Facebook account must not drag in
+// Google's leads for the same practice.
+export function adAccountFunnel(googleRows, metaRows) {
+    const out = { leads: 0, booked: 0, patients: 0, newPatients: 0, paidPence: 0 };
+    for (const l of [...(googleRows ?? []), ...(metaRows ?? [])]) {
+        out.leads += 1;
+        if (l.is_new_patient) out.newPatients += 1;
+        // Same gate as the report pages: a returning patient who books is real
+        // and is not an acquisition.
+        if (l.booked && eligibleForOutcome(l)) out.booked += 1;
+        if (l.accepted && eligibleForOutcome(l)) out.patients += 1;
+        // Money these leads actually paid — the numerator for revenue-per-lead
+        // and for a ROAS that means "what this spend bought", not the group's
+        // entire takings.
+        out.paidPence += Number(l.paid_pence ?? 0);
+    }
+    return out;
+}

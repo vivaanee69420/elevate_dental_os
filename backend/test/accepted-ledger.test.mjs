@@ -20,7 +20,7 @@
 // second definition free to drift, which is the whole bug — so it is imported.
 // ============================================================================
 import { describe, it, expect } from 'vitest';
-import { summariseAccepted } from '../src/lib/marketing/accepted-ledger.js';
+import { summariseAccepted, adAccountFunnel } from '../src/lib/marketing/accepted-ledger.js';
 
 // Rows as the two repository readers return them (snake_case, both platforms).
 const lead = (o = {}) => ({
@@ -101,5 +101,38 @@ describe('summariseAccepted', () => {
         expect(s.total.accepted).toBe(1);
         expect(s.byChannel.meta_ads.accepted).toBe(1);
         expect(s.byChannel.google_ads.leads).toBe(0);
+    });
+});
+
+describe('adAccountFunnel (Business Hub marketing block)', () => {
+    const l = (o = {}) => ({ booked: false, accepted: false, is_new_patient: true, paid_pence: 0, ...o });
+
+    it('counts the same leads the Facebook and Google pages do', () => {
+        // Rochester, August 2026: the pages show 110 Google + 341 Meta = 451.
+        // The ad_account_marketing RPC this replaces returned 372.
+        const f = adAccountFunnel(
+            Array.from({ length: 110 }, () => l()),
+            Array.from({ length: 341 }, () => l()),
+        );
+        expect(f.leads).toBe(451);
+    });
+
+    it('gates bookings and patients on new patients, as the report pages do', () => {
+        const f = adAccountFunnel([
+            l({ booked: true, accepted: true, is_new_patient: true, paid_pence: 20000 }),
+            l({ booked: true, accepted: true, is_new_patient: false, paid_pence: 50000 }),
+        ], []);
+        expect(f.leads).toBe(2);
+        expect(f.newPatients).toBe(1);
+        expect(f.booked).toBe(1);
+        expect(f.patients).toBe(1);
+        // Money is NOT gated: a returning patient's payment is still money these
+        // leads brought in, and it is the numerator of revenue per lead.
+        expect(f.paidPence).toBe(70000);
+    });
+
+    it('is zero, not broken, with nothing selected on either platform', () => {
+        expect(adAccountFunnel([], [])).toEqual({ leads: 0, booked: 0, patients: 0, newPatients: 0, paidPence: 0 });
+        expect(adAccountFunnel(null, null).leads).toBe(0);
     });
 });

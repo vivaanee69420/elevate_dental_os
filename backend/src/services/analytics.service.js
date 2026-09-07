@@ -15,6 +15,9 @@ import * as valuationInputs_repository_1 from "../repositories/valuationInputs.r
 import * as chairConfig_repository_1 from "../repositories/chairConfig.repository.js";
 import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { boardReportRepository } from "../repositories/boardReport.repository.js";
+import { marketingRepository as marketing_repository_1 } from "../repositories/marketing.repository.js";
+import { adAccountFunnel } from "../lib/marketing/accepted-ledger.js";
+import { ACCEPTANCE_MIN_PAID_PENCE } from "../lib/marketing/lead-performance.js";
 import { orgSettingsRepository } from "../repositories/orgSettings.repository.js";
 import { businessHealthRepository } from "../repositories/business-health.repository.js";
 import * as aws_ses_1 from "../lib/aws-ses.js";
@@ -906,9 +909,16 @@ export const analyticsService = {
     async marketingRoi(orgId, { scope = 'all', period = 'month', periodKey, since: winSince, until: winUntil, label: winLabel, accountIds: accountIdsArg, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
         const { since, until, label } = resolveWindow({ since: winSince, until: winUntil, label: winLabel, period, periodKey, now: now() });
-        const fromDate = since.slice(0, 10);
-        const untilD = new Date(until); untilD.setUTCDate(untilD.getUTCDate() - 1);
-        const toDate = untilD.toISOString().slice(0, 10); // inclusive last day of window
+        // RESOLVED to London calendar dates, never sliced. The scope bar sends
+        // London day bounds as UTC instants, so August 2026 arrives as
+        // 2026-07-31T23:00:00Z under BST: slicing reads "2026-07-31" and pulls a
+        // day of July's spend in, while `until - 1 day` then sliced reads
+        // "2026-08-30" and drops 31 August. Measured live on Rochester's two ad
+        // accounts: GBP 8,615.58 against the GBP 8,710.96 the Facebook and
+        // Google pages show for the same month. `until` is EXCLUSIVE, so the
+        // last included day is the instant one millisecond before it.
+        const fromDate = londonYmd(new Date(since));
+        const toDate = londonYmd(new Date(Date.parse(until) - 1));
 
         // Dynamic, org-isolated ad-account filter. Explicit ?account_ids= wins;
         // else fall back to the org's selected accounts (null => no filter when
@@ -918,17 +928,59 @@ export const analyticsService = {
             : await integration_repository_1.selectedAdAccountIds(orgId, null);
 
         const pids = resolved.practiceIds; // null = whole org
-        const [adRows, leads, revRows, practices, adAccounts, adFunnel] = await Promise.all([
+        const [adRows, leads, revRows, practices, adAccounts, googleLedger, metaLedger] = await Promise.all([
             analytics_repository_1.analyticsRepository.adMetricsInWindow(orgId, fromDate, toDate, pids, accountIds),
             analytics_repository_1.analyticsRepository.leadsForMarketing(orgId, since, until, pids),
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, since, until),
             analytics_repository_1.analyticsRepository.practicesFull(orgId),
             integration_repository_1.listAdAccounts(orgId, null),
-            // The funnel the Facebook/Google report pages show, for these
-            // accounts. Read through their own ledgers so the three screens
-            // cannot disagree about what a lead, a booking or a patient is.
-            analytics_repository_1.analyticsRepository.adAccountMarketing(orgId, since, until, accountIds),
+            // The funnel the Facebook/Google report pages show. Read through
+            // THEIR OWN LEDGERS — the same two reads those pages make — so the
+            // three screens cannot disagree about what a lead, a booking or a
+            // patient is.
+            //
+            // This replaced the `ad_account_marketing` RPC, which was a third
+            // definition: for Rochester's two accounts in August 2026 it
+            // returned 372 leads where the Facebook and Google pages showed
+            // 341 + 110 = 451. Fetched org-wide and narrowed below, exactly as
+            // the report pages do, because neither RPC takes a practice.
+            //
+            // Each read degrades to [] rather than throwing: the marketing block
+            // is one section of the Business Hub, and it must never be able to
+            // take the whole page down with it. The RPC path it replaced had the
+            // same guard.
+            marketing_repository_1.googleLeadLedger(orgId, since, until, ACCEPTANCE_MIN_PAID_PENCE)
+                .catch((err) => { console.warn(`[analytics] google lead ledger unavailable: ${err?.message || err}`); return []; }),
+            marketing_repository_1.metaLeadLedger(orgId, since, until, ACCEPTANCE_MIN_PAID_PENCE)
+                .catch((err) => { console.warn(`[analytics] meta lead ledger unavailable: ${err?.message || err}`); return []; }),
         ]);
+        // Narrow each ledger to the practices whose accounts are in scope FOR
+        // THAT PROVIDER. Selecting a Facebook account must not drag in Google's
+        // leads for the same practice, so the two are scoped separately rather
+        // than through one shared practice set.
+        //
+        // `accountIds === null` means "no explicit filter" and leaves the
+        // provider unnarrowed, which is the "All accounts" state the chips start
+        // in. Practices reached the same way spend does: account -> practice_id.
+        const practicesOfProvider = (provider) => {
+            const rows = adAccounts.filter((a) => a.provider === provider && a.practice_id);
+            const inScope = accountIds == null
+                ? rows
+                : rows.filter((a) => accountIds.includes(a.customer_id));
+            return new Set(inScope.map((a) => a.practice_id));
+        };
+        const scopeLedger = (rows, provider) => {
+            const allowed = practicesOfProvider(provider);
+            // No account for this provider is in scope -> it contributes nothing,
+            // rather than everything.
+            if (accountIds != null && allowed.size === 0) return [];
+            return (rows ?? []).filter((r) => allowed.has(r.practice_id));
+        };
+        const adFunnel = adAccountFunnel(
+            scopeLedger(googleLedger, 'google_ads'),
+            scopeLedger(metaLedger, 'meta_ads'),
+        );
+
         // Each practice runs its own ad account, so account.practice_id is how
         // spend + platform conversions attribute to a site (see migration 000069).
         const acctPractice = new Map();

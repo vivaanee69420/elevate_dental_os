@@ -15,7 +15,7 @@
 // than divide by a scope we cannot pin down, ROAS is withheld and the reason is
 // stated.
 // ============================================================================
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { supaRec } from './setup.js';
 
 const svc = (await import('../src/services/analytics.service.js')).analyticsService;
@@ -110,33 +110,89 @@ describe('marketingRoi — an ad-account filter scopes everything', () => {
     });
 });
 
-describe('marketingRoi — the attributed funnel behind the marketing cards', () => {
-    it('reports the funnel for the selected accounts, read through the report pages own ledgers', async () => {
-        // Leads/booked/patients/paid come from ad_account_marketing, which reads
-        // ad_meta_lead_ledger + ad_google_lead_ledger — the exact functions the
-        // Facebook and Google pages use. The Business Hub therefore cannot show
-        // a different lead count from those pages for the same accounts, which
-        // is what it did before: 200 practice enquiries against their 66.
-        stub({ ad: [{ provider: 'google_ads', customer_id: 'G-ROCH', spend_pence: 100000, impressions: 10, clicks: 5, conversions: 1, practice_id: 'p1' }] });
-        supaRec.rpcProvider = (fn) =>
-            fn === 'settled_revenue_by_practice' ? { data: REV, error: null }
-                : fn === 'ad_metrics_rollup' ? { data: [{ provider: 'google_ads', customer_id: 'G-ROCH', spend_pence: 100000, impressions: 10, clicks: 5, conversions: 1, practice_id: 'p1' }], error: null }
-                    : fn === 'ad_account_marketing'
-                        ? { data: [{ leads: 72, booked: 6, patients: 2, new_patients: 3, paid_pence: 250000 }], error: null }
-                        : { data: [], error: null };
-        const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', accountIds: 'G-ROCH', now });
+// ============================================================================
+// The Business Hub's marketing block must count what the Facebook and Google
+// pages count.
+//
+// It was fed by the `ad_account_marketing` RPC — a THIRD definition of a lead,
+// beside ad_campaign_funnel's and the report pages'. Measured live (Rochester's
+// two ad accounts, August 2026) it returned 372 leads where those pages showed
+// 341 Meta + 110 Google = 451. The block now reads the SAME two ledgers the
+// pages read and narrows them to the practices behind the chosen accounts.
+// ============================================================================
+const marketing = await import('../src/repositories/marketing.repository.js');
 
-        expect(r.adFunnel).toEqual({ leads: 72, booked: 6, patients: 2, newPatients: 3, paidPence: 250000 });
+describe('marketingRoi — the attributed funnel behind the marketing cards', () => {
+    const lead = (practiceId, o = {}) => ({
+        practice_id: practiceId, booked: false, accepted: false,
+        is_new_patient: true, paid_pence: 0, ...o,
     });
 
-    it('degrades to null rather than failing the page when the funnel is unavailable', async () => {
-        stub();
-        supaRec.rpcProvider = (fn) =>
-            fn === 'ad_account_marketing' ? { data: null, error: { message: 'boom' } }
-                : fn === 'settled_revenue_by_practice' ? { data: REV, error: null }
-                    : { data: [], error: null };
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it('counts the ledgers the report pages read, narrowed to the chosen accounts', async () => {
+        stub({
+            accounts: [
+                { provider: 'google_ads', customer_id: 'G-ROCH', practice_id: 'p1', is_selected: true },
+                { provider: 'google_ads', customer_id: 'G-ASH', practice_id: 'p2', is_selected: true },
+            ],
+            ad: [{ provider: 'google_ads', customer_id: 'G-ROCH', spend_pence: 100000, impressions: 10, clicks: 5, conversions: 1, practice_id: 'p1' }],
+        });
+        vi.spyOn(marketing.marketingRepository, 'googleLeadLedger').mockResolvedValue([
+            lead('p1', { booked: true, accepted: true, paid_pence: 250000 }),
+            lead('p1'),
+            lead('p2'),   // another practice's account was not chosen
+        ]);
+        vi.spyOn(marketing.marketingRepository, 'metaLeadLedger').mockResolvedValue([]);
+
+        const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', accountIds: 'G-ROCH', now });
+
+        expect(r.adFunnel).toEqual({ leads: 2, booked: 1, patients: 1, newPatients: 2, paidPence: 250000 });
+    });
+
+    it('scopes the two platforms separately — a Facebook account does not pull in Google leads', async () => {
+        // Both accounts serve the same practice. Choosing only the Meta one must
+        // count Meta's leads there and none of Google's, or the card silently
+        // reports a channel the filter excluded.
+        stub({
+            accounts: [
+                { provider: 'google_ads', customer_id: 'G-ROCH', practice_id: 'p1', is_selected: true },
+                { provider: 'meta_ads', customer_id: 'M-ROCH', practice_id: 'p1', is_selected: true },
+            ],
+            ad: [{ provider: 'meta_ads', customer_id: 'M-ROCH', spend_pence: 100000, impressions: 10, clicks: 5, conversions: 1, practice_id: 'p1' }],
+        });
+        vi.spyOn(marketing.marketingRepository, 'googleLeadLedger').mockResolvedValue([lead('p1'), lead('p1')]);
+        vi.spyOn(marketing.marketingRepository, 'metaLeadLedger').mockResolvedValue([lead('p1')]);
+
+        const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', accountIds: 'M-ROCH', now });
+
+        expect(r.adFunnel.leads).toBe(1);
+    });
+
+    it('counts both platforms when no account filter is applied', async () => {
+        stub({
+            accounts: [
+                { provider: 'google_ads', customer_id: 'G-ROCH', practice_id: 'p1', is_selected: true },
+                { provider: 'meta_ads', customer_id: 'M-ROCH', practice_id: 'p1', is_selected: true },
+            ],
+        });
+        vi.spyOn(marketing.marketingRepository, 'googleLeadLedger').mockResolvedValue([lead('p1'), lead('p1')]);
+        vi.spyOn(marketing.marketingRepository, 'metaLeadLedger').mockResolvedValue([lead('p1')]);
+
         const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
 
-        expect(r.adFunnel).toBeNull();
+        expect(r.adFunnel.leads).toBe(3);
+    });
+
+    it('degrades to an empty funnel rather than failing the page when a ledger read errors', async () => {
+        // Same discipline the RPC path had: the marketing block is one section
+        // of a page, and it must never be able to take the rest down with it.
+        stub();
+        vi.spyOn(marketing.marketingRepository, 'googleLeadLedger').mockRejectedValue(new Error('boom'));
+        vi.spyOn(marketing.marketingRepository, 'metaLeadLedger').mockResolvedValue([]);
+
+        const r = await svc.marketingRoi(ORG, { scope: 'all', period: 'month', periodKey: '2026-05', now });
+
+        expect(r.adFunnel).toEqual({ leads: 0, booked: 0, patients: 0, newPatients: 0, paidPence: 0 });
     });
 });
