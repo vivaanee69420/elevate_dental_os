@@ -127,7 +127,7 @@ export function GoogleSummary() {
       <ScopePeriodBar hidePeriod adProvider="google_ads" />
       <ChannelSummaryView
       title="Google"
-      reportHref="/marketing-google"
+      campaignsHref="/marketing-google?tab=campaigns"
       isPending={isPending}
       error={(error as Error) ?? null}
       notConnected={

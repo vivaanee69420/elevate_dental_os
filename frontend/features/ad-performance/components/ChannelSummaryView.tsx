@@ -13,14 +13,13 @@
 // rather than two layouts free to drift into different-looking answers to the
 // same question.
 
-import Link from 'next/link';
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
 } from 'recharts';
 import { formatPence } from '@/lib/format';
 import { EmptyState, Skeleton } from '@/components/ui';
-import { HeadlineCard, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
+import { HeadlineCard, SectionLabel, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
 import { CampaignHighlights, type HighlightCampaign } from '@/features/marketing/_shared/CampaignHighlights';
 import { BestPerformer, type Performer } from '@/features/marketing/_shared/BestPerformer';
 import type { Polarity } from '@/features/marketing/_shared/compare';
@@ -113,11 +112,14 @@ function FunnelChart({ total }: { total: ChannelTotals }) {
 }
 
 export function ChannelSummaryView({
-  title, reportHref, isPending, error, notConnected,
+  title, campaignsHref, isPending, error, notConnected,
   total, previous, campaigns, grains, previousLabel, onOpenCampaign, onOpenGrain,
 }: {
   title: string;
-  reportHref: string;
+  /** Where each card's figure breaks down — the campaigns tab of this
+   *  channel's full report. Every one of these five splits by campaign, so
+   *  they share a destination rather than inventing five. */
+  campaignsHref: string;
   isPending: boolean;
   error: Error | null;
   /** A channel with no connection renders one honest line, not a wall of £0. */
@@ -168,12 +170,14 @@ export function ChannelSummaryView({
       label: 'Spend', value: formatPence(total.spendPence), sub: `Ad spend · ${title}`,
       chip: null,
       compare: cmp(total.spendPence, previous?.spendPence ?? null, 'neutral', money),
+      href: campaignsHref, hint: 'Spend by campaign →',
     },
     {
       label: 'Leads', value: nf.format(total.leads), sub: 'Enquiries attributed to this channel',
       // The tag carries the figure the headline cannot: what a lead cost.
       chip: total.cplPence === null ? null : { text: `${formatPence(total.cplPence)} per lead`, tone: 'emerald' },
       compare: cmp(total.leads, previous?.leads ?? null, 'higher-better', count),
+      href: campaignsHref, hint: 'Leads by campaign →',
     },
     {
       label: 'Booked', value: nf.format(total.booked), sub: 'Leads that took an appointment',
@@ -181,6 +185,7 @@ export function ChannelSummaryView({
         ? { text: `${((total.booked / total.leads) * 100).toFixed(1)}% of leads`, tone: 'emerald' }
         : null,
       compare: cmp(total.booked, previous?.booked ?? null, 'higher-better', count),
+      href: campaignsHref, hint: 'Bookings by campaign →',
     },
     {
       label: 'Patients', value: nf.format(total.accepted), sub: 'Paid over the acceptance floor',
@@ -188,6 +193,7 @@ export function ChannelSummaryView({
         ? { text: `${((total.accepted / total.booked) * 100).toFixed(1)}% of booked`, tone: 'emerald' }
         : null,
       compare: cmp(total.accepted, previous?.accepted ?? null, 'higher-better', count),
+      href: campaignsHref, hint: 'Patients by campaign →',
     },
     {
       // Null, never £0: a cost per no patients is unknowable, not free.
@@ -196,17 +202,12 @@ export function ChannelSummaryView({
       sub: total.cpaPence === null ? 'No patients yet in this period' : 'Spend ÷ patients acquired',
       chip: null,
       compare: cmp(total.cpaPence, previous?.cpaPence ?? null, 'lower-better', money),
+      href: campaignsHref, hint: 'Cost by campaign →',
     },
   ];
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex justify-end">
-        <Link href={reportHref} className="text-[12.5px] font-medium text-brand hover:underline">
-          Open the full {title} report →
-        </Link>
-      </div>
-
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
         {cards.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
@@ -214,7 +215,7 @@ export function ChannelSummaryView({
       {/* The winners come BEFORE the charts. A name and a cost is a decision;
           a chart is context for it, and context read first is just decoration. */}
       <div>
-        <p className="mb-2 text-[12.5px] font-medium text-ink">Best performer at each level</p>
+        <SectionLabel>Best performer at each level</SectionLabel>
         <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(230px,1fr))]">
           {grains.map((g) => (
             <BestPerformer
@@ -238,7 +239,7 @@ export function ChannelSummaryView({
       <CampaignHighlights campaigns={campaigns} onOpenCampaign={onOpenCampaign} />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-panel border border-border bg-surface p-4">
+        <div className="rounded-panel border border-border bg-surface p-4 transition-colors hover:border-brand-200">
           <p className="mb-1 text-[12.5px] font-medium text-ink">Where the spend went</p>
           <p className="mb-2 text-[11.5px] text-ink-muted">
             Top {TOP_SLICES} campaigns by spend; the rest are grouped.
@@ -274,7 +275,7 @@ export function ChannelSummaryView({
           )}
         </div>
 
-        <div className="rounded-panel border border-border bg-surface p-4">
+        <div className="rounded-panel border border-border bg-surface p-4 transition-colors hover:border-brand-200">
           <p className="mb-1 text-[12.5px] font-medium text-ink">Lead to patient</p>
           <p className="mb-2 text-[11.5px] text-ink-muted">
             The drop between these three is where the money is won or lost.

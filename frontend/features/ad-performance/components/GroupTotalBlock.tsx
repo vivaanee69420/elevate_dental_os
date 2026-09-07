@@ -16,7 +16,8 @@
 // over an unmeasured blind spot.
 
 import { useQuery } from '@tanstack/react-query';
-import { SectionCard, SecHead, EmptyState, Skeleton } from '@/components/ui';
+import { EmptyState, Skeleton } from '@/components/ui';
+import { SectionLabel } from '@/features/overview/components/HeadlineCard';
 import { StatRail } from '@/features/marketing/_shared/StatRail';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { api } from '@/lib/api';
@@ -54,12 +55,18 @@ export function GroupTotalBlock() {
   });
 
   return (
-    <SectionCard>
-      <SecHead
-        n={1}
-        title="Both channels, people counted once"
-        desc="Someone who appears in Google and in Facebook counts once here, which is why this is smaller than the two blocks added together."
-      />
+    // No card wrapper and no numbered section head: both added padding and
+    // vertical rhythm around four figures that read perfectly well as a row.
+    <div className="flex flex-col gap-2">
+      <div>
+        {/* The same titled divider the Business Hub uses above each source's
+            row of cards, so a section reads as a section here too. */}
+        <SectionLabel>Both channels · people counted once</SectionLabel>
+        <p className="-mt-1 mb-1 text-[12px] text-ink-muted">
+          Someone in Google and in Facebook counts once here, which is why this is smaller
+          than the two channels added together.
+        </p>
+      </div>
 
       {isPending && <Skeleton className="h-24 w-full" />}
 
@@ -103,7 +110,7 @@ export function GroupTotalBlock() {
               undercount") tells the reader nothing they can act on; a count
               tells them exactly how much of the data is blind. */}
           {data.overlapIsLowerBound && (
-            <p className="mt-3 text-[12.5px] text-ink-muted">
+            <p className="text-[12px] text-ink-muted">
               {nf.format(data.unmatchable)} lead{data.unmatchable === 1 ? '' : 's'} carry no email
               address, and email is the only detail both channels record — most often a
               Google lead that arrived as a phone call. Those cannot be matched to the other
@@ -113,6 +120,6 @@ export function GroupTotalBlock() {
           )}
         </>
       )}
-    </SectionCard>
+    </div>
   );
 }

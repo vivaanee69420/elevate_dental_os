@@ -134,7 +134,7 @@ export function FacebookSummary() {
       <ScopePeriodBar hidePeriod adProvider="meta_ads" />
       <ChannelSummaryView
       title="Facebook"
-      reportHref="/marketing-facebook"
+      campaignsHref="/marketing-facebook?tab=campaigns"
       isPending={isPending}
       error={(error as Error) ?? null}
       notConnected={

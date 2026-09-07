@@ -21,6 +21,7 @@
 // channel — they are the only numbers here that need both at once, and the only
 // ones not delegated.
 
+import Link from 'next/link';
 import { PageHeader } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { AdReportTabs, useAdReportTab, type AdReportTab } from '@/features/marketing/_shared/AdReportTabs';
@@ -76,7 +77,17 @@ export default function AdPerformanceScreen() {
       <WarmBothChannels />
       <GroupTotalBlock />
 
-      <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
+      {/* The tab strip and the way out on ONE row. As its own line the link
+          cost a full row of vertical space to say four words. */}
+      <div className="flex items-end justify-between gap-3 border-b border-border">
+        <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
+        <Link
+          href={tab === 'facebook' ? '/marketing-facebook' : '/marketing-google'}
+          className="shrink-0 pb-2.5 text-[12.5px] font-medium text-brand hover:underline"
+        >
+          Open the full {tab === 'facebook' ? 'Facebook' : 'Google'} report →
+        </Link>
+      </div>
 
       {tab === 'facebook' && <FacebookSummary />}
       {tab === 'google' && <GoogleSummary />}
