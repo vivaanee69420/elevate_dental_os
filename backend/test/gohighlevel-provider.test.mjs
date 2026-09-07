@@ -64,6 +64,13 @@ describe('authorize — OAuth when configured', () => {
         expect(u.searchParams.get('redirect_uri')).not.toMatch(/highlevel|ghl/i);
         expect(u.searchParams.get('response_type')).toBe('code');
         expect(u.searchParams.get('state')).toContain('.');
+        // The VERSIONED path. The unversioned one is GHL's v1 endpoint, which
+        // answers "No integration found with the id: <client id>" for any app
+        // created on the current marketplace — a dead end that looks like a bad
+        // credential and is not one.
+        expect(u.pathname).toBe('/v2/oauth/chooselocation');
+        // Not sent unless the operator supplies it.
+        expect(u.searchParams.has('version_id')).toBe(false);
         expect(integrationRepository.upsert).toHaveBeenCalledWith('org-1', 'gohighlevel', { status: 'pending' });
     });
 });
@@ -87,6 +94,22 @@ describe('authorize — requested scopes', () => {
         // Nothing else may write. A scope is a standing permission over a
         // client's CRM, not a convenience.
         expect(scopes.filter((s) => s.endsWith('.write'))).toEqual(['conversations/message.write']);
+    });
+
+    it('passes version_id through when the operator supplies it', async () => {
+        Object.assign(process.env, OAUTH_ENV, { GHL_APP_VERSION_ID: 'ver-123' });
+        const res = await GoHighLevelProvider.authorize('org-1');
+        expect(new URL(res.redirectUrl).searchParams.get('version_id')).toBe('ver-123');
+        delete process.env.GHL_APP_VERSION_ID;
+    });
+
+    it('honours a GHL_AUTHORIZE_PATH override', async () => {
+        Object.assign(process.env, OAUTH_ENV, { GHL_AUTHORIZE_PATH: '/oauth/chooselocation' });
+        // The path has moved once already; an operator must be able to follow
+        // it without waiting for a deploy.
+        const res = await GoHighLevelProvider.authorize('org-1');
+        expect(new URL(res.redirectUrl).pathname).toBe('/oauth/chooselocation');
+        delete process.env.GHL_AUTHORIZE_PATH;
     });
 
     it('honours a GHL_SCOPES override', async () => {

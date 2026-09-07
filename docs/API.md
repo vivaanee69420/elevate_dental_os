@@ -797,7 +797,16 @@ Dentally accepts both connect methods, selected by `method` on the body:
 `authStyle: 'oauth_or_key'`, without it `broker_key`, and the tile follows.
 
 - `{ provider: 'gohighlevel' }` → `{ redirectUrl }` to
-  `marketplace.gohighlevel.com/oauth/chooselocation`. One consent authorises ONE
+  `marketplace.gohighlevel.com/v2/oauth/chooselocation`. **The path must be
+  versioned.** GHL serves `/oauth/chooselocation`, `/v1/...` and `/v2/...`; the
+  unversioned one is v1 and resolves the client id as a legacy "integration",
+  answering `HttpException: No integration found with the id: <client id>` for
+  any app created on the current marketplace — which reads as a bad credential
+  and is not one. GHL's own InstallLinkBanner builds the `/v2` form, and also
+  passes `version_id` (the app's `_id`); we send that only when
+  `GHL_APP_VERSION_ID` is set, since connections work without it.
+  `GHL_AUTHORIZE_PATH` overrides the path — it has moved once already.
+  One consent authorises ONE
   Location, so the callback writes an **`integration_accounts` row** — the same
   place a pasted token lands — with `secrets {access_token, refresh_token}` and
   `config.auth = 'oauth'`, then fires the same first pull `addAccount` does. The

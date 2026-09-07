@@ -72,6 +72,19 @@ function redirectUri() {
 function authBase() {
     return process.env.GHL_AUTH_BASE || 'https://marketplace.gohighlevel.com';
 }
+
+// The VERSIONED consent path. GHL's marketplace serves four routes —
+// /oauth/chooselocation, /v1/... and /v2/... — and the unversioned one is the
+// v1 endpoint: it looks the client id up as a legacy "integration" and answers
+// `No integration found with the id: <id>` for any app created on the current
+// marketplace, which is every app anyone can make today. GHL's own
+// InstallLinkBanner (the install link shown in app settings) builds /v2, so
+// that is what a working link looks like.
+//
+// Overridable because this is the second time the path has moved.
+function chooseLocationPath() {
+    return process.env.GHL_AUTHORIZE_PATH || '/v2/oauth/chooselocation';
+}
 function tokenUrl() {
     return process.env.GHL_TOKEN_URL || 'https://services.leadconnectorhq.com/oauth/token';
 }
@@ -213,12 +226,19 @@ export const GoHighLevelProvider = {
         // Sign with the INTERNAL provider key so verifyState matches after the
         // controller aliases the leadconnector slug back to gohighlevel.
         const state = signState({ orgId, provider: 'gohighlevel' });
-        const url = new URL(`${authBase()}/oauth/chooselocation`);
+        const url = new URL(`${authBase()}${chooseLocationPath()}`);
         url.searchParams.set('response_type', 'code');
         url.searchParams.set('client_id', process.env.GHL_CLIENT_ID);
         url.searchParams.set('redirect_uri', redirectUri());
         url.searchParams.set('scope', scopes());
         url.searchParams.set('state', state);
+        // GHL's own install link carries the app version id. It is not
+        // documented as required and connections work without it, so it is sent
+        // only when the operator supplies it — copied from the install link in
+        // the app's settings.
+        if (process.env.GHL_APP_VERSION_ID) {
+            url.searchParams.set('version_id', process.env.GHL_APP_VERSION_ID);
+        }
         await integrationsRepository.upsert(orgId, 'gohighlevel', { status: 'pending' });
         return { redirectUrl: url.toString() };
     },
