@@ -42,9 +42,12 @@ export const OAUTH_SLUG = 'leadconnector';
 // Exactly what the OAuth token is used for and nothing more: contacts,
 // opportunities and workflows for the sync's four phases, calendars plus their
 // events for the appointments phase, conversations for the Inbox pull, and
-// locations to name the subaccount on connect. All read-only — sending a
-// message goes out through the marker row's own credentials, so a write scope
-// here would be a permission we never exercise.
+// locations to name the subaccount on connect.
+//
+// One write scope, and it is load-bearing: replying from the Inbox posts to
+// POST /conversations/messages as the contact's own subaccount, so without
+// conversations/message.write an OAuth connection can read the whole
+// conversation and not answer it. Every other scope is read-only.
 const DEFAULT_SCOPES = [
     'contacts.readonly',
     'opportunities.readonly',
@@ -54,10 +57,11 @@ const DEFAULT_SCOPES = [
     'calendars/events.readonly',
     'conversations.readonly',
     'conversations/message.readonly',
+    'conversations/message.write',
 ].join(' ');
 
 const PASTE_HINT =
-    'Paste a GoHighLevel Private Integration Token (Settings → Private Integrations → create a token with View Contacts + View Opportunities) and your Location ID (Settings → Business Info). Note: the legacy JWT "API Key" targets the old v1 API and will not work here.';
+    'Paste a GoHighLevel Private Integration Token (Settings → Private Integrations → create a token with View Contacts, View Opportunities, View Conversations and Edit Conversation Messages — the last one is what lets you reply from the Inbox) and your Location ID (Settings → Business Info). Note: the legacy JWT "API Key" targets the old v1 API and will not work here.';
 
 function backendUrl() {
     return process.env.BACKEND_PUBLIC_URL || 'http://localhost:8080';

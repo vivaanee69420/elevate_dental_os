@@ -68,6 +68,35 @@ describe('authorize — OAuth when configured', () => {
     });
 });
 
+describe('authorize — requested scopes', () => {
+    it('asks for the write scope that replying needs, and no other write scope', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        const res = await GoHighLevelProvider.authorize('org-1');
+        const scopes = new URL(res.redirectUrl).searchParams.get('scope').split(' ');
+        // Inbox replies POST /conversations/messages as the contact's own
+        // subaccount. Without this, an OAuth connection can read a whole
+        // conversation and not answer it — and GHL's refusal arrives at send
+        // time, long after the connection looked healthy.
+        expect(scopes).toContain('conversations/message.write');
+        // Everything the sync reads.
+        expect(scopes).toEqual(expect.arrayContaining([
+            'contacts.readonly', 'opportunities.readonly', 'locations.readonly',
+            'workflows.readonly', 'calendars.readonly', 'calendars/events.readonly',
+            'conversations.readonly',
+        ]));
+        // Nothing else may write. A scope is a standing permission over a
+        // client's CRM, not a convenience.
+        expect(scopes.filter((s) => s.endsWith('.write'))).toEqual(['conversations/message.write']);
+    });
+
+    it('honours a GHL_SCOPES override', async () => {
+        Object.assign(process.env, OAUTH_ENV, { GHL_SCOPES: 'contacts.readonly' });
+        const res = await GoHighLevelProvider.authorize('org-1');
+        expect(new URL(res.redirectUrl).searchParams.get('scope')).toBe('contacts.readonly');
+        delete process.env.GHL_SCOPES;
+    });
+});
+
 describe('authorize — broker fallback when OAuth not configured', () => {
     it('prompts for an API key + location id', async () => {
         const res = await GoHighLevelProvider.authorize('org-1');

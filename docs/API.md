@@ -831,11 +831,17 @@ native Twilio/Postmark providers. Before this, the send read only the legacy
 row, so a multi-subaccount org — which has no secrets there — silently sent
 every reply over Twilio/Postmark instead.
 
-Scopes requested (all read-only, exactly what the sync calls): `contacts.readonly`,
-`opportunities.readonly`, `locations.readonly`, `workflows.readonly`,
-`calendars.readonly`, `calendars/events.readonly`, `conversations.readonly`,
-`conversations/message.readonly`. Override with `GHL_SCOPES`; `GHL_AUTH_BASE` and
-`GHL_TOKEN_URL` default to production.
+Scopes requested: `contacts.readonly`, `opportunities.readonly`,
+`locations.readonly`, `workflows.readonly`, `calendars.readonly`,
+`calendars/events.readonly`, `conversations.readonly`,
+`conversations/message.readonly`, and one write scope —
+**`conversations/message.write`**, which is what the Inbox reply above needs.
+Without it a connection reads a whole conversation and cannot answer it, and
+GHL refuses at send time rather than at connect time. Pinned by
+`test/gohighlevel-provider.test.mjs`, which also asserts no OTHER write scope is
+requested. A Private Integration Token needs the equivalent permission ticked
+when it is created ("Edit Conversation Messages"). Override with `GHL_SCOPES`;
+`GHL_AUTH_BASE` and `GHL_TOKEN_URL` default to production.
 
 Token refresh is automatic in the sync path: `resolveDentallyAuth` refreshes a near-expiry OAuth access token (5-min skew) under a single-use-refresh-token claim guard, and the long backfill pagers retry once on a 401 by refreshing. API-key rows never refresh. `POST /api/integrations/dentally/refresh` forces a manual refresh. Env: `DENTALLY_CLIENT_ID`/`DENTALLY_CLIENT_SECRET`, optional `DENTALLY_AUTH_BASE` (default `https://api.dentally.co`) / `DENTALLY_SCOPES`; prod `BACKEND_PUBLIC_URL` must equal the host registered as the Dentally redirect URI (exact match) or OAuth is rejected.
 
