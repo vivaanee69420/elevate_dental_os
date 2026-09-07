@@ -133,6 +133,14 @@ export interface HubCompare {
   // unknowable, not zero.
   prev: HubComparePrev & {
     turnoverPence: number;
+    // The three MARKETING figures this endpoint owns. Group-level only: they
+    // are deliberately absent from the per-practice rows below because two of
+    // them have no practice — treatment_plans carry none and ad_metrics'
+    // practice_id is unreliable — so under a practice scope the service zeroes
+    // them on both sides rather than inventing a split.
+    leads: number;
+    treatmentsStarted: number;
+    adPlatformConversions: number;
     // Per-practice priors as well as the group totals. This endpoint is fetched
     // ONCE, group-wide, and the practice pills filter the payload in the
     // browser — so a card scoped to one site must read its own prior figure

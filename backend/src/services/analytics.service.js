@@ -52,7 +52,11 @@ const businessHubCache = createTtlCache({ ttlMs: 60_000, max: 300 });
 // fresh ones with it, and a card rendering "213.2% vs undefined" off exactly
 // that mismatch. Versioning the key makes a shape change MISS the old entry
 // instead of trusting it; the stale rows simply expire unread.
-export const HUB_PAYLOAD_VERSION = 'v3';
+// v4: compare.prev gained leads / treatmentsStarted / adPlatformConversions for
+// the Marketing cards. A cached v3 payload has none of them, and a card reading
+// `undefined` for its prior renders exactly the "213.2% vs undefined" this key
+// exists to prevent.
+export const HUB_PAYLOAD_VERSION = 'v4';
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -2866,7 +2870,8 @@ export const analyticsService = {
         const prevSinceISO = cmp.previous.since;
         const prevUntilISO = cmp.previous.until;
         let [practices, revRows, apptRows, leadRows, treatments, closedRows, actuals, health, noShowTracked, revLineRows, cashRows, adLeadsBy, newPatientRows, acceptedAgg, acceptedByPractice, completedRows, invoiceTotalRows, pmsSyncedAt, leadChannelRows,
-            prevCashRowsAll, prevBillRowsAll, prevApptRowsAll, prevClosedRowsAll, prevCompletedRowsAll, prevNewPatientRowsAll, prevAcceptedRowsAll, prevInvoiceRowsAll] = await (0, async_pool_1.mapWithConcurrency)([
+            prevCashRowsAll, prevBillRowsAll, prevApptRowsAll, prevClosedRowsAll, prevCompletedRowsAll, prevNewPatientRowsAll, prevAcceptedRowsAll, prevInvoiceRowsAll,
+            prevLeadRowsAll, prevTreatments, prevAdLeadsBy] = await (0, async_pool_1.mapWithConcurrency)([
             () => analytics_repository_1.analyticsRepository.practicesFull(orgId),
             () => analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             () => analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
@@ -2921,6 +2926,20 @@ export const analyticsService = {
             () => analytics_repository_1.analyticsRepository.newPatientsRegisteredByPractice(orgId, prevSinceISO, prevUntilISO),
             () => analytics_repository_1.analyticsRepository.treatmentAcceptedByPractice(orgId, prevSinceISO, prevUntilISO),
             () => analytics_repository_1.analyticsRepository.invoiceTotalsByPractice(orgId, prevSinceISO, prevUntilISO),
+            // The three feeds behind the MARKETING cards this endpoint owns:
+            // CRM leads, the treatment_plans funnel, and ad-platform conversions.
+            // Same repository methods as their current-window twins — a prior
+            // read from anywhere else would compare two different metrics.
+            () => analytics_repository_1.analyticsRepository.leadsRollupByPractice(orgId, prevSinceISO, prevUntilISO),
+            () => analytics_repository_1.analyticsRepository.treatmentsRollupByOrg(orgId, prevSinceISO, prevUntilISO),
+            // By London DATE, like adFromDate/adToDate above — ad_metrics.metric_date
+            // is a date, and slicing the previous window's ISO instant would start
+            // it a day early for the seven months of the year that are BST.
+            () => analytics_repository_1.analyticsRepository.adLeadsByProvider(
+                orgId,
+                londonYmd(new Date(prevSinceISO)),
+                londonYmd(new Date(new Date(prevUntilISO).getTime() - 1)),
+            ),
         ], 4);
         // Practice name lookup BEFORE the practiceId filter narrows `practices`, so
         // the accepted breakdown can name every practice even under a scoped call.
@@ -2945,6 +2964,11 @@ export const analyticsService = {
             invoiceTotalRows = (invoiceTotalRows || []).filter(mine);
             treatments = { started: 0, completed: 0, closed_value_pence: 0 };
             adLeadsBy = new Map();
+            // The PRIORS are zeroed on exactly the same rule. Left alone, a
+            // practice-scoped card would put this practice's 0 beside the whole
+            // group's previous figure and render a fabricated 100% collapse.
+            prevTreatments = { started: 0, completed: 0, closed_value_pence: 0 };
+            prevAdLeadsBy = new Map();
         }
         const rate = (n, d) => (d ? Math.round((n / d) * 1000) / 10 : 0);
         // A rate with no denominator is UNKNOWABLE, not zero. `rate()` returns 0
@@ -3181,6 +3205,7 @@ export const analyticsService = {
         const prevNewPatientRows = mine(prevNewPatientRowsAll);
         const prevAcceptedRows = mine(prevAcceptedRowsAll);
         const prevInvoiceRows = mine(prevInvoiceRowsAll);
+        const prevLeadRows = mine(prevLeadRowsAll);
         const totalOf = (rows, key) => rows.reduce((s, r) => s + num(r[key]), 0);
 
         const prevRevenuePence = totalOf(prevBillRows, 'fee_pence');
@@ -3204,6 +3229,12 @@ export const analyticsService = {
             invoicedPence: totalOf(prevInvoiceRows, 'invoiced_pence'),
             invoiceOutstandingPence: totalOf(prevInvoiceRows, 'outstanding_pence'),
             invoiceSettledPence: totalOf(prevInvoiceRows, 'settled_pence'),
+            // Marketing priors. `leads` carries a practice and so narrows with
+            // the scope; the other two do not carry one and were zeroed above,
+            // exactly as their current-window twins are.
+            leads: totalOf(prevLeadRows, 'total'),
+            treatmentsStarted: num(prevTreatments?.started),
+            adPlatformConversions: num(prevAdLeadsBy.get('google_ads')) + num(prevAdLeadsBy.get('meta_ads')),
             // Per-practice priors as well as the group totals. The Business Hub
             // is fetched ONCE, group-wide, and the practice pills filter that
             // payload in the browser — so a group-only prior would sit a single

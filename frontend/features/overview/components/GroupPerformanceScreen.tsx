@@ -21,19 +21,20 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowUpRight, Gem, TrendingDown } from 'lucide-react';
 import { Card, Chip, AlertRow, EmptyState, SkeletonKpiRow, SkeletonChart, type ChipColour } from '@/components/ui';
 import { formatPence, formatNumber } from '@/lib/format';
-import { useBusinessHub, usePlanFeesLines, type HubPractice, type RevenueLine, type PlanFeeLine } from '../business-hub-api';
+import { useBusinessHub, usePlanFeesLines, type HubPractice, type HubComparePrev, type RevenueLine, type PlanFeeLine } from '../business-hub-api';
 import { useScopePeriod } from '@/features/_shared/scope-context';
 import { SectionFilterPills } from '@/features/_shared/SectionFilterPills';
 import { DecisionLens } from '@/features/_shared/DecisionLens';
 import { usePractices } from '@/features/practices/hooks';
-import { useMarketingRoi } from '@/features/intelligence/marketing-roi-hooks';
+import { useMarketingRoi, useMarketingRoiFor } from '@/features/intelligence/marketing-roi-hooks';
 import type { MarketingRoi } from '@/features/intelligence/marketing-roi-api';
 import { AdAccountFilter } from '@/features/intelligence/AdAccountFilter';
 import { useGhlDashboard } from '@/features/ghl/hooks';
 import { HeadlineCard, SectionLabel, type HeadlineKpi } from './HeadlineCard';
+import { marketingKpis, type HubSide, type RoiSide } from '../marketing-kpis';
 import { QuickBooksGroupSection } from './QuickBooksGroupSection';
 import { GhlSummaryCards } from '@/features/ghl/components/GhlSummaryCards';
-import { type Polarity } from '@/features/marketing/_shared/compare';
+import { sourcesComparable, type Polarity } from '@/features/marketing/_shared/compare';
 
 const DASH = '—';
 
@@ -73,6 +74,13 @@ export function GroupPerformanceScreen() {
   // Pin marketing to group scope — ad spend isn't practice-attributed, so a
   // selected practice must not empty the marketing cards / snapshot.
   const { data: roi } = useMarketingRoi(accountIds.length ? accountIds : undefined, 'all');
+  // The SAME feed over the comparison window the Dentally cards already use, so
+  // both halves of the page measure across identical bounds — the clamping that
+  // makes a running month read against the same elapsed days of the month
+  // before included. Null until the hub payload arrives; the query is disabled
+  // until then rather than guessing a window.
+  const prevWin = data?.group?.compare?.previous ?? null;
+  const { data: prevRoi } = useMarketingRoiFor(prevWin, accountIds.length ? accountIds : undefined, 'all');
   // GoHighLevel → connected subaccount. The all-accounts dashboard supplies the
   // filter options; GhlSummaryCards re-fetches scoped to the selection.
   const [ghlAccountId, setGhlAccountId] = useState<string | null>(null);
@@ -175,7 +183,6 @@ export function GroupPerformanceScreen() {
   // Treatments started is a COUNT, not a % of leads: Dentally treatment plans
   // (existing patients) and GHL leads (new marketing) are different populations,
   // so "started ÷ leads" can exceed 100% and means nothing.
-  const costPerStart = connected && g.treatmentsStarted > 0 ? Math.round(spendPence / g.treatmentsStarted) : 0;
   // Is an ad-account filter actually applied? The ROI feed honours it (spend,
   // leads and revenue all scope to the practices those accounts run); the
   // business-hub feed never receives it. Cards fed by the latter therefore say
@@ -200,7 +207,7 @@ export function GroupPerformanceScreen() {
   // cannot drift from them.
   const fun = roi?.adFunnel ?? null;
   const adScopePids = adFilterOn ? (roi?.scopePracticeIds ?? null) : null;
-  const inAdScope = (p: HubPractice) => !adScopePids || adScopePids.includes(p.practiceId);
+  const inAdScope = (p: { practiceId: string }) => !adScopePids || adScopePids.includes(p.practiceId);
   const sumScoped = (pick: (p: HubPractice) => number) =>
     data.practices.filter(inAdScope).reduce((s, p) => s + (pick(p) || 0), 0);
   const scopedClosedPence = adScopePids ? sumScoped((p) => p.treatmentsClosedPence) : closedPence;
@@ -208,21 +215,51 @@ export function GroupPerformanceScreen() {
   // treatments_started has no per-practice form, so anything divided by it stays
   // group-wide however the filter is set.
   const groupWideNote = adFilterOn ? ' · group-wide, not filtered' : '';
-  // Leads as the ad-account filter sees them — the denominator every ratio below
-  // divides by, so its numerator must be scoped to match.
-  const mktLeads = fun ? fun.leads : (adFilterOn ? (roi?.totalLeads ?? 0) : g.leads);
-  // Money EARNED FROM THOSE LEADS, not the group's plan fees. A rate with no
-  // denominator is unknowable, not zero.
-  const attributedPence = fun ? fun.paidPence : scopedClosedPence;
-  const revPerLead = mktLeads > 0 ? Math.round(attributedPence / mktLeads) : null;
-  const mktNewPatients = fun ? fun.newPatients : scopedNewPatients;
-  const mktConversionPct = mktLeads > 0 ? Math.round((mktNewPatients / mktLeads) * 1000) / 10 : null;
-  // ROAS on the same footing: money from these leads over the spend that bought
-  // them. The old figure divided the group's whole settled revenue by one
-  // account's spend and read 32x.
-  const attributedRoas = spendPence > 0 && fun ? Math.round((attributedPence / spendPence) * 100) / 100 : null;
 
-  const adConvFiltered = (roi?.channels ?? []).reduce((s, c) => s + (c.adConversions || 0), 0);
+  // Every marketing figure, and every marketing PRIOR, from one function of its
+  // inputs — called twice. Computing the previous period's ratios separately
+  // would be a second definition of each, and a comparison whose two sides are
+  // arrived at differently is worse than none: it prints a confident percentage
+  // between two things that were never the same measurement.
+  const roiSide = (r: typeof roi): RoiSide | null => (r ? {
+    connected: !!r.connected,
+    adFunnel: r.adFunnel ?? null,
+    paidSpendPence: r.paidSpendPence,
+    totalLeads: r.totalLeads ?? 0,
+    channelAdConversions: (r.channels ?? []).reduce((n, c) => n + (c.adConversions || 0), 0),
+  } : null);
+  const hubNow: HubSide = {
+    leads: g.leads,
+    adPlatformConversions: g.adPlatformConversions ?? 0,
+    treatmentsStarted: g.treatmentsStarted,
+    closedPence: scopedClosedPence,
+    newPatients: scopedNewPatients,
+  };
+  const mkt = marketingKpis(roiSide(roi), hubNow, adFilterOn);
+
+  const cmpPrev = cmp?.prev ?? null;
+  // The prior side, narrowed to the SAME practices the ad filter scoped the
+  // current side to — the payload carries per-practice priors for exactly this,
+  // so a filtered card never sits one account's figure over the whole group's
+  // previous one.
+  const sumScopedPrev = (pick: (r: HubComparePrev) => number): number =>
+    (cmpPrev?.byPractice ?? []).filter(inAdScope).reduce((s, r) => s + (pick(r) || 0), 0);
+  const hubPrev: HubSide | null = cmpPrev ? {
+    leads: cmpPrev.leads,
+    adPlatformConversions: cmpPrev.adPlatformConversions,
+    treatmentsStarted: cmpPrev.treatmentsStarted,
+    closedPence: adScopePids ? sumScopedPrev((r) => r.treatmentsClosedPence) : cmpPrev.treatmentsClosedPence,
+    newPatients: adScopePids ? sumScopedPrev((r) => r.newPatients) : cmpPrev.newPatients,
+  } : null;
+  // No prior payload, or the comparison window's own read has not landed yet →
+  // no comparison at all, rather than a percentage against a partial period.
+  const mktPrev = hubPrev && prevRoi ? marketingKpis(roiSide(prevRoi), hubPrev, adFilterOn) : null;
+
+  const mktLeads = mkt.leads;
+  const attributedPence = mkt.attributedPence;
+  const revPerLead = mkt.revPerLeadPence;
+  const mktConversionPct = mkt.conversionPct;
+  const attributedRoas = mkt.roas;
   // Withheld rather than wrong: an account with no practice mapped has spend but
   // no revenue scope to divide by.
   const roasWithheld = !!roi?.roasUnavailableReason;
@@ -256,6 +293,30 @@ export function GroupPerformanceScreen() {
     ? (isGroupScope ? cmp.prev : cmp.prev.byPractice.find((r) => r.practiceId === scope) ?? null)
     : null;
   const countOf = (n: number) => formatNumber(n);
+  // The marketing counterpart. `mktPrev` is null until BOTH the hub payload and
+  // the comparison window's own ROI read have landed, so a card shows no
+  // comparison rather than one measured against half a period.
+  //
+  // THE ATTRIBUTION CLIFF. A percentage between two periods is a performance
+  // figure only if both were measured the same way. This group captured no ad
+  // attribution at all before June 2026, so a June-against-May comparison puts
+  // real leads beside a structural zero and renders a spectacular improvement
+  // that never happened. Where one side has attributed leads and the other has
+  // none, the ad-attributed cards keep the ARROW — the number really did move
+  // that way — and lose the good/bad COLOUR, because "good" is a claim about
+  // performance and performance is what cannot be read across that boundary.
+  const adLeadsComparable = !mktPrev
+    || sourcesComparable({ ghl: mkt.leads, callrail: 0 }, { ghl: mktPrev.leads, callrail: 0 });
+  const cmpMkt = (
+    current: number | null, previous: number | null,
+    polarity: Polarity, format: (n: number) => string, isRate = false,
+    attributed = false,
+  ): HeadlineKpi['compare'] => (cmp && mktPrev ? {
+    current, previous,
+    polarity: attributed && !adLeadsComparable ? 'neutral' : polarity,
+    isRate,
+    format: (n) => `${format(n)} · ${cmp.previous.label}`,
+  } : undefined);
 
   // Merged-in Group-Overview metrics (appointments / no-show / leads), scoped to
   // the selected practice where the feed is practice-attributed.
@@ -346,22 +407,30 @@ export function GroupPerformanceScreen() {
     // hub feed below does NOT take that filter, which is why the cards after
     // these say so on their face instead of implying a scope they do not have.
     { label: 'Leads', value: formatNumber(mktLeads),
+      compare: cmpMkt(mktLeads, mktPrev?.leads ?? null, 'higher-better', countOf, false, true),
       sub: fun
         ? `${formatNumber(fun.booked)} booked · ${adFilterOn ? 'selected ad accounts' : 'all ad accounts'}`
         : (leadsBreakdown || 'No CRM enquiries in this period'),
       chip: null,
       source: 'Leads bought by these ad accounts, counted through the same per-lead ledgers the Facebook and Google report pages use — so this figure matches those pages for the same accounts and window.' },
-    { label: 'Ad Platform Conversions', value: formatNumber(adFilterOn ? adConvFiltered : (g.adPlatformConversions ?? 0)),
+    { label: 'Ad Platform Conversions', value: formatNumber(mkt.adPlatformConversions),
+      compare: cmpMkt(mkt.adPlatformConversions, mktPrev?.adPlatformConversions ?? null, 'higher-better', countOf),
       sub: adFilterOn ? `Reported by the selected accounts · not enquiries` : 'Reported by Google and Meta · not enquiries',
       chip: null,
       source: 'Google Ads and Meta report these against their own campaigns. A "conversion" is any action the campaign optimises for — a form, a click-to-call, a messaging start — so it counts actions, not people, and is normally far higher than the enquiries your CRM records. Use Leads for enquiries.' },
     { label: 'Conversion', value: mktConversionPct == null ? DASH : `${mktConversionPct}%`,
+      compare: cmpMkt(mktConversionPct, mktPrev?.conversionPct ?? null, 'higher-better', (n) => `${n}%`, true, true),
       sub: fun ? 'Leads → new patients, from these accounts' : 'Leads → new patients booked',
       chip: null,
       source: 'New patients among the leads these ad accounts bought, counted through the same ledgers the Facebook and Google report pages use.' },
+    // Spend is NEUTRAL, deliberately: it is an input the practice controls, not
+    // an outcome. Colouring a rise red would tell an owner that investing more
+    // is going badly; colouring it green would congratulate them for spending.
     { label: 'Marketing Spend', value: connected ? formatPence(spendPence) : DASH, sub: connected ? 'Tracked acquisition spend' : 'Connect Google / Meta Ads',
+      compare: cmpMkt(mkt.spendPence, mktPrev?.spendPence ?? null, 'neutral', formatPence),
       chip: connected ? { text: `${spendPctTurnover}% of turnover`, tone: 'amber' } : null },
     { label: 'Blended Paid ROAS', value: attributedRoas == null ? DASH : `${attributedRoas.toFixed(2)}×`,
+      compare: cmpMkt(attributedRoas, mktPrev?.roas ?? null, 'higher-better', (n) => `${n.toFixed(2)}×`, false, true),
       sub: fun
         ? 'Money from these leads ÷ spend that bought them'
         : 'Settled revenue ÷ paid spend, same scope both sides',
@@ -370,14 +439,19 @@ export function GroupPerformanceScreen() {
             tone: attributedRoas >= 4 ? 'emerald' : attributedRoas >= 2 ? 'amber' : 'rose' }
         : null,
       source: 'Settled payments from the leads these accounts bought, divided by their spend. Over a short window this is near zero and that is correct — a lead takes weeks to become a paying patient. The old figure divided the whole group\'s revenue by one account\'s spend and read 32x.' },
-    { label: 'Lead → Start Rate', value: g.leadToStartRate == null ? DASH : `${g.leadToStartRate}%`,
+    { label: 'Lead → Start Rate', value: mkt.leadToStartRatePct == null ? DASH : `${mkt.leadToStartRatePct}%`,
+      compare: cmpMkt(mkt.leadToStartRatePct, mktPrev?.leadToStartRatePct ?? null, 'higher-better', (n) => `${n}%`, true),
       sub: `${formatNumber(g.treatmentsStarted)} treatments started from ${formatNumber(g.leads)} leads${groupWideNote}`,
       source: 'Treatments started comes from Dentally treatment plans, which carry no reliable practice, so BOTH sides of this rate stay group-wide however the ad-account filter is set. That is why its lead count can differ from the Leads card above.',
       chip: g.treatmentsCompleted > 0 ? { text: `${formatNumber(g.treatmentsCompleted)} completed`, tone: 'emerald' } : null },
-    { label: 'Cost / Treatment Started', value: costPerStart > 0 ? formatPence(costPerStart) : DASH, sub: `Paid spend ÷ treatments started${groupWideNote}`,
+    // A cost: a RISE is bad news, so this card's up-arrow renders red. Direction
+    // as the number moved, colour as the metric actually means.
+    { label: 'Cost / Treatment Started', value: mkt.costPerStartPence == null ? DASH : formatPence(mkt.costPerStartPence), sub: `Paid spend ÷ treatments started${groupWideNote}`,
+      compare: cmpMkt(mkt.costPerStartPence, mktPrev?.costPerStartPence ?? null, 'lower-better', formatPence),
       source: 'Treatments started comes from Dentally treatment plans, which carry no reliable practice — so this one figure stays group-wide however the ad-account filter is set, while the spend above it follows the filter. Read the two accordingly.',
       chip: connected && spendPence > 0 ? { text: `${formatPence(spendPence)} paid`, tone: 'amber' } : null },
     { label: 'Revenue / Lead', value: revPerLead == null ? DASH : formatPence(revPerLead),
+      compare: cmpMkt(revPerLead, mktPrev?.revPerLeadPence ?? null, 'higher-better', formatPence, false, true),
       sub: fun ? 'Settled money from these leads ÷ leads' : 'Dentally plan fees ÷ leads',
       chip: attributedPence > 0 ? { text: `${formatPence(attributedPence)} attributed`, tone: 'emerald' } : null,
       source: 'Settled payments from the leads these ad accounts bought. This is NOT the group\'s plan fees — it is money traced to these leads, so on a short window it is near zero, which is honest rather than broken.' },

@@ -9,16 +9,23 @@
 // A null delta renders as an em dash with the reason beside it, never as
 // "0%": the two say different things, and the whole point of the comparison
 // is that the reader can trust the number next to the arrow.
+import { ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import type { Delta } from './compare';
 
-const ARROW: Record<Delta['direction'], string> = {
-  // Solid triangles, not ↑↓: at 11px the arrow glyphs render thin enough in
-  // the system stack to be missed at a glance, which is the one thing this
-  // chip cannot afford.
-  up: '▲',
-  down: '▼',
-  flat: '–',
-};
+// Real icons, not glyphs. This was ▲ / ▼ / – , chosen over ↑↓ because the
+// arrow CHARACTERS render thin enough in the system stack to be missed at a
+// glance — but the triangles solved that by being blunt rather than legible,
+// and they inherit whatever weight and baseline the font happens to give them.
+// An SVG has neither problem: it is the same shape in every font stack, sits
+// on the text baseline because we put it there, and carries its own stroke
+// weight independent of the surrounding type.
+function Arrow({ direction, size = 13 }: { direction: Delta['direction']; size?: number }) {
+  const Icon = direction === 'up' ? ArrowUp : direction === 'down' ? ArrowDown : Minus;
+  return (
+    <Icon size={size} strokeWidth={2.75} aria-hidden="true"
+      className="inline-block shrink-0 relative -top-px" />
+  );
+}
 
 // No dark-mode variants: rule 1, light only.
 const TONE_CLASS: Record<Delta['tone'], string> = {
@@ -56,10 +63,10 @@ export function DeltaBadge({
     : `${Math.abs(delta.pct).toFixed(1)}${delta.unit === 'points' ? ' pp' : '%'}`;
 
   return (
-    <p className={`mt-1 text-[11.5px] ${TONE_CLASS[delta.tone]}`}>
-      <span aria-hidden="true">{ARROW[delta.direction]}</span>{' '}
-      <span className="font-medium">{pct}</span>
-      <span className="text-ink-muted"> vs {previousLabel}</span>
+    <p className={`mt-1 text-[11.5px] flex items-center gap-1 flex-wrap ${TONE_CLASS[delta.tone]}`}>
+      <Arrow direction={delta.direction} />
+      <span className="font-semibold">{pct}</span>
+      <span className="text-ink-muted">vs {previousLabel}</span>
     </p>
   );
 }
@@ -77,9 +84,16 @@ export function DeltaBadge({
 export function DeltaInline({ delta }: { delta: Delta | null }) {
   if (!delta) return null;
   const pct = delta.pct === null ? 'new' : `${Math.abs(delta.pct).toFixed(1)}%`;
+  // Stays a BLOCK whose inner row is inline-flex, so the arrow and figure sit
+  // on their own line but still follow the cell's own text alignment. A flex
+  // container with a fixed justification here would drag the badge to one side
+  // of every left-aligned cell it appears in.
   return (
     <span className={`block text-[11px] leading-tight ${TONE_CLASS[delta.tone]}`}>
-      <span aria-hidden="true">{ARROW[delta.direction]}</span> {pct}
+      <span className="inline-flex items-center gap-0.5 align-middle">
+        <Arrow direction={delta.direction} size={11} />
+        {pct}
+      </span>
     </span>
   );
 }

@@ -220,3 +220,89 @@ describe('businessHub — the comparison the cards are measured against', () => 
         expect(peak).toBeLessThanOrEqual(4);
     });
 });
+
+// ============================================================================
+// The MARKETING cards had no comparison at all. Every Dentally card above them
+// carried one, so the same page answered "how does this month compare?" for
+// takings and appointments and said nothing about leads, spend or ROAS.
+//
+// Three of those cards are fed by THIS endpoint rather than the marketing ROI
+// feed — leads, treatments started and ad-platform conversions — so their
+// priors have to be read here, over the window `comparisonWindows` already
+// resolved, from the same three RPCs their current-window twins come from.
+// ============================================================================
+describe('businessHub — priors for the Marketing cards this endpoint feeds', () => {
+    const withMarketing = (fn, params) => {
+        switch (fn) {
+            case 'leads_rollup_by_practice':
+                return { data: [
+                    { practice_id: 'p1', total: pair(300, 250, params), converted: pair(30, 20, params) },
+                    { practice_id: 'p2', total: pair(100, 90, params), converted: pair(10, 8, params) },
+                ], error: null };
+            case 'treatments_rollup_by_org':
+                return { data: [{ started: pair(80, 64, params), completed: pair(70, 55, params), closed_value_pence: 0 }], error: null };
+            case 'ad_leads_by_provider':
+                // Windowed by DATE, not instant — so this one is split on p_from,
+                // and 1 May London is 2026-05-01 either side of BST.
+                return { data: [
+                    { provider: 'google_ads', conversions: params?.p_from === '2026-05-01' ? 400 : 500 },
+                    { provider: 'meta_ads', conversions: params?.p_from === '2026-05-01' ? 600 : 750 },
+                ], error: null };
+            default:
+                return rollups(fn, params);
+        }
+    };
+
+    beforeEach(() => { supaRec.rpcProvider = withMarketing; });
+
+    it('carries a prior for leads, treatments started and ad-platform conversions', async () => {
+        const res = await svc.businessHub(ORG, { ...JUN, now: NOW });
+
+        expect(res.group.compare.prev).toMatchObject({
+            leads: 340,                   // 250 Alpha + 90 Beta
+            treatmentsStarted: 64,
+            adPlatformConversions: 1000,  // 400 google + 600 meta
+        });
+    });
+
+    it('reads each prior from the same feed as its current-window twin', async () => {
+        const res = await svc.businessHub(ORG, { ...JUN, now: NOW });
+
+        expect(res.group.leads).toBe(400);                  // 300 + 100
+        expect(res.group.treatmentsStarted).toBe(80);
+        expect(res.group.adPlatformConversions).toBe(1250); // 500 + 750
+    });
+
+    it('windows the prior ad read by London DATE, the same way the current one is', async () => {
+        // ad_metrics.metric_date is a DATE. Slicing the previous window's ISO
+        // instant would start it a day early through BST — the exact bug this
+        // endpoint already fixed for the current window (1,270 leads reported
+        // against 1,047 actually in the window).
+        const seen = [];
+        supaRec.rpcProvider = (fn, params) => {
+            if (fn === 'ad_leads_by_provider') seen.push({ from: params.p_from, to: params.p_to });
+            return withMarketing(fn, params);
+        };
+        await svc.businessHub(ORG, { ...JUN, now: NOW });
+
+        expect(seen).toEqual(expect.arrayContaining([
+            { from: '2026-06-01', to: '2026-06-30' },  // current: all of June, London
+            { from: '2026-05-01', to: '2026-05-31' },  // previous: all of May, London
+        ]));
+    });
+
+    it('zeroes the practice-less priors when a practice is selected, exactly as the live figures are', async () => {
+        // treatment_plans carry no practice and ad_metrics.practice_id is
+        // unreliable, so both are zeroed under a practice scope. A prior that
+        // was NOT zeroed would put 0 beside 64 and render a fabricated 100%
+        // collapse on every practice-scoped view.
+        const res = await svc.businessHub(ORG, { ...JUN, practiceId: 'p1', now: NOW });
+
+        expect(res.group.treatmentsStarted).toBe(0);
+        expect(res.group.adPlatformConversions).toBe(0);
+        expect(res.group.compare.prev.treatmentsStarted).toBe(0);
+        expect(res.group.compare.prev.adPlatformConversions).toBe(0);
+        // Leads DO carry a practice, so this one narrows rather than zeroing.
+        expect(res.group.compare.prev.leads).toBe(250);
+    });
+});
