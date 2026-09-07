@@ -29,7 +29,6 @@ import { usePractices } from '@/features/practices/hooks';
 import { useMarketingRoi } from '@/features/intelligence/marketing-roi-hooks';
 import type { MarketingRoi } from '@/features/intelligence/marketing-roi-api';
 import { AdAccountFilter } from '@/features/intelligence/AdAccountFilter';
-import { getQuickBooksOverview } from '@/features/finance/quickbooks-api';
 import { useGhlDashboard } from '@/features/ghl/hooks';
 import { QuickBooksGroupSection } from './QuickBooksGroupSection';
 import { GhlSummaryCards } from '@/features/ghl/components/GhlSummaryCards';
@@ -156,11 +155,6 @@ export function GroupPerformanceScreen() {
   // Pin marketing to group scope — ad spend isn't practice-attributed, so a
   // selected practice must not empty the marketing cards / snapshot.
   const { data: roi } = useMarketingRoi(accountIds.length ? accountIds : undefined, 'all');
-  // QuickBooks → connected company. The roll-up section owns its own period
-  // filter (clean YYYY-MM, mirroring the Finance > QuickBooks screen).
-  const [qbAccountId, setQbAccountId] = useState<string | null>(null);
-  const { data: qbAll } = useQuery({ queryKey: ['qbo-finance', 'accounts'], queryFn: () => getQuickBooksOverview({}) });
-  const qbOptions = (qbAll?.accounts ?? []).map((a) => ({ id: a.id, label: a.companyName }));
   // GoHighLevel → connected subaccount. The all-accounts dashboard supplies the
   // filter options; GhlSummaryCards re-fetches scoped to the selection.
   const [ghlAccountId, setGhlAccountId] = useState<string | null>(null);
@@ -251,7 +245,6 @@ export function GroupPerformanceScreen() {
   const spendPence = connected ? roi!.paidSpendPence : 0;
   const roas = connected ? (roi!.blendedRoas ?? 0) : 0;
 
-  const profitPence = g.marginPct > 0 ? Math.round((g.revenuePence * g.marginPct) / 100) : 0;
   const spendPctTurnover = pctOf(spendPence, g.revenuePence, 1);
   // New patients follow the practice scope (Dentally registrations are
   // practice-attributed): a selected practice shows that site's count, group
@@ -422,13 +415,6 @@ export function GroupPerformanceScreen() {
       chip: costPerPatientPence > 0 ? { text: `${formatPence(costPerPatientPence)} cost / patient`, tone: 'emerald' } : null,
       compare: cmpFor(newPts, prev?.newPatients ?? null, 'higher-better', countOf),
       href: to('/patients'), hint: 'Open Patients →' },
-  ];
-  // QuickBooks / Xero — P&L actuals (profit + net margin).
-  const quickbooksCards: HeadlineKpi[] = [
-    { label: 'Group Profit', value: g.marginPct > 0 ? formatPence(profitPence) : DASH, sub: g.marginPct > 0 ? `Contribution · ${g.marginPct}% of turnover` : 'Connect Xero for live P&L',
-      chip: g.marginPct > 0 ? { text: `${g.marginPct}% of turnover`, tone: 'emerald' } : null },
-    { label: 'Margin', value: g.marginPct > 0 ? `${g.marginPct}%` : DASH, sub: g.marginPct > 0 ? 'Net, from actuals' : 'Connect Xero / QuickBooks',
-      chip: null },
   ];
   // Marketing — paid spend/ROAS + the lead→treatment acquisition funnel.
   const marketingCards: HeadlineKpi[] = [
@@ -608,19 +594,12 @@ export function GroupPerformanceScreen() {
         </div>
       </Card>
 
-      <Card>
-        <SectionLabel>QuickBooks</SectionLabel>
-        <SectionFilterPills label="Company" options={qbOptions}
-          selectedId={qbAccountId} onSelect={setQbAccountId} allLabel="All companies" />
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
-          {quickbooksCards.map((c) => <HeadlineCard key={c.label} c={c} />)}
-        </div>
-      </Card>
-
-      {/* QuickBooks group roll-up — scoped by the company filter; owns its own
-          period filter (mirrors the Finance > QuickBooks screen's clean `period`
-          param, not the global ISO window which is off-by-one under BST). */}
-      <QuickBooksGroupSection accountId={qbAccountId} />
+      {/* QuickBooks — ONE block, on ONE window. This used to be two: a card grid
+          reading the Business Hub feed's margin over the global scope window,
+          and a roll-up beneath it reading /api/finance/quickbooks over a period
+          dropdown of its own. Two windows and two definitions of profit, with a
+          company filter wired to only one of them. */}
+      <QuickBooksGroupSection />
 
       <Card>
         <SectionLabel>GoHighLevel</SectionLabel>
@@ -688,46 +667,6 @@ export function GroupPerformanceScreen() {
           <DecisionLens surface="group" fallback={lens} />
         </Card>
       </div>
-
-      {/* QuickBooks (by company) — P&L actuals per connected QuickBooks company.
-          Deliberately separate from the Dentally Business Performance table above:
-          QuickBooks companies are NOT mapped to Dentally practices, so they list
-          as their own entities (Revenue/Profit/Margin) rather than merged rows.
-          Trailing 12 months (the `qbAll` overview, all companies summed). */}
-      {(qbAll?.companies?.length ?? 0) > 0 && (
-        <Card>
-          <h3 className="display text-lg font-semibold">QuickBooks (by company)</h3>
-          <p className="text-sm text-ink-muted mt-0.5 mb-3">Live P&amp;L per connected QuickBooks company · last 12 months. Not mapped to Dentally practices — shown separately.</p>
-          <div className="overflow-x-auto">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Entity</th>
-                  <th className="right">Revenue</th>
-                  <th className="right">Profit</th>
-                  <th className="right">Margin</th>
-                </tr>
-              </thead>
-              <tbody>
-                {qbAll!.companies.map((c) => (
-                  <tr key={c.accountId}>
-                    <td><strong>{c.companyName}</strong></td>
-                    <td className="right">{formatPence(c.revenuePence)}</td>
-                    <td className="right" style={{ color: c.netProfitPence >= 0 ? '#047857' : '#B91C1C' }}>{formatPence(c.netProfitPence)}</td>
-                    <td className="right">{c.revenuePence > 0 ? `${c.netMarginPct}%` : DASH}</td>
-                  </tr>
-                ))}
-                <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
-                  <td><strong>Group</strong></td>
-                  <td className="right">{formatPence(qbAll!.summary.revenuePence)}</td>
-                  <td className="right" style={{ color: qbAll!.summary.netProfitPence >= 0 ? '#047857' : '#B91C1C' }}>{formatPence(qbAll!.summary.netProfitPence)}</td>
-                  <td className="right">{qbAll!.summary.revenuePence > 0 ? `${qbAll!.summary.netMarginPct}%` : DASH}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
 
       {/* Revenue by Line + Profit Contribution — live from Dentally invoice
           items, bucketed into clinical treatment lines. Costs (Xero/QuickBooks)

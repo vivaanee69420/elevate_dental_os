@@ -128,7 +128,12 @@ export const financeQuickbooksService = {
                 const s = summarise(rows);
                 companies.push({
                     accountId: accId,
-                    companyName: labelOf.get(accId) ?? 'QuickBooks',
+                    // Rows with no integration_account_id are real money that
+                    // belongs to no connected company. Naming them 'QuickBooks'
+                    // read as a fifth company in the table; 'Unassigned' says
+                    // what they are, and keeps the breakdown summing to the
+                    // headline instead of quietly dropping them.
+                    companyName: accId === 'unknown' ? 'Unassigned' : (labelOf.get(accId) ?? 'QuickBooks'),
                     revenuePence: s.revenuePence,
                     expensesPence: s.expensesPence,
                     netProfitPence: s.netProfitPence,

@@ -35,7 +35,7 @@ export interface QbAccountOption {
 }
 
 export interface QbOverview {
-  window: { fromPeriod: string; toPeriod: string };
+  window: { fromPeriod: string; toPeriod: string; accountingMethod: QbMethod };
   summary: {
     revenuePence: number;
     expensesPence: number;
@@ -52,11 +52,18 @@ export interface QbOverview {
   accounts: QbAccountOption[];
 }
 
+// QuickBooks syncs its P&L under BOTH bases. The backend pins one per read —
+// summing the two double-counts every figure — and defaults to accrual, the
+// standard P&L basis. Callers that show the number must also show which basis
+// it is on, or the same window legitimately reports two different profits.
+export type QbMethod = 'accrual' | 'cash';
+
 export interface QbQuery {
   accountId?: string | null;
   period?: string | null;
   from?: string | null;
   to?: string | null;
+  method?: QbMethod | null;
 }
 
 export function getQuickBooksOverview(q: QbQuery = {}): Promise<QbOverview> {
@@ -65,6 +72,7 @@ export function getQuickBooksOverview(q: QbQuery = {}): Promise<QbOverview> {
   if (q.period) params.set('period', q.period);
   if (q.from) params.set('from', q.from);
   if (q.to) params.set('to', q.to);
+  if (q.method) params.set('method', q.method);
   const qs = params.toString();
   return api<QbOverview>(`/api/finance/quickbooks${qs ? `?${qs}` : ''}`);
 }

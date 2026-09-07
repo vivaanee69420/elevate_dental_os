@@ -88,6 +88,52 @@ function londonISO(y: number, m: number, d: number): string {
   return new Date(wall - off * 60000).toISOString();
 }
 
+/**
+ * The London calendar day an instant falls on, as 'YYYY-MM-DD'.
+ *
+ * Window bounds on this page are UTC ISO instants of London wall-clock
+ * midnight, so under BST 1 Aug is `2026-07-31T23:00:00Z`. Slicing that string
+ * yields "2026-07" and silently reads the wrong month — the bug this helper
+ * exists to make unrepeatable. Exported (rather than copied per caller) for the
+ * same reason every other window convention here is shared: a second copy is
+ * free to drift from this one.
+ */
+export function londonYmd(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  // en-CA renders as YYYY-MM-DD, which is exactly the shape we want.
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+}
+
+/**
+ * Resolve a [since, until) instant window to the inclusive London MONTH bounds
+ * it covers, plus whether those months are wider than the window asked for.
+ *
+ * QuickBooks reports monthly: monthly_financials.period is 'YYYY-MM' and there
+ * is no finer grain to read. A part-month selection can therefore only be
+ * answered with whole months, and `widened` is true whenever that is what
+ * happened — so the caller can say so rather than round in silence.
+ */
+export function londonMonthWindow(win: { since: string; until: string }): {
+  fromPeriod: string; toPeriod: string; widened: boolean;
+} {
+  const firstDay = londonYmd(win.since);
+  // `until` is EXCLUSIVE (start of the next London day), so step back one
+  // millisecond to land on the last day actually inside the window. Stepping
+  // back a whole day would be wrong on a window that is not day-aligned.
+  const lastDay = londonYmd(new Date(Date.parse(win.until) - 1).toISOString());
+  const fromPeriod = firstDay.slice(0, 7);
+  const toPeriod = lastDay.slice(0, 7);
+  // The selection already covers whole months iff it starts on a 1st and ends
+  // on a month end — i.e. the day after its last day is the 1st of some month.
+  // Anything else had to be widened to reach a month boundary.
+  const dayAfter = londonYmd(win.until);
+  const widened = !(firstDay.endsWith('-01') && dayAfter.endsWith('-01'));
+  return { fromPeriod, toPeriod, widened };
+}
+
 // Resolve the active mode to a concrete [since, until) window + label. Bounds are
 // London-local day-granular, so the window — and therefore the React Query key —
 // is stable within a calendar day (no refetch churn from millisecond drift) and
