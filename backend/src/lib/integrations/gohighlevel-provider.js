@@ -364,14 +364,26 @@ async function finishAgencyConnect(orgId, body) {
         last_error: failed.length ? `Could not connect: ${failed.join('; ')}` : null,
     });
 
-    import('./gohighlevel-sync.js')
-        .then(({ bootstrapAccount }) => Promise.allSettled(accounts.map((id) => bootstrapAccount(orgId, id))))
-        .catch((err) => console.error('[gohighlevel] agency bootstrap failed:', err?.message || err));
-
     if (accounts.length === 0) {
         throw new Error(`Connected to the agency, but no location could be connected. ${failed.join('; ')}`);
     }
-    return { ok: true, companyId, accounts, locations: locations.length, failed };
+
+    // ONE location is not a decision, so it pulls straight away — the same rule
+    // dentally-sync's bootstrapOnConnect applies to a single site.
+    //
+    // SEVERAL is a decision, and it is the owner's. An agency install can span
+    // every sub-account the agency has, and fanning out an immediate pull
+    // across all of them is how the Dentally connect ingested four practices
+    // nobody asked for. The rows are created either way — they are free, they
+    // carry no data, and the panel lists them with a practice mapping and a
+    // Sync button each — but the pull waits to be asked for.
+    const autoPull = accounts.length === 1;
+    if (autoPull) {
+        import('./gohighlevel-sync.js')
+            .then(({ bootstrapAccount }) => bootstrapAccount(orgId, accounts[0]))
+            .catch((err) => console.error('[gohighlevel] agency bootstrap failed:', err?.message || err));
+    }
+    return { ok: true, companyId, accounts, locations: locations.length, failed, autoPull };
 }
 
 export const GoHighLevelProvider = {

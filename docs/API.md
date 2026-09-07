@@ -826,7 +826,15 @@ Dentally accepts both connect methods, selected by `method` on the body:
   `ensureAccountToken` RE-MINTS it from the agency token instead of refreshing
   it — without that, every subaccount of an agency connection dies 24 hours
   after the consent. A Location that fails to mint is reported in the marker
-  row's `last_error` and the others still connect. Zero installed locations is a
+  row's `last_error` and the others still connect. **The first pull runs
+  automatically only when the agency installed the app on exactly ONE
+  location** — one location is not a decision, the same rule
+  `dentally-sync.bootstrapOnConnect` applies to a single site. With several,
+  the rows are created (they hold no data, and the panel lists each with a
+  practice mapping and a Sync button) but nothing pulls until the owner asks:
+  an agency install can span every sub-account the agency has, and fanning an
+  immediate pull across all of them is how the Dentally connect ingested four
+  practices nobody asked for. The result carries `autoPull`. Zero installed locations is a
   SUCCESS with `locations: 0`, not a failure: the consent worked and the owner
   installs into sub-accounts in GoHighLevel.
 - `{ provider: 'gohighlevel', method: 'key' }` → `{ requiresKeyPaste: true,

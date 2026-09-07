@@ -267,6 +267,11 @@ describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
         const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
         expect(res).toMatchObject({ ok: true, companyId: 'co-1', locations: 2 });
         expect(res.accounts).toHaveLength(2);
+        // SEVERAL locations is a decision, and it is the owner's. An agency
+        // install can span every sub-account the agency has; fanning an
+        // immediate pull across all of them is how the Dentally connect
+        // ingested four practices nobody asked for. Rows yes, pull no.
+        expect(res.autoPull).toBe(false);
 
         // The AGENCY token is the one renewable credential, and it belongs to
         // the company — so it lives on the org row, not on any subaccount.
@@ -287,6 +292,15 @@ describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
             expect(JSON.parse(decryptSecret(r.secrets)).refresh_token).toBeNull();
         }
         expect(JSON.parse(decryptSecret(rows[0].secrets)).access_token).toBe('loc-at-loc-1');
+    });
+
+    it('pulls straight away when there is exactly one location', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        vi.stubGlobal('fetch', routeFetch({ locations: [{ _id: 'loc-1', name: 'Rochester' }] }));
+        // One location is not a decision — the same rule dentally-sync applies
+        // to a single site.
+        const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
+        expect(res.autoPull).toBe(true);
     });
 
     it('connects the locations that work and names the ones that do not', async () => {
