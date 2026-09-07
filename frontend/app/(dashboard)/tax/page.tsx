@@ -1,1 +1,1 @@
-export { default } from '@/features/intelligence/components/TaxScreen';
+export { default } from '@/features/tax/components/TaxScreen';

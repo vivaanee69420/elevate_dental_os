@@ -89,7 +89,12 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   uda: 'operations.view',
 
   // Intelligence
-  tax: 'intelligence.view',
+  // finance.view, NOT intelligence.view: /api/tax is requirePermission
+  // ('finance.view') on the backend, so any other key here puts a tab in the
+  // nav that 403s the moment it is opened — the failure this map's own
+  // comment above describes. It also keeps Reception out of a tax position
+  // (rule 5: Reception is CRM only).
+  tax: 'finance.view',
   debt: 'intelligence.view',
   alerts: 'intelligence.view',
 
