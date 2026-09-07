@@ -628,18 +628,37 @@ export function selectContactsToWrite(fetched, since, needsAttribution) {
 }
 
 /**
+ * May this GHL contact be merged into the existing row we matched by email or
+ * phone?
+ *
+ * Only when that row is NOT itself a GoHighLevel contact. The dedup exists to
+ * stop a GHL contact duplicating a person Dentally already knows about; it was
+ * never meant to merge two GoHighLevel contacts together.
+ *
+ * The same person can fill the Rochester form and the Ashford form. That is two
+ * leads, in two locations, and GoHighLevel holds two contacts for them — so we
+ * hold two. Merging them made every per-location count read short (9,832 in
+ * GoHighLevel against 9,707 here, and the same shortfall on all four locations)
+ * and gave one of the two leads the wrong home.
+ *
+ * A legacy row carrying a ghl_contact_id but no subaccount is refused too: it
+ * predates the multi-subaccount split, but it is still somebody's GHL contact.
+ */
+export function canLinkOntoContact(candidate) {
+    return !candidate?.ghl;
+}
+
+/**
  * The account fields to write when linking a GHL id onto an EXISTING contact.
  *
- * The dedup maps are org-wide, so the same person in two GoHighLevel locations
- * resolves to one contacts row — deliberately; one person is one contact. What
- * must not follow is moving the row: this step used to overwrite
- * integration_account_id, so whichever location synced last claimed it and the
- * other location's contact count dropped by one for no reason the owner could
- * see. On live data 552 email addresses and 687 phone numbers appear in more
- * than one location, so this was not an edge case.
+ * Only a NON-GoHighLevel row can be linked onto at all (see canLinkOntoContact),
+ * so in practice this claims a Dentally / manual / CSV contact for the location
+ * that just matched it. The guard matters anyway: it used to overwrite
+ * integration_account_id unconditionally, which under the old org-wide merge
+ * moved a contact between locations on every sync and made each location's
+ * count drift by however many people it shared with its neighbours.
  *
- * First location to find a contact keeps it. Stable, and no worse a choice than
- * last-wins — the difference is that it stops changing every night.
+ * First location to find a contact keeps it.
  */
 export function linkAccountPatch(integrationAccountId, existingAccountId) {
     if (!integrationAccountId || existingAccountId) return {};
@@ -731,17 +750,24 @@ async function pullContacts(orgId, accessToken, locationId, practiceId, onPage =
         const g = String(r.ghl_contact_id);
         if (byGhl.has(g)) { toUpsert.push(r); continue; } // already linked -> refresh
         const e = r.email ? String(r.email).toLowerCase() : null;
-        if (e && byEmail.has(e)) {
-            const ex = byEmail.get(e);
-            if (String(ex.ghl ?? '') !== g) { toLink.push({ id: ex.id, ghl_contact_id: g, account: ex.account ?? null }); byGhl.set(g, ex.id); }
+        const ex = (e && byEmail.get(e)) || (byPhone.get(normalizePhone(r.phone)) ?? null);
+        if (ex && canLinkOntoContact(ex)) {
+            toLink.push({ id: ex.id, ghl_contact_id: g, account: ex.account ?? null });
+            byGhl.set(g, ex.id);
+            // The row is now a GHL contact, so no LATER contact in this same
+            // walk may fold into it either — otherwise two contacts sharing an
+            // email would still collapse, just one page further on.
+            if (e) byEmail.set(e, { ...ex, ghl: g });
+            const npx = normalizePhone(r.phone);
+            if (npx) byPhone.set(npx, { ...(byPhone.get(npx) ?? ex), ghl: g });
             continue;
         }
-        const np = normalizePhone(r.phone);
-        if (np && byPhone.has(np)) {
-            const ex = byPhone.get(np);
-            if (String(ex.ghl ?? '') !== g) { toLink.push({ id: ex.id, ghl_contact_id: g, account: ex.account ?? null }); byGhl.set(g, ex.id); }
-            continue;
-        }
+        // New. Claim its email and phone so a second GoHighLevel contact with
+        // the same details later in the walk inserts as its own row rather than
+        // matching this one — GoHighLevel holds two, so we hold two.
+        if (e && !byEmail.has(e)) byEmail.set(e, { id: null, ghl: g, account: integrationAccountId });
+        const npNew = normalizePhone(r.phone);
+        if (npNew && !byPhone.has(npNew)) byPhone.set(npNew, { id: null, ghl: g, account: integrationAccountId });
         toUpsert.push(r); // new
     }
     const { synced: upserted, failed } = await upsertContactRows(toUpsert, onPage);

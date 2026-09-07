@@ -330,3 +330,41 @@ describe('linkAccountPatch — a shared contact keeps the location that found it
         expect(linkAccountPatch(null, null)).toEqual({});
     });
 });
+
+// ============================================================================
+// ONE GOHIGHLEVEL CONTACT IS ONE ROW. The email/phone dedup exists to stop a
+// GHL contact duplicating a person Dentally already knows about — NOT to merge
+// two GoHighLevel contacts into one.
+//
+// The same person can fill the Rochester form and the Ashford form. That is two
+// leads, in two locations, and GoHighLevel holds two contacts for them. Folding
+// them into one row made every per-location count read short — 9,832 there
+// against 9,707 here, and the same on all four locations — and lost one of the
+// two leads' home.
+//
+// So a GHL contact may only ever link onto a row that is NOT itself a GHL
+// contact. Once a row carries a ghl_contact_id it is spoken for.
+// ============================================================================
+describe('canLinkOntoContact — what a GHL contact may merge into', () => {
+    it('links onto a Dentally / manual / CSV contact, which is the whole point of the dedup', async () => {
+        const { canLinkOntoContact } = await import('../src/lib/integrations/gohighlevel-sync.js');
+        expect(canLinkOntoContact({ id: 'c1', ghl: null, account: null })).toBe(true);
+    });
+
+    it('refuses a row that is already a GoHighLevel contact, whichever location owns it', async () => {
+        const { canLinkOntoContact } = await import('../src/lib/integrations/gohighlevel-sync.js');
+        // Ashford's contact must not absorb Rochester's, and vice versa.
+        expect(canLinkOntoContact({ id: 'c1', ghl: 'ghl-rochester', account: 'acct-rochester' })).toBe(false);
+        // Same location, two contacts for one person: GoHighLevel holds two, so
+        // we hold two. Matching it exactly is the requirement.
+        expect(canLinkOntoContact({ id: 'c1', ghl: 'ghl-a', account: 'acct-ashford' })).toBe(false);
+    });
+
+    it('refuses a legacy GHL row that carries an id but no subaccount', async () => {
+        // Pre-multi-subaccount rows have integration_account_id null. They are
+        // still GoHighLevel contacts, and absorbing one would lose a lead just
+        // as surely.
+        const { canLinkOntoContact } = await import('../src/lib/integrations/gohighlevel-sync.js');
+        expect(canLinkOntoContact({ id: 'c1', ghl: 'ghl-legacy', account: null })).toBe(false);
+    });
+});
