@@ -722,8 +722,23 @@ export interface DentallyImportSummary {
   status: string | null;
   last_error: string | null;
   running: boolean;
+  /** A first pull started, nothing is running, and none ever completed. */
+  interrupted: boolean;
+  /** Why it stopped, in plain terms. Null unless interrupted. */
+  stopped_reason: string | null;
+  attempts: number;
+  can_resume: boolean;
 }
 
 export function getDentallyImportSummary() {
   return api<DentallyImportSummary>('/api/integrations/dentally/import-summary');
+}
+
+// Continues a stopped first pull from its checkpoint — finished phases are
+// skipped, so this is not a fresh start.
+export function resumeDentallyImport() {
+  return api<{ ok: boolean; started?: boolean; alreadyRunning?: boolean }>(
+    '/api/integrations/dentally/resume-import',
+    { method: 'POST' },
+  );
 }

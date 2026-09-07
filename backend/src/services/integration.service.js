@@ -338,13 +338,50 @@ export const integrationService = {
             pms_import_repository_1.pmsImportRepository.summary(orgId, 'dentally'),
             integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally'),
         ]);
+        const running = getProgress(orgId, 'dentally')?.running === true;
+        const mark = integration?.config?.bootstrap;
+        // A first pull is INTERRUPTED when a marker says one started, nothing is
+        // running now, and no completion was ever recorded. That third clause
+        // matters: without it a finished run whose marker failed to clear would
+        // be reported as broken.
+        const interrupted = Boolean(mark?.started_at) && !running && !integration?.last_sync_at;
         return {
             ...summary,
             last_sync_at: integration?.last_sync_at ?? null,
             status: integration?.status ?? null,
             last_error: integration?.last_error ?? null,
-            running: getProgress(orgId, 'dentally')?.running === true,
+            running,
+            interrupted,
+            // Why it stopped, in the owner's terms. An upstream failure records
+            // itself; a killed process cannot, so absence of an error beside a
+            // stale marker IS the diagnosis — the server went away mid-pull.
+            stopped_reason: interrupted
+                ? (integration?.last_error
+                    ? `Dentally returned an error: ${integration.last_error}`
+                    : 'The server restarted while the import was running, which happens on a deploy.')
+                : null,
+            attempts: Number(mark?.attempts ?? 0),
+            can_resume: interrupted && Number(mark?.attempts ?? 0) < 8,
         };
+    },
+
+    // Continue a first pull that stopped. Not a fresh start: syncOneOrg keeps a
+    // per-phase checkpoint, so phases that finished are skipped and the run
+    // picks up where it left off.
+    async dentallyResumeImport(orgId) {
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally');
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('dentally is not connected', 409);
+        const active = getProgress(orgId, 'dentally');
+        if (active?.running && active.at && Date.now() - active.at < 10 * 60 * 1000) {
+            return { ok: true, alreadyRunning: true };
+        }
+        // Fire-and-forget for the same reason the connect path is: this runs for
+        // minutes and the UI polls progress rather than holding the request open.
+        this.bootstrapDentally(orgId).catch((err) => {
+            console.error('[integrations] dentally resume failed:', err?.message || err);
+        });
+        return { ok: true, started: true };
     },
 
     // GoHighLevel first-connect automation: full-history pull of contacts +

@@ -13,8 +13,9 @@
 //
 // Counts only — no row bodies are read to produce them.
 
-import { useQuery } from '@tanstack/react-query';
-import { getDentallyImportSummary, getSyncProgress } from '../api';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getDentallyImportSummary, getSyncProgress, resumeDentallyImport } from '../api';
 import { useSyncToast } from '../sync-toast';
 
 // A progress record whose last write is older than this is treated as dead: the
@@ -51,8 +52,11 @@ function phaseLabel(phase: string): string {
 }
 
 export function DentallyImportSummary() {
-  const { active } = useSyncToast();
+  const { active, start } = useSyncToast();
+  const qc = useQueryClient();
   const startedHere = active.has('dentally');
+  const [resuming, setResuming] = useState(false);
+  const [resumeErr, setResumeErr] = useState('');
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['integrations', 'dentally', 'import-summary'],
@@ -106,9 +110,9 @@ export function DentallyImportSummary() {
               {progress?.pct ? ` · ${pct}%` : ''}
             </span>
           </span>
-        ) : stalled ? (
+        ) : stalled || data.interrupted ? (
           <span style={{ fontSize: 12, color: 'var(--warning, #92400e)', fontWeight: 500 }}>
-            Stopped responding — the counts below are what arrived
+            Import stopped
           </span>
         ) : data.last_sync_at ? (
           <span className="text-ink-muted" style={{ fontSize: 12 }}>
@@ -184,10 +188,63 @@ export function DentallyImportSummary() {
         </>
       )}
 
-      {data.last_error && !live && (
-        <p style={{ fontSize: 12, marginTop: 8, color: 'var(--danger, #b91c1c)' }}>
-          Last run stopped: {data.last_error}
-        </p>
+      {/* Why it stopped, and the way out. A partial import with no explanation
+          and no button is the state that made this whole panel necessary. */}
+      {/* `stalled` is only ever computed while `live` is true (a running flag
+          whose progress went cold), so it must NOT be gated on !live — that
+          combination is unreachable and the banner would never show for the
+          very case it was written for. */}
+      {(stalled || (data.interrupted && !live)) && (
+        <div
+          style={{
+            marginTop: 12,
+            border: '1px solid var(--warning-border, #FDE68A)',
+            background: 'var(--warning-bg, #FFFBEB)',
+            borderRadius: 10,
+            padding: 12,
+          }}
+        >
+          <p style={{ fontSize: 12.5, color: 'var(--warning-ink, #92400E)' }}>
+            {data.stopped_reason ??
+              'The import stopped before it finished. The counts above are what arrived.'}
+          </p>
+          <p style={{ fontSize: 12, marginTop: 4 }} className="text-ink-muted">
+            Resuming carries on from where it stopped — the parts already pulled are
+            not fetched again.
+          </p>
+          {resumeErr && (
+            <p style={{ fontSize: 12, marginTop: 6, color: 'var(--danger, #b91c1c)' }}>{resumeErr}</p>
+          )}
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              type="button"
+              disabled={resuming || !data.can_resume}
+              className="btn-primary"
+              style={{ opacity: resuming || !data.can_resume ? 0.5 : 1 }}
+              onClick={async () => {
+                setResuming(true);
+                setResumeErr('');
+                try {
+                  await resumeDentallyImport();
+                  start('dentally');
+                  await qc.invalidateQueries({ queryKey: ['integrations', 'dentally'] });
+                } catch (e) {
+                  setResumeErr((e as Error).message);
+                } finally {
+                  setResuming(false);
+                }
+              }}
+            >
+              {resuming ? 'Resuming…' : 'Resume import'}
+            </button>
+            {!data.can_resume && (
+              <span className="text-ink-muted" style={{ fontSize: 12 }}>
+                Tried {data.attempts} times without finishing — worth checking the
+                Dentally connection before retrying.
+              </span>
+            )}
+          </div>
+        </div>
       )}
 
       <style>{`@keyframes elevate-pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }`}</style>
