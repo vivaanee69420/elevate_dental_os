@@ -86,7 +86,11 @@ export const PAGE_SECTION = {
   'board-report': 'finance.view',
   'exit-plan': 'wealth.view',
   'p4g-ai': 'overview.view',
-  'tax': 'intelligence.view',
+  // finance.view, matching BOTH the frontend ROUTE_PERMISSION and the actual
+  // /api/tax route gate. These two page maps agreed with each other but
+  // disagreed with the route, so anyone holding intelligence.view saw the tab
+  // and was 403'd the moment they opened it. All three now say the same thing.
+  'tax': 'finance.view',
   'debt': 'intelligence.view',
   'alerts': 'intelligence.view',
   'cashflow': 'finance.view',
