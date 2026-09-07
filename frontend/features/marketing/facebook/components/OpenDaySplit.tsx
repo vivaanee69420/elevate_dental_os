@@ -19,6 +19,7 @@ import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
 import { SectionHead } from '../../_shared/StatRail';
 import { money, money0, num } from '../../_shared/format';
 import type { FacebookOpenDayBucket, FacebookOpenDaySplit } from '../api';
+import { useState } from 'react';
 
 type SplitRow = {
   key: string;
@@ -76,6 +77,7 @@ const COLUMNS: GridColumn<SplitRow>[] = [
 ];
 
 export function OpenDaySplit({ split }: { split: FacebookOpenDaySplit }) {
+  const [open, setOpen] = useState(false);
   const mapped = split.events.length > 0 || split.openDays.spendPence > 0;
 
   // Nothing mapped: one line, no table. Open days cost a tenant who does not
@@ -114,23 +116,38 @@ export function OpenDaySplit({ split }: { split: FacebookOpenDaySplit }) {
 
   return (
     <div className="flex flex-col gap-2">
+      {/* Collapsed by default. Open days are a secondary analysis, and expanded
+          this table pushed the Campaigns, Ad sets and Ads tabs — the reason
+          most people open the page — below the fold on a laptop. One click
+          still gets to it, and the heading keeps it discoverable. */}
       <SectionHead
         title="Always-on and open days"
         note="Every campaign sits in exactly one of these, so the two add up to the whole."
-        right={
-          <Link href="/integrations" className="text-[13px] text-brand underline">
-            Manage open days
-          </Link>
-        }
+        right={(
+          <span className="flex items-center gap-3">
+            <Link href="/integrations" className="text-[13px] text-brand underline">
+              Manage open days
+            </Link>
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              className="text-[13px] text-brand underline"
+            >
+              {open ? 'Hide' : 'Show'}
+            </button>
+          </span>
+        )}
       />
-      <DataGrid
-        columns={COLUMNS}
-        rows={rows}
-        rowKey={(r) => r.key}
-        rowTone={(r) => (r.tone === 'event' ? 'muted' : 'default')}
-        emptyState={null}
-      />
-      {split.events.length === 0 && (
+      {open && (
+        <DataGrid
+          columns={COLUMNS}
+          rows={rows}
+          rowKey={(r) => r.key}
+          rowTone={(r) => (r.tone === 'event' ? 'muted' : 'default')}
+          emptyState={null}
+        />
+      )}
+      {open && split.events.length === 0 && (
         <p className="text-[12px] text-ink-2">
           Spend is mapped to an open day, but no event was active in this period.
         </p>

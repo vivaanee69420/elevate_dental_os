@@ -23,7 +23,7 @@
 // congratulate the practice for getting worse.
 // ============================================================================
 import { useMemo, useState } from 'react';
-import { EmptyState, SkeletonTable } from '@/components/ui';
+import { Chip, EmptyState, SkeletonTable } from '@/components/ui';
 import { formatDate } from '@/lib/format';
 import { DataGrid, type GridColumn } from '../../_shared/DataGrid';
 import { FootNote, SectionHead, type Stat } from '../../_shared/StatRail';
@@ -40,6 +40,17 @@ import {
 import { OpenDaySplit } from './OpenDaySplit';
 import type { FacebookLeadPractice, FacebookLeadRow } from '../api';
 import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
+
+/** "5 Sep" — a table cell has no room for 05/09/2026, and the year is the same
+ *  on every row of a period anyway. Formatted in London, because these are
+ *  London days and a UTC render shifts the late-evening ones back by one. */
+function shortDay(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? '—'
+    : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/London' });
+}
+
 
 // The page's cards, from the stats these panels already build. Same component
 // as the Business Hub and Ad performance, so the three surfaces look like one
@@ -278,20 +289,46 @@ export function FacebookPerformancePanel() {
     ]
     : practices;
 
+  // Seven columns of mostly one-word answers made every row three lines tall
+  // and told the reader very little. The practice and campaign move UNDER the
+  // name as its second line — they describe the person, they are not separate
+  // questions — which halves the width and lets each row sit on one line. Every
+  // column is sortable, which is the point of a table over a list.
   const leadCols: GridColumn<FacebookLeadRow>[] = [
-    { key: 'name', header: 'Name', render: (r) => r.name ?? DASH },
-    { key: 'practice', header: 'Practice', render: (r) => r.practice_name ?? DASH },
-    { key: 'campaign', header: 'Campaign', render: (r) => r.campaign_name ?? DASH },
-    { key: 'at', header: 'Lead', render: (r) => (r.lead_at ? formatDate(r.lead_at) : DASH) },
-    { key: 'treatment', header: 'Treatment', render: (r) => r.treatment ?? DASH },
-    { key: 'booked', header: 'Booked', render: (r) => (r.booked ? 'Yes' : DASH) },
     {
-      key: 'paid',
-      header: 'Paid',
-      align: 'right',
-      // The money behind the Yes, so the reader can see the threshold working
+      key: 'name', header: 'Person', width: 'w-[34%]',
+      render: (r) => <span className="font-medium text-ink">{r.name ?? DASH}</span>,
+      // Two facts about where the lead came from, on one quiet line.
+      sub: (r) => [r.practice_name, r.campaign_name].filter(Boolean).join(' · ') || null,
+      sortBy: (r) => r.name ?? null,
+    },
+    {
+      key: 'at', header: 'Enquired', width: 'w-28',
+      render: (r) => (r.lead_at ? shortDay(r.lead_at) : DASH),
+      // Sorted on the INSTANT, not the printed text: "5 Sep" and "12 Aug" sort
+      // alphabetically into nonsense.
+      sortBy: (r) => (r.lead_at ? Date.parse(r.lead_at) : null),
+    },
+    {
+      key: 'treatment', header: 'Treatment',
+      render: (r) => r.treatment ?? DASH,
+      sortBy: (r) => r.treatment ?? null,
+    },
+    {
+      key: 'booked', header: 'Booked', width: 'w-24',
+      // A tick, not the word "Yes". In a column where every visible row says
+      // the same thing, the word is furniture; the tick is scannable.
+      render: (r) => (r.booked ? <Chip colour="emerald">Booked</Chip> : DASH),
+      sortBy: (r) => (r.booked ? 1 : 0),
+    },
+    {
+      key: 'paid', header: 'Paid', align: 'right', width: 'w-24',
+      // The money behind the tick, so the reader can see the threshold working
       // rather than take it on trust.
-      render: (r) => (r.paid_pence > 0 ? money0(r.paid_pence) : DASH),
+      render: (r) => (r.paid_pence > 0
+        ? <span className="font-medium tabular-nums text-ink">{money0(r.paid_pence)}</span>
+        : DASH),
+      sortBy: (r) => r.paid_pence,
     },
   ];
 
