@@ -166,19 +166,36 @@ export function resolveWindow(s: {
   return { since: londonISO(y, m, 1), until: londonISO(y, m + 1, 1), label: `${MONTHS_SHORT[m]} ${y}` };
 }
 
-export function ScopePeriodProvider({ children }: { children: React.ReactNode }) {
+/**
+ * `prefix` lets a page hold MORE THAN ONE independent scope.
+ *
+ * Ad performance shows Google and Facebook side by side, and they cannot share
+ * a window: Meta's deep-grain tables hold a rolling 92 days while Google's do
+ * not, so one filter row either clamps Google needlessly or clamps Facebook
+ * silently. Prefixing the URL keys (`fb_scope`, `g_mode`, …) gives each block
+ * its own state while keeping it in the URL, so a filtered view is still
+ * shareable and survives a reload.
+ *
+ * A nested provider overrides the context for its subtree, so every existing
+ * tab keeps calling useScopePeriod() and simply reads the scope it is inside —
+ * no component needs to know it is now one of two.
+ */
+export function ScopePeriodProvider(
+  { children, prefix = '' }: { children: React.ReactNode; prefix?: string },
+) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
+  const k = (name: string) => (prefix ? `${prefix}_${name}` : name);
 
-  const scope: Scope = params.get('scope') || 'all';
-  const rawMode = params.get('mode');
+  const scope: Scope = params.get(k('scope')) || 'all';
+  const rawMode = params.get(k('mode'));
   const mode: PeriodMode =
     rawMode === 'year' || rawMode === 'custom' ? rawMode : 'month';
-  const monthKey = params.get('mk') || currentMonthKey();
-  const yearKey = params.get('yk') || currentYearKey();
-  const customSince = params.get('cs') || '';
-  const customUntil = params.get('cu') || '';
+  const monthKey = params.get(k('mk')) || currentMonthKey();
+  const yearKey = params.get(k('yk')) || currentYearKey();
+  const customSince = params.get(k('cs')) || '';
+  const customUntil = params.get(k('cu')) || '';
 
   const win = useMemo(
     () => resolveWindow({ mode, monthKey, yearKey, customSince, customUntil }),
@@ -188,10 +205,11 @@ export function ScopePeriodProvider({ children }: { children: React.ReactNode })
   const patch = useCallback(
     (next: Record<string, string>) => {
       const sp = new URLSearchParams(params.toString());
-      for (const [k, v] of Object.entries(next)) sp.set(k, v);
+      for (const [name, v] of Object.entries(next)) sp.set(k(name), v);
       router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
     },
-    [params, pathname, router],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [params, pathname, router, prefix],
   );
 
   const value = useMemo<ScopePeriodState>(
