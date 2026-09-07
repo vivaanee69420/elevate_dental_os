@@ -696,6 +696,90 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         integrationRepository.mergeConfig.mockReset();
     });
 
+    it('records what the reconcilers did — including an abort — instead of swallowing it', async () => {
+        // The reconcilers are all non-fatal and all fail quietly by design: a
+        // prune that cannot page its window deletes nothing, a backfill that
+        // gets a 500 restores nothing, and the sync reports success either way.
+        // That is correct behaviour and a terrible outcome on its own, because
+        // "reconciled cleanly" and "never ran" look identical from outside — which
+        // is how the appointment prune managed to abort on 'page_cap' every night
+        // for months without anyone knowing. Persist the result so silence is
+        // distinguishable from success.
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'integrations' && q.op === 'select')
+                return { data: [{ organisation_id: 'org-1', provider: 'dentally', status: 'active', secrets, config: { history_backfilled: true, treatment_items_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+            if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            return { data: [], error: null };
+        };
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            const seg = u.pathname.split('/').pop();
+            // Fail ONLY the reconciliation passes over /appointments. They are the
+            // ones that carry no `updated_after` — the data pull rides the cursor.
+            if (seg === 'appointments' && !u.searchParams.get('updated_after')) {
+                return { ok: false, status: 500, headers: { get: () => null }, json: async () => ({}), clone: () => ({ text: async () => '' }) };
+            }
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+
+        await syncAllOrgs();
+
+        const call = integrationRepository.mergeConfig.mock.calls
+            .map((c) => c[2])
+            .find((cfg) => cfg && cfg.dentally_reconcile);
+        expect(call, 'the sync must persist a reconcile summary').toBeDefined();
+        const rec = call.dentally_reconcile;
+        expect(rec.at).toEqual(expect.any(String));
+        // The failure is named, not merely absent.
+        expect(rec.appointments_backfill).toMatchObject({ aborted: 'http_500' });
+        expect(rec.appointments_prune).toMatchObject({ aborted: 'http_500' });
+        // A pass that DID run is recorded too, so "0 restored" is readable as a
+        // real answer rather than as a pass that never happened.
+        expect(rec.invoices_backfill).toBeDefined();
+        expect(rec.invoices_backfill.aborted).toBeUndefined();
+    });
+
+    it('retries an integration a previous run marked failed, and never a revoked one', async () => {
+        // syncOneOrg calls markFailed on ANY throw — one timeout, one rate-limit
+        // burst, one bad page — and markFailed sets status='failed'. Selecting
+        // only 'active' therefore meant a single transient error stopped that
+        // org syncing FOREVER, silently: no pull, no prune, and none of the
+        // backfill reconcilers that exist to catch exactly this. The org would
+        // simply stop moving while the app kept serving its stale rows. A
+        // successful run flips the status back to 'active' on its own
+        // (syncOneOrg's closing upsert), so retrying is self-healing.
+        //
+        // 'revoked' stays excluded: that is a deliberate disconnect and its
+        // secrets are nulled, so retrying it could only produce noise.
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        let statusFilter = null;
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'integrations' && q.op === 'select') {
+                statusFilter = { eqs: q.eqs, ins: q.ins };
+                return { data: [{ organisation_id: 'org-failed', provider: 'dentally', status: 'failed', secrets, config: { history_backfilled: true, treatment_items_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+            }
+            if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            return { data: [], error: null };
+        };
+        global.fetch = vi.fn(async (url) => {
+            const seg = new URL(url.toString()).pathname.split('/').pop();
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+
+        const res = await syncAllOrgs();
+
+        // It ran for the failed org rather than skipping it.
+        expect(res).toHaveLength(1);
+        expect(res[0].orgId ?? res[0].organisation_id ?? 'org-failed').toBeTruthy();
+        // And the query asked for both live states, never a bare status='active'.
+        const askedStatuses = (statusFilter.ins ?? []).find((i) => i.col === 'status')?.vals;
+        expect(askedStatuses).toBeDefined();
+        expect([...askedStatuses].sort()).toEqual(['active', 'failed']);
+        expect(askedStatuses).not.toContain('revoked');
+        expect((statusFilter.eqs ?? []).some((e) => e.col === 'status')).toBe(false);
+    });
+
     it('first run full-backfills the 6-month window then flags the org', async () => {
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         supaRec.resultProvider = (q) => {
@@ -739,7 +823,14 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         const windowed = seen.filter(Boolean);
         expect(windowed.length).toBeGreaterThan(0);
         expect(windowed.every((s) => s.startsWith('2026-05'))).toBe(true); // incremental from last_sync_at
-        expect(integrationRepository.mergeConfig).not.toHaveBeenCalled();
+        // Specifically: no one-time backfill flag is re-written. (mergeConfig
+        // itself IS called every run now — it persists the reconcile summary —
+        // so asserting it was never called at all would start passing for the
+        // wrong reason the moment anything else needed to write config.)
+        const flagWrites = integrationRepository.mergeConfig.mock.calls
+            .map((c) => c[2] ?? {})
+            .filter((cfg) => 'history_backfilled' in cfg || 'treatment_items_backfilled' in cfg);
+        expect(flagWrites).toEqual([]);
     });
 
     it('legacy org (history backfilled, no item flag) runs a one-time treatment_items backfill', async () => {

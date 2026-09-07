@@ -2125,6 +2125,24 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // unless it fully paged the window). Non-fatal: a prune failure must never
         // abort the sync. Skipped on the bootstrap (recent) pull, whose appointment
         // set is deliberately partial (open-only / page-capped history).
+        // Every reconciler below is non-fatal and fails QUIETLY by design — a
+        // prune that cannot page its window deletes nothing, a backfill that gets
+        // a 500 restores nothing, and the sync reports success either way. That
+        // is the right behaviour and, on its own, a terrible outcome: "reconciled
+        // cleanly" and "never ran" look identical from outside, which is exactly
+        // how the appointment prune aborted on 'page_cap' every night for months
+        // with nobody the wiser. Record each pass so silence is distinguishable
+        // from success.
+        const reconcile = { at: new Date().toISOString() };
+        const note = (key, r) => {
+            reconcile[key] = {
+                ...(r?.restored != null ? { restored: r.restored } : {}),
+                ...(r?.deleted != null ? { deleted: r.deleted } : {}),
+                ...(r?.skippedUnmapped ? { skippedUnmapped: r.skippedUnmapped } : {}),
+                ...(r?.truncated ? { truncated: true } : {}),
+                ...(r?.aborted ? { aborted: r.aborted } : {}),
+            };
+        };
         let pruned = { deleted: 0 };
         if (!recent && want('appointments')) {
             try {
@@ -2142,6 +2160,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                     // every night and had never deleted anything.
                     maxPages: full ? maxPages : WINDOW_RECON_MAX_PAGES,
                 });
+                note('appointments_prune', pruned);
                 if (pruned.aborted) {
                     console.warn(`[dentally] appointment prune aborted (${pruned.aborted}) — no rows deleted`);
                 } else if (pruned.deleted) {
@@ -2172,6 +2191,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 const reconSince = full ? backfillSince() : new Date(Date.now() - wMs).toISOString();
                 const reconUntil = new Date(Date.now() + wMs).toISOString();
                 const prunedPay = await reconcileDeletedPayments(orgId, base, auth, { sinceISO: reconSince, untilISO: reconUntil, maxPages });
+                note('payments_prune', prunedPay);
                 if (prunedPay.aborted) {
                     console.warn(`[dentally] payment prune aborted (${prunedPay.aborted}) — no rows deleted`);
                 } else if (prunedPay.deleted) {
@@ -2196,6 +2216,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             if (want('appointments')) {
                 try {
                     const b = await reconcileMissingAppointments(orgId, base, auth, { sinceISO: backSince, untilISO: backUntil });
+                    note('appointments_backfill', b);
                     if (b.restored) console.warn(`[dentally] appointment backfill restored ${b.restored} row(s) the incremental feed had missed`);
                     if (b.skippedUnmapped) console.warn(`[dentally] appointment backfill skipped ${b.skippedUnmapped} row(s) with an unmapped site`);
                 } catch (err) {
@@ -2205,6 +2226,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             if (want('payments')) {
                 try {
                     const b = await reconcileMissingPayments(orgId, base, auth, { sinceISO: backSince, untilISO: backUntil });
+                    note('payments_backfill', b);
                     if (b.restored) console.warn(`[dentally] payment backfill restored ${b.restored} row(s) the incremental feed had missed`);
                 } catch (err) {
                     console.warn(`[dentally] payment backfill skipped: ${err?.message || err}`);
@@ -2265,12 +2287,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 // its id set to the prune, so the 240-page walk happens once a
                 // night rather than twice.
                 const back = await reconcileMissingInvoices(orgId, base, auth, { collectRemoteIds: true });
+                note('invoices_backfill', back);
                 if (back.restored) console.warn(`[dentally] invoice backfill restored ${back.restored} row(s) the incremental feed had missed`);
                 // Fee lines too, or the two tables drift apart: `invoices` would
                 // carry a period that `invoice_items` has no lines for, and the
                 // money cards built on each would stop reconciling.
                 try {
                     const bi = await reconcileMissingInvoiceItems(orgId, base, auth);
+                    note('invoice_items_backfill', bi);
                     if (bi.restored) console.warn(`[dentally] invoice_item backfill restored ${bi.restored} fee line(s)`);
                 } catch (err) {
                     console.warn(`[dentally] invoice_item backfill skipped: ${err?.message || err}`);
@@ -2278,6 +2302,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 prunedInv = await reconcileDeletedInvoices(orgId, base, auth, {
                     remoteIds: back.truncated || back.aborted ? null : back.remoteIds,
                 });
+                note('invoices_prune', prunedInv);
                 if (prunedInv.aborted) {
                     console.warn(`[dentally] invoice prune aborted (${prunedInv.aborted}) — no rows deleted`);
                 } else if (prunedInv.deleted) {
@@ -2386,6 +2411,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             } catch (err) {
                 console.warn(`[dentally] checkpoint clear skipped: ${err?.message || err}`);
             }
+        }
+        // Persisted, not just logged: a log line is gone by morning, and the
+        // question this answers ("did the reconcilers actually run, and what did
+        // they find?") is asked days later.
+        try {
+            await integrationRepository.mergeConfig(orgId, 'dentally', { dentally_reconcile: reconcile });
+        } catch (err) {
+            console.warn(`[dentally] reconcile summary not recorded: ${err?.message || err}`);
         }
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
@@ -2558,11 +2591,21 @@ export async function backfillTreatmentItems(orgId, integration) {
 }
 
 export async function syncAllOrgs() {
+    // 'failed' is included on purpose. syncOneOrg calls markFailed on ANY throw
+    // — one timeout, one rate-limit burst, one bad page — and markFailed sets
+    // status='failed'. Selecting only 'active' meant a single transient error
+    // stopped that org syncing FOREVER, silently: no pull, no delete prune, and
+    // none of the backfill reconcilers that exist to catch exactly this drift.
+    // The org would just stop moving while the app kept serving its stale rows,
+    // and nothing on screen would say so. A successful run flips the status back
+    // to 'active' by itself (the closing upsert below), so retrying self-heals.
+    // 'revoked' stays out: that is a deliberate disconnect with nulled secrets,
+    // and retrying it could only generate noise.
     const { data: rows } = await supabase_1.serviceClient
         .from('integrations')
         .select('*')
         .eq('provider', 'dentally')
-        .eq('status', 'active');
+        .in('status', ['active', 'failed']);
     const results = [];
     for (const row of rows ?? []) {
         try {
