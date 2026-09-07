@@ -63,6 +63,7 @@ export function DentallyImportSummary() {
     queryFn: getDentallyImportSummary,
     // The server decides whether to keep polling, so this survives a reload.
     refetchInterval: (q) => (q.state.data?.running || startedHere ? COUNTS_MS : false),
+    refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
     staleTime: 0,
   });
@@ -76,6 +77,10 @@ export function DentallyImportSummary() {
     queryFn: () => getSyncProgress('dentally'),
     enabled: live,
     refetchInterval: live ? PROGRESS_MS : false,
+    // Same reason as useSyncProgress: a background tab must not freeze a view
+    // of work happening on the server.
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
     staleTime: 0,
   });
 

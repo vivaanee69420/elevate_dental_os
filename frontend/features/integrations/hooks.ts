@@ -130,6 +130,13 @@ export function useSyncProgress(provider: string, enabled = true) {
     queryFn: () => getSyncProgress(provider),
     enabled,
     refetchInterval: enabled ? 1000 : false,
+    // Chrome throttles timers in a background tab, and React Query pauses
+    // refetchInterval entirely when the window loses focus — so switching tab
+    // froze the overlay on its last payload and it never caught up. The sync
+    // runs on the server and does not care which tab is in front; the progress
+    // view should not either.
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
   });
 }
 

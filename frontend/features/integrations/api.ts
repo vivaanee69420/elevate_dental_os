@@ -119,6 +119,11 @@ export interface SyncProgress {
   totalPages?: number | null;
   count?: number; // records fetched so far in the current phase
   at?: number; // server epoch ms of the last progress write — used to detect a stalled/lost sync
+  // No progress record exists on the server. Either the run has not written its
+  // first tick yet, or the process running it restarted and nothing will ever
+  // mark it finished. Progress is in-memory and per-process, so a deploy during
+  // a sync produces exactly this.
+  missing?: boolean;
   // Per-phase breakdown accumulated server-side (insertion order = pull order),
   // so the UI can show each resource's pull, not just the active phase.
   phases?: Record<string, SyncPhaseProgress>;

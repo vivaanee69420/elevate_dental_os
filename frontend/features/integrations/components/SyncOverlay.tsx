@@ -54,8 +54,19 @@ export default function SyncOverlay({
   onDone?: () => void;
 }) {
   const { data } = useSyncProgress(provider, true);
-  const done = !!data?.done;
   const errored = !!data?.error;
+
+  // How long to tolerate "no progress record on the server" before deciding the
+  // run is gone. Long enough to cover the gap between starting a sync and its
+  // first tick — the server writes that after a DB read — so a healthy start is
+  // never mistaken for a lost one.
+  const MISSING_GRACE_MS = 20_000;
+  const openedAt = useRef(Date.now());
+  // A vanished progress record means a restarted process (a deploy). Nothing
+  // will ever set `done`, so without this the overlay waits for a signal that
+  // cannot arrive and sits on its last payload indefinitely.
+  const lost = !!data?.missing && Date.now() - openedAt.current > MISSING_GRACE_MS;
+  const done = !!data?.done || lost;
 
   useEffect(() => {
     if (done) onDone?.();

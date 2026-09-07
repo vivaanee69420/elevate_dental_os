@@ -413,7 +413,20 @@ export const integrationService = {
         }
     },
     syncProgress(orgId, provider) {
-        return getProgress(orgId, provider) ?? { running: false, pct: 0, phase: 'idle' };
+        const live = getProgress(orgId, provider);
+        if (live) return live;
+        // Progress is per-process and ephemeral, so an ABSENT record means one
+        // of two things, and the UI has to be able to tell either from a live
+        // run: the sync has not written its first tick yet, or the process that
+        // was running it restarted (a deploy does exactly this) and nothing
+        // will ever mark it finished.
+        //
+        // The old shape said `idle at 0%` with no `done`, which the overlay
+        // could not distinguish from a run that simply had not started — so it
+        // waited forever, showing whatever it had last seen. `missing` is the
+        // fact the caller needs; how long to wait before acting on it belongs
+        // to the caller, which knows when it started the run.
+        return { running: false, pct: 0, phase: 'idle', missing: true };
     },
     // List GoHighLevel pipelines + stages, to drive the stage-mapping UI.
     async detectPipelines(orgId, provider) {
