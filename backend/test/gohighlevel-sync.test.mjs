@@ -274,3 +274,59 @@ describe('upsertContact (dedup on pull)', () => {
         expect(up.vals).toMatchObject({ organisation_id: org, source: 'gohighlevel', ghl_contact_id: 'g9' });
     });
 });
+
+// ============================================================================
+// The contact book is walked WHOLE, or it is not synced.
+//
+// pullContacts took the routine page cap — 50 pages x 100 = 5,000 contacts —
+// and three of this org's four GoHighLevel locations are past it: 9,832 / 8,057
+// / 7,311 contacts against a walk that stopped at 5,000. Everything beyond that
+// point was never looked at again after the on-connect bootstrap, so an edit or
+// an addition out there simply never arrived.
+//
+// The cap made no sense for THIS endpoint in particular. GHL's /contacts/ list
+// cannot filter server-side — the code says so a few lines below — so the walk
+// is full-length whatever happens; the incremental saving is in the WRITE,
+// which `selectContactsToWrite` already does. Capping the read bought nothing
+// and cost the tail of the book.
+// ============================================================================
+describe('pullContacts walks the whole contact book', () => {
+    it('does not stop at the routine page cap the other resources use', async () => {
+        const { CONTACT_MAX_PAGES, MAX_PAGES } = await import('../src/lib/integrations/gohighlevel-sync.js');
+        // Whatever the routine cap is for the resources GHL CAN filter, the
+        // contact walk must reach further — a location with 9,832 contacts
+        // needs 99 pages.
+        expect(CONTACT_MAX_PAGES).toBeGreaterThanOrEqual(500);
+        expect(CONTACT_MAX_PAGES).toBeGreaterThan(MAX_PAGES);
+    });
+});
+
+// ============================================================================
+// A contact who exists in TWO GoHighLevel locations.
+//
+// The dedup maps are org-wide, so the same person in Ashford and Barnet is one
+// contacts row — deliberately, and that part stays. What did not: the link step
+// also overwrote integration_account_id, so whichever location synced last
+// claimed the row and the other location's contact count silently dropped by
+// one. Measured on live data, 552 email addresses and 687 phone numbers appear
+// in more than one location.
+// ============================================================================
+describe('linkAccountPatch — a shared contact keeps the location that found it first', () => {
+    it('claims a contact that belongs to no account yet', async () => {
+        const { linkAccountPatch } = await import('../src/lib/integrations/gohighlevel-sync.js');
+        expect(linkAccountPatch('acct-ashford', null)).toEqual({ integration_account_id: 'acct-ashford' });
+    });
+
+    it('leaves a contact already attributed to another location alone', async () => {
+        const { linkAccountPatch } = await import('../src/lib/integrations/gohighlevel-sync.js');
+        // Barnet finds a contact Ashford already owns. Linking the GHL id is
+        // right; moving the row is not — it would take one off Ashford's count
+        // every night and put it back the next time the order changed.
+        expect(linkAccountPatch('acct-barnet', 'acct-ashford')).toEqual({});
+    });
+
+    it('is a no-op when there is no account to attribute to', async () => {
+        const { linkAccountPatch } = await import('../src/lib/integrations/gohighlevel-sync.js');
+        expect(linkAccountPatch(null, null)).toEqual({});
+    });
+});

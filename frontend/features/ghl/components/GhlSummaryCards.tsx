@@ -67,10 +67,16 @@ export function GhlSummaryCards({
     {
       label: 'New contacts',
       value: formatNumber(t.contacts.new),
-      sub: `${formatNumber(t.contacts.total)} on the books in total`,
+      sub: `${formatNumber(t.contacts.total)} contacts held for ${accountId ? 'this subaccount' : 'these subaccounts'}`,
       chip: null,
       compare: cmp(t.contacts.new, p?.contacts.new ?? null, 'higher-better', countOf),
-      source: 'GoHighLevel contacts created inside the selected period. The total beneath is every contact on the books up to the end of that period, which does not move much month to month — this card counts the arrivals.',
+      // Says "held", not "on the books": the two are not the same number and
+      // the difference is deliberate. One person who exists in two GoHighLevel
+      // locations is ONE contact here — 552 email addresses and 687 phone
+      // numbers appear in more than one of this group's locations — so a
+      // per-subaccount total is legitimately lower than what that location
+      // reports, and the group total is lower than the sum of the locations.
+      source: 'GoHighLevel contacts created inside the selected period. The figure beneath is how many contacts we hold for the selected subaccounts, which is not the same as the contact count GoHighLevel shows per location: a person who exists in two of your locations is one contact here, counted once, under whichever location saw them first.',
       onClick: () => setOpen((v) => !v),
       active: open,
       hint: open ? 'Hide subaccounts' : 'Click for the breakdown',
