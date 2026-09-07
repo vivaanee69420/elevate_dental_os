@@ -32,7 +32,7 @@ import { markBootstrapStarted, markBootstrapFinished } from './bootstrap-recover
 import { integrationAccountRepository } from '../../repositories/integration-account.repository.js';
 import { ghlAppointmentRepository } from '../../repositories/ghl-appointment.repository.js';
 import { decryptSecret, encryptSecret } from '../crypto.js';
-import { exchangeRefreshToken } from './gohighlevel-provider.js';
+import { exchangeRefreshToken, ensureAgencyToken, mintLocationToken } from './gohighlevel-provider.js';
 import { GoHighLevelProvider } from './gohighlevel-provider.js';
 import { syncConversations } from './gohighlevel-conversations.js';
 import { extractAttribution } from './ghl-attribution.js';
@@ -1055,8 +1055,39 @@ export async function pullAppointments(orgId, account, accessToken, locationId, 
  */
 export async function ensureAccountToken(orgId, account) {
     const secrets = JSON.parse(decryptSecret(account.secrets));
+    const auth = account.config?.auth;
+
+    // Agency install: this row's token was MINTED from the agency token and has
+    // no refresh token of its own, so it is re-minted rather than refreshed.
+    // Skipping this would leave every subaccount of an agency connection dead
+    // 24 hours after the consent.
+    if (auth === 'oauth_company') {
+        const expiresAt = account.config?.expires_at ? Date.parse(account.config.expires_at) : 0;
+        if (Number.isFinite(expiresAt) && expiresAt - Date.now() > TOKEN_SKEW_MS) {
+            return secrets.access_token;
+        }
+        const agencyToken = await ensureAgencyToken(orgId);
+        if (!agencyToken) {
+            // The agency credential is gone — reconnecting is the only fix, and
+            // the stored token is the best we can offer until then.
+            return secrets.access_token;
+        }
+        const minted = await mintLocationToken(
+            agencyToken, account.config.companyId, account.external_account_id,
+        );
+        await integrationAccountRepository.update(orgId, account.id, {
+            secrets: encryptSecret(JSON.stringify({ access_token: minted.access_token, refresh_token: null })),
+        });
+        await integrationAccountRepository.mergeConfig(orgId, account.id, {
+            expires_at: minted.expires_in
+                ? new Date(Date.now() + minted.expires_in * 1000).toISOString()
+                : null,
+        });
+        return minted.access_token;
+    }
+
     const refreshToken = secrets.refresh_token;
-    if (account.config?.auth !== 'oauth' || !refreshToken) return secrets.access_token;
+    if (auth !== 'oauth' || !refreshToken) return secrets.access_token;
 
     const expiresAt = account.config?.expires_at ? Date.parse(account.config.expires_at) : 0;
     // Refresh a token that is merely CLOSE to expiry, so a long pull cannot

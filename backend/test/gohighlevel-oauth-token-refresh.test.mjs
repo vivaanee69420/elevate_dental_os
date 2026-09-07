@@ -19,8 +19,12 @@ vi.mock('../src/repositories/integration-account.repository.js', () => ({
 }));
 
 const exchangeRefreshToken = vi.fn();
+const ensureAgencyToken = vi.fn();
+const mintLocationToken = vi.fn();
 vi.mock('../src/lib/integrations/gohighlevel-provider.js', () => ({
     exchangeRefreshToken: (...a) => exchangeRefreshToken(...a),
+    ensureAgencyToken: (...a) => ensureAgencyToken(...a),
+    mintLocationToken: (...a) => mintLocationToken(...a),
 }));
 
 process.env.INTEGRATIONS_SECRET_KEY = 'enc-key';
@@ -118,5 +122,45 @@ describe('ensureAccountToken', () => {
         // A stuck claim flag blocks every future refresh for this account,
         // and that failure surfaces a day later with no obvious cause.
         expect(repo.clearRefresh).toHaveBeenCalledWith('org-1', 'a1');
+    });
+});
+
+describe('ensureAccountToken — agency install', () => {
+    // An agency consent produces ONE renewable credential (the agency token)
+    // and N derived ones. A subaccount row from that install has no refresh
+    // token of its own, so it is RE-MINTED, not refreshed — miss this and every
+    // subaccount of an agency connection is dead 24 hours after the consent.
+    const agencyAccount = (over = {}) => ({
+        id: 'a1',
+        external_account_id: 'loc-1',
+        secrets: secretsOf({ access_token: 'loc-old', refresh_token: null }),
+        config: { auth: 'oauth_company', companyId: 'co-1', expires_at: inHours(-1) },
+        ...over,
+    });
+
+    it('re-mints an expired location token from the agency token', async () => {
+        ensureAgencyToken.mockResolvedValue('agency-live');
+        mintLocationToken.mockResolvedValue({ access_token: 'loc-new', expires_in: 86399 });
+        expect(await ensureAccountToken('org-1', agencyAccount())).toBe('loc-new');
+        expect(mintLocationToken).toHaveBeenCalledWith('agency-live', 'co-1', 'loc-1');
+        const [, , patch] = repo.update.mock.calls[0];
+        expect(JSON.parse(decryptSecret(patch.secrets))).toEqual({ access_token: 'loc-new', refresh_token: null });
+        // Never the rotating-refresh path — there is no refresh token to spend.
+        expect(exchangeRefreshToken).not.toHaveBeenCalled();
+        expect(repo.claimRefresh).not.toHaveBeenCalled();
+    });
+
+    it('leaves a minted token that is still good', async () => {
+        const acct = agencyAccount({ config: { auth: 'oauth_company', companyId: 'co-1', expires_at: inHours(6) } });
+        expect(await ensureAccountToken('org-1', acct)).toBe('loc-old');
+        expect(mintLocationToken).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the stored token when the agency credential is gone', async () => {
+        ensureAgencyToken.mockResolvedValue(null);
+        // Reconnecting is the only real fix; failing the whole sync here would
+        // turn a re-auth into an outage.
+        expect(await ensureAccountToken('org-1', agencyAccount())).toBe('loc-old');
+        expect(mintLocationToken).not.toHaveBeenCalled();
     });
 });

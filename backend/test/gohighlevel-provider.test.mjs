@@ -227,6 +227,105 @@ describe('authStyle — the token path stays reachable', () => {
     });
 });
 
+describe('callback — AGENCY consent (one consent, N subaccounts)', () => {
+    // Installing the app on the agency authorises the COMPANY, so GHL returns
+    // companyId and NO locationId. That used to dead-end with "did not return a
+    // locationId" — which is the natural install for an agency with many
+    // sub-accounts, and the one this org actually did.
+    function routeFetch({ locations, mintFails = [] }) {
+        return vi.fn(async (url, opts = {}) => {
+            const u = String(url);
+            if (u.endsWith('/oauth/token')) {
+                return { ok: true, json: async () => ({
+                    access_token: 'agency-at', refresh_token: 'agency-rt', expires_in: 86399,
+                    companyId: 'co-1', userType: 'Company', scope: 'contacts.readonly',
+                }) };
+            }
+            if (u.includes('/oauth/installedLocations')) {
+                return { ok: true, json: async () => ({ locations }) };
+            }
+            if (u.endsWith('/oauth/locationToken')) {
+                const locId = new URLSearchParams(opts.body).get('locationId');
+                if (mintFails.includes(locId)) {
+                    return { ok: false, json: async () => ({ message: 'not authorised for this location' }) };
+                }
+                return { ok: true, json: async () => ({
+                    access_token: `loc-at-${locId}`, expires_in: 86399, locationId: locId, userType: 'Location',
+                }) };
+            }
+            throw new Error(`unexpected fetch: ${u}`);
+        });
+    }
+
+    it('creates one subaccount per installed location and keeps the agency token separate', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        const fetchMock = routeFetch({ locations: [
+            { _id: 'loc-1', name: 'Rochester' }, { _id: 'loc-2', name: 'Ashford' },
+        ] });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
+        expect(res).toMatchObject({ ok: true, companyId: 'co-1', locations: 2 });
+        expect(res.accounts).toHaveLength(2);
+
+        // The AGENCY token is the one renewable credential, and it belongs to
+        // the company — so it lives on the org row, not on any subaccount.
+        const agency = integrationRepository.upsertSecrets.mock.calls[0][2];
+        expect(JSON.parse(decryptSecret(agency.secrets))).toEqual({
+            access_token: 'agency-at', refresh_token: 'agency-rt',
+        });
+        expect(agency.config.companyId).toBe('co-1');
+
+        // Each Location gets its own row, named from GHL, carrying a MINTED
+        // token with no refresh token of its own.
+        const rows = integrationAccountRepository.insert.mock.calls.map((c) => c[1]);
+        expect(rows.map((r) => r.external_account_id)).toEqual(['loc-1', 'loc-2']);
+        expect(rows.map((r) => r.label)).toEqual(['Rochester', 'Ashford']);
+        for (const r of rows) {
+            expect(r.config.auth).toBe('oauth_company');
+            expect(r.config.companyId).toBe('co-1');
+            expect(JSON.parse(decryptSecret(r.secrets)).refresh_token).toBeNull();
+        }
+        expect(JSON.parse(decryptSecret(rows[0].secrets)).access_token).toBe('loc-at-loc-1');
+    });
+
+    it('connects the locations that work and names the ones that do not', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        vi.stubGlobal('fetch', routeFetch({
+            locations: [{ _id: 'loc-1', name: 'Rochester' }, { _id: 'loc-2', name: 'Ashford' }],
+            mintFails: ['loc-2'],
+        }));
+        const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
+        // One bad location must not cost the owner the others, and must not
+        // vanish either.
+        expect(res.accounts).toHaveLength(1);
+        expect(res.failed[0]).toMatch(/Ashford/);
+        const marker = integrationRepository.upsert.mock.calls.at(-1)[2];
+        expect(marker.last_error).toMatch(/Ashford/);
+    });
+
+    it('succeeds with zero locations rather than reporting a broken connection', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        vi.stubGlobal('fetch', routeFetch({ locations: [] }));
+        // The consent worked; the app is just not on a sub-account yet, which
+        // the owner fixes in GoHighLevel.
+        const res = await GoHighLevelProvider.callback('org-1', { code: 'auth-code' });
+        expect(res).toMatchObject({ ok: true, locations: 0 });
+        expect(integrationAccountRepository.insert).not.toHaveBeenCalled();
+    });
+
+    it('names what GHL returned when there is neither a location nor a company', async () => {
+        Object.assign(process.env, OAUTH_ENV);
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true, json: async () => ({ access_token: 'at', expires_in: 86399, userType: 'Weird' }),
+        })));
+        // A bare "no locationId" cannot be acted on; the two causes need
+        // opposite fixes.
+        await expect(GoHighLevelProvider.callback('org-1', { code: 'x' }))
+            .rejects.toThrow(/neither a locationId nor a companyId.*userType: Weird/s);
+    });
+});
+
 describe('callback — broker key-paste fallback', () => {
     it('persists the encrypted key + locationId', async () => {
         await GoHighLevelProvider.callback('org-1', { apiKey: 'pit-abc', locationId: 'loc-9' });

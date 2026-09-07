@@ -119,6 +119,96 @@ async function postToken(params) {
     return json; // { access_token, refresh_token, expires_in, scope, locationId, companyId, userType, token_type }
 }
 
+const API_BASE = 'https://services.leadconnectorhq.com';
+const API_VERSION = '2021-07-28';
+
+// The marketplace app id is the client id's first segment — the same id GHL
+// names in "No integration found with the id: <id>".
+function appId() {
+    return String(process.env.GHL_CLIENT_ID ?? '').split('-')[0];
+}
+
+async function ghlOAuthGet(path, agencyToken) {
+    const res = await fetch(`${API_BASE}${path}`, {
+        headers: {
+            Authorization: `Bearer ${agencyToken}`,
+            Version: API_VERSION,
+            Accept: 'application/json',
+        },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(body.message || body.error_description || `GoHighLevel ${res.status}`);
+    }
+    return body;
+}
+
+/**
+ * The Locations this agency installed the app into.
+ *
+ * An agency-level consent authorises the COMPANY, not a Location, so the token
+ * response carries companyId and no locationId. This is how the one consent
+ * becomes N subaccounts.
+ */
+export async function listInstalledLocations(agencyToken, companyId) {
+    const qs = new URLSearchParams({ companyId: String(companyId), appId: appId() });
+    const body = await ghlOAuthGet(`/oauth/installedLocations?${qs}`, agencyToken);
+    const rows = body.locations ?? body.data ?? [];
+    return rows
+        .map((l) => ({ id: String(l._id ?? l.id ?? ''), name: l.name ?? null }))
+        .filter((l) => l.id);
+}
+
+/**
+ * Mint a Location access token from an agency token.
+ *
+ * These are the credentials an agency install actually syncs with, and they
+ * carry NO refresh token of their own — they are re-minted from the agency
+ * token, which is the thing that refreshes. That is why an agency-install
+ * subaccount stores `auth: 'oauth_company'` and the agency token stays on the
+ * org's `integrations` row: one renewable credential, N derived ones.
+ */
+export async function mintLocationToken(agencyToken, companyId, locationId) {
+    const res = await fetch(`${API_BASE}/oauth/locationToken`, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${agencyToken}`,
+            Version: API_VERSION,
+            Accept: 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({ companyId: String(companyId), locationId: String(locationId) }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.access_token) {
+        throw new Error(body.message || body.error_description || `GoHighLevel ${res.status} minting a location token`);
+    }
+    return body;
+}
+
+/**
+ * A live agency access token for this org, refreshing it first if it is spent.
+ *
+ * The agency token lives on the `integrations` row because it belongs to the
+ * COMPANY, not to any one Location — every subaccount row derives from it.
+ */
+export async function ensureAgencyToken(orgId) {
+    const row = await integrationsRepository.getByProvider(orgId, 'gohighlevel');
+    if (!row?.secrets) return null;
+    let secrets;
+    try { secrets = JSON.parse(decryptSecret(row.secrets)); } catch { return null; }
+    if (!secrets.refresh_token) return null;
+    const expiresAt = row.expires_at ? Date.parse(row.expires_at) : 0;
+    if (Number.isFinite(expiresAt) && expiresAt - Date.now() > AGENCY_TOKEN_SKEW_MS) {
+        return secrets.access_token;
+    }
+    await GoHighLevelProvider.refresh(orgId);
+    const fresh = await integrationsRepository.getByProvider(orgId, 'gohighlevel');
+    try { return JSON.parse(decryptSecret(fresh.secrets)).access_token; } catch { return null; }
+}
+
+const AGENCY_TOKEN_SKEW_MS = 10 * 60 * 1000;
+
 /** Exchange a refresh token. Exported so gohighlevel-sync can refresh a
  *  subaccount's token without a second copy of the client credentials, the
  *  endpoint, or GHL's form-encoding requirement. */
@@ -140,7 +230,7 @@ export async function exchangeRefreshToken(refreshToken) {
  * the sync cannot tell them apart. `config.auth` records which it is, because
  * only an OAuth row has a token worth refreshing.
  */
-async function persistOAuthAccount(orgId, body) {
+async function persistOAuthAccount(orgId, body, { label: labelOverride = null } = {}) {
     const locationId = body.locationId ? String(body.locationId) : null;
     if (!locationId) {
         throw new Error('GoHighLevel did not return a locationId for this authorisation');
@@ -150,7 +240,11 @@ async function persistOAuthAccount(orgId, body) {
         refresh_token: body.refresh_token ?? null,
     }));
     const config = {
-        auth: 'oauth',
+        // 'oauth' — this row holds its own renewable token (a Location
+        // consent). 'oauth_company' — it does not: its token is minted from the
+        // agency token on the org's `integrations` row, because an agency
+        // consent produces one renewable credential and N derived ones.
+        auth: body.refresh_token ? 'oauth' : 'oauth_company',
         companyId: body.companyId ? String(body.companyId) : null,
         userType: body.userType ?? null,
         // Not a secret, and the sync needs it before every run.
@@ -171,12 +265,14 @@ async function persistOAuthAccount(orgId, body) {
             config: { ...(existing.config ?? {}), ...config },
         });
     }
-    let label = 'GoHighLevel';
-    try {
-        const { fetchLocation } = await import('./gohighlevel-sync.js');
-        label = (await fetchLocation(body.access_token, locationId))?.name || label;
-    } catch {
-        // A naming call must never fail a connection that already authenticated.
+    let label = labelOverride || 'GoHighLevel';
+    if (!labelOverride) {
+        try {
+            const { fetchLocation } = await import('./gohighlevel-sync.js');
+            label = (await fetchLocation(body.access_token, locationId))?.name || label;
+        } catch {
+            // A naming call must never fail a connection that already authenticated.
+        }
     }
     return integrationAccountRepository.insert(orgId, {
         provider: 'gohighlevel',
@@ -209,6 +305,70 @@ async function persistTokens(orgId, body, prevConfig = {}) {
         scopes: body.scope ? body.scope.split(/\s+/).filter(Boolean) : undefined,
         expires_at: body.expires_in ? new Date(Date.now() + body.expires_in * 1000).toISOString() : null,
     });
+}
+
+/**
+ * Turn ONE agency consent into a subaccount per installed Location.
+ *
+ * The agency token is stored on the org's `integrations` row — it belongs to
+ * the company, not to any Location, and it is the only credential here that
+ * refreshes. Each Location then gets an `integration_accounts` row exactly like
+ * a token or Location-consent subaccount, so everything downstream (the
+ * nightly sync, the Inbox reply path, the practice mapping) is unchanged.
+ *
+ * A Location that fails to mint is REPORTED, not skipped silently: the others
+ * still connect, and the owner learns which one needs attention.
+ */
+async function finishAgencyConnect(orgId, body) {
+    await persistTokens(orgId, body);
+    const companyId = String(body.companyId);
+
+    let locations = [];
+    try {
+        locations = await listInstalledLocations(body.access_token, companyId);
+    } catch (err) {
+        await integrationsRepository.markFailed(orgId, 'gohighlevel', err.message);
+        throw new Error(`Connected to the agency, but could not list its locations: ${err.message}`);
+    }
+    if (locations.length === 0) {
+        // The consent worked; the app just is not on any sub-account yet, and
+        // that is a thing the owner fixes in GoHighLevel, not a failure here.
+        await integrationsRepository.upsert(orgId, 'gohighlevel', { status: 'active', last_error: null });
+        return { ok: true, companyId, accounts: [], locations: 0 };
+    }
+
+    const accounts = [];
+    const failed = [];
+    for (const loc of locations) {
+        try {
+            const token = await mintLocationToken(body.access_token, companyId, loc.id);
+            const account = await persistOAuthAccount(orgId, {
+                ...token,
+                locationId: token.locationId ?? loc.id,
+                companyId,
+                // A minted Location token has no refresh token of its own —
+                // that is what makes this row 'oauth_company'.
+                refresh_token: null,
+            }, { label: loc.name || undefined });
+            accounts.push(account.id);
+        } catch (err) {
+            failed.push(`${loc.name || loc.id}: ${err.message}`);
+        }
+    }
+
+    await integrationsRepository.upsert(orgId, 'gohighlevel', {
+        status: 'active',
+        last_error: failed.length ? `Could not connect: ${failed.join('; ')}` : null,
+    });
+
+    import('./gohighlevel-sync.js')
+        .then(({ bootstrapAccount }) => Promise.allSettled(accounts.map((id) => bootstrapAccount(orgId, id))))
+        .catch((err) => console.error('[gohighlevel] agency bootstrap failed:', err?.message || err));
+
+    if (accounts.length === 0) {
+        throw new Error(`Connected to the agency, but no location could be connected. ${failed.join('; ')}`);
+    }
+    return { ok: true, companyId, accounts, locations: locations.length, failed };
 }
 
 export const GoHighLevelProvider = {
@@ -253,6 +413,24 @@ export const GoHighLevelProvider = {
             } catch (err) {
                 await integrationsRepository.markFailed(orgId, 'gohighlevel', err.message);
                 throw new Error(`GoHighLevel OAuth exchange failed: ${err.message}`);
+            }
+            // AGENCY consent. Installing the app on the agency authorises the
+            // COMPANY, not a Location, so GHL returns companyId and no
+            // locationId — which is the natural flow for an agency with many
+            // sub-accounts, and the one that used to dead-end here. The agency
+            // token is renewable and lives on the org's `integrations` row;
+            // each installed Location becomes a subaccount whose token is
+            // minted from it.
+            if (!body.locationId && body.companyId) {
+                return finishAgencyConnect(orgId, body);
+            }
+            if (!body.locationId) {
+                // Name what DID come back — a bare "no locationId" cannot be
+                // acted on, and the two causes need opposite fixes.
+                throw new Error(
+                    'GoHighLevel returned neither a locationId nor a companyId for this authorisation '
+                    + `(userType: ${body.userType ?? 'absent'}). Install the app into a sub-account, or on the agency.`,
+                );
             }
             const account = await persistOAuthAccount(orgId, body);
             // The marker row is what the tile reads for "connected"; the

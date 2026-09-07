@@ -815,6 +815,20 @@ Dentally accepts both connect methods, selected by `method` on the body:
   `integration_accounts` (`listAllSyncable`) and never reads the marker row.
   Re-authorising a Location already connected UPDATES that row rather than
   adding a second (its practice mapping and webhook token survive).
+- **Agency install** — installing the app on the agency rather than a
+  sub-account authorises the COMPANY, so GHL returns `companyId` and NO
+  `locationId`. That one consent becomes N subaccounts: the agency token (the
+  only renewable credential here) is stored on the org's `integrations` row via
+  `persistTokens`, `GET /oauth/installedLocations` lists the Locations the app
+  was installed into, and each gets an `integration_accounts` row whose token is
+  minted by `POST /oauth/locationToken`. Those minted tokens carry **no refresh
+  token**, so the row records `config.auth = 'oauth_company'` and
+  `ensureAccountToken` RE-MINTS it from the agency token instead of refreshing
+  it — without that, every subaccount of an agency connection dies 24 hours
+  after the consent. A Location that fails to mint is reported in the marker
+  row's `last_error` and the others still connect. Zero installed locations is a
+  SUCCESS with `locations: 0`, not a failure: the consent worked and the owner
+  installs into sub-accounts in GoHighLevel.
 - `{ provider: 'gohighlevel', method: 'key' }` → `{ requiresKeyPaste: true,
   requiresLocationId: true, pasteHint }`, unchanged. Still the only route for a
   Location the person setting this up cannot sign in to, so it stays offered
