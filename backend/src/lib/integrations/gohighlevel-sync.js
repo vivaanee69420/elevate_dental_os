@@ -28,6 +28,7 @@
 // Dentally row-builder precedent).
 
 import { integrationRepository } from '../../repositories/integration.repository.js';
+import { markBootstrapStarted, markBootstrapFinished } from './bootstrap-recovery.js';
 import { integrationAccountRepository } from '../../repositories/integration-account.repository.js';
 import { ghlAppointmentRepository } from '../../repositories/ghl-appointment.repository.js';
 import { decryptSecret } from '../crypto.js';
@@ -907,7 +908,15 @@ export async function detectPipelines(orgId, integration) {
 // contacts + opportunities with progress. Stage mapping is owner-configured
 // later (heuristic default until then), so it doesn't gate the first pull.
 export async function bootstrapOnConnect(orgId, integration, onProgress = () => {}) {
-    return syncOneOrg(orgId, integration, onProgress, { recent: true });
+    // Record that a first pull is in flight BEFORE running it. Nothing else
+    // knows: last_sync_at is only stamped on completion, so a process restart
+    // mid-bootstrap (a deploy does it) leaves a half-filled tenant that looks
+    // identical to one never connected. resumeInterruptedImports finds this.
+    await markBootstrapStarted(orgId, 'gohighlevel', integration);
+    const result = await syncOneOrg(orgId, integration, onProgress, { recent: true });
+    // An errored run KEEPS the marker so the sweep retries it.
+    if (!result?.error) await markBootstrapFinished(orgId, 'gohighlevel');
+    return result;
 }
 
 // --- GHL calendar + appointment sync (Phase 3 of syncAccount) ---------------

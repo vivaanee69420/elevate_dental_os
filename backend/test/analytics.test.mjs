@@ -785,21 +785,34 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
       q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
       : { data: [], error: null };
+    // Bounds are LONDON midnights, which is what the period pickers send
+    // (`londonISO` in scope-context) — June 2026 starts at 23:00Z on 31 May.
+    // This fixture used to send UTC midnights, and a UTC-midnight window is the
+    // one shape the old `d.getUTCDate() === 1` month check got right, so the
+    // test passed all year while real BST users saw "prev period" on the card.
+    const JUN = { since: '2026-05-31T23:00:00.000Z', until: '2026-06-30T23:00:00.000Z' };
     // RPCs are window-aware: current window (Jun) vs prior (May) keyed by p_since.
     supaRec.rpcProvider = (fn, params) => {
-      const isPrev = params?.p_since && params.p_since < '2026-06-01';
+      const isPrev = params?.p_since && params.p_since < JUN.since;
       if (fn === 'treatment_revenue_matrix')
         return { data: [{ practice_id: 'p1', treatment_name: 'X', fee_pence: isPrev ? 100000 : 112000, item_count: 1 }], error: null };
+      // Both payment feeds, kept in agreement: the group's cash total reads
+      // settled_receipts_by_day for the live window and settled_revenue_by_
+      // practice for the prior one (that feed also splits the prior figure per
+      // practice, so the comparison survives the practice pills). A fixture
+      // stubbing only one of them would leave the other silently empty.
       if (fn === 'settled_receipts_by_day')
         return { data: [{ day: '2026-05-01', pence: isPrev ? 100000 : 108000 }], error: null };
+      if (fn === 'settled_revenue_by_practice')
+        return { data: [{ practice_id: 'p1', pence: isPrev ? 100000 : 108000 }], error: null };
       return { data: [], error: null };
     };
-    const res = await svc.businessHub(ORG_A, { since: '2026-06-01T00:00:00.000Z', until: '2026-07-01T00:00:00.000Z', label: 'Jun 2026' });
+    const res = await svc.businessHub(ORG_A, { ...JUN, label: 'Jun 2026', now: () => new Date('2026-07-20T09:00:00.000Z') });
     expect(res.group.revenuePence).toBe(112000);
     expect(res.group.prevRevenuePence).toBe(100000);
     expect(res.group.turnoverDeltaPct).toBe(12);   // (112k-100k)/100k
     expect(res.group.cashDeltaPct).toBe(8);        // (108k-100k)/100k
-    expect(res.group.prevPeriodLabel).toBe('May 2026');
+    expect(res.group.compare.previous.label).toBe('May 2026');
   });
 
   it('delta is null when the prior period has no base (avoids a fake 0% / ±∞)', async () => {
@@ -903,9 +916,18 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     expect(res.group.leadToStartRate).toBe(40);  // 4 started / 10 leads
   });
 
-  it('leads come from ALL sources (Google + Meta ad conversions + GHL) with a named breakdown; new patients are booked Dentally exams', async () => {
-    // CRM/GHL leads empty (Dentally-only org) — the old path showed Leads 0.
-    // Real leads live in ad_metrics.conversions; new patients in appointments.
+  it('an org with no CRM reports zero leads, and its platform conversions stay separate', async () => {
+    // THE ACCEPTED TRADE-OFF, recorded so it is not mistaken for a regression.
+    //
+    // Leads used to be `ad_metrics.conversions + CRM leads`, so a Dentally-only
+    // org still saw a number here. But a platform "conversion" is any optimised
+    // action, and Meta reports it per action type — roll-ups and their own
+    // components both counted. On the live org that read 1,391 against 303 real
+    // enquiries, and disagreed with our own Facebook report by 5.6x.
+    //
+    // Leads is now enquiries. An org with no CRM therefore has none to show, and
+    // its platform conversions live in `adPlatformConversions` where they are
+    // not mistaken for people who got in touch.
     supaRec.resultProvider = (q) =>
       q.table === 'practices' ? { data: [{ id: 'p1', name: 'Alpha', chairs: 4 }], error: null }
       : q.table === 'business_health' ? { data: { baseline: {} }, error: null }
@@ -928,15 +950,18 @@ describe('businessHub — exact per-practice rollups via RPC (no 1000-row cap)',
     };
     const res = await svc.businessHub(ORG_A, { since: '2026-06-01T00:00:00.000Z', until: '2026-07-01T00:00:00.000Z', label: 'Jun 2026' });
 
-    expect(res.group.leads).toBe(1397);                  // 21 + 1376 + 0 (GHL)
+    expect(res.group.leads).toBe(0);                     // no CRM => no enquiries
+    expect(res.group.adPlatformConversions).toBe(21 + 1376); // kept, and not called leads
     expect(res.group.leadsBySource).toEqual([
-      { source: 'Google Ads', leads: 21 },
-      { source: 'Meta Ads', leads: 1376 },
-      { source: 'GHL / CRM', leads: 0 },
+      { source: 'Google Ads', leads: 0 },
+      { source: 'Meta Ads', leads: 0 },
+      { source: 'Direct / other', leads: 0 },
     ]);
     expect(res.group.newPatients).toBe(35);              // new patients by payment plan (Dentally)
-    expect(res.group.conversionRate).toBe(2.5);          // 35 new patients / 1397 leads
-    expect(res.group.leadToStartRate).toBe(22.2);        // 310 started / 1397 leads
+    // A rate with no denominator is UNKNOWABLE, not zero — the UI shows an em
+    // dash rather than a confident 0% conversion.
+    expect(res.group.conversionRate).toBeNull();
+    expect(res.group.leadToStartRate).toBeNull();
   });
 
   it('revenueByLine buckets invoice-item treatments into clinical lines, summed group-wide, sorted desc', async () => {

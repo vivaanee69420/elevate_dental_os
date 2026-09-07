@@ -5,12 +5,15 @@
 // GoHighLevel subaccount panel.
 
 import { useState } from 'react';
+import { DeleteAccountButton } from './DeleteAccountButton';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { listQboAccounts, connectQboAccount, syncQboAccount, removeQboAccount, type QboAccount } from '../api';
 import PanelCard from './PanelCard';
+import { useDeleteAccountPermanently } from '../hooks';
 
 export default function QuickBooksPanel() {
   const qc = useQueryClient();
+  const onAccountDeleted = useDeleteAccountPermanently();
   const { data, isLoading } = useQuery({ queryKey: ['qbo-accounts'], queryFn: listQboAccounts });
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -96,10 +99,20 @@ export default function QuickBooksPanel() {
                   {a.last_sync_at ? new Date(a.last_sync_at).toLocaleString('en-GB') : 'Never'}
                 </td>
                 <td style={{ padding: 6 }}>
-                  <div style={{ display: 'flex', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                     <button onClick={() => onSync(a.id, false)} style={btnSm}>Sync</button>
                     <button onClick={() => onSync(a.id, true)} style={btnSm}>Full refresh</button>
-                    <button onClick={() => onDisconnect(a)} style={{ ...btnSm, color: '#B91C1C' }}>Disconnect</button>
+                    {a.status !== 'revoked' && (
+                      <button onClick={() => onDisconnect(a)} style={{ ...btnSm, color: '#B91C1C' }}>Disconnect</button>
+                    )}
+                    {/* A QuickBooks company owns its whole P&L through an
+                        ON DELETE CASCADE, so this one always surfaces the
+                        counts before it will proceed. */}
+                    <DeleteAccountButton
+                      provider="quickbooks" id={a.id}
+                      label={a.company_name || a.label || 'this company'} status={a.status}
+                      onDeleted={onAccountDeleted}
+                    />
                   </div>
                 </td>
               </tr>

@@ -9,6 +9,16 @@
 
 export type FilterOption = { id: string; label: string };
 
+/** The row wrapper, so a caller can lay its own pills out on the same line. */
+export function PillRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-2 flex-wrap items-center mb-2">
+      <span className="text-[12px] text-ink-muted mr-0.5">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 export function SectionFilterPills({
   label,
   options,
@@ -24,17 +34,20 @@ export function SectionFilterPills({
 }) {
   if (options.length < 2) return null;
   return (
-    <div className="flex gap-2 flex-wrap items-center mb-2">
-      <span className="text-[12px] text-ink-muted mr-0.5">{label}</span>
+    <PillRow label={label}>
       <Pill active={selectedId === null} onClick={() => onSelect(null)}>{allLabel}</Pill>
       {options.map((o) => (
         <Pill key={o.id} active={selectedId === o.id} onClick={() => onSelect(o.id)}>{o.label}</Pill>
       ))}
-    </div>
+    </PillRow>
   );
 }
 
-function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+// Exported so a section's other controls (the QuickBooks accounting basis, for
+// one) are the SAME pill, not a lookalike. The basis toggle was previously a
+// black segmented control sitting beside these green pills — the only control
+// on the page in its own palette.
+export function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"

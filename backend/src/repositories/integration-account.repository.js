@@ -147,6 +147,42 @@ export const integrationAccountRepository = {
         return config;
     },
 
+    /**
+     * Newest per-account sync time, keyed by provider.
+     *
+     * GoHighLevel, QuickBooks and CallRail keep their credentials per account,
+     * and their syncers stamp the ACCOUNT row — never the `integrations`
+     * marker row the Integrations cards read. The parent's `last_sync_at` only
+     * moves when someone runs a provider-level sync, so a nightly poll that
+     * ran two hours ago was being reported as "synced 86d ago" while data
+     * arrived normally underneath.
+     *
+     * Revoked accounts are excluded deliberately: they are paused on purpose,
+     * so how long ago one last ran says nothing about whether the connection
+     * is healthy. A 'failed' account IS counted — its last successful run is
+     * still the honest answer to "when did this last sync", and the failure
+     * surfaces through status/last_error rather than by freezing the clock.
+     */
+    async newestSyncByProvider(orgId) {
+        const { data, error } = await this._client()
+            .from('integration_accounts')
+            .select('provider, last_sync_at')
+            .eq('organisation_id', orgId)
+            .neq('status', 'revoked')
+            .not('last_sync_at', 'is', null);
+        if (error) throw new Error(error.message);
+        const newest = new Map();
+        for (const row of data ?? []) {
+            const at = Date.parse(row.last_sync_at);
+            if (Number.isNaN(at)) continue;
+            const cur = newest.get(row.provider);
+            // Compare as instants, not strings: the two can carry different
+            // UTC offsets and would then sort by text rather than by time.
+            if (!cur || at > Date.parse(cur)) newest.set(row.provider, row.last_sync_at);
+        }
+        return newest;
+    },
+
     async markSynced(orgId, id) {
         const { error } = await this._client()
             .from('integration_accounts')
@@ -161,6 +197,67 @@ export const integrationAccountRepository = {
             .update({ status: 'failed', last_error: String(lastError).slice(0, 500) })
             .eq('organisation_id', orgId).eq('id', id);
         if (error) throw new Error(error.message);
+    },
+
+    // Permanently remove the row. ORG-SCOPED, always — a bare delete by id is
+    // one typo away from another tenant's account. Callers must go through
+    // integration-account-delete.service, which checks what the row owns first:
+    // seven of the eleven foreign keys onto this table are ON DELETE CASCADE.
+    async deleteById(orgId, id) {
+        const { error } = await this._client()
+            .from('integration_accounts')
+            .delete()
+            .eq('organisation_id', orgId).eq('id', id);
+        if (error) throw new Error(error.message);
+        return true;
+    },
+
+    // What a delete of this account would take with it, counted per table.
+    //
+    // `cascade` is the rows the database would DESTROY (ON DELETE CASCADE);
+    // `detach` is the rows that survive and merely lose their account
+    // attribution (ON DELETE SET NULL). The split is the whole point: one is a
+    // decision the owner has to make in front of the numbers, the other is
+    // information. Tables are listed here rather than read from the catalogue
+    // so that adding a new cascading FK without thinking about this code shows
+    // up as a missing count in review, not as silent data loss in production.
+    //
+    // Counted with head:true + count:'exact' — the count comes back in the
+    // Content-Range header, so no rows cross the wire and PostgREST's 1000-row
+    // ceiling cannot truncate the answer.
+    async ownedRowCounts(orgId, id) {
+        const CASCADE_TABLES = [
+            'invoices', 'payments', 'monthly_financials', 'ghl_appointments',
+            'bank_accounts', 'bank_balance_snapshots', 'ad_channel_pipelines',
+        ];
+        const DETACH_TABLES = ['contacts', 'leads', 'communications', 'callrail_calls'];
+        const countIn = async (table) => {
+            const { count, error } = await this._client()
+                .from(table)
+                .select('id', { count: 'exact', head: true })
+                .eq('organisation_id', orgId)
+                .eq('integration_account_id', id);
+            if (error) throw new Error(error.message);
+            return Number(count || 0);
+        };
+        // ALL of them at once. Written as a sequential loop first, which made a
+        // single delete wait on eleven round trips one after another before it
+        // could even ask the question. They are independent reads against
+        // eleven different tables, every one covered by its own index on
+        // integration_account_id, so the whole probe costs one wave of latency
+        // rather than eleven.
+        const tally = async (tables) => {
+            const counts = await Promise.all(tables.map((t) => countIn(t)));
+            const out = {};
+            tables.forEach((t, i) => {
+                // Only non-zero entries: a refusal listing eleven zeroes tells
+                // the owner nothing about what is actually in the way.
+                if (counts[i] > 0) out[t] = counts[i];
+            });
+            return out;
+        };
+        const [cascade, detach] = await Promise.all([tally(CASCADE_TABLES), tally(DETACH_TABLES)]);
+        return { cascade, detach };
     },
 
     async markRevoked(orgId, id) {

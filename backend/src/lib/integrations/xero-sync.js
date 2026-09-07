@@ -180,7 +180,15 @@ async function syncMonth(orgId, tenantId, access_token, accountMap, { period, fr
 
 // opts.months overrides the window; otherwise first fill (no prior sync) backfills
 // 12 months and the nightly cron refreshes the trailing 6.
-export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
+export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, opts = {}) {
+    // The callback was named `_onProgress` and never called, so the overlay sat
+    // on "Starting… 0%" for the whole run — a healthy sync looked identical to
+    // a dead one. Report the phases this pull actually walks.
+    const report = (phase, pct, extra = {}) => {
+        try { onProgress({ phase, pct: Math.min(99, Math.max(0, Math.round(pct))), ...extra }); }
+        catch { /* progress must never break the pull it describes */ }
+    };
+    report('starting', 2);
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'xero');
     if (!integration?.secrets) {
         await integrationRepository.markFailed(orgId, 'xero', 'no_auth: no stored credentials');
@@ -198,7 +206,11 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
 
         let lines = 0;
         const periods = [];
+        let doneWindows = 0;
         for (const w of windows) {
+            report('financials', 5 + (doneWindows / Math.max(1, windows.length)) * 85,
+                { page: doneWindows, totalPages: windows.length });
+            doneWindows += 1;
             lines += await syncMonth(orgId, tenantId, access_token, accountMap, w);
             periods.push(w.period);
         }

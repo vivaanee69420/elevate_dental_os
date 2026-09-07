@@ -175,7 +175,10 @@ export default function BusinessHubScreen() {
             tone={!roi.roas ? undefined : roi.roas >= 4 ? 'good' : roi.roas >= 1 ? 'warn' : 'bad'}
           />
           <Kpi label="Cost / new patient" value={roi.cac_pence ? formatPence(roi.cac_pence) : '—'} sub={`${formatNumber(roi.new_patients)} new patients`} />
-          <Kpi label="Cost / lead" value={roi.cpl_pence ? formatPence(roi.cpl_pence) : '—'} sub={`${formatNumber(roi.leads_from_ads)} ad leads`} />
+          {/* Same ledger-backed lead count as the Facebook/Google reports —
+              formerly a sum of ad_metrics.conversions, which counts platform
+              events, not people. */}
+          <Kpi label="Cost / lead" value={roi.cpl_pence ? formatPence(roi.cpl_pence) : '—'} sub={`${formatNumber(roi.leads_from_ads)} leads from ads`} />
         </div>
       )}
 

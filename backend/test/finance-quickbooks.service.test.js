@@ -90,3 +90,39 @@ describe('financeQuickbooksService.getOverview', () => {
     expect(out.trend).toHaveLength(12);
   });
 });
+
+// ============================================================================
+// Rows whose integration_account_id is null. On the live database ten such rows
+// carry £14,797.57 of revenue — real money, counted in the group total, but the
+// per-company breakdown labelled them "QuickBooks", which reads as the name of a
+// fifth connected company rather than as the residue it is.
+// ============================================================================
+describe('financeQuickbooksService — rows not attached to a connected company', () => {
+  beforeEach(() => {
+    repo.bankRows.mockResolvedValue([]);
+    repo.bankSnapshotRows.mockResolvedValue([]);
+    repo.receivableRows.mockResolvedValue([]);
+    repo.receiptRows.mockResolvedValue([]);
+    repo.accounts.mockResolvedValue([
+      { id: 'A', label: 'Acme', status: 'active', config: { company_name: 'Acme Dental' } },
+    ]);
+  });
+
+  it('names the residue row for what it is, not after a company that does not exist', async () => {
+    repo.pnlRows.mockResolvedValue([
+      { period: '2026-05', dental_bucket: 'revenue', amount_pence: 900000, integration_account_id: 'A' },
+      { period: '2026-05', dental_bucket: 'revenue', amount_pence: 100000, integration_account_id: null },
+    ]);
+
+    const out = await financeQuickbooksService.getOverview('org-1', { period: '2026-05' });
+
+    // Still counted in the group total — it is real money.
+    expect(out.summary.revenuePence).toBe(1000000);
+    const residue = out.companies.find((c) => c.accountId === 'unknown');
+    expect(residue.companyName).toBe('Unassigned');
+    expect(residue.revenuePence).toBe(100000);
+    // And the breakdown must add up to the headline, or the table is a claim
+    // the cards above it do not support.
+    expect(out.companies.reduce((n, c) => n + c.revenuePence, 0)).toBe(out.summary.revenuePence);
+  });
+});

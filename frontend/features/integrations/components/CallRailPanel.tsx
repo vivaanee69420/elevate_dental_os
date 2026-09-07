@@ -18,6 +18,7 @@
 // genuinely has no account id to hand.
 
 import { Fragment, useState } from 'react';
+import { DeleteAccountButton } from './DeleteAccountButton';
 import { Chip, type ChipColour } from '@/components/ui';
 import { useMe, isAgencyActor } from '@/hooks/useMe';
 import type { CallRailAccount, CallRailBulkConnectEntry, CallRailDiscoveredAccount, IntegrationStatus } from '../api';
@@ -30,6 +31,7 @@ import {
   useSyncCallRailAccount,
   useSyncAllCallRail,
   useDisconnectCallRail,
+  useDeleteAccountPermanently,
   usePractices,
 } from '../hooks';
 import PanelCard from './PanelCard';
@@ -60,6 +62,7 @@ export default function CallRailPanel() {
   const sync = useSyncCallRailAccount();
   const syncAll = useSyncAllCallRail();
   const disconnectAll = useDisconnectCallRail();
+  const onAccountDeleted = useDeleteAccountPermanently();
 
   const [showAdd, setShowAdd] = useState(false);
   // Add-company step 1 (key-only discovery) fields.
@@ -559,11 +562,18 @@ export default function CallRailPanel() {
                       <button onClick={() => toggleCreds(a.id)} style={btn('white')}>
                         {credsOpenId === a.id ? 'Close' : 'Credentials'}
                       </button>{' '}
-                      {confirmRemoveId === a.id ? (
+                      {a.status !== 'revoked' && (confirmRemoveId === a.id ? (
                         <button onClick={() => { remove.mutate(a.id); setConfirmRemoveId(null); }} style={btn('var(--danger)', 'white')}>Confirm</button>
                       ) : (
                         <button onClick={() => setConfirmRemoveId(a.id)} style={btn('white')}>Disconnect</button>
-                      )}
+                      ))}{' '}
+                      {/* Disconnect stops the sync; Delete removes the row it
+                          leaves behind. Only on an already-disconnected row. */}
+                      <DeleteAccountButton
+                        provider="callrail" id={a.id}
+                        label={a.label || 'this company'} status={a.status}
+                        onDeleted={onAccountDeleted}
+                      />
                     </td>
                   </tr>
                   {credsOpenId === a.id && (

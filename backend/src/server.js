@@ -9,6 +9,7 @@ import { buildApp } from "./app.js";
 import { serviceClient } from "./lib/supabase.js";
 import { bootstrapPlatformAdmin } from "./lib/platform-admin-bootstrap.js";
 import { logger } from "./lib/logger.js";
+import { resumeInterruptedImports } from "./lib/integrations/bootstrap-recovery.js";
 
 export { buildApp };
 
@@ -51,6 +52,16 @@ function start() {
             console.log(`✓ Elevate API listening on ${HOST}:${PORT}`);
             checkSupabase();
             bootstrapPlatformAdmin();
+            // A deploy restarts this process, and a first pull is an in-process
+            // job — so shipping while one runs kills it silently and leaves a
+            // half-filled tenant. Pick those back up. Delayed so the
+            // process is serving traffic first, and so an instance that boots
+            // beside a genuinely live run sees a fresh marker and leaves it be.
+            setTimeout(() => {
+                resumeInterruptedImports()
+                    .then((r) => { if (r?.resumed) console.log(`✓ resumed ${r.resumed} interrupted first pull(s)`); })
+                    .catch((err) => console.error('bootstrap resume sweep failed:', err?.message || err));
+            }, 45_000).unref();
         });
         server.requestTimeout = 30000;
     }

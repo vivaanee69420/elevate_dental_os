@@ -9,16 +9,8 @@
 // A null delta renders as an em dash with the reason beside it, never as
 // "0%": the two say different things, and the whole point of the comparison
 // is that the reader can trust the number next to the arrow.
+import { TrendArrow as Arrow } from '@/features/_shared/TrendArrow';
 import type { Delta } from './compare';
-
-const ARROW: Record<Delta['direction'], string> = {
-  // Solid triangles, not ↑↓: at 11px the arrow glyphs render thin enough in
-  // the system stack to be missed at a glance, which is the one thing this
-  // chip cannot afford.
-  up: '▲',
-  down: '▼',
-  flat: '–',
-};
 
 // No dark-mode variants: rule 1, light only.
 const TONE_CLASS: Record<Delta['tone'], string> = {
@@ -49,13 +41,17 @@ export function DeltaBadge({
     // "was zero, now isn't". An infinite rise has no percentage; saying so
     // beats printing a number that cannot be right.
     ? 'new'
-    : `${Math.abs(delta.pct).toFixed(1)}%`;
+    // A points move is an absolute change in a figure that is already a
+    // percentage, so it is labelled "pp": "▼ 0.6 pp" beside a headline of
+    // "5.6%" is checkable, where a bare "▼ 0.6%" invites the reader to
+    // subtract it from the value above.
+    : `${Math.abs(delta.pct).toFixed(1)}${delta.unit === 'points' ? ' pp' : '%'}`;
 
   return (
-    <p className={`mt-1 text-[11.5px] ${TONE_CLASS[delta.tone]}`}>
-      <span aria-hidden="true">{ARROW[delta.direction]}</span>{' '}
-      <span className="font-medium">{pct}</span>
-      <span className="text-ink-muted"> vs {previousLabel}</span>
+    <p className={`mt-1 text-[11.5px] flex items-center gap-1 flex-wrap ${TONE_CLASS[delta.tone]}`}>
+      <Arrow direction={delta.direction} />
+      <span className="font-semibold">{pct}</span>
+      <span className="text-ink-muted">vs {previousLabel}</span>
     </p>
   );
 }
@@ -73,9 +69,16 @@ export function DeltaBadge({
 export function DeltaInline({ delta }: { delta: Delta | null }) {
   if (!delta) return null;
   const pct = delta.pct === null ? 'new' : `${Math.abs(delta.pct).toFixed(1)}%`;
+  // Stays a BLOCK whose inner row is inline-flex, so the arrow and figure sit
+  // on their own line but still follow the cell's own text alignment. A flex
+  // container with a fixed justification here would drag the badge to one side
+  // of every left-aligned cell it appears in.
   return (
     <span className={`block text-[11px] leading-tight ${TONE_CLASS[delta.tone]}`}>
-      <span aria-hidden="true">{ARROW[delta.direction]}</span> {pct}
+      <span className="inline-flex items-center gap-0.5 align-middle">
+        <Arrow direction={delta.direction} size={12} />
+        {pct}
+      </span>
     </span>
   );
 }

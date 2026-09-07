@@ -226,7 +226,16 @@ export function classifyCustomerError(message) {
 // the tally screen.
 export const SKIP_STATUSES = new Set(Object.values(PERMANENT_CUSTOMER_ERRORS));
 
-export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
+export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, opts = {}) {
+    // The callback was named `_onProgress` and never called, so the overlay sat
+    // on "Starting… 0%" for the whole run and a healthy sync was
+    // indistinguishable from a dead one. Report the phases this pull actually
+    // walks: accounts, then one tick per customer, then the deep-grain pull.
+    const report = (phase, pct, extra = {}) => {
+        try { onProgress({ phase, pct: Math.min(99, Math.max(0, Math.round(pct))), ...extra }); }
+        catch { /* progress must never break the pull it describes */ }
+    };
+    report('accounts', 2);
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'google_ads');
     if (!integration?.secrets) {
         await integrationRepository.markFailed(orgId, 'google_ads', 'no_auth: no stored credentials');
@@ -341,7 +350,13 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         const all = [];
         const skipped = [];
         const accounts = [];
+        let doneCustomers = 0;
         for (const cid of customerIds) {
+            // 5% -> 70% across the customers, so a multi-account org sees the
+            // bar move per account rather than once at the end.
+            report('metrics', 5 + (doneCustomers / Math.max(1, customerIds.length)) * 65,
+                { count: all.length, page: doneCustomers, totalPages: customerIds.length });
+            doneCustomers += 1;
             try {
                 let batches;
                 try {
@@ -411,6 +426,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         // which surfaced as "ad_metrics upsert: canceling statement due to
         // statement timeout" when the two syncs overlapped.
         if (cidsWithRows.length > 0) {
+            report('metrics', 75, { count: all.length });
             const { error } = await supabase_1.serviceClient.rpc('ad_metrics_replace_window', {
                 p_org: orgId,
                 p_provider: 'google_ads',
@@ -443,6 +459,7 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
                 cidsWithRows.map((cid) => ({ customer_id: cid, currency: byId.get(String(cid))?.currency ?? null })),
             );
             const deepSince = daysAgo(DEEP_WINDOW_DAYS);
+            report('deep', 80, { count: all.length });
             const r = await syncGoogleDeep(orgId, {
                 accessToken: access_token,
                 customerIds: supported,

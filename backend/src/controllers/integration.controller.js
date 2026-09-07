@@ -2,6 +2,7 @@ import * as integration_service_1 from "../services/integration.service.js";
 import * as integration_model_1 from "../models/integration.model.js";
 import { providerParamSchema, idParamSchema } from "../models/common.model.js";
 import { verifyState } from "../lib/oauth-state.js";
+import { deleteAccountPermanently, accountDeleteImpact } from "../services/integration-account-delete.service.js";
 import { ghlAccountService } from "../services/ghl-account.service.js";
 import { quickbooksAccountService } from "../services/quickbooks-account.service.js";
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
@@ -46,6 +47,23 @@ export const integrationController = {
         const body = integration_model_1.dentallyPaymentRepairSchema.parse(req.body);
         res.json(await integration_service_1.integrationService.repairDentallyPayments(
             req.user.organisation_id, { since: body.since, until: body.until },
+        ));
+    },
+    async importSummary(req, res) {
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.importSummary(req.user.organisation_id, provider));
+    },
+    async resumeImport(req, res) {
+        const { provider } = providerParamSchema.parse(req.params);
+        res.json(await integration_service_1.integrationService.resumeImport(req.user.organisation_id, provider));
+    },
+    async dentallySites(req, res) {
+        res.json(await integration_service_1.integrationService.dentallySites(req.user.organisation_id));
+    },
+    async dentallySelectSites(req, res) {
+        const body = integration_model_1.dentallySiteSelectionSchema.parse(req.body);
+        res.json(await integration_service_1.integrationService.dentallySelectSites(
+            req.user.organisation_id, body.site_ids,
         ));
     },
     async emergentDisconnect(req, res) {
@@ -282,6 +300,25 @@ export const integrationController = {
         const { id } = idParamSchema.parse(req.params);
         const body = ghlAccountUpdateSchema.parse(req.body);
         res.json(await ghlAccountService.updateAccount(req.user.organisation_id, id, body));
+    },
+    // Permanently delete a connected-account row, for whichever provider the
+    // route belongs to. `provider` is bound HERE, from the route, never taken
+    // from the request: a QuickBooks id posted to the GoHighLevel delete route
+    // must not drop a company's whole P&L.
+    //
+    // `?confirm=true` proceeds past the refusal that names what the delete
+    // would destroy — the owner's decision, made in front of the counts.
+    // What a delete WOULD do — read-only, so the panel can ask before the owner
+    // clicks and the click itself costs no round trip.
+    async accountDeleteImpact(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        res.json(await accountDeleteImpact(req.user.organisation_id, id, req.accountProvider));
+    },
+    async accountDeletePermanently(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const provider = req.accountProvider;
+        const confirm = req.query.confirm === 'true';
+        res.json(await deleteAccountPermanently(req.user.organisation_id, id, provider, { confirm }));
     },
     async ghlAccountRemove(req, res) {
         const { id } = idParamSchema.parse(req.params);

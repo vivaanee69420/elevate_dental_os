@@ -17,7 +17,7 @@
 // which is the other reason to keep it: the next person changing
 // previousPeriod() gets to argue with something.
 
-import { computeDelta, previousPeriod, inclusiveDays, sourcesComparable, missingSources } from './compare.ts';
+import { computeDelta, pointsDelta, previousPeriod, inclusiveDays, sourcesComparable, missingSources } from './compare.ts';
 
 let fails = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -43,9 +43,9 @@ eq('null current',  computeDelta(null, 100, 'lower-better'), null);
 eq('null previous', computeDelta(100, null, 'lower-better'), null);
 eq('undefined',     computeDelta(undefined, 100, 'neutral'), null);
 eq('negative base', computeDelta(100, -50, 'lower-better'), null);
-eq('zero to zero',  computeDelta(0, 0, 'lower-better'), { direction:'flat', pct:0, tone:'neutral' });
-eq('zero to some',  computeDelta(500, 0, 'higher-better'), { direction:'up', pct:null, tone:'good' });
-eq('some to zero',  computeDelta(0, 500, 'higher-better'), { direction:'down', pct:-100, tone:'bad' });
+eq('zero to zero',  computeDelta(0, 0, 'lower-better'), { direction:'flat', pct:0, tone:'neutral', unit:'percent' });
+eq('zero to some',  computeDelta(500, 0, 'higher-better'), { direction:'up', pct:null, tone:'good', unit:'percent' });
+eq('some to zero',  computeDelta(0, 500, 'higher-better'), { direction:'down', pct:-100, tone:'bad', unit:'percent' });
 
 // --- polarity: the whole point ---
 eq('CPA rose = BAD',   computeDelta(51652, 43710, 'lower-better')?.tone, 'bad');
@@ -54,7 +54,7 @@ eq('CPA fell = GOOD',  computeDelta(43710, 51652, 'lower-better')?.tone, 'good')
 eq('CPA fell = down',  computeDelta(43710, 51652, 'lower-better')?.direction, 'down');
 eq('leads rose = GOOD',computeDelta(60, 50, 'higher-better')?.tone, 'good');
 eq('spend rose = NEUTRAL', computeDelta(60, 50, 'neutral')?.tone, 'neutral');
-eq('unchanged is flat',computeDelta(50, 50, 'lower-better'), { direction:'flat', pct:0, tone:'neutral' });
+eq('unchanged is flat',computeDelta(50, 50, 'lower-better'), { direction:'flat', pct:0, tone:'neutral', unit:'percent' });
 
 // --- the percentage itself ---
 eq('+18.2%', Number(computeDelta(51652, 43710, 'lower-better')!.pct!.toFixed(1)), 18.2);
@@ -81,3 +81,29 @@ eq('unstripped would have said good', computeDelta(110483, 2301789, 'lower-bette
 
 console.log(fails ? `\n${fails} FAILED` : '\nall passed');
 process.exit(fails ? 1 : 0);
+
+// --- pointsDelta: a change in a RATE is points, not a percent of a percent ---
+//
+// The Business Hub's no-show rate moved 6.2% -> 5.6%. computeDelta reports that
+// as -9.7%, which is arithmetically true and reads as nonsense on a card whose
+// value is itself a percentage: "▼ 9.7%" beside "5.6%" invites the reader to
+// subtract 9.7 from 5.6. The move is 0.6 PERCENTAGE POINTS, and that is the
+// only figure a rate card should print.
+eq('rate falling reads as points, not a ratio',
+   pointsDelta(5.6, 6.2, 'lower-better'),
+   { direction: 'down', pct: -0.6, tone: 'good', unit: 'points' });
+eq('a rising no-show rate is bad news',
+   pointsDelta(6.2, 5.6, 'lower-better')?.tone, 'bad');
+eq('points are rounded to one decimal, not floated',
+   pointsDelta(5.55, 6.25, 'lower-better')?.pct, -0.7);
+eq('an unchanged rate is flat, not a tiny float',
+   pointsDelta(5.6, 5.6, 'lower-better'), { direction: 'flat', pct: 0, tone: 'neutral', unit: 'points' });
+// Zero is a REAL no-show rate (a practice that missed nothing), unlike a zero
+// denominator — so unlike computeDelta this must not call it "new".
+eq('a rate rising from a real zero is still points',
+   pointsDelta(3.7, 0, 'lower-better'),
+   { direction: 'up', pct: 3.7, tone: 'bad', unit: 'points' });
+eq('an unknowable rate has no comparison',
+   pointsDelta(5.6, null, 'lower-better'), null);
+eq('computeDelta still reports percent',
+   computeDelta(150, 100, 'higher-better')?.unit, 'percent');

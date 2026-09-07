@@ -6,6 +6,7 @@
 // target) → the 30-year compounding drawdown. Inputs persist (PUT /inputs); the
 // sliders recompute live via POST /compute/exit-plan. Owner-only. Integer pence.
 import { useEffect, useRef, useState } from 'react';
+import { TrendTag } from '@/features/_shared/TrendArrow';
 import { formatPence } from '@/lib/format';
 import { useWealthInputs, useExitPlan, useExitPlanCompare, useComputeExitPlan, useSaveWealthInputs } from '../wealth-hooks';
 import type { ExitPlanInput, ExitPlanResult, ExitPlanCompare } from '../wealth-api';
@@ -120,14 +121,14 @@ function DriftRow({ label, saved, live, fmt, upGood = true }: {
   const flat = Math.abs(delta) < 1;
   const good = upGood ? delta > 0 : delta < 0;
   const colour = flat ? 'var(--ink-muted)' : good ? 'var(--success)' : 'var(--danger)';
-  const arrow = flat ? '=' : delta > 0 ? '▲' : '▼';
+  const direction = flat ? 'flat' : delta > 0 ? 'up' : 'down';
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)', fontSize: 13, alignItems: 'center' }}>
       <span className="text-ink-muted">{label}</span>
       <span style={{ textAlign: 'right' }}>{fmt(saved)}</span>
       <span style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(live)}</span>
       <span style={{ textAlign: 'right', color: colour, fontWeight: 600, fontSize: 12 }}>
-        {flat ? '—' : `${arrow} ${fmt(Math.abs(delta))}`}
+        {flat ? '—' : <TrendTag direction={direction} size={12}>{fmt(Math.abs(delta))}</TrendTag>}
       </span>
     </div>
   );

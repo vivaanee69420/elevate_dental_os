@@ -119,6 +119,11 @@ export interface SyncProgress {
   totalPages?: number | null;
   count?: number; // records fetched so far in the current phase
   at?: number; // server epoch ms of the last progress write — used to detect a stalled/lost sync
+  // No progress record exists on the server. Either the run has not written its
+  // first tick yet, or the process running it restarted and nothing will ever
+  // mark it finished. Progress is in-memory and per-process, so a deploy during
+  // a sync produces exactly this.
+  missing?: boolean;
   // Per-phase breakdown accumulated server-side (insertion order = pull order),
   // so the UI can show each resource's pull, not just the active phase.
   phases?: Record<string, SyncPhaseProgress>;
@@ -670,4 +675,125 @@ export interface EmergentStatus {
 
 export function getEmergentStatus() {
   return api<EmergentStatus>('/api/integrations/emergent');
+}
+
+// --- Dentally site selection ------------------------------------------------
+// A Dentally OAuth grant covers the whole group, so an organisation must say
+// which of its sites it pulls before the first sync runs. `awaiting` is true
+// while the bootstrap is holding, having detected more than one.
+export interface DentallySite {
+  site_id: string;
+  name: string | null;
+  /** How often the site appeared in the detection sample — a rough size hint. */
+  count: number;
+}
+
+export interface DentallySites {
+  sites: DentallySite[];
+  /** null means every site, which is what an org that never chose does. */
+  selected: string[] | null;
+  awaiting: boolean;
+}
+
+export function getDentallySites() {
+  return api<DentallySites>('/api/integrations/dentally/sites');
+}
+
+export function selectDentallySites(siteIds: string[]) {
+  return api<{ ok: boolean }>('/api/integrations/dentally/sites', {
+    method: 'POST',
+    body: JSON.stringify({ site_ids: siteIds }),
+  });
+}
+
+// --- What has actually landed, per provider ---------------------------------
+// `last_sync_at` is stamped once, on completion, so it cannot answer "is
+// anything here yet" during a pull or after one that died partway. These are
+// row counts, read without loading any row bodies.
+export interface ImportSummaryRow {
+  key: string;
+  label: string;
+  /** null means the count could not be read — which is not the same as zero. */
+  count: number | null;
+}
+
+export interface ImportSummary {
+  provider: string;
+  /** False when the provider has no resource registry — unknown, not empty. */
+  known: boolean;
+  rows: ImportSummaryRow[];
+  /** The date range this provider's data covers, where one is meaningful. */
+  span: { label: string; from: string | null; to: string | null } | null;
+  last_sync_at: string | null;
+  status: string | null;
+  last_error: string | null;
+  running: boolean;
+  /** A first pull started, nothing is running, and none ever completed. */
+  interrupted: boolean;
+  /** Why it stopped, in plain terms. Null unless interrupted. */
+  stopped_reason: string | null;
+  attempts: number;
+  can_resume: boolean;
+}
+
+export function getImportSummary(provider: string) {
+  return api<ImportSummary>(`/api/integrations/${provider}/import-summary`);
+}
+
+// Continues a stopped first pull from its checkpoint — finished phases are
+// skipped, so this is not a fresh start.
+export function resumeImport(provider: string) {
+  return api<{ ok: boolean; started?: boolean; alreadyRunning?: boolean }>(
+    `/api/integrations/${provider}/resume-import`,
+    { method: 'POST' },
+  );
+}
+
+// ============================================================================
+// Permanently delete a connected-account row, for any provider that keeps its
+// accounts in `integration_accounts`.
+//
+// Distinct from the DELETE above, which only DISCONNECTS: it marks the account
+// revoked and stops syncing, leaving the row in the panel. Nothing deleted it,
+// which is why revoked subaccounts accumulated with no way to clear them.
+//
+// The backend refuses with 409 + `details` when the row still owns synced
+// records the database would cascade-delete, so the caller can show what would
+// go before asking again with `confirm`.
+// ============================================================================
+export type AccountDeleteProvider = 'gohighlevel' | 'callrail' | 'quickbooks';
+
+/** Per-table counts of what a delete would do. Present only where non-zero. */
+export interface AccountDeleteImpact {
+  /** Rows the delete would DESTROY. */
+  cascade: Record<string, number>;
+  /** Rows that survive but lose their account attribution. */
+  detach: Record<string, number>;
+}
+
+export interface AccountDeleteResult extends AccountDeleteImpact {
+  deleted: true;
+}
+
+/** What a delete WOULD do — a read, asked before the owner clicks. */
+export interface AccountDeletePreview extends AccountDeleteImpact {
+  /** False while the account is still connected — disconnect first. */
+  deletable: boolean;
+  /** True when the delete would destroy records and must be confirmed. */
+  needsConfirm: boolean;
+}
+
+export function fetchAccountDeleteImpact(provider: AccountDeleteProvider, id: string) {
+  return api<AccountDeletePreview>(
+    `/api/integrations/${provider}/accounts/${id}/delete-impact`,
+  );
+}
+
+export function deleteAccountPermanently(
+  provider: AccountDeleteProvider, id: string, confirm = false,
+) {
+  return api<AccountDeleteResult>(
+    `/api/integrations/${provider}/accounts/${id}/permanent${confirm ? '?confirm=true' : ''}`,
+    { method: 'DELETE' },
+  );
 }

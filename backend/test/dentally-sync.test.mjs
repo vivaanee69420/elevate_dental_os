@@ -62,8 +62,11 @@ describe('dentally mappers', () => {
         expect(__test.mapPaymentMethod('BACS')).toBe('bank_transfer');
         expect(__test.mapPaymentMethod('Direct Debit')).toBe('direct_debit');
         expect(__test.mapPaymentMethod('CARD')).toBe('card');
-        // Unknown but real method: preserve as a slug, never silently null.
-        expect(__test.mapPaymentMethod('Crypto Wallet')).toBe('crypto_wallet');
+        // Unknown but real method: bucketed as 'other', never silently null and
+        // never slugified. A slug is not in payments_method_check, so the row was
+        // REJECTED and the payment disappeared — see the mapPaymentMethod
+        // contract block below for the 183 payments this cost.
+        expect(__test.mapPaymentMethod('Crypto Wallet')).toBe('other');
         // Only genuinely empty values map to null.
         expect(__test.mapPaymentMethod('')).toBeNull();
         expect(__test.mapPaymentMethod(null)).toBeNull();
@@ -125,6 +128,67 @@ describe('resolveDentallyAuth', () => {
     it('returns null on garbage', async () => {
         const integ = { secrets: 'not-encrypted', expires_at: null };
         expect(await resolveDentallyAuth('org1', integ)).toBeNull();
+    });
+});
+
+// ============================================================================
+// mapPaymentMethod must only ever emit a value the DB will accept.
+//
+// `payments.method` carries a CHECK constraint, and the mapper's fallback
+// slugified ANY unrecognised label ("Other" -> 'other', "American Express" ->
+// 'american_express'). Those rows are rejected by Postgres, upsertChunked logs
+// "skipped N unstorable row(s)" and the sync moves on — so the payment is
+// dropped, silently, and Takings is short by exactly that much forever.
+//
+// Measured live over 12 months: 183 payments worth GBP 7,540.45 could not be
+// stored — 181 "Other" (GBP 7,446.45), 1 "American Express", 1 "Cheque". Note
+// 'cheque' was in the mapper's own canon table yet absent from the constraint,
+// which is the clearest sign the two lists were never checked against each
+// other.
+//
+// The constraint list is repeated here deliberately: it is the contract the
+// mapper has to satisfy, and pinning it means widening one without the other
+// fails a test instead of losing money in production.
+// ============================================================================
+describe('mapPaymentMethod — the emitted value must satisfy payments_method_check', () => {
+    const { mapPaymentMethod } = __test;
+    const ALLOWED = [
+        'card', 'apple_pay', 'google_pay', 'bank_transfer', 'cash',
+        'direct_debit', 'finance', 'card_on_file', 'pay_link', 'cheque',
+        'amex', 'other',
+    ];
+    // Every method the live Dentally account actually sends, by volume.
+    const LIVE_METHODS = [
+        'Debit Card', 'Credit Card', 'Stripe', 'Cash', 'Other',
+        'BACS', 'Finance', 'Bank Transfer', 'American Express', 'Cheque',
+    ];
+
+    it('maps every method Dentally actually sends to an accepted value', () => {
+        for (const m of LIVE_METHODS) {
+            expect(ALLOWED, `${m} -> ${mapPaymentMethod(m)}`).toContain(mapPaymentMethod(m));
+        }
+    });
+
+    it('buckets an unrecognised method as "other" rather than inventing a slug', () => {
+        // A label we have never seen must not cost us the payment. The money is
+        // what matters; the label is a detail we can bucket honestly.
+        expect(mapPaymentMethod('Klarna Pay In 3')).toBe('other');
+        expect(mapPaymentMethod('Other')).toBe('other');
+    });
+
+    it('keeps cheque and amex as themselves, not as "card"', () => {
+        // Both were being lost. Folding them into 'card' would store the money
+        // but misreport how it arrived, so they get their own accepted values.
+        expect(mapPaymentMethod('Cheque')).toBe('cheque');
+        expect(mapPaymentMethod('American Express')).toBe('amex');
+        expect(mapPaymentMethod('amex')).toBe('amex');
+    });
+
+    it('still returns null for a genuinely absent method', () => {
+        // The column is nullable; null is "not stated", which is different from
+        // "stated as something we do not recognise".
+        expect(mapPaymentMethod(null)).toBeNull();
+        expect(mapPaymentMethod('')).toBeNull();
     });
 });
 
@@ -378,8 +442,11 @@ describe('syncOneOrg', () => {
         // by the checkpoint — so exactly 1 page-1 hit, not 2.
         expect(pageOneHits['patients']).toBe(1);
         // appointments: not checkpointed -> probe + real pull (2) + the delete-
-        // reconciliation's own windowed id pull (1) = 3 page-1 hits.
-        expect(pageOneHits['appointments']).toBe(3);
+        // reconciliation's own windowed id pull (1) + the BACKFILL
+        // reconciliation's window pull (1) = 4 page-1 hits. The two
+        // reconciliations are separate passes on purpose: one is fail-closed and
+        // keeps only ids, the other is fail-open and needs whole records.
+        expect(pageOneHits['appointments']).toBe(4);
         vi.useRealTimers();
     });
 
@@ -501,21 +568,33 @@ describe('syncOneOrg', () => {
     it('pulls /invoices once (the invoice map is built from the same fetch, not a second pull)', async () => {
         supaRec.resultProvider = (q) =>
             q.table === 'practices' ? { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null } : { data: [], error: null };
-        let invoiceListPulls = 0;
+        let dataPulls = 0;
+        let prunePulls = 0;
         global.fetch = vi.fn(async (url) => {
             const u = new URL(url.toString());
             // Count only the paginating collection pulls of /invoices (page param
             // present), not the up-front page-count probe — both hit the path, but
             // the duplicate we removed was a second *full* pull.
-            if (u.pathname.endsWith('/invoices') && u.searchParams.get('page') === '1') invoiceListPulls++;
+            //
+            // Split by `updated_after`, which is what tells the two remaining
+            // pulls apart: the DATA pull rides the incremental cursor, while the
+            // delete-reconciliation deliberately carries no filter at all (see
+            // reconcileDeletedInvoices — Dentally ignores date filters here, so
+            // both sides must be read at full scope). Counting a bare total would
+            // have let a reintroduced buildInvoiceMap hide behind the prune.
+            if (u.pathname.endsWith('/invoices') && u.searchParams.get('page') === '1') {
+                if (u.searchParams.get('updated_after')) dataPulls++; else prunePulls++;
+            }
             const seg = u.pathname.split('/').pop();
             return page({ [seg]: [], meta: { total_pages: 1 } });
         });
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         await syncOneOrg('org-1', { secrets, config: {}, last_sync_at: '2026-01-01T00:00:00Z' });
-        // probe (fetchPageCount) + one real pull = 2 page-1 hits; the old code did
-        // 3 (probe + buildInvoiceMap + pullInvoices).
-        expect(invoiceListPulls).toBe(2);
+        // probe (fetchPageCount) + one real pull = 2 windowed page-1 hits; the old
+        // code did 3 (probe + buildInvoiceMap + pullInvoices).
+        expect(dataPulls).toBe(2);
+        // ...and exactly one unfiltered pass for the delete-reconciliation.
+        expect(prunePulls).toBe(1);
     });
 
     it('recent mode: all three resources pull the same ~12-month updated_after window (no open-only `after`)', async () => {
@@ -617,6 +696,90 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         integrationRepository.mergeConfig.mockReset();
     });
 
+    it('records what the reconcilers did — including an abort — instead of swallowing it', async () => {
+        // The reconcilers are all non-fatal and all fail quietly by design: a
+        // prune that cannot page its window deletes nothing, a backfill that
+        // gets a 500 restores nothing, and the sync reports success either way.
+        // That is correct behaviour and a terrible outcome on its own, because
+        // "reconciled cleanly" and "never ran" look identical from outside — which
+        // is how the appointment prune managed to abort on 'page_cap' every night
+        // for months without anyone knowing. Persist the result so silence is
+        // distinguishable from success.
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'integrations' && q.op === 'select')
+                return { data: [{ organisation_id: 'org-1', provider: 'dentally', status: 'active', secrets, config: { history_backfilled: true, treatment_items_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+            if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            return { data: [], error: null };
+        };
+        global.fetch = vi.fn(async (url) => {
+            const u = new URL(url.toString());
+            const seg = u.pathname.split('/').pop();
+            // Fail ONLY the reconciliation passes over /appointments. They are the
+            // ones that carry no `updated_after` — the data pull rides the cursor.
+            if (seg === 'appointments' && !u.searchParams.get('updated_after')) {
+                return { ok: false, status: 500, headers: { get: () => null }, json: async () => ({}), clone: () => ({ text: async () => '' }) };
+            }
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+
+        await syncAllOrgs();
+
+        const call = integrationRepository.mergeConfig.mock.calls
+            .map((c) => c[2])
+            .find((cfg) => cfg && cfg.dentally_reconcile);
+        expect(call, 'the sync must persist a reconcile summary').toBeDefined();
+        const rec = call.dentally_reconcile;
+        expect(rec.at).toEqual(expect.any(String));
+        // The failure is named, not merely absent.
+        expect(rec.appointments_backfill).toMatchObject({ aborted: 'http_500' });
+        expect(rec.appointments_prune).toMatchObject({ aborted: 'http_500' });
+        // A pass that DID run is recorded too, so "0 restored" is readable as a
+        // real answer rather than as a pass that never happened.
+        expect(rec.invoices_backfill).toBeDefined();
+        expect(rec.invoices_backfill.aborted).toBeUndefined();
+    });
+
+    it('retries an integration a previous run marked failed, and never a revoked one', async () => {
+        // syncOneOrg calls markFailed on ANY throw — one timeout, one rate-limit
+        // burst, one bad page — and markFailed sets status='failed'. Selecting
+        // only 'active' therefore meant a single transient error stopped that
+        // org syncing FOREVER, silently: no pull, no prune, and none of the
+        // backfill reconcilers that exist to catch exactly this. The org would
+        // simply stop moving while the app kept serving its stale rows. A
+        // successful run flips the status back to 'active' on its own
+        // (syncOneOrg's closing upsert), so retrying is self-healing.
+        //
+        // 'revoked' stays excluded: that is a deliberate disconnect and its
+        // secrets are nulled, so retrying it could only produce noise.
+        const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
+        let statusFilter = null;
+        supaRec.resultProvider = (q) => {
+            if (q.table === 'integrations' && q.op === 'select') {
+                statusFilter = { eqs: q.eqs, ins: q.ins };
+                return { data: [{ organisation_id: 'org-failed', provider: 'dentally', status: 'failed', secrets, config: { history_backfilled: true, treatment_items_backfilled: true }, last_sync_at: '2026-05-01T00:00:00Z' }], error: null };
+            }
+            if (q.table === 'practices') return { data: [{ id: 'prac-1', pms_site_id: 'S1' }], error: null };
+            return { data: [], error: null };
+        };
+        global.fetch = vi.fn(async (url) => {
+            const seg = new URL(url.toString()).pathname.split('/').pop();
+            return page({ [seg]: [], meta: { total_pages: 1 } });
+        });
+
+        const res = await syncAllOrgs();
+
+        // It ran for the failed org rather than skipping it.
+        expect(res).toHaveLength(1);
+        expect(res[0].orgId ?? res[0].organisation_id ?? 'org-failed').toBeTruthy();
+        // And the query asked for both live states, never a bare status='active'.
+        const askedStatuses = (statusFilter.ins ?? []).find((i) => i.col === 'status')?.vals;
+        expect(askedStatuses).toBeDefined();
+        expect([...askedStatuses].sort()).toEqual(['active', 'failed']);
+        expect(askedStatuses).not.toContain('revoked');
+        expect((statusFilter.eqs ?? []).some((e) => e.col === 'status')).toBe(false);
+    });
+
     it('first run full-backfills the 6-month window then flags the org', async () => {
         const secrets = encryptSecret(JSON.stringify({ apiKey: 'k' }));
         supaRec.resultProvider = (q) => {
@@ -660,7 +823,14 @@ describe('syncAllOrgs (nightly cron) — one-time overnight backfill', () => {
         const windowed = seen.filter(Boolean);
         expect(windowed.length).toBeGreaterThan(0);
         expect(windowed.every((s) => s.startsWith('2026-05'))).toBe(true); // incremental from last_sync_at
-        expect(integrationRepository.mergeConfig).not.toHaveBeenCalled();
+        // Specifically: no one-time backfill flag is re-written. (mergeConfig
+        // itself IS called every run now — it persists the reconcile summary —
+        // so asserting it was never called at all would start passing for the
+        // wrong reason the moment anything else needed to write config.)
+        const flagWrites = integrationRepository.mergeConfig.mock.calls
+            .map((c) => c[2] ?? {})
+            .filter((cfg) => 'history_backfilled' in cfg || 'treatment_items_backfilled' in cfg);
+        expect(flagWrites).toEqual([]);
     });
 
     it('legacy org (history backfilled, no item flag) runs a one-time treatment_items backfill', async () => {

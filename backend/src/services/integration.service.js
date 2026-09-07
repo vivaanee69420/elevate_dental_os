@@ -8,6 +8,7 @@ import "../lib/integrations/index.js";
 import { getProvider, listProviders } from "../lib/integrations/provider-interface.js";
 import * as errors_1 from "../middleware/errors.js";
 import * as dentally_sync_1 from "../lib/integrations/dentally-sync.js";
+import * as import_summary_repository_1 from "../repositories/import-summary.repository.js";
 import * as xero_sync_1 from "../lib/integrations/xero-sync.js";
 import * as quickbooks_sync_1 from "../lib/integrations/quickbooks-sync.js";
 import * as google_ads_sync_1 from "../lib/integrations/google-ads-sync.js";
@@ -87,9 +88,47 @@ const ON_DEMAND_SYNCERS = {
 // a full/historical backfill).
 const REFRESH_ALL_PROVIDERS = ['dentally', 'gohighlevel', 'google_ads', 'meta_ads', 'quickbooks'];
 
+// Provider names as the owner sees them, for messages that name the upstream.
+const PROVIDER_LABEL = {
+    dentally: 'Dentally',
+    gohighlevel: 'GoHighLevel',
+    quickbooks: 'QuickBooks',
+    xero: 'Xero',
+    google_ads: 'Google Ads',
+    meta_ads: 'Meta Ads',
+    callrail: 'CallRail',
+    emergent: 'Emergent',
+};
+
+// The providers whose FIRST pull is long enough to be worth resuming, mapped to
+// the bootstrap that resumes it. The others sync in seconds: a restart during
+// one costs the next scheduled run, not a half-filled tenant, so offering a
+// Resume button there would be a control with nothing to control.
+const RESUMABLE_BOOTSTRAPS = {
+    dentally: (svc, orgId) => svc.bootstrapDentally(orgId),
+    gohighlevel: (svc, orgId) => svc.bootstrapGohighlevel(orgId),
+};
+
 export const integrationService = {
     async list(orgId) {
         const connected = await integration_repository_1.integrationRepository.list(orgId);
+        // Report the newest sync that actually happened, wherever it was
+        // recorded. For the per-account providers the nightly poll stamps the
+        // ACCOUNT row, so reading the marker row alone told the owner
+        // GoHighLevel and QuickBooks had been dead for 6 and 86 days while
+        // both were syncing hourly and nightly. A poll that pulled no new
+        // records is still a sync: it asked, and the answer was "nothing new".
+        const newestByProvider = await integrationAccountRepository
+            .newestSyncByProvider(orgId)
+            .catch(() => new Map()); // never let the badge break the page
+        const withAccountSync = connected.map((row) => {
+            const fromAccounts = newestByProvider.get(row.provider);
+            if (!fromAccounts) return row;
+            const parent = row.last_sync_at ? Date.parse(row.last_sync_at) : 0;
+            return Date.parse(fromAccounts) > parent
+                ? { ...row, last_sync_at: fromAccounts }
+                : row;
+        });
         // A feature-bound provider (emergent, google_sheets, google_sheets_writer)
         // the org lacks must not appear as a connectable card — already-connected
         // rows stay visible in `integrations` (disconnect must still work), only
@@ -98,7 +137,7 @@ export const integrationService = {
         for (const meta of listProviders()) {
             if (await featuresService.orgHasProviderFeature(orgId, meta.id)) available.push(meta);
         }
-        return { integrations: connected, available };
+        return { integrations: withAccountSync, available };
     },
     async startConnect(orgId, provider, extra = {}) {
         await assertProviderFeature(orgId, provider);
@@ -260,6 +299,116 @@ export const integrationService = {
             throw err;
         }
     },
+    // The sites Dentally offered on connect, and the ones this org settled on.
+    // `detected_sites` is written by bootstrapOnConnect when it stops to ask;
+    // re-detecting here would cost another four Dentally calls to answer a
+    // question already answered.
+    async dentallySites(orgId) {
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally');
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('dentally is not connected', 409);
+        let sites = integration.config?.detected_sites;
+        if (!Array.isArray(sites) || sites.length === 0) {
+            ({ siteIds: sites = [] } = await dentally_sync_1.detectSiteIds(orgId, integration));
+        }
+        return {
+            sites,
+            selected: integration.config?.site_ids ?? null,
+            awaiting: integration.config?.awaiting_site_selection === true,
+        };
+    },
+
+    // Record which sites this org pulls, then run the bootstrap that was held
+    // back. Validated against what Dentally actually returned so a caller can
+    // never name a site this token cannot see.
+    async dentallySelectSites(orgId, siteIds) {
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, 'dentally');
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError('dentally is not connected', 409);
+        const detected = Array.isArray(integration.config?.detected_sites)
+            ? integration.config.detected_sites
+            : (await dentally_sync_1.detectSiteIds(orgId, integration)).siteIds ?? [];
+        const known = new Set(detected.map((s) => String(s.site_id)));
+        const wanted = [...new Set(siteIds.map(String))];
+        const unknown = wanted.filter((id) => !known.has(id));
+        if (unknown.length) {
+            throw new errors_1.AppError(`Unknown Dentally site: ${unknown.join(', ')}`, 400);
+        }
+        await integration_repository_1.integrationRepository.mergeConfig(orgId, 'dentally', {
+            site_ids: wanted,
+            awaiting_site_selection: false,
+        });
+        // Fire-and-forget, for the same reason the connect path above is: the
+        // bootstrap is a full pull that runs for minutes, so awaiting it here
+        // holds the HTTP response open and leaves the button reading
+        // "Starting…" with no progress until it finishes. The UI polls the
+        // progress overlay instead, and last_sync_at / last_error land on the
+        // row either way.
+        this.bootstrapDentally(orgId).catch((err) => {
+            console.error('[integrations] dentally bootstrap failed:', err?.message || err);
+        });
+        return { ok: true, provider: 'dentally', site_ids: wanted, started: true };
+    },
+
+    // What this organisation actually holds from ONE provider, and whether a
+    // pull is in flight, finished, or stopped. The tiles used to read only
+    // last_sync_at, which is stamped on completion — so a run several thousand
+    // rows in read "Synced never", identical to one that never started.
+    async importSummary(orgId, provider) {
+        const [summary, integration] = await Promise.all([
+            import_summary_repository_1.importSummaryRepository.summary(orgId, provider),
+            integration_repository_1.integrationRepository.getByProvider(orgId, provider),
+        ]);
+        const running = getProgress(orgId, provider)?.running === true;
+        const mark = integration?.config?.bootstrap;
+        // INTERRUPTED means a first pull started, nothing is running now, and no
+        // completion was ever recorded. That third clause matters: without it a
+        // finished run whose marker failed to clear reads as broken forever.
+        const interrupted = Boolean(mark?.started_at) && !running && !integration?.last_sync_at;
+        const label = PROVIDER_LABEL[provider] ?? provider;
+        return {
+            ...summary,
+            provider,
+            last_sync_at: integration?.last_sync_at ?? null,
+            status: integration?.status ?? null,
+            last_error: integration?.last_error ?? null,
+            running,
+            interrupted,
+            // An upstream failure records itself; a killed process cannot — so
+            // an absent error beside a stale marker IS the diagnosis.
+            stopped_reason: interrupted
+                ? (integration?.last_error
+                    ? `${label} returned an error: ${integration.last_error}`
+                    : 'The server restarted while the import was running, which happens on a deploy.')
+                : null,
+            attempts: Number(mark?.attempts ?? 0),
+            // Only the providers with a resumable first pull offer the button.
+            can_resume: interrupted
+                && Number(mark?.attempts ?? 0) < 8
+                && Boolean(RESUMABLE_BOOTSTRAPS[provider]),
+        };
+    },
+
+    // Continue a first pull that stopped. Not a fresh start: the syncers keep a
+    // per-phase checkpoint, so phases that finished are skipped.
+    async resumeImport(orgId, provider) {
+        const run = RESUMABLE_BOOTSTRAPS[provider];
+        if (!run) throw new errors_1.AppError(`${provider} has no resumable import`, 400);
+        const integration = await integration_repository_1.integrationRepository.getByProvider(orgId, provider);
+        if (!integration || integration.status === 'revoked' || !integration.secrets)
+            throw new errors_1.AppError(`${provider} is not connected`, 409);
+        const active = getProgress(orgId, provider);
+        if (active?.running && active.at && Date.now() - active.at < 10 * 60 * 1000) {
+            return { ok: true, alreadyRunning: true };
+        }
+        // Fire-and-forget for the same reason the connect path is: this runs for
+        // minutes and the UI polls progress rather than holding the request open.
+        run(this, orgId).catch((err) => {
+            console.error(`[integrations] ${provider} resume failed:`, err?.message || err);
+        });
+        return { ok: true, started: true };
+    },
+
     // GoHighLevel first-connect automation: full-history pull of contacts +
     // opportunities as ONE run sharing the same progress key + concurrency guard
     // as syncNow (so the connect overlay shows it land). GHL has no sites to map.
@@ -289,7 +438,20 @@ export const integrationService = {
         }
     },
     syncProgress(orgId, provider) {
-        return getProgress(orgId, provider) ?? { running: false, pct: 0, phase: 'idle' };
+        const live = getProgress(orgId, provider);
+        if (live) return live;
+        // Progress is per-process and ephemeral, so an ABSENT record means one
+        // of two things, and the UI has to be able to tell either from a live
+        // run: the sync has not written its first tick yet, or the process that
+        // was running it restarted (a deploy does exactly this) and nothing
+        // will ever mark it finished.
+        //
+        // The old shape said `idle at 0%` with no `done`, which the overlay
+        // could not distinguish from a run that simply had not started — so it
+        // waited forever, showing whatever it had last seen. `missing` is the
+        // fact the caller needs; how long to wait before acting on it belongs
+        // to the caller, which knows when it started the run.
+        return { running: false, pct: 0, phase: 'idle', missing: true };
     },
     // List GoHighLevel pipelines + stages, to drive the stage-mapping UI.
     async detectPipelines(orgId, provider) {

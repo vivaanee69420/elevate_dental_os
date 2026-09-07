@@ -32,6 +32,15 @@ export function setProgress(orgId, provider, patch) {
             pct: patch.phasePct ?? patch.pct ?? cur.pct ?? 0,
             page: patch.page ?? cur.page ?? 0,
             totalPages: patch.totalPages ?? cur.totalPages ?? null,
+            // Records STORED, as distinct from `count`, which is records read
+            // from the provider. The two diverge whenever a pull filters: a
+            // Dentally token covers a whole group, so a sub-account scoped to
+            // one practice reads 9,450 patients and keeps 4,061. Reporting only
+            // `count` and calling it "pulled" made the overlay and the account's
+            // own totals disagree by more than 2x with no way to tell which was
+            // real. Undefined (not 0) when a phase does no filtering, so the UI
+            // can tell "kept everything" from "kept none".
+            kept: patch.kept ?? cur.kept,
             // Explicit completion flag — set when a phase finishes. Lets the UI
             // mark a phase done by signal instead of by position, which is what
             // makes concurrent (parallel) phases render correctly.

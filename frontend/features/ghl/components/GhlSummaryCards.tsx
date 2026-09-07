@@ -1,44 +1,128 @@
 'use client';
+// ============================================================================
+// Business Hub — GoHighLevel.
+//
+// Built from the page's OWN section components (HeadlineCard), not a private
+// set of tiles in Tailwind's slate palette. The old cards were the only ones on
+// the page painted in a colour scheme the theme does not define.
+//
+// Two of the four figures were also wrong, both measured on the live org for
+// August 2026:
+//
+//   * "GHL Contacts" showed 29,419 against a true 1,596. The RPC's
+//     contacts_total is CUMULATIVE — every contact ever created up to the end
+//     of the window — so a card sitting under a period filter barely moved
+//     whichever month was chosen. The windowed count was already in the payload
+//     as contacts_new and simply was not read.
+//
+//   * "GHL Pipeline" showed £587,500, of which £190,000 belonged to 481 leads
+//     already marked not_proceeding or failed_to_attend. Pipeline means money
+//     still in play. Migration 000170 added the open-only figure beside the
+//     total rather than redefining it.
+//
+// Conversion is decided leads only — won ÷ (won + lost) — which is NOT won ÷
+// every lead, because 895 of August's 1,433 leads had not been decided either
+// way. The card says which it is instead of leaving the reader to divide.
+// ============================================================================
+
 import { useState } from 'react';
 import { formatPence, formatNumber } from '@/lib/format';
 import { useGhlDashboard } from '../hooks';
 import { SyncHealthTable } from './SyncHealthTable';
+import { HeadlineCard, type HeadlineKpi } from '@/features/overview/components/HeadlineCard';
+import type { Polarity } from '@/features/marketing/_shared/compare';
 
-export function GhlSummaryCards({ since, until, accountId = null }: { since?: string; until?: string; accountId?: string | null }) {
+export function GhlSummaryCards({
+  since, until, accountId = null, compare = null,
+}: {
+  since?: string; until?: string; accountId?: string | null;
+  /** The page's own comparison window, so this section measures across exactly
+   *  the same bounds as the Dentally and Marketing sections above it. */
+  compare?: { previous: { since: string; until: string; label: string } } | null;
+}) {
   const { data } = useGhlDashboard({ since, until, accountId });
+  // The SAME endpoint over the comparison window — the prior figure cannot
+  // drift from the one it measures, because it IS that figure asked for a
+  // different month.
+  const { data: was } = useGhlDashboard(
+    compare ? { since: compare.previous.since, until: compare.previous.until, accountId } : {},
+  );
   const [open, setOpen] = useState(false);
 
   if (!data || data.totals.sync.accounts === 0) return null;
   const t = data.totals;
+  const p = compare && was ? was.totals : null;
 
-  const cards = [
-    { label: 'GHL Contacts', value: formatNumber(t.contacts.total) },
-    { label: 'GHL Leads', value: formatNumber(t.leads.total) },
-    { label: 'GHL Pipeline', value: formatPence(t.leads.pipelineValuePence) },
-    { label: 'GHL Conversion', value: `${t.leads.conversionPct}%` },
+  const cmp = (
+    current: number | null, previous: number | null,
+    polarity: Polarity, format: (n: number) => string, isRate = false,
+  ): HeadlineKpi['compare'] => (compare && p ? {
+    current, previous, polarity, isRate,
+    format: (n) => `${format(n)} · ${compare.previous.label}`,
+  } : undefined);
+
+  const countOf = (n: number) => formatNumber(n);
+
+  const cards: HeadlineKpi[] = [
+    {
+      label: 'New contacts',
+      value: formatNumber(t.contacts.new),
+      sub: `${formatNumber(t.contacts.total)} on the books in total`,
+      chip: null,
+      compare: cmp(t.contacts.new, p?.contacts.new ?? null, 'higher-better', countOf),
+      source: 'GoHighLevel contacts created inside the selected period. The total beneath is every contact on the books up to the end of that period, which does not move much month to month — this card counts the arrivals.',
+      onClick: () => setOpen((v) => !v),
+      active: open,
+      hint: open ? 'Hide subaccounts' : 'Click for the breakdown',
+    },
+    {
+      label: 'Leads',
+      value: formatNumber(t.leads.total),
+      sub: `${formatNumber(t.leads.open)} still open · ${formatNumber(t.leads.won)} won · ${formatNumber(t.leads.lost)} lost`,
+      chip: null,
+      compare: cmp(t.leads.total, p?.leads.total ?? null, 'higher-better', countOf),
+      source: 'GoHighLevel opportunities created inside the selected period, across every connected subaccount.',
+      onClick: () => setOpen((v) => !v),
+      active: open,
+    },
+    {
+      label: 'Open pipeline',
+      value: formatPence(t.leads.pipelineOpenValuePence),
+      sub: `Undecided leads only · ${formatPence(t.leads.pipelineValuePence)} incl. won and lost`,
+      chip: null,
+      compare: cmp(t.leads.pipelineOpenValuePence, p?.leads.pipelineOpenValuePence ?? null, 'higher-better', formatPence),
+      source: 'Estimated value of leads that have not been decided either way. The figure beside it adds back leads already marked not proceeding or failed to attend — money no longer in play, which is why it is not the headline.',
+      onClick: () => setOpen((v) => !v),
+      active: open,
+    },
+    {
+      label: 'Conversion',
+      // A rate with no denominator is unknowable, not 0%: a period where no
+      // lead was decided either way has no conversion rate to report.
+      value: t.leads.won + t.leads.lost > 0 ? `${t.leads.conversionPct}%` : '—',
+      sub: `${formatNumber(t.leads.won)} won of ${formatNumber(t.leads.won + t.leads.lost)} decided`,
+      chip: null,
+      compare: t.leads.won + t.leads.lost > 0
+        ? cmp(t.leads.conversionPct, (p && p.leads.won + p.leads.lost > 0) ? p.leads.conversionPct : null,
+          'higher-better', (n) => `${n}%`, true)
+        : undefined,
+      source: 'Won leads as a share of leads that reached a decision — NOT of every lead. Most leads in a recent period are still open, so dividing by the full lead count would understate the rate for the newest month and flatter the oldest.',
+      onClick: () => setOpen((v) => !v),
+      active: open,
+    },
   ];
 
   return (
-    <section className="space-y-3">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {cards.map((c) => (
-          <button
-            key={c.label}
-            onClick={() => setOpen((v) => !v)}
-            className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-slate-300 hover:shadow"
-          >
-            <div className="text-[12px] font-medium uppercase tracking-wide text-slate-500">{c.label}</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-900">{c.value}</div>
-            <div className="mt-0.5 text-[12px] text-slate-400">Click for breakdown</div>
-          </button>
-        ))}
+    <>
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+        {cards.map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
-      {open ? (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-slate-900">GHL by subaccount</h3>
+      {open && (
+        <div className="mt-4">
+          <div className="text-xs text-ink-muted uppercase tracking-wide mb-2">By subaccount</div>
           <SyncHealthTable accounts={data.perAccount} />
         </div>
-      ) : null}
-    </section>
+      )}
+    </>
   );
 }

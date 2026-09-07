@@ -219,7 +219,15 @@ async function fetchCampaignMeta(accountId, accessToken) {
     return map;
 }
 
-export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) {
+export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, opts = {}) {
+    // The callback was named `_onProgress` and never called, so the overlay sat
+    // on "Starting… 0%" for the whole run — a healthy sync looked identical to
+    // a dead one. Report the phases this pull actually walks.
+    const report = (phase, pct, extra = {}) => {
+        try { onProgress({ phase, pct: Math.min(99, Math.max(0, Math.round(pct))), ...extra }); }
+        catch { /* progress must never break the pull it describes */ }
+    };
+    report('accounts', 2);
     let integration = integrationArg ?? await integrationRepository.getByProvider(orgId, 'meta_ads');
     if (!integration?.secrets) {
         await integrationRepository.markFailed(orgId, 'meta_ads', 'no_auth: no stored credentials');
@@ -272,7 +280,13 @@ export async function syncOneOrg(orgId, integrationArg, _onProgress, opts = {}) 
         const all = [];
         const skipped = [];
         const until = londonYmd();
+        let doneAccounts = 0;
         for (const aid of accountIds) {
+            // 5% -> 75% across the ad accounts, so a multi-account org sees the
+            // bar move per account rather than once at the end.
+            report('metrics', 5 + (doneAccounts / Math.max(1, accountIds.length)) * 70,
+                { page: doneAccounts, totalPages: accountIds.length });
+            doneAccounts += 1;
             try {
                 const meta = await fetchCampaignMeta(aid, access_token).catch(() => ({}));
                 const rows = await queryAccount(aid, access_token, sinceDate);

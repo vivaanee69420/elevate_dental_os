@@ -1,3 +1,6 @@
+import { summariseAccepted } from '../lib/marketing/accepted-ledger.js';
+import { ACCEPTANCE_MIN_PAID_PENCE } from '../lib/marketing/lead-performance.js';
+import { londonYmd } from '../lib/tz.js';
 // Marketing business logic: campaign performance from ad spend joined to leads.
 // Money is integer pence throughout (rule 2) — never floats.
 import { marketingRepository } from '../repositories/marketing.repository.js';
@@ -59,7 +62,14 @@ const CHANNEL_ORDER = ['meta_ads', 'google_ads', 'other'];
 //
 // The 'other' row carries leads and patients but never a cost: dividing paid
 // spend by organic enquiries is exactly the error the totals already avoid.
-function channelSplit(spendRows, funnelRows, campaignProvider) {
+// The Marketing section's OUTCOME counts (booked / became a patient) come from
+// the same per-platform lead ledgers the Facebook and Google report pages read,
+// not from ad_campaign_funnel. Those two disagreed about what a patient is —
+// "matches some Dentally record" against "has paid more than the acceptance
+// floor" — and were 8.5x apart on live data (729 against 86, group, Jun-Aug
+// 2026) in the same section of the same app. LEADS are deliberately untouched:
+// the Overview counts every enquiry however it arrived and says so on screen.
+function channelSplit(spendRows, funnelRows, campaignProvider, accepted, mappedSpendByProvider = null) {
     const blank = () => ({
         spendPence: 0, impressions: 0, clicks: 0, platformConversions: 0,
         campaigns: 0, leads: 0, booked: 0, attended: 0, patients: 0,
@@ -78,14 +88,45 @@ function channelSplit(spendRows, funnelRows, campaignProvider) {
 
     for (const g of funnelRows) {
         const e = by.get(resolveLeadChannel(g, campaignProvider));
+        // Paid leads are REPLACED below from the ledgers; this accumulation is
+        // what gives the 'other' (organic) channel its count, and what the
+        // channel totals fall back to when no ledger row exists at all.
         e.leads += g.leads;
-        e.booked += g.booked;
         e.attended += g.attended;
-        e.patients += g.patients;
     }
+    // A PAID channel card is the same claim the Facebook or Google report page
+    // makes, so it is built from the same rows: leads, bookings and patients
+    // all from that platform's ledger. Taking only the OUTCOMES from the ledger
+    // while leaving leads on the funnel's attribution would put two different
+    // populations in one card — live, that read 170 Google leads beside 45
+    // ledger patients and priced a lead at GBP 285.95 against the Google page's
+    // own GBP 56.85.
+    //
+    // Spend likewise comes from the mapped-practice figure the report pages
+    // divide by, so the card and the page cannot differ.
+    for (const c of ['google_ads', 'meta_ads']) {
+        const e = by.get(c);
+        if (!e) continue;
+        e.leads = accepted.byChannel[c].leads;
+        e.booked = accepted.byChannel[c].booked;
+        e.patients = accepted.byChannel[c].accepted;
+        if (mappedSpendByProvider) e.spendPence = mappedSpendByProvider.get(c) ?? 0;
+    }
+    // The 'other' channel is everyone who arrived without ad attribution, so it
+    // has no ledger by definition. Its outcomes are UNKNOWABLE on a money rule
+    // rather than zero — null renders as an em dash, where 0 would be a claim
+    // about the practice ("no organic enquiry ever became a patient") rather
+    // than about our data.
+    const other = by.get('other');
+    if (other) { other.booked = null; other.patients = null; }
 
     return CHANNEL_ORDER
         .map((c) => by.get(c))
+        // Facebook and Google only. The organic bucket is not an advertising
+        // channel and counting it here made the cards sum to more than the tile
+        // above them. Its leads are still reported as totals.unattributedLeads
+        // and listed on the Leads page.
+        .filter((e) => e.channel !== 'other')
         // Drop a channel that has neither spend nor leads — an empty Google row
         // on an account that has never run Google is noise, not information.
         .filter((e) => e.spendPence > 0 || e.leads > 0)
@@ -98,8 +139,8 @@ function channelSplit(spendRows, funnelRows, campaignProvider) {
             return {
                 ...e,
                 costPerLeadPence: costed ? perUnitPence(e.spendPence, e.leads) : null,
-                costPerBookingPence: costed ? perUnitPence(e.spendPence, e.booked) : null,
-                costPerPatientPence: costed ? perUnitPence(e.spendPence, e.patients) : null,
+                costPerBookingPence: costed && e.booked != null ? perUnitPence(e.spendPence, e.booked) : null,
+                costPerPatientPence: costed && e.patients != null ? perUnitPence(e.spendPence, e.patients) : null,
             };
         });
 }
@@ -133,12 +174,12 @@ function buildCoverage(accounts, practiceId, unmappedSpendPence) {
 // where every practice's rows are present. Leads carry the practice they first
 // enquired at, and the RPC emits one row per person, so the practices sum to
 // the group total instead of double-counting somebody who enquired at two.
-function practiceSplit(spendByPractice, funnelRows, campaignProvider) {
+function practiceSplit(spendByPractice, funnelRows, campaignProvider, accepted) {
     const by = new Map();
     const row = (id) => {
         if (!by.has(id)) {
             by.set(id, {
-                practiceId: id, spendPence: 0, leads: 0, booked: 0, patients: 0, newPatients: 0,
+                practiceId: id, spendPence: 0, leads: 0, attributedLeads: 0, booked: 0, patients: 0, newPatients: 0,
                 channels: { meta_ads: 0, google_ads: 0, other: 0 },
             });
         }
@@ -150,21 +191,36 @@ function practiceSplit(spendByPractice, funnelRows, campaignProvider) {
     for (const g of funnelRows) {
         const e = row(g.practice_id ?? null);
         e.leads += g.leads;
-        e.booked += g.booked;
-        e.patients += g.patients;
+        // newPatients stays on the funnel's basis — it counts first-ever
+        // Dentally attendance, which is a clinical fact rather than a money
+        // rule, so the ledgers have no better answer for it.
         e.newPatients += g.newPatients;
         e.channels[resolveLeadChannel(g, campaignProvider)] += g.leads;
+    }
+    // Outcomes and the cost DENOMINATOR come from the ledgers. `e.leads` above
+    // is every enquiry at this practice including organic, and dividing paid
+    // spend by that population is the exact defect this function's own comment
+    // warned about below — it just had no attributed figure to use instead
+    // until now.
+    for (const [practiceId, a] of accepted.byPractice) {
+        const e = row(practiceId);
+        e.attributedLeads = a.leads;
+        e.booked = a.booked;
+        e.patients = a.accepted;
     }
 
     return [...by.values()]
         .map((e) => ({
             ...e,
-            // NOTE: no costPerBookingPence here. `e.booked` sums every group at
-            // this practice, including the 'other' (organic) channel — dividing
-            // paid spend by that population is the exact defect this file was
-            // corrected for elsewhere. A per-practice "attributed booked" figure
-            // does not exist yet, so this stays a raw count, not a false cost.
-            costPerLeadPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.leads) : null,
+            // Every cost here divides by an ATTRIBUTED figure. It used to
+            // divide by e.leads — every enquiry at the practice, organic
+            // included — which understated cost per lead by whatever share
+            // arrived without ad tracking. The ledgers give the attributed
+            // population, so the note that once said "does not exist yet" is
+            // now simply done.
+            costPerLeadPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.attributedLeads) : null,
+            costPerBookingPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.booked) : null,
+            costPerPatientPence: e.spendPence > 0 ? perUnitPence(e.spendPence, e.patients) : null,
             costPerNewPatientPence: e.spendPence > 0 && e.newPatients > 0
                 ? perUnitPence(e.spendPence, e.newPatients)
                 : null,
@@ -178,7 +234,7 @@ function practiceSplit(spendByPractice, funnelRows, campaignProvider) {
 // per person. ad_lead_conversions emits exactly one row per contact, so every
 // person lands in exactly one group and summing group counts is exact. That is
 // what lets this stop paging ten thousand rows in order to count them.
-function joinSpendToLeads(spendRows, funnelRows) {
+function joinSpendToLeads(spendRows, funnelRows, accepted, spendTotals, campaignProvider) {
     // Collapse the groups to campaign for the table.
     const byCampaign = new Map();
     const blank = () => ({ leads: 0, booked: 0, attended: 0, patients: 0, newPatients: 0 });
@@ -200,9 +256,15 @@ function joinSpendToLeads(spendRows, funnelRows) {
     const attributed = blank();
     const rows = spendRows.map((s) => {
         const f = byCampaign.get(s.campaign_id) ?? blank();
-        attributed.leads += f.leads;
-        attributed.booked += f.booked;
-        attributed.patients += f.patients;
+        // Per-campaign LEADS and OUTCOMES come from the ledgers, so a campaign
+        // row here shows the same numbers as the same campaign on the Facebook
+        // or Google page. Mixing the two sources per row would be worse than
+        // either: funnel leads with ledger bookings can make a campaign report
+        // more bookings than leads.
+        const a = accepted.byCampaign.get(s.campaign_id) ?? { leads: 0, booked: 0, accepted: 0 };
+        attributed.leads += a.leads;
+        attributed.booked += a.booked;
+        attributed.patients += a.accepted;
         attributed.newPatients += f.newPatients;
         return {
             provider: s.provider,
@@ -212,18 +274,35 @@ function joinSpendToLeads(spendRows, funnelRows) {
             impressions: s.impressions,
             clicks: s.clicks,
             platformConversions: s.conversions,
-            leads: f.leads,
-            booked: f.booked,
+            leads: a.leads,
+            booked: a.booked,
+            // `attended` has no ledger equivalent — it is a Dentally
+            // appointment state, not a money rule — so it stays as the funnel
+            // reports it and is the one column here on the older basis.
             attended: f.attended,
-            patients: f.patients,
+            patients: a.accepted,
             newPatients: f.newPatients,
-            costPerLeadPence: perUnitPence(s.spend_pence, f.leads),
-            costPerBookingPence: perUnitPence(s.spend_pence, f.booked),
-            costPerPatientPence: perUnitPence(s.spend_pence, f.patients),
+            costPerLeadPence: perUnitPence(s.spend_pence, a.leads),
+            costPerBookingPence: perUnitPence(s.spend_pence, a.booked),
+            costPerPatientPence: perUnitPence(s.spend_pence, a.accepted),
             costPerNewPatientPence: perUnitPence(s.spend_pence, f.newPatients),
             tier: 'campaign',
         };
     }).sort((a, b) => b.spendPence - a.spendPence);
+
+    // Organic, referral, direct, walk-in — the only part of the lead population
+    // ad_campaign_funnel is the better source for, since the ad ledgers cannot
+    // see it by definition.
+    //
+    // Counted through resolveLeadChannel, the SAME function the channel cards
+    // use, not by "has no campaign id". They are not the same set: a lead whose
+    // attribution_source says Paid Social but that carries no campaign id is
+    // paid, not organic. Defining it independently here put 90 in the tile
+    // against 88 on the card, and the tile stopped being the sum of the cards
+    // by two leads.
+    const organicLeads = funnelRows
+        .filter((g) => resolveLeadChannel(g, campaignProvider) === 'other')
+        .reduce((n, g) => n + g.leads, 0);
 
     // The whole population, organic and unattributed included.
     const all = funnelRows.reduce((n, g) => ({
@@ -235,24 +314,63 @@ function joinSpendToLeads(spendRows, funnelRows) {
     }), blank());
 
     const totals = {
-        spendPence: rows.reduce((n, r) => n + r.spendPence, 0),
-        impressions: rows.reduce((n, r) => n + r.impressions, 0),
-        clicks: rows.reduce((n, r) => n + r.clicks, 0),
+        // MAPPED-PRACTICE spend, not the sum of the campaign rows below.
+        // Spend on an account mapped to no practice can be charged against no
+        // practice's leads, so including it here would price every lead and
+        // patient against money that produced none of them — and the tile would
+        // contradict the channel cards and practice rows on its own page
+        // (live: GBP 122,649.08 in the tile against GBP 104,052.34 in the cards
+        // beneath it). The excluded amount is not hidden: coverage.
+        // unmappedSpendPence carries it and the page names it.
+        spendPence: spendTotals.spendPence,
+        impressions: spendTotals.impressions,
+        clicks: spendTotals.clicks,
         platformConversions: rows.reduce((n, r) => n + r.platformConversions, 0),
-        // Honest and shown on the screen — but NOT a denominator for paid spend.
-        leads: all.leads,
-        booked: all.booked,
+        // FACEBOOK AND GOOGLE ONLY. This section reports paid advertising, so
+        // every figure on it is what the two ad platforms bought — the same
+        // people the Facebook and Google report pages count, and nobody else.
+        //
+        // It used to add the funnel's organic enquiries in, which made the tile
+        // answer a different question from every card beneath it and from the
+        // two pages it is supposed to agree with. Organic enquiries are real and
+        // are not hidden: `unattributedLeads` still reports them and the Leads
+        // page lists them. They are simply not an advertising result.
+        leads: accepted.total.leads,
         attended: all.attended,
-        patients: all.patients,
         newPatients: all.newPatients,
+        // Outcomes on the report pages' rule: settled payments above the
+        // acceptance floor, counted for new patients only. This was
+        // ad_campaign_funnel's "matched a Dentally record", which read 729
+        // against the report pages' 86 for the same window.
+        booked: accepted.total.booked,
+        patients: accepted.total.accepted,
         // The cost denominators: the population the spend can be measured
         // against. Dividing paid spend by organic enquiries understates every
         // cost per unit.
-        attributedLeads: attributed.leads,
-        attributedBooked: attributed.booked,
-        attributedPatients: attributed.patients,
+        //
+        // This is EVERY ledger lead, not only those that resolve to a campaign
+        // with spend in the window. A lead sitting in an ad ledger came from an
+        // ad whether or not we can name which one — the campaign may have spent
+        // in an earlier window, or the click may predate the deep tables' rolling
+        // 92-day window. Charging spend only against the nameable subset
+        // OVERSTATES every cost: on live data that is 1,876 rather than 2,484
+        // leads, i.e. GBP 68.79 per lead instead of GBP 49.38, and it would not
+        // match the per-practice cost the Facebook and Google pages show for the
+        // same people.
+        attributedLeads: accepted.total.leads,
+        attributedBooked: accepted.total.booked,
+        attributedPatients: accepted.total.accepted,
         attributedNewPatients: attributed.newPatients,
-        unattributedLeads: all.leads - attributed.leads,
+        // The narrower subset that the per-campaign TABLE below sums to, kept
+        // so the screen can reconcile the table against the tiles without
+        // implying the difference is unattributed.
+        campaignMatchedLeads: attributed.leads,
+        campaignMatchedPatients: attributed.patients,
+        // Reported, NOT counted in `leads` above: enquiries that reached the
+        // practice without any ad attribution. Kept so the page can say how many
+        // it is leaving out rather than leave the reader wondering where they
+        // went.
+        unattributedLeads: organicLeads,
     };
     totals.costPerLeadPence = perUnitPence(totals.spendPence, totals.attributedLeads);
     totals.costPerBookingPence = perUnitPence(totals.spendPence, totals.attributedBooked);
@@ -269,6 +387,16 @@ function joinSpendToLeads(spendRows, funnelRows) {
 // survive a deploy and be shared across instances; an in-process TTL alone
 // would recompute on every restart. Cache failures log and fall through to a
 // live read — a cache must never be able to break the page.
+// The scope window's `until` is an EXCLUSIVE instant, while
+// ad_provider_spend_by_practice takes an INCLUSIVE London date — the same
+// convention the report pages call it with. Converting here rather than
+// slicing: 2026-08-31T23:00:00Z is the start of 1 September under BST, so the
+// last day to include is 31 August. Handing the raw London date across would
+// silently add a day of the next month's spend to every channel card.
+function lastLondonDay(untilISO) {
+    return londonYmd(new Date(Date.parse(untilISO) - 1));
+}
+
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
 // BUMP THIS whenever the payload SHAPE changes. A cache entry written before a
@@ -276,7 +404,7 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 // on every hit for the whole TTL — the screen would render against a shape that
 // no longer exists (an undefined series is a crash, not a blank chart). The
 // version makes old entries unreachable rather than merely stale.
-const PAYLOAD_VERSION = 6;   // v6: booked, attended, CPB, cost per new patient
+const PAYLOAD_VERSION = 7;   // v7: outcomes from the lead ledgers, not ad_campaign_funnel
 
 function cacheKey(since, until, practiceId) {
     return `marketing:perf:v${PAYLOAD_VERSION}:${since}|${until}|${practiceId ?? 'all'}`;
@@ -475,20 +603,58 @@ export const marketingService = {
             const cached = await readDashboardCache(orgId, key).catch(() => undefined);
             if (cached) return cached;
         }
-        const [spend, funnel, accounts] = await Promise.all([
+        const [spend, funnel, accounts, googleLedger, metaLedger, googleSpend, metaSpend] = await Promise.all([
             marketingRepository.campaignSpend(orgId, since, until, practiceId),
             marketingRepository.campaignFunnel(orgId, since, until, practiceId),
             marketingRepository.adAccounts(orgId),
+            // The SAME reads the Facebook and Google report pages make, with the
+            // same acceptance floor. Passed explicitly rather than left to the
+            // RPC default: the caller owns the tenant's fee, and a silent
+            // server-side default is how the two would drift apart.
+            marketingRepository.googleLeadLedger(orgId, since, until, ACCEPTANCE_MIN_PAID_PENCE),
+            marketingRepository.metaLeadLedger(orgId, since, until, ACCEPTANCE_MIN_PAID_PENCE),
+            // The SAME per-practice spend the report pages divide by, so a
+            // channel card and its report page cannot state different costs for
+            // the same platform and window.
+            marketingRepository.adSpendByPractice(orgId, 'google_ads', londonYmd(since), lastLondonDay(until)),
+            marketingRepository.adSpendByPractice(orgId, 'meta_ads', londonYmd(since), lastLondonDay(until)),
         ]);
-        const payload = joinSpendToLeads(spend.campaigns, funnel);
-        // campaign id -> provider, from the campaigns we hold spend for. This is
-        // the definitive arm of channel resolution, so it is built from the same
-        // spend rows the table is built from.
+        // Scoped to the requested practice here rather than in SQL: the two
+        // ledger RPCs take no practice parameter (the report pages narrow in JS
+        // for the same reason — one org-wide fetch serves every practice toggle
+        // without re-running a ~1s query).
+        const inScope = (r) => practiceId == null || r.practice_id === practiceId;
+        const accepted = summariseAccepted(
+            googleLedger.filter(inScope), metaLedger.filter(inScope),
+        );
+        // Mapped practices only, and inside the requested practice scope. The
+        // report pages divide by exactly this, so a card here and a card there
+        // cannot state different costs for the same platform and window.
+        const mappedRows = (rows) => rows.filter((r) => r.practice_id != null
+            && (practiceId == null || r.practice_id === practiceId));
+        const sumField = (rows, f) => rows.reduce((n, r) => n + Number(r[f] ?? 0), 0);
+        const allMapped = [...mappedRows(googleSpend), ...mappedRows(metaSpend)];
+        const spendTotals = {
+            spendPence: sumField(allMapped, 'spend_pence'),
+            impressions: sumField(allMapped, 'impressions'),
+            clicks: sumField(allMapped, 'clicks'),
+        };
+        const mappedSpendByProvider = new Map([
+            ['google_ads', sumField(mappedRows(googleSpend), 'spend_pence')],
+            ['meta_ads', sumField(mappedRows(metaSpend), 'spend_pence')],
+        ]);
+        // Built before the join, not after: the lead totals now need it to count
+        // the organic channel the same way the channel cards do.
         const campaignProvider = new Map(
             spend.campaigns.map((c) => [c.campaign_id, c.provider]),
         );
-        payload.byChannel = channelSplit(payload.rows, funnel, campaignProvider);
-        payload.byPractice = practiceSplit(spend.spendByPractice, funnel, campaignProvider);
+        const payload = joinSpendToLeads(spend.campaigns, funnel, accepted, spendTotals, campaignProvider);
+        payload.byChannel = channelSplit(payload.rows, funnel, campaignProvider, accepted, mappedSpendByProvider);
+        payload.byPractice = practiceSplit(spend.spendByPractice, funnel, campaignProvider, accepted);
+        // The threshold the patient counts were computed against, so the screen
+        // can state it instead of leaving the reader to guess what "became a
+        // patient" means. GBP 43 and GBP 4,300 are both "Yes" without it.
+        payload.acceptanceMinPaidPence = ACCEPTANCE_MIN_PAID_PENCE;
         payload.series = spend.series;
         payload.coverage = buildCoverage(accounts, practiceId, spend.unmappedSpendPence);
         await writeDashboardCache(orgId, key, payload, CACHE_TTL_MS).catch(() => {});

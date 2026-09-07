@@ -65,8 +65,13 @@ describe('the revenue target is pro-rated to the window', () => {
     // month rendered "-£1,200,000 vs target" in warning amber. The `developer`
     // org has £800,000 set today, so this was live.
     stub();
+    // LONDON midnights, which is what the period pickers send. A UTC-midnight
+    // pair looks like the same month but spans 31 London days through BST
+    // (01:00 on 1 Jun to 01:00 on 1 Jul touches 31 dates), so a fixture built
+    // that way pro-rates over a month that is one day too long.
     const res = await svc.businessHub(ORG, {
-      since: '2026-06-01T00:00:00.000Z', until: '2026-07-01T00:00:00.000Z', label: 'Jun 2026',
+      since: '2026-05-31T23:00:00.000Z', until: '2026-06-30T23:00:00.000Z', label: 'Jun 2026',
+      now: () => new Date('2026-07-20T09:00:00.000Z'),
     });
     expect(res.group.revenueTargetAnnualPence).toBe(120_000_000);
     expect(res.group.revenueTargetPence).toBe(Math.round((120_000_000 * 30) / 365));
@@ -74,13 +79,31 @@ describe('the revenue target is pro-rated to the window', () => {
     expect(res.group.revenueTargetPence).toBeLessThan(res.group.revenueTargetAnnualPence / 10);
   });
 
-  it('a full-year window recovers (approximately) the whole annual goal', async () => {
+  it('a finished year recovers the whole annual goal', async () => {
+    stub();
+    svc.invalidateBusinessHub(ORG);
+    const res = await svc.businessHub(ORG, {
+      since: '2025-01-01T00:00:00.000Z', until: '2026-01-01T00:00:00.000Z', label: '2025',
+      now: () => new Date('2026-03-01T09:00:00.000Z'),
+    });
+    expect(res.group.revenueTargetPence).toBe(120_000_000);
+  });
+
+  it('a year still running pro-rates the goal to the days elapsed', async () => {
+    // The revenue figure beside this target covers 1 Jan to today, because a
+    // running window is clamped there — appointments and invoices carry future
+    // rows and an unclamped window would count bookings that have not happened.
+    // The target has to cover the same span or a group two thirds through the
+    // year is measured against a full year's goal and reads as far behind when
+    // it is on plan. 1 Jan – 6 Sep 2026 inclusive is 249 days.
     stub();
     svc.invalidateBusinessHub(ORG);
     const res = await svc.businessHub(ORG, {
       since: '2026-01-01T00:00:00.000Z', until: '2027-01-01T00:00:00.000Z', label: '2026',
+      now: () => new Date('2026-09-06T13:20:00.000Z'),
     });
-    expect(res.group.revenueTargetPence).toBe(120_000_000);
+    expect(res.group.revenueTargetPence).toBe(Math.round((120_000_000 * 249) / 365));
+    expect(res.group.compare.current.label).toBe('1 Jan – 6 Sep 2026');
   });
 
   it('no baseline means no target, not a zero one to miss', async () => {

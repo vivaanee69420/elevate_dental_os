@@ -49,7 +49,10 @@ function ChannelCard({ row, totalLeads }: { row: ChannelRow; totalLeads: number 
         <Figure label="Spend" value={isOther ? '—' : money(row.spendPence)} muted={isOther} />
         <Figure label="Leads" value={num(row.leads)} />
         <Figure label="Cost per lead" value={money(row.costPerLeadPence)} />
-        <Figure label="Patients" value={num(row.patients)} />
+        {/* Organic has no ad ledger, so "became a patient" is unknowable on the
+            paid rule rather than zero — an em dash, not a confident 0 that would
+            claim no organic enquiry ever converted. */}
+        <Figure label="Patients" value={row.patients == null ? '—' : num(row.patients)} muted={row.patients == null} />
         <Figure label="Cost per patient" value={money(row.costPerPatientPence)} />
         <Figure
           label="Campaigns"

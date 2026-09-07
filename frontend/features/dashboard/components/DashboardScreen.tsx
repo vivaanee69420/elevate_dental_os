@@ -790,7 +790,12 @@ export default function DashboardScreen() {
           {[
             { label: `Ad spend · ${periodLabel}`, value: fmtPence(roi.spend_pence), sub: `${roi.clicks.toLocaleString('en-GB')} clicks`, colour: BRAND },
             { label: 'ROAS', value: roi.roas ? `${roi.roas.toFixed(2)}x` : '—', sub: 'settled revenue / spend', colour: roi.roas >= 1 ? POS : NEG },
-            { label: 'Cost / lead', value: roi.cpl_pence ? fmtPence(roi.cpl_pence) : '—', sub: `${roi.leads_from_ads.toLocaleString('en-GB')} ad leads`, colour: AMB },
+            // Leads are whole people from the same ledgers the Facebook and
+            // Google report pages use, so this card reconciles against them.
+            // It used to sum ad_metrics.conversions — modelled, fractional
+            // platform events — and rendered "4,692.66 ad leads" at a cost per
+            // lead ~6x too cheap.
+            { label: 'Cost / lead', value: roi.cpl_pence ? fmtPence(roi.cpl_pence) : '—', sub: `${roi.leads_from_ads.toLocaleString('en-GB')} leads from ads`, colour: AMB },
           ].map((k) => (
             <Link key={k.label} href="/marketing" className="card card-padded block" style={{ borderLeft: `4px solid ${k.colour}` }}>
               <div className="text-ink-muted font-bold uppercase" style={{ fontSize: 10, letterSpacing: '0.05em' }}>{k.label}</div>

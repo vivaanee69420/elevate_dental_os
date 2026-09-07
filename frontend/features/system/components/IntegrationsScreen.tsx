@@ -36,6 +36,20 @@ import type {
   IntegrationRow,
   ProviderMeta,
 } from '@/features/integrations/api';
+import { DentallySitePicker } from '@/features/integrations/components/DentallySitePicker';
+import { ImportSummary } from '@/features/integrations/components/ImportSummary';
+
+// A tile's id is not always a provider key. The Google tile fronts THREE
+// separate Google connections (Ads, the read-only Sheets used by Call
+// Reporting, and the read/write Sheets used by the conversion export), so
+// looking its data up under `google` found no registry entry — and the panel
+// reported "Nothing pulled yet" over thousands of real rows. Every other tile
+// happens to match today; this makes that a stated fact rather than a
+// coincidence each new tile has to rediscover.
+const TILE_PROVIDERS: Record<string, string[]> = {
+  google: ['google_ads', 'google_sheets'],
+};
+const providersFor = (id: string) => TILE_PROVIDERS[id] ?? [id];
 import DentallyPracticeMapping from '@/features/integrations/components/DentallyPracticeMapping';
 import DentallyWebhookPanel from '@/features/integrations/components/DentallyWebhookPanel';
 import GoHighLevelPanel from '@/features/integrations/components/GoHighLevelPanel';
@@ -499,6 +513,10 @@ export default function IntegrationsScreen() {
         menu: providerMenu('dentally', meta),
         body: dentallyConnected ? (
           <>
+            {/* First: which practices this account is allowed to pull. The
+                mapping below only decides where pulled rows land, so it answers
+                a narrower question and belongs after this one. */}
+            <DentallySitePicker />
             <DentallyPracticeMapping />
             <DentallyWebhookPanel />
           </>
@@ -732,13 +750,20 @@ export default function IntegrationsScreen() {
         ))}
       </div>
 
-      {open?.body && (
+      {/* A connected integration opens even with no panel of its own: the
+          question every one of them has to answer first is "is the data here
+          yet", and that is the same panel each time. Injecting it once here
+          rather than adding it to seven tile bodies keeps them from drifting. */}
+      {open && (open.body || open.connected) && (
         <IntegrationModal
           title={open.label}
           subtitle={open.dialogSubtitle ?? open.status}
           icon={<ProviderIcon id={open.id} label={open.label} size={28} />}
           onClose={() => setOpenTile(null)}
         >
+          {open.connected && providersFor(open.id).map((p) => (
+            <ImportSummary key={p} provider={p} />
+          ))}
           {open.body}
         </IntegrationModal>
       )}

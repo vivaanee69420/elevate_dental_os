@@ -9,6 +9,7 @@
 // Everything below the tiles reads the SAME payload as the tiles — one query,
 // one window, one set of campaigns — so no panel on this page can disagree
 // with another.
+import Link from 'next/link';
 import {
   PageHeader, KpiTile, EmptyState, SkeletonKpiRow, SkeletonChart,
 } from '@/components/ui';
@@ -73,28 +74,51 @@ export default function MarketingOverviewScreen() {
             <KpiTile label="Ad spend" value={money(t.spendPence)} />
             <KpiTile label="Leads" value={t.leads.toLocaleString('en-GB')} />
             <KpiTile label="Cost per lead" value={money(t.costPerLeadPence)} />
-            <KpiTile label="Became patients" value={t.patients.toLocaleString('en-GB')} />
+            {/* Same rule as the Facebook and Google pages: a new patient whose
+                settled payments exceed the acceptance floor. It used to mean
+                "matched any Dentally record", which read 729 here against 86 on
+                those pages for the same window. */}
+            <KpiTile
+              label="Patients from ads"
+              value={t.patients.toLocaleString('en-GB')}
+              delta={`Paid over ${money(data.acceptanceMinPaidPence)} after enquiring`}
+            />
             <KpiTile label="Cost per patient" value={money(t.costPerPatientPence)} />
           </div>
 
-          {t.unattributedLeads > 0 ? (
-            <p className="text-[13px] text-ink-muted">
-              Leads and patients count everyone who enquired in this window, however they
-              found you.
-              {' '}
-              {t.attributedLeads.toLocaleString('en-GB')}
-              {' '}
-              of them are matched to a campaign with spend
-              {t.patients > 0 ? `, ${t.attributedPatients.toLocaleString('en-GB')} of the ${t.patients.toLocaleString('en-GB')} patients among them` : ''}
-              , and only those are used as the denominators for cost per lead and cost per
-              patient — charging paid spend against organic enquiries would understate both.
-              The other
-              {' '}
-              {t.unattributedLeads.toLocaleString('en-GB')}
-              {' '}
-              carry no ad tracking. The cards below split all of it by channel.
-            </p>
-          ) : null}
+          <p className="text-[13px] text-ink-muted">
+            Every figure here is Facebook and Google only — the same numbers as the
+            {' '}
+            <Link href="/marketing-facebook" className="underline">Facebook</Link>
+            {' '}
+            and
+            {' '}
+            <Link href="/marketing-google" className="underline">Google</Link>
+            {' '}
+            pages, for the practice and period selected above.
+            {' '}
+            <strong className="font-medium text-ink">Patients from ads</strong>
+            {' '}
+            counts a lead who went on to pay more than
+            {' '}
+            {money(data.acceptanceMinPaidPence)}
+            .
+            {t.unattributedLeads > 0 ? (
+              <>
+                {' '}
+                A further
+                {' '}
+                {t.unattributedLeads.toLocaleString('en-GB')}
+                {' '}
+                enquiries arrived with no ad tracking; they are not advertising
+                results, so they are excluded here and listed on the
+                {' '}
+                <Link href="/marketing-leads" className="underline">Leads</Link>
+                {' '}
+                page.
+              </>
+            ) : null}
+          </p>
 
           <ChannelCards rows={data.byChannel} />
 

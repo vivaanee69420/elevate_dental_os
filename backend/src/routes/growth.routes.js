@@ -20,6 +20,8 @@ import * as paged_rpc_1 from "../lib/paged-rpc.js";
 // for every viewer of the same org+window and compete for the same database.
 const practicePerformanceCache = createTtlCache({ ttlMs: 60_000, max: 300 });
 
+import { paidMarketingSummary } from '../services/paid-marketing.service.js';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Resolve the ad-account filter for the marketing views. Precedence:
@@ -621,7 +623,7 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     // all partial sums presented as totals, and ROAS (revenue / spend) divided
     // one truncated figure by another. None of the reads carried an ORDER BY, so
     // which rows survived changed between calls.
-    const [adR, leadsR, newPatients, paymentsR, healthR] = await Promise.all([
+    const [adR, leadsR, newPatients, paymentsR, healthR, paid] = await Promise.all([
         // Summed in SQL: provider x account x practice, bounded by the org's
         // account count instead of its history.
         supabase_1.serviceClient.rpc('ad_metrics_rollup', {
@@ -646,6 +648,11 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
             .select('baseline')
             .eq('organisation_id', orgId)
             .maybeSingle(),
+        // Spend and LEADS from the same place the Facebook and Google report
+        // pages get theirs, so this card and those pages cannot disagree. The
+        // window is the same London day pair those routes use (windowFrom), not
+        // the ISO instants — the report services take YYYY-MM-DD.
+        paidMarketingSummary(orgId, { since: fromDate, until: toDate, practiceId: pid }),
     ]);
     // A paged read refuses rather than returning a partial result; surface that
     // instead of rendering the shortfall as a real number.
@@ -692,15 +699,20 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         acc.leads += 1;
     }
     totals.leads = adLeads;
-    // CRM leads synced from GHL carry source='gohighlevel' with no UTM, so
-    // attributeProvider() matches none and adLeads collapses to 0 — which made
-    // CPL structurally zero. Fall back to the ad platforms' own conversion counts
-    // as the lead proxy (same source the Business Hub leads roll-up uses).
-    const adLeadProxy = adLeads || totals.conversions;
 
-    // Derived ratios. roas/cac/cpl are business-level (revenue & new patients
-    // are not split per provider), so they live on totals only. CPL prefers
-    // CRM-attributed leads, falling back to platform conversions when absent.
+    // Derived ratios for the per-provider / per-account BREAKDOWNS only. The
+    // headline cpl_pence is overridden below from paidMarketingSummary, which
+    // divides by real ledger leads.
+    //
+    // The `|| a.conversions` fallback survives here and is a KNOWN
+    // approximation, not an oversight: attributeProvider() reads UTMs that this
+    // org's GoHighLevel leads simply do not carry, so a.leads is 0 and these
+    // rows price against the platforms' own modelled conversion counts. Per
+    // ACCOUNT there is no ledger equivalent to use instead — the ledgers
+    // attribute a lead to a practice and a campaign, never to an ad account —
+    // so the choice is this or no per-account figure at all. `paid_by_provider`
+    // on the response carries the ledger-accurate numbers per PLATFORM, and
+    // anything reading a headline should use those.
     const ratios = (a) => {
         const cplDenom = a.leads || a.conversions;
         return {
@@ -729,11 +741,36 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
     res.json({
         connected: adRows.length > 0,
         window: { from: fromDate, to: toDate },
-        spend_pence: totals.spend_pence,
-        impressions: totals.impressions,
-        clicks: totals.clicks,
+        // HEADLINE FIGURES COME FROM paidMarketingSummary, not from the
+        // ad_metrics rollup above, and deliberately so: spend and leads must
+        // share one scope or their ratio is a nonsense. The rollup is scoped by
+        // the owner's SELECTED accounts; the ledger attributes leads by
+        // PRACTICE. Those coincide on this org today (every selected account is
+        // mapped and every unselected one is not) but nothing enforces it, and
+        // a cost per lead that divides one scope by another is wrong in a way
+        // nobody can see. by_provider/by_account below still come from the
+        // rollup — they are a per-account breakdown, which is exactly what the
+        // account-scoped read is for.
+        spend_pence: paid.total.spendPence,
+        impressions: paid.total.impressions,
+        clicks: paid.total.clicks,
         conversions: totals.conversions,
-        leads_from_ads: adLeadProxy,
+        // Real, whole people from the CRM ledgers — NOT ad_metrics.conversions,
+        // which is a modelled, fractional count of platform EVENTS and read
+        // 4,692.66 "leads" against a true 735 on the live org. `null` when no
+        // platform is connected at all, so "no ads" and "no leads" stay
+        // distinguishable.
+        leads_from_ads: paid.connected ? paid.total.leads : 0,
+        leads_basis: paid.connected ? 'crm_ledger' : 'none',
+        // Kept, honestly named, because it is still the right number for
+        // "what did the platforms themselves claim" — it was only ever wrong as
+        // a stand-in for people.
+        platform_conversions: totals.conversions,
+        paid_by_provider: paid.providers,
+        // Spend whose ad account maps to no practice: excluded from the total
+        // above (a single card cannot show a caveat row the way the report
+        // pages can) and stated here so it is never silently dropped either.
+        unmapped_spend_pence: paid.unmappedSpendPence,
         crm_attributed_leads: adLeads,
         total_leads: leads.length,
         new_patients: newPatients,
@@ -743,6 +780,15 @@ router.get('/marketing/roi', (0, async_handler_1.asyncHandler)(async (req, res) 
         ltv_pence,
         ltv_cac_ratio: ltv_pence && cac_pence ? +(ltv_pence / cac_pence).toFixed(2) : 0,
         ...ratios(totals),
+        // Overrides ratios(totals).cpl_pence, which divided spend by
+        // ad_metrics.conversions. withLeadCosts' rule: a cost per NOTHING is
+        // unknowable, so this is null rather than a confident GBP 0.00 when
+        // there are no attributed leads.
+        cpl_pence: paid.total.cplPence,
+        cost_per_booking_pence: paid.total.cpbPence,
+        cost_per_accepted_pence: paid.total.cpaPence,
+        booked_from_ads: paid.total.booked,
+        accepted_from_ads: paid.total.accepted,
         account_filter: accountIds, // null = all; [] = none; [...] = explicit
         by_provider: Array.from(byProvider.entries())
             .map(([provider, a]) => {

@@ -12,6 +12,13 @@ import { requireAgencyActor } from "../middleware/agency.js";
 import { sheetsController } from "../controllers/sheets.controller.js";
 import { sheetExportController } from "../controllers/sheet-export.controller.js";
 const router = (0, express_1.Router)();
+
+// Permanent deletion of a connected-account row. One controller serves all
+// three providers, so the PROVIDER is bound by the route rather than sent by
+// the client — a QuickBooks account id posted to the GoHighLevel path must not
+// resolve. Owner-only, like every other account mutation here.
+const bindProvider = (provider) => (req, _res, next) => { req.accountProvider = provider; next(); };
+
 const emergentFeature = (0, features_1.requireFeature)('emergent');
 const callReportingFeature = (0, features_1.requireFeature)('call_reporting');
 const sheetExportFeature = (0, features_1.requireFeature)('sheet_export');
@@ -27,12 +34,30 @@ router.post('/gohighlevel/daily-report/send', (0, auth_1.requireRole)('owner'), 
 router.post('/gohighlevel/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountCreate));
 router.patch('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountUpdate));
 router.delete('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountRemove));
+router.get('/gohighlevel/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
+router.delete('/gohighlevel/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
 router.post('/gohighlevel/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountSync));
 router.get('/gohighlevel/accounts/:id/pipelines', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountPipelines));
 router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountStageMappings));
 // One-off historical repair: re-pull a payment-date window from Dentally and
 // re-apply the corrected status mapper. Owner-only — it walks a remote API and
 // rewrites financial rows.
+// Which Dentally sites this organisation pulls. A Dentally grant is group-wide,
+// so a sub-account must be able to say "only this practice" before any pull
+// runs — bootstrapOnConnect stops and waits on this when it detects more than
+// one site. Owner-only: it decides what data enters the tenant.
+// How much has actually landed. Practice managers see it too: it answers
+// "is the data here yet", which is not an owner-only question, and it returns
+// counts only — no patient rows are read to render it.
+// Continue a first pull that a restart killed. Owner-only: it starts work.
+// How much has actually landed, per provider. Practice managers see it too:
+// "is the data here yet" is not an owner-only question, and it returns counts
+// only — no row bodies are read to render it.
+router.get('/:provider/import-summary', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.importSummary));
+// Continue a first pull a restart killed. Owner-only: it starts work.
+router.post('/:provider/resume-import', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.resumeImport));
+router.get('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySites));
+router.post('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySelectSites));
 router.post('/dentally/repair-payments', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyRepairPayments));
 router.get('/emergent', emergentFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentGet));
 router.post('/emergent', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentConnect));
@@ -58,6 +83,8 @@ router.get('/quickbooks/accounts', (0, auth_1.requireRole)('owner'), (0, async_h
 router.post('/quickbooks/accounts/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountConnect));
 router.post('/quickbooks/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountSync));
 router.delete('/quickbooks/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountRemove));
+router.get('/quickbooks/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
+router.delete('/quickbooks/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
 // CallRail — provider-level status/sync/disconnect (Task 3) plus the
 // per-company /accounts routes (Task 4). STATIC paths: must stay above the
 // generic /:provider/* routes below, or '/callrail'/'/callrail/sync'
@@ -77,6 +104,8 @@ router.post('/callrail/accounts/bulk', (0, auth_1.requireRole)('owner'), (0, asy
 router.post('/callrail/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountCreate));
 router.patch('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountUpdate));
 router.delete('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountRemove));
+router.get('/callrail/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
+router.delete('/callrail/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
 router.post('/callrail/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountSync));
 router.get('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
 router.post('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));

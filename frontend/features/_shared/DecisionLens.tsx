@@ -7,7 +7,7 @@
 // card is never blank. A small header shows the basis + a Refresh control.
 
 import type { ReactNode } from 'react';
-import { ArrowUpRight, AlertTriangle, TrendingDown, Info, RefreshCw, Sparkles } from 'lucide-react';
+import { TrendingUp, AlertTriangle, TrendingDown, Info, RefreshCw, Sparkles } from 'lucide-react';
 import { AlertRow, EmptyState, Chip, type ChipColour } from '@/components/ui';
 import { useDecisionLens } from './decision-lens-hooks';
 import type { LensSurface, LensTone } from './decision-lens-api';
@@ -21,8 +21,11 @@ export interface LensFallbackItem {
   icon?: ReactNode; // some screens supply their own icon; else derived from tone
 }
 
+// good/bad are the SAME trend mark, mirrored — they were an ArrowUpRight
+// against a TrendingDown, two different drawings for the two halves of one
+// comparison.
 const TONE_ICON: Record<LensTone, ReactNode> = {
-  good: <ArrowUpRight size={16} />,
+  good: <TrendingUp size={16} />,
   warn: <AlertTriangle size={16} />,
   bad: <TrendingDown size={16} />,
   info: <Info size={16} />,

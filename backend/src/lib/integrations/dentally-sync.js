@@ -23,6 +23,7 @@
 // helpers if a field differs. The fetch/paginate/resolve/upsert structure is stable.
 
 import { integrationRepository } from "../../repositories/integration.repository.js";
+import { markBootstrapStarted, markBootstrapFinished } from './bootstrap-recovery.js';
 import { decryptSecret } from "../crypto.js";
 import * as supabase_1 from "../supabase.js";
 
@@ -33,6 +34,8 @@ const RATE_DELAY_MS = 120;   // ~8 req/s, under Dentally's ~10/s cap
 const UPSERT_CHUNK = 500;
 const REQUEST_TIMEOUT_MS = 30000; // abort a hung Dentally request, never hang forever
 const MAX_PAGES = 100;       // cap a single sync to 100 pages/resource (~10k rows) so a foreground Refresh stays bounded; the incremental cursor catches the rest next run
+const WINDOW_RECON_MAX_PAGES = 400; // window-scoped reconciliation (~40k rows). Deliberately NOT MAX_PAGES: Dentally ignores `before` on /appointments, so a +/-35-day window pull actually returns everything from `after` onward INCLUDING the whole future diary — measured at 17,505 rows (176 pages) for this org, which silently blew the 100-page MAX_PAGES and made the delete prune abort with 'page_cap' every single night.
+const INVOICE_RECON_MAX_PAGES = 1000; // invoice delete-reconciliation pages the WHOLE collection (Dentally ignores date filters on /invoices) — ~240 pages at 23.7k invoices today, so this is a runaway guard with room to grow, not a target. Hitting it ABORTS the prune rather than acting on a partial remote set.
 const BACKFILL_MAX_PAGES = 15000; // full backfill ceiling (~1.5M rows/resource) — one-off, pulls the 6-month window. MUST exceed the largest collection: /treatment_plan_items returns ~725k rows (7.2k pages) and Dentally IGNORES the completed/date filters, so the whole collection must be paged to find the completed subset. The old 5000-page (500k-row) cap truncated the oldest ~225k items, silently dropping completed treatments scattered across past months (the "Treatments Completed undercount" bug). The page loop self-terminates at the real end (items.length < PER_PAGE), so this is only a runaway guard, not a target.
 const BACKFILL_MONTHS = 6;       // nightly full-backfill cap: most-recent 6 months of history, no deeper (product rule — the nightly cron stays light; on-connect already landed the full year)
 // Rolling 6-month updated_after for full pulls. Dentally requires the param; we
@@ -88,6 +91,32 @@ async function isRateLimited(res) {
     } catch {
         return false;
     }
+}
+
+// One page fetch for the reconcilers, with Dentally's TWO rate-limit signals
+// handled. The reconcilers page long collections (the invoice pass alone is
+// ~240 pages), which is exactly the workload that trips Dentally's sustained cap
+// — and that cap arrives as a 403 with a "Rate limit exceeded" body, NOT a 429.
+// Treating it as a hard failure would abort the reconcile every night for the
+// biggest orgs, which are the ones with the most to reconcile. Bounded attempts,
+// so a genuine 403/permission error still fails fast instead of spinning.
+async function fetchReconcilePage(url, auth, maxAttempts = 6) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        let res;
+        try {
+            res = await fetchWithTimeout(url, { headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' } });
+        } catch {
+            return { res: null, aborted: 'fetch_error' };
+        }
+        if (await isRateLimited(res)) {
+            const ra = Number(res.headers?.get?.('retry-after'));
+            await sleep(ra ? ra * 1000 : Math.min(60000, 2000 * 2 ** attempt));
+            continue;
+        }
+        if (!res.ok) return { res: null, aborted: `http_${res.status}` };
+        return { res, aborted: null };
+    }
+    return { res: null, aborted: 'rate_limited' };
 }
 
 // Refresh ~5 min before the OAuth token's stated expiry to avoid mid-call 401s.
@@ -147,7 +176,7 @@ export async function dentallyFetchWithRefresh(orgId, auth, url, extraHeaders = 
 // Returns the total record count fetched. onBatch(items, page) is awaited so the
 // upsert's back-pressure paces the fetch; onPage(page, totalPages, fetchedSoFar)
 // drives the progress bar.
-async function streamPages(orgId, base, path, auth, params, onBatch, onPage = null, maxPages = MAX_PAGES) {
+async function streamPagesOnce(orgId, base, path, auth, params, onBatch, onPage = null, maxPages = MAX_PAGES) {
     let page = 1;
     let fetched = 0;
     for (;;) {
@@ -212,6 +241,57 @@ async function streamPages(orgId, base, path, auth, params, onBatch, onPage = nu
     return fetched;
 }
 
+// Expand a pull into one request pass per selected site.
+//
+// A Dentally grant covers the whole GROUP and its `site_id` filter takes ONE
+// value, so a two-practice selection is two filtered pulls — never one
+// unfiltered pull that downloads the group and throws most of it away.
+// Measured on the live token: patients 9,553 -> 4,108, appointments 33,828 ->
+// 12,675, payments 13,138 -> 5,103, invoices 23,721 -> 9,294, practitioners
+// 218 -> 75, users 270 -> 99.
+//
+// Doing it HERE rather than in each pull means every collection inherits it and
+// no call site has to remember. `__sites` is stripped before the URL is built,
+// so it can never leak into a query string.
+export function sitePasses(params) {
+    const rest = { ...(params || {}) };
+    const sites = rest.__sites;
+    delete rest.__sites;
+    // No selection means every site — the behaviour of every organisation
+    // connected before the picker existed. One pass, unfiltered, unchanged.
+    if (!Array.isArray(sites) || sites.length === 0) return [rest];
+    // De-duplicated: the same site twice would pull and upsert it twice.
+    return [...new Set(sites.map(String))].map((site_id) => ({ ...rest, site_id }));
+}
+
+async function streamPages(orgId, base, path, auth, params, onBatch, onPage = null, maxPages = MAX_PAGES) {
+    const passes = sitePasses(params);
+    let basePage = 0;
+    let baseCount = 0;
+    let fetched = 0;
+    for (const pass of passes) {
+        let lastPage = 0;
+        let lastCount = 0;
+        // Counters accumulate ACROSS passes so the phase advances once instead
+        // of restarting per practice. totalPages is only meaningful for a
+        // single pass — with several, the true total is unknown until the last
+        // one reports, so send null and let reportPct grow the estimate from
+        // the live pull (its documented fallback) rather than render a
+        // percentage that jumps backwards.
+        const report = onPage
+            ? (page, totalPages, count) => {
+                lastPage = page;
+                lastCount = count ?? 0;
+                onPage(basePage + page, passes.length > 1 ? null : totalPages, baseCount + lastCount);
+            }
+            : null;
+        fetched += await streamPagesOnce(orgId, base, path, auth, pass, onBatch, report, maxPages);
+        basePage += lastPage;
+        baseCount += lastCount;
+    }
+    return fetched;
+}
+
 // Collect every page into a flat array. Thin wrapper over streamPages for the
 // small, unweighted resources (practitioners, users) where buffering the whole
 // set is cheap. The heavy resources stream-upsert per page instead (see pulls).
@@ -270,7 +350,23 @@ export function reportPct(phaseTotals, idx, page, totalPages) {
     return weightedPct(idx, page, phaseTotals);
 }
 
+// Size the progress bar for what the pull will ACTUALLY fetch. This probe must
+// carry the same site filter as the pull, or a one-practice sub-account is
+// weighted against the whole group's page count and its bar crawls to ~40% and
+// stops. Several sites means several probes, summed — the same expansion the
+// pull itself makes.
 async function fetchPageCount(base, path, auth, params, maxPages = MAX_PAGES) {
+    const passes = sitePasses(params);
+    if (passes.length > 1) {
+        const counts = await Promise.all(
+            passes.map((pass) => fetchPageCountOnce(base, path, auth, pass, maxPages)),
+        );
+        return counts.reduce((a, b) => a + b, 0);
+    }
+    return fetchPageCountOnce(base, path, auth, passes[0], maxPages);
+}
+
+async function fetchPageCountOnce(base, path, auth, params, maxPages = MAX_PAGES) {
     try {
         const url = new URL(`${base}${path}`);
         for (const [k, v] of Object.entries({ ...params, page: 1, per_page: PER_PAGE })) {
@@ -373,14 +469,32 @@ function mapPaymentStatus(p) {
 // every value that didn't match verbatim — ~94% of real rows. Normalise the
 // known labels to our canonical set; for anything unrecognised keep a slug of
 // the raw value rather than dropping the taxonomy. Only empty -> null.
+// The values `payments.method` will actually accept — payments_method_check.
+// This list is the CONTRACT, and mapPaymentMethod must never emit anything
+// outside it: a rejected row is not a mislabelled payment, it is a payment that
+// vanishes. upsertChunked retries the chunk row-by-row, logs "skipped N
+// unstorable row(s)" and carries on, so the loss is silent and permanent.
+// Measured live over 12 months before this was closed: 183 payments worth
+// GBP 7,540.45 that could never be stored — 181 "Other", 1 "American Express"
+// and 1 "Cheque", the last of which the canon table below already knew about
+// while the constraint did not.
+const PAYMENT_METHODS = new Set([
+    'card', 'apple_pay', 'google_pay', 'bank_transfer', 'cash',
+    'direct_debit', 'finance', 'card_on_file', 'pay_link', 'cheque',
+    'amex', 'other',
+]);
+
 function mapPaymentMethod(m) {
     const v = String(m ?? '').trim().toLowerCase();
+    // Nullable by design: "not stated" is a different fact from "stated as
+    // something we do not recognise", and only the latter becomes 'other'.
     if (!v) return null;
     const canon = {
         'card': 'card', 'credit card': 'card', 'debit card': 'card',
         'card on file': 'card', 'card_on_file': 'card', 'stripe': 'card',
         'cash': 'cash',
         'cheque': 'cheque', 'check': 'cheque',
+        'american express': 'amex', 'amex': 'amex',
         'bacs': 'bank_transfer', 'bank transfer': 'bank_transfer',
         'bank_transfer': 'bank_transfer', 'direct credit': 'bank_transfer',
         'direct debit': 'direct_debit', 'direct_debit': 'direct_debit',
@@ -388,8 +502,13 @@ function mapPaymentMethod(m) {
         'apple pay': 'apple_pay', 'apple_pay': 'apple_pay',
         'google pay': 'google_pay', 'google_pay': 'google_pay',
         'pay link': 'pay_link', 'pay_link': 'pay_link',
+        'other': 'other',
     };
-    return canon[v] ?? v.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const mapped = canon[v] ?? v.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    // Closed set. An unrecognised label is bucketed honestly as 'other' rather
+    // than slugified into a value the database will refuse — the money matters
+    // more than the label, and a payment we cannot describe is still a payment.
+    return PAYMENT_METHODS.has(mapped) ? mapped : 'other';
 }
 
 function toPence(amount) {
@@ -475,6 +594,44 @@ async function loadPractitionerPracticeMap(orgId) {
 //
 // Only callers that genuinely need the WHOLE map should use this. To resolve
 // the handful of patients one event references, use contactMapFor.
+/**
+ * Dentally patient id -> the practice that patient belongs to.
+ *
+ * The SECOND way to attribute a treatment row, and usually the better one. A
+ * treatment item or plan carries only a practitioner, and practice was resolved
+ * from that alone — so any row whose practitioner is missing from `associates`,
+ * or who has no primary_practice_id, came out unattributed even when it was
+ * plainly the account's own work. Its PATIENT is the stronger signal: contacts
+ * are pulled site-filtered, so a patient we hold is a patient of a practice we
+ * selected.
+ *
+ * Only built when an organisation pulls a subset of its practices — an
+ * organisation holding the whole group has nothing to disambiguate.
+ */
+export async function loadContactPracticeMap(orgId) {
+    const map = new Map();
+    const PAGE = 1000;
+    let after = null;
+    for (;;) {
+        let query = supabase_1.serviceClient
+            .from('contacts')
+            .select('pms_external_id, practice_id')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .not('pms_external_id', 'is', null)
+            .order('pms_external_id', { ascending: true })
+            .limit(PAGE);
+        if (after !== null) query = query.gt('pms_external_id', after);
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+        const rows = data ?? [];
+        for (const c of rows) if (c.practice_id) map.set(String(c.pms_external_id), c.practice_id);
+        if (rows.length < PAGE) break;
+        after = rows[rows.length - 1].pms_external_id;
+    }
+    return map;
+}
+
 export async function loadContactMap(orgId) {
     const map = new Map();
     const PAGE = 1000;
@@ -771,14 +928,18 @@ export function paymentRow(orgId, p, siteMap, contactMap) {
 // practitioner's home site — practiceByPractitioner from
 // loadPractitionerPracticeMap; restamp_treatment_plan_practices self-heals
 // rows whose practitioner joined the roster later.
-export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap = new Map(), practiceByPractitioner = new Map()) {
+export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap = new Map(), practiceByPractitioner = new Map(), practiceByContact = new Map()) {
     const numOrNull = (v) => (v == null || v === '' ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
     const prac = tp.practitioner_id != null ? String(tp.practitioner_id) : null;
+    // Practitioner first, then the patient — see treatmentItemRow.
+    const practiceId = (prac ? practiceByPractitioner.get(prac) : null)
+        ?? practiceByContact.get(String(tp.patient_id))
+        ?? null;
     return {
         organisation_id: orgId,
         source: 'dentally',
         pms_external_id: String(tp.id),
-        practice_id: prac ? (practiceByPractitioner.get(prac) ?? null) : null,
+        practice_id: practiceId,
         pms_practitioner_id: tp.practitioner_id != null ? String(tp.practitioner_id) : null,
         pms_patient_id: tp.patient_id != null ? String(tp.patient_id) : null,
         associate_id: associateMap.get(String(tp.practitioner_id)) ?? null,
@@ -805,16 +966,23 @@ export function treatmentPlanRow(orgId, tp, associateMap = new Map(), contactMap
 // price is a money STRING -> integer pence. base_chart=true rows are tooth/surface
 // charting noise Dentally excludes from the report; we store the flag and let the
 // rollup RPC filter, so both report semantics stay available.
-export function treatmentItemRow(orgId, it, practiceByPractitioner = new Map(), associateMap = new Map(), contactMap = new Map()) {
+export function treatmentItemRow(orgId, it, practiceByPractitioner = new Map(), associateMap = new Map(), contactMap = new Map(), practiceByContact = new Map()) {
     const prac = it.practitioner_id != null ? String(it.practitioner_id) : null;
     const dur = Number(it.duration);
+    // Practitioner first (it names who did the work), patient second. Without
+    // the fallback a practitioner missing from `associates` — a locum, a
+    // leaver, anyone the roster pull has not reached — left the row
+    // unattributed and invisible to every per-practice figure.
+    const practiceId = (prac ? practiceByPractitioner.get(prac) : null)
+        ?? practiceByContact.get(String(it.patient_id))
+        ?? null;
     return {
         organisation_id: orgId,
         source: 'dentally',
         pms_external_id: String(it.id),
         pms_practitioner_id: prac,
         pms_patient_id: it.patient_id != null ? String(it.patient_id) : null,
-        practice_id: prac ? (practiceByPractitioner.get(prac) ?? null) : null,
+        practice_id: practiceId,
         contact_id: contactMap.get(String(it.patient_id)) ?? null,
         associate_id: prac ? (associateMap.get(prac) ?? null) : null,
         treatment_plan_id: it.treatment_plan_id != null ? String(it.treatment_plan_id) : null,
@@ -895,21 +1063,132 @@ export function invoiceRow(orgId, inv, siteMap, contactMap) {
     };
 }
 
+// ---- site scoping -----------------------------------------------------------
+
+/**
+ * The Dentally sites this organisation is allowed to pull, or null for "every
+ * site" — which is what an org connected before the picker existed does, and
+ * what a single-site tenant keeps doing. Null is deliberately NOT an empty Set:
+ * the two must never be confused, because an empty Set means "pull nothing".
+ *
+ * This exists because a Dentally OAuth grant is GROUP-wide. A sub-account that
+ * should hold one practice gets a token that can read all of them, and on a
+ * live connect that pulled 9,446 patients and 21,800 appointments belonging to
+ * four other practices into one sub-account before it was stopped.
+ */
+export function allowedSites(integration) {
+    const ids = integration?.config?.site_ids;
+    if (!Array.isArray(ids) || ids.length === 0) return null;
+    return new Set(ids.map(String));
+}
+
+/** True when a record's site is one this organisation pulls. */
+export function keepSite(allowed, siteId) {
+    return !allowed || allowed.has(String(siteId));
+}
+
+/**
+ * Request params that make Dentally send only the sites this organisation
+ * pulls, so a practice it did not select is never transferred at all.
+ *
+ * Verified against the live API — `site_id` narrows EVERY collection: patients
+ * 9,553 -> 4,108, appointments 33,828 -> 12,675, payments 13,138 -> 5,103,
+ * invoices 23,721 -> 9,294, practitioners 218 -> 75, users 270 -> 99.
+ *
+ * The filter takes ONE value, so several selected sites become several filtered
+ * passes (expanded by sitePasses at the fetch layer) — never one unfiltered
+ * pass that downloads the group and discards most of it.
+ *
+ * keepSite still runs on the rows that come back. Correctness must never depend
+ * on a remote filter we cannot unit-test — the same reason isOpenAppointment
+ * re-checks the server-side `after` filter locally.
+ */
+export function siteRequestParams(allowed) {
+    if (!allowed || allowed.size === 0) return {};
+    return { __sites: [...allowed] };
+}
+
+/**
+ * Scope for the reconcilers, which compare OUR rows against Dentally's.
+ *
+ * BOTH SIDES MUST BE SCOPED THE SAME WAY. A remote set narrowed to one practice
+ * compared against local rows from several marks every row of the others as
+ * deleted-upstream, and the delete reconcilers act on that: de-selecting a
+ * practice would quietly erase its clinical history on the next nightly run.
+ * Removing a practice's data must be an explicit act, never a filter's side
+ * effect.
+ *
+ * Dentally's site_id takes ONE value and these functions build their own URLs,
+ * so the narrowing applies when exactly one site is selected — every
+ * sub-account today, and where all the volume is. With none or several selected
+ * BOTH sides stay unfiltered: the remote set is then a superset of anything we
+ * hold, so a row can only be deleted because Dentally really dropped it.
+ */
+async function reconcileScope(orgId, allowed) {
+    const NONE = { params: {}, practiceIds: null };
+    if (!allowed || allowed.size !== 1) return NONE;
+    const site = [...allowed][0];
+    const siteMap = await loadSiteMap(orgId);
+    const practiceId = siteMap.get(String(site));
+    // No practice row for the site means the local side cannot be scoped, so
+    // the remote side must not be either — an asymmetric scope is the bug.
+    if (!practiceId) return NONE;
+    return { params: { site_id: site }, practiceIds: [practiceId] };
+}
+
+/**
+ * Drop rows whose practice could not be resolved, when the organisation pulls
+ * only some of the group's practices.
+ *
+ * appointments, payments, invoices and contacts are protected already: their
+ * practice_id is NOT NULL, so a row whose site maps to no practice is skipped.
+ * treatment_plans, dentally_treatment_items and invoice_items have a NULLABLE
+ * practice_id and store the row anyway — which is right for an organisation
+ * that holds the whole group (unattributed is still theirs) and wrong for one
+ * scoped to a single practice, where an unresolvable practice means the record
+ * belongs to a practice it did not select.
+ *
+ * Measured live before this existed: the Rochester sub-account held 64,165
+ * treatment items, 10,792 invoice items and 7,700 treatment plans with a null
+ * practice — other practices' records — and the Treatments Completed card
+ * counted them all. It read 1,981 for June against 775 that were actually
+ * Rochester's, and 341 for a September week against Dentally's own 96.
+ *
+ * Only applied when a selection exists. An organisation that pulls everything
+ * keeps its unattributed rows, exactly as before.
+ */
+function dropsUnattributed(allowed) {
+    return Boolean(allowed && allowed.size > 0);
+}
+
 // ---- pulls ------------------------------------------------------------------
 
-async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages) {
+// The three pulls below are the ONLY ones that need an explicit site gate.
+// Appointments, payments and invoices already drop a record whose site maps to
+// no practice, because those tables have a NOT NULL practice_id — so limiting
+// which practices exist limits them for free. Patients, practitioners and staff
+// set `practice_id: null` and insert anyway (patientRow line ~607), so without
+// this they land in full whatever the practice list says.
+
+async function pullPatients(orgId, base, auth, params, siteMap, onPage, maxPages, allowed = null) {
     let synced = 0;
+    // The page reporter is wrapped so every tick carries how many records were
+    // KEPT alongside how many were read. Without it the overlay says "9,450
+    // pulled" for an account holding 4,061 — both true, neither labelled.
+    const report = onPage ? (page, totalPages, count) => onPage(page, totalPages, count, synced) : onPage;
     await streamPages(orgId, base, '/patients', auth, params, async (items) => {
-        const rows = items.map((p) => patientRow(orgId, p, siteMap));
+        const rows = items
+            .filter((p) => keepSite(allowed, p?.site_id))
+            .map((p) => patientRow(orgId, p, siteMap));
         synced += await upsertChunked('contacts', rows, 'organisation_id,source,pms_external_id');
-    }, onPage, maxPages);
+    }, report, maxPages);
     return { synced };
 }
 
-async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages) {
+async function pullPractitioners(orgId, base, auth, params, siteMap, maxPages, allowed = null) {
     const remote = await fetchAllPages(orgId, base, '/practitioners', auth, params, null, maxPages);
     const rows = remote
-        .filter((p) => p && p.id != null)
+        .filter((p) => p && p.id != null && keepSite(allowed, p.site_id))
         .map((p) => practitionerRow(orgId, p, siteMap));
     // Upsert on the new (organisation_id, pms_external_id) arbiter. pay_pct /
     // lab_split_pct are NOT in the payload, so owner-set values are preserved.
@@ -926,15 +1205,15 @@ export async function syncPractitionersOnly(orgId, integration) {
     const auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) return { error: 'no_auth' };
     const siteMap = await loadSiteMap(orgId);
-    return pullPractitioners(orgId, base, auth, {}, siteMap, BACKFILL_MAX_PAGES);
+    return pullPractitioners(orgId, base, auth, {}, siteMap, BACKFILL_MAX_PAGES, allowedSites(integration));
 }
 
 // Dentally `/users` -> staff roster. Small set (whole-practice team), so one
 // unfiltered pull each sync; upsert is idempotent on (org, source, pms id).
-async function pullUsers(orgId, base, auth, params, siteMap, maxPages) {
+async function pullUsers(orgId, base, auth, params, siteMap, maxPages, allowed = null) {
     const remote = await fetchAllPages(orgId, base, '/users', auth, params, null, maxPages);
     const rows = remote
-        .filter((u) => u && u.id != null)
+        .filter((u) => u && u.id != null && keepSite(allowed, u.site_id))
         .map((u) => staffRow(orgId, u, siteMap));
     const synced = await upsertChunked('staff', rows, 'organisation_id,source,pms_external_id');
     return { synced };
@@ -966,6 +1245,21 @@ async function pullAppointments(orgId, base, auth, params, siteMap, contactMap, 
     return { synced, skipped, skippedClosed };
 }
 
+// DELIBERATELY NOT SITE-FILTERED — the delete reconcilers below fetch the whole
+// group's remote set, and that is a safety property, not an oversight.
+//
+// They delete OUR rows that are absent from the remote set. Fetching the group
+// makes the remote set a SUPERSET of anything we hold, so a row can only be
+// deleted because Dentally really dropped it. Narrowing the remote side to the
+// currently-selected sites would mean that de-selecting a practice makes every
+// row we already hold for it look deleted-upstream, and the next nightly
+// reconcile would quietly erase real clinical history as a side effect of a
+// settings change. Removing a practice's data must be an explicit act, never a
+// consequence of a filter.
+//
+// The cost is one unfiltered page-through per reconcile. The pulls themselves
+// are filtered, which is where the volume is.
+//
 // Pure decision step for the delete-reconciliation below, factored out so the
 // safety rules are unit-testable without hitting Dentally or the DB. Given our
 // dentally appointment rows in a window and the authoritative set of ids Dentally
@@ -1003,7 +1297,9 @@ export function selectStaleAppointmentIds(ourRows, remoteIdSet, { maxDeleteShare
 // same `after` the upcoming-diary pull already relies on); if `before` is ignored
 // by a tenant the pull simply returns a superset and either still pages fully or
 // trips the page cap and aborts — both safe.
-export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO, untilISO, maxPages = MAX_PAGES } = {}) {
+export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO, untilISO, maxPages = MAX_PAGES, allowed = null } = {}) {
+    // Remote and local are narrowed together or not at all. See reconcileScope.
+    const scope = await reconcileScope(orgId, allowed);
     if (!sinceISO || !untilISO) return { deleted: 0, aborted: 'no_window' };
     const pad = 86400000; // ±1 day, in ms
     const after = new Date(Date.parse(sinceISO) - pad).toISOString();
@@ -1015,15 +1311,10 @@ export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO
     let complete = false;
     for (;;) {
         const url = new URL(`${base}/appointments`);
+        for (const [k, v] of Object.entries(scope.params)) url.searchParams.set(k, String(v));
         for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
-        let res = null;
-        try {
-            res = await fetchWithTimeout(url, { headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' } });
-        } catch {
-            return { deleted: 0, aborted: 'fetch_error' }; // partial -> never delete
-        }
-        if (res.status === 429) { const ra = Number(res.headers.get('retry-after')) || 2; await sleep(ra * 1000); continue; }
-        if (!res.ok) return { deleted: 0, aborted: `http_${res.status}` };
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { deleted: 0, aborted: fetchAborted }; // partial -> never delete
         const body = await res.json();
         const key = Object.keys(body).find((k) => Array.isArray(body[k]));
         const items = key ? body[key] : [];
@@ -1041,15 +1332,19 @@ export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO
     const ourRows = [];
     const PAGE = 1000;
     for (let from = 0; ; from += PAGE) {
-        const { data, error } = await supabase_1.serviceClient
+        let q = supabase_1.serviceClient
             .from('appointments')
             .select('id, pms_external_id')
             .eq('organisation_id', orgId)
             .eq('source', 'dentally')
             .gte('starts_at', sinceISO)
             .lt('starts_at', untilISO)
-            .not('pms_external_id', 'is', null)
-            .range(from, from + PAGE - 1);
+            .not('pms_external_id', 'is', null);
+        // Same narrowing as the remote fetch above. Rows for a practice the
+        // remote set no longer covers are excluded from the comparison rather
+        // than treated as deleted upstream.
+        if (scope.practiceIds) q = q.in('practice_id', scope.practiceIds);
+        const { data, error } = await q.range(from, from + PAGE - 1);
         if (error) return { deleted: 0, aborted: 'db_read_error' };
         const rows = data ?? [];
         ourRows.push(...rows);
@@ -1064,6 +1359,188 @@ export async function reconcileDeletedAppointments(orgId, base, auth, { sinceISO
         if (!error) deleted += chunk.length;
     }
     return { deleted, remote: remoteIds.size, scanned: ourRows.length };
+}
+
+// ============================================================================
+// BACKFILL reconciliation — the missing half of an `updated_after` sync.
+//
+// Every heavy pull in this file is driven by `updated_after`, so it only ever
+// sees what Dentally CHANGED since the last run. That makes any miss permanent:
+// if a record never lands (or is removed after the fact), its `updated_at` stays
+// frozen in the past while our cursor moves forward, and no future incremental
+// pull can ever return it again. There is delete-reconciliation for rows
+// Dentally REMOVED and, until now, nothing at all for rows we simply do not
+// have — so the error could only accumulate, which is exactly why the gap grows
+// the further back you look.
+//
+// Measured on the live project 2026-09-07, Rochester August 2026: Dentally
+// reported 620 patient appointments against our 605. All 15 still exist in
+// Dentally, all carry a mapped site, a valid start/finish and a patient we hold
+// as a contact, and replaying the sync's own pull shape returned all 15 across
+// 54 complete pages with no duplicates. Nothing about the fetch or the mapping
+// was wrong — the rows just were not in the table, and the cursor could never go
+// back for them.
+//
+// DELIBERATE ASYMMETRY with the delete prunes above. Those are fail-CLOSED: a
+// partial remote set makes healthy rows look deleted, so they abort rather than
+// act on incomplete data. This is fail-OPEN: writing back a record Dentally just
+// handed us cannot destroy anything, so a short pull restores what it saw and
+// the next run picks up the rest. Getting these two backwards in either
+// direction is the dangerous mistake.
+//
+// Only rows we do NOT already hold are written. A blanket re-upsert of the
+// window would be simpler and wrong: it would rewrite thousands of rows a night,
+// and could blank a column the row builder has no value for, to fix a handful of
+// gaps.
+//
+// Generic over the resource, because this is not an appointments problem — every
+// `updated_after` feed in this file has the same one-way ratchet.
+// ============================================================================
+// `prepare` is an optional per-PAGE hook returning context the row builder
+// needs but the record does not carry — an invoice_item holds only invoice_id
+// and has to resolve its parent's practice / contact / date / paid status. Per
+// page, not per row: one lookup for a hundred ids instead of a hundred lookups,
+// and without holding a whole-org map in memory. The poll path solves the same
+// problem the same way (loadInvoiceContext).
+export async function reconcileMissingRecords(orgId, base, auth, {
+    path, params = {}, table, idCol, onConflict, buildRow, prepare = null,
+    maxPages = WINDOW_RECON_MAX_PAGES, collectRemoteIds = false,
+} = {}) {
+    let restored = 0;
+    let skippedUnmapped = 0;
+    let scanned = 0;
+    let truncated = false;
+    const remoteIds = collectRemoteIds ? new Set() : null;
+    let page = 1;
+    for (;;) {
+        const url = new URL(`${base}${path}`);
+        for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { restored, skippedUnmapped, scanned, truncated: true, aborted: fetchAborted };
+        const body = await res.json();
+        const key = Object.keys(body).find((k) => Array.isArray(body[k]));
+        const items = (key ? body[key] : []).filter((r) => r && r.id != null);
+        scanned += items.length;
+        if (remoteIds) for (const r of items) remoteIds.add(String(r.id));
+
+        if (items.length) {
+            // One small indexed probe per page: which of these do we already
+            // hold? Org- AND source-scoped, because the pms id is only unique
+            // within a tenant — an unscoped probe would see another tenant's row
+            // and conclude we already have a record we do not.
+            const ids = items.map((r) => String(r.id));
+            const { data: existing, error } = await supabase_1.serviceClient
+                .from(table)
+                .select(idCol)
+                .eq('organisation_id', orgId)
+                .eq('source', 'dentally')
+                .in(idCol, ids);
+            if (error) return { restored, skippedUnmapped, scanned, truncated: true, aborted: 'db_read_error' };
+            const have = new Set((existing ?? []).map((r) => String(r[idCol])));
+            const wanted = items.filter((rec) => !have.has(String(rec.id)));
+            // Resolve context only for what we are actually going to write — a
+            // page where we already hold everything costs no extra query.
+            const ctx = prepare && wanted.length ? await prepare(wanted) : null;
+            const rows = [];
+            for (const rec of wanted) {
+                const row = buildRow(rec, ctx);
+                if (!row) { skippedUnmapped++; continue; } // e.g. practice_id is NOT NULL
+                rows.push(row);
+            }
+            if (rows.length) restored += await upsertChunked(table, rows, onConflict);
+        }
+
+        const totalPages = body.meta?.total_pages;
+        const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
+        if (done) break;
+        if (page >= maxPages) { truncated = true; break; }
+        page++;
+        await sleep(RATE_DELAY_MS);
+    }
+    return { restored, skippedUnmapped, scanned, truncated, ...(remoteIds ? { remoteIds } : {}) };
+}
+
+// Appointments. Windowed on appointment DATE via after/before — note Dentally
+// ignores `before` (verified live: a before-only query returns the whole
+// 263,926-row collection), so the window is effectively open-ended forward.
+// That only ever makes the pull a SUPERSET of the window, which is harmless
+// here: a restored row outside the window is still a row Dentally has.
+export async function reconcileMissingAppointments(orgId, base, auth, { sinceISO, untilISO, maxPages = WINDOW_RECON_MAX_PAGES, allowed = null } = {}) {
+    const siteMap = await loadSiteMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    const practitionerMap = await loadPractitionerMap(orgId);
+    // Restore-only: buildRow drops an unmapped practice, so narrowing the
+    // remote side here is a pure saving and can delete nothing.
+    const { params: scope } = await reconcileScope(orgId, allowed);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/appointments',
+        params: { after: sinceISO, before: untilISO, cancelled: true, ...scope },
+        table: 'appointments',
+        idCol: 'pms_external_id',
+        onConflict: 'organisation_id,source,pms_external_id',
+        buildRow: (a) => appointmentRow(orgId, a, siteMap, contactMap, practitionerMap),
+        maxPages,
+    });
+}
+
+// Payments. /payments filters on dated_on (a DATE) via dated_after/dated_before.
+export async function reconcileMissingPayments(orgId, base, auth, { sinceISO, untilISO, maxPages = WINDOW_RECON_MAX_PAGES, allowed = null } = {}) {
+    const siteMap = await loadSiteMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    const { params: scope } = await reconcileScope(orgId, allowed);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/payments',
+        params: { dated_after: String(sinceISO).slice(0, 10), dated_before: String(untilISO).slice(0, 10), ...scope },
+        table: 'payments',
+        idCol: 'external_id',
+        onConflict: 'organisation_id,source,external_id',
+        buildRow: (p) => paymentRow(orgId, p, siteMap, contactMap),
+        maxPages,
+    });
+}
+
+// Invoices. NOT windowed: Dentally ignores every date filter on /invoices
+// (verified live — dated_after/dated_before, dated_from/dated_to and
+// filter[dated_from]/filter[dated_to] all return the identical full collection).
+// Passing collectRemoteIds lets the caller reuse this single page-through for
+// the delete prune too, instead of paging the whole collection twice a night.
+export async function reconcileMissingInvoices(orgId, base, auth, { maxPages = INVOICE_RECON_MAX_PAGES, collectRemoteIds = false, allowed = null } = {}) {
+    const siteMap = await loadSiteMap(orgId);
+    const contactMap = await loadContactMap(orgId);
+    // DANGEROUS COUPLING, handled deliberately: with collectRemoteIds the ids
+    // gathered here are handed to reconcileDeletedInvoices as its authoritative
+    // remote set. Narrowing this fetch therefore narrows that set too, so the
+    // delete MUST be given the same `allowed` and scope its local side to
+    // match. Scoping one and not the other deletes every invoice belonging to
+    // the practices this fetch no longer asked for.
+    const { params: scope } = await reconcileScope(orgId, allowed);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/invoices',
+        params: scope,
+        table: 'invoices',
+        idCol: 'external_id',
+        onConflict: 'organisation_id,source,external_id',
+        buildRow: (inv) => invoiceRow(orgId, inv, siteMap, contactMap),
+        maxPages,
+        collectRemoteIds,
+    });
+}
+
+// Invoice items — the per-treatment fee lines behind each invoice. Not windowed
+// for the same reason as invoices (Dentally ignores the date filters), and each
+// item needs its parent invoice's practice/contact/date, resolved a page at a
+// time through the same loadInvoiceContext the webhook path uses.
+export async function reconcileMissingInvoiceItems(orgId, base, auth, { maxPages = INVOICE_RECON_MAX_PAGES } = {}) {
+    const practitionerMap = await loadPractitionerMap(orgId);
+    return reconcileMissingRecords(orgId, base, auth, {
+        path: '/invoice_items',
+        table: 'invoice_items',
+        idCol: 'pms_external_id',
+        onConflict: 'organisation_id,source,pms_external_id',
+        prepare: (items) => loadInvoiceContext(orgId, items.map((it) => it.invoice_id)),
+        buildRow: (it, ctx) => invoiceItemRow(orgId, it, ctx ?? new Map(), practitionerMap),
+        maxPages,
+    });
 }
 
 // Pure decision step for the payment delete-reconciliation, mirroring
@@ -1093,7 +1570,8 @@ export function selectStalePaymentIds(ourRows, remoteIdSet, { maxDeleteShare = 0
 // HTTP error, fetch error, or empty/ambiguous body is "unknown", never "deleted";
 // the pure selectStalePaymentIds guard aborts on an empty remote set or an
 // implausibly large delete share.
-export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, untilISO, maxPages = MAX_PAGES } = {}) {
+export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, untilISO, maxPages = MAX_PAGES, allowed = null } = {}) {
+    const scope = await reconcileScope(orgId, allowed);
     if (!sinceISO || !untilISO) return { deleted: 0, aborted: 'no_window' };
     const pad = 86400000; // ±1 day, in ms
     // /payments filters on dated_on (a DATE) via dated_after/dated_before.
@@ -1105,15 +1583,9 @@ export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, un
     let complete = false;
     for (;;) {
         const url = new URL(`${base}/payments`);
-        for (const [k, v] of Object.entries({ ...params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
-        let res = null;
-        try {
-            res = await fetchWithTimeout(url, { headers: { Authorization: auth, 'User-Agent': USER_AGENT, Accept: 'application/json' } });
-        } catch {
-            return { deleted: 0, aborted: 'fetch_error' }; // partial -> never delete
-        }
-        if (res.status === 429) { const ra = Number(res.headers.get('retry-after')) || 2; await sleep(ra * 1000); continue; }
-        if (!res.ok) return { deleted: 0, aborted: `http_${res.status}` };
+        for (const [k, v] of Object.entries({ ...params, ...scope.params, page, per_page: PER_PAGE })) url.searchParams.set(k, String(v));
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { deleted: 0, aborted: fetchAborted }; // partial -> never delete
         const body = await res.json();
         const key = Object.keys(body).find((k) => Array.isArray(body[k]));
         const items = key ? body[key] : [];
@@ -1130,15 +1602,17 @@ export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, un
     const ourRows = [];
     const PAGE = 1000;
     for (let from = 0; ; from += PAGE) {
-        const { data, error } = await supabase_1.serviceClient
+        let q = supabase_1.serviceClient
             .from('payments')
             .select('id, external_id')
             .eq('organisation_id', orgId)
             .eq('source', 'dentally')
             .gte('processed_at', sinceISO)
             .lt('processed_at', untilISO)
-            .not('external_id', 'is', null)
-            .range(from, from + PAGE - 1);
+            .not('external_id', 'is', null);
+        // Narrowed with the remote fetch above, never independently.
+        if (scope.practiceIds) q = q.in('practice_id', scope.practiceIds);
+        const { data, error } = await q.range(from, from + PAGE - 1);
         if (error) return { deleted: 0, aborted: 'db_read_error' };
         const rows = data ?? [];
         ourRows.push(...rows);
@@ -1153,6 +1627,133 @@ export async function reconcileDeletedPayments(orgId, base, auth, { sinceISO, un
         if (!error) deleted += chunk.length;
     }
     return { deleted, remote: remoteIds.size, scanned: ourRows.length };
+}
+
+// Pure decision step for the invoice delete-reconciliation, mirroring
+// selectStalePaymentIds. Invoices key on `external_id`. Returns the external
+// ids alongside our row ids because invoice_items reference the DENTALLY
+// invoice id (pms_invoice_id), not our row id, so the fee-line cascade cannot
+// be done from `ids` alone. Same fail-closed guards: never act on an empty
+// remote set, never delete more than maxDeleteShare of the collection.
+export function selectStaleInvoiceIds(ourRows, remoteIdSet, { maxDeleteShare = 0.5 } = {}) {
+    const stale = (ourRows || []).filter((r) => r.external_id != null && !remoteIdSet.has(String(r.external_id)));
+    if (!ourRows || ourRows.length === 0) return { ids: [], externalIds: [], aborted: null };
+    if (remoteIdSet.size === 0) return { ids: [], externalIds: [], aborted: 'empty_remote' };
+    if (stale.length > ourRows.length * maxDeleteShare) return { ids: [], externalIds: [], aborted: 'safety_threshold' };
+    return { ids: stale.map((r) => r.id), externalIds: stale.map((r) => String(r.external_id)), aborted: null };
+}
+
+// Whole-collection delete reconciliation for invoices.
+//
+// WHY IT IS NOT WINDOWED like its two siblings above: Dentally's /invoices
+// endpoint SILENTLY IGNORES every date filter. Verified against the live API —
+// dated_after/dated_before, dated_from/dated_to and filter[dated_from]/
+// filter[dated_to] each return the identical full collection; only `site_id`
+// narrows it. A windowed prune here would therefore be a windowed LOCAL read
+// compared against a FULL remote set, which is merely wasteful today, but the
+// day Dentally starts honouring those filters it inverts into a full local read
+// against a windowed remote set — i.e. "delete every invoice outside the
+// window". Both sides are read at the same (full) scope so the comparison can
+// never drift into that. The extra cost is one full page-through per nightly
+// sync (~240 pages at 23.7k invoices), and the payoff is that it also reaches
+// deletions older than any rolling window would: of the 150 stale invoices
+// found on the live project, 130 predated a 35-day window.
+//
+// Safety (this function deletes financial rows, so it is fail-closed):
+//   - only ever touches rows with source='dentally' in this organisation;
+//   - ABORTS (deletes nothing) on any page-cap hit, HTTP error, fetch error or
+//     ambiguous body — an incomplete remote set makes every unseen invoice look
+//     deleted, which is exactly the failure that would wipe real money;
+//   - the pure selectStaleInvoiceIds guard aborts on an empty remote set or an
+//     implausibly large delete share.
+// Fee lines are deleted BEFORE their invoice: invoice_items are found by the
+// Dentally invoice id, so removing the invoice first would strand them.
+export async function reconcileDeletedInvoices(orgId, base, auth, { maxPages = INVOICE_RECON_MAX_PAGES, remoteIds: suppliedIds, allowed = null } = {}) {
+    // `suppliedIds` normally comes from reconcileMissingInvoices, which is
+    // given the SAME `allowed` — so a scoped remote set is compared against a
+    // scoped local one. Passing one without the other is the bug this pairing
+    // exists to prevent.
+    const scope = await reconcileScope(orgId, allowed);
+    // The backfill reconciler already walks this exact collection, so it can hand
+    // its id set over rather than make us pay for a second ~240-page pass. It
+    // passes null when ITS own pull was truncated or errored — a partial set must
+    // never be mistaken for an authoritative one, which is the whole reason this
+    // function is fail-closed.
+    const remoteIds = suppliedIds instanceof Set ? suppliedIds : new Set();
+    let page = 1;
+    let complete = suppliedIds instanceof Set;
+    for (; !complete;) {
+        const url = new URL(`${base}/invoices`);
+        for (const [k, v] of Object.entries(scope.params)) url.searchParams.set(k, String(v));
+        url.searchParams.set('page', String(page));
+        url.searchParams.set('per_page', String(PER_PAGE));
+        const { res, aborted: fetchAborted } = await fetchReconcilePage(url, auth);
+        if (fetchAborted) return { deleted: 0, aborted: fetchAborted }; // partial -> never delete
+        const body = await res.json();
+        const key = Object.keys(body).find((k) => Array.isArray(body[k]));
+        const items = key ? body[key] : [];
+        for (const inv of items) if (inv?.id != null) remoteIds.add(String(inv.id));
+        const totalPages = body.meta?.total_pages;
+        const done = totalPages ? page >= totalPages : items.length < PER_PAGE;
+        if (done) { complete = true; break; }
+        if (page >= maxPages) break; // collection too big to fully page -> abort below
+        page++;
+        await sleep(RATE_DELAY_MS);
+    }
+    if (!complete) return { deleted: 0, aborted: 'page_cap' };
+
+    // Our dentally invoices, ALL of them — same scope as the remote set above.
+    // Keyset-paged on external_id (unique within org+source, and the third
+    // column of the upsert's conflict target) rather than .range(): OFFSET makes
+    // the server re-walk every skipped row, which is quadratic in table size.
+    const ourRows = [];
+    let cursor = null;
+    for (;;) {
+        let q = supabase_1.serviceClient
+            .from('invoices')
+            .select('id, external_id')
+            .eq('organisation_id', orgId)
+            .eq('source', 'dentally')
+            .not('external_id', 'is', null)
+            .order('external_id', { ascending: true })
+            .limit(1000);
+        if (scope.practiceIds) q = q.in('practice_id', scope.practiceIds);
+        if (cursor != null) q = q.gt('external_id', cursor);
+        const { data, error } = await q;
+        if (error) return { deleted: 0, aborted: 'db_read_error' };
+        const rows = data ?? [];
+        if (!rows.length) break;
+        ourRows.push(...rows);
+        cursor = rows[rows.length - 1].external_id;
+        if (rows.length < 1000) break;
+    }
+
+    const { ids: staleIds, externalIds, aborted } = selectStaleInvoiceIds(ourRows, remoteIds);
+    if (aborted) return { deleted: 0, aborted, remote: remoteIds.size, scanned: ourRows.length };
+    if (!staleIds.length) return { deleted: 0, invoicesCleared: 0, remote: remoteIds.size, scanned: ourRows.length };
+
+    // Counts INVOICES whose fee lines were cleared, not fee lines — a PostgREST
+    // delete does not report how many rows it removed, and reporting a chunk
+    // length as a row count would overstate or understate it every time.
+    let invoicesCleared = 0;
+    for (let i = 0; i < externalIds.length; i += 500) {
+        const chunk = externalIds.slice(i, i + 500);
+        const { error } = await supabase_1.serviceClient
+            .from('invoice_items').delete()
+            .eq('organisation_id', orgId).eq('source', 'dentally')
+            .in('pms_invoice_id', chunk);
+        if (!error) invoicesCleared += chunk.length;
+    }
+    let deleted = 0;
+    for (let i = 0; i < staleIds.length; i += 500) {
+        const chunk = staleIds.slice(i, i + 500);
+        const { error } = await supabase_1.serviceClient
+            .from('invoices').delete()
+            .eq('organisation_id', orgId)
+            .in('id', chunk);
+        if (!error) deleted += chunk.length;
+    }
+    return { deleted, invoicesCleared, remote: remoteIds.size, scanned: ourRows.length };
 }
 
 // ============================================================================
@@ -1259,12 +1860,14 @@ async function pullPayments(orgId, base, auth, params, siteMap, contactMap, onPa
     return { synced, skipped };
 }
 
-async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages, practiceByPractitioner = new Map()) {
+async function pullTreatmentPlans(orgId, base, auth, params, associateMap, contactMap, onPage, maxPages, practiceByPractitioner = new Map(), allowed = null, practiceByContact = new Map()) {
     let synced = 0;
+    const strict = dropsUnattributed(allowed);
     await streamPages(orgId, base, '/treatment_plans', auth, params, async (items) => {
         const rows = items
             .filter((tp) => tp && tp.id != null)
-            .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap, practiceByPractitioner));
+            .map((tp) => treatmentPlanRow(orgId, tp, associateMap, contactMap, practiceByPractitioner, practiceByContact))
+            .filter((r) => !strict || r?.practice_id);
         synced += await upsertChunked('treatment_plans', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
     return { synced };
@@ -1278,23 +1881,27 @@ async function pullTreatmentPlans(orgId, base, auth, params, associateMap, conta
 // metric and would bloat the table (the full collection is ~725k rows); when an
 // item is later completed its updated_at bumps and the incremental cursor re-pulls
 // it. Never fail the whole sync if this resource errors (caller wraps in try).
-async function pullTreatmentItems(orgId, base, auth, params, practiceByPractitioner, associateMap, contactMap, onPage, maxPages) {
+async function pullTreatmentItems(orgId, base, auth, params, practiceByPractitioner, associateMap, contactMap, onPage, maxPages, allowed = null, practiceByContact = new Map()) {
     let synced = 0;
+    const strict = dropsUnattributed(allowed);
     await streamPages(orgId, base, '/treatment_plan_items', auth, params, async (items) => {
         const rows = items
             .filter((it) => it && it.id != null && it.completed === true)
-            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap));
+            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap, practiceByContact))
+            .filter((r) => !strict || r?.practice_id);
         if (rows.length) synced += await upsertChunked('dentally_treatment_items', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
     return { synced };
 }
 
-async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitionerMap, onPage, maxPages) {
+async function pullInvoiceItems(orgId, base, auth, params, invoiceMap, practitionerMap, onPage, maxPages, allowed = null) {
     let synced = 0;
+    const strict = dropsUnattributed(allowed);
     await streamPages(orgId, base, '/invoice_items', auth, params, async (items) => {
         const rows = items
             .filter((it) => it && it.id != null)
-            .map((it) => invoiceItemRow(orgId, it, invoiceMap, practitionerMap));
+            .map((it) => invoiceItemRow(orgId, it, invoiceMap, practitionerMap))
+            .filter((r) => !strict || r?.practice_id);
         synced += await upsertChunked('invoice_items', rows, 'organisation_id,source,pms_external_id');
     }, onPage, maxPages);
     return { synced };
@@ -1470,11 +2077,30 @@ async function deleteByExternal(table, orgId, idCol, externalId) {
     if (error) throw new Error(`${table} webhook delete: ${error.message}`);
 }
 
+// A record we cannot store must not vanish without a word. Both exits below are
+// returns, not throws, so the caller's try/catch never sees them and nothing is
+// persisted — a whole resource type can stop arriving and look identical to one
+// that was never sent. Measured cost of that blindness: this org has "All
+// events" subscribed at Dentally, 38 appointment rows updated by webhook in a
+// day and ZERO invoice rows touched, and the question "are invoice events being
+// dropped or never sent?" could not be answered from anything we record.
+function warnDropped(orgId, resourceType, reason, detail = {}) {
+    console.warn('[dentally-webhook] record NOT stored', {
+        orgId, resourceType, reason, ...detail,
+    });
+}
+
 export async function applyWebhookEvent(orgId, resourceType, record, action = 'upsert') {
     if (!record || record.id == null) return { ignored: 'no_record_id' };
     if (action === 'delete') {
         const m = WEBHOOK_TABLE[resourceType];
-        if (!m) return { ignored: resourceType };
+        if (!m) {
+            // A DELETE we ignore is not harmless: Dentally removed the record and
+            // we keep ours, which is exactly how a voided invoice stays in the
+            // totals forever.
+            warnDropped(orgId, resourceType, 'unhandled_delete', { recordId: record?.id ?? null });
+            return { ignored: resourceType };
+        }
         await deleteByExternal(m[0], orgId, m[1], record.id);
         return { table: m[0], deleted: 1 };
     }
@@ -1500,13 +2126,19 @@ export async function applyWebhookEvent(orgId, resourceType, record, action = 'u
     }
     if (resourceType === 'payment') {
         const row = paymentRow(orgId, record, siteMap, contactMap);
-        if (!row) return { skipped: 'unmatched_practice' };
+        if (!row) {
+            warnDropped(orgId, 'payment', 'unmatched_practice', { siteId: record?.site_id ?? null, recordId: record?.id ?? null });
+            return { skipped: 'unmatched_practice' };
+        }
         await upsertChunked('payments', [row], 'organisation_id,source,external_id');
         return { table: 'payments', applied: 1 };
     }
     if (resourceType === 'invoice') {
         const row = invoiceRow(orgId, record, siteMap, contactMap);
-        if (!row) return { skipped: 'unmatched_practice' };
+        if (!row) {
+            warnDropped(orgId, 'invoice', 'unmatched_practice', { siteId: record?.site_id ?? null, recordId: record?.id ?? null });
+            return { skipped: 'unmatched_practice' };
+        }
         await upsertChunked('invoices', [row], 'organisation_id,source,external_id');
         // Dentally invoice payloads usually embed their line items. Persist them
         // inline (the REAL per-treatment fees) so production data does not depend
@@ -1547,6 +2179,7 @@ export async function applyWebhookEvent(orgId, resourceType, record, action = 'u
         await upsertChunked('treatment_plans', [row], 'organisation_id,source,pms_external_id');
         return { table: 'treatment_plans', applied: 1 };
     }
+    warnDropped(orgId, resourceType, 'unhandled_resource_type', { recordId: record?.id ?? null });
     return { ignored: resourceType };
 }
 
@@ -1567,6 +2200,15 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
     }
+    // Sites this org pulls (null = all). A Dentally grant is group-wide, so
+    // without this a sub-account reads every practice the token can see.
+    const allowed = allowedSites(integration);
+    // Patient -> practice, the fallback attribution for treatment rows. Only
+    // built for a scoped org: it costs a paged read of contacts and changes no
+    // answer for an org that holds every practice.
+    const practiceByContact = dropsUnattributed(allowed)
+        ? await loadContactPracticeMap(orgId).catch(() => new Map())
+        : new Map();
     // Window selection — ONE window, shared by patients / appointments /
     // payments (all filtered by `updated_after`):
     //  - full   : the most-recent 6 months (backfillSince()) with a lifted page cap.
@@ -1596,7 +2238,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // selective run is short and the user explicitly asked for those resources,
     // so honour the pick every time rather than skipping a phase a prior run
     // happened to finish.
-    const resumeMode = full && !selective;
+    // `recent` (the on-connect bootstrap) resumes for the same reason `full`
+    // does, and more urgently: it is the FIRST pull, so a restart mid-run leaves
+    // the tenant with a partial dataset and nothing recorded to say so. Observed
+    // live — a deploy killed a bootstrap at 4,060 patients / 14,463 appointments
+    // with payments, invoices and treatment plans never reached, and no error.
+    // A selective run still never resumes: the user picked those resources, so
+    // honour the pick rather than skipping a phase an earlier run finished.
+    const resumeMode = (full || recent) && !selective;
     const windowKey = since.slice(0, 10);
     const prevCursor = integration.config?.dentally_sync_cursor;
     const completedPhases = (resumeMode && prevCursor && prevCursor.window === windowKey)
@@ -1627,8 +2276,10 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // Dentally's "found" count by the cancelled volume (~19% at a busy site).
     // mapAppointmentStatus already maps cancelled -> 'cancelled' and DNA ->
     // 'no_show'; this just stops the API from withholding those rows.
-    const apptParams = { updated_after: since, cancelled: true };
-    const patientParams = { updated_after: since };
+    // Ask Dentally for only the practices this organisation pulls.
+    const siteParams = siteRequestParams(allowed);
+    const apptParams = { updated_after: since, cancelled: true, ...siteParams };
+    const patientParams = { updated_after: since, ...siteParams };
     // /payments has NO `updated_after` — Dentally's List-payments endpoint only
     // filters by payment date (`dated_after`/`dated_before` on `dated_on`). An
     // unknown param is silently ignored and the WHOLE history comes back every
@@ -1637,8 +2288,8 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
     // (upsert dedups on org+source+external_id). Trade-off: a back-dated edit to
     // an OLD payment won't surface incrementally (its `dated_on` predates the
     // window) — the periodic full backfill (dated_after = 2y ago) reconciles those.
-    const payParams = { dated_after: since.slice(0, 10) };
-    const invoiceParams = { updated_after: since };
+    const payParams = { dated_after: since.slice(0, 10), ...siteParams };
+    const invoiceParams = { updated_after: since, ...siteParams };
 
     // Page-weighted progress. The 3 resources are very unequal (a practice can
     // have ~5x more appointments than patients), so weighting each phase as a
@@ -1668,12 +2319,12 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         probe('treatment_items', '/treatment_plan_items', { updated_after: since }),
     ]);
     const phaseTotals = [patientPages, apptPages, payPages, planPages, invoicePages, itemPages, tiPages];
-    const reporter = (idx) => (page, totalPages, count) => {
+    const reporter = (idx) => (page, totalPages, count, kept) => {
         // reportPct grows phaseTotals from the live pull so an under-counting
         // probe (no meta.total_pages -> 1, or a timed-out probe -> 0) can't
         // freeze the bar at 0% for a whole phase. See reportPct's comment.
         // count = records fetched so far this phase, surfaced live in the UI.
-        onProgress({ phase: PHASES[idx], pct: reportPct(phaseTotals, idx, page, totalPages), page, totalPages, count });
+        onProgress({ phase: PHASES[idx], pct: reportPct(phaseTotals, idx, page, totalPages), page, totalPages, count, kept });
     };
 
     try {
@@ -1710,7 +2361,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         if (want('appointments') || want('treatment_plans')) {
             onProgress({ phase: 'practitioners', pct: 0, count: 0 });
             try {
-                practitioners = await pullPractitioners(orgId, base, auth, {}, siteMap, maxPages);
+                practitioners = await pullPractitioners(orgId, base, auth, { ...siteParams }, siteMap, maxPages, allowed);
                 onProgress({ phase: 'practitioners', pct: 0, count: practitioners.synced });
             } catch (err) {
                 console.warn(`[dentally] practitioners pull skipped: ${err?.message || err}`);
@@ -1722,7 +2373,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         onProgress({ phase: 'staff', pct: 0, count: 0 });
         let staff = { synced: 0 };
         try {
-            staff = await pullUsers(orgId, base, auth, {}, siteMap, maxPages);
+            staff = await pullUsers(orgId, base, auth, { ...siteParams }, siteMap, maxPages, allowed);
             onProgress({ phase: 'staff', pct: 0, count: staff.synced });
         } catch (err) {
             console.warn(`[dentally] users pull skipped: ${err?.message || err}`);
@@ -1734,7 +2385,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // doesn't strand appointment contact resolution.
         let patients = { synced: 0 };
         if (want('patients') && !completedPhases.has('patients')) {
-            patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages);
+            patients = await pullPatients(orgId, base, auth, patientParams, siteMap, reporter(0), maxPages, allowed);
             await markPhaseDone('patients');
         }
         const contactMap = await loadContactMap(orgId);
@@ -1757,7 +2408,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         let upcomingSynced = 0;
         if (recent && want('appointments')) {
             try {
-                const upcoming = await pullAppointments(orgId, base, auth, { after: new Date().toISOString(), cancelled: true }, siteMap, contactMap, null, maxPages, { practitionerMap });
+                const upcoming = await pullAppointments(orgId, base, auth, { after: new Date().toISOString(), cancelled: true, ...siteParams }, siteMap, contactMap, null, maxPages, { practitionerMap });
                 upcomingSynced = upcoming.synced ?? 0;
             } catch (err) {
                 console.warn(`[dentally] upcoming appointments pull skipped: ${err?.message || err}`);
@@ -1770,13 +2421,43 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         // unless it fully paged the window). Non-fatal: a prune failure must never
         // abort the sync. Skipped on the bootstrap (recent) pull, whose appointment
         // set is deliberately partial (open-only / page-capped history).
+        // Every reconciler below is non-fatal and fails QUIETLY by design — a
+        // prune that cannot page its window deletes nothing, a backfill that gets
+        // a 500 restores nothing, and the sync reports success either way. That
+        // is the right behaviour and, on its own, a terrible outcome: "reconciled
+        // cleanly" and "never ran" look identical from outside, which is exactly
+        // how the appointment prune aborted on 'page_cap' every night for months
+        // with nobody the wiser. Record each pass so silence is distinguishable
+        // from success.
+        const reconcile = { at: new Date().toISOString() };
+        const note = (key, r) => {
+            reconcile[key] = {
+                ...(r?.restored != null ? { restored: r.restored } : {}),
+                ...(r?.deleted != null ? { deleted: r.deleted } : {}),
+                ...(r?.skippedUnmapped ? { skippedUnmapped: r.skippedUnmapped } : {}),
+                ...(r?.truncated ? { truncated: true } : {}),
+                ...(r?.aborted ? { aborted: r.aborted } : {}),
+            };
+        };
         let pruned = { deleted: 0 };
         if (!recent && want('appointments')) {
             try {
                 const wMs = 35 * 86400000;
                 const reconSince = new Date(Date.now() - wMs).toISOString();
                 const reconUntil = new Date(Date.now() + wMs).toISOString();
-                pruned = await reconcileDeletedAppointments(orgId, base, auth, { sinceISO: reconSince, untilISO: reconUntil, maxPages });
+                pruned = await reconcileDeletedAppointments(orgId, base, auth, {
+                    allowed,
+                    sinceISO: reconSince,
+                    untilISO: reconUntil,
+                    // NOT `maxPages`. Dentally ignores `before` here, so this
+                    // window pull actually returns everything from `after`
+                    // onward including the whole future diary — 17,505 rows for
+                    // this org against a 100-page (10,000-row) MAX_PAGES. The
+                    // prune is fail-closed, so it was aborting on 'page_cap'
+                    // every night and had never deleted anything.
+                    maxPages: full ? maxPages : WINDOW_RECON_MAX_PAGES,
+                });
+                note('appointments_prune', pruned);
                 if (pruned.aborted) {
                     console.warn(`[dentally] appointment prune aborted (${pruned.aborted}) — no rows deleted`);
                 } else if (pruned.deleted) {
@@ -1806,7 +2487,8 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 // BACKFILL_MAX_PAGES on the full path, so the wide window can page out.
                 const reconSince = full ? backfillSince() : new Date(Date.now() - wMs).toISOString();
                 const reconUntil = new Date(Date.now() + wMs).toISOString();
-                const prunedPay = await reconcileDeletedPayments(orgId, base, auth, { sinceISO: reconSince, untilISO: reconUntil, maxPages });
+                const prunedPay = await reconcileDeletedPayments(orgId, base, auth, { sinceISO: reconSince, untilISO: reconUntil, maxPages, allowed });
+                note('payments_prune', prunedPay);
                 if (prunedPay.aborted) {
                     console.warn(`[dentally] payment prune aborted (${prunedPay.aborted}) — no rows deleted`);
                 } else if (prunedPay.deleted) {
@@ -1814,6 +2496,38 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 }
             } catch (err) {
                 console.warn(`[dentally] payment prune skipped: ${err?.message || err}`);
+            }
+        }
+        // BACKFILL reconciliation — the other direction. The prunes above remove
+        // what Dentally deleted; these restore what we never received. An
+        // `updated_after` feed can only move forward, so without this a record
+        // missed once is missed forever and the gap compounds month by month
+        // (measured: 15 of Rochester's 620 August appointments absent, every one
+        // still live in Dentally). Fail-open by design — see
+        // reconcileMissingRecords. Skipped on the bootstrap (recent) pull, whose
+        // dataset is deliberately partial; non-fatal like every reconciler here.
+        if (!recent) {
+            const wMs = 35 * 86400000;
+            const backSince = full ? backfillSince() : new Date(Date.now() - wMs).toISOString();
+            const backUntil = new Date(Date.now() + wMs).toISOString();
+            if (want('appointments')) {
+                try {
+                    const b = await reconcileMissingAppointments(orgId, base, auth, { sinceISO: backSince, untilISO: backUntil, allowed });
+                    note('appointments_backfill', b);
+                    if (b.restored) console.warn(`[dentally] appointment backfill restored ${b.restored} row(s) the incremental feed had missed`);
+                    if (b.skippedUnmapped) console.warn(`[dentally] appointment backfill skipped ${b.skippedUnmapped} row(s) with an unmapped site`);
+                } catch (err) {
+                    console.warn(`[dentally] appointment backfill skipped: ${err?.message || err}`);
+                }
+            }
+            if (want('payments')) {
+                try {
+                    const b = await reconcileMissingPayments(orgId, base, auth, { sinceISO: backSince, untilISO: backUntil, allowed });
+                    note('payments_backfill', b);
+                    if (b.restored) console.warn(`[dentally] payment backfill restored ${b.restored} row(s) the incremental feed had missed`);
+                } catch (err) {
+                    console.warn(`[dentally] payment backfill skipped: ${err?.message || err}`);
+                }
             }
         }
         // Treatment plans = production per practitioner (for the Associate Pay
@@ -1824,7 +2538,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         if (want('treatment_plans') && !completedPhases.has('treatment_plans')) {
             try {
                 const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
-                treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_after: since }, practitionerMap, contactMap, reporter(3), maxPages, practiceByPractitioner);
+                treatmentPlans = await pullTreatmentPlans(orgId, base, auth, { updated_after: since }, practitionerMap, contactMap, reporter(3), maxPages, practiceByPractitioner, allowed, practiceByContact);
                 await markPhaseDone('treatment_plans');
             } catch (err) {
                 console.warn(`[dentally] treatment_plans pull skipped: ${err?.message || err}`);
@@ -1847,12 +2561,56 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             // price), resolved against the invoice map. Weighted phase 5; same
             // never-fail-the-whole-sync pattern as plans.
             try {
-                invoiceItems = await pullInvoiceItems(orgId, base, auth, { updated_after: since }, invoices.invoiceMap ?? new Map(), practitionerMap, reporter(5), maxPages);
+                invoiceItems = await pullInvoiceItems(orgId, base, auth, { updated_after: since }, invoices.invoiceMap ?? new Map(), practitionerMap, reporter(5), maxPages, allowed);
             } catch (err) {
                 console.warn(`[dentally] invoice_items pull skipped: ${err?.message || err}`);
             }
             await markPhaseDone('invoices');
             await markPhaseDone('invoice_items');
+        }
+        // Delete-reconciliation for invoices: prune invoices Dentally has REMOVED
+        // but our upsert-only pull still holds. Unlike the appointment/payment
+        // prunes above this is NOT windowed — Dentally ignores date filters on
+        // /invoices, so both sides are read at full scope (see
+        // reconcileDeletedInvoices for why a windowed version is unsafe here).
+        // Skipped on the bootstrap (recent) pull, whose invoice set is
+        // deliberately partial. Non-fatal: a prune failure must never abort the
+        // sync, and the reconciler itself deletes nothing unless it fully paged.
+        let prunedInv = { deleted: 0 };
+        if (!recent && want('invoices')) {
+            try {
+                // ONE page-through of the whole collection serves both
+                // directions: it restores invoices we never received and hands
+                // its id set to the prune, so the 240-page walk happens once a
+                // night rather than twice.
+                const back = await reconcileMissingInvoices(orgId, base, auth, { collectRemoteIds: true, allowed });
+                note('invoices_backfill', back);
+                if (back.restored) console.warn(`[dentally] invoice backfill restored ${back.restored} row(s) the incremental feed had missed`);
+                // Fee lines too, or the two tables drift apart: `invoices` would
+                // carry a period that `invoice_items` has no lines for, and the
+                // money cards built on each would stop reconciling.
+                try {
+                    const bi = await reconcileMissingInvoiceItems(orgId, base, auth);
+                    note('invoice_items_backfill', bi);
+                    if (bi.restored) console.warn(`[dentally] invoice_item backfill restored ${bi.restored} fee line(s)`);
+                } catch (err) {
+                    console.warn(`[dentally] invoice_item backfill skipped: ${err?.message || err}`);
+                }
+                prunedInv = await reconcileDeletedInvoices(orgId, base, auth, {
+                    // Same `allowed` as the fetch that produced these ids —
+                    // scoping one side alone deletes the other practices' rows.
+                    allowed,
+                    remoteIds: back.truncated || back.aborted ? null : back.remoteIds,
+                });
+                note('invoices_prune', prunedInv);
+                if (prunedInv.aborted) {
+                    console.warn(`[dentally] invoice prune aborted (${prunedInv.aborted}) — no rows deleted`);
+                } else if (prunedInv.deleted) {
+                    console.warn(`[dentally] invoice prune removed ${prunedInv.deleted} invoice(s) Dentally no longer has, clearing the fee lines of ${prunedInv.invoicesCleared ?? 0} of them`);
+                }
+            } catch (err) {
+                console.warn(`[dentally] invoice prune skipped: ${err?.message || err}`);
+            }
         }
         // Treatment plan ITEMS = the completed-treatment feed behind Dentally's
         // Practitioner Activity report (the "Treatments Completed" card). Weighted
@@ -1863,7 +2621,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         if (want('treatment_items') && !completedPhases.has('treatment_items')) {
             try {
                 const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
-                treatmentItems = await pullTreatmentItems(orgId, base, auth, { updated_after: since }, practiceByPractitioner, practitionerMap, contactMap, reporter(6), maxPages);
+                treatmentItems = await pullTreatmentItems(orgId, base, auth, { updated_after: since }, practiceByPractitioner, practitionerMap, contactMap, reporter(6), maxPages, allowed, practiceByContact);
                 await markPhaseDone('treatment_items');
             } catch (err) {
                 console.warn(`[dentally] treatment_items pull skipped: ${err?.message || err}`);
@@ -1954,6 +2712,14 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
                 console.warn(`[dentally] checkpoint clear skipped: ${err?.message || err}`);
             }
         }
+        // Persisted, not just logged: a log line is gone by morning, and the
+        // question this answers ("did the reconcilers actually run, and what did
+        // they find?") is asked days later.
+        try {
+            await integrationRepository.mergeConfig(orgId, 'dentally', { dentally_reconcile: reconcile });
+        } catch (err) {
+            console.warn(`[dentally] reconcile summary not recorded: ${err?.message || err}`);
+        }
         await integrationRepository.upsert(orgId, 'dentally', {
             last_sync_at: new Date().toISOString(),
             last_error: null,
@@ -1975,6 +2741,7 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
             relinked_appointment_contacts: relinked,
             relinked_appointment_associates: relinkedAssociates,
             repaid_invoice_items: repaidItems,
+            pruned_invoices: prunedInv.deleted ?? 0,
         };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'dentally', String(err.message).slice(0, 500));
@@ -2000,8 +2767,21 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
         await integrationRepository.markFailed(orgId, 'dentally', 'no_auth: missing or undecryptable API key');
         return { error: 'no_auth' };
     }
-    // 1. detect sites + 2. create a practice for each unmapped site.
+    // 1. detect sites.
     const { siteIds = [] } = await detectSiteIds(orgId, integration);
+    // 1a. More than one site and nobody has said which to pull? STOP and ask.
+    // A Dentally grant covers the whole group, so pulling on sight is how a
+    // sub-account ends up holding four other practices' patients. Only ask when
+    // there is a choice to make: one site is not a decision.
+    const chosen = allowedSites(integration);
+    if (!chosen && siteIds.length > 1) {
+        await integrationRepository.mergeConfig(orgId, 'dentally', {
+            detected_sites: siteIds,
+            awaiting_site_selection: true,
+        });
+        return { awaitingSiteSelection: true, sitesDetected: siteIds.length, siteIds };
+    }
+    // 2. create a practice for each unmapped site the org actually pulls.
     let practicesCreated = 0;
     if (siteIds.length) {
         const { data: existing } = await supabase_1.serviceClient
@@ -2010,7 +2790,9 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
             .eq('organisation_id', orgId)
             .not('pms_site_id', 'is', null);
         const mapped = new Set((existing ?? []).map((p) => String(p.pms_site_id)));
-        const toCreate = siteIds.filter((s) => !mapped.has(String(s.site_id)));
+        const toCreate = siteIds.filter(
+            (s) => !mapped.has(String(s.site_id)) && keepSite(chosen, s.site_id),
+        );
         for (const s of toCreate) {
             const { error } = await supabase_1.serviceClient.from('practices').insert({
                 organisation_id: orgId,
@@ -2024,7 +2806,19 @@ export async function bootstrapOnConnect(orgId, integration, onProgress = () => 
         }
     }
     // 3. pull the recent window with the now-populated siteMap.
+    //
+    // Record that a first pull is in flight BEFORE running it. Nothing else
+    // knows: last_sync_at is only stamped on completion, so a process restart
+    // mid-bootstrap (a deploy will do it) leaves a half-filled tenant that looks
+    // identical to one that was never connected. This marker is what
+    // resumeInterruptedImports finds afterwards.
+    await markBootstrapStarted(orgId, 'dentally', integration);
+
     const result = await syncOneOrg(orgId, integration, onProgress, { recent: true });
+
+    // Finished — nothing to resume. An errored run keeps the marker so the
+    // sweep retries it.
+    if (!result?.error) await markBootstrapFinished(orgId, 'dentally');
     return { sitesDetected: siteIds.length, practicesCreated, ...result };
 }
 
@@ -2049,6 +2843,21 @@ export async function backfillTreatmentItems(orgId, integration) {
     let auth = await resolveDentallyAuth(orgId, integration);
     if (!auth) return { error: 'no_auth' };
     const practiceByPractitioner = await loadPractitionerPracticeMap(orgId);
+    // Same rule as the windowed pull: with a site selection, a row whose
+    // practice does not resolve belongs to a practice this account did not
+    // select. This path pages the WHOLE collection (Dentally ignores every
+    // filter on /treatment_plan_items, site_id included — verified live), so
+    // without the gate it is the single largest source of other practices'
+    // records: it alone put 64,165 unattributed items into a one-practice
+    // sub-account.
+    const strictAllowed = allowedSites(integration);
+    const strict = dropsUnattributed(strictAllowed);
+    // Same patient fallback as the windowed pull. Without it this path — which
+    // pages the whole collection — would drop every legitimate row whose
+    // practitioner is not on the roster.
+    const practiceByContact = strict
+        ? await loadContactPracticeMap(orgId).catch(() => new Map())
+        : new Map();
     const associateMap = await loadPractitionerMap(orgId);
     const contactMap = await loadContactMap(orgId);
     const params = { updated_after: backfillSince() };
@@ -2093,7 +2902,8 @@ export async function backfillTreatmentItems(orgId, integration) {
         const items = body.treatment_plan_items || [];
         const rows = items
             .filter((it) => it && it.id != null && it.completed === true)
-            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap));
+            .map((it) => treatmentItemRow(orgId, it, practiceByPractitioner, associateMap, contactMap, practiceByContact))
+            .filter((r) => !strict || r?.practice_id);
         if (rows.length) {
             synced += await upsertChunked('dentally_treatment_items', rows, 'organisation_id,source,pms_external_id');
         }
@@ -2124,11 +2934,31 @@ export async function backfillTreatmentItems(orgId, integration) {
 }
 
 export async function syncAllOrgs() {
+    // 'failed' is included on purpose. syncOneOrg calls markFailed on ANY throw
+    // — one timeout, one rate-limit burst, one bad page — and markFailed sets
+    // status='failed'. Selecting only 'active' meant a single transient error
+    // stopped that org syncing FOREVER, silently: no pull, no delete prune, and
+    // none of the backfill reconcilers that exist to catch exactly this drift.
+    // The org would just stop moving while the app kept serving its stale rows,
+    // and nothing on screen would say so. A successful run flips the status back
+    // to 'active' by itself (the closing upsert below), so retrying self-heals.
+    // 'revoked' stays out: that is a deliberate disconnect with nulled secrets,
+    // and retrying it could only generate noise.
     const { data: rows } = await supabase_1.serviceClient
         .from('integrations')
         .select('*')
         .eq('provider', 'dentally')
-        .eq('status', 'active');
+        .in('status', ['active', 'failed']);
+    // Finish any first pull a restart interrupted, before the nightly work.
+    // Boot covers the deploy case; this covers a run that died some other way
+    // (OOM, an upstream stall) on a process that never restarted.
+    try {
+        const { resumeInterruptedImports } = await import('./bootstrap-recovery.js');
+        await resumeInterruptedImports();
+    } catch (err) {
+        console.error(`[dentally] nightly bootstrap sweep failed: ${err?.message || err}`);
+    }
+
     const results = [];
     for (const row of rows ?? []) {
         try {

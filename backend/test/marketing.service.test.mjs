@@ -4,6 +4,35 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { supaRec } from './setup.js';
 const { __test } = await import('../src/services/marketing.service.js');
+const { summariseAccepted } = await import('../src/lib/marketing/accepted-ledger.js');
+
+// Outcome counts (booked / became a patient) now come from the per-platform
+// lead ledgers, the SAME source the Facebook and Google report pages read —
+// ad_campaign_funnel's "matched a Dentally record" and the ledgers' "paid more
+// than the acceptance floor" were 8.5x apart on live data (729 against 86) in
+// one section of one app. LEADS still come from the funnel: the Overview counts
+// every enquiry however it arrived, and says so on screen.
+//
+// Expands a compact spec into ledger rows so a test can say "this campaign had
+// 7 leads, 3 of whom booked and 3 of whom paid" without writing them out.
+const rows = (spec) => spec.flatMap(({ campaign_id = null, practice_id = 'p1', leads = 0, booked = 0, accepted = 0 }) =>
+    Array.from({ length: leads }, (_, i) => ({
+        campaign_id, practice_id, booked: i < booked, accepted: i < accepted,
+        // Outcomes are gated on new patients, so fixtures state it explicitly.
+        is_new_patient: true,
+    })));
+const acc = (google = [], meta = []) => summariseAccepted(rows(google), rows(meta));
+
+// Spend totals are now passed in rather than summed from the campaign rows:
+// the tile shows MAPPED-practice spend, because money on an account mapped to
+// no practice can be charged against no practice's leads. In these unit tests
+// every fixture campaign is mapped, so the totals are simply the fixture's own
+// sums and each assertion keeps the meaning it had.
+const spendTotalsOf = (spendRows) => ({
+    spendPence: spendRows.reduce((n, r) => n + r.spend_pence, 0),
+    impressions: spendRows.reduce((n, r) => n + r.impressions, 0),
+    clicks: spendRows.reduce((n, r) => n + r.clicks, 0),
+});
 
 const SINCE = '2026-05-31T23:00:00Z';
 const UNTIL = '2026-08-31T23:00:00Z';
@@ -26,8 +55,15 @@ describe('joinSpendToLeads', () => {
           leads: 1, booked: 0, attended: 0, patients: 0, newPatients: 0 },
     ];
 
+    // The ledger counterpart of `funnel` above: the same people, on the rule the
+    // report pages use.
+    const ACC = acc(
+        [{ campaign_id: '22794584316', leads: 1, booked: 1, accepted: 1 }],
+        [{ campaign_id: '120249721894530517', leads: 2, booked: 1, accepted: 1 }],
+    );
+
     it('computes cost per lead, per booking and per new patient in integer pence', () => {
-        const { rows } = __test.joinSpendToLeads(spend, funnel);
+        const { rows } = __test.joinSpendToLeads(spend, funnel, ACC, spendTotalsOf(spend), new Map(spend.map((c) => [c.campaign_id, c.provider])));
         const meta = rows.find((r) => r.campaignId === '120249721894530517');
         expect(meta.leads).toBe(2);
         expect(meta.booked).toBe(1);
@@ -45,10 +81,14 @@ describe('joinSpendToLeads', () => {
             { ad_campaign_id: '22794584316', attribution_source: 'Paid Search', practice_id: 'p2',
               leads: 4, booked: 1, attended: 0, patients: 2, newPatients: 1 },
         ];
-        const { rows } = __test.joinSpendToLeads(spend, split);
+        const { rows } = __test.joinSpendToLeads(spend, split,
+            acc([{ campaign_id: '22794584316', leads: 7, booked: 3, accepted: 3 }]),
+            spendTotalsOf(spend), new Map(spend.map((c) => [c.campaign_id, c.provider])));
         const g = rows.find((r) => r.campaignId === '22794584316');
         expect(g.leads).toBe(7);
         expect(g.booked).toBe(3);
+        // `attended` is a Dentally appointment state, not a money rule, so it
+        // has no ledger equivalent and stays as the funnel reports it.
         expect(g.attended).toBe(1);
         expect(g.patients).toBe(3);
     });
@@ -56,27 +96,30 @@ describe('joinSpendToLeads', () => {
     it('never divides by zero — spend with no bookings has null CPB, not Infinity', () => {
         const noneBooked = [{ ad_campaign_id: '22794584316', attribution_source: 'Paid Search',
                               practice_id: null, leads: 4, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
-        const { rows } = __test.joinSpendToLeads(spend, noneBooked);
+        const { rows } = __test.joinSpendToLeads(spend, noneBooked,
+            acc([{ campaign_id: '22794584316', leads: 4 }]),
+            spendTotalsOf(spend), new Map(spend.map((c) => [c.campaign_id, c.provider])));
         const g = rows.find((r) => r.campaignId === '22794584316');
         expect(g.costPerBookingPence).toBeNull();
         expect(g.costPerNewPatientPence).toBeNull();
     });
 
     it('keeps unattributed leads out of every row but counted in totals', () => {
-        const { rows, totals } = __test.joinSpendToLeads(spend, funnel);
+        const { rows, totals } = __test.joinSpendToLeads(spend, funnel, ACC, spendTotalsOf(spend), new Map(spend.map((c) => [c.campaign_id, c.provider])));
         expect(rows.some((r) => r.campaignId === null)).toBe(false);
+        // Reported, not counted: this section reports Facebook and Google only.
         expect(totals.unattributedLeads).toBe(1);
-        expect(totals.leads).toBe(4);
+        expect(totals.leads).toBe(3);   // the ad leads alone
     });
 
     it('reports platform conversions separately from real patients', () => {
-        const { totals } = __test.joinSpendToLeads(spend, funnel);
+        const { totals } = __test.joinSpendToLeads(spend, funnel, ACC, spendTotalsOf(spend), new Map(spend.map((c) => [c.campaign_id, c.provider])));
         expect(totals.platformConversions).toBe(464);   // 412 + 52, from the ad platforms
-        expect(totals.patients).toBe(2);                // matched to a Dentally record
+        expect(totals.patients).toBe(2);                // paid above the acceptance floor
     });
 
     it('totals the funnel over every person, and costs over the attributed ones', () => {
-        const { totals } = __test.joinSpendToLeads(spend, funnel);
+        const { totals } = __test.joinSpendToLeads(spend, funnel, ACC, spendTotalsOf(spend), new Map(spend.map((c) => [c.campaign_id, c.provider])));
         expect(totals.booked).toBe(2);                 // everyone, referral included
         expect(totals.attended).toBe(1);
         expect(totals.attributedBooked).toBe(2);       // only campaigns with spend
@@ -86,13 +129,27 @@ describe('joinSpendToLeads', () => {
     });
 
     // A lead whose campaign has no spend IN THIS WINDOW produces no row. It
-    // must still be accounted for, or the table silently loses people.
-    it('reconciles: sum(rows.leads) + unattributedLeads === totals.leads', () => {
+    // must still be accounted for, or the table silently loses people — and it
+    // is NOT unattributed: it sits in an ad ledger, so an ad produced it. The
+    // tiles reconcile on attributed + unattributed; the TABLE reconciles on the
+    // narrower campaign-matched subset.
+    it('reconciles the tiles on attributed + unattributed, and the table on campaign-matched', () => {
         const orphan = [...funnel, { ad_campaign_id: 'no-spend-here', attribution_source: 'Paid Social',
                                      practice_id: 'p1', leads: 6, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
-        const { rows, totals } = __test.joinSpendToLeads(spend, orphan);
+        const { rows, totals } = __test.joinSpendToLeads(spend, orphan, acc(
+            [{ campaign_id: '22794584316', leads: 1, booked: 1, accepted: 1 },
+                { campaign_id: 'no-spend-here', leads: 6 }],
+            [{ campaign_id: '120249721894530517', leads: 2, booked: 1, accepted: 1 }],
+        ), spendTotalsOf(spend), new Map(spend.map((c) => [c.campaign_id, c.provider])));
         const shown = rows.reduce((n, r) => n + r.leads, 0);
-        expect(shown + totals.unattributedLeads).toBe(totals.leads);
+        // The tile IS the ad-attributed population — organic is reported
+        // beside it, never folded in.
+        expect(totals.leads).toBe(totals.attributedLeads);
+        // The per-campaign table shows only leads whose campaign also has spend
+        // in this window — a SUBSET of the ad-attributed population. The 6 on
+        // 'no-spend-here' are real ad leads with no row to sit in.
+        expect(shown).toBe(totals.campaignMatchedLeads);
+        expect(shown).toBeLessThan(totals.attributedLeads);
     });
 });
 
@@ -174,28 +231,32 @@ describe('channelSplit', () => {
           leads: 7, booked: 1, attended: 1, patients: 2, newPatients: 1 },
     ];
 
+    const ACC = acc(
+        [{ campaign_id: 'g1', leads: 5, booked: 2, accepted: 1 }],
+        [{ campaign_id: 'm1', leads: 10, booked: 4, accepted: 3 }],
+    );
+
     it('carries booked and attended per channel', () => {
-        const out = __test.channelSplit(spend, funnel, campaignProvider);
+        const out = __test.channelSplit(spend, funnel, campaignProvider, ACC);
         const meta = out.find((c) => c.channel === 'meta_ads');
         expect(meta.leads).toBe(10);
         expect(meta.booked).toBe(4);
         expect(meta.attended).toBe(2);
     });
 
-    it('gives the organic channel leads and bookings but never a cost', () => {
-        // Organic enquiries cost nothing; averaging them into a paid
-        // denominator would quietly flatter every cost per unit.
-        const out = __test.channelSplit(spend, funnel, campaignProvider);
-        const other = out.find((c) => c.channel === 'other');
-        expect(other.leads).toBe(7);
-        expect(other.booked).toBe(1);
-        expect(other.costPerLeadPence).toBeNull();
-        expect(other.costPerBookingPence).toBeNull();
+    it('returns Facebook and Google only — organic is not an advertising channel', () => {
+        // The organic bucket carried 7 leads here and no spend. Counting it as a
+        // channel made the cards sum to more than the Leads tile above them, and
+        // it answers a different question from the one this section asks. Its
+        // leads are still reported as totals.unattributedLeads and listed on the
+        // Leads page.
+        const out = __test.channelSplit(spend, funnel, campaignProvider, ACC);
+        expect(out.map((c) => c.channel).sort()).toEqual(['google_ads', 'meta_ads']);
     });
 
-    it('every lead lands in exactly one channel, so channels sum to the total', () => {
-        const out = __test.channelSplit(spend, funnel, campaignProvider);
-        expect(out.reduce((n, c) => n + c.leads, 0)).toBe(22);
+    it('every PAID lead lands in exactly one channel, so the cards sum to the tile', () => {
+        const out = __test.channelSplit(spend, funnel, campaignProvider, ACC);
+        expect(out.reduce((n, c) => n + c.leads, 0)).toBe(15);   // 10 Meta + 5 Google
     });
 
     // The costed guard has two arms: `channel !== 'other'` (gated by name) and
@@ -209,7 +270,8 @@ describe('channelSplit', () => {
         const noSpend = [];
         const leadsOnly = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
                               leads: 3, booked: 1, attended: 1, patients: 1, newPatients: 1 }];
-        const out = __test.channelSplit(noSpend, leadsOnly, campaignProvider);
+        const out = __test.channelSplit(noSpend, leadsOnly, campaignProvider,
+            acc([], [{ campaign_id: 'm1', leads: 3, booked: 1, accepted: 1 }]));
         const meta = out.find((c) => c.channel === 'meta_ads');
         expect(meta.leads).toBe(3);
         expect(meta.spendPence).toBe(0);
@@ -224,7 +286,8 @@ describe('channelSplit', () => {
         ];
         const metaOnlyFunnel = [{ ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
                                    leads: 5, booked: 2, attended: 1, patients: 1, newPatients: 1 }];
-        const out = __test.channelSplit(metaOnlySpend, metaOnlyFunnel, campaignProvider);
+        const out = __test.channelSplit(metaOnlySpend, metaOnlyFunnel, campaignProvider,
+            acc([], [{ campaign_id: 'm1', leads: 5, booked: 2, accepted: 1 }]));
         expect(out.map((c) => c.channel)).not.toContain('google_ads');
         expect(out.map((c) => c.channel)).toContain('meta_ads');
     });
@@ -284,11 +347,20 @@ describe('cacheKey payload version', () => {
   });
 });
 
-// The Leads tile counts every person who enquired; the Became patients tile
-// beside it must count that same population. It used to count only
-// campaign-matched patients, so the pair implied a conversion rate about a
-// third of the real one — and it contradicted the per-channel cards, whose
-// patients sum to every converted lead.
+// WHAT THE TWO TILES COUNT, and why they no longer count the same population.
+//
+// The Leads tile counts every person who enquired, however they arrived — that
+// is deliberate and the screen says so. The Became patients tile used to count
+// every converted person too, on ad_campaign_funnel's "matches a Dentally
+// record" rule. It now counts acquisitions the ADS can be shown to have bought:
+// a new patient whose settled payments exceed the acceptance floor, from the
+// same ledgers the Facebook and Google pages read. On live data the old rule
+// said 729 where those pages said 86.
+//
+// So the pair is now "all enquiries" beside "patients from ads", which is only
+// honest if the screen labels it — the tile does. The reconciliation that
+// matters is no longer channels-sum-to-patients across ALL channels (organic
+// has no ad ledger and reports null), but across the PAID ones.
 describe('totals.patients population', () => {
   const { joinSpendToLeads } = __test;
   const SPEND = [{
@@ -307,25 +379,112 @@ describe('totals.patients population', () => {
       leads: 1, booked: 0, attended: 0, patients: 1, newPatients: 0 },
   ];
 
-  it('counts every converted person, not only the campaign-matched ones', () => {
-    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
-    expect(totals.leads).toBe(4);
-    expect(totals.patients).toBe(3);           // the m1, zz and organic converters
-    expect(totals.attributedPatients).toBe(1); // only m1 sits on a campaign with spend
+  // Two ad leads paid: one on m1 (which has spend this window) and one on zz
+  // (whose spend does not). The organic enquiry cannot be in an ad ledger at
+  // all.
+  const ACC = acc([], [
+    { campaign_id: 'm1', leads: 2, accepted: 1 },
+    { campaign_id: 'zz', leads: 1, accepted: 1 },
+  ]);
+
+  it('counts patients the ads bought, while leads still count everyone', () => {
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL, ACC, spendTotalsOf(SPEND), new Map(SPEND.map((c) => [c.campaign_id, c.provider])));
+    expect(totals.leads).toBe(3);              // the ad leads; the organic enquiry is reported separately
+    expect(totals.patients).toBe(2);           // m1 + zz; the organic converter is not an ad acquisition
+    // Both ad patients count against the spend: zz's campaign having no spend
+    // in THIS window does not make the patient it bought unattributable.
+    expect(totals.attributedPatients).toBe(2);
+    // The per-campaign table can only show the one whose campaign has a row.
+    expect(totals.campaignMatchedPatients).toBe(1);
   });
 
-  it('still divides spend by the attributable patients, never by all of them', () => {
-    const { totals } = joinSpendToLeads(SPEND, FUNNEL);
-    expect(totals.costPerPatientPence).toBe(10000);   // 10000 / 1, not / 3
+  it('divides spend by the ad-attributed patients, never by every converter', () => {
+    // 10000 / 2 ad patients. NOT / 3 — that charges paid spend against the
+    // organic converter and flatters the cost. NOT / 1 either — that charges a
+    // whole window's spend against only the campaigns that happened to spend
+    // inside it, and overstates it.
+    const { totals } = joinSpendToLeads(SPEND, FUNNEL, ACC, spendTotalsOf(SPEND), new Map(SPEND.map((c) => [c.campaign_id, c.provider])));
+    expect(totals.costPerPatientPence).toBe(5000);
   });
 
-  it('reconciles with the channel cards — both count the same patients', () => {
-    const { rows, totals } = joinSpendToLeads(SPEND, FUNNEL);
+  it('reconciles with the channel cards', () => {
+    // The cards ARE the paid channels now, so the identity is exact on both
+    // leads and patients rather than needing an organic row filtered out.
+    const { rows, totals } = joinSpendToLeads(SPEND, FUNNEL, ACC, spendTotalsOf(SPEND), new Map(SPEND.map((c) => [c.campaign_id, c.provider])));
     const provider = new Map(SPEND.map((c) => [c.campaign_id, c.provider]));
-    const channels = __test.channelSplit(rows, FUNNEL, provider);
+    const channels = __test.channelSplit(rows, FUNNEL, provider, ACC);
     expect(channels.reduce((n, c) => n + c.patients, 0)).toBe(totals.patients);
     expect(channels.reduce((n, c) => n + c.leads, 0)).toBe(totals.leads);
   });
+});
+
+// The Leads tile must equal the sum of the channel cards directly beneath it.
+//
+// It did not. `leads` came from ad_campaign_funnel while the paid channel cards
+// came from the ad ledgers, and those do not see the same people — the ledgers
+// include CallRail calls and dedupe on phone. Live, Rochester in August 2026:
+// the tile said 446 leads "of which 451 from ads" (more attributed than total,
+// with the negative remainder clamped to 0 and hidden) while the cards summed
+// to 539. Three numbers on one page, no two of which could both be right.
+//
+// The tile is now composed from the SAME two sources the cards are, so the
+// identity holds by construction rather than by luck.
+describe('the Leads tile reconciles with the channel cards', () => {
+    const spend = [
+        { provider: 'meta_ads', campaign_id: 'm1', campaign_name: 'M',
+            spend_pence: 549739, impressions: 0, clicks: 0, conversions: 0 },
+        { provider: 'google_ads', campaign_id: 'g1', campaign_name: 'G',
+            spend_pence: 321357, impressions: 0, clicks: 0, conversions: 0 },
+    ];
+    const campaignProvider = new Map([['m1', 'meta_ads'], ['g1', 'google_ads']]);
+    // The funnel sees FEWER paid leads than the ledgers (no CallRail, different
+    // dedup) — the real shape that broke this.
+    const funnel = [
+        { ad_campaign_id: 'm1', attribution_source: 'Paid Social', practice_id: 'p1',
+            leads: 300, booked: 0, attended: 0, patients: 0, newPatients: 0 },
+        { ad_campaign_id: 'g1', attribution_source: 'Paid Search', practice_id: 'p1',
+            leads: 58, booked: 0, attended: 0, patients: 0, newPatients: 0 },
+        { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
+            leads: 88, booked: 0, attended: 0, patients: 0, newPatients: 0 },
+    ];
+    const ACC = acc(
+        [{ campaign_id: 'g1', leads: 110 }],
+        [{ campaign_id: 'm1', leads: 341 }],
+    );
+    const TOTALS = { spendPence: 871096, impressions: 0, clicks: 0 };
+
+    it('counts the ledgers\' paid leads and nothing else', () => {
+        const { totals } = __test.joinSpendToLeads(spend, funnel, ACC, TOTALS, campaignProvider);
+        expect(totals.leads).toBe(451);             // 341 Meta + 110 Google
+        expect(totals.attributedLeads).toBe(451);
+        // Organic is REPORTED so the page can say what it leaves out, and is
+        // never added to the headline.
+        expect(totals.unattributedLeads).toBe(88);
+        // The failure this replaces: attributed exceeded the total, and the
+        // negative remainder was clamped to 0 and hidden.
+        expect(totals.attributedLeads).toBeLessThanOrEqual(totals.leads);
+    });
+
+    it('makes the tile the exact sum of the cards beneath it', () => {
+        const { rows, totals } = __test.joinSpendToLeads(spend, funnel, ACC, TOTALS, campaignProvider);
+        const channels = __test.channelSplit(rows, funnel, campaignProvider, ACC,
+            new Map([['google_ads', 321357], ['meta_ads', 549739]]));
+        expect(channels.map((c) => c.channel).sort()).toEqual(['google_ads', 'meta_ads']);
+        expect(channels.reduce((n, c) => n + c.leads, 0)).toBe(totals.leads);
+        expect(channels.reduce((n, c) => n + c.spendPence, 0)).toBe(totals.spendPence);
+    });
+
+    it('counts a campaign-less PAID lead as paid, not as organic', () => {
+        // resolveLeadChannel, not "has no campaign id" — a lead whose
+        // attribution_source says Paid Social but that carries no campaign id is
+        // paid. Defining organic independently put 90 in the tile against 88 on
+        // the card and broke the identity by two leads.
+        const withPaidOrphan = [...funnel,
+            { ad_campaign_id: null, attribution_source: 'Paid Social', practice_id: 'p1',
+                leads: 2, booked: 0, attended: 0, patients: 0, newPatients: 0 }];
+        const { totals } = __test.joinSpendToLeads(spend, withPaidOrphan, ACC, TOTALS, campaignProvider);
+        expect(totals.unattributedLeads).toBe(88);
+    });
 });
 
 describe('practiceSplit', () => {
@@ -337,21 +496,33 @@ describe('practiceSplit', () => {
           leads: 6, booked: 1, attended: 0, patients: 1, newPatients: 1 },
     ];
 
-    it('carries booked as a raw count per practice, with no cost derived from it', () => {
-        // `booked` at a practice sums every group there, including the 'other'
-        // (organic) channel — there is no per-practice "attributed booked"
-        // figure, so dividing paid spend by it would understate every cost.
-        // practiceSplit therefore emits the count and no costPerBookingPence
-        // at all (see marketing.service.js practiceSplit).
-        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
+    // 10 enquiries at p1, of which 6 came from ads; 6 at p2, of which 4 did.
+    const ACC = acc([], [
+        { campaign_id: 'm1', practice_id: 'p1', leads: 6, booked: 4, accepted: 3 },
+        { campaign_id: 'm1', practice_id: 'p2', leads: 4, booked: 1, accepted: 1 },
+    ]);
+
+    it('costs a practice against its ATTRIBUTED leads, not every enquiry there', () => {
+        // This function's own comment used to say a per-practice "attributed
+        // booked" figure did not exist, so cost per lead divided paid spend by
+        // e.leads — every enquiry at the practice, organic included — and
+        // understated it by whatever share arrived without ad tracking. The
+        // ledgers supply that population, so the costs are now measured against
+        // the people the spend can actually claim.
+        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider, ACC);
         const p1 = out.find((p) => p.practiceId === 'p1');
+        expect(p1.leads).toBe(10);            // every enquiry, unchanged
+        expect(p1.attributedLeads).toBe(6);   // the ones ads can claim
         expect(p1.booked).toBe(4);
-        expect(p1).not.toHaveProperty('costPerBookingPence');
+        expect(p1.patients).toBe(3);
+        expect(p1.costPerLeadPence).toBe(33333);      // 200000 / 6, NOT / 10
+        expect(p1.costPerBookingPence).toBe(50000);   // 200000 / 4
+        expect(p1.costPerPatientPence).toBe(66667);   // 200000 / 3
         expect(p1.costPerNewPatientPence).toBe(100000);   // 200000 / 2
     });
 
     it('practices sum to the group total rather than double-counting', () => {
-        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider);
+        const out = __test.practiceSplit([['p1', 200000], ['p2', 60000]], funnel, campaignProvider, ACC);
         expect(out.reduce((n, p) => n + p.leads, 0)).toBe(16);
     });
 
@@ -363,7 +534,8 @@ describe('practiceSplit', () => {
         { ad_campaign_id: null, attribution_source: 'Referral', practice_id: 'p1',
           leads: 4, booked: 0, attended: 0, patients: 1, newPatients: 0 },
       ];
-      const out = __test.practiceSplit([['p1', 100000]], groups, new Map([['m1', 'meta_ads']]));
+      const out = __test.practiceSplit([['p1', 100000]], groups, new Map([['m1', 'meta_ads']]),
+        acc([], [{ campaign_id: 'm1', practice_id: 'p1', leads: 5, booked: 2, accepted: 3 }]));
       const p1 = out.find((p) => p.practiceId === 'p1');
       expect(p1.channels.meta_ads).toBe(5);
       expect(p1.channels.other).toBe(4);
@@ -377,6 +549,7 @@ describe('practiceSplit', () => {
             [['p1', 200000], ['p2', 600000]],
             funnel,
             campaignProvider,
+            ACC,
         );
         expect(out[0].practiceId).toBe('p2');
         expect(out[1].practiceId).toBe('p1');
@@ -386,11 +559,13 @@ describe('practiceSplit', () => {
     // leads but no spend at all (no account mapped, or none of the group's
     // spend attributable here) must show every cost as null, not £0.00.
     it('has no cost at all for a practice with leads and zero spend', () => {
-        const out = __test.practiceSplit([], funnel, campaignProvider);
+        const out = __test.practiceSplit([], funnel, campaignProvider, ACC);
         const p1 = out.find((p) => p.practiceId === 'p1');
         expect(p1.leads).toBe(10);
         expect(p1.spendPence).toBe(0);
         expect(p1.costPerLeadPence).toBeNull();
+        expect(p1.costPerBookingPence).toBeNull();
+        expect(p1.costPerPatientPence).toBeNull();
         expect(p1.costPerNewPatientPence).toBeNull();
     });
 });
@@ -411,6 +586,9 @@ describe('campaignPerformance', () => {
             campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
         });
         vi.spyOn(repo.marketingRepository, 'adAccounts').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'adSpendByPractice').mockResolvedValue([]);
+        const google = vi.spyOn(repo.marketingRepository, 'googleLeadLedger').mockResolvedValue([]);
+        const meta = vi.spyOn(repo.marketingRepository, 'metaLeadLedger').mockResolvedValue([]);
 
         const { marketingService } = await import('../src/services/marketing.service.js');
         await marketingService.campaignPerformance('org-1', {
@@ -418,6 +596,98 @@ describe('campaignPerformance', () => {
         });
         expect(funnel).toHaveBeenCalledTimes(1);
         expect(perPerson).not.toHaveBeenCalled();
+        // The outcome figures come from the SAME two ledgers the Facebook and
+        // Google report pages read, so the section cannot disagree with them.
+        expect(google).toHaveBeenCalledTimes(1);
+        expect(meta).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks both ledgers for the acceptance floor explicitly, never the RPC default', async () => {
+        // The caller owns the tenant's fee. A silent server-side default is
+        // exactly how this figure and the report pages' would drift apart —
+        // the same reasoning migration 000162 records for the report pages.
+        const repo = await import('../src/repositories/marketing.repository.js');
+        vi.spyOn(repo.marketingRepository, 'campaignFunnel').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+            campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [],
+        });
+        vi.spyOn(repo.marketingRepository, 'adAccounts').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'adSpendByPractice').mockResolvedValue([]);
+        const google = vi.spyOn(repo.marketingRepository, 'googleLeadLedger').mockResolvedValue([]);
+        const meta = vi.spyOn(repo.marketingRepository, 'metaLeadLedger').mockResolvedValue([]);
+        const { ACCEPTANCE_MIN_PAID_PENCE } = await import('../src/lib/marketing/lead-performance.js');
+
+        const { marketingService } = await import('../src/services/marketing.service.js');
+        const out = await marketingService.campaignPerformance('org-1', {
+            since: SINCE, until: UNTIL, refresh: true,
+        });
+
+        expect(google).toHaveBeenCalledWith('org-1', SINCE, UNTIL, ACCEPTANCE_MIN_PAID_PENCE);
+        expect(meta).toHaveBeenCalledWith('org-1', SINCE, UNTIL, ACCEPTANCE_MIN_PAID_PENCE);
+        // ...and the payload states the threshold, so the screen can name it
+        // rather than leave the reader guessing what "became a patient" means.
+        expect(out.acceptanceMinPaidPence).toBe(ACCEPTANCE_MIN_PAID_PENCE);
+    });
+
+    it('prices against MAPPED spend, so the tile cannot contradict the cards beneath it', async () => {
+        // Spend on an account mapped to no practice can be charged against no
+        // practice's leads. Summing the campaign rows instead put GBP
+        // 122,649.08 in the Ad spend tile while the channel cards on the same
+        // page summed to GBP 104,052.34 — the difference being three ad
+        // accounts belonging to other businesses that produced zero leads here.
+        // The excluded amount stays visible as coverage.unmappedSpendPence.
+        const repo = await import('../src/repositories/marketing.repository.js');
+        vi.spyOn(repo.marketingRepository, 'campaignFunnel').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+            campaigns: [{ provider: 'google_ads', campaign_id: 'g1', campaign_name: 'A',
+                spend_pence: 500000, impressions: 0, clicks: 0, conversions: 0 }],
+            series: [], unmappedSpendPence: 200000, spendByPractice: [],
+        });
+        vi.spyOn(repo.marketingRepository, 'adAccounts').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'googleLeadLedger').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'metaLeadLedger').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'adSpendByPractice').mockImplementation(
+            async (_org, provider) => (provider === 'google_ads'
+                ? [{ practice_id: 'p1', spend_pence: 300000, impressions: 10, clicks: 5 },
+                    { practice_id: null, spend_pence: 200000, impressions: 4, clicks: 2 }]
+                : []),
+        );
+
+        const { marketingService } = await import('../src/services/marketing.service.js');
+        const out = await marketingService.campaignPerformance('org-1', {
+            since: SINCE, until: UNTIL, refresh: true,
+        });
+
+        expect(out.totals.spendPence).toBe(300000);   // NOT 500000
+        expect(out.totals.clicks).toBe(5);
+        const google = out.byChannel.find((c) => c.channel === 'google_ads');
+        expect(google.spendPence).toBe(300000);
+    });
+
+    it('narrows the ledgers to the requested practice', async () => {
+        // Neither ledger RPC takes a practice parameter — the report pages
+        // fetch org-wide once and narrow in JS so a practice toggle costs no
+        // second query. If that narrowing were skipped here, a practice-scoped
+        // page would show the GROUP's patients beside one practice's spend.
+        const repo = await import('../src/repositories/marketing.repository.js');
+        vi.spyOn(repo.marketingRepository, 'campaignFunnel').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'campaignSpend').mockResolvedValue({
+            campaigns: [], series: [], unmappedSpendPence: 0, spendByPractice: [['p1', 100000]],
+        });
+        vi.spyOn(repo.marketingRepository, 'adAccounts').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'adSpendByPractice').mockResolvedValue([]);
+        vi.spyOn(repo.marketingRepository, 'googleLeadLedger').mockResolvedValue([
+            { campaign_id: 'g1', practice_id: 'p1', booked: true, accepted: true, is_new_patient: true },
+            { campaign_id: 'g1', practice_id: 'p2', booked: true, accepted: true, is_new_patient: true },
+        ]);
+        vi.spyOn(repo.marketingRepository, 'metaLeadLedger').mockResolvedValue([]);
+
+        const { marketingService } = await import('../src/services/marketing.service.js');
+        const out = await marketingService.campaignPerformance('org-1', {
+            since: SINCE, until: UNTIL, practiceId: 'p1', refresh: true,
+        });
+
+        expect(out.totals.patients).toBe(1);
     });
 });
 
@@ -426,7 +696,7 @@ describe('cacheKey', () => {
         // A cache entry written before the deploy is read after it. Without the
         // bump, every hit for the whole TTL renders against a shape that no
         // longer exists.
-        expect(__test.cacheKey(SINCE, UNTIL, null)).toContain('v6');
+        expect(__test.cacheKey(SINCE, UNTIL, null)).toContain('v7');
     });
 });
 
