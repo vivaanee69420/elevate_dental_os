@@ -217,6 +217,34 @@ describe('syncGoogleClicks', () => {
         expect(r.skipped).toHaveLength(1);
     });
 
+    // The backfill measured this: five accounts the login cannot read cost 90
+    // identical failures EACH — 450 queries to learn five facts.
+    it('abandons an account that fails several days running, instead of walking the whole window', async () => {
+        const queryCustomer = vi.fn(async () => { throw new Error("User doesn't have permission"); });
+        const r = await syncGoogleClicks(ORG, {
+            accessToken: 't', customerIds: ['dead'], until: '2026-09-08', days: 90, queryCustomer,
+        });
+        expect(queryCustomer).toHaveBeenCalledTimes(__test.MAX_CONSECUTIVE_DAY_FAILURES);
+        expect(r.skipped.some((s) => s.day === null && /abandoned/.test(s.error))).toBe(true);
+    });
+
+    // The other half of that rule: a couple of throttled days must not cost an
+    // account the rest of its window.
+    it('keeps going when failures are interrupted by a success', async () => {
+        let n = 0;
+        const queryCustomer = vi.fn(async () => {
+            n += 1;
+            // Fail days 1 and 2, succeed on 3, fail 4 and 5, succeed on 6...
+            if (n % 3 !== 0) throw new Error('RESOURCE_EXHAUSTED');
+            return batches(SEARCH_ROW);
+        });
+        const r = await syncGoogleClicks(ORG, {
+            accessToken: 't', customerIds: ['flaky'], until: '2026-09-08', days: 9, queryCustomer,
+        });
+        expect(queryCustomer).toHaveBeenCalledTimes(9);
+        expect(r.clicks).toBe(3);
+    });
+
     it('writes nothing and asks for nothing when there are no accounts', async () => {
         const queryCustomer = vi.fn();
         const r = await syncGoogleClicks(ORG, {

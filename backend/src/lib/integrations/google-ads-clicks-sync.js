@@ -54,6 +54,21 @@ export const CLICK_WINDOW_DAYS = 90;
 export const SKIP_ACCOUNT_STATUSES = new Set(['manager', 'not_enabled']);
 
 /**
+ * Consecutive failed days after which an account is abandoned FOR THIS RUN.
+ *
+ * Measured, not guessed: the first backfill spent 450 queries discovering five
+ * times over that an account it cannot read on day 1 it also cannot read on
+ * days 2 through 90. Every one returned the same "user doesn't have permission"
+ * — a fact about the ACCOUNT, repeated ninety times at one query each.
+ *
+ * Three, not one, because a single failure is usually a throttle or a deadline
+ * and the next day would have succeeded. Three in a row is a condition, not a
+ * blip. The account is not marked bad anywhere: the next run tries it again
+ * from the top, so an account that regains access heals itself.
+ */
+export const MAX_CONSECUTIVE_DAY_FAILURES = 3;
+
+/**
  * Days re-pulled on top of what is already held. Google attributes some clicks
  * late, so the most recent days keep changing for a short while after the
  * fact; re-reading them is free (ON CONFLICT DO NOTHING) and not re-reading
@@ -212,13 +227,29 @@ export async function syncGoogleClicks(orgId, { accessToken, customerIds, until,
         }
 
         const rows = [];
+        let consecutiveFailures = 0;
         for (const day of window) {
             try {
                 queries += 1;
                 const batches = await queryCustomer(customerId, accessToken, buildClickGaql(day));
                 rows.push(...parseClicks(batches, { customerId }));
+                // A success clears the count: an account that fails twice and
+                // then answers is having a bad night, not a permission
+                // problem, and must be allowed to finish its window.
+                consecutiveFailures = 0;
             } catch (err) {
+                consecutiveFailures += 1;
                 skipped.push({ customerId, day, error: String(err.message).slice(0, 150) });
+                if (consecutiveFailures >= MAX_CONSECUTIVE_DAY_FAILURES) {
+                    // Reported as its own entry, with no day, so the caller can
+                    // tell "this account is unreadable" from "these days
+                    // failed" — different problems needing different action.
+                    skipped.push({
+                        customerId, day: null,
+                        error: `abandoned after ${consecutiveFailures} consecutive failed days; ${window.length - window.indexOf(day) - 1} day(s) not attempted this run`,
+                    });
+                    break;
+                }
             }
         }
         if (rows.length) {
@@ -237,4 +268,5 @@ export async function syncGoogleClicks(orgId, { accessToken, customerIds, until,
 export const __test = {
     parseClicks, buildClickGaql, daysToPull, idAfterTilde, realId,
     CLICK_WINDOW_DAYS, CLICK_OVERLAP_DAYS, SKIP_ACCOUNT_STATUSES,
+    MAX_CONSECUTIVE_DAY_FAILURES,
 };
