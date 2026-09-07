@@ -199,6 +199,60 @@ export const integrationAccountRepository = {
         if (error) throw new Error(error.message);
     },
 
+    // Permanently remove the row. ORG-SCOPED, always — a bare delete by id is
+    // one typo away from another tenant's account. Callers must go through
+    // integration-account-delete.service, which checks what the row owns first:
+    // seven of the eleven foreign keys onto this table are ON DELETE CASCADE.
+    async deleteById(orgId, id) {
+        const { error } = await this._client()
+            .from('integration_accounts')
+            .delete()
+            .eq('organisation_id', orgId).eq('id', id);
+        if (error) throw new Error(error.message);
+        return true;
+    },
+
+    // What a delete of this account would take with it, counted per table.
+    //
+    // `cascade` is the rows the database would DESTROY (ON DELETE CASCADE);
+    // `detach` is the rows that survive and merely lose their account
+    // attribution (ON DELETE SET NULL). The split is the whole point: one is a
+    // decision the owner has to make in front of the numbers, the other is
+    // information. Tables are listed here rather than read from the catalogue
+    // so that adding a new cascading FK without thinking about this code shows
+    // up as a missing count in review, not as silent data loss in production.
+    //
+    // Counted with head:true + count:'exact' — the count comes back in the
+    // Content-Range header, so no rows cross the wire and PostgREST's 1000-row
+    // ceiling cannot truncate the answer.
+    async ownedRowCounts(orgId, id) {
+        const CASCADE_TABLES = [
+            'invoices', 'payments', 'monthly_financials', 'ghl_appointments',
+            'bank_accounts', 'bank_balance_snapshots', 'ad_channel_pipelines',
+        ];
+        const DETACH_TABLES = ['contacts', 'leads', 'communications', 'callrail_calls'];
+        const countIn = async (table) => {
+            const { count, error } = await this._client()
+                .from(table)
+                .select('id', { count: 'exact', head: true })
+                .eq('organisation_id', orgId)
+                .eq('integration_account_id', id);
+            if (error) throw new Error(error.message);
+            return Number(count || 0);
+        };
+        const tally = async (tables) => {
+            const out = {};
+            for (const t of tables) {
+                const n = await countIn(t);
+                // Only non-zero entries: a refusal listing eleven zeroes tells
+                // the owner nothing about what is actually in the way.
+                if (n > 0) out[t] = n;
+            }
+            return out;
+        };
+        return { cascade: await tally(CASCADE_TABLES), detach: await tally(DETACH_TABLES) };
+    },
+
     async markRevoked(orgId, id) {
         const { error } = await this._client()
             .from('integration_accounts')

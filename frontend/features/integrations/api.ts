@@ -748,3 +748,38 @@ export function resumeImport(provider: string) {
     { method: 'POST' },
   );
 }
+
+// ============================================================================
+// Permanently delete a connected-account row, for any provider that keeps its
+// accounts in `integration_accounts`.
+//
+// Distinct from the DELETE above, which only DISCONNECTS: it marks the account
+// revoked and stops syncing, leaving the row in the panel. Nothing deleted it,
+// which is why revoked subaccounts accumulated with no way to clear them.
+//
+// The backend refuses with 409 + `details` when the row still owns synced
+// records the database would cascade-delete, so the caller can show what would
+// go before asking again with `confirm`.
+// ============================================================================
+export type AccountDeleteProvider = 'gohighlevel' | 'callrail' | 'quickbooks';
+
+/** Per-table counts of what a delete would do. Present only where non-zero. */
+export interface AccountDeleteImpact {
+  /** Rows the delete would DESTROY. */
+  cascade: Record<string, number>;
+  /** Rows that survive but lose their account attribution. */
+  detach: Record<string, number>;
+}
+
+export interface AccountDeleteResult extends AccountDeleteImpact {
+  deleted: true;
+}
+
+export function deleteAccountPermanently(
+  provider: AccountDeleteProvider, id: string, confirm = false,
+) {
+  return api<AccountDeleteResult>(
+    `/api/integrations/${provider}/accounts/${id}/permanent${confirm ? '?confirm=true' : ''}`,
+    { method: 'DELETE' },
+  );
+}

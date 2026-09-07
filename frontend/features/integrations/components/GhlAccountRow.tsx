@@ -1,7 +1,8 @@
 'use client';
 import { useState } from 'react';
+import { DeleteAccountButton } from './DeleteAccountButton';
 import type { GhlAccount } from '../api';
-import { useRemoveGhlAccount } from '../hooks';
+import { useRemoveGhlAccount, useDeleteAccountPermanently } from '../hooks';
 
 export default function GhlAccountRow({
   account, onSync,
@@ -10,6 +11,7 @@ export default function GhlAccountRow({
   onSync: (id: string, full: boolean) => void;
 }) {
   const remove = useRemoveGhlAccount();
+  const onDeleted = useDeleteAccountPermanently();
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   return (
@@ -30,10 +32,21 @@ export default function GhlAccountRow({
           : <span className="text-ink-muted">—</span>}
       </td>
       <td style={{ padding: '8px 4px', whiteSpace: 'nowrap' }}>
-        <button onClick={() => onSync(account.id, false)} style={btn('white')}>Sync</button>{' '}
-        {!confirmRemove
-          ? <button onClick={() => setConfirmRemove(true)} style={btn('white')}>Disconnect</button>
-          : <button onClick={() => remove.mutate(account.id)} style={btn('var(--danger)', 'white')}>Confirm</button>}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <button onClick={() => onSync(account.id, false)} style={btn('white')}>Sync</button>
+          {account.status !== 'revoked' && (!confirmRemove
+            ? <button onClick={() => setConfirmRemove(true)} style={btn('white')}>Disconnect</button>
+            : <button onClick={() => remove.mutate(account.id)} style={btn('var(--danger)', 'white')}>Confirm</button>)}
+          {/* Only on a row that is already disconnected — Disconnect stops the
+              sync, Delete removes the row that was left behind. */}
+          <DeleteAccountButton
+            provider="gohighlevel"
+            id={account.id}
+            label={account.label || 'this subaccount'}
+            status={account.status}
+            onDeleted={onDeleted}
+          />
+        </div>
       </td>
     </tr>
   );

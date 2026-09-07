@@ -2,6 +2,7 @@ import * as integration_service_1 from "../services/integration.service.js";
 import * as integration_model_1 from "../models/integration.model.js";
 import { providerParamSchema, idParamSchema } from "../models/common.model.js";
 import { verifyState } from "../lib/oauth-state.js";
+import { deleteAccountPermanently } from "../services/integration-account-delete.service.js";
 import { ghlAccountService } from "../services/ghl-account.service.js";
 import { quickbooksAccountService } from "../services/quickbooks-account.service.js";
 import { syncAccount, detectPipelinesForToken } from "../lib/integrations/gohighlevel-sync.js";
@@ -299,6 +300,19 @@ export const integrationController = {
         const { id } = idParamSchema.parse(req.params);
         const body = ghlAccountUpdateSchema.parse(req.body);
         res.json(await ghlAccountService.updateAccount(req.user.organisation_id, id, body));
+    },
+    // Permanently delete a connected-account row, for whichever provider the
+    // route belongs to. `provider` is bound HERE, from the route, never taken
+    // from the request: a QuickBooks id posted to the GoHighLevel delete route
+    // must not drop a company's whole P&L.
+    //
+    // `?confirm=true` proceeds past the refusal that names what the delete
+    // would destroy — the owner's decision, made in front of the counts.
+    async accountDeletePermanently(req, res) {
+        const { id } = idParamSchema.parse(req.params);
+        const provider = req.accountProvider;
+        const confirm = req.query.confirm === 'true';
+        res.json(await deleteAccountPermanently(req.user.organisation_id, id, provider, { confirm }));
     },
     async ghlAccountRemove(req, res) {
         const { id } = idParamSchema.parse(req.params);

@@ -289,6 +289,19 @@ export function useRemoveGhlAccount() {
   });
 }
 
+// Permanently removes the row, for any provider that keeps its accounts in
+// `integration_accounts`. Every account list is invalidated rather than only
+// this provider's: the three panels sit on one page, and a delete that
+// cascades into invoices or P&L rows changes what the others show.
+export function useDeleteAccountPermanently() {
+  const qc = useQueryClient();
+  return () => {
+    for (const key of [['ghl-accounts'], ['callrail-accounts'], ['qbo-accounts'], ['integrations']]) {
+      qc.invalidateQueries({ queryKey: key });
+    }
+  };
+}
+
 export function useSyncGhlAccount() {
   return useMutation({
     mutationFn: ({ id, full }: { id: string; full?: boolean }) => syncGhlAccount(id, full),
