@@ -820,6 +820,17 @@ token on use and two concurrent syncs would otherwise each spend it. A token row
 has no `refresh_token` and passes through untouched. `integration_accounts` has
 no `expires_at` column, so the expiry lives in `config.expires_at`.
 
+**Outbound replies** (`POST /api/comms`) send through the contact's OWN
+subaccount: `contacts.integration_account_id` names it, `sendAuthForContact`
+resolves and refreshes its token. A GHL contact belongs to one Location, so
+that is the only credential that threads the reply into the existing
+conversation. It declines rather than guesses when the stamped account is
+revoked, or when an unstamped contact sits in an org with several subaccounts;
+the caller then tries the legacy single `integrations` row and finally the
+native Twilio/Postmark providers. Before this, the send read only the legacy
+row, so a multi-subaccount org — which has no secrets there — silently sent
+every reply over Twilio/Postmark instead.
+
 Scopes requested (all read-only, exactly what the sync calls): `contacts.readonly`,
 `opportunities.readonly`, `locations.readonly`, `workflows.readonly`,
 `calendars.readonly`, `calendars/events.readonly`, `conversations.readonly`,

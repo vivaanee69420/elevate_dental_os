@@ -1091,6 +1091,41 @@ export async function ensureAccountToken(orgId, account) {
     }
 }
 
+/**
+ * The access token to SEND as, for one of our contacts.
+ *
+ * A GHL contact belongs to exactly one Location, and each Location has its own
+ * credential, so "which token" is a per-contact question — not an org-level
+ * one. The contact carries `integration_account_id`, stamped by the sync that
+ * pulled it, and that is the answer whenever it is present.
+ *
+ * Returns null rather than guessing, in two cases:
+ *
+ *   - the contact names an account that is gone or revoked. Sending through a
+ *     different Location's token would either fail at GHL or, worse, thread the
+ *     reply into the wrong subaccount.
+ *   - the contact is unstamped (pulled by the retired org-wide sync) and the
+ *     org has several accounts. There is nothing to choose between them.
+ *
+ * A null sends the caller to its next option, which is the legacy single
+ * `integrations` row and then the native Twilio/Postmark providers.
+ */
+export async function sendAuthForContact(orgId, contact) {
+    const accountId = contact?.integration_account_id ?? null;
+    if (accountId) {
+        const account = await integrationAccountRepository.getByIdWithSecrets(orgId, accountId);
+        if (!account || account.provider !== 'gohighlevel' || account.status === 'revoked' || !account.secrets) {
+            return null;
+        }
+        return ensureAccountToken(orgId, account);
+    }
+    const live = (await integrationAccountRepository.list(orgId, 'gohighlevel'))
+        .filter((a) => a.status !== 'revoked');
+    if (live.length !== 1) return null;
+    const only = await integrationAccountRepository.getByIdWithSecrets(orgId, live[0].id);
+    return only?.secrets ? ensureAccountToken(orgId, only) : null;
+}
+
 // Account-driven sync: same pull/upsert engine as syncOneOrg, but creds come
 // from an integration_accounts row (its own PIT + locationId), pipelines/last_sync
 // persist to the account row. This is the multi-subaccount path.

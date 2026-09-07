@@ -79,9 +79,15 @@ export function messageRow(orgId, m, contactId, conversationId, integrationAccou
 
 // Send an SMS / Email / WhatsApp to a GHL contact. contactId is the GHL contact
 // id. Returns { conversationId, messageId }.
-export async function sendMessage(orgId, integration, { contactId, channel, body, subject }) {
+//
+// Takes the access token directly rather than a row to read it off: the caller
+// resolves WHICH credential sends (the contact's own subaccount, in a
+// multi-Location org) and may have had to refresh it first, so a row here would
+// be a second, stale source for the same answer.
+export async function sendMessage(orgId, accessToken, { contactId, channel, body, subject }) {
     if (!contactId) throw new Error('GHL contactId required to send');
-    const at = tokenOf(integration);
+    if (!accessToken) throw new Error('GHL access token required to send');
+    const at = accessToken;
     const type = channel === 'email' ? 'Email' : channel === 'whatsapp' ? 'WhatsApp' : 'SMS';
     const payload = { type, contactId, message: body };
     if (type === 'Email') {

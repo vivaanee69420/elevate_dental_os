@@ -8,6 +8,9 @@ import * as errors_1 from "../middleware/errors.js";
 import * as messaging_1 from "../lib/messaging.js";
 import { integrationRepository } from "../repositories/integration.repository.js";
 import { sendMessage as ghlSendMessage } from "../lib/integrations/gohighlevel-conversations.js";
+import { sendAuthForContact } from "../lib/integrations/gohighlevel-sync.js";
+import { integrationAccountRepository } from "../repositories/integration-account.repository.js";
+import { decryptSecret } from "../lib/crypto.js";
 import * as supabase_1 from "../lib/supabase.js";
 import { assertOrgOwns } from "../lib/tenant-guard.js";
 export const commService = {
@@ -23,23 +26,48 @@ export const commService = {
         let externalId;
         let provider = 'native';
         let conversationId = null;
-        // Prefer GoHighLevel when the target contact is GHL-linked and GHL is
-        // connected — the reply goes out through GHL's number/email and threads
-        // in GHL (and back into our Inbox via syncConversations). Otherwise fall
-        // back to the native Twilio/Postmark providers.
+        // Prefer GoHighLevel when the target contact is GHL-linked and we can
+        // resolve the credential for ITS subaccount — the reply then goes out
+        // through that Location's own number/email and threads where the
+        // conversation already lives (and back into our Inbox via
+        // syncConversations). Otherwise fall back to the native Twilio/Postmark
+        // providers: a patient still gets the message.
         let ghlContactId = null;
-        let ghlIntegration = null;
+        let ghlToken = null;
         if (input.contact_id) {
-            ghlIntegration = await integrationRepository.getByProvider(orgId, 'gohighlevel');
-            if (ghlIntegration?.status === 'active' && ghlIntegration?.secrets) {
+            // Two credential stores, and most orgs have only one of them: the
+            // per-Location `integration_accounts` rows the sync actually uses,
+            // and the legacy single `integrations` row. Ask both before
+            // touching contacts, so an org with no GoHighLevel at all still
+            // costs the same two cheap reads it always did.
+            const [marker, accounts] = await Promise.all([
+                integrationRepository.getByProvider(orgId, 'gohighlevel'),
+                integrationAccountRepository.list(orgId, 'gohighlevel'),
+            ]);
+            const markerUsable = marker?.status === 'active' && !!marker.secrets;
+            const anyAccount = accounts.some((a) => a.status !== 'revoked');
+            if (markerUsable || anyAccount) {
                 const { data } = await supabase_1.serviceClient.from('contacts')
-                    .select('ghl_contact_id').eq('organisation_id', orgId).eq('id', input.contact_id).maybeSingle();
+                    .select('ghl_contact_id, integration_account_id')
+                    .eq('organisation_id', orgId).eq('id', input.contact_id).maybeSingle();
                 ghlContactId = data?.ghl_contact_id ?? null;
+                if (ghlContactId) {
+                    // The contact's OWN subaccount first — a GHL contact belongs
+                    // to one Location, so this is the only credential that can
+                    // thread the reply where the conversation already lives.
+                    // Refreshed on the way out if it is an OAuth account.
+                    ghlToken = await sendAuthForContact(orgId, data);
+                    // Legacy single-connection orgs, unchanged: one row, one
+                    // Location, and no account rows to disambiguate.
+                    if (!ghlToken && markerUsable) {
+                        ghlToken = JSON.parse(decryptSecret(marker.secrets)).access_token ?? null;
+                    }
+                }
             }
         }
         try {
-            if (ghlContactId) {
-                const r = await ghlSendMessage(orgId, ghlIntegration, {
+            if (ghlContactId && ghlToken) {
+                const r = await ghlSendMessage(orgId, ghlToken, {
                     contactId: ghlContactId, channel: input.channel, body: input.body, subject: input.subject,
                 });
                 externalId = r.messageId;
