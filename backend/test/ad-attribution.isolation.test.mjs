@@ -48,10 +48,15 @@ describe('every ad-attribution write pins organisation_id', () => {
     expect(supaRec.last.upsertVals.organisation_id).not.toBe(ORG_B);
   });
 
-  it('setChannel(null) deletes scoped by org, so it cannot clear a foreign row', async () => {
+  it('setChannel(null) stamps the caller org, so it cannot clear a foreign row', async () => {
+    // Clearing writes an explicit null-channel row now rather than deleting
+    // (see the repository). The isolation guarantee is unchanged and still the
+    // point of this test: the org on the row is the CALLER's, never a
+    // body-supplied one.
     await adChannelPipelineRepository.setChannel(ORG_A, 'acc1', 'p1', null, null);
-    expect(supaRec.last.op).toBe('delete');
-    expect(orgFilter(supaRec.last).val).toBe(ORG_A);
+    expect(supaRec.last.upsertVals.organisation_id).toBe(ORG_A);
+    expect(supaRec.last.upsertVals.organisation_id).not.toBe(ORG_B);
+    expect(supaRec.last.upsertVals.channel).toBeNull();
   });
 
   it('setAdAccountPractice constrains by org AND id', async () => {

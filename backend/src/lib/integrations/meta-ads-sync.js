@@ -27,6 +27,7 @@ import { londonDaysAgo, londonYmd } from "../tz.js";
 import { syncMetaDeep, LEVEL_FIELDS } from "./meta-ads-deep-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
 import { applyAccountSelection } from "./ad-account-selection.js";
+import { pipelineChannelDetectService } from "../../services/pipeline-channel-detect.service.js";
 // Shared window constant lives with the Google deep-sync module (its
 // sibling) so both providers' nightly wiring read the SAME value — see
 // google-ads-sync.js for the matching import. Two providers must not drift
@@ -431,6 +432,12 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
 
         await integrationRepository.markSynced(orgId, 'meta_ads',
             warnings.length ? warnings.join(' | ').slice(0, 500) : null);
+        // A pipeline is classed as Meta or Google partly by whether its leads'
+        // campaign ids resolve inside THIS org's ad_metrics — which only exist
+        // once this sync has written them. An org that connected its CRM before
+        // its ad platform therefore has no evidence to detect on until now, so
+        // the detection is re-run here as well as after the CRM sync.
+        await pipelineChannelDetectService.runQuietly(orgId, 'meta_ads sync');
         return { rows: all.length, accounts: accountIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), deep };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'meta_ads', String(err.message).slice(0, 500));

@@ -21,8 +21,17 @@ export interface PipelineRow {
   practiceName: string | null;
   pipelineId: string;
   pipelineName: string;
-  /** null = unassigned. Never inferred from the pipeline name. */
+  /** null = unassigned. Never inferred from the pipeline NAME. */
   channel: AdChannel | null;
+  /**
+   * Who decided. 'owner' is a human's choice and is never overwritten;
+   * 'auto' was detected from the attribution this pipeline's own leads carry
+   * (migration 000180). null when nobody has decided yet.
+   */
+  channelSource: 'owner' | 'auto' | null;
+  /** The evidence behind an 'auto' channel: leads seen, and the share of them. */
+  detectedLeads: number | null;
+  detectedShare: number | null;
   leadCount: number;
 }
 

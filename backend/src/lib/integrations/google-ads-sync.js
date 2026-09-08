@@ -26,6 +26,7 @@ import { syncGoogleDeep, DEEP_WINDOW_DAYS, CAMPAIGN_SHARE_METRICS } from "./goog
 import { syncGoogleClicks } from "./google-ads-clicks-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
 import { applyAccountSelection } from "./ad-account-selection.js";
+import { pipelineChannelDetectService } from "../../services/pipeline-channel-detect.service.js";
 
 const INCREMENTAL_DAYS = 90;  // nightly cron window: trailing 3 months (product rule)
 const FULL_DAYS = 183;        // on-connect / reconnect backfill window: 6 months (product rule)
@@ -598,6 +599,12 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'google_ads',
             warnings.length ? warnings.join(' | ').slice(0, 500) : null);
+        // A pipeline is classed as Meta or Google partly by whether its leads'
+        // campaign ids resolve inside THIS org's ad_metrics — which only exist
+        // once this sync has written them. An org that connected its CRM before
+        // its ad platform therefore has no evidence to detect on until now, so
+        // the detection is re-run here as well as after the CRM sync.
+        await pipelineChannelDetectService.runQuietly(orgId, 'google_ads sync');
         return { rows: all.length, customers: customerIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), permanentlySkipped: [...permanent], deep, clicks };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'google_ads', String(err.message).slice(0, 500));

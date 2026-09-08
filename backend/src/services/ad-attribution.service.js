@@ -433,7 +433,7 @@ export const adAttributionService = {
             adAttributionRepository.ghlAccounts(orgId),
             adAttributionRepository.practiceOptions(orgId),
             adAttributionRepository.adAccounts(orgId),
-            adChannelPipelineRepository.channelMap(orgId),
+            adChannelPipelineRepository.decisionMap(orgId),
             adAttributionRepository.leadCountsByPipeline(orgId),
         ]);
         const practiceName = new Map(practices.map((p) => [p.id, p.name]));
@@ -457,7 +457,14 @@ export const adAttributionService = {
                 practiceName: a.practice_id ? practiceName.get(a.practice_id) ?? null : null,
                 pipelineId: p.id,
                 pipelineName: p.name,
-                channel: channelMap.get(pipeKey(a.id, p.id)) ?? null,
+                channel: channelMap.get(pipeKey(a.id, p.id))?.channel ?? null,
+                // Whether a human said this or the detection did, and on what
+                // evidence. Shown rather than hidden: a channel the owner never
+                // chose, presented as if they had, is the kind of quiet
+                // assumption this table was created to get rid of.
+                channelSource: channelMap.get(pipeKey(a.id, p.id))?.source ?? null,
+                detectedLeads: channelMap.get(pipeKey(a.id, p.id))?.detectedLeads ?? null,
+                detectedShare: channelMap.get(pipeKey(a.id, p.id))?.detectedShare ?? null,
                 leadCount: leadCounts.get(pipeKey(a.id, p.id)) ?? 0,
             }))),
             adAccounts: adAccounts.map((a) => ({
