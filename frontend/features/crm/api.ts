@@ -84,3 +84,76 @@ export function fetchGhlWorkflows(accountId?: string | null) {
   const qs = accountId ? `?account_id=${accountId}` : '';
   return api<{ workflows: GhlWorkflow[] }>(`/api/workflows/ghl${qs}`);
 }
+
+// ---------------------------------------------------------------------------
+// Inbox — server-aggregated conversations.
+//
+// The old Inbox fetched /api/comms (capped at 200 rows server-side) and then
+// threaded, counted and searched that page in the browser. On live data it
+// showed 105 of 12,764 conversations, and an unread badge of 10 against a true
+// 5,753. These endpoints answer over the whole inbox instead.
+// ---------------------------------------------------------------------------
+
+export interface InboxThread {
+  thread_key: string;
+  contact_id: string | null;
+  lead_id: string | null;
+  channel: Channel;
+  counterparty: string | null;
+  contact_first_name: string | null;
+  contact_last_name: string | null;
+  last_at: string;
+  last_subject: string | null;
+  last_body: string | null;
+  message_count: number;
+  unread_count: number;
+}
+
+export interface InboxSummary {
+  total_messages: number;
+  total_threads: number;
+  unread_messages: number;
+  unread_threads: number;
+}
+
+export interface InboxResponse {
+  threads: InboxThread[];
+  /** Conversations matching the CURRENT filters — what a pager counts. */
+  total: number;
+  limit: number;
+  offset: number;
+  /** The whole inbox, regardless of filters — what the unread badge counts. */
+  summary: InboxSummary;
+}
+
+export interface InboxFilters {
+  integration_account_id?: string | null;
+  search?: string;
+  channel?: string;
+  unread_only?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function fetchInbox(filters: InboxFilters = {}): Promise<InboxResponse> {
+  const params = new URLSearchParams();
+  if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.channel) params.set('channel', filters.channel);
+  if (filters.unread_only) params.set('unread_only', 'true');
+  if (filters.limit != null) params.set('limit', String(filters.limit));
+  if (filters.offset != null) params.set('offset', String(filters.offset));
+  const qs = params.toString();
+  // The "?" is added HERE and never baked into the query string. A helper that
+  // returned "since=..&until=.." without one was interpolated raw elsewhere in
+  // this codebase and produced
+  // "/api/marketing/facebook/lead-performancesince=2026-09-01" — which 404s
+  // silently into an empty state that reads as a design decision.
+  return api<InboxResponse>(`/api/comms/inbox${qs ? `?${qs}` : ''}`);
+}
+
+export function fetchThread(threadKey: string): Promise<{ messages: Communication[] }> {
+  return api<{ messages: Communication[] }>(
+    `/api/comms/thread?thread_key=${encodeURIComponent(threadKey)}`,
+  );
+}

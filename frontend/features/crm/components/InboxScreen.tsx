@@ -1,17 +1,23 @@
 'use client';
-// CRM Inbox — wired to GET /api/comms.
+// CRM Inbox — wired to GET /api/comms/inbox and GET /api/comms/thread.
 //
-// Server returns a flat list of `communications` rows scoped to the caller's
-// organisation_id. This component groups them client-side into "threads" by
-// (contact_id || lead_id || channel+address), picks the latest message per
-// thread for the list view, and renders the full message history for the
-// selected thread. UI is pixel-identical to the prototype; only the data
-// source moved from mock fixtures to the real endpoint.
+// It used to fetch a flat list of `communications` (capped at 200 rows
+// server-side) and thread, count and search that page in the browser. On live
+// data that showed 105 of 12,764 conversations — 0.8% — with an unread badge
+// reading 10 against a true 5,753, and a search box that only searched those
+// 105, so it answered "no results" for 99% of the real inbox. Nothing about it
+// looked broken.
+//
+// Now the grouping, counting, filtering, searching and paging all happen in
+// SQL over every message the organisation has. This component renders one page
+// of conversations, fetches the open conversation's messages on demand, and
+// takes every number from the server rather than from the length of what it
+// happens to be holding.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Skeleton } from '@/components/ui';
-import { useCommunications, useSendCommunication } from '../hooks';
-import { type Communication } from '../api';
+import { useInbox, useThread, useSendCommunication } from '../hooks';
+import { type Communication, type InboxThread } from '../api';
 import { CRM_NAVY, agoLabel } from '../data';
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
@@ -66,11 +72,6 @@ function cleanBody(s: string | null | undefined): string {
     .trim();
 }
 
-function counterpartyAddress(c: Communication): string {
-  if (c.direction === 'inbound') return c.from_address ?? c.to_address ?? '';
-  return c.to_address ?? c.from_address ?? '';
-}
-
 function deriveDisplayName(addr: string, fallback: string): string {
   if (!addr) return fallback;
   // Strip "Name <email>" angle-bracket form if present.
@@ -94,64 +95,47 @@ function minutesAgoFrom(iso: string): number {
   return Math.max(0, Math.floor((Date.now() - t) / 60_000));
 }
 
-// Group flat communications into threads. Key precedence:
-// contact_id > lead_id > (channel + counterparty address).
-function groupIntoThreads(rows: Communication[]): DerivedThread[] {
-  const buckets = new Map<string, Communication[]>();
+// Threading now happens in SQL (crm_inbox_threads), not here. The key is a
+// stored generated column on communications: contact_id, else lead_id, else
+// channel + counterparty address — the same precedence the browser-side
+// groupIntoThreads() used to apply, moved to where the whole population is
+// visible rather than the newest 200 rows.
 
-  for (const c of rows) {
-    const key =
-      c.contact_id
-        ? `c:${c.contact_id}`
-        : c.lead_id
-          ? `l:${c.lead_id}`
-          : `a:${c.channel}:${counterpartyAddress(c)}`;
-    const list = buckets.get(key);
-    if (list) list.push(c);
-    else buckets.set(key, [c]);
-  }
+// Conversations per page. Small enough to scan, and the pager states the
+// total, so the list is bounded rather than truncated.
+const PAGE_SIZE = 50;
 
-  const threads: DerivedThread[] = [];
-  for (const [id, msgs] of buckets) {
-    // Sort oldest → newest within thread for natural conversation reading.
-    msgs.sort((a, b) => a.created_at.localeCompare(b.created_at));
-    const latest = msgs[msgs.length - 1];
-    const addr = counterpartyAddress(latest);
-    // Prefer the joined contact's real name; fall back to the address, then the id.
-    const withContact = msgs.find((m) => m.contact?.first_name || m.contact?.last_name);
-    const contactName = withContact
-      ? `${withContact.contact?.first_name ?? ''} ${withContact.contact?.last_name ?? ''}`.trim()
-      : '';
-    const displayName = contactName || deriveDisplayName(
-      addr,
-      id.startsWith('c:')
-        ? `Contact ${id.slice(2, 10)}`
-        : id.startsWith('l:')
-          ? `Lead ${id.slice(2, 10)}`
-          : 'Unknown sender',
-    );
-    threads.push({
-      id,
-      name: displayName,
-      initials: initialsOf(displayName),
-      channel: latest.channel,
-      unread: msgs.filter((m) => m.direction === 'inbound' && !m.read_at).length,
-      subject: latest.subject ?? undefined,
-      lastSnippet: cleanBody(latest.body) || '(no content)',
-      minutesAgo: minutesAgoFrom(latest.created_at),
-      tag: '',
-      contactId: latest.contact_id ?? null,
-      toAddress: addr,
-      messages: msgs,
-    });
-  }
-
-  // Newest activity first in the list.
-  threads.sort((a, b) => a.minutesAgo - b.minutesAgo);
-  return threads;
+// Map one server-aggregated thread onto the shape the presentation below
+// already speaks. `messages` is deliberately empty here: the list needs a
+// thread's summary, and only the OPEN conversation fetches its messages.
+function toDerivedThread(t: InboxThread): DerivedThread {
+  const addr = t.counterparty ?? '';
+  const contactName = `${t.contact_first_name ?? ''} ${t.contact_last_name ?? ''}`.trim();
+  const name = contactName || deriveDisplayName(
+    addr,
+    t.contact_id
+      ? `Contact ${t.contact_id.slice(0, 8)}`
+      : t.lead_id
+        ? `Lead ${t.lead_id.slice(0, 8)}`
+        : 'Unknown sender',
+  );
+  return {
+    id: t.thread_key,
+    name,
+    initials: initialsOf(name),
+    channel: t.channel,
+    unread: t.unread_count,
+    subject: t.last_subject ?? undefined,
+    lastSnippet: cleanBody(t.last_body) || '(no content)',
+    minutesAgo: minutesAgoFrom(t.last_at),
+    tag: '',
+    contactId: t.contact_id,
+    toAddress: addr,
+    messages: [],
+  };
 }
 
-/** CRM unified-inbox screen — backed by GET /api/comms. */
+/** CRM unified-inbox screen — backed by GET /api/comms/inbox. */
 export default function InboxScreen() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const { data: ghlData } = useGhlAccounts();
@@ -160,39 +144,59 @@ export default function InboxScreen() {
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reply, setReply] = useState('');
+  const [page, setPage] = useState(0);
   const sendMsg = useSendCommunication();
 
-  const { data, isLoading, error } = useCommunications({
-    ...(accountId ? { integration_account_id: accountId } : {}),
+  // Search runs on the SERVER, so it is debounced — every keystroke is a query
+  // over the organisation's whole message history, not a filter over an array
+  // already in memory.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Changing what is being asked for returns you to the first page; leaving the
+  // offset behind lands the user on page 7 of a 2-page result, which reads as
+  // "no conversations".
+  useEffect(() => { setPage(0); }, [debouncedSearch, filter, accountId]);
+
+  const { data, isLoading, error, isFetching } = useInbox({
+    integration_account_id: accountId,
+    ...(debouncedSearch ? { search: debouncedSearch } : {}),
+    ...(filter === 'unread' ? { unread_only: true } : {}),
+    ...(filter !== 'all' && filter !== 'unread' ? { channel: filter } : {}),
+    limit: PAGE_SIZE,
+    offset: page * PAGE_SIZE,
   });
 
-  const threads = useMemo(
-    () => groupIntoThreads(data?.communications ?? []),
-    [data?.communications],
+  // The list on screen is one page of a server-side result. `total` is how many
+  // conversations match the current filters; `summary` counts the whole inbox
+  // regardless of them. Neither is ever inferred from the page's length — that
+  // is precisely what made this screen report 105 conversations and 10 unread
+  // when the truth was 12,764 and 5,753.
+  const threads: DerivedThread[] = useMemo(
+    () => (data?.threads ?? []).map(toDerivedThread),
+    [data?.threads],
   );
+  const matchingTotal = data?.total ?? 0;
+  const totalUnread = data?.summary.unread_messages ?? 0;
+  const totalThreads = data?.summary.total_threads ?? 0;
+  const pageCount = Math.max(1, Math.ceil(matchingTotal / PAGE_SIZE));
 
-  const totalUnread = useMemo(
-    () => threads.reduce((s, t) => s + t.unread, 0),
-    [threads],
-  );
-
-  // Filtered thread list: channel/unread chip + free-text search.
-  const filtered = useMemo(() => {
-    let list = threads;
-    if (filter === 'unread') list = list.filter((t) => t.unread > 0);
-    else if (filter !== 'all') list = list.filter((t) => t.channel === filter);
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter((t) =>
-        `${t.name} ${t.lastSnippet}`.toLowerCase().includes(q),
-      );
-    }
-    return list;
-  }, [threads, filter, search]);
+  // The list is already filtered and paged by SQL — there is nothing left to
+  // filter here, and re-filtering it in the browser is the bug being removed.
+  const filtered = threads;
 
   const selected =
     threads.find((t) => t.id === selectedId) ?? filtered[0] ?? null;
-  const messages = selected?.messages ?? [];
+
+  // A conversation's messages are fetched for the conversation you opened, not
+  // sliced out of a page of the whole inbox — so an old thread opens with its
+  // full history rather than only whatever happened to be in the last 200
+  // messages org-wide.
+  const { data: threadData, isLoading: threadLoading } = useThread(selected?.id ?? null);
+  const messages = threadData?.messages ?? [];
 
   // Only sms/email/whatsapp are sendable (call/in_person are log-only).
   const canSend =
@@ -210,13 +214,17 @@ export default function InboxScreen() {
     setReply('');
   }
 
-  const filterChips = [
-    { k: 'all', l: 'All', c: threads.length },
-    { k: 'unread', l: 'Unread', c: totalUnread },
-    { k: 'sms', l: 'SMS', c: threads.filter((t) => t.channel === 'sms').length },
-    { k: 'email', l: 'Email', c: threads.filter((t) => t.channel === 'email').length },
-    { k: 'whatsapp', l: 'WhatsApp', c: threads.filter((t) => t.channel === 'whatsapp').length },
-    { k: 'call', l: 'Call', c: threads.filter((t) => t.channel === 'call').length },
+  // Only the two chips whose totals are actually known carry a number. The
+  // per-channel chips used to count the loaded page — with 105 of 12,764
+  // threads loaded, "SMS 12" was a count of the sample, not of the inbox.
+  // A chip with no number is honest; a chip with a wrong one is not.
+  const filterChips: { k: string; l: string; c: number | null }[] = [
+    { k: 'all', l: 'All', c: totalThreads },
+    { k: 'unread', l: 'Unread', c: data?.summary.unread_threads ?? null },
+    { k: 'sms', l: 'SMS', c: null },
+    { k: 'email', l: 'Email', c: null },
+    { k: 'whatsapp', l: 'WhatsApp', c: null },
+    { k: 'call', l: 'Call', c: null },
   ];
 
   return (
@@ -238,7 +246,9 @@ export default function InboxScreen() {
           <p className="text-ink-muted" style={{ fontSize: 13 }}>
             {isLoading
               ? 'Loading conversations…'
-              : `${threads.length} conversations · ${totalUnread} unread · SMS, Email, WhatsApp, Voice AI all in one place`}
+              : `${totalThreads.toLocaleString('en-GB')} conversations · `
+                + `${totalUnread.toLocaleString('en-GB')} unread · `
+                + 'SMS, Email, WhatsApp, Voice AI all in one place'}
           </p>
         </div>
       </div>
@@ -332,7 +342,7 @@ export default function InboxScreen() {
                   flexShrink: 0,
                 }}
               >
-                {f.l} · {f.c}
+                {f.c === null ? f.l : `${f.l} · ${f.c.toLocaleString('en-GB')}`}
               </button>
             ))}
           </div>
@@ -348,9 +358,16 @@ export default function InboxScreen() {
                 className="text-ink-muted text-center"
                 style={{ padding: '30px 20px', fontSize: 12 }}
               >
-                {threads.length === 0
+                {/* Three different states that used to look identical. An
+                    inbox with nothing in it, a filter that matched nothing,
+                    and a search that matched nothing are different facts, and
+                    the last one is only trustworthy now that the search runs
+                    over every conversation rather than over 0.8% of them. */}
+                {totalThreads === 0
                   ? 'No conversations yet — outbound sends will appear here.'
-                  : 'No conversations match this filter.'}
+                  : debouncedSearch
+                    ? `Nothing matches “${debouncedSearch}” in ${totalThreads.toLocaleString('en-GB')} conversations.`
+                    : 'No conversations match this filter.'}
               </div>
             ) : (
               filtered.map((t) => (
@@ -477,6 +494,57 @@ export default function InboxScreen() {
               ))
             )}
           </div>
+
+          {/* Pager. The list is bounded and SAYS so, with the real total
+              beside it — the difference between showing a page and quietly
+              being a page. */}
+          {matchingTotal > 0 && (
+            <div
+              className="flex"
+              style={{
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+                padding: '8px 10px',
+                borderTop: '1px solid var(--border)',
+                fontSize: 11,
+              }}
+            >
+              <span className="text-ink-muted">
+                {(page * PAGE_SIZE + 1).toLocaleString('en-GB')}–
+                {Math.min((page + 1) * PAGE_SIZE, matchingTotal).toLocaleString('en-GB')}
+                {' of '}
+                {matchingTotal.toLocaleString('en-GB')}
+                {isFetching ? ' · updating…' : ''}
+              </span>
+              <span style={{ display: 'flex', gap: 6 }}>
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  style={{
+                    padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                    border: '1px solid var(--border)', background: 'white',
+                    cursor: page === 0 ? 'not-allowed' : 'pointer',
+                    opacity: page === 0 ? 0.45 : 1,
+                  }}
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                  disabled={page >= pageCount - 1}
+                  style={{
+                    padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+                    border: '1px solid var(--border)', background: 'white',
+                    cursor: page >= pageCount - 1 ? 'not-allowed' : 'pointer',
+                    opacity: page >= pageCount - 1 ? 0.45 : 1,
+                  }}
+                >
+                  Next
+                </button>
+              </span>
+            </div>
+          )}
         </div>
 
         {/* RIGHT: conversation */}
@@ -535,7 +603,16 @@ export default function InboxScreen() {
                   maxHeight: 540,
                 }}
               >
-                {messages.length === 0 ? (
+                {threadLoading ? (
+                  // The conversation is fetched on open, so it has a real
+                  // loading state. "No messages yet" while it is still in
+                  // flight would be a wrong answer, not a pending one.
+                  <div className="space-y-3" style={{ padding: 12 }}>
+                    {Array.from({ length: 4 }).map((_, i) => (
+                      <Skeleton key={i} className="h-14 w-full" />
+                    ))}
+                  </div>
+                ) : messages.length === 0 ? (
                   <div
                     className="text-ink-muted text-center"
                     style={{ fontSize: 12, padding: 30 }}

@@ -1,6 +1,7 @@
 'use client';
 import { PageHeader, DataTable, StatusBadge, EmptyState, type Column } from '@/components/ui';
 import { formatPence, formatDate, formatNumber } from '@/lib/format';
+import { money, DASH } from '@/features/marketing/_shared/format';
 import { useLeads } from '../hooks';
 import { useMarketingRoi } from '@/features/growth/hooks';
 import { useScopePeriod } from '@/features/_shared/scope-context';
@@ -11,8 +12,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const columns: Column<any>[] = [
   { header: 'Name', render: (l) => `${l.contact?.first_name ?? ''} ${l.contact?.last_name ?? ''}` },
-  { header: 'Treatment', render: (l) => l.treatment },
-  { header: 'Value', render: (l) => formatPence(l.estimated_value_pence) },
+  // A "Treatment" column here rendered `l.treatment`, which is NOT a treatment:
+  // it is GoHighLevel's raw opportunity name, and on live data 3,201 of this
+  // group's leads carry a patient's email address or phone number in it. The
+  // stage is the honest thing this row knows.
+  { header: 'Stage', render: (l) => <span className="text-ink-muted">{l.ghl_stage_name || DASH}</span> },
+  // Only 22.5% of leads carry an estimated value, and formatPence renders null
+  // as "£0.00" without a type error — so guard at the call site.
+  { header: 'Value', render: (l) => money(l.estimated_value_pence || null) },
   {
     header: 'Status',
     render: (l) => <StatusBadge tone="brand">{String(l.status).replace(/_/g, ' ')}</StatusBadge>,

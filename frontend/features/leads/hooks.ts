@@ -1,5 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getLeadFunnel, getLeadReport, listLeads, listPipelines, updateLead, type LeadsListFilters, type LeadUpdateInput } from './api';
+import { getLeadFunnel, getLeadReport, getPipelineSummary, getTodayCounters, listLeads, listPipelines, updateLead, type LeadsListFilters, type LeadUpdateInput } from './api';
+
+// Board counts and value for one pipeline, computed in SQL over every lead in
+// it rather than over the page the board happens to have fetched.
+export function usePipelineSummary(pipelineId: string | null, accountId?: string | null) {
+  return useQuery({
+    queryKey: ['pipeline-summary', pipelineId, accountId ?? null],
+    queryFn: () => getPipelineSummary({ pipelineId: pipelineId as string, accountId }),
+    enabled: !!pipelineId,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useTodayCounters(opts: { since?: string | null; accountId?: string | null } = {}) {
+  return useQuery({
+    queryKey: ['today-counters', opts.since ?? null, opts.accountId ?? null],
+    queryFn: () => getTodayCounters(opts),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
 
 export function useLeads(filters: LeadsListFilters = {}) {
   return useQuery({

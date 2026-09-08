@@ -6,12 +6,13 @@
 // Replaces the mock task generator.
 
 import { useMemo, useState } from 'react';
-import { useLeads } from '@/features/leads/hooks';
+import { useLeads, useTodayCounters } from '@/features/leads/hooks';
 import { useCommunications } from '../hooks';
 import type { Lead } from '@/features/leads/api';
 import type { Communication } from '../api';
 import { agoLabel } from '../data';
 import { formatPence } from '@/lib/format';
+import { DASH } from '@/features/marketing/_shared/format';
 
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
@@ -52,6 +53,12 @@ export default function TodayScreen() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const { data: ghlData } = useGhlAccounts();
 
+  // THE LISTS are a page; THE COUNTERS are not. This fetch feeds the three
+  // lists below, which are bounded by design. The headline counters come from
+  // an SQL aggregate over every lead (useTodayCounters), because counting this
+  // page made "Active leads" read 500 — its own page size — against a true
+  // 17,778, and made "Needs follow-up" the oldest of the NEWEST 500, which is
+  // never an actually old lead.
   const { data: leadData, isLoading } = useLeads({
     limit: 500,
     ...(accountId ? { integration_account_id: accountId } : {}),
@@ -64,18 +71,25 @@ export default function TodayScreen() {
   const [selected, setSelected] = useState<Selected | null>(null);
   const [windowKey, setWindowKey] = useState<WindowKey>('recent');
 
-  const { newLeads, followUps, messages, activeCount } = useMemo(() => {
+  // ONE window start, shared by the counters and the lists beneath them, so
+  // the two can never disagree about where "today" begins.
+  const sinceIso = useMemo(() => {
+    const days = WINDOWS.find((w) => w.key === windowKey)?.days ?? 1;
+    if (!Number.isFinite(days)) return null;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - days);
+    return start.toISOString();
+  }, [windowKey]);
+
+  const { data: counters } = useTodayCounters({ since: sinceIso, accountId });
+
+  const { newLeads, followUps, messages } = useMemo(() => {
     // Window start = local midnight minus N days. 'recent' (N=1) buffers the
     // nightly GHL sync lag: leads land ~22:00 carrying GHL's real createdAt, so
     // a strict calendar-today filter reads 0 every morning even when leads
     // flowed overnight. 'all' (N=Infinity) treats every open lead as new.
-    const days = WINDOWS.find((w) => w.key === windowKey)?.days ?? 1;
-    let startMs = 0;
-    if (Number.isFinite(days)) {
-      const start = new Date(); start.setHours(0, 0, 0, 0);
-      start.setDate(start.getDate() - days);
-      startMs = start.getTime();
-    }
+    const startMs = sinceIso ? new Date(sinceIso).getTime() : 0;
 
     const open = leads.filter((l) => !CLOSED.includes(l.status));
     const newLeads = open
@@ -88,15 +102,17 @@ export default function TodayScreen() {
     const messages = comms
       .filter((c) => c.direction === 'inbound')
       .slice(0, 20);
-    return { newLeads, followUps, messages, activeCount: open.length };
-  }, [leads, comms, windowKey]);
+    return { newLeads, followUps, messages };
+  }, [leads, comms, sinceIso]);
 
   const windowLabel = WINDOWS.find((w) => w.key === windowKey)?.label ?? 'Recent';
-  const counters = [
-    { label: `New leads · ${windowLabel}`, value: newLeads.length, colour: '#3B82F6' },
-    { label: 'Needs follow-up', value: followUps.length, colour: 'var(--warning)' },
-    { label: 'Recent messages', value: messages.length, colour: '#8B5CF6' },
-    { label: 'Active leads', value: activeCount, colour: 'var(--success)' },
+  // Every figure here is server-aggregated. `newLeads.length` and friends are
+  // the lengths of bounded lists and must never be presented as counts.
+  const counterCards = [
+    { label: `New leads · ${windowLabel}`, value: counters?.new_leads, colour: '#3B82F6' },
+    { label: 'Needs follow-up', value: counters?.follow_ups, colour: 'var(--warning)' },
+    { label: `Messages in · ${windowLabel}`, value: counters?.inbound_messages, colour: '#8B5CF6' },
+    { label: 'Active leads', value: counters?.active_leads, colour: 'var(--success)' },
   ];
 
   return (
@@ -105,7 +121,11 @@ export default function TodayScreen() {
         <div>
           <h1 className="display font-bold" style={{ fontSize: 28 }}>Today</h1>
           <p className="text-ink-muted" style={{ fontSize: 13 }}>
-            {isLoading ? 'Loading…' : `${newLeads.length} new leads · ${followUps.length} to follow up · ${messages.length} recent messages`}
+            {isLoading || !counters
+              ? 'Loading…'
+              : `${counters.new_leads.toLocaleString('en-GB')} new leads · `
+                + `${counters.follow_ups.toLocaleString('en-GB')} to follow up · `
+                + `${counters.inbound_messages.toLocaleString('en-GB')} messages in`}
           </p>
         </div>
         <select
@@ -133,10 +153,15 @@ export default function TodayScreen() {
       )}
 
       <div className="grid gap-3 mb-5" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        {counters.map((s) => (
+        {counterCards.map((s) => (
           <div key={s.label} className="card-padded" style={{ borderLeft: `3px solid ${s.colour}` }}>
             <div className="text-ink-muted uppercase font-bold" style={{ fontSize: 10, letterSpacing: '0.05em' }}>{s.label}</div>
-            <div className="display font-bold" style={{ fontSize: 28, color: s.colour, marginTop: 4 }}>{s.value}</div>
+            <div className="display font-bold" style={{ fontSize: 28, color: s.colour, marginTop: 4 }}>
+              {/* An em dash while the count is loading, never a placeholder 0 —
+                  a zero that later becomes 17,778 was a wrong answer, not a
+                  loading state. */}
+              {s.value === undefined ? DASH : s.value.toLocaleString('en-GB')}
+            </div>
           </div>
         ))}
       </div>
@@ -144,12 +169,12 @@ export default function TodayScreen() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <Section title={`New leads · ${windowLabel}`} empty="No new leads in this window.">
           {newLeads.map((l) => (
-            <Row key={l.id} title={nameOf(l)} sub={l.treatment} tag={l.source ?? undefined} ago={agoLabel(minsSince(l.created_at))} onClick={() => setSelected({ kind: 'lead', lead: l })} />
+            <Row key={l.id} title={nameOf(l)} sub={l.ghl_stage_name ?? undefined} tag={l.source ?? undefined} ago={agoLabel(minsSince(l.created_at))} onClick={() => setSelected({ kind: 'lead', lead: l })} />
           ))}
         </Section>
         <Section title="Needs follow-up" empty="Nothing to follow up.">
           {followUps.map((l) => (
-            <Row key={l.id} title={nameOf(l)} sub={`${l.treatment} · ${l.status.replace(/_/g, ' ')}`} ago={agoLabel(minsSince(l.created_at))} onClick={() => setSelected({ kind: 'lead', lead: l })} />
+            <Row key={l.id} title={nameOf(l)} sub={l.status.replace(/_/g, ' ')} ago={agoLabel(minsSince(l.created_at))} onClick={() => setSelected({ kind: 'lead', lead: l })} />
           ))}
         </Section>
       </div>
@@ -203,7 +228,10 @@ function DetailModal({ selected, onClose }: { selected: Selected; onClose: () =>
           <div>
             <Field label="Email" value={l!.contact?.email} />
             <Field label="Phone" value={l!.contact?.phone} />
-            <Field label="Treatment" value={l!.treatment} />
+            {/* The "Treatment" field that stood here rendered l.treatment,
+                which is GoHighLevel's raw opportunity name and carries patient
+                names, emails and phone numbers on live data. The stage below
+                already says where the lead is, truthfully. */}
             <Field label="Stage" value={l!.ghl_stage_name ?? l!.status.replace(/_/g, ' ')} />
             <Field label="Status" value={l!.status.replace(/_/g, ' ')} />
             <Field label="Value" value={l!.estimated_value_pence ? formatPence(l!.estimated_value_pence) : null} />

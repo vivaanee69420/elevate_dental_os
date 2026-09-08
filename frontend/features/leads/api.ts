@@ -118,6 +118,63 @@ export function listPipelines(accountId?: string | null) {
   return api<{ pipelines: GhlPipeline[] }>(`/api/leads/pipelines${qs}`);
 }
 
+// ---------------------------------------------------------------------------
+// Board figures, aggregated in SQL.
+//
+// The board used to sum a `limit: 500` page of leads in the browser. Measured
+// on live data, a pipeline holding 2,092 leads worth £1,421,317 rendered
+// "500 leads · £0.00" — every valued lead was older than that page.
+//
+// `value_pence` is NULL, never 0, when nothing in the bucket carries a value.
+// Only 22.5% of this group's leads have an estimated value at all, so £0.00
+// would state a fact nobody recorded. `valued_count` says what share of the
+// bucket the money actually covers.
+// ---------------------------------------------------------------------------
+export interface PipelineStageSummary {
+  stage_id: string | null;
+  lead_count: number;
+  valued_count: number;
+  value_pence: number | null;
+  open_count: number;
+  open_valued_count: number;
+  open_value_pence: number | null;
+}
+
+export type PipelineTotals = Omit<PipelineStageSummary, 'stage_id'>;
+
+export interface PipelineSummary {
+  stages: PipelineStageSummary[];
+  /** null when no pipeline was asked for — not a zeroed board. */
+  totals: PipelineTotals | null;
+}
+
+export function getPipelineSummary(opts: {
+  pipelineId: string;
+  accountId?: string | null;
+}): Promise<PipelineSummary> {
+  const params = new URLSearchParams({ ghl_pipeline_id: opts.pipelineId });
+  if (opts.accountId) params.set('integration_account_id', opts.accountId);
+  return api<PipelineSummary>(`/api/leads/pipeline-summary?${params.toString()}`);
+}
+
+export interface TodayCounters {
+  new_leads: number;
+  follow_ups: number;
+  active_leads: number;
+  inbound_messages: number;
+}
+
+export function getTodayCounters(opts: {
+  since?: string | null;
+  accountId?: string | null;
+} = {}): Promise<TodayCounters> {
+  const params = new URLSearchParams();
+  if (opts.since) params.set('since', opts.since);
+  if (opts.accountId) params.set('integration_account_id', opts.accountId);
+  const qs = params.toString();
+  return api<TodayCounters>(`/api/leads/today-counters${qs ? `?${qs}` : ''}`);
+}
+
 export interface LeadUpdateInput {
   status?: LeadStatus;
   assigned_to?: string | null;

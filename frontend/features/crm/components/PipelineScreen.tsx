@@ -7,10 +7,13 @@
 // that pipeline's leads show. With no GHL pipelines (manual-only org) it falls
 // back to the fixed Elevate-status columns.
 
-import { useMemo, useState } from 'react';
-import { useLeads, usePipelines } from '@/features/leads/hooks';
+import { useState } from 'react';
+import { useLeads, usePipelines, usePipelineSummary } from '@/features/leads/hooks';
 import { leadsExportUrl, type Lead, type LeadStatus } from '@/features/leads/api';
-import { formatPence } from '@/lib/format';
+// money() renders null as an em dash; lib/format's formatPence renders it as
+// "£0.00" and its signature accepts null, so TypeScript never warns. A lead
+// with no estimated value must not be shown as being worth nothing.
+import { money, DASH } from '@/features/marketing/_shared/format';
 import { CRM_TEAL, agoLabel } from '../data';
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
@@ -53,14 +56,25 @@ export default function PipelineScreen() {
   const [picked, setPicked] = useState<string | null>(null);
   const selectedId = (picked && pipelines.some((p) => p.id === picked) ? picked : pipelines[0]?.id) ?? null;
 
-  // Fetch the selected pipeline's leads server-side (a pipeline can have 300+
-  // leads, so client-side slicing of a 100-row page would drop most).
+  // THE CARDS are a page; THE FIGURES are not.
+  //
+  // This fetch is deliberately bounded — a board cannot render 2,092 cards and
+  // nobody would read them. What changed is that the counts and totals no
+  // longer come from it. They come from an SQL aggregate over every lead in
+  // the pipeline (usePipelineSummary below), because summing this page is what
+  // made a pipeline holding 2,092 leads worth £1,421,317 render as
+  // "500 leads · £0.00" — every valued lead in it was older than the page.
+  const CARD_PAGE = 500;
   const { data, isLoading, error } = useLeads({
     ...(selectedId ? { ghl_pipeline_id: selectedId } : {}),
     ...(accountId ? { integration_account_id: accountId } : {}),
-    limit: 500,
+    limit: CARD_PAGE,
   });
   const leads: Lead[] = data?.leads ?? [];
+
+  const { data: summary } = usePipelineSummary(selectedId, accountId);
+  const totals = summary?.totals ?? null;
+  const byStage = new Map((summary?.stages ?? []).map((s) => [s.stage_id ?? '', s]));
   const selectedPipeline = pipelines.find((p) => p.id === selectedId) ?? null;
   const dynamic = !!selectedPipeline;
 
@@ -78,10 +92,12 @@ export default function PipelineScreen() {
     return leads.filter((l) => l.status === fb?.byStatus);
   }
 
-  const totalValue = useMemo(
-    () => scopedLeads.reduce((s, l) => s + l.estimated_value_pence, 0),
-    [scopedLeads],
-  );
+  // The header reads from SQL. `dynamic` is false only for a manual-only org
+  // with no GHL pipeline at all, where there is no pipeline to aggregate and
+  // the fallback board is the whole population anyway.
+  const headerCount = dynamic ? totals?.open_count ?? null : scopedLeads.length;
+  const headerValue = dynamic ? totals?.open_value_pence ?? null : null;
+  const headerValued = dynamic ? totals?.open_valued_count ?? 0 : 0;
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1500 }}>
@@ -89,7 +105,19 @@ export default function PipelineScreen() {
         <div>
           <h1 className="display font-bold" style={{ fontSize: 28 }}>Pipeline</h1>
           <p className="text-ink-muted" style={{ fontSize: 13 }}>
-            {isLoading ? 'Loading pipeline…' : `${scopedLeads.length} leads · ${formatPence(totalValue)} active pipeline`}
+            {isLoading ? 'Loading pipeline…' : (
+              <>
+                {headerCount === null ? DASH : headerCount.toLocaleString('en-GB')} open
+                {' · '}
+                {money(headerValue)} active pipeline
+                {/* Say what the money covers. Most leads carry no estimated
+                    value, so a total without this reads as the value of every
+                    lead on the board rather than of the few that have one. */}
+                {headerValue !== null && headerCount ? (
+                  <span> · value recorded on {headerValued.toLocaleString('en-GB')} of {headerCount.toLocaleString('en-GB')}</span>
+                ) : null}
+              </>
+            )}
           </p>
         </div>
         {pipelines.length > 0 && (
@@ -156,15 +184,24 @@ export default function PipelineScreen() {
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns.length}, minmax(180px, 1fr))`, gap: 10, overflowX: 'auto' }}>
         {columns.map((stage) => {
           const stageLeads = leadsInColumn(stage.key);
-          const stageValue = stageLeads.reduce((s, l) => s + l.estimated_value_pence, 0);
+          // Column figures come from SQL for a real GHL pipeline. Reducing
+          // stageLeads gave every column header the same defect as the board
+          // total, one stage at a time.
+          const agg = dynamic ? byStage.get(stage.key) ?? null : null;
+          const stageCount = agg ? agg.lead_count : stageLeads.length;
+          const stageValue = agg
+            ? agg.value_pence
+            : (stageLeads.length ? stageLeads.reduce((s, l) => s + (l.estimated_value_pence ?? 0), 0) : null);
+          // Cards are a bounded page of the column; the count above is not.
+          const hidden = Math.max(0, stageCount - stageLeads.length);
           return (
             <div key={stage.key} style={{ background: 'var(--bg)', borderRadius: 10, minHeight: 480, borderTop: `4px solid ${stage.colour}` }}>
               <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1 }}>
                 <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
                   <strong style={{ fontSize: 13, color: stage.colour }}>{stage.label}</strong>
-                  <span style={{ fontSize: 11, padding: '1px 8px', background: 'white', borderRadius: 10, fontWeight: 700 }}>{stageLeads.length}</span>
+                  <span style={{ fontSize: 11, padding: '1px 8px', background: 'white', borderRadius: 10, fontWeight: 700 }}>{stageCount.toLocaleString('en-GB')}</span>
                 </div>
-                <div className="text-ink-muted" style={{ fontSize: 10, marginTop: 2 }}>{formatPence(stageValue)}</div>
+                <div className="text-ink-muted" style={{ fontSize: 10, marginTop: 2 }}>{money(stageValue)}</div>
               </div>
               <div style={{ padding: 8, display: 'grid', gap: 6 }}>
                 {isLoading ? (
@@ -178,9 +215,21 @@ export default function PipelineScreen() {
                         <strong style={{ fontSize: 12 }}>{displayName(l)}</strong>
                         <span className="text-ink-muted" style={{ fontSize: 9 }}>{agoLabel(minutesSince(l.created_at))}</span>
                       </div>
-                      <div className="text-ink-muted" style={{ fontSize: 11, marginBottom: 4 }}>{l.treatment}</div>
+                      {/* `l.treatment` used to render here. It is NOT a
+                          treatment: it is GoHighLevel's raw opportunity name,
+                          which on live data carries patient names, email
+                          addresses and phone numbers — 3,201 of this group's
+                          leads hold contact details in it. Showing the GHL
+                          stage instead says something true about the lead
+                          without republishing a patient's details under a
+                          column heading that claims to be clinical. */}
+                      {l.ghl_stage_name && (
+                        <div className="text-ink-muted" style={{ fontSize: 11, marginBottom: 4 }}>{l.ghl_stage_name}</div>
+                      )}
                       <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: CRM_TEAL }}>{formatPence(l.estimated_value_pence)}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: CRM_TEAL }}>
+                          {money(l.estimated_value_pence || null)}
+                        </span>
                         {l.source && (
                           <span className="text-ink-muted" style={{ fontSize: 9, padding: '1px 5px', background: 'var(--bg)', borderRadius: 3 }}>{l.source}</span>
                         )}
@@ -192,6 +241,17 @@ export default function PipelineScreen() {
                       )}
                     </div>
                   ))
+                )}
+                {/* The count in the header is the whole column; these cards are
+                    a page of it. Saying so is the difference between a bounded
+                    list and a wrong one. */}
+                {hidden > 0 && (
+                  <div
+                    className="text-ink-muted text-center"
+                    style={{ padding: '8px 6px', fontSize: 10, borderTop: '1px dashed var(--border)' }}
+                  >
+                    {stageLeads.length.toLocaleString('en-GB')} of {stageCount.toLocaleString('en-GB')} shown
+                  </div>
                 )}
               </div>
             </div>
