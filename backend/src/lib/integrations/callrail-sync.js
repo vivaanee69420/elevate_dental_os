@@ -77,6 +77,19 @@ import * as Sentry from '@sentry/node';
 
 const API_BASE = 'https://api.callrail.com/v3';
 const PER_PAGE = 250;             // CallRail's documented max per_page for calls.json
+
+// CallRail explains its rejections in the body ({"error":"..."}); the status
+// alone does not. "HTTP 400" is what an owner saw on the Integrations panel for
+// a pager bug that took a live probe to identify, because the one sentence that
+// would have named it was thrown away at the point of failure. Capped and
+// guarded — a diagnostic must never become a second failure.
+async function errorBody(res) {
+    try {
+        return (await res.text()).slice(0, 200) || '(empty body)';
+    } catch {
+        return '(body unreadable)';
+    }
+}
 const MAX_PAGES = 200;            // safety cap (~50k calls/account) — never hit in practice
 const INCREMENTAL_DAYS = 90;      // nightly cron window: trailing 3 months
 // Manual reconnect / full pull. Well inside CallRail's 25-month retention —
@@ -95,13 +108,45 @@ const FULL_DAYS = 183;
 // pastes an account-wide key and every other company's calls landing under
 // this company's practice. Key-scoping alone (a key restricted to one
 // CallRail user) is not relied on for this — see the file header.
-async function fetchCallsPage(apiKey, callrailAccountId, companyId, { page, startDate, endDate }) {
+// `nextUrl` is CallRail's own next_page value — a COMPLETE URL, already
+// carrying every parameter this function would set. Under
+// relative_pagination it is the documented way to page, and it is followed
+// verbatim rather than picked apart.
+//
+// THE BUG THIS REPLACES. next_page was being assigned to a variable called
+// `page` and written into the `page` QUERY PARAMETER, so the second request of
+// any pull sent page=https://api.callrail.com/v3/a/ACC.../calls.json?... and
+// CallRail answered 400. The first page always worked, which is why it hid:
+// every company whose window fit in one page of 250 synced perfectly, and only
+// the busier ones — and every 183-day reconnect — failed, losing the WHOLE
+// pull, not the second page. Found on a live account whose 90-day window
+// returned has_next_page:false and whose 183-day connect window did not.
+//
+// The host is checked before following it. It is a URL out of an API response,
+// and following one of those unexamined is how a redirect becomes a request to
+// somewhere else entirely, with this account's Authorization header attached.
+function nextPageUrl(nextUrl) {
+    const url = new URL(String(nextUrl));
+    const base = new URL(API_BASE);
+    if (url.origin !== base.origin) {
+        throw new Error(`CallRail next_page pointed outside the API host (${url.origin})`);
+    }
+    return url;
+}
+
+async function fetchCallsPage(apiKey, callrailAccountId, companyId, { nextUrl, startDate, endDate }) {
+    if (nextUrl) {
+        const res = await fetchWithBackoff(nextPageUrl(nextUrl), callrailHeaders(apiKey));
+        if (!res.ok) {
+            throw new Error(`CallRail calls fetch failed: HTTP ${res.status} — ${await errorBody(res)}`);
+        }
+        return res.json();
+    }
     const url = new URL(`${API_BASE}/a/${encodeURIComponent(callrailAccountId)}/calls.json`);
     url.searchParams.set('relative_pagination', 'true');
     url.searchParams.set('per_page', String(PER_PAGE));
     url.searchParams.set('fields', CALLRAIL_FIELDS);
     url.searchParams.set('company_id', String(companyId));
-    if (page) url.searchParams.set('page', String(page));
 
     // start_date/end_date are REQUIRED, not optional-with-a-guard. When a
     // request carries no date parameters at all, CallRail does not return
@@ -124,7 +169,7 @@ async function fetchCallsPage(apiKey, callrailAccountId, companyId, { page, star
 
     const res = await fetchWithBackoff(url, callrailHeaders(apiKey));
     if (!res.ok) {
-        throw new Error(`CallRail calls fetch failed: HTTP ${res.status}`);
+        throw new Error(`CallRail calls fetch failed: HTTP ${res.status} — ${await errorBody(res)}`);
     }
     return res.json();
 }
@@ -138,16 +183,16 @@ async function fetchCallsPage(apiKey, callrailAccountId, companyId, { page, star
 // that stops on a short page).
 export async function fetchAllCalls(apiKey, callrailAccountId, companyId, { startDate, endDate } = {}) {
     const calls = [];
-    let page;
+    let nextUrl;
     let requests = 0;
     let truncated = false;
     for (;;) {
-        const data = await fetchCallsPage(apiKey, callrailAccountId, companyId, { page, startDate, endDate });
+        const data = await fetchCallsPage(apiKey, callrailAccountId, companyId, { nextUrl, startDate, endDate });
         requests += 1;
         const rows = Array.isArray(data?.calls) ? data.calls : [];
         calls.push(...rows);
         if (!data?.has_next_page || !data?.next_page) break;
-        page = data.next_page;
+        nextUrl = data.next_page;
         if (requests >= MAX_PAGES) {
             // The cap was hit while CallRail was still saying has_next_page —
             // there IS more data waiting, and it is being dropped silently

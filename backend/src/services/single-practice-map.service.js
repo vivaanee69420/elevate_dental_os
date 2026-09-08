@@ -44,35 +44,69 @@ async function solePracticeId(orgId) {
   return (data ?? []).length === 1 ? data[0].id : null;
 }
 
+
+// Stamp the practice onto a provider's account only where that provider has
+// exactly ONE account in scope. Returns how many rows were stamped.
+async function stampSoleAccount({ table, orgId, practiceId, scope, groupBy }) {
+  const { data, error } = await scope(
+    serviceClient.from(table).select(`id, ${groupBy}, practice_id`).eq('organisation_id', orgId),
+  );
+  if (error) throw new Error(`${table} read: ${error.message}`);
+
+  const byProvider = new Map();
+  for (const row of data ?? []) {
+    const list = byProvider.get(row[groupBy]) ?? [];
+    list.push(row);
+    byProvider.set(row[groupBy], list);
+  }
+
+  let stamped = 0;
+  for (const [provider, rows] of byProvider) {
+    if (rows.length !== 1) continue;          // ambiguous — leave it to a human
+    if (rows[0].practice_id !== null) continue; // never overwrite a decision
+    const { error: upErr } = await serviceClient
+      .from(table)
+      .update({ practice_id: practiceId })
+      .eq('organisation_id', orgId)
+      .eq('id', rows[0].id);
+    if (upErr) throw new Error(`${table} stamp (${provider}): ${upErr.message}`);
+    stamped += 1;
+  }
+  return stamped;
+}
+
 export const singlePracticeMapService = {
   async run(orgId) {
     if (!orgId) throw new Error('single-practice map: orgId required');
     const practiceId = await solePracticeId(orgId);
     if (!practiceId) return { mapped: false, reason: 'not a single-practice organisation' };
 
-    // Ad accounts. Only the SELECTED ones: an account the owner excluded is not
-    // theirs to report on, so stamping it would map spend they have said they
-    // do not want counted.
-    const { data: adRows, error: adErr } = await serviceClient
-      .from('ad_accounts')
-      .update({ practice_id: practiceId })
-      .eq('organisation_id', orgId)
-      .eq('is_selected', true)
-      .is('practice_id', null)
-      .select('id');
-    if (adErr) throw new Error(`ad_accounts stamp: ${adErr.message}`);
+    // ONE PRACTICE IS ONLY UNAMBIGUOUS ONE ACCOUNT AT A TIME.
+    //
+    // integration_accounts carries a unique index on (organisation_id,
+    // provider, practice_id) — a practice may hold at most ONE subaccount per
+    // provider — so a blanket update of two unmapped GoHighLevel subaccounts
+    // onto the same practice does not map one and skip the other: it violates
+    // the index and the whole statement fails. ad_accounts has no such index,
+    // but the ambiguity is real either way. Two accounts and one practice is a
+    // question with no obvious answer, and this exists only to answer the
+    // obvious ones — so it maps a provider's accounts only when that provider
+    // has exactly one, and leaves the rest to the mapping screen.
+    const adAccounts = await stampSoleAccount({
+      table: 'ad_accounts', orgId, practiceId,
+      // Only the SELECTED ones: an account the owner excluded is not theirs to
+      // report on, so stamping it would map spend they said not to count. It
+      // is also the right denominator — one ticked account beside three
+      // unticked ones is still unambiguous.
+      scope: (q) => q.eq('is_selected', true),
+      groupBy: 'provider',
+    });
 
-    const { data: iaRows, error: iaErr } = await serviceClient
-      .from('integration_accounts')
-      .update({ practice_id: practiceId })
-      .eq('organisation_id', orgId)
-      .in('provider', ACCOUNT_PROVIDERS)
-      .is('practice_id', null)
-      .select('id');
-    if (iaErr) throw new Error(`integration_accounts stamp: ${iaErr.message}`);
-
-    const adAccounts = (adRows ?? []).length;
-    const subaccounts = (iaRows ?? []).length;
+    const subaccounts = await stampSoleAccount({
+      table: 'integration_accounts', orgId, practiceId,
+      scope: (q) => q.in('provider', ACCOUNT_PROVIDERS),
+      groupBy: 'provider',
+    });
     if (adAccounts === 0 && subaccounts === 0) {
       return { mapped: false, reason: 'everything already mapped', adAccounts: 0, subaccounts: 0 };
     }

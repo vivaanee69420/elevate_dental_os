@@ -24,18 +24,20 @@ const PRACTICE = 'practice-1';
 
 // One practice row, then two "update ... select" calls returning the stamped
 // rows, then the GHL restamp RPC.
-function harness({ practices, adStamped = [], iaStamped = [] }) {
+// The service first READS the candidate accounts (to find providers with
+// exactly one), then updates those. `adRows`/`iaRows` are what the read
+// returns; the shape mirrors live rows.
+function harness({ practices, adRows = [], iaRows = [] }) {
   const calls = [];
   let updates = 0;
   supaRec.resultProvider = (q) => {
     calls.push(q);
     if (q.table === 'practices') return { data: practices, error: null };
-    // `update(...).select('id')` records op:'select' — the trailing select
+    // `update(...).select()` records op:'select' — the trailing select
     // overwrites it — so an update is identified by updateVals, not by op.
-    if (q.updateVals) {
-      updates += 1;
-      return { data: q.table === 'ad_accounts' ? adStamped : iaStamped, error: null };
-    }
+    if (q.updateVals) { updates += 1; return { data: [], error: null }; }
+    if (q.table === 'ad_accounts') return { data: adRows, error: null };
+    if (q.table === 'integration_accounts') return { data: iaRows, error: null };
     return { data: [], error: null };
   };
   supaRec.rpcProvider = () => ({ data: [{ contacts_updated: 3, leads_updated: 5 }], error: null });
@@ -48,8 +50,8 @@ describe('singlePracticeMapService', () => {
   it('maps unmapped accounts to the only practice and restamps the stored rows', async () => {
     const h = harness({
       practices: [{ id: PRACTICE }],
-      adStamped: [{ id: 'ad-1' }],
-      iaStamped: [{ id: 'ia-1' }],
+      adRows: [{ id: 'ad-1', provider: 'meta_ads', practice_id: null }],
+      iaRows: [{ id: 'ia-1', provider: 'gohighlevel', practice_id: null }],
     });
     const r = await singlePracticeMapService.run(ORG);
 
@@ -89,14 +91,46 @@ describe('singlePracticeMapService', () => {
   // Never overwrite: only null practice_id is stamped, so a deliberate mapping
   // survives, and neither does an account the owner excluded get one.
   it('only touches unmapped rows, and only SELECTED ad accounts', async () => {
-    const h = harness({ practices: [{ id: PRACTICE }], adStamped: [{ id: 'ad-1' }] });
+    const h = harness({
+      practices: [{ id: PRACTICE }],
+      adRows: [
+        { id: 'ad-1', provider: 'meta_ads', practice_id: null },
+        { id: 'ad-2', provider: 'google_ads', practice_id: 'already-set' },
+      ],
+    });
     await singlePracticeMapService.run(ORG);
-    const adUpdate = h.calls.find((q) => q.updateVals && q.table === 'ad_accounts');
-    // `.is('practice_id', null)` — a deliberate mapping is never rewritten.
-    expect(adUpdate.iss).toContainEqual({ col: 'practice_id', val: null });
+    const updated = h.calls.filter((q) => q.updateVals && q.table === 'ad_accounts');
+    // Only the unmapped one — a deliberate mapping is never rewritten.
+    expect(updated).toHaveLength(1);
+    expect(updated[0].eqs).toContainEqual({ col: 'id', val: 'ad-1' });
     // An account the owner unticked is not theirs to report on, so stamping it
     // would map spend they have said not to count.
-    expect(adUpdate.eqs).toContainEqual({ col: 'is_selected', val: true });
+    const read = h.calls.find((q) => !q.updateVals && q.table === 'ad_accounts');
+    expect(read.eqs).toContainEqual({ col: 'is_selected', val: true });
+  });
+
+  // The bug this shape exists to avoid: integration_accounts has a UNIQUE index
+  // on (organisation_id, provider, practice_id), so stamping two GoHighLevel
+  // subaccounts onto the same practice does not map one and skip the other —
+  // it violates the index and the whole statement fails. Two accounts and one
+  // practice is a question with no obvious answer, and this answers only the
+  // obvious ones.
+  it('leaves a provider alone when it has more than one account', async () => {
+    const h = harness({
+      practices: [{ id: PRACTICE }],
+      iaRows: [
+        { id: 'ia-1', provider: 'gohighlevel', practice_id: null },
+        { id: 'ia-2', provider: 'gohighlevel', practice_id: null },
+        // A different provider with exactly one is still unambiguous, and the
+        // index is provider-scoped, so this one IS mapped.
+        { id: 'ia-3', provider: 'callrail', practice_id: null },
+      ],
+    });
+    const r = await singlePracticeMapService.run(ORG);
+    expect(r.subaccounts).toBe(1);
+    const ids = h.calls.filter((q) => q.updateVals && q.table === 'integration_accounts')
+      .flatMap((q) => q.eqs.filter((e) => e.col === 'id').map((e) => e.val));
+    expect(ids).toEqual(['ia-3']);
   });
 
   it('reports "already mapped" without restamping when there is nothing to do', async () => {
