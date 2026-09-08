@@ -62,6 +62,10 @@ export const chairWeekSaveSchema = zod_1.z.object({
         slot: SLOT_ENUM,
         booked_minutes: zod_1.z.coerce.number().int().min(0).max(1440),
         revenue_pence: zod_1.z.coerce.number().int().min(0).default(0),
+        // The clinician in this chair in this slot. Nullable on purpose: a slot
+        // may be recorded without naming who worked it, and null CLEARS a
+        // previously-set clinician rather than leaving a stale one behind.
+        associate_id: zod_1.z.string().uuid().nullable().optional(),
         notes: zod_1.z.string().trim().max(500).optional(),
     })).min(1).max(28),
 }).strict();

@@ -11,6 +11,7 @@ import { practiceChairRepository } from "../repositories/practice-chair.reposito
 import { practiceOpeningHoursRepository } from "../repositories/practice-opening-hours.repository.js";
 import { chairCapacityService } from "./chair-capacity.service.js";
 import { aggregateGrid } from "../lib/chair-utilisation.js";
+import { assertOrgOwns } from "../lib/tenant-guard.js";
 import * as errors_1 from "../middleware/errors.js";
 
 const todayStr = () => new Date().toISOString().split('T')[0];
@@ -103,6 +104,17 @@ export const chairUtilisationService = {
         const chairs = await practiceChairRepository.listForPractice(orgId, practice_id);
         const chair = chairs.find((c) => c.id === chair_id);
         if (!chair) throw new errors_1.AppError('Chair not found at this practice', 404);
+
+        // Clinician ids also arrive in the request BODY. Each is checked against
+        // the caller's organisation before it is written, or a caller could
+        // stamp another tenant's associate onto their own chair time — and then
+        // read that associate's name back out of the per-clinician rollup.
+        const associateIds = [...new Set(
+            cells.map((c) => c.associate_id).filter((id) => id != null && id !== ''),
+        )];
+        for (const associateId of associateIds) {
+            await assertOrgOwns(orgId, 'associates', associateId, 'Clinician');
+        }
 
         const saved = await chairUtilisationRepository.bulkUpsertChairWeek(orgId, {
             practice_id, chair_id, chair_name: chair.name, cells,

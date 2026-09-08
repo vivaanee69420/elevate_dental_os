@@ -11,7 +11,7 @@ export const chairUtilisationRepository = {
     listAll(orgId) {
         return pageAll(() => supabase_1.serviceClient
             .from('chair_utilisation')
-            .select('id, practice_id, chair_id, chair_name, weekday, slot, booked_minutes, revenue_pence')
+            .select('id, practice_id, chair_id, chair_name, associate_id, weekday, slot, booked_minutes, revenue_pence')
             .eq('organisation_id', orgId));
     },
 
@@ -31,6 +31,9 @@ export const chairUtilisationRepository = {
             chair_name,
             weekday: Number(c.weekday),
             slot: c.slot,
+            // null is meaningful: a slot may be recorded without naming who
+            // worked it, so this is cleared rather than left stale on re-save.
+            associate_id: c.associate_id ?? null,
             booked_minutes: Math.max(0, Number(c.booked_minutes) || 0),
             revenue_pence: Math.max(0, Number(c.revenue_pence) || 0),
             notes: c.notes ?? null,

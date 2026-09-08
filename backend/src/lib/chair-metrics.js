@@ -109,6 +109,82 @@ export function practiceChairMetrics({
     }, { weeksYr, benchOccPct, benchRevHrPence });
 }
 
+/**
+ * Utilisation per clinician, across every practice in scope.
+ *
+ * Answers "who fills their chair time and who has gaps". Built from the SAME
+ * open-cell rule as the practice metrics — a cell counts only if its chair is
+ * active and its slot is one the practice is open for — so a clinician's
+ * occupancy and their practice's are the same measurement at a different grain
+ * and cannot contradict each other.
+ *
+ * Cells with no clinician named are collected under a single `null` id rather
+ * than dropped: hiding them would make the per-clinician hours silently fail to
+ * add up to the practice's, and a reader would have no way to see why.
+ */
+export function clinicianUtilisation({ practices = [], nameById = new Map() } = {}) {
+    const byClinician = new Map();
+
+    for (const p of practices) {
+        const availability = availabilityByDay(p.openingHours);
+        const activeIds = new Set(
+            (p.chairs ?? []).filter((c) => c.active !== false).map((c) => c.id),
+        );
+
+        for (const cell of p.cells ?? []) {
+            if (!activeIds.has(cell.chair_id)) continue;
+            const slotIndex = slotIndexOf(cell.slot);
+            if (slotIndex < 0) continue;
+            const mins = availability.get(Number(cell.weekday));
+            const available = mins ? mins[slotIndex] : 0;
+            if (available <= 0) continue; // slot the practice is shut for
+
+            const id = cell.associate_id ?? null;
+            const acc = byClinician.get(id) ?? {
+                id,
+                name: id == null ? 'Not assigned' : (nameById.get(id) ?? 'Unknown clinician'),
+                cells: 0, availableMinutesWk: 0, bookedMinutesWk: 0, revenuePence: 0,
+                practiceIds: new Set(),
+            };
+            acc.cells++;
+            acc.availableMinutesWk += available;
+            acc.bookedMinutesWk += Math.min(
+                Math.max(0, Number(cell.booked_minutes) || 0), available,
+            );
+            acc.revenuePence += Math.max(0, Number(cell.revenue_pence) || 0);
+            acc.practiceIds.add(cell.practice_id);
+            byClinician.set(id, acc);
+        }
+    }
+
+    return [...byClinician.values()]
+        .map((c) => {
+            const bookedHrsWk = c.bookedMinutesWk / 60;
+            return {
+                id: c.id,
+                name: c.name,
+                cells: c.cells,
+                practices: c.practiceIds.size,
+                availableMinutesWk: c.availableMinutesWk,
+                bookedMinutesWk: c.bookedMinutesWk,
+                emptyMinutesWk: Math.max(0, c.availableMinutesWk - c.bookedMinutesWk),
+                revenuePence: c.revenuePence,
+                occupancyPct: c.availableMinutesWk > 0
+                    ? round1((100 * c.bookedMinutesWk) / c.availableMinutesWk) : null,
+                // Null, not zero: earnings per hour over no hours is unknowable.
+                revPerBookedHrPence: bookedHrsWk > 0
+                    ? Math.round(c.revenuePence / bookedHrsWk) : null,
+            };
+        })
+        // Busiest first, but the unassigned bucket always sits last however
+        // large it is — it is a data-quality note, not a performer.
+        .sort((a, b) => {
+            if (a.id === null) return 1;
+            if (b.id === null) return -1;
+            return b.bookedMinutesWk - a.bookedMinutesWk;
+        });
+}
+
 /** Group rollup. Sums the entered-cell minutes across practices and re-derives
  *  the blended figures from those sums — never an average of averages, which
  *  would weight a one-cell practice equally with a fully-entered one. */

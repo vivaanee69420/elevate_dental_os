@@ -21,7 +21,7 @@ import {
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { formatPence } from '@/lib/format';
 import { useChairAnalytics } from '../chair-analytics-hooks';
-import type { ChairPracticeRow } from '../chair-analytics-api';
+import type { ChairPracticeRow, ChairClinicianRow } from '../chair-analytics-api';
 import { useChairConfig, useSaveChairConfig } from '../chair-config-hooks';
 import type { ChairConfig } from '../chair-config-api';
 
@@ -321,8 +321,75 @@ export function ChairEfficiencyScreen() {
             />
           </div>
 
+          <ClinicianUtilisation rows={data.clinicians ?? []} />
+
           {data.note && <p className="text-[11px] text-ink-soft">{data.note}</p>}
         </>
+      )}
+    </div>
+  );
+}
+
+// Utilisation per clinician — who fills their chair time and who has gaps.
+//
+// Measured over the SAME open cells as the practice rows, so a clinician's
+// occupancy and their practice's are one measurement at two grains and cannot
+// contradict each other.
+//
+// Hours are per typical WEEK, not annualised: this is a rota-shaped question,
+// and a yearly figure per clinician would invite comparison with Associate Pay,
+// which is derived from real Dentally activity rather than this hand-entered
+// grid. Two sources for one number drift apart.
+function ClinicianUtilisation({ rows }: { rows: ChairClinicianRow[] }) {
+  if (rows.length === 0) return null;
+
+  const named = rows.filter((r) => r.id !== null);
+  const unassigned = rows.find((r) => r.id === null);
+  const hrs = (mins: number) => `${Math.round((mins / 60) * 10) / 10}h`;
+
+  const cols: Column<ChairClinicianRow>[] = [
+    {
+      header: 'Clinician',
+      render: (r) => (
+        <div>
+          <span className={r.id === null ? 'text-ink-muted' : 'font-semibold'}>{r.name}</span>
+          <div className="text-ink-muted text-[11px] mt-0.5">
+            {r.cells} slot{r.cells === 1 ? '' : 's'}
+            {r.practices > 1 ? ` · ${r.practices} practices` : ''}
+          </div>
+        </div>
+      ),
+    },
+    { header: 'Booked/wk', align: 'right', render: (r) => hrs(r.bookedMinutesWk) },
+    { header: 'Chair time/wk', align: 'right', render: (r) => hrs(r.availableMinutesWk) },
+    { header: 'Empty/wk', align: 'right', render: (r) => hrs(r.emptyMinutesWk) },
+    { header: 'Occupancy', align: 'right', render: (r) => percent(r.occupancyPct) },
+    { header: 'Revenue/hr', align: 'right', render: (r) => money(r.revPerBookedHrPence) },
+  ];
+
+  return (
+    <div>
+      <h3 className="display text-lg mb-1">Utilisation by clinician</h3>
+      <p className="text-xs text-ink-muted mb-2">
+        Of the chair time each clinician is scheduled for, how much is booked. Hours are a typical
+        week, taken from the same slots as the practice figures above.
+        {unassigned && (
+          <> {hrs(unassigned.bookedMinutesWk)} of booked time has no clinician against it — it is
+          listed last so the hours still add up.</>
+        )}
+      </p>
+      <DataTable
+        columns={cols}
+        rows={rows}
+        rowKey={(r) => r.id ?? 'unassigned'}
+        empty={
+          <EmptyState message="No clinicians recorded against chair time yet. Name one in each slot in Chair Utilisation." />
+        }
+      />
+      {named.length === 0 && (
+        <p className="text-[11px] text-ink-soft mt-1">
+          Chair time is being recorded, but nobody has been named in any slot yet.
+        </p>
       )}
     </div>
   );

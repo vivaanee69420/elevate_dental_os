@@ -406,7 +406,7 @@ export const analyticsRepository = {
     chairUtilisationRows(orgId) {
         return pageAll(() => supabase_1.serviceClient
             .from('chair_utilisation')
-            .select('id, practice_id, chair_id, weekday, slot, booked_minutes, revenue_pence')
+            .select('id, practice_id, chair_id, associate_id, weekday, slot, booked_minutes, revenue_pence')
             .eq('organisation_id', orgId));
     },
     async settledRevenueByPractice(orgId, sinceISO, untilISO = null) {

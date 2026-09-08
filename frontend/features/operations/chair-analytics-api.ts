@@ -56,6 +56,23 @@ export interface ChairGroup extends ChairCoverage {
   blendedRevPerBookedHrPence: number | null;
 }
 
+/** Utilisation per clinician, over the SAME open cells as the practice rows.
+ *  `id` is null for the trailing "Not assigned" bucket — chair time recorded
+ *  without naming who worked it. It is kept rather than dropped so the
+ *  per-clinician hours still add up to the practice's. */
+export interface ChairClinicianRow {
+  id: string | null;
+  name: string;
+  cells: number;
+  practices: number;
+  availableMinutesWk: number;
+  bookedMinutesWk: number;
+  emptyMinutesWk: number;
+  revenuePence: number;
+  occupancyPct: number | null;
+  revPerBookedHrPence: number | null;
+}
+
 export interface ChairAnalytics {
   applicable: boolean;
   scope: string;
@@ -66,6 +83,7 @@ export interface ChairAnalytics {
   /** null when no practice has an occupancy to climb from. Zeros here would
    *  read as "there is nothing to win back". */
   recovery?: { recoveryHrsYr: number; revenueUnlockedPence: number; newOccupancyPct: number } | null;
+  clinicians?: ChairClinicianRow[];
   /** Coverage below which the money figures are withheld. */
   coverageThresholdPct?: number;
   ocpspd: null;

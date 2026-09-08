@@ -6,7 +6,7 @@
 // 230,041 recoverable for Ashford and 100% / GBP 0 for Barnet.
 import { describe, it, expect } from 'vitest';
 import {
-    COVERAGE_THRESHOLD_PCT, practiceChairMetrics, rollupChairMetrics,
+    COVERAGE_THRESHOLD_PCT, practiceChairMetrics, rollupChairMetrics, clinicianUtilisation,
 } from '../src/lib/chair-metrics.js';
 
 const CFG = { weeksYr: 46, benchOccPct: 88, benchRevHrPence: 30000 };
@@ -229,6 +229,94 @@ describe('edge cases', () => {
             ...CFG,
         });
         expect(m.enteredCells).toBe(0);
+    });
+});
+
+describe('clinicianUtilisation', () => {
+    const HOURS = [{ weekday: 1, openMinute: 540, closeMinute: 1020 }]; // 120/180/180/0
+    const CHAIRS = [{ id: 'c1', active: true }, { id: 'c2', active: true }];
+    const names = new Map([['dr-a', 'Dr A'], ['dr-b', 'Dr B']]);
+
+    const run = (cells, chairs = CHAIRS) => clinicianUtilisation({
+        practices: [{ chairs, openingHours: HOURS, cells }],
+        nameById: names,
+    });
+
+    it('measures each clinician over their own cells', () => {
+        const out = run([
+            { practice_id: 'p1', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'morning', booked_minutes: 60, revenue_pence: 30000 },
+            { practice_id: 'p1', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'midday', booked_minutes: 180, revenue_pence: 90000 },
+            { practice_id: 'p1', chair_id: 'c2', associate_id: 'dr-b', weekday: 1, slot: 'midday', booked_minutes: 90, revenue_pence: 45000 },
+        ]);
+        const a = out.find((c) => c.id === 'dr-a');
+        expect(a.name).toBe('Dr A');
+        expect(a.availableMinutesWk).toBe(300);   // 120 + 180
+        expect(a.bookedMinutesWk).toBe(240);
+        expect(a.occupancyPct).toBe(80);
+        expect(a.revPerBookedHrPence).toBe(30000);
+
+        const b = out.find((c) => c.id === 'dr-b');
+        expect(b.occupancyPct).toBe(50);          // 90 of 180
+    });
+
+    it('ranks busiest first', () => {
+        const out = run([
+            { practice_id: 'p1', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'morning', booked_minutes: 30, revenue_pence: 0 },
+            { practice_id: 'p1', chair_id: 'c2', associate_id: 'dr-b', weekday: 1, slot: 'midday', booked_minutes: 180, revenue_pence: 0 },
+        ]);
+        expect(out.map((c) => c.id)).toEqual(['dr-b', 'dr-a']);
+    });
+
+    it('keeps unnamed cells in a trailing bucket rather than dropping them', () => {
+        // Dropping them would stop the per-clinician hours adding up to the
+        // practice's, with nothing on screen to explain the gap.
+        const out = run([
+            { practice_id: 'p1', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'morning', booked_minutes: 30, revenue_pence: 0 },
+            { practice_id: 'p1', chair_id: 'c2', associate_id: null, weekday: 1, slot: 'midday', booked_minutes: 180, revenue_pence: 0 },
+        ]);
+        const last = out[out.length - 1];
+        expect(last.id).toBeNull();
+        expect(last.name).toBe('Not assigned');
+        expect(last.bookedMinutesWk).toBe(180);
+        // Last DESPITE being the busiest — it is a data-quality note, not a performer.
+        expect(out[0].id).toBe('dr-a');
+    });
+
+    it('excludes closed slots and retired chairs, exactly as the practice rows do', () => {
+        const out = run([
+            // Evening: the practice shuts at 17:00, so this is not chair time.
+            { practice_id: 'p1', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'evening', booked_minutes: 90, revenue_pence: 0 },
+            // A retired chair.
+            { practice_id: 'p1', chair_id: 'gone', associate_id: 'dr-a', weekday: 1, slot: 'morning', booked_minutes: 60, revenue_pence: 0 },
+        ], [{ id: 'c1', active: true }, { id: 'gone', active: false }]);
+        expect(out).toEqual([]);
+    });
+
+    it('counts how many practices a clinician covers', () => {
+        const out = clinicianUtilisation({
+            practices: [
+                { chairs: CHAIRS, openingHours: HOURS, cells: [{ practice_id: 'p1', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'morning', booked_minutes: 60, revenue_pence: 0 }] },
+                { chairs: CHAIRS, openingHours: HOURS, cells: [{ practice_id: 'p2', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'midday', booked_minutes: 60, revenue_pence: 0 }] },
+            ],
+            nameById: names,
+        });
+        expect(out[0].practices).toBe(2);
+        expect(out[0].availableMinutesWk).toBe(300);
+    });
+
+    it('an id with no name still appears, labelled', () => {
+        const out = run([
+            { practice_id: 'p1', chair_id: 'c1', associate_id: 'ghost', weekday: 1, slot: 'morning', booked_minutes: 60, revenue_pence: 0 },
+        ]);
+        expect(out[0].name).toBe('Unknown clinician');
+    });
+
+    it('zero booked -> yield null, not free', () => {
+        const out = run([
+            { practice_id: 'p1', chair_id: 'c1', associate_id: 'dr-a', weekday: 1, slot: 'morning', booked_minutes: 0, revenue_pence: 0 },
+        ]);
+        expect(out[0].occupancyPct).toBe(0);
+        expect(out[0].revPerBookedHrPence).toBeNull();
     });
 });
 

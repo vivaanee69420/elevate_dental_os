@@ -23,7 +23,7 @@ const SLOT_LABEL: Record<string, string> = {
   morning: 'Morning', midday: 'Midday', afternoon: 'Afternoon', evening: 'Evening',
 };
 
-type Draft = Record<string, { booked: string; revenue: string }>;
+type Draft = Record<string, { booked: string; revenue: string; associate: string }>;
 const key = (weekday: number, slot: string) => `${weekday}|${slot}`;
 
 /** Minutes to a plain hours string for editing. Blank stays blank — an empty
@@ -53,6 +53,7 @@ export function ChairWeekGrid({
         next[key(weekday, slot)] = {
           booked: toHours(cell?.bookedMinutes ?? null),
           revenue: toPounds(cell?.revenuePence ?? null),
+          associate: cell?.associateId ?? '',
         };
       }
     }
@@ -66,7 +67,7 @@ export function ChairWeekGrid({
     [week.slots, cells],
   );
 
-  const set = (weekday: number, slot: string, field: 'booked' | 'revenue', value: string) =>
+  const set = (weekday: number, slot: string, field: 'booked' | 'revenue' | 'associate', value: string) =>
     setDraft((d) => ({ ...d, [key(weekday, slot)]: { ...d[key(weekday, slot)], [field]: value } }));
 
   /** Copy Monday down the rest of the week. The single biggest saving in a
@@ -89,7 +90,7 @@ export function ChairWeekGrid({
   function clearAll() {
     setDraft((d) => {
       const next = { ...d };
-      for (const k of Object.keys(next)) next[k] = { booked: '', revenue: '' };
+      for (const k of Object.keys(next)) next[k] = { booked: '', revenue: '', associate: '' };
       return next;
     });
   }
@@ -113,6 +114,9 @@ export function ChairWeekGrid({
           slot,
           booked_minutes: bookedMinutes,
           revenue_pence: Math.round(Number(entry.revenue || 0) * 100),
+          // null, not omitted: it must CLEAR a clinician the owner removed,
+          // rather than leaving yesterday's name attached to today's hours.
+          associate_id: entry.associate || null,
         });
       }
     }
@@ -156,6 +160,13 @@ export function ChairWeekGrid({
         </button>
       </div>
 
+      {week.clinicians.length === 0 && (
+        <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 10 }}>
+          No clinicians are listed against this practice yet, so the &quot;who?&quot; box is empty.
+          Set an associate&apos;s home practice under Associates and they will appear here.
+        </p>
+      )}
+
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 780 }}>
           <thead>
@@ -184,7 +195,7 @@ export function ChairWeekGrid({
                       </td>
                     );
                   }
-                  const entry = draft[key(weekday, slot)] ?? { booked: '', revenue: '' };
+                  const entry = draft[key(weekday, slot)] ?? { booked: '', revenue: '', associate: '' };
                   const overbooked = Number(entry.booked) * 60 > available;
                   return (
                     <td key={weekday} style={{ padding: '8px 6px', verticalAlign: 'top' }}>
@@ -211,6 +222,23 @@ export function ChairWeekGrid({
                           border: '1px solid var(--border)', marginTop: 4,
                         }}
                       />
+                      {/* Who is in the chair. Optional on purpose — a slot can
+                          be recorded before anyone knows who will work it. */}
+                      <select
+                        value={entry.associate}
+                        onChange={(e) => set(weekday, slot, 'associate', e.target.value)}
+                        aria-label={`Clinician, ${WEEKDAY_LABEL[weekday]} ${SLOT_LABEL[slot] ?? slot}`}
+                        style={{
+                          width: '100%', fontSize: 11, padding: '5px 4px', borderRadius: 6,
+                          border: '1px solid var(--border)', marginTop: 4,
+                          color: entry.associate ? 'inherit' : 'var(--ink-muted)',
+                        }}
+                      >
+                        <option value="">Who?</option>
+                        {week.clinicians.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
                       {overbooked && (
                         <div style={{ color: 'var(--danger)', fontSize: 10, marginTop: 3 }}>
                           Over open hours

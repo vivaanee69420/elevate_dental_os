@@ -12,14 +12,21 @@ export type ChairCellState = {
    *  booked zero, so it renders blank rather than as "0". */
   bookedMinutes: number | null;
   revenuePence: number | null;
+  /** The clinician in this chair in this slot. Null is legitimate — a slot may
+   *  be recorded without naming who worked it. */
+  associateId: string | null;
   notes: string | null;
   /** More booked time than the practice is open for. Shown, not silently
    *  clamped: the owner has to see it to correct it. */
   overbooked: boolean;
 };
 
+export type Clinician = { id: string; name: string; colour: string | null };
+
 export type ChairWeek = {
   chairs: { id: string; name: string; displayOrder: number }[];
+  /** Active associates whose home practice is this one. */
+  clinicians: Clinician[];
   openingHours: {
     id: string;
     practice_id: string;
@@ -44,6 +51,8 @@ export type WeekCellInput = {
   slot: SlotKey;
   booked_minutes: number;
   revenue_pence: number;
+  /** null CLEARS a previously-set clinician rather than leaving a stale one. */
+  associate_id?: string | null;
   notes?: string;
 };
 

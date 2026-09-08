@@ -123,10 +123,11 @@ export const analyticsService = {
             sinceIso = s.toISOString();
         }
         const config = await this.getChairConfig(orgId);
-        const [revRows, metricsBy] = await Promise.all([
+        const [revRows, capacity] = await Promise.all([
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceIso, untilIso),
-            chair_capacity_service_1.chairCapacityService.metricsByPractice(orgId, practices.map((p) => p.id), config),
+            chair_capacity_service_1.chairCapacityService.metricsAndClinicians(orgId, practices.map((p) => p.id), config),
         ]);
+        const metricsBy = capacity.byPractice;
         const revByPractice = new Map(revRows.map((r) => [r.practice_id, Number(r.pence) || 0]));
 
         // Annualise the ENTERED-cell week. Capacity used to come from
@@ -195,6 +196,12 @@ export const analyticsService = {
             practices: rows,
             group,
             recovery,
+            // Utilisation per clinician, over the SAME open cells as the
+            // practice rows, so the two grains cannot contradict each other.
+            // Cells with nobody named are kept in a trailing 'Not assigned'
+            // bucket rather than dropped — hiding them would stop the
+            // per-clinician hours adding up to the practice's, invisibly.
+            clinicians: capacity.clinicians,
             coverageThresholdPct: chair_metrics_1.COVERAGE_THRESHOLD_PCT,
             // Deferred: need per-practice opex + treatment-minute sourcing.
             ocpspd: null,
