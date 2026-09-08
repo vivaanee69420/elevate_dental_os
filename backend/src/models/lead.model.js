@@ -81,6 +81,21 @@ export const leadExportQuerySchema = zod_1.z.object({
 export const pipelinesQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),
 });
+// Board summary for ONE pipeline. ghl_pipeline_id is required: a summary with
+// no pipeline would silently aggregate every pipeline in the org into one
+// meaningless total, which is the sort of confident wrong number this whole
+// change exists to remove.
+export const pipelineSummaryQuerySchema = zod_1.z.object({
+    ghl_pipeline_id: zod_1.z.string().min(1).max(100),
+    integration_account_id: zod_1.z.string().uuid().optional(),
+});
+
+export const todayCountersQuerySchema = zod_1.z.object({
+    // ISO instant marking the start of the screen's window; omitted = all time.
+    since: zod_1.z.string().datetime({ offset: true }).optional(),
+    integration_account_id: zod_1.z.string().uuid().optional(),
+});
+
 export const leadCreateSchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),
     contact: zod_1.z.object({

@@ -146,6 +146,35 @@ export const leadRepository = {
             throw new Error(error.message);
         return data ?? [];
     },
+    // Per-stage counts and value for ONE pipeline, aggregated in SQL.
+    //
+    // The board used to reduce over a `limit: 500` page of leads, so every
+    // column header and the board total were computed from at most the newest
+    // 500 rows. Measured on live data: pipeline r2preQuq… holds 2,092 leads
+    // worth £1,421,317 and rendered "500 leads · £0.00", because every valued
+    // lead in it was older than that page. One row per stage (a pipeline has
+    // a handful) cannot be capped, however many leads accumulate.
+    async pipelineStageSummary(orgId, pipelineId, accountId = null) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_pipeline_stage_summary', {
+                p_org: orgId, p_pipeline: pipelineId, p_account: accountId,
+            });
+        if (error)
+            throw new Error(error.message);
+        return data ?? [];
+    },
+    // The four Today counters in one round trip. `since` is an ISO instant or
+    // null for all-time; it is passed in rather than derived here so the
+    // counter and the list beneath it cannot disagree about the window.
+    async todayCounters(orgId, since = null, accountId = null) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_today_counters', {
+                p_org: orgId, p_since: since, p_account: accountId,
+            });
+        if (error)
+            throw new Error(error.message);
+        return data?.[0] ?? null;
+    },
     // Per-status lead counts for a window, aggregated IN SQL.
     //
     // This replaced a `.select('status, estimated_value_pence')` over the whole
