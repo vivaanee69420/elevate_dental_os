@@ -1249,6 +1249,24 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
             const r = await upsertOpportunity(orgId, opp, account.practice_id, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap, accountId);
             if (r.ok) synced++;
         }
+        // STAMP COMPLETION HERE, before the defensive phases.
+        //
+        // Contacts and opportunities are written and durable at this point, and
+        // everything below is explicitly allowed to fail with a warning. A
+        // phase that may fail silently must not also be able to withhold the
+        // completion stamp — that is the worst of both, and it is what happened
+        // on gm dental Rochester: `updated_at` moved to 11:20 today while
+        // `last_sync_at` stayed on 7 September, because the run wrote its
+        // contacts, its opportunities and its config, then died somewhere in
+        // the long appointments/conversations phases and reached neither
+        // markSynced nor markFailed.
+        //
+        // The consequence was not lost data — `since` is last_sync_at minus 24h,
+        // so a stuck stamp only ever widens the window and re-fetches — but the
+        // Integrations tile reported a sync that was days stale while the data
+        // beneath it was current, which is its own kind of wrong answer.
+        await integrationAccountRepository.markSynced(orgId, accountId);
+
         // Phase 3: calendar appointments — DEFENSIVE. A missing calendars scope
         // on the PIT (404/401) must never break contacts+opportunities sync.
         let apptResult = { appointments: 0 };
@@ -1276,7 +1294,6 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
         } catch (err) {
             console.warn(`[gohighlevel] account ${accountId} conversations phase skipped: ${err?.message || err}`);
         }
-        await integrationAccountRepository.markSynced(orgId, accountId);
         return {
             contacts: contactsSynced, opportunities: synced, total: opportunities.length,
             appointments: apptResult.appointments,

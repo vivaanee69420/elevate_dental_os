@@ -57,7 +57,13 @@ describe('syncConversations pagination', () => {
     // is guarded by migration 000084 + a full-index re-run, not reproducible
     // against the in-memory Supabase fake; this test pins the pagination control
     // flow that surfaces all of it.
-    it('pages via the cursor until a short page and upserts every page', async () => {
+    // A SHORT PAGE IS NOT THE END. This test used to assert the opposite —
+    // that a page of 1 against a limit of 2 stopped the walk — which is the
+    // stop that lost 65 of gm dental Rochester's 9,487 contacts in
+    // ghlFetchAll. GoHighLevel filters server-side after taking a page, so a
+    // short page arrives with threads still behind it. The walk now continues
+    // and ends on the EMPTY page.
+    it('pages via the cursor past a short page, stopping on an empty one', async () => {
         const integration = {
             secrets: encryptSecret(JSON.stringify({ access_token: 'tok' })),
             config: { locationId: 'loc-1' },
@@ -77,9 +83,13 @@ describe('syncConversations pagination', () => {
             if (u.includes('/conversations/search')) {
                 searchCalls.push(u);
                 const page2 = u.includes('startAfterDate=');
-                const conversations = page2
-                    ? [{ id: 'c3', contactId: 'gc3', sort: [300] }]                              // 1 < limit 2 -> stop
-                    : [{ id: 'c1', contactId: 'gc1', sort: [100] }, { id: 'c2', contactId: 'gc2', sort: [200] }];
+                // Page 2 is SHORT (1 against a limit of 2) but page 3 still
+                // has a thread; page 4 is empty and is the real end.
+                const conversations = u.includes('startAfterDate=300')
+                    ? []
+                    : u.includes('startAfterDate=200')
+                        ? [{ id: 'c3', contactId: 'gc3', sort: [300] }]
+                        : [{ id: 'c1', contactId: 'gc1', sort: [100] }, { id: 'c2', contactId: 'gc2', sort: [200] }];
                 return { ok: true, status: 200, json: async () => ({ conversations, total: 3 }) };
             }
             const id = u.match(/conversations\/([^/]+)\/messages/)[1];
@@ -91,9 +101,11 @@ describe('syncConversations pagination', () => {
 
         const res = await syncConversations('org-1', integration, { pageSize: 2, concurrency: 2, perConv: 5 });
 
-        expect(searchCalls.length).toBe(2);                     // page 1 + page 2, then short page stops
+        // THREE requests: the short page did not stop it, the empty one did.
+        expect(searchCalls.length).toBe(3);
         expect(searchCalls[0]).not.toContain('startAfterDate');
         expect(searchCalls[1]).toContain('startAfterDate=200'); // cursor = page 1's last sort[0]
+        expect(searchCalls[2]).toContain('startAfterDate=300'); // past the SHORT page
         expect(res.conversations).toBe(3);
         expect(res.messages).toBe(3);                           // 3 threads x 1 message
         expect(upsertedRows).toBe(3);
