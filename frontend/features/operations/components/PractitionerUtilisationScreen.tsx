@@ -61,10 +61,17 @@ const pct = (v: number | null) => (v === null ? DASH : `${v.toFixed(0)}%`);
 
 /** "7h 15m" — hours and minutes, the way a diary is read. Negative bookable
  *  time is real (an over-booked day) and keeps its sign rather than clamping,
- *  because clamping would hide double-booking. */
-function hm(hours: number): string {
-  const neg = hours < 0;
-  const total = Math.round(Math.abs(hours) * 60);
+ *  because clamping would hide double-booking.
+ *
+ *  TAKES SECONDS, not hours, and that is the whole point. It used to take the
+ *  rounded 1-decimal hour the API already publishes, so a genuine 255-minute
+ *  day (4h 15m — exactly what Dentally prints) became 4.3h and rendered as
+ *  "4h 18m". Three minutes invented by rounding, on every cell in the grid,
+ *  and the bookable line inherited it: -1h 15m read as -1h 18m. A unit finer
+ *  than the rounding must never be derived from the rounded value. */
+function hm(seconds: number): string {
+  const neg = seconds < 0;
+  const total = Math.round(Math.abs(seconds) / 60);
   const h = Math.floor(total / 60);
   const m = total % 60;
   return `${neg ? '-' : ''}${h}h ${m}m`;
@@ -79,6 +86,32 @@ const ddmmyyyy = (iso: string) => {
 /** Monday of the London week containing `iso`, as YYYY-MM-DD. Weeks are the
  *  unit a contracted-hours figure is expressed in, so the buckets have to line
  *  up with them or the comparison is meaningless. */
+/** Every bucket key the window spans, whether or not anything happened in it.
+ *
+ *  THE POINT OF THE CHART IS THE EMPTY WEEKS. Buckets used to be built from the
+ *  data, so a week in which a practitioner saw nobody produced no bucket and
+ *  the line simply jumped over it — Gaurav Mehta's w/c 10 Aug and w/c 31 Aug
+ *  vanished, and 7.5 hours joined straight to 9.0 as though the fortnight
+ *  between were busy. Dentally draws those weeks at zero against a -30
+ *  difference, which is the finding, not an absence of data. */
+function bucketKeysBetween(since: string, until: string, unit: 'day' | 'week'): string[] {
+  const out: string[] = [];
+  const end = Date.parse(`${until}T12:00:00Z`);
+  let cursor = Date.parse(`${unit === 'week' ? weekStart(since) : since}T12:00:00Z`);
+  // A hard ceiling: a mis-ordered window would otherwise spin here forever.
+  for (let i = 0; cursor <= end && i < 800; i++) {
+    out.push(new Date(cursor).toISOString().slice(0, 10));
+    cursor += (unit === 'week' ? 7 : 1) * 86400000;
+  }
+  return out;
+}
+
+/** The Sunday closing the London week that contains `iso`. */
+function weekEnd(iso: string): string {
+  const start = Date.parse(`${weekStart(iso)}T12:00:00Z`);
+  return new Date(start + 6 * 86400000).toISOString().slice(0, 10);
+}
+
 function weekStart(iso: string): string {
   const d = new Date(`${iso}T12:00:00`);
   const dow = (d.getDay() + 6) % 7;      // Monday = 0
@@ -90,12 +123,37 @@ function weekStart(iso: string): string {
 }
 
 /** "Mon 08 Sep" — a bucket label short enough for an axis. */
-function bucketLabel(iso: string, bucket: 'day' | 'week'): string {
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const dm = (d: Date) => `${String(d.getDate()).padStart(2, '0')} ${MON[d.getMonth()]}`;
+
+/**
+ * A weekly bucket is labelled with THE SPAN IT ACTUALLY COVERS, clipped to the
+ * selected window — "28 Jul – 2 Aug", not a single date the reader has to
+ * interpret.
+ *
+ * This exists because Dentally's own headers cannot be taken at face value.
+ * Its column headed "Tue 04 Aug 26" reads 11 used hours for this practitioner;
+ * the 4–10 August window holds 5.00, while Monday 3 – Sunday 9 August holds
+ * exactly 11.00. Its buckets are Monday weeks, but the headers print
+ * `From + 7n` — the From date happened to be a Tuesday — so every column is
+ * labelled a day later than the week it summarises. Every one of our figures
+ * matches theirs once that is allowed for (they also TRUNCATE to whole hours:
+ * our 8.5 is their 8, our 7.5 their 7, our 17.5 their 17, our 2.8 their 2).
+ *
+ * A single anchor date is what made that ambiguity possible, so we print both
+ * ends and let the reader see the seven days for themselves. A clipped first or
+ * last week is visibly shorter, which is why its figure is lower — rather than
+ * looking like a quiet week.
+ */
+function bucketLabel(iso: string, bucket: 'day' | 'week', since?: string, until?: string): string {
   const d = new Date(`${iso}T12:00:00`);
-  const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
-  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
-  const dd = String(d.getDate()).padStart(2, '0');
-  return bucket === 'week' ? `w/c ${dd} ${mon}` : `${dow} ${dd} ${mon}`;
+  if (bucket !== 'week') return `${DOW[d.getDay()]} ${dm(d)}`;
+  const startMs = Math.max(d.getTime(), since ? Date.parse(`${since}T12:00:00`) : -Infinity);
+  const endMs = Math.min(d.getTime() + 6 * 86400000, until ? Date.parse(`${until}T12:00:00`) : Infinity);
+  const a = new Date(startMs);
+  const b = new Date(endMs);
+  return endMs <= startMs ? dm(a) : `${dm(a)} \u2013 ${dm(b)}`;
 }
 
 type HoverCell = {
@@ -144,6 +202,31 @@ export default function PractitionerUtilisationScreen() {
   // never be sent as one.
   const practiceId = scope && scope !== 'all' ? scope : null;
 
+  // WEEK GROUPING READS WHOLE WEEKS, which means a SECOND window.
+  //
+  // A week bucket clipped by the date picker understates itself: a range
+  // starting Tuesday 28 July drops Monday the 27th, and that Monday held 1.75
+  // of the practitioner's hours - so the first column read 0 against Dentally's
+  // 1, and looked like an idle week rather than a short one. Dentally expands
+  // the range to whole weeks; grouped by week, so do we.
+  //
+  // It is a SECOND CALL to the same endpoint rather than a widening of the
+  // first, because the cards, the grid and the daily totals must keep the
+  // window the user actually chose - widening that one would quietly change
+  // every headline on the page to answer a question nobody asked.
+  const weekWindow = useMemo(
+    () => ({ since: weekStart(since), until: weekEnd(until) }),
+    [since, until],
+  );
+  const weekAligned = bucket === 'week'
+    && (weekWindow.since !== since || weekWindow.until !== until);
+  const { data: weekData } = usePractitionerUtilisation({
+    since: weekWindow.since, until: weekWindow.until, practiceId, basis,
+    // Never fires when the chosen window is already whole weeks - that request
+    // would be byte-identical to the one above.
+    enabled: weekAligned,
+  });
+
   const { data: practicesData } = usePractices();
   const practices = practicesData?.practices ?? [];
   const practiceName = useMemo(
@@ -156,6 +239,17 @@ export default function PractitionerUtilisationScreen() {
   const t = data?.totals;
   const days = data?.days ?? [];
   const practitioners = data?.practitioners ?? [];
+  const otherPractitioners = data?.otherPractitioners ?? [];
+
+  // The PICKER offers everyone in the window — those who treated patients and
+  // those who were in the diary and saw nobody — sorted by name, because a
+  // menu ordered by utilisation announces who is worst before you have chosen
+  // anything. The grid and every total still read `practitioners` alone.
+  const pickerPractitioners = useMemo(
+    () => [...practitioners, ...otherPractitioners]
+      .sort((a, b) => a.practitionerName.localeCompare(b.practitionerName)),
+    [practitioners, otherPractitioners],
+  );
 
   // Every day that appears anywhere, so the grid's columns are the window and
   // not just the days one practitioner happened to work.
@@ -192,65 +286,102 @@ export default function PractitionerUtilisationScreen() {
   // would be noise; labelling the three that repeat is the whole fix.
   const rowLabel = useMemo(() => {
     const seen = new Map<string, number>();
-    for (const p of practitioners) seen.set(p.practitionerName, (seen.get(p.practitionerName) ?? 0) + 1);
+    for (const p of [...practitioners, ...otherPractitioners]) {
+      seen.set(p.practitionerName, (seen.get(p.practitionerName) ?? 0) + 1);
+    }
     return (p: UtilPractitioner): string => {
       if ((seen.get(p.practitionerName) ?? 0) < 2) return p.practitionerName;
       const site = p.practiceId ? practiceName.get(p.practiceId) : null;
       return site ? `${p.practitionerName} · ${site}` : p.practitionerName;
     };
-  }, [practitioners, practiceName]);
+  }, [practitioners, otherPractitioners, practiceName]);
 
-  // THE CHART SERIES, derived from the SAME per-practitioner rows the grid
-  // uses — not a second fetch and not a second definition. Filtering by
-  // practitioner and bucketing by week are presentation choices, so they
-  // belong here; the numbers underneath are the server's.
+  // THE CHART SERIES. The numbers underneath are the server's; filtering by
+  // practitioner and bucketing are presentation choices, so they belong here.
+  //
+  // On a week grouping it reads the week-aligned window above (falling back to
+  // the primary one until that lands, so the chart never blanks); on a day
+  // grouping it reads exactly what the rest of the page reads.
   const chartSeries = useMemo(() => {
+    const source = weekAligned
+      ? [...(weekData?.practitioners ?? practitioners), ...(weekData?.otherPractitioners ?? otherPractitioners)]
+      : [...practitioners, ...otherPractitioners];
+    const from = weekAligned && weekData ? weekWindow.since : since;
+    const to = weekAligned && weekData ? weekWindow.until : until;
     const rows = chartPractitioner === 'all'
-      ? practitioners
-      : practitioners.filter((p) => p.practitionerId === chartPractitioner);
+      // "All" means all CLINICIANS. Folding in the block-only practitioners
+      // here would divide real treatment time by reception hours — the same
+      // collapse the service guards its totals against.
+      ? (weekAligned ? (weekData?.practitioners ?? practitioners) : practitioners)
+      : source.filter((p) => p.practitionerId === chartPractitioner);
 
-    type Bucket = { key: string; used: number; available: number; heads: Set<string>; days: Set<string> };
+    type Bucket = { key: string; usedSecs: number; availableSecs: number; heads: Set<string> };
     const buckets = new Map<string, Bucket>();
+    // Seed EVERY bucket the window covers, so an idle week is a zero rather
+    // than a gap the line hops over.
+    for (const key of bucketKeysBetween(from, to, bucket)) {
+      buckets.set(key, { key, usedSecs: 0, availableSecs: 0, heads: new Set() });
+    }
     for (const p of rows) {
       for (const d of p.days) {
         const key = bucket === 'week' ? weekStart(d.day) : d.day;
-        const b = buckets.get(key) ?? { key, used: 0, available: 0, heads: new Set(), days: new Set() };
-        b.used += d.utilisedHours;
-        b.available += d.availableHours;
+        const b = buckets.get(key);
+        // A day outside the seeded window (the API's window and the picker's
+        // can differ by a boundary day) still belongs somewhere.
+        if (!b) {
+          buckets.set(key, {
+            key, usedSecs: d.utilisedSecs, availableSecs: d.availableSecs,
+            heads: new Set([p.practitionerId]),
+          });
+          continue;
+        }
+        // SECONDS, then round ONCE at the end. Summing the per-day rounded
+        // hours drifted: five days totalling 8.5 hours rendered as 8.6, and
+        // 17.5 as 17.6, against Dentally's 8 and 17.
+        b.usedSecs += d.utilisedSecs;
+        b.availableSecs += d.availableSecs;
         b.heads.add(p.practitionerId);
-        b.days.add(d.day);
-        buckets.set(key, b);
       }
     }
+
+    // Contracted hours are a COMMITMENT, not a record of attendance, so the
+    // head count is the practitioners in view — not the ones who happened to
+    // work that week. Counting only those who worked made an idle week's
+    // contracted figure 0 and its shortfall 0, which reads as "nothing was
+    // owed and nothing was missed" for the very week the chart exists to show.
+    // Dentally holds it at 30 with a -30 difference; so do we.
+    const headsInView = chartPractitioner === 'all' ? rows.length : Math.min(rows.length, 1);
 
     return [...buckets.values()]
       .sort((a, b) => a.key.localeCompare(b.key))
       .map((b) => {
-        // Contracted hours apply PER PRACTITIONER PER WEEK, so a weekly bucket
-        // multiplies by the heads who actually worked in it. In a daily bucket
-        // there is no honest divisor — nobody works a flat seven-day week — so
-        // the baseline is only offered weekly, and the control says so.
-        const contracted = hoursPerWeek > 0 && bucket === 'week'
-          ? Math.round(hoursPerWeek * b.heads.size * 10) / 10
+        const used = b.usedSecs / 3600;
+        const available = b.availableSecs / 3600;
+        // In a daily bucket there is no honest divisor — nobody works a flat
+        // seven-day week — so the baseline is offered weekly only, and the
+        // control says so.
+        const contracted = hoursPerWeek > 0 && bucket === 'week' && headsInView > 0
+          ? Math.round(hoursPerWeek * headsInView * 10) / 10
           : null;
         return {
           key: b.key,
-          label: bucketLabel(b.key, bucket),
-          usedHours: Math.round(b.used * 10) / 10,
+          label: bucketLabel(b.key, bucket, from, to),
+          usedHours: Math.round(used * 10) / 10,
           // Diary-derived availability, minus what was used. Never negative on
           // the chart: a stacked band cannot render a negative segment, and an
           // over-booked day is shown by the contracted line instead.
-          unusedHours: Math.round(Math.max(0, b.available - b.used) * 10) / 10,
-          availableHours: Math.round(b.available * 10) / 10,
+          unusedHours: Math.round(Math.max(0, available - used) * 10) / 10,
+          availableHours: Math.round(available * 10) / 10,
           contractedHours: contracted,
           // Used minus contracted. Positive is more hours worked than
           // contracted, negative is a shortfall — the number this filter
           // exists to surface.
-          differenceHours: contracted === null ? null : Math.round((b.used - contracted) * 10) / 10,
+          differenceHours: contracted === null ? null : Math.round((used - contracted) * 10) / 10,
           practitioners: b.heads.size,
         };
       });
-  }, [practitioners, chartPractitioner, bucket, hoursPerWeek]);
+  }, [practitioners, otherPractitioners, weekData, weekAligned, weekWindow,
+      chartPractitioner, bucket, hoursPerWeek, since, until]);
 
   // Daily total: a RATIO OF SUMS from the server, not a mean of the cells
   // above it. Averaging the column would let a 45-minute list count as much as
@@ -321,14 +452,17 @@ export default function PractitionerUtilisationScreen() {
             onChange={(e) => setBasis(e.target.value as UtilBasis)}
             className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
           >
+            <option value="rota">Rostered hours — Dentally's own rota</option>
             <option value="clinical">Clinical window — first to last patient</option>
             <option value="span">Diary span — first to last of anything</option>
           </select>
         </div>
         <span className="text-ink-muted text-[11px]">
-          {basis === 'clinical'
-            ? 'Blocks before the first patient and after the last do not count as available.'
-            : 'Every block in the diary counts as available, so this reads lower.'}
+          {basis === 'rota'
+            ? 'The hours each practitioner was actually rostered for. This is the figure Dentally divides by.'
+            : basis === 'clinical'
+              ? 'Blocks before the first patient and after the last do not count as available.'
+              : 'Every block in the diary counts as available, so this reads lower.'}
         </span>
         <span className="text-ink-muted ml-auto text-[11px]">
           {win.label} · <span className="tabular-nums">{since} → {until}</span>
@@ -339,9 +473,12 @@ export default function PractitionerUtilisationScreen() {
       {/* Said once, plainly, rather than left for someone to discover by
           comparing against Dentally — which is how it was found. */}
       <p className="text-ink-muted text-[11px]">
-        Dentally shows a third figure, its own rostered hours. Its API does not expose them
-        (ten candidate endpoints return 404), so the two options above are what the diary
-        can tell us. For a declared figure, set contracted hours on the chart below.
+        {basis === 'rota'
+          ? 'Rostered hours come from Dentally\u2019s rota and match its own utilisation figure. '
+            + 'A practitioner with no rota for a day is left out of the ratio rather than counted as idle, '
+            + 'and any work done outside the rota is listed separately below.'
+          : 'Dentally divides by its own rostered hours, which you can select above. '
+            + 'These two options are what the diary alone can tell us, and both read differently.'}
       </p>
 
       {error && (
@@ -385,13 +522,50 @@ export default function PractitionerUtilisationScreen() {
 
       {/* The exclusion, stated. A headline that quietly dropped four fifths of
           the diary would be indistinguishable from one that did not. */}
-      {data && data.excluded.blockOnlyDays > 0 && (
+      {data && basis !== 'rota' && data.excluded.blockOnlyDays > 0 && (
         <div className="text-ink-muted rounded-panel border border-border bg-card px-3 py-2 text-[12px]">
           <strong>{data.excluded.blockOnlyDays.toLocaleString('en-GB')}</strong> practitioner-days
           {' '}({hrs(data.excluded.blockOnlyHours)} across {data.excluded.practitioners} practitioners)
-          {' '}held only blocks, meetings or holidays and no patients. They are counted as
-          {' '}<strong>not working</strong> rather than 0% utilised — Dentally exposes no rota, so a
-          {' '}diary with no patients in it cannot tell us the clinician was rostered.
+          {' '}held only blocks, meetings or holidays and no patients. On this basis they are counted
+          {' '}as <strong>not working</strong> rather than 0% utilised: a diary with no patients in it
+          {' '}cannot tell us whether the clinician was rostered. Switch to rostered hours, which can.
+        </div>
+      )}
+
+      {/* The rota basis reconciles out loud: rostered hours, plus work done off
+          the rota, plus people the rota does not cover. Absorbing any of these
+          into the ratio would flatter it; dropping them silently would hide
+          real work. */}
+      {data && basis === 'rota' && (
+        <div className="text-ink-muted space-y-1 rounded-panel border border-border bg-card px-3 py-2 text-[12px]">
+          <div>
+            Measured over <strong>{data.totals.daysWorked.toLocaleString('en-GB')}</strong> rostered
+            {' '}practitioner-days ({hrs(data.totals.availableHours)}), of which
+            {' '}{hrs(data.excluded.rotaBreakHours)} are rostered breaks — the figure above is gross
+            {' '}of them, which is how Dentally counts it.
+          </div>
+          {data.excluded.offRotaDays > 0 && (
+            <div>
+              <strong>{data.excluded.offRotaDays.toLocaleString('en-GB')}</strong> further
+              {' '}practitioner-days fell on a day the rota marks as off, carrying
+              {' '}{hrs(data.excluded.offRotaUtilisedHours)} of patient time. That work is real but has
+              {' '}no rostered window to divide by, so it is listed here rather than counted.
+            </div>
+          )}
+          {data.excluded.noRotaDays > 0 && (
+            <div>
+              <strong>{data.excluded.noRotaDays.toLocaleString('en-GB')}</strong> practitioner-days have
+              {' '}no rota entry at all ({hrs(data.excluded.noRotaUtilisedHours)} of patient time).
+              {' '}Nothing is assumed for them.
+            </div>
+          )}
+          {data.excluded.practitioners > 0 && (
+            <div>
+              {data.excluded.practitioners} rostered {data.excluded.practitioners === 1 ? 'person' : 'people'}
+              {' '}treated no patients in this window and are excluded entirely. The rota covers all staff,
+              {' '}not only clinicians, and counting them would divide real treatment time by reception hours.
+            </div>
+          )}
         </div>
       )}
 
@@ -414,7 +588,7 @@ export default function PractitionerUtilisationScreen() {
                 className="max-w-[220px] truncate rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
               >
                 <option value="all">All practitioners</option>
-                {practitioners.map((p) => (
+                {pickerPractitioners.map((p) => (
                   <option key={p.practitionerId} value={p.practitionerId}>{rowLabel(p)}</option>
                 ))}
               </select>
@@ -742,7 +916,7 @@ export default function PractitionerUtilisationScreen() {
                 <dl className="space-y-0.5">
                   <div className="flex justify-between gap-3">
                     <dt className="text-ink-muted">Utilised time</dt>
-                    <dd className="font-semibold tabular-nums">{hm(hover.day.utilisedHours)}</dd>
+                    <dd className="font-semibold tabular-nums">{hm(hover.day.utilisedSecs)}</dd>
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-ink-muted">Bookable time</dt>
@@ -750,13 +924,13 @@ export default function PractitionerUtilisationScreen() {
                         and it keeps the sign — clamping at zero would hide
                         double-booking, which is the thing worth seeing. */}
                     <dd className="font-semibold tabular-nums"
-                      style={{ color: hover.day.availableHours - hover.day.utilisedHours < 0 ? 'var(--danger)' : undefined }}>
-                      {hm(hover.day.availableHours - hover.day.utilisedHours)}
+                      style={{ color: hover.day.availableSecs - hover.day.utilisedSecs < 0 ? 'var(--danger)' : undefined }}>
+                      {hm(hover.day.availableSecs - hover.day.utilisedSecs)}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-ink-muted">Total time</dt>
-                    <dd className="font-semibold tabular-nums">{hm(hover.day.availableHours)}</dd>
+                    <dd className="font-semibold tabular-nums">{hm(hover.day.availableSecs)}</dd>
                   </div>
                   <div className="mt-1 flex justify-between gap-3 border-t border-border pt-1">
                     <dt className="text-ink-muted">Patients</dt>

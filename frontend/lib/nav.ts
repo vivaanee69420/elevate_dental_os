@@ -23,6 +23,7 @@ export const NAV: NavSection[] = [
     { id: 'ad-performance', label: 'Ad Performance', isNew: true },
     { id: 'dashboard', label: 'Command Centre' },
     { id: 'business-hub', label: 'Business Hub', isNew: true },
+    { id: 'practitioner-performance', label: 'Practitioner Performance', isNew: true },
     { id: 'task-manager', label: 'Task Manager' },
     { id: 'ai-insights', label: 'AI Analyst', isNew: true },
     { id: 'board-report', label: 'Board Report', isNew: true },
@@ -57,8 +58,15 @@ export const NAV: NavSection[] = [
     // a finance surface, entry is an operations one. One combined page hid the
     // entry screen from anyone without finance access.
     { id: 'chair', label: 'Chair Efficiency' },
-    { id: 'chair-utilisation', label: 'Chair Utilisation' },
-    { id: 'practitioner-utilisation', label: 'Practitioner Utilisation', isNew: true },
+    // Renamed from "Practitioner Utilisation". It measures exactly what
+    // Dentally's own Chair Utilisation report measures - a practitioner's
+    // rostered hours against the time they actually treated patients - and
+    // the manual per-chair grid that used to carry this name is retired:
+    // Dentally sends no room on an appointment, so a per-CHAIR figure was
+    // never derivable, and the grid held nine hand-typed cells across the
+    // whole platform.
+    { id: 'practitioner-utilisation', label: 'Chair Utilisation', isNew: true },
+    { id: 'practitioner-schedules', label: 'Practitioner Schedules', isNew: true },
     { id: 'treatments', label: 'Treatments' },
     { id: 'uda', label: 'UDA Tracker' },
   ]},

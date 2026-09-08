@@ -12,6 +12,8 @@ export interface UtilDay {
   availableHours: number;
   utilisedHours: number;
   unusedHours: number;
+  availableSecs: number;
+  utilisedSecs: number;
   /** null when there were no available hours — never 0%. */
   utilisationPct: number | null;
   practitioners: number;
@@ -19,6 +21,10 @@ export interface UtilDay {
   revenuePence: number | null;
 }
 
+/** EXACT seconds accompany every rounded hour figure. Anything rendered in a
+ *  unit FINER than the rounding — hours and minutes, most of all — must be
+ *  derived from the seconds: 255 minutes rounds to 4.3 hours, and turning that
+ *  back into minutes yields "4h 18m" for a day that was really 4h 15m. */
 export interface UtilPractitionerDay {
   day: string;
   /** The site this day was worked at — a practitioner can move between them. */
@@ -26,6 +32,8 @@ export interface UtilPractitionerDay {
   utilisationPct: number | null;
   availableHours: number;
   utilisedHours: number;
+  availableSecs: number;
+  utilisedSecs: number;
   patientAppts: number;
   revenuePence: number | null;
 }
@@ -38,6 +46,8 @@ export interface UtilPractitioner {
   daysWorked: number;
   availableHours: number;
   utilisedHours: number;
+  availableSecs: number;
+  utilisedSecs: number;
   utilisationPct: number | null;
   patientAppts: number;
   revenuePence: number | null;
@@ -45,8 +55,9 @@ export interface UtilPractitioner {
   days: UtilPractitionerDay[];
 }
 
-/** Which derived denominator the figures were divided by. */
-export type UtilBasis = 'span' | 'clinical';
+/** Which denominator the figures were divided by. 'rota' is the only one that
+ *  is Dentally's own rather than derived from the diary. */
+export type UtilBasis = 'span' | 'clinical' | 'rota';
 
 export interface PractitionerUtilisation {
   window: { since: string; until: string };
@@ -69,9 +80,25 @@ export interface PractitionerUtilisation {
     blockOnlyDays: number;
     blockOnlyHours: number;
     practitioners: number;
+    /** Rota basis only: patient time on a day the rota marks off, and days we
+     *  hold no rota for. Reported so the panel reconciles rather than quietly
+     *  absorbing them. Zero on the other two bases by construction. */
+    offRotaDays: number;
+    offRotaUtilisedHours: number;
+    noRotaDays: number;
+    noRotaUtilisedHours: number;
+    /** Breaks inside the rostered window. The headline is GROSS of these,
+     *  which is what reconciled against Dentally. */
+    rotaBreakHours: number;
   };
   days: UtilDay[];
   practitioners: UtilPractitioner[];
+  /** Practitioners whose diary held ONLY blocks in this window — rostered, saw
+   *  nobody. Deliberately outside `practitioners` so no total can pick them up
+   *  (counting them collapses the group figure), but returned so the chart's
+   *  picker can offer them: "rostered and saw nobody" is the finding, and a
+   *  menu that omits them hides it. Dentally's own picker lists them. */
+  otherPractitioners: UtilPractitioner[];
 }
 
 export function getPractitionerUtilisation(opts: {

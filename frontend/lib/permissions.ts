@@ -88,13 +88,18 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // finance.view. It was listed as operations.view, so it appeared in a
   // practice manager's nav and then 403'd — nav and API must name the SAME key.
   chair: 'finance.view',
-  // Data entry is an operations surface, and deliberately reachable by someone
-  // with no finance access at all: the people who know how full the chairs
-  // were are not usually the people who see the money.
-  'chair-utilisation': 'operations.view',
   // Same gate as the chair grid: the people who maintain it are the people who
   // need to see who is filling the chairs. Reception stays out (rule 5).
+  // Time, treatment and money for each clinician. Reads the same mount as the
+  // utilisation report and carries the same gate: it is those figures with the
+  // clinical and financial columns beside them, not a new class of data.
+  'practitioner-performance': 'operations.view',
   'practitioner-utilisation': 'operations.view',
+  // The manual rota fallback for a practice without Dentally's Rota feature.
+  // Same gate as the chair grid and the utilisation report: the people who
+  // know the working hours are not the people who see the money, and Reception
+  // stays out (rule 5).
+  'practitioner-schedules': 'operations.view',
   treatments: 'operations.view',
   uda: 'operations.view',
 
@@ -184,6 +189,11 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
  * the API stays the boundary.
  */
 export const ROUTE_FEATURE: Record<string, string> = {
+  // Lives in the Overview nav section, which is always on, but READS the
+  // /api/chair-utilisation mount, which requireFeature('operations') gates. An
+  // org with the Operations module off would otherwise get an Overview item
+  // that 403s the moment it is opened - the exact drift this map exists for.
+  'practitioner-performance': 'operations',
   'call-reporting': 'call_reporting',
   'data-summaries': 'data_room',
   'data-dentally': 'data_room',
@@ -252,7 +262,7 @@ export function featureAllowsRoute(
  * "nav only" rather than implying a boundary that is not there.
  */
 export const PAGE_ENFORCED = new Set([
-  'appointments', 'associates', 'staff', 'chair', 'chair-utilisation', 'practitioner-utilisation', 'treatments', 'pay',
+  'appointments', 'associates', 'staff', 'chair', 'practitioner-utilisation', 'treatments', 'pay',
   'contacts', 'inbox', 'workflows', 'task-manager', 'p4g-ai', 'cockpit',
 ]);
 
