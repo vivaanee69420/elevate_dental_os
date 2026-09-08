@@ -374,6 +374,7 @@ export default function InboxScreen() {
                 <button
                   key={t.id}
                   onClick={() => setSelectedId(t.id)}
+                  className="crm-thread-row"
                   style={{
                     display: 'block',
                     width: '100%',

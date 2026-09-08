@@ -15,6 +15,7 @@ import { leadsExportUrl, type Lead, type LeadStatus } from '@/features/leads/api
 // with no estimated value must not be shown as being worth nothing.
 import { money, DASH } from '@/features/marketing/_shared/format';
 import { CRM_TEAL, agoLabel } from '../data';
+import { LeadDetailModal } from '../_shared/LeadDetailModal';
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
@@ -29,6 +30,10 @@ const FALLBACK_STAGES: { key: string; label: string; colour: string; byStatus: L
 ];
 
 // Colour palette cycled across dynamic GHL stages.
+// Board viewport height. Fixed so the horizontal scrollbar is always on
+// screen; the columns scroll inside it.
+const BOARD_HEIGHT = 620;
+
 const STAGE_COLOURS = ['#3B82F6', 'var(--warning)', '#8B5CF6', '#06B6D4', '#0891B2', 'var(--success)', 'var(--ink-muted)', '#DC2626', '#7C3AED', '#EA580C'];
 
 function minutesSince(iso: string): number {
@@ -54,6 +59,7 @@ export default function PipelineScreen() {
   const { data: pData } = usePipelines(accountId);
   const pipelines = pData?.pipelines ?? [];
   const [picked, setPicked] = useState<string | null>(null);
+  const [openLead, setOpenLead] = useState<Lead | null>(null);
   const selectedId = (picked && pipelines.some((p) => p.id === picked) ? picked : pipelines[0]?.id) ?? null;
 
   // THE CARDS are a page; THE FIGURES are not.
@@ -196,7 +202,23 @@ export default function PipelineScreen() {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns.length}, minmax(180px, 1fr))`, gap: 10, overflowX: 'auto' }}>
+      {/* THE BOARD SCROLLS, NOT THE PAGE.
+          Columns used to grow to the height of their tallest one — 500 cards
+          deep — so the horizontal scrollbar sat thousands of pixels below the
+          fold and could not be reached without scrolling to the bottom of the
+          longest column. The board is now a fixed-height region: it scrolls
+          sideways at a reachable place, and each column scrolls vertically
+          inside itself. `pb-2` leaves room for the scrollbar so it never
+          overlaps the last row of cards.
+
+          Columns are a fixed width rather than `1fr`: with 8 stages, equal
+          fractions squeeze each to ~180px and the horizontal scrollbar never
+          appears at all, which is the actual reason it was missing here. */}
+      <div
+        className="crm-board-scroll overflow-x-auto overflow-y-hidden pb-2"
+        style={{ scrollbarGutter: 'stable' }}
+      >
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns.length}, 232px)`, gap: 10 }}>
         {columns.map((stage) => {
           const stageLeads = leadsInColumn(stage.key);
           // Column figures come from SQL for a real GHL pipeline. Reducing
@@ -210,8 +232,16 @@ export default function PipelineScreen() {
           // Cards are a bounded page of the column; the count above is not.
           const hidden = Math.max(0, stageCount - stageLeads.length);
           return (
-            <div key={stage.key} style={{ background: 'var(--bg)', borderRadius: 10, minHeight: 480, borderTop: `4px solid ${stage.colour}` }}>
-              <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1 }}>
+            <div
+              key={stage.key}
+              className="flex flex-col"
+              style={{ background: 'var(--bg)', borderRadius: 10, height: BOARD_HEIGHT, borderTop: `4px solid ${stage.colour}` }}
+            >
+              {/* The header sits OUTSIDE the scrolling body, so it stays put
+                  while its own column scrolls. It used to be `position:
+                  sticky` against the page, which does nothing once the column
+                  is the thing that scrolls. */}
+              <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
                 <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
                   <strong style={{ fontSize: 13, color: stage.colour }} title={stage.label}>{stage.label}</strong>
                   <span className="tabular-nums" style={{ fontSize: 11, padding: '1px 8px', background: 'white', borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>
@@ -228,14 +258,27 @@ export default function PipelineScreen() {
                   )}
                 </div>
               </div>
-              <div style={{ padding: 8, display: 'grid', gap: 6 }}>
+              <div className="crm-col-scroll flex-1 overflow-y-auto" style={{ padding: 8, display: 'grid', gap: 6, alignContent: 'start' }}>
                 {isLoading ? (
                   <div className="text-ink-muted text-center" style={{ padding: 12, fontSize: 11 }}>…</div>
                 ) : stageLeads.length === 0 ? (
                   <div className="text-ink-muted text-center" style={{ padding: 12, fontSize: 11 }}>—</div>
                 ) : (
                   stageLeads.map((l) => (
-                    <div key={l.id} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}>
+                    // A card is now a button: clicking it opens the lead.
+                    // Previously it looked interactive and did nothing.
+                    <div
+                      key={l.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Open ${displayName(l)}`}
+                      onClick={() => setOpenLead(l)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenLead(l); }
+                      }}
+                      className="cursor-pointer transition-all duration-150 hover:border-brand/40 hover:shadow-panel-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                      style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}
+                    >
                       <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
                         <strong style={{ fontSize: 12 }}>{displayName(l)}</strong>
                         <span className="text-ink-muted" style={{ fontSize: 9 }}>{agoLabel(minutesSince(l.created_at))}</span>
@@ -283,6 +326,9 @@ export default function PipelineScreen() {
           );
         })}
       </div>
+      </div>
+
+      {openLead && <LeadDetailModal lead={openLead} onClose={() => setOpenLead(null)} />}
     </div>
   );
 }

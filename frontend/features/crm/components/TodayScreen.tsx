@@ -11,9 +11,9 @@ import { useCommunications } from '../hooks';
 import type { Lead } from '@/features/leads/api';
 import type { Communication } from '../api';
 import { agoLabel } from '../data';
-import { formatPence } from '@/lib/format';
 import { DASH } from '@/features/marketing/_shared/format';
 import { KpiTile, PageHeader } from '@/components/ui';
+import { LeadDetailModal } from '../_shared/LeadDetailModal';
 
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
@@ -200,7 +200,14 @@ export default function TodayScreen() {
         </Section>
       </div>
 
-      {selected && <DetailModal selected={selected} onClose={() => setSelected(null)} />}
+      {/* Leads use the shared dialog, so "what does a lead say" is defined
+          once. Two copies would be two places to forget that
+          `leads.treatment` must never be rendered. Messages keep the local
+          modal below — a message is a different thing. */}
+      {selected?.kind === 'lead' && (
+        <LeadDetailModal lead={selected.lead} onClose={() => setSelected(null)} />
+      )}
+      {selected?.kind === 'msg' && <MessageDetailModal comm={selected.comm} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -215,48 +222,42 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function DetailModal({ selected, onClose }: { selected: Selected; onClose: () => void }) {
-  const isLead = selected.kind === 'lead';
-  const l = isLead ? selected.lead : null;
-  const m = !isLead ? selected.comm : null;
-  const title = isLead
-    ? nameOf(l!)
-    : `${m!.contact?.first_name ?? ''} ${m!.contact?.last_name ?? ''}`.trim() || 'Unknown';
+// Messages only. Leads use the shared LeadDetailModal — this used to serve
+// both, and its lead branch is gone rather than left unreachable, so there is
+// no second copy of the lead fields to drift or to reintroduce
+// `leads.treatment`.
+function MessageDetailModal({ comm, onClose }: { comm: Communication; onClose: () => void }) {
+  const title = `${comm.contact?.first_name ?? ''} ${comm.contact?.last_name ?? ''}`.trim() || 'Unknown';
   return (
     <div
       onClick={onClose}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+      role="presentation"
+      className="crm-overlay fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 p-4"
     >
-      <div className="card-padded" onClick={(e) => e.stopPropagation()} style={{ background: 'white', maxWidth: 520, width: '92%', maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}>
-        <button onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: 10, right: 12, border: 'none', background: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--ink-muted)' }}>×</button>
-        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>{title}</h3>
-        {isLead ? (
-          <div>
-            <Field label="Email" value={l!.contact?.email} />
-            <Field label="Phone" value={l!.contact?.phone} />
-            {/* The "Treatment" field that stood here rendered l.treatment,
-                which is GoHighLevel's raw opportunity name and carries patient
-                names, emails and phone numbers on live data. The stage below
-                already says where the lead is, truthfully. */}
-            <Field label="Stage" value={l!.ghl_stage_name ?? l!.status.replace(/_/g, ' ')} />
-            <Field label="Status" value={l!.status.replace(/_/g, ' ')} />
-            <Field label="Value" value={l!.estimated_value_pence ? formatPence(l!.estimated_value_pence) : null} />
-            <Field label="Source" value={l!.source} />
-            <Field label="Created" value={new Date(l!.created_at).toLocaleString('en-GB')} />
-            <Field label="Synced from" value={l!.sync_status === 'synced' ? 'GoHighLevel' : 'Manual'} />
-          </div>
-        ) : (
-          <div>
-            <Field label="Email" value={m!.contact?.email} />
-            <Field label="Channel" value={m!.channel} />
-            <Field label="Direction" value={m!.direction} />
-            <Field label="Received" value={new Date(m!.created_at).toLocaleString('en-GB')} />
-            <div style={{ marginTop: 12 }}>
-              <div className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Message</div>
-              <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{stripJunk(m!.body) || '(empty)'}</div>
-            </div>
-          </div>
-        )}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Message from ${title}`}
+        className="crm-dialog card-padded relative max-h-[85vh] w-full max-w-[520px] overflow-y-auto bg-card shadow-panel"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute right-3 top-2.5 rounded-md px-1.5 text-xl leading-none text-ink-muted transition-colors hover:bg-bg hover:text-ink"
+        >
+          ×
+        </button>
+        <h3 className="mb-3 pr-8 text-lg font-bold">{title}</h3>
+        <Field label="Email" value={comm.contact?.email} />
+        <Field label="Channel" value={comm.channel} />
+        <Field label="Direction" value={comm.direction} />
+        <Field label="Received" value={new Date(comm.created_at).toLocaleString('en-GB')} />
+        <div style={{ marginTop: 12 }}>
+          <div className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>Message</div>
+          <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{stripJunk(comm.body) || '(empty)'}</div>
+        </div>
       </div>
     </div>
   );
