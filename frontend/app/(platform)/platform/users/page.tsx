@@ -1,68 +1,45 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { PageHeader, DataTable, type Column } from '@/components/ui';
-import { platformApi } from '@/lib/platform-api';
-
-type User = {
-  id: string;
-  email: string;
-  full_name: string | null;
-  role: string;
-  organisation_id: string;
-  status: string | null;
-  created_at: string;
-};
+import { usePlatformUsers, useCreateOrgWithOwner } from '@/features/platform/hooks';
+import type { PlatformUser as User, CreatedOwner } from '@/features/platform/api';
 
 // A new platform-created user IS the owner of a new organisation. That owner
 // then invites their own team members from the tenant Team UI — the platform
 // admin only onboards the org + its first owner. Backed by POST /orgs.
-type CreatedOwner = {
-  organisation_id: string;
-  owner_id: string;
-  email: string;
-  temp_password: string;
-};
-
 export default function PlatformUsersPage() {
   const [q, setQ]       = useState('');
-  const [rows, setRows] = useState<User[]>([]);
-  const [error, setError] = useState<string | null>(null);
 
   // Create-owner form state (mirrors the Organisations page).
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ email: '', full_name: '', organisation_name: '' });
-  const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedOwner | null>(null);
 
-  useEffect(() => {
-    if (q.length < 2) { setRows([]); return; }
-    const params = new URLSearchParams({ q, limit: '50' });
-    platformApi<User[]>(`/users?${params}`)
-      .then((d) => { setRows(d); setError(null); })
-      .catch((e) => setError(e.message));
-  }, [q]);
+  // Unchanged rule: no search below two characters.
+  const searchable = q.length >= 2;
+  const params = useMemo(() => new URLSearchParams({ q, limit: '50' }), [q]);
+  const { data, error: loadError } = usePlatformUsers(params, searchable);
+  const rows = searchable ? (data ?? []) : [];
+  const error = loadError ? (loadError as Error).message : null;
+
+  const createM = useCreateOrgWithOwner();
+  const creating = createM.isPending;
 
   async function createOwner(e: React.FormEvent) {
     e.preventDefault();
-    setCreating(true);
     setFormError(null);
     setCreated(null);
     try {
-      const out = await platformApi<CreatedOwner>('/orgs', {
-        method: 'POST',
-        body: JSON.stringify(form),
-      });
+      const out = await createM.mutateAsync(form);
       setCreated(out);
       setForm({ email: '', full_name: '', organisation_name: '' });
       // Surface the new owner in the table straight away.
       setQ(out.email);
-    } catch (e: any) {
-      setFormError(e.message);
-    } finally {
-      setCreating(false);
+    } catch (e) {
+      setFormError((e as Error).message);
     }
   }
 

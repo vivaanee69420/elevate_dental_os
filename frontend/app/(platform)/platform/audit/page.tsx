@@ -1,34 +1,25 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { PageHeader, DataTable, type Column } from '@/components/ui';
-import { platformApi } from '@/lib/platform-api';
-
-type Row = {
-  id: string;
-  organisation_id: string;
-  user_id: string | null;
-  action: string;
-  entity_type: string;
-  entity_id: string | null;
-  ip_address: string | null;
-  created_at: string;
-};
+import { useAudit } from '@/features/platform/hooks';
+import type { AuditRow as Row } from '@/features/platform/api';
 
 export default function PlatformAuditPage() {
-  const [rows, setRows]   = useState<Row[]>([]);
   const [action, setAction] = useState('');
   const [orgId, setOrgId]   = useState('');
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const params = new URLSearchParams({ limit: '200' });
-    if (action) params.set('action', action);
-    if (orgId)  params.set('organisation_id', orgId);
-    platformApi<{ rows: Row[]; total: number }>(`/audit?${params}`)
-      .then((d) => setRows(d.rows))
-      .catch((e) => setError(e.message));
+  // The filters ARE the cache key, so re-applying a filter you used a moment
+  // ago is instant instead of a fresh round trip.
+  const params = useMemo(() => {
+    const p = new URLSearchParams({ limit: '200' });
+    if (action) p.set('action', action);
+    if (orgId)  p.set('organisation_id', orgId);
+    return p;
   }, [action, orgId]);
+
+  const { data, error } = useAudit(params);
+  const rows = data?.rows ?? [];
 
   const columns: Column<Row>[] = [
     { header: 'When', render: (r) => new Date(r.created_at).toLocaleString('en-GB') },
@@ -60,7 +51,7 @@ export default function PlatformAuditPage() {
         />
       </div>
 
-      {error && <div className="text-sm text-danger">{error}</div>}
+      {error && <div className="text-sm text-danger">{(error as Error).message}</div>}
 
       <DataTable columns={columns} rows={rows} rowKey={(r) => r.id} empty={<div className="p-6 text-center text-ink-muted">No audit entries.</div>} />
     </div>

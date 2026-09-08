@@ -1,31 +1,26 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { PageHeader, Card, DataTable, type Column } from '@/components/ui';
-import { platformApi } from '@/lib/platform-api';
-
-type Org = { id: string; name: string; slug: string; plan: string | null; created_at: string; user_count: number };
-type User = { id: string; email: string; full_name: string | null; role: string; status: string | null; last_seen_at: string | null };
-type Activity = { id: string; user_id: string | null; action: string; entity_type: string; created_at: string };
+import { useOrg, useOrgUsers, useOrgActivity } from '@/features/platform/hooks';
+import type {
+  OrgDetail as Org, OrgUser as User, OrgActivity as Activity,
+} from '@/features/platform/api';
 
 export default function PlatformOrgDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const [org, setOrg]           = useState<Org | null>(null);
-  const [users, setUsers]       = useState<User[]>([]);
-  const [activity, setActivity] = useState<Activity[]>([]);
-  const [error, setError]       = useState<string | null>(null);
+  // Three independent queries, not one Promise.all. Under Promise.all a single
+  // failing request blanked the whole page, including the two that succeeded;
+  // now each section renders or fails on its own.
+  const orgQ = useOrg(id);
+  const usersQ = useOrgUsers(id);
+  const activityQ = useOrgActivity(id);
 
-  useEffect(() => {
-    if (!id) return;
-    Promise.all([
-      platformApi<Org>(`/orgs/${id}`),
-      platformApi<User[]>(`/orgs/${id}/users`),
-      platformApi<Activity[]>(`/orgs/${id}/activity`),
-    ])
-      .then(([o, u, a]) => { setOrg(o); setUsers(u); setActivity(a); })
-      .catch((e) => setError(e.message));
-  }, [id]);
+  const org = orgQ.data ?? null;
+  const users = usersQ.data ?? [];
+  const activity = activityQ.data ?? [];
+  const firstError = orgQ.error ?? usersQ.error ?? activityQ.error;
+  const error = firstError ? (firstError as Error).message : null;
 
   const userCols: Column<User>[] = [
     { header: 'Email',    render: (r) => r.email },
