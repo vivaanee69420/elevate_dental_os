@@ -172,6 +172,29 @@ export default function PractitionerUtilisationScreen() {
     return m;
   }, [practitioners]);
 
+  // ONE PERSON, SEVERAL ROWS — and that is the data, not a bug.
+  //
+  // Dentally models a practitioner as a person AT A SITE, so a clinician who
+  // works at three practices holds three practitioner records with three ids.
+  // Measured on this organisation: 218 practitioner records for 193 people,
+  // and of the 15 people holding more than one, EVERY set is at distinct sites
+  // (one holds four). Merging them would be wrong — a chair at Ashford is not
+  // a chair at Barnet, and summing a person's day spans across two sites would
+  // invent availability they never had.
+  //
+  // So the rows stay separate and the SITE is appended, but only where the
+  // name alone is ambiguous. Labelling all 41 rows with a site nobody needed
+  // would be noise; labelling the three that repeat is the whole fix.
+  const rowLabel = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const p of practitioners) seen.set(p.practitionerName, (seen.get(p.practitionerName) ?? 0) + 1);
+    return (p: UtilPractitioner): string => {
+      if ((seen.get(p.practitionerName) ?? 0) < 2) return p.practitionerName;
+      const site = p.practiceId ? practiceName.get(p.practiceId) : null;
+      return site ? `${p.practitionerName} · ${site}` : p.practitionerName;
+    };
+  }, [practitioners, practiceName]);
+
   // THE CHART SERIES, derived from the SAME per-practitioner rows the grid
   // uses — not a second fetch and not a second definition. Filtering by
   // practitioner and bucketing by week are presentation choices, so they
@@ -234,6 +257,8 @@ export default function PractitionerUtilisationScreen() {
 
   const leagueColumns: Column<UtilPractitioner>[] = useMemo(() => [
     { header: 'Practitioner', render: (p) => <strong className="text-[13px]">{p.practitionerName}</strong> },
+    // The league table already carries its own Practice column below, so the
+    // name needs no suffix here.
     // The site they worked most in this window. Shown only when the
     // organisation has more than one, and never blank: an unmapped day says so
     // rather than leaving a gap that reads as missing data.
@@ -360,7 +385,7 @@ export default function PractitionerUtilisationScreen() {
               >
                 <option value="all">All practitioners</option>
                 {practitioners.map((p) => (
-                  <option key={p.practitionerId} value={p.practitionerId}>{p.practitionerName}</option>
+                  <option key={p.practitionerId} value={p.practitionerId}>{rowLabel(p)}</option>
                 ))}
               </select>
             </div>
@@ -508,15 +533,31 @@ export default function PractitionerUtilisationScreen() {
         <div className="border-b border-border px-4 py-3">
           <h2 className="text-[15px] font-semibold">Utilisation by practitioner and day</h2>
           <p className="text-ink-muted text-[12px]">
-            A blank cell means the practitioner had no patient appointments that day.
+            {practiceId
+              ? 'A blank cell means the practitioner had no patient appointments that day.'
+              : 'Pick a practice above to see this grid.'}
           </p>
         </div>
         {isLoading ? (
           <div className="space-y-2 p-3">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
           </div>
+        ) : !practiceId ? (
+          // ONE PRACTICE AT A TIME, deliberately.
+          //
+          // Dentally models a practitioner as a person AT A SITE, so a
+          // clinician working at three practices holds three practitioner
+          // records. Across all practices this grid repeated the same person
+          // once per site — 218 records for 193 people on this organisation —
+          // which reads as duplicated data rather than as what it is.
+          //
+          // It is also the wrong question. A chair at Ashford is not a chair
+          // at Barnet, and a row-per-person-per-site grid spanning every site
+          // has no single "Total utilisation" worth printing under it. The
+          // cards and the chart above stay group-wide; this grid is per site.
+          <EmptyState message="Choose a single practice in the bar above to see utilisation per practitioner. Across every practice the same clinician appears once for each site they work at, which makes the grid unreadable." />
         ) : practitioners.length === 0 ? (
-          <EmptyState message="No practitioner activity in this window." />
+          <EmptyState message="No practitioner activity at this practice in this window." />
         ) : (
           <div className="relative p-3">
             {/* The grid SCROLLS, in both directions, with the practitioner
@@ -558,10 +599,10 @@ export default function PractitionerUtilisationScreen() {
                     <tr key={p.practitionerId}>
                       <td
                         className="sticky left-0 z-10 truncate bg-card px-2 text-right text-[12px] font-medium"
-                        title={p.practitionerName}
-                        style={{ maxWidth: 200 }}
+                        title={rowLabel(p)}
+                        style={{ maxWidth: 220 }}
                       >
-                        {p.practitionerName}
+                        {rowLabel(p)}
                       </td>
                       {allDays.map((d) => {
                         const cell = cells.get(p.practitionerId)?.get(d) ?? null;
@@ -577,7 +618,7 @@ export default function PractitionerUtilisationScreen() {
                                 if (!cell) return setHover(null);
                                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                                 setHover({
-                                  practitionerName: p.practitionerName,
+                                  practitionerName: rowLabel(p),
                                   practiceName: practiceName.get(cell.practiceId ?? '') ?? null,
                                   day: cell,
                                   x: r.left + r.width / 2,
@@ -588,7 +629,7 @@ export default function PractitionerUtilisationScreen() {
                                 if (!cell) return;
                                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                                 setHover({
-                                  practitionerName: p.practitionerName,
+                                  practitionerName: rowLabel(p),
                                   practiceName: practiceName.get(cell.practiceId ?? '') ?? null,
                                   day: cell,
                                   x: r.left + r.width / 2,
