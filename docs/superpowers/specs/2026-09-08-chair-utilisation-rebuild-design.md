@@ -26,6 +26,11 @@ Ashford's two chairs need 56. Entry is one cell at a time through a seven-field
 form, each submission a separate `POST`, each triggering a full snapshot
 rewrite. The table above is what that interface produces.
 
+**All nine cells are trial data.** The chair names are `Test Surgery 1`,
+`Test Surgery 2` and `test`. Nobody has ever entered a real week. That is worth
+stating plainly: there is no production data to protect, no migration risk from
+reshaping it, and no user habit to preserve.
+
 ### 1.2 Occupancy and money are computed from different capacities
 
 `analyticsService.chairAnalytics` takes occupancy from the entered cells but
@@ -224,13 +229,29 @@ For each practice:
 - `lostPotentialYrPence = emptyMinutesWk / 60 × weeksYr × benchRevHrPence`.
 - `recoverRevYrPence` — unchanged formula, on entered-cell capacity.
 
-Applied to Ashford: cost of empty becomes **£110,400/yr** (8 h/week idle × 46
-weeks × £300) instead of £315,300 — and it is a defensible sentence: *"over the
-8 slots you have told us about."*
+**Worked against the live rows, with real opening hours.** Ashford opens
+09:00–17:00, so its evening slot has zero available minutes and each chair has
+3 open slots × 6 days = 18 open cells; two chairs give **36**. Seven of its eight
+stored cells fall in open slots. Derived available across those seven is
+1,020 min/week against 990 booked (clamped), so Ashford reads **97.1% occupancy
+on 19% coverage** — below threshold, so cost-of-empty and recoverable render as
+em dashes rather than £315,300.
+
+Barnet maps to a site open Mon–Fri 08:30–17:30 and Sat 09:00–17:30 — 4 open
+slots × 6 days = **24 open cells**. Its single cell is Monday morning, 120
+booked against a derived 150 available. Barnet therefore reports **80%
+occupancy, 1 of 24 slots entered**, with money em-dashed — instead of today's
+"100% occupancy, £0 cost of empty chairs".
 
 **Coverage badge, and null below threshold.** Every practice row and KPI states
-`8 of 56 slots entered`. Below **50% coverage**, `lostPotentialYrPence` and
+`7 of 36 slots entered`. Below **50% coverage**, `lostPotentialYrPence` and
 `recoverRevYrPence` return `null` — occupancy is still shown, with the badge.
+
+Note what this exposes in the existing rows: **four of Ashford's eight cells
+record more booked time than the practice is open for**, and one sits on Friday
+evening when the practice is shut. That is edge case 8 arriving on day one, not
+a hypothetical — it is what happens when available minutes are typed by hand
+with nothing to check them against.
 
 `null`, never `0`. `formatPence` accepts `number | null | undefined` and renders
 null as a confident `£0.00` with no TypeScript warning, so the em-dash guard goes
@@ -399,8 +420,13 @@ Each is handled explicitly and covered by a test.
   shape in §4, including hours outside the slot envelope and a closed weekday.
 - Coverage and null-below-threshold behaviour, asserted as `null` rather than
   `0` — the assertion distinguishes them.
-- The Ashford and Barnet figures from §1.2 as **regression fixtures**: the same
-  inputs must now produce £110,400 and *insufficient coverage* respectively.
+- The nine live cells from §1.1 and the four real opening-hours shapes from
+  §2.1 as **regression fixtures**, asserted exactly: Ashford 97.1% occupancy on
+  7 of 36 cells with money `null`; Barnet 80% on 1 of 24 with money `null`.
+  Today those same inputs produce 71.4%/£230,041 and 100%/£0.
+- Warwick Lodge as the **no-opening-hours fixture**: its `pms_site_id` is null,
+  so it has no Dentally site and never will until one is mapped. Every figure
+  `null`, with the *set your opening hours* prompt — never a £0.
 - Cross-org isolation per new table, run.
 - Route gates run, not name-checked.
 - Bulk save atomicity, including a mid-batch failure.
