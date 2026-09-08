@@ -90,6 +90,18 @@ export const pipelineSummaryQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),
 });
 
+export const enquiriesQuerySchema = zod_1.z.object({
+    integration_account_id: zod_1.z.string().uuid().optional(),
+    search: zod_1.z.string().trim().max(200).optional(),
+    stage: zod_1.z.string().max(200).optional(),
+    valued_only: zod_1.z.coerce.boolean().optional().default(false),
+    open_only: zod_1.z.coerce.boolean().optional().default(true),
+    // Capped server-side: the browser may choose a page size, not an
+    // unbounded one.
+    limit: zod_1.z.coerce.number().int().min(1).max(100).default(50),
+    offset: zod_1.z.coerce.number().int().min(0).default(0),
+});
+
 export const todayCountersQuerySchema = zod_1.z.object({
     // ISO instant marking the start of the screen's window; omitted = all time.
     since: zod_1.z.string().datetime({ offset: true }).optional(),

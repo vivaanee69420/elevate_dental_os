@@ -14,6 +14,7 @@ router.get('/report', (0, async_handler_1.asyncHandler)(lead_controller_1.leadCo
 router.get('/pipelines', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.pipelines));
 router.get('/pipeline-summary', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.pipelineSummary));
 router.get('/today-counters', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.todayCounters));
+router.get('/enquiries', (0, async_handler_1.asyncHandler)(lead_controller_1.leadController.enquiries));
 // Exporting raw lead/contact data off the board is a bigger act than viewing
 // it, so this is gated on `data.export` — NOT `crm.view`. Reception (CRM view
 // only, rule 5) can see the Pipeline board but cannot export it. Registered

@@ -232,6 +232,82 @@ describe('commService.inbox', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Enquiries — the screen that was 100% mock
+// ---------------------------------------------------------------------------
+describe('leadService.enquiries', () => {
+    const rows = [
+        { lead_id: 'l1', created_at: '2026-08-01T00:00:00Z', contact_first_name: 'A',
+          contact_last_name: 'B', contact_email: 'a@b.test', stage_name: 'New enquiry',
+          status: 'new', estimated_value_pence: 250_000, source: 'Facebook',
+          practice_name: 'Ashford', age_days: 38, total_count: 17778 },
+        // No value recorded, and no practice mapped — both real states on live
+        // data (77.5% and a whole tenant respectively).
+        { lead_id: 'l2', created_at: '2026-08-02T00:00:00Z', contact_first_name: null,
+          contact_last_name: null, contact_email: null, stage_name: null,
+          status: 'contact_made', estimated_value_pence: null, source: null,
+          practice_name: null, age_days: 37, total_count: 17778 },
+    ];
+    const summary = { open_count: 17778, valued_count: 2772, value_pence: 637_938_011,
+                      stale_count: 17042, oldest_age_days: 843 };
+
+    beforeEach(() => {
+        supaRec.rpcProvider = (fn) => fn === 'crm_enquiries_summary'
+            ? { data: [summary], error: null }
+            : { data: rows, error: null };
+    });
+
+    it('takes the total from SQL, not from the page it was handed', async () => {
+        const r = await leadService.enquiries(ORG, { limit: 2 });
+        expect(r.total).toBe(17778);
+        expect(r.enquiries).toHaveLength(2);
+        expect(r.summary.open_count).toBe(17778);
+    });
+
+    // NULL IS NOT ZERO — the single most repeated defect on these screens.
+    it('keeps an unrecorded value null rather than rendering it as zero', async () => {
+        const r = await leadService.enquiries(ORG, {});
+        expect(r.enquiries[0].estimated_value_pence).toBe(250_000);
+        expect(r.enquiries[1].estimated_value_pence).toBeNull();
+    });
+
+    it('reports no total value at all when nothing carries one', async () => {
+        supaRec.rpcProvider = (fn) => fn === 'crm_enquiries_summary'
+            ? { data: [{ ...summary, valued_count: 0, value_pence: 0 }], error: null }
+            : { data: [], error: null };
+        const r = await leadService.enquiries(ORG, {});
+        expect(r.summary.value_pence).toBeNull();
+        expect(r.total).toBe(0);
+    });
+
+    // The mock's "Treatment" column read leads.treatment, which carries patient
+    // emails and phone numbers on live data. It must not come back.
+    it('never returns a treatment field', async () => {
+        const r = await leadService.enquiries(ORG, {});
+        for (const e of r.enquiries) {
+            expect(e).not.toHaveProperty('treatment');
+        }
+        expect(JSON.stringify(r)).not.toMatch(/treatment/i);
+    });
+
+    it('passes search and paging to SQL', async () => {
+        await leadService.enquiries(ORG, { search: 'ash', limit: 25, offset: 75 });
+        const call = supaRec.rpcCalls.find((c) => c.fn === 'crm_enquiries');
+        expect(call.params.p_search).toBe('ash');
+        expect(call.params.p_limit).toBe(25);
+        expect(call.params.p_offset).toBe(75);
+    });
+
+    it('scopes every read to the caller organisation', async () => {
+        await leadService.enquiries(ORG, {});
+        expect(supaRec.rpcCalls.length).toBeGreaterThan(0);
+        for (const call of supaRec.rpcCalls) {
+            expect(call.params.p_org).toBe(ORG);
+            expect(JSON.stringify(call.params)).not.toContain(OTHER);
+        }
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Thread keys
 // ---------------------------------------------------------------------------
 describe('parseThreadKey', () => {
@@ -276,6 +352,8 @@ describe('routes are mounted and their handlers exist', () => {
         const paths = router.stack.filter((l) => l.route).map((l) => l.route.path);
         expect(paths).toContain('/pipeline-summary');
         expect(paths).toContain('/today-counters');
+        expect(paths).toContain('/enquiries');
+        expect(paths.indexOf('/enquiries')).toBeLessThan(paths.indexOf('/:id'));
         // Static paths must be registered BEFORE /:id or the param route
         // swallows them and both endpoints 404 into an empty screen.
         expect(paths.indexOf('/pipeline-summary')).toBeLessThan(paths.indexOf('/:id'));
@@ -294,6 +372,7 @@ describe('routes are mounted and their handlers exist', () => {
         const { commController } = await import('../src/controllers/comm.controller.js');
         expect(typeof leadController.pipelineSummary).toBe('function');
         expect(typeof leadController.todayCounters).toBe('function');
+        expect(typeof leadController.enquiries).toBe('function');
         expect(typeof commController.inbox).toBe('function');
         expect(typeof commController.thread).toBe('function');
     });

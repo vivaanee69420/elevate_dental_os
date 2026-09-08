@@ -157,6 +157,69 @@ export function getPipelineSummary(opts: {
   return api<PipelineSummary>(`/api/leads/pipeline-summary?${params.toString()}`);
 }
 
+// ---------------------------------------------------------------------------
+// Enquiries.
+//
+// No `treatment` field, deliberately. The screen this replaces showed one read
+// from leads.treatment, which is GoHighLevel's raw opportunity name and carries
+// patient names, emails and phone numbers. The honest source is Dentally's
+// treatment-plan lines, which resolve for 0.7% of leads.
+// ---------------------------------------------------------------------------
+export interface Enquiry {
+  lead_id: string;
+  created_at: string;
+  contact_first_name: string | null;
+  contact_last_name: string | null;
+  contact_email: string | null;
+  stage_name: string | null;
+  status: string;
+  /** null when no value was recorded — never 0. */
+  estimated_value_pence: number | null;
+  source: string | null;
+  /** null when the lead is not mapped to a practice. */
+  practice_name: string | null;
+  age_days: number;
+}
+
+export interface EnquiriesResponse {
+  enquiries: Enquiry[];
+  /** Enquiries matching the current filters — what the pager counts. */
+  total: number;
+  limit: number;
+  offset: number;
+  summary: {
+    open_count: number;
+    valued_count: number;
+    /** null when nothing carries a value. */
+    value_pence: number | null;
+    stale_count: number;
+    oldest_age_days: number;
+  };
+}
+
+export interface EnquiriesFilters {
+  accountId?: string | null;
+  search?: string;
+  stage?: string;
+  valuedOnly?: boolean;
+  openOnly?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function getEnquiries(f: EnquiriesFilters = {}): Promise<EnquiriesResponse> {
+  const params = new URLSearchParams();
+  if (f.accountId) params.set('integration_account_id', f.accountId);
+  if (f.search) params.set('search', f.search);
+  if (f.stage) params.set('stage', f.stage);
+  if (f.valuedOnly) params.set('valued_only', 'true');
+  if (f.openOnly === false) params.set('open_only', 'false');
+  if (f.limit != null) params.set('limit', String(f.limit));
+  if (f.offset != null) params.set('offset', String(f.offset));
+  const qs = params.toString();
+  return api<EnquiriesResponse>(`/api/leads/enquiries${qs ? `?${qs}` : ''}`);
+}
+
 export interface TodayCounters {
   new_leads: number;
   follow_ups: number;

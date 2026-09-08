@@ -67,6 +67,10 @@ export const leadController = {
             accountId: q.integration_account_id ?? null,
         }));
     },
+    async enquiries(req, res) {
+        const q = lead_model_1.enquiriesQuerySchema.parse(req.query);
+        res.json(await lead_service_1.leadService.enquiries(req.user.organisation_id, q));
+    },
     async todayCounters(req, res) {
         const q = lead_model_1.todayCountersQuerySchema.parse(req.query);
         res.json(await lead_service_1.leadService.todayCounters(req.user.organisation_id, {

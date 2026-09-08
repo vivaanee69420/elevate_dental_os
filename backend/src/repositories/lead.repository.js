@@ -166,6 +166,30 @@ export const leadRepository = {
     // The four Today counters in one round trip. `since` is an ISO instant or
     // null for all-time; it is passed in rather than derived here so the
     // counter and the list beneath it cannot disagree about the window.
+    // One page of enquiries plus the full matching count, and the open-enquiry
+    // headline figures. Both aggregate in SQL — the screen they replace was
+    // built entirely on a hardcoded array of invented patients.
+    async enquiries(orgId, q = {}) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_enquiries', {
+                p_org: orgId,
+                p_account: q.integration_account_id ?? null,
+                p_search: q.search ?? null,
+                p_stage: q.stage ?? null,
+                p_valued_only: q.valued_only ?? false,
+                p_open_only: q.open_only ?? true,
+                p_limit: q.limit ?? 50,
+                p_offset: q.offset ?? 0,
+            });
+        if (error) throw new Error(error.message);
+        return data ?? [];
+    },
+    async enquiriesSummary(orgId, accountId = null) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_enquiries_summary', { p_org: orgId, p_account: accountId });
+        if (error) throw new Error(error.message);
+        return data?.[0] ?? null;
+    },
     async todayCounters(orgId, since = null, accountId = null) {
         const { data, error } = await supabase_1.serviceClient
             .rpc('crm_today_counters', {

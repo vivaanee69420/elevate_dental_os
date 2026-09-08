@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getLeadFunnel, getLeadReport, getPipelineSummary, getTodayCounters, listLeads, listPipelines, updateLead, type LeadsListFilters, type LeadUpdateInput } from './api';
+import { getEnquiries, getLeadFunnel, getLeadReport, getPipelineSummary, getTodayCounters, listLeads, listPipelines, updateLead, type EnquiriesFilters, type LeadsListFilters, type LeadUpdateInput } from './api';
 
 // Board counts and value for one pipeline, computed in SQL over every lead in
 // it rather than over the page the board happens to have fetched.
@@ -8,6 +8,15 @@ export function usePipelineSummary(pipelineId: string | null, accountId?: string
     queryKey: ['pipeline-summary', pipelineId, accountId ?? null],
     queryFn: () => getPipelineSummary({ pipelineId: pipelineId as string, accountId }),
     enabled: !!pipelineId,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useEnquiries(filters: EnquiriesFilters = {}) {
+  return useQuery({
+    queryKey: ['enquiries', filters],
+    queryFn: () => getEnquiries(filters),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
