@@ -78,9 +78,25 @@ begin
         (array_agg(a.practice_id) filter (where a.practice_id is not null))[1] as practice_id,
         min(a.starts_at)                                         as first_start,
         max(a.ends_at)                                           as last_end,
+        -- A CANCELLED OR MISSED SLOT IS AN EMPTY CHAIR.
+        --
+        -- This counted every appointment with a patient, whatever its status,
+        -- so a cancellation and a no-show both read as chair time in use.
+        -- Checked against Dentally's own figure for one practitioner on
+        -- 8 September: we reported 8h 30m utilised where Dentally reported
+        -- 5h 30m, and the 3h difference was exactly that practitioner's
+        -- cancelled and did-not-attend slots. Across September, both
+        -- organisations together, it was 254 cancelled appointments (169.5
+        -- hours) and 43 no-shows (20.3 hours) being reported as used.
+        --
+        -- They stay in the day SPAN below, because a cancelled slot still
+        -- shows the practitioner was rostered at that hour — it is available
+        -- time that went unused, which is precisely Dentally's definition.
         coalesce(sum(extract(epoch from (a.ends_at - a.starts_at))
-          ) filter (where a.pms_patient_id is not null), 0)::bigint as utilised_secs,
-        count(*) filter (where a.pms_patient_id is not null)::bigint as patient_appts,
+          ) filter (where a.pms_patient_id is not null
+                      and a.status not in ('cancelled', 'no_show')), 0)::bigint as utilised_secs,
+        count(*) filter (where a.pms_patient_id is not null
+                           and a.status not in ('cancelled', 'no_show'))::bigint as patient_appts,
         count(*) filter (where a.pms_patient_id is null)::bigint     as block_appts
       from public.appointments a
       where a.organisation_id = $1

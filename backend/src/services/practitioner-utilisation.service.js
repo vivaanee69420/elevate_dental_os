@@ -6,6 +6,16 @@
 //   utilised  = appointments with a PATIENT attached
 //   appointments with no patient are UNUSED time, not utilisation
 //
+// A CANCELLED OR MISSED SLOT IS AN EMPTY CHAIR, and the RPC excludes both from
+// utilised time (they stay in the day span — the practitioner was rostered).
+// This was wrong at first and was caught by checking one practitioner against
+// Dentally's own tooltip: we reported 8h 30m used on 8 September where Dentally
+// reported 5h 30m, and the difference was exactly that person's cancelled and
+// did-not-attend slots. Across September, both organisations, it was 254
+// cancellations (169.5 hours) and 43 no-shows (20.3 hours) counted as chairs in
+// use. Group utilisation over the last 30 days fell from 71.9% to 59.6% once
+// they were removed — the lower figure is the true one.
+//
 // TWO DECISIONS LIVE HERE, both measured, both stated on the screen.
 //
 // 1. A DAY OF NOTHING BUT BLOCKS IS "NOT WORKING", NOT 0%.
