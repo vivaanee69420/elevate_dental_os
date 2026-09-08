@@ -7,7 +7,7 @@
 // that pipeline's leads show. With no GHL pipelines (manual-only org) it falls
 // back to the fixed Elevate-status columns.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLeads, usePipelines, usePipelineSummary } from '@/features/leads/hooks';
 import { leadsExportUrl, type Lead, type LeadStatus } from '@/features/leads/api';
 // money() renders null as an em dash; lib/format's formatPence renders it as
@@ -47,6 +47,11 @@ function displayName(l: Lead): string {
   return joined || `Lead ${l.id.slice(0, 8)}`;
 }
 
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map((p) => p[0] ?? '').join('').toUpperCase() || '?';
+}
+
 /** Pipeline kanban screen. */
 export default function PipelineScreen() {
   const [accountId, setAccountId] = useState<string | null>(null);
@@ -60,6 +65,15 @@ export default function PipelineScreen() {
   const pipelines = pData?.pipelines ?? [];
   const [picked, setPicked] = useState<string | null>(null);
   const [openLead, setOpenLead] = useState<Lead | null>(null);
+  // Stages the user has folded away. Keyed by stage id, so collapsing survives
+  // a refetch but resets when a different pipeline is chosen — a stage id from
+  // one pipeline means nothing in another.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleCollapsed = (key: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
   const selectedId = (picked && pipelines.some((p) => p.id === picked) ? picked : pipelines[0]?.id) ?? null;
 
   // THE CARDS are a page; THE FIGURES are not.
@@ -77,6 +91,11 @@ export default function PipelineScreen() {
     limit: CARD_PAGE,
   });
   const leads: Lead[] = data?.leads ?? [];
+
+  // Folded stages belong to the pipeline they were folded in. GHL stage ids
+  // are disjoint per pipeline, so carrying the set across a pipeline change
+  // would collapse nothing and, worse, silently keep a stale id around.
+  useEffect(() => { setCollapsed(new Set()); }, [selectedId]);
 
   const { data: summary } = usePipelineSummary(selectedId, accountId);
   const totals = summary?.totals ?? null;
@@ -118,7 +137,7 @@ export default function PipelineScreen() {
   const openValue = dynamic ? totals?.open_value_pence ?? null : null;
 
   return (
-    <div className="mx-auto" style={{ maxWidth: 1500 }}>
+    <div className="mx-auto w-full" style={{ maxWidth: 1760 }}>
       <div className="mb-6 flex" style={{ justifyContent: 'space-between', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap' }}>
         <div>
           <h1 className="display font-bold" style={{ fontSize: 28 }}>Pipeline</h1>
@@ -218,114 +237,171 @@ export default function PipelineScreen() {
         className="crm-board-scroll overflow-x-auto overflow-y-hidden pb-2"
         style={{ scrollbarGutter: 'stable' }}
       >
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns.length}, 232px)`, gap: 10 }}>
-        {columns.map((stage) => {
-          const stageLeads = leadsInColumn(stage.key);
-          // Column figures come from SQL for a real GHL pipeline. Reducing
-          // stageLeads gave every column header the same defect as the board
-          // total, one stage at a time.
-          const agg = dynamic ? byStage.get(stage.key) ?? null : null;
-          const stageCount = agg ? agg.lead_count : stageLeads.length;
-          const stageValue = agg
-            ? agg.value_pence
-            : (stageLeads.length ? stageLeads.reduce((s, l) => s + (l.estimated_value_pence ?? 0), 0) : null);
-          // Cards are a bounded page of the column; the count above is not.
-          const hidden = Math.max(0, stageCount - stageLeads.length);
-          return (
-            <div
-              key={stage.key}
-              className="flex flex-col"
-              style={{ background: 'var(--bg)', borderRadius: 10, height: BOARD_HEIGHT, borderTop: `4px solid ${stage.colour}` }}
-            >
-              {/* The header sits OUTSIDE the scrolling body, so it stays put
-                  while its own column scrolls. It used to be `position:
-                  sticky` against the page, which does nothing once the column
-                  is the thing that scrolls. */}
-              <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-                <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                  <strong style={{ fontSize: 13, color: stage.colour }} title={stage.label}>{stage.label}</strong>
-                  <span className="tabular-nums" style={{ fontSize: 11, padding: '1px 8px', background: 'white', borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>
-                    {stageCount.toLocaleString('en-GB')}
+        <div className="flex items-start" style={{ gap: 12 }}>
+          {columns.map((stage) => {
+            const stageLeads = leadsInColumn(stage.key);
+            // Column figures come from SQL for a real GHL pipeline. Reducing
+            // stageLeads gave every column header the same defect as the board
+            // total, one stage at a time.
+            const agg = dynamic ? byStage.get(stage.key) ?? null : null;
+            const stageCount = agg ? agg.lead_count : stageLeads.length;
+            const stageValue = agg
+              ? agg.value_pence
+              : (stageLeads.length ? stageLeads.reduce((s, l) => s + (l.estimated_value_pence ?? 0), 0) : null);
+            // Cards are a bounded page of the column; the count above is not.
+            const hidden = Math.max(0, stageCount - stageLeads.length);
+
+            // A collapsed column keeps its name and count readable sideways, so
+            // a board of 8+ stages can be narrowed to the ones being worked
+            // without losing track of what was folded away.
+            if (collapsed.has(stage.key)) {
+              return (
+                <button
+                  key={stage.key}
+                  type="button"
+                  onClick={() => toggleCollapsed(stage.key)}
+                  aria-label={`Expand ${stage.label}`}
+                  aria-expanded={false}
+                  className="flex shrink-0 flex-col items-center gap-3 rounded-panel border border-border bg-card py-3 transition-colors hover:border-brand-200"
+                  style={{ width: 46, height: BOARD_HEIGHT }}
+                >
+                  <span aria-hidden className="text-ink-muted text-xs">›</span>
+                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: stage.colour }} />
+                  <span
+                    className="text-ink-muted whitespace-nowrap text-[11px] font-semibold tabular-nums"
+                    style={{ writingMode: 'vertical-rl' }}
+                  >
+                    {stage.label} · {stageCount.toLocaleString('en-GB')}
                   </span>
+                </button>
+              );
+            }
+
+            return (
+              <div key={stage.key} className="flex shrink-0 flex-col" style={{ width: 268, height: BOARD_HEIGHT }}>
+                {/* The stage header is its own card above the column, and sits
+                    OUTSIDE the scrolling body so it stays put while the column
+                    scrolls. It used to be `position: sticky` against the page,
+                    which does nothing once the column is the thing scrolling. */}
+                <div className="mb-2 shrink-0 rounded-panel border border-border bg-card px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: stage.colour }} />
+                      <strong className="truncate text-[13px]" title={stage.label}>{stage.label}</strong>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleCollapsed(stage.key)}
+                      aria-label={`Collapse ${stage.label}`}
+                      aria-expanded
+                      className="text-ink-muted shrink-0 rounded px-1 text-xs transition-colors hover:bg-surface-muted hover:text-ink"
+                    >
+                      ‹
+                    </button>
+                  </div>
+                  <div className="text-ink-muted mt-0.5 flex items-baseline gap-2 text-[11px] tabular-nums">
+                    <span>{stageCount.toLocaleString('en-GB')} {stageCount === 1 ? 'lead' : 'leads'}</span>
+                    <span>{money(stageValue)}</span>
+                    {/* Say what the money covers, per column as well as
+                        overall. A stage of 753 leads showing £78,487 with no
+                        qualifier reads as the worth of all 753, when 684 carry
+                        no value at all. */}
+                    {agg && agg.valued_count > 0 && agg.valued_count < agg.lead_count && (
+                      <span className="text-[10px]">on {agg.valued_count.toLocaleString('en-GB')}</span>
+                    )}
+                  </div>
                 </div>
-                <div className="text-ink-muted tabular-nums" style={{ fontSize: 10, marginTop: 2 }}>
-                  {money(stageValue)}
-                  {/* Say what the money covers, per column as well as overall.
-                      A stage of 753 leads showing £78,487 with no qualifier
-                      reads as the worth of all 753, when 684 carry no value. */}
-                  {agg && agg.valued_count > 0 && agg.valued_count < agg.lead_count && (
-                    <span> · {agg.valued_count.toLocaleString('en-GB')} valued</span>
+
+                <div className="crm-col-scroll flex-1 overflow-y-auto pr-0.5" style={{ display: 'grid', gap: 8, alignContent: 'start' }}>
+                  {isLoading ? (
+                    <>
+                      {Array.from({ length: 3 }).map((_, i) => (
+                        <div key={i} className="h-[104px] animate-pulse rounded-panel border border-border bg-card" />
+                      ))}
+                    </>
+                  ) : stageLeads.length === 0 ? (
+                    <div className="text-ink-muted rounded-panel border border-dashed border-border py-6 text-center text-[11px]">
+                      No leads in this stage
+                    </div>
+                  ) : (
+                    stageLeads.map((l) => (
+                      // A card is a button: clicking it opens the lead. It used
+                      // to look interactive and do nothing.
+                      <div
+                        key={l.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Open ${displayName(l)}`}
+                        onClick={() => setOpenLead(l)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenLead(l); }
+                        }}
+                        className="cursor-pointer rounded-panel border border-border bg-card px-3 py-2.5 transition-all duration-150 hover:border-brand-200 hover:shadow-panel-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          {/* THE NAME ONLY.
+                              GoHighLevel's own board titles each card with the
+                              opportunity name, which on this data reads
+                              "Ganesh Bdr Girung || ganeshdil88@…" — a patient's
+                              name and email address, on screen, in a column.
+                              That string is `leads.treatment`, and 3,201 of
+                              this group's leads carry contact details in it.
+                              The card shows the contact's name: the same
+                              person, without republishing their email. */}
+                          <strong className="min-w-0 flex-1 truncate text-[13px]" title={displayName(l)}>
+                            {displayName(l)}
+                          </strong>
+                          <span
+                            aria-hidden
+                            className="text-ink-muted flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-bg text-[10px] font-bold"
+                          >
+                            {initialsOf(displayName(l))}
+                          </span>
+                        </div>
+
+                        <dl className="mt-2 space-y-1 text-[11px]">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <dt className="text-ink-muted">Source</dt>
+                            <dd className="truncate font-medium">{l.source || DASH}</dd>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-2">
+                            <dt className="text-ink-muted">Value</dt>
+                            {/* money() renders null as an em dash. Most leads
+                                carry no estimated value, and "£0.00" — which is
+                                what GoHighLevel's own board shows on every card
+                                in the screenshot — states a figure nobody
+                                recorded. */}
+                            <dd className="font-semibold tabular-nums" style={{ color: CRM_TEAL }}>
+                              {money(l.estimated_value_pence || null)}
+                            </dd>
+                          </div>
+                        </dl>
+
+                        <div className="mt-2 flex items-center justify-between gap-2 border-t border-border pt-1.5 text-[10px]">
+                          <span className="text-ink-muted">{agoLabel(minutesSince(l.created_at))}</span>
+                          {l.sync_status === 'synced' ? (
+                            <span className="rounded px-1.5 py-px font-semibold" style={{ color: '#047857', background: '#ecfdf5' }}>GHL</span>
+                          ) : (
+                            <span className="text-ink-muted rounded bg-bg px-1.5 py-px font-semibold">Manual</span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+
+                  {/* The count in the header is the whole column; these cards
+                      are a page of it. Saying so is the difference between a
+                      bounded list and a wrong one. */}
+                  {hidden > 0 && (
+                    <div className="text-ink-muted border-t border-dashed border-border py-2 text-center text-[10px]">
+                      {stageLeads.length.toLocaleString('en-GB')} of {stageCount.toLocaleString('en-GB')} shown
+                    </div>
                   )}
                 </div>
               </div>
-              <div className="crm-col-scroll flex-1 overflow-y-auto" style={{ padding: 8, display: 'grid', gap: 6, alignContent: 'start' }}>
-                {isLoading ? (
-                  <div className="text-ink-muted text-center" style={{ padding: 12, fontSize: 11 }}>…</div>
-                ) : stageLeads.length === 0 ? (
-                  <div className="text-ink-muted text-center" style={{ padding: 12, fontSize: 11 }}>—</div>
-                ) : (
-                  stageLeads.map((l) => (
-                    // A card is now a button: clicking it opens the lead.
-                    // Previously it looked interactive and did nothing.
-                    <div
-                      key={l.id}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Open ${displayName(l)}`}
-                      onClick={() => setOpenLead(l)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpenLead(l); }
-                      }}
-                      className="cursor-pointer transition-all duration-150 hover:border-brand/40 hover:shadow-panel-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
-                      style={{ background: 'white', border: '1px solid var(--border)', borderRadius: 6, padding: 8 }}
-                    >
-                      <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-                        <strong style={{ fontSize: 12 }}>{displayName(l)}</strong>
-                        <span className="text-ink-muted" style={{ fontSize: 9 }}>{agoLabel(minutesSince(l.created_at))}</span>
-                      </div>
-                      {/* `l.treatment` used to render here. It is NOT a
-                          treatment: it is GoHighLevel's raw opportunity name,
-                          which on live data carries patient names, email
-                          addresses and phone numbers — 3,201 of this group's
-                          leads hold contact details in it. Showing the GHL
-                          stage instead says something true about the lead
-                          without republishing a patient's details under a
-                          column heading that claims to be clinical. */}
-                      {l.ghl_stage_name && (
-                        <div className="text-ink-muted" style={{ fontSize: 11, marginBottom: 4 }}>{l.ghl_stage_name}</div>
-                      )}
-                      <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: CRM_TEAL }}>
-                          {money(l.estimated_value_pence || null)}
-                        </span>
-                        {l.source && (
-                          <span className="text-ink-muted" style={{ fontSize: 9, padding: '1px 5px', background: 'var(--bg)', borderRadius: 3 }}>{l.source}</span>
-                        )}
-                      </div>
-                      {l.sync_status === 'synced' ? (
-                        <span style={{ display: 'inline-block', marginTop: 4, fontSize: 9, fontWeight: 600, padding: '1px 6px', color: '#047857', background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 3 }}>GHL Synced</span>
-                      ) : (
-                        <span className="text-ink-muted" style={{ display: 'inline-block', marginTop: 4, fontSize: 9, fontWeight: 600, padding: '1px 6px', background: 'var(--bg)', borderRadius: 3 }}>Manual Entry</span>
-                      )}
-                    </div>
-                  ))
-                )}
-                {/* The count in the header is the whole column; these cards are
-                    a page of it. Saying so is the difference between a bounded
-                    list and a wrong one. */}
-                {hidden > 0 && (
-                  <div
-                    className="text-ink-muted text-center"
-                    style={{ padding: '8px 6px', fontSize: 10, borderTop: '1px dashed var(--border)' }}
-                  >
-                    {stageLeads.length.toLocaleString('en-GB')} of {stageCount.toLocaleString('en-GB')} shown
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
       </div>
 
       {openLead && <LeadDetailModal lead={openLead} onClose={() => setOpenLead(null)} />}
