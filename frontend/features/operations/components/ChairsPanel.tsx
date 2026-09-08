@@ -22,11 +22,20 @@ export function ChairsPanel({
   const [newName, setNewName] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [hint, setHint] = useState<string | null>(null);
 
   function add(e: React.FormEvent) {
     e.preventDefault();
     const name = newName.trim();
-    if (!name) return;
+    // NOT a disabled button. A disabled control that looks enabled just does
+    // nothing when clicked and explains nothing — and the placeholder reads
+    // like a filled-in default, so "Add chair" on an empty box is the obvious
+    // thing to try. Say what is needed instead of silently refusing.
+    if (!name) {
+      setHint('Type a name for the chair first — for example, Surgery 1.');
+      return;
+    }
+    setHint(null);
     onAdd(name);
     setNewName('');
   }
@@ -100,16 +109,29 @@ export function ChairsPanel({
 
       <form onSubmit={add} className="flex items-center" style={{ gap: 8 }}>
         <input
-          value={newName} onChange={(e) => setNewName(e.target.value)}
-          placeholder="Surgery 1" aria-label="New chair name"
+          value={newName}
+          onChange={(e) => { setNewName(e.target.value); if (hint) setHint(null); }}
+          // "e.g." so the placeholder cannot be mistaken for a filled-in value.
+          placeholder="e.g. Surgery 1"
+          aria-label="New chair name"
           style={{ fontSize: 13, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', width: 200 }}
         />
-        <button type="submit" className="btn-ghost" disabled={busy || !newName.trim()}
-          style={{ fontSize: 13, border: '1px solid var(--border)', padding: '8px 14px', borderRadius: 8 }}>
-          Add chair
+        <button
+          type="submit"
+          className="btn-ghost"
+          // Disabled ONLY while a save is in flight, never for an empty box —
+          // that case is answered with words above.
+          disabled={busy}
+          style={{
+            fontSize: 13, border: '1px solid var(--border)', padding: '8px 14px',
+            borderRadius: 8, opacity: busy ? 0.6 : 1, cursor: busy ? 'default' : 'pointer',
+          }}
+        >
+          {busy ? 'Adding…' : 'Add chair'}
         </button>
       </form>
 
+      {hint && <div className="text-ink-muted" style={{ fontSize: 13, marginTop: 10 }}>{hint}</div>}
       {error && <div style={{ color: 'var(--danger)', fontSize: 13, marginTop: 10 }}>{error}</div>}
     </div>
   );
