@@ -252,23 +252,29 @@ export const teamService = {
       throw new AppError('You cannot assign a role above your own', 403);
     }
 
-    // You cannot change your own role. canManageTarget('owner', …) is
-    // unconditionally true, so without this an owner could demote themselves
-    // and lose access on the very next request — a self-lockout if they are
-    // the only owner. Same reasoning as the self guards on setMemberPassword
-    // and removeMember. Profile fields are still yours to edit.
-    if (caller.id === userId && body.role !== undefined && body.role !== target.role) {
-      throw new AppError('You cannot change your own role', 400);
-    }
-
-    // NOR YOUR OWN PERMISSIONS. assertGrantCeiling below returns early for an
-    // owner, and canManageTarget('owner', 'owner') is true, so an admin could
-    // open their own row in the Team screen and tick anything they liked.
-    // Granting yourself a permission is not administration, it is the absence
-    // of it: whatever the answer, the person deciding must not be the person
-    // it is about. Profile and password stay yours.
-    if (caller.id === userId && body.permissions !== undefined) {
-      throw new AppError('You cannot change your own permissions — ask an account administrator', 403);
+    // YOU DO NOT EDIT YOURSELF HERE, AT ALL.
+    //
+    // It began as "not your own role" (canManageTarget('owner', …) is
+    // unconditionally true, so an owner could demote themselves into a
+    // lockout), then "not your own permissions" (assertGrantCeiling returns
+    // early for an owner, so an admin could tick anything on their own row).
+    // Both were the same rule discovered twice: the person a change is ABOUT
+    // must not be the person making it, and an admin who can edit their own
+    // row is not administered by anyone.
+    //
+    // So the whole row, not a list of fields — a field-by-field rule is a list
+    // somebody eventually adds to and forgets. removeMember and
+    // setMemberPassword already refused self; this is save catching up.
+    //
+    // Consequence, stated rather than discovered: an admin cannot change their
+    // own name or phone number here either. That is the cost of the rule, and
+    // it is somebody else's job in the same way their permissions are — an
+    // agency administrator, or a fellow admin.
+    if (caller.id === userId) {
+      throw new AppError(
+        'You cannot edit your own account — ask an account administrator',
+        403,
+      );
     }
 
     // AN ADMIN SITS BELOW THE AGENCY. An organisation's own owner administers
@@ -278,12 +284,12 @@ export const teamService = {
     // the hierarchy exists in the nav only.
     //
     // Deliberately narrow: it fires only for permission or role changes on a
-    // fellow owner, so an owner still edits every non-owner in their account,
-    // and every profile field on anyone. An organisation with no agency above
+    // fellow owner, so an owner still edits every non-owner in their account.
+    // (Self is already refused above, so this can only be a FELLOW owner.) An organisation with no agency above
     // it is unaffected in practice — its owner already holds every key, so
     // there is nothing an owner-on-owner grant could add.
     const touchingRights = body.permissions !== undefined || body.role !== undefined;
-    if (touchingRights && target.role === 'owner' && caller.id !== userId && !scope.agencyWide) {
+    if (touchingRights && target.role === 'owner' && !scope.agencyWide) {
       throw new AppError(
         'Only an agency administrator can change an owner\u2019s role or permissions',
         403,

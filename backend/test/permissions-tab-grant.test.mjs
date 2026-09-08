@@ -138,10 +138,19 @@ describe('an admin cannot grant to themselves, and sits below the agency', () =>
 
   // The hole this closes: assertGrantCeiling returns early for an owner and
   // canManageTarget('owner','owner') is true, so an admin could open their own
-  // row and tick anything at all.
-  it('refuses a permission change on your own row', async () => {
+  // row and tick anything at all. The rule is now the whole ROW, not a list of
+  // fields — a field list is something somebody adds to and forgets.
+  it('refuses any edit to your own row, permissions or otherwise', async () => {
     await expect(teamService.save(scope(), caller(), 'me', body))
-      .rejects.toThrow(/your own permissions/i);
+      .rejects.toThrow(/your own account/i);
+    // Profile fields too: the person a change is about must not be the person
+    // making it, and "except my own name" is how the list starts growing back.
+    await expect(teamService.save(scope(), caller(), 'me', { full_name: 'New Name' }))
+      .rejects.toThrow(/your own account/i);
+    // ...and an agency actor is not exempt from THIS one: it is about the
+    // person, not the tier.
+    await expect(teamService.save(scope(true), caller(), 'me', body))
+      .rejects.toThrow(/your own account/i);
   });
 
   // Same call twice, only agencyWide differing, so it cannot pass for some
