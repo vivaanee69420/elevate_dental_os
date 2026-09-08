@@ -92,12 +92,24 @@ export default function PipelineScreen() {
     return leads.filter((l) => l.status === fb?.byStatus);
   }
 
-  // The header reads from SQL. `dynamic` is false only for a manual-only org
-  // with no GHL pipeline at all, where there is no pipeline to aggregate and
-  // the fallback board is the whole population anyway.
-  const headerCount = dynamic ? totals?.open_count ?? null : scopedLeads.length;
-  const headerValue = dynamic ? totals?.open_value_pence ?? null : null;
-  const headerValued = dynamic ? totals?.open_valued_count ?? 0 : 0;
+  // The header reads from SQL, and reports the SAME population the columns do:
+  // every lead in the pipeline, not just the open ones. The columns below are
+  // the pipeline's own GHL stages — some of which ARE the closed ones — so a
+  // header counting only open leads would never sum to the columns beneath it,
+  // and a board whose parts do not add up to its total is the kind of panel
+  // that quietly teaches people not to trust it.
+  //
+  // The open subset is shown beside it rather than instead of it, because
+  // "what is still live" is the genuinely useful number and the old header
+  // called the all-leads total "active pipeline", which it never was.
+  //
+  // `dynamic` is false only for a manual-only org with no GHL pipeline, where
+  // there is nothing to aggregate and the fallback board is the whole set.
+  const headerCount = dynamic ? totals?.lead_count ?? null : scopedLeads.length;
+  const headerValue = dynamic ? totals?.value_pence ?? null : null;
+  const headerValued = dynamic ? totals?.valued_count ?? 0 : 0;
+  const openCount = dynamic ? totals?.open_count ?? null : null;
+  const openValue = dynamic ? totals?.open_value_pence ?? null : null;
 
   return (
     <div className="mx-auto" style={{ maxWidth: 1500 }}>
@@ -107,14 +119,17 @@ export default function PipelineScreen() {
           <p className="text-ink-muted" style={{ fontSize: 13 }}>
             {isLoading ? 'Loading pipeline…' : (
               <>
-                {headerCount === null ? DASH : headerCount.toLocaleString('en-GB')} open
+                {headerCount === null ? DASH : headerCount.toLocaleString('en-GB')} leads
                 {' · '}
-                {money(headerValue)} active pipeline
+                {money(headerValue)}
                 {/* Say what the money covers. Most leads carry no estimated
                     value, so a total without this reads as the value of every
                     lead on the board rather than of the few that have one. */}
                 {headerValue !== null && headerCount ? (
-                  <span> · value recorded on {headerValued.toLocaleString('en-GB')} of {headerCount.toLocaleString('en-GB')}</span>
+                  <span> across {headerValued.toLocaleString('en-GB')} of {headerCount.toLocaleString('en-GB')}</span>
+                ) : null}
+                {openCount !== null ? (
+                  <span> · {openCount.toLocaleString('en-GB')} still open, {money(openValue)}</span>
                 ) : null}
               </>
             )}

@@ -63,6 +63,22 @@ describe('leadService.pipelineSummary', () => {
         expect(r.totals.open_value_pence).toBe(7_848_700);
     });
 
+    // THE BOARD MUST RECONCILE. The columns on screen are the stages, and the
+    // header sits above them, so the stages have to add up to it — a panel
+    // whose parts do not sum to its own total teaches people to distrust the
+    // whole screen. This is asserted as an identity rather than against fixed
+    // numbers, so it still holds when the fixture changes.
+    it('the stages sum to the totals, exactly', async () => {
+        supaRec.rpcProvider = () => ({ data: stages, error: null });
+        const r = await leadService.pipelineSummary(ORG, { pipelineId: 'p1' });
+        const sum = (key) => r.stages.reduce((s, x) => s + (x[key] ?? 0), 0);
+        expect(sum('lead_count')).toBe(r.totals.lead_count);
+        expect(sum('value_pence')).toBe(r.totals.value_pence);
+        expect(sum('valued_count')).toBe(r.totals.valued_count);
+        expect(sum('open_count')).toBe(r.totals.open_count);
+        expect(sum('open_value_pence')).toBe(r.totals.open_value_pence);
+    });
+
     // NULL IS NOT ZERO. A stage where nothing carries a value has no value to
     // report; rendering £0.00 there states a fact nobody recorded.
     it('reports unrecorded value as null, never as zero', async () => {
