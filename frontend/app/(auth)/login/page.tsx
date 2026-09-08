@@ -1,6 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { leaveSession } from '@/lib/session-boundary';
 import Link from 'next/link';
 
 export default function LoginPage() {
@@ -26,8 +27,10 @@ export default function LoginPage() {
     }
     // The route decides the destination: /dashboard for tenants,
     // /platform/overview for a platform superadmin.
-    router.push(data.redirect || '/business-hub');
-    router.refresh();
+    // Full document navigation. Signing in is a session boundary, and a
+    // client-side push would hand this person the PREVIOUS user's cached
+    // identity, navigation and figures until they refreshed.
+    leaveSession(data.redirect || '/business-hub');
   }
 
   return (
