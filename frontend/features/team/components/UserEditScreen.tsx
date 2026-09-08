@@ -202,6 +202,27 @@ export default function UserEditScreen() {
     );
   }
 
+  // Reaching your own row by URL is a dead end, so say that instead of
+  // rendering a form whose every save is refused. The list hides the link;
+  // this catches a typed address, a bookmark, or a stale tab.
+  if (!isNew && me?.id && userId === me.id) {
+    return (
+      <div className="mx-auto" style={{ maxWidth: 900 }}>
+        <Link href="/team-permissions" className="text-brand" style={{ fontSize: 13 }}>
+          ← Back
+        </Link>
+        <h1 className="display font-bold mt-2 mb-2" style={{ fontSize: 22 }}>
+          Your own account
+        </h1>
+        <p className="text-ink-muted" style={{ fontSize: 13.5, lineHeight: 1.6, maxWidth: 560 }}>
+          Nobody edits their own permissions, role or details here — the person a
+          change is about should not be the person making it. Ask another
+          administrator, or your agency, to make the change for you.
+        </p>
+      </div>
+    );
+  }
+
   const busy = save.isPending || create.isPending;
 
   return (
@@ -446,6 +467,9 @@ export default function UserEditScreen() {
                   // wrong org while the save writes the right one.
                   roleDefaults={detail.role_defaults?.[values.role] ?? {}}
                   patch={patch}
+                  // The action keys, straight from the backend catalog — a key
+                  // added there appears here without a second edit.
+                  actions={detail.catalog}
                   onChange={(key, value) => setPatch((p) => ({ ...p, [key]: value }))}
                   search={search}
                   onSearchChange={setSearch}

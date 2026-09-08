@@ -108,11 +108,22 @@ describe('a page inherits its section until it is overridden', () => {
     expect(eff[pageKey('associates')]).toBe(false);
   });
 
-  it('a page override switches ONE page on inside a section that is off', () => {
+  // CHANGED DELIBERATELY. This used to assert that granting a page left the
+  // section key FALSE — which is exactly the state an owner reported as "I
+  // gave the permission and it says insufficient permission": the tab appeared
+  // in the nav and every request the page made was refused, because every API
+  // gate reads the section key and nothing had set it.
+  //
+  // Granting a tab now carries its section's READ key. What must NOT change,
+  // and is asserted below, is the nav: the other tabs in that section stay off,
+  // so ticking one tab still shows one tab.
+  it('a page override switches ONE page on, and opens the data behind it', () => {
     const eff = resolve([{ permission_key: 'page:appointments', allowed: true }]);
-    expect(eff['operations.view']).toBe(false);
     expect(eff[pageKey('appointments')]).toBe(true);
+    expect(eff['operations.view']).toBe(true);
+    // The tab granted is the only tab shown.
     expect(eff[pageKey('associates')]).toBe(false);
+    expect(eff[pageKey('staff')]).toBe(false);
   });
 
   it('a per-user override beats the role-level page override', () => {

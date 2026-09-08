@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseRoute } from '@/lib/supabase-server';
+import { SESSION_MARKER, SESSION_MAX_AGE_SECONDS } from '@/lib/session-boundary';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,6 +9,7 @@ const BACKEND_URL =
 
 const PLATFORM_COOKIE = 'platform_token';
 const PLATFORM_COOKIE_MAX_AGE = 8 * 60 * 60; // matches the 8h platform JWT
+
 
 // ============================================================================
 // Unified login. ONE page, ONE route — but the two auth systems stay isolated:
@@ -91,7 +93,19 @@ export async function POST(req: NextRequest) {
       console.error('[auth/login] setSession failed:', error.message);
       return NextResponse.json({ error: 'Sign in failed' }, { status: 401 });
     }
-    return NextResponse.json({ success: true, redirect: '/business-hub' });
+    const ok = NextResponse.json({ success: true, redirect: '/business-hub' });
+    // Starts the day. The browser drops it after 24h and middleware then
+    // treats the session as over, whatever the refresh token still says.
+    ok.cookies.set({
+      name: SESSION_MARKER,
+      value: '1',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/',
+      maxAge: SESSION_MAX_AGE_SECONDS,
+    });
+    return ok;
   }
 
   // Only a plain 401 (unknown / wrong tenant credentials) is ambiguous enough

@@ -9,7 +9,9 @@ import * as auth_1 from "../middleware/auth.js";
 import * as cockpit_controller_1 from "../controllers/cockpit.controller.js";
 const router = (0, express_1.Router)();
 const fin = (0, auth_1.requirePermission)('finance.view');
-const owner = (0, auth_1.requireRole)('owner');
+// A practice cost model is a finance edit, and finance.edit already exists
+// for exactly that (owner-only by default).
+const owner = (0, auth_1.requirePermission)('finance.edit');
 // Lazy detail endpoints (fetched on drill-down open) — static paths, mounted
 // before the root '/' handler (no param routes on this router, but keep the
 // convention so future param routes can't shadow these).

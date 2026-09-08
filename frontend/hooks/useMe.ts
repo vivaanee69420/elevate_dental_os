@@ -49,6 +49,12 @@ export function useMe() {
     staleTime: 5 * 60_000, // 5 min — identity rarely changes mid-session
     gcTime: 10 * 60_000,
     retry: false, // unauthenticated -> fail fast, don't hammer
-    refetchOnWindowFocus: false,
+    // The ONE query that refetches on focus, and identity is why. Everything
+    // else can wait for its own staleTime; a tab that has been in the
+    // background while somebody signed in as a different person elsewhere is
+    // rendering the wrong human's navigation and figures, and needs to find
+    // that out when it comes back rather than up to five minutes later.
+    // SessionGuard reloads the tab on the change this refetch discovers.
+    refetchOnWindowFocus: true,
   });
 }

@@ -4,6 +4,7 @@ import { TopBar } from '@/components/layout/topbar';
 import { SectionTabs } from '@/components/layout/SectionTabs';
 import { SidebarProvider } from '@/components/layout/sidebar-context';
 import { RoleHomeGuard } from '@/components/layout/RoleHomeGuard';
+import { SessionGuard } from '@/components/layout/SessionGuard';
 import { ScopePeriodProvider } from '@/features/_shared/scope-context';
 import { SyncToastProvider } from '@/features/integrations/sync-toast';
 
@@ -14,6 +15,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <Suspense fallback={null}>
       <ScopePeriodProvider>
         <SidebarProvider>
+          {/* Reloads the tab if the signed-in identity changes underneath it
+              — a second tab signing in as somebody else re-points the shared
+              httpOnly cookie while this one keeps rendering the old user's
+              cached pages. */}
+          <SessionGuard />
           <RoleHomeGuard />
           {/* Holds the live sync-progress toast above the routed pages so it
               survives client-side navigation (start a sync on Integrations,

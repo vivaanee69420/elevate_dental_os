@@ -6,7 +6,7 @@
 
 import { Router } from "express";
 import { asyncHandler } from "../middleware/async-handler.js";
-import { requirePermission, requireRole } from "../middleware/auth.js";
+import { requirePermission } from "../middleware/auth.js";
 import { membersController } from "../controllers/members.controller.js";
 
 const router = Router();
@@ -15,7 +15,13 @@ router.get("/", requirePermission("users.invite"), asyncHandler(membersControlle
 // Creates a login AND writes its user_organisations row(s) in one call, the
 // same users.permissions-adjacent territory as the :id editor below — owner
 // only, not delegable via a permission key.
-router.post("/", requireRole('owner'), asyncHandler(membersController.create));
+// users.invite / users.manage exist in the catalog for precisely these three
+// routes and were never used by them: adding and editing team members was
+// owner-only by ROLE, so an owner could not delegate team administration even
+// though the matrix has the words for it. assertGrantCeiling still stops
+// anyone handing out a permission they do not themselves hold, so this cannot
+// become a self-escalation path.
+router.post("/", requirePermission('users.invite'), asyncHandler(membersController.create));
 router.post("/invite", requirePermission("users.invite"), asyncHandler(membersController.invite));
 // Setting a password is account-takeover-grade — gate on the stronger
 // users.manage (same as remove), not users.invite. Role-hierarchy + grant
@@ -29,7 +35,7 @@ router.post("/remove", requirePermission("users.manage"), asyncHandler(membersCo
 // the top of the precedence chain, so delegating it via a permission key
 // would let a holder grant themselves the key that guards it.
 // Registered after the static POSTs above so `/:id` never shadows them.
-router.get("/:id", requireRole('owner'), asyncHandler(membersController.getOne));
-router.put("/:id", requireRole('owner'), asyncHandler(membersController.save));
+router.get("/:id", requirePermission('users.manage'), asyncHandler(membersController.getOne));
+router.put("/:id", requirePermission('users.manage'), asyncHandler(membersController.save));
 
 export default router;

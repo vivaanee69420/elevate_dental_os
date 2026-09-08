@@ -20,6 +20,7 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import { AlertDialog, Chip, DialogButton } from '@/components/ui';
 import { useMe } from '@/hooks/useMe';
+import { countOf } from '@/lib/format';
 import {
   useIntegrations,
   useStartConnect,
@@ -677,7 +678,7 @@ export default function IntegrationsScreen() {
     const copy = PROVIDER_COPY[id];
     const connected = id === 'callrail' ? !!callRail?.connected : !!emergent?.connected;
     const detail = id === 'callrail' && connected
-      ? `${callRail?.accounts?.length ?? 0} companies connected`
+      ? `${countOf(callRail?.accounts?.length ?? 0, 'company', 'companies')} connected`
       : id === 'emergent' && connected
         ? `Synced ${relTime(emergent?.lastSyncAt ?? null)}`
         : 'Not connected';

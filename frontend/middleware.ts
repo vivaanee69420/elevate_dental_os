@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { SESSION_MARKER } from '@/lib/session-boundary';
 import { createServerClient } from '@supabase/ssr';
 
 const SECURE = process.env.NODE_ENV === 'production';
@@ -70,10 +71,25 @@ export async function middleware(req: NextRequest) {
   if (isAuthPage && req.cookies.get('platform_token')?.value) {
     return NextResponse.redirect(new URL('/platform/overview', req.url));
   }
-  if (!session && !isAuthPage && !isPublic) {
+  // ONE DAY, then sign in again. Supabase's refresh token has no absolute
+  // expiry, so without this a session ran until the browser stopped using it —
+  // eight weeks, on the oldest live one. The marker cookie is set at sign-in
+  // with a 24h max-age, so the browser deletes it on our behalf and its
+  // absence beside a live Supabase session means the day is over.
+  const expiredForToday = session && !req.cookies.get(SESSION_MARKER)?.value;
+  if (expiredForToday && !isAuthPage && !isPublic) {
+    const out = NextResponse.redirect(new URL('/login', req.url));
+    // Clear the session too, or the next request walks straight back in.
+    for (const c of req.cookies.getAll()) {
+      if (c.name.startsWith('sb-')) out.cookies.set({ name: c.name, value: '', path: '/', maxAge: 0 });
+    }
+    return out;
+  }
+
+  if ((!session || expiredForToday) && !isAuthPage && !isPublic) {
     return NextResponse.redirect(new URL('/login', req.url));
   }
-  if (session && isAuthPage) {
+  if (session && !expiredForToday && isAuthPage) {
     return NextResponse.redirect(new URL('/business-hub', req.url));
   }
 

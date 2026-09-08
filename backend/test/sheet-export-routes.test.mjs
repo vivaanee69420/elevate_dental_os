@@ -6,6 +6,7 @@
 // response body ever leaks a `secrets` field.
 // ============================================================================
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { defaultPermissionsForRole } from '../src/lib/permissions.js';
 import http from 'node:http';
 import express from 'express';
 import { AppError } from '../src/middleware/errors.js';
@@ -56,7 +57,24 @@ function buildApp() {
   app.use(express.json());
   app.use((req, res, next) => {
     const role = req.headers['x-test-role'];
-    req.user = role ? { id: 'u1', organisation_id: 'org-1', role } : null;
+    // Production never hands a route a bare role: `authenticate` always
+    // resolves the permission map, and the gates read THAT. Building a
+    // user without one made these tests answer a question no real
+    // request asks, and they failed the moment the gates stopped
+    // consulting the role directly.
+    req.user = role
+      ? {
+        id: 'u1',
+        organisation_id: 'org-1',
+        role,
+        // Role defaults plus whatever the owner has ticked for this person —
+        // exactly the two layers resolveEffectivePermissions merges.
+        permissions: {
+          ...defaultPermissionsForRole(role),
+          ...JSON.parse(req.headers['x-test-grant'] ?? '{}'),
+        },
+      }
+      : null;
     next();
   });
   app.use('/api/integrations', router);
@@ -77,12 +95,13 @@ afterAll(async () => {
   await new Promise((resolve) => server.close(resolve));
 });
 
-async function call(method, path, { role, body } = {}) {
+async function call(method, path, { role, body, grant } = {}) {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       'content-type': 'application/json',
       ...(role ? { 'x-test-role': role } : {}),
+      ...(grant ? { 'x-test-grant': JSON.stringify(grant) } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
@@ -111,15 +130,29 @@ describe('sheet-export routes — role gating', () => {
     }
   });
 
-  it('practice_manager gets status + activity 200 but 403 on destination/drain/delete', async () => {
-    for (const path of READ_PATHS) {
-      const { status } = await call('GET', path, { role: 'practice_manager' });
-      expect(status, `GET ${path}`).toBe(200);
+  // CONTRACT CHANGE, stated rather than absorbed. These endpoints used to
+  // admit a practice manager by ROLE, on every verb this test lists as read.
+  // They are now gated on system.manage, which a practice manager does not
+  // hold by default — the same key the Integrations nav item uses, and this
+  // panel lives inside that dialog, so a practice manager had API access to a
+  // screen they could not navigate to. Aligning the two is the point of the
+  // change, not a side effect of it.
+  //
+  // What they LOSE is access nobody could reach through the product. What they
+  // GAIN is that an owner can now grant it deliberately — before, the role
+  // list was the ceiling and no amount of ticking could move it.
+  it('practice_manager is 403 without system.manage, and 200 the moment it is granted', async () => {
+    for (const ep of ENDPOINTS) {
+      const { status } = await call(ep.method, ep.path, { role: 'practice_manager', body: ep.body });
+      expect(status, `${ep.method} ${ep.path}`).toBe(403);
     }
 
-    for (const ep of ENDPOINTS.filter((e) => !READ_PATHS.includes(e.path))) {
-      const { status: code } = await call(ep.method, ep.path, { role: 'practice_manager', body: ep.body });
-      expect(code, `${ep.method} ${ep.path}`).toBe(403);
+    // The grant is the whole feature: a permission the owner ticks, honoured.
+    for (const ep of ENDPOINTS) {
+      const { status } = await call(ep.method, ep.path, {
+        role: 'practice_manager', body: ep.body, grant: { 'system.manage': true },
+      });
+      expect(status, `${ep.method} ${ep.path} (granted)`).toBe(200);
     }
   });
 
