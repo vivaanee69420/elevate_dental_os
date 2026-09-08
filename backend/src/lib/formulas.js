@@ -350,22 +350,61 @@ export function calculateRevenueLeakage(input = {}, rates = {}) {
         acceptedPlanPence = 0,
         appointments = 0,
         noShows = 0,
-        cashCollectedPence = 0,
+        outstandingPence = 0,
         hygieneShare = LEAKAGE_HYGIENE_SHARE,
         lapsedShare = LEAKAGE_LAPSED_SHARE,
     } = input;
     const ftaRate = appointments > 0 ? noShows / appointments : 0;
-    const lostPlanPence = Math.max(0, presentedPlanPence - acceptedPlanPence);
-    const uncollectedPence = Math.max(0, revenuePence - cashCollectedPence);
+    // PRESENTED MINUS COMPLETED IS NOT "LOST". Dentally sends no acceptance
+    // state — only `completed` — and the completed share of plan value ran
+    // 1.1%-6.5% in every one of the last thirteen months, including months a
+    // year old. So this difference is essentially the whole presented value and
+    // includes work in progress and work booked for next month. It is an upper
+    // bound on the opportunity, never a measurement of money lost, and the
+    // basis map below says so.
+    const openPlanPence = Math.max(0, presentedPlanPence - acceptedPlanPence);
+    // THE REAL UNPAID BALANCE. This used to be revenue - cashCollected, and the
+    // caller passes SETTLED RECEIPTS as both, so it was a figure subtracted
+    // from itself: zero for every organisation, forever, while real unpaid
+    // invoices sat in the same ledger.
+    const uncollectedPence = Math.max(0, Number(outstandingPence) || 0);
     const pools = {
-        plans: pence(lostPlanPence * clamp(r.plans)),
+        plans: pence(openPlanPence * clamp(r.plans)),
         fta: pence(revenuePence * ftaRate * clamp(r.fta)),
         recall: pence(revenuePence * hygieneShare * 0.25 * clamp(r.recall)),
         lapsed: pence(revenuePence * lapsedShare * clamp(r.lapsed)),
         collect: pence(uncollectedPence * clamp(r.collect)),
     };
-    const windowTotalPence = pools.plans + pools.fta + pools.recall + pools.lapsed + pools.collect;
-    return { pools, windowTotalPence, rates: r, ftaRatePct: pct(ftaRate * 100) };
+    // What each pool actually is. Recall and lapsed are flat shares of revenue
+    // — constants, not observations — and plans has no acceptance signal behind
+    // it. Only FTA (a real no-show rate) and collections (a real outstanding
+    // balance) are measured, so only those two are summed into the headline.
+    const basisByPool = {
+        plans: 'modelled',
+        fta: 'measured',
+        recall: 'modelled',
+        lapsed: 'modelled',
+        collect: 'measured',
+    };
+    const sumWhere = (basis) => Object.entries(pools)
+        .filter(([k]) => basisByPool[k] === basis)
+        .reduce((n, [, v]) => n + v, 0);
+    const measuredTotalPence = sumWhere('measured');
+    const modelledTotalPence = sumWhere('modelled');
+    return {
+        pools,
+        basisByPool,
+        measuredTotalPence,
+        modelledTotalPence,
+        windowTotalPence: measuredTotalPence + modelledTotalPence,
+        rates: r,
+        ftaRatePct: pct(ftaRate * 100),
+        // Lets the reader judge the plans pool rather than take it on trust. A
+        // rate near zero across mature months means the flag is not populated.
+        planCompletionPct: presentedPlanPence > 0
+            ? pct((acceptedPlanPence / presentedPlanPence) * 100)
+            : null,
+    };
 }
 
 export function calculateProgress(input) {
@@ -584,6 +623,18 @@ export const TREATMENT_CASE_RULES = {
 // invoice total across invoices containing a matching (and non-excluded) line,
 // or null when there are no matches. Pure (no I/O) so it is unit-tested directly
 // against real catalog names.
+// The same rules, shaped for the SQL aggregator (invoice_case_stats). Derived
+// from TREATMENT_CASE_RULES rather than written out again: two lists of these
+// patterns would be two definitions of what a full arch is, and the one that
+// drifted would be the one nobody tested.
+export function caseRulesForSql(rules = TREATMENT_CASE_RULES) {
+    return Object.entries(rules).map(([key, r]) => ({
+        key,
+        match: r.match.source,
+        not: r.not ? r.not.source : null,
+    }));
+}
+
 export function classifyCaseFees(invoices, rules = TREATMENT_CASE_RULES) {
     const acc = {};
     for (const key of Object.keys(rules)) acc[key] = { sum: 0, n: 0 };

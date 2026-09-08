@@ -88,10 +88,13 @@ describe('endpoint wiring (schema + service)', () => {
   it('rejects a negative price', () => {
     expect(() => treatmentModelSchema.parse({ pricePence: -5 })).toThrow();
   });
-  it('service.treatmentEconomics returns computed group profit; treatmentModels returns defaults', () => {
+  // treatmentModels became ASYNC when the workbench gained persistence: it now
+  // lays an organisation's saved rows over these defaults. With no org it still
+  // answers with the defaults, which is what this pins.
+  it('service.treatmentEconomics returns computed group profit; treatmentModels returns defaults', async () => {
     const out = svc.treatmentEconomics(DEFAULT_SERVICE_MODELS.fullarch);
     expect(out.groupProfitPence).toBe(364_160);
-    expect(svc.treatmentModels().implant.unit).toBe('implant');
+    expect((await svc.treatmentModels()).implant.unit).toBe('implant');
   });
 });
 

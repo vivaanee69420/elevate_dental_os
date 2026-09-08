@@ -5,7 +5,7 @@
 // (settled-cash revenue + monthly_financials costs, by accounting basis + QBO company).
 import { useMemo, useState } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import { Skeleton } from '@/components/ui';
 import { poundsCompact, monthShort } from '../mock';
@@ -13,7 +13,7 @@ import { useFinanceSeries } from '../hooks';
 import type { FinanceSource } from '../api';
 import FinanceToolbar from './FinanceToolbar';
 import ManualPLModal from './ManualPLModal';
-import ProfitSourceBar from './ProfitSourceBar';
+import ProfitSourceBar, { FILTER_LABEL_WIDTH } from './ProfitSourceBar';
 import PracticeTabs from '@/features/practices/PracticeTabs';
 import QbFilterBar, { DEFAULT_QB_FILTERS, type QbFilters } from './QbFilterBar';
 import {
@@ -102,9 +102,38 @@ export default function ProfitScreen() {
   };
   const basisLabel = SOURCE_NOTE[source];
 
+  // WHAT THE REVENUE FIGURE ACTUALLY IS.
+  //
+  // The card said "Real settled payments" as a hardcoded string, and for any
+  // org with an accounting feed that is simply not what it shows: for a month
+  // with monthly_financials rows, financeSeries takes revenue from THAT feed
+  // and never looks at payments. Measured over the same twelve months —
+  // QuickBooks accrual revenue £5,290,546, Dentally billed £4,433,466, settled
+  // payments £4,348,681. The page displayed £5.3M under a label describing a
+  // figure £942k smaller.
+  const revenueNote = source === 'quickbooks'
+    ? `QuickBooks ${filters.method} revenue`
+    : source === 'dentally'
+      ? 'Dentally billed production'
+      : data?.basis === 'actuals'
+        ? `From your accounting feed · ${filters.method}`
+        : data?.basis === 'mixed'
+          ? 'Accounting feed, Dentally where it has no month'
+          : 'Dentally billed production';
+
   // In-scope months + the pivoted columns.
   const scopeMonths = useMemo(() => sliceMonths(allMonths, scope.from, scope.to), [allMonths, scope.from, scope.to]);
   const columns = useMemo(() => buildColumns(scopeMonths, filters.groupBy), [scopeMonths, filters.groupBy]);
+  // The window the page is actually showing, so the provenance panel below the
+  // filters stops saying "last 30 days" under a 12-month period.
+  const sourceWindowDays = useMemo(() => {
+    const { from, to } = filters.range;
+    if (from && to) {
+      const days = Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1;
+      return Math.max(1, days);
+    }
+    return Math.max(1, Math.round(spanMonths * 30.44));
+  }, [filters.range, spanMonths]);
 
   // Comparison total columns (appended after the period columns).
   const compareCols = useMemo(() => {
@@ -158,7 +187,7 @@ export default function ProfitScreen() {
 
   const cellPad = '10px 14px';
   return (
-    <div className="container max-w-7xl mx-auto">
+    <div>
       <div className="mb-6 flex justify-between items-start gap-4 flex-wrap">
         <div>
           <h1 className="display text-3xl font-bold">Profit &amp; Loss</h1>
@@ -180,19 +209,38 @@ export default function ProfitScreen() {
 
       <ManualPLModal open={plModalOpen} onClose={() => setPlModalOpen(false)} practiceId={practiceId} />
 
-      {/* Source toggle + QBO company selector (from main) */}
-      <ProfitSourceBar
-        source={source}
-        onSourceChange={setSource}
-        accountId={qboAccountId}
-        onAccountChange={setQboAccountId}
-      />
-      {/* QuickBooks is scoped by company, not practice — hide the practice tabs when active. */}
-      {source !== 'quickbooks' && <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />}
-
-      {/* QuickBooks-style filter bar: date range, groupBy, accounting method, compare columns. */}
-      <QbFilterBar value={filters} onChange={setFilters} />
-      <FinanceToolbar />
+      {/* All four controls in ONE block. They were four full-width rows stacked
+          down the page — source, practices, period, method — each with its own
+          margin, so roughly 180px of chrome stood between the title and the
+          first number. */}
+      <div className="card-padded" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+        <ProfitSourceBar
+          source={source}
+          onSourceChange={setSource}
+          accountId={qboAccountId}
+          onAccountChange={setQboAccountId}
+          inlineLabel
+        />
+        {/* QuickBooks is scoped by company, not practice — hide the practice tabs when active. */}
+        {source !== 'quickbooks' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* The one row that had NO label at all, between three that did. */}
+            <span
+              className="text-ink-muted uppercase"
+              style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.3, minWidth: FILTER_LABEL_WIDTH }}
+            >
+              Practice
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <PracticeTabs dentallyOnly value={practiceId} onChange={setPracticeId} />
+            </div>
+          </div>
+        )}
+        <QbFilterBar value={filters} onChange={setFilters} />
+      </div>
+      {/* The provenance panel now covers the window the page is actually
+          showing, instead of a fixed 30 days beneath a 12-month period. */}
+      <FinanceToolbar sourceDays={sourceWindowDays} />
 
       {isError && (
         <div className="card-padded mb-4">
@@ -245,14 +293,21 @@ export default function ProfitScreen() {
 
       {/* KPI strip */}
       <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <Kpi label="Revenue (period)" value={isLoading ? '…' : poundsCompact(grand.values.revenue)} delta="Real settled payments" />
+        <Kpi label="Revenue (period)" value={isLoading ? '…' : poundsCompact(grand.values.revenue)} delta={revenueNote} />
         <Kpi label="Net profit (period)" value={isLoading ? '…' : (costsAvailable ? poundsCompact(grand.profit) : '£0')} delta={costsAvailable && grand.marginPct != null ? `${grand.marginPct.toFixed(1)}% margin` : 'no cost data (£0)'} />
         <Kpi label="Avg monthly revenue" value={isLoading ? '…' : poundsCompact(avgMonthlyRevenue)} delta={revenueMonths > 0 ? `over ${revenueMonths} mo with revenue` : undefined} />
       </div>
 
       {/* Revenue & profit chart */}
       <div className="card-padded mb-4">
-        <h2 className="display text-lg font-semibold mb-5">Revenue &amp; profit</h2>
+        <h2 className="display text-lg font-semibold mb-1">Revenue &amp; profit</h2>
+        {/* The month in progress is a stub on the cost side — payroll, rent and
+            lab bills post late — so its profit bar runs high and its revenue bar
+            low. Saying so beats letting the last column read as a collapse. */}
+        <p className="text-sm text-ink-muted mb-4">
+          Month by month over the selected period. The current month is still filling, so its
+          final column is incomplete on both lines.
+        </p>
         {isLoading ? (
           <Skeleton className="w-full" style={{ height: 240 }} />
         ) : !hasRevenue ? (
@@ -264,6 +319,8 @@ export default function ProfitScreen() {
               <XAxis dataKey="month" tick={{ fontSize: 10, fill: 'var(--ink-muted)' }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 10, fill: 'var(--ink-soft)' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => poundsCompact(v)} width={56} />
               <Tooltip formatter={(v: number, name: string) => [poundsCompact(v), name]} contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+              {/* Two colours with no key is a puzzle, not a chart. */}
+              <Legend wrapperStyle={{ fontSize: 11 }} iconType="circle" />
               <Bar dataKey="Revenue" fill={BRAND} radius={[2, 2, 0, 0]} />
               <Bar dataKey="Profit" fill={ACCENT} radius={[2, 2, 0, 0]} />
             </BarChart>

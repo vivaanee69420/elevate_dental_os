@@ -36,6 +36,7 @@ export const NAV: NavSection[] = [
     { id: 'cashflow', label: 'Cash Flow' },
     { id: 'workbench', label: 'Treatment Economics', isNew: true },
     { id: 'profit', label: 'Profit & Loss' },
+    { id: 'profit-benchmark', label: 'Profit Benchmarking', isNew: true },
     { id: 'financial', label: 'P&L & Margin' },
     { id: 'payments', label: 'Patient Payments' },
     { id: 'quickbooks', label: 'QuickBooks', isNew: true },

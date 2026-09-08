@@ -218,7 +218,7 @@ export default function ValuationScreen() {
   }
 
   return (
-    <div className="container max-w-7xl mx-auto">
+    <div>
       {/* Header */}
       <div className="mb-4">
         <div className="flex justify-between items-end gap-4 flex-wrap">

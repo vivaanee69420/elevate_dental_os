@@ -479,18 +479,18 @@ describe('financial — exact revenue, costs/balance-sheet real-or-zero', () => 
 describe('cashflow — backward real settled receipts (no projection)', () => {
   const now = () => new Date(2026, 4, 15); // Fri 15 May 2026
 
-  it('no receipts → 13 real zero weeks, opening 0', async () => {
+  it('no receipts → 13 real zero weeks, no bank balance', async () => {
     supaRec.resultProvider = () => ({ data: [], error: null });
     supaRec.rpcProvider = rpcReceipts([]);
     const r = await svc.cashflow(ORG_A, { now });
     expect(r.basis).toBe('actuals');
     expect(r.weeks).toHaveLength(13);
-    expect(r.openingBalancePence).toBe(0);
+    expect(r.bankBalancePence).toBe(0);
     expect(r.weeks.every((w) => w.receiptsPence === 0)).toBe(true);
     expect(r.totalReceiptsPence).toBe(0);
   });
 
-  it('opening = Σ bank; exact receipts bucketed backward by week', async () => {
+  it('receipts are bucketed backward by week, and no balance is invented', async () => {
     supaRec.resultProvider = (q) =>
       q.table === 'bank_accounts'
         ? { data: [
@@ -507,22 +507,73 @@ describe('cashflow — backward real settled receipts (no projection)', () => {
     expect(r.basis).toBe('actuals');
     expect(r.bankConnected).toBe(true);
     expect(r.bankStale).toBe(false);
-    expect(r.openingBalancePence).toBe(500_000);
+    expect(r.bankBalancePence).toBe(500_000);
     expect(r.weeks).toHaveLength(13);
-    expect(r.weeks[0].openingBalancePence).toBe(500_000);
     expect(r.weeks[12].receiptsPence).toBe(25_000); // today in the latest week
-    expect(r.weeks[12].closingBalancePence).toBe(500_000 + 10_000 + 25_000);
     expect(r.totalReceiptsPence).toBe(35_000);
     expect(r).not.toHaveProperty('baselineWeeklyRunRatePence'); // no baseline anymore
   });
 
-  it('no bank rows → opening 0, bankStale true, still 13 real weeks', async () => {
+  // THE REGRESSION THIS PANEL EXISTS TO PREVENT.
+  //
+  // cashflow() used to seed the opening balance THIRTEEN WEEKS AGO with
+  // TODAY's bank figure and then add receipts forward, with paymentsPence
+  // hardcoded to 0. The final "closing balance" was therefore
+  // today's-balance + every receipt in the window, and it was rendered in a
+  // column headed Closing beside an outlook card that anchored the SAME day
+  // to the real balance. Measured on live data at the point it was found:
+  // a real bank position of £783,422 was displayed as £1,846,524, with
+  // £1,063,102 of the difference fabricated by this loop.
+  //
+  // There is no per-week outflow source for ANY tenant — bank_transactions is
+  // empty and nothing reads it — so a weekly bank balance is not computable
+  // and must not be shown. Receipts are real; a running total of receipts is
+  // real; a balance is not.
+  it('never reports a balance per week — there is no outflow feed to build one from', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'bank_accounts'
+        ? { data: [{ balance_pence: 78_342_222, last_synced_at: '2026-05-15T00:00:00Z' }], error: null }
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([
+      { day: '2026-05-15', pence: 60_000 },
+      { day: '2026-05-08', pence: 40_000 },
+    ]);
+    const r = await svc.cashflow(ORG_A, { weeks: 13, now });
+    for (const w of r.weeks) {
+      expect(w).not.toHaveProperty('openingBalancePence');
+      expect(w).not.toHaveProperty('closingBalancePence');
+      expect(w).not.toHaveProperty('paymentsPence');
+    }
+    // The bank balance is reported ONCE, as itself, and is never mixed into
+    // the weekly series.
+    expect(r.bankBalancePence).toBe(78_342_222);
+    expect(r.weeks.some((w) => w.receiptsPence === 78_342_222)).toBe(false);
+  });
+
+  it('cumulative receipts are a running total of receipts only', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'bank_accounts'
+        ? { data: [{ balance_pence: 500_000, last_synced_at: '2026-05-15T00:00:00Z' }], error: null }
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([
+      { day: '2026-05-15', pence: 25_000 },
+      { day: '2026-05-08', pence: 10_000 },
+    ]);
+    const r = await svc.cashflow(ORG_A, { weeks: 13, now });
+    const last = r.weeks[r.weeks.length - 1];
+    // Starts at zero, not at the bank balance, and ends at the window total.
+    expect(r.weeks[0].cumulativeReceiptsPence).toBe(0);
+    expect(last.cumulativeReceiptsPence).toBe(35_000);
+    expect(last.cumulativeReceiptsPence).toBe(r.totalReceiptsPence);
+  });
+
+  it('no bank rows → balance 0, bankStale true, still 13 real weeks', async () => {
     supaRec.resultProvider = () => ({ data: [], error: null });
     supaRec.rpcProvider = rpcReceipts([]);
     const r = await svc.cashflow(ORG_A, { now });
     expect(r.bankConnected).toBe(false);
     expect(r.bankStale).toBe(true);
-    expect(r.openingBalancePence).toBe(0);
+    expect(r.bankBalancePence).toBe(0);
     expect(r.weeks).toHaveLength(13);
   });
 
@@ -1340,5 +1391,583 @@ describe('cashflowOutlook — run-rate excludes the incomplete current month', (
     supaRec.rpcProvider = () => ({ data: [], error: null });
     const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
     expect(r.costsUnavailableReason).toBe('no-feed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The bank balance belongs to the ORGANISATION, never to a practice.
+//
+// bank_accounts has no practice_id column — not a missing mapping, there is
+// nowhere to put one — so a practice-level cash position cannot exist. The page
+// nevertheless anchored every month's closing balance to the group bank figure,
+// carried it into runway, and fed it to freeCashDecision, so selecting one
+// practice of five produced a "Free cash" and a "Sweepable" figure built from
+// the whole group's money sitting beside that one practice's receipts. Measured
+// live: £783,422 of group cash offered as sweepable on every practice tab.
+//
+// This mirrors the treatment costs already get. A QuickBooks company is
+// deliberately never mapped to a practice, so costs report
+// costsUnavailableReason:'org-level-costs' rather than a wrong number; the bank
+// side is the same fact and now says so the same way.
+// ---------------------------------------------------------------------------
+describe('cashflowOutlook — the bank position is org-level, never per practice', () => {
+  const now = () => new Date(2026, 8, 3); // 3 September 2026
+  const bankRows = (q) =>
+    q.table === 'bank_accounts'
+      ? { data: [{ balance_pence: 78_342_222, last_synced_at: '2026-09-03T00:00:00Z' }], error: null }
+      : { data: [], error: null };
+  const receipts = (fn) =>
+    fn === 'settled_receipts_by_day'
+      ? { data: [{ day: '2026-07-15', pence: 16_011_800 }, { day: '2026-08-15', pence: 13_308_300 }], error: null }
+      : { data: [], error: null };
+
+  it('group scope: balances are anchored to the real bank figure', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.bankAttributable).toBe(true);
+    expect(r.bankUnavailableReason).toBeNull();
+    expect(r.months[r.currentIndex].closingPence).toBe(78_342_222);
+    // forward:0 here, so there is no FORECAST low — the window low is the one
+    // that exists. See 'free cash is not gated on a reconstructed past low'.
+    expect(r.lowestInWindowPence).not.toBeNull();
+    expect(r.lowestProjectedPence).toBeNull();
+  });
+
+  it('practice scope: no month carries a balance', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
+    expect(r.bankAttributable).toBe(false);
+    expect(r.bankUnavailableReason).toBe('org-level-bank');
+    expect(r.months.every((m) => m.openingPence === null && m.closingPence === null)).toBe(true);
+    expect(r.balancesReconstructed).toBe(false);
+    expect(r.lowestProjectedPence).toBeNull();
+  });
+
+  it('practice scope: the group bank balance is NEVER offered as free or sweepable cash', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
+    expect(r.decision.freeCashPence).toBeNull();
+    expect(r.decision.sweepablePence).toBeNull();
+    expect(r.decision.bufferPence).toBeNull();
+    expect(r.decision.action).toBe('unavailable');
+    expect(r.runway.freeCashPence).toBeNull();
+    // Nothing anywhere in the payload may equal the group balance except the
+    // clearly-labelled anchor itself.
+    expect(r.decision.freeCashPence).not.toBe(78_342_222);
+  });
+
+  it('practice scope: the group figure is still returned, labelled as the org total', async () => {
+    // Suppressing it entirely would be its own lie — the money exists, it just
+    // is not this practice's. The card renders it as a GROUP position.
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
+    expect(r.anchorBankPence).toBe(78_342_222);
+    expect(r.bankScope).toBe('organisation');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The page's date filter must reach the outlook, or it governs a third of the
+// screen in silence.
+//
+// cashflowOutlook called _monthWindow(ref, months, null, null) with the nulls
+// hardcoded, though the helper has taken from/to all along. So picking "Pick
+// month → March" moved the weekly receipts panel and the context strip, and
+// left Cash in vs cash out, the month table, the bills and the decision showing
+// the trailing four months to today — with nothing on screen saying so.
+//
+// Threading the range exposes a second problem it would have been easy to miss:
+// the balance trail is ANCHORED to today's real bank balance at its last month.
+// That is only sound while the window actually ends in the current month. Ask
+// for March and the anchor would staple September's bank balance onto the end
+// of March, and every reconstructed month behind it would inherit the error.
+// ---------------------------------------------------------------------------
+describe('cashflowOutlook — the date range is honoured, and the anchor is not abused', () => {
+  const now = () => new Date(2026, 8, 3); // 3 September 2026
+  const bankRows = (q) =>
+    q.table === 'bank_accounts'
+      ? { data: [{ balance_pence: 78_342_222, last_synced_at: '2026-09-03T00:00:00Z' }], error: null }
+      : { data: [], error: null };
+  const receipts = (fn) =>
+    fn === 'settled_receipts_by_day'
+      ? { data: [{ day: '2026-03-15', pence: 1_000_000 }, { day: '2026-08-15', pence: 2_000_000 }], error: null }
+      : { data: [], error: null };
+
+  it('a custom range selects exactly those months', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, {
+      months: 4, forward: 0, now, from: '2026-03-01', to: '2026-04-30',
+    });
+    expect(r.months.map((m) => m.month)).toEqual(['2026-03', '2026-04']);
+    expect(r.months.find((m) => m.month === '2026-03').inPence).toBe(1_000_000);
+  });
+
+  it('a window ending in the PAST carries no balances — the anchor is today only', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, {
+      months: 4, forward: 0, now, from: '2026-03-01', to: '2026-04-30',
+    });
+    expect(r.balancesAvailable).toBe(false);
+    expect(r.balancesUnavailableReason).toBe('past-window');
+    expect(r.months.every((m) => m.closingPence === null)).toBe(true);
+    // The specific corruption this prevents: September's bank balance must
+    // never appear as April's closing figure.
+    expect(r.months.some((m) => m.closingPence === 78_342_222)).toBe(false);
+    expect(r.lowestProjectedPence).toBeNull();
+    expect(r.balancesReconstructed).toBe(false);
+  });
+
+  it('a window ending in the CURRENT month still anchors to the real balance', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, {
+      months: 4, forward: 0, now, from: '2026-07-01', to: '2026-09-30',
+    });
+    expect(r.balancesAvailable).toBe(true);
+    expect(r.balancesUnavailableReason).toBeNull();
+    expect(r.months[r.currentIndex].closingPence).toBe(78_342_222);
+  });
+
+  it('a practice scope reports the bank reason, not the window reason', async () => {
+    // Both conditions can hold at once; the bank one is the more fundamental
+    // and is what the user can act on (switch to All practices).
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, {
+      months: 4, forward: 0, now, practiceId: 'prac-1', from: '2026-03-01', to: '2026-04-30',
+    });
+    expect(r.balancesAvailable).toBe(false);
+    expect(r.balancesUnavailableReason).toBe('org-level-bank');
+  });
+
+  it('no range behaves exactly as before — trailing months to today, anchored', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.months.map((m) => m.month)).toEqual(['2026-06', '2026-07', '2026-08', '2026-09']);
+    expect(r.balancesAvailable).toBe(true);
+    expect(r.months[r.currentIndex].closingPence).toBe(78_342_222);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// "Sweepable" must not be decided by how much money you had six months ago.
+//
+// freeCashDecision takes the LOWEST point of the projection and only calls cash
+// sweepable if that low still clears the operating buffer. Sound — but the page
+// passes forward:0, so there were no projected months and `lowestProjected` was
+// the minimum over the RECONSTRUCTED HISTORY instead. Those closings are worked
+// backwards from today's balance, so on any growing practice the lowest is
+// always the OLDEST month, and the decision card was quietly answering "how
+// much could you have swept last spring?".
+//
+// Measured on the fixture below: £480,746 offered as sweepable against a real
+// position of £783,422 — £302,676 of the owner's own money withheld on the
+// strength of a balance that has long since been superseded.
+//
+// A past low is not a constraint on future cash. The lowest point of a
+// projection now comes from PROJECTED months only and is null when there are
+// none, at which point freeCashDecision falls back to cash on hand — which is
+// exactly the right answer when nothing has been forecast.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Say which feed each number came from, and never put a cash label on an
+// accrual figure.
+//
+// Cash IN is settled receipts, except for a month with no settled receipts at
+// all, which silently falls back to financeSeries revenue — BILLED production
+// from invoice_items. That fallback is deliberate (a QuickBooks-only org would
+// otherwise read £0), but it was invisible: the month sat in the same column
+// under the same "settled patient payments" heading, fed the run-rate and the
+// tax estimate, and `inSource` fell back to the COST source's name, so a month
+// of billed work could be labelled "settled patient payments · QuickBooks".
+//
+// The basis now travels with the month.
+// ---------------------------------------------------------------------------
+describe('cashflowOutlook — each month says whether it is cash or billed work', () => {
+  const now = () => new Date(2026, 4, 15); // 15 May 2026 → Feb..May
+
+  const rpc = (fn) => {
+    if (fn === 'settled_receipts_by_day') return { data: [{ day: '2026-04-10', pence: 5_000_000 }], error: null };
+    if (fn === 'billed_revenue_by_month') return { data: [{ month: '2026-03', pence: 9_000_000 }], error: null };
+    return { data: [], error: null };
+  };
+
+  it('a month with settled receipts is marked as cash', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'payments' ? { data: [{ source: 'dentally' }], error: null } : { data: [], error: null };
+    supaRec.rpcProvider = rpc;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    const apr = r.months.find((m) => m.month === '2026-04');
+    expect(apr.inPence).toBe(5_000_000);
+    expect(apr.inBasis).toBe('settled');
+  });
+
+  it('a month that fell back to billed production says so', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'payments' ? { data: [{ source: 'dentally' }], error: null } : { data: [], error: null };
+    supaRec.rpcProvider = rpc;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    const mar = r.months.find((m) => m.month === '2026-03');
+    expect(mar.inPence).toBe(9_000_000);
+    // The number is real; it is simply not cash, and the page must not imply
+    // this money has landed in the bank.
+    expect(mar.inBasis).toBe('billed');
+  });
+
+  it('a month with nothing at all is neither', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpc;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.months.find((m) => m.month === '2026-02').inBasis).toBe('none');
+  });
+
+  it('the settled-cash label is never borrowed from the cost feed', async () => {
+    // No settled receipts anywhere, an accounting feed present. inSource used
+    // to fall through to the cost source, putting "QuickBooks" behind a line
+    // that reads "settled patient payments".
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials' ? { data: [{ source: 'quickbooks' }], error: null } : { data: [], error: null };
+    supaRec.rpcProvider = (fn) =>
+      fn === 'billed_revenue_by_month' ? { data: [{ month: '2026-03', pence: 9_000_000 }], error: null } : { data: [], error: null };
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.inSource).toBeNull();
+    expect(r.inFallbackSource).toBe('QuickBooks');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Name the bank feed. The Dashboard already labels this exact figure
+// "indicative" (it sums QuickBooks chart-of-accounts bank accounts, card and
+// clearing accounts included) while the cashflow page called it a "Real bank
+// balance", and the empty state told owners to connect OPEN BANKING when the
+// live feed is QuickBooks. One number, three stories.
+// ---------------------------------------------------------------------------
+describe('cashflow — the bank feed is named', () => {
+  const now = () => new Date(2026, 4, 15);
+
+  it('reports which source the balance came from', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'bank_accounts'
+        ? { data: [{ balance_pence: 78_342_222, last_synced_at: '2026-05-15T00:00:00Z', source: 'quickbooks' }], error: null }
+        : { data: [], error: null };
+    supaRec.rpcProvider = rpcReceipts([]);
+    const r = await svc.cashflow(ORG_A, { weeks: 13, now });
+    expect(r.bankSource).toBe('QuickBooks');
+    const o = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(o.bankSource).toBe('QuickBooks');
+  });
+
+  it('no accounts → no source claimed', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = rpcReceipts([]);
+    const r = await svc.cashflow(ORG_A, { weeks: 13, now });
+    expect(r.bankSource).toBeNull();
+  });
+});
+
+describe('cashflowOutlook — free cash is not gated on a reconstructed past low', () => {
+  const now = () => new Date(2026, 8, 3); // 3 September 2026
+  const bankRows = (q) =>
+    q.table === 'bank_accounts'
+      ? { data: [{ balance_pence: 78_342_222, last_synced_at: '2026-09-03T00:00:00Z' }], error: null }
+      : { data: [], error: null };
+  const receipts = (fn) =>
+    fn === 'settled_receipts_by_day'
+      ? {
+          data: [
+            { day: '2026-07-15', pence: 16_011_800 },
+            { day: '2026-08-15', pence: 13_308_300 },
+            { day: '2026-09-02', pence: 947_500 },
+          ],
+          error: null,
+        }
+      : { data: [], error: null };
+
+  it('forward:0 → no projected low, so the decision rests on cash in hand', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.lowestProjectedPence).toBeNull();
+    // NOT 48_074_622, which is June's reconstructed closing balance.
+    expect(r.decision.sweepablePence).toBe(78_342_222);
+    expect(r.decision.freeCashPence).toBe(78_342_222);
+  });
+
+  it('the window low is still reported — it is just not the decision', async () => {
+    // Useful context under the table; simply not a constraint on today's cash.
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.lowestInWindowPence).toBe(48_074_622);
+  });
+
+  it('with a real projection the low comes from the FORECAST months only', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 2, now });
+    const projected = r.months.filter((m) => m.projected);
+    expect(projected).toHaveLength(2);
+    const low = Math.min(...projected.map((m) => m.closingPence));
+    expect(r.lowestProjectedPence).toBe(low);
+    // A reconstructed history month must never be the source of that number.
+    expect(r.lowestProjectedPence).not.toBe(48_074_622);
+  });
+
+  it('a practice scope still reports no decision at all', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, practiceId: 'prac-1' });
+    expect(r.decision.action).toBe('unavailable');
+    expect(r.lowestInWindowPence).toBeNull();
+  });
+});
+
+describe('cashflowOutlook — the bank position is org-level, never per practice (weekly tie-in)', () => {
+  const now = () => new Date(2026, 8, 3);
+  const bankRows = (q) =>
+    q.table === 'bank_accounts'
+      ? { data: [{ balance_pence: 78_342_222, last_synced_at: '2026-09-03T00:00:00Z' }], error: null }
+      : { data: [], error: null };
+  const receipts = (fn) =>
+    fn === 'settled_receipts_by_day'
+      ? { data: [{ day: '2026-07-15', pence: 16_011_800 }], error: null }
+      : { data: [], error: null };
+
+  it('weekly view: runway free cash is null on a practice, real on the group', async () => {
+    supaRec.resultProvider = bankRows;
+    supaRec.rpcProvider = receipts;
+    const g = await svc.cashflow(ORG_A, { weeks: 13, now });
+    expect(g.runway.freeCashPence).toBe(78_342_222);
+    const p = await svc.cashflow(ORG_A, { weeks: 13, now, practiceId: 'prac-1' });
+    expect(p.runway.freeCashPence).toBeNull();
+    expect(p.bankAttributable).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A CASHFLOW page must read the CASH basis.
+//
+// QuickBooks is pulled twice — once accrual, once cash — and both land in
+// monthly_financials under `accounting_method`. Measured live at the point this
+// was found, 15 periods of each: 1,564 accrual rows and 1,537 cash rows,
+// covering the same months. The cashflow endpoints asked for neither and so
+// took the 'accrual' default, and the outlook's own header called its cash-out
+// figure "an accrual proxy for cash out" — a proxy for data that was already
+// sitting in the table beside it.
+//
+// The gap is not rounding. Jun 2026 cost £299,957.80 accrual against
+// £305,450.39 cash; Jul £371,297.51 against £363,089.94; Aug £305,205.36
+// against £298,808.37 — thousands a month, in both directions, which is exactly
+// what the timing difference between incurring a cost and paying it looks like.
+// On a page about cash, the cash basis is the right one.
+//
+// IT MUST FALL BACK, THOUGH. bucketsByPeriod surfaces ONLY explicit cash rows,
+// so an org on Xero or on manual entry has none at all, and asking for cash
+// alone would drop its entire cost side — cash out, net, runway and the tax
+// estimate all silently gone from a tenant whose feed is perfectly healthy.
+// Prefer cash, fall back to accrual, and say which one is on screen.
+// ---------------------------------------------------------------------------
+describe('cashflow — cash and accrual are BOTH offered, and the page says which', () => {
+  const now = () => new Date(2026, 4, 15); // 15 May 2026
+
+  const rows = (method, costPence) => ([
+    { period: '2026-04', dental_bucket: 'revenue', amount_pence: 10_000_000, source: 'quickbooks', practice_id: null, accounting_method: method },
+    { period: '2026-04', dental_bucket: 'staff', amount_pence: costPence, source: 'quickbooks', practice_id: null, accounting_method: method },
+  ]);
+  const bothBases = (q) =>
+    q.table === 'monthly_financials'
+      ? { data: [...rows('accrual', 4_000_000), ...rows('cash', 3_000_000)], error: null }
+      : { data: [], error: null };
+  const receipts = (fn) =>
+    fn === 'settled_receipts_by_day' ? { data: [{ day: '2026-04-10', pence: 9_000_000 }], error: null } : { data: [], error: null };
+
+  it('cash basis returns the cash costs', async () => {
+    supaRec.resultProvider = bothBases;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, accountingMethod: 'cash' });
+    expect(r.costsAccountingBasis).toBe('cash');
+    expect(r.months.find((m) => m.month === '2026-04').outPence).toBe(3_000_000);
+  });
+
+  it('accrual basis returns the accrual costs, from the same call shape', async () => {
+    supaRec.resultProvider = bothBases;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, accountingMethod: 'accrual' });
+    expect(r.costsAccountingBasis).toBe('accrual');
+    expect(r.months.find((m) => m.month === '2026-04').outPence).toBe(4_000_000);
+  });
+
+  it('defaults to cash — it is a cashflow page', async () => {
+    supaRec.resultProvider = bothBases;
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.costsAccountingBasis).toBe('cash');
+  });
+
+  // A Xero or manual-entry tenant has no cash rows at all: bucketsByPeriod
+  // surfaces ONLY explicit cash rows. Honouring the request literally would
+  // drop that tenant's whole cost side — cash out, net, runway and the tax
+  // estimate — from a feed that is perfectly healthy.
+  it('falls back to the other basis rather than losing the cost side', async () => {
+    supaRec.resultProvider = (q) =>
+      q.table === 'monthly_financials' ? { data: rows('accrual', 4_000_000), error: null } : { data: [], error: null };
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now, accountingMethod: 'cash' });
+    expect(r.costsAvailable).toBe(true);
+    expect(r.costsAccountingBasis).toBe('accrual');
+    // Said out loud, so the toggle does not look broken when it silently
+    // cannot honour what was asked.
+    expect(r.costsBasisRequested).toBe('cash');
+    expect(r.costsBasisFellBack).toBe(true);
+    expect(r.months.find((m) => m.month === '2026-04').outPence).toBe(4_000_000);
+  });
+
+  it('no cost feed at all → no basis claimed', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 4, forward: 0, now });
+    expect(r.costsAvailable).toBe(false);
+    expect(r.costsAccountingBasis).toBeNull();
+    expect(r.costsBasisFellBack).toBe(false);
+  });
+
+  it('the weekly view takes the same basis, so one page has one burn rate', async () => {
+    supaRec.resultProvider = bothBases;
+    supaRec.rpcProvider = rpcReceipts([{ day: '2026-04-10', pence: 9_000_000 }]);
+    const cash = await svc.cashflow(ORG_A, { weeks: 13, now, accountingMethod: 'cash' });
+    expect(cash.costsAccountingBasis).toBe('cash');
+    const accrual = await svc.cashflow(ORG_A, { weeks: 13, now, accountingMethod: 'accrual' });
+    expect(accrual.costsAccountingBasis).toBe('accrual');
+    // Different bases must actually produce different burn rates, or the
+    // toggle is decoration.
+    expect(cash.runway.monthlyCostsPence).not.toBe(accrual.runway.monthlyCostsPence);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE RUN-RATE IS NOT THE DATE FILTER'S BUSINESS.
+//
+// Threading the page's range into this endpoint (so the months table follows
+// the filter) collapsed `_monthWindow` to the months the range spans — and the
+// run-rate, the runway, the tax estimate and the free-cash decision were all
+// derived from that same list. Select 1–8 September and the burn rate became
+// eight days of September: observed on screen as "Monthly cost base £13,449"
+// beside "Running costs £13,449" — the same number twice — under a runway
+// reading "Self-funding · balance grows ~£62,458/mo" off eight days of data.
+//
+// This is the exact failure the original code refused to ship a forward number
+// for: "a forward number that is most wrong at the start of every month is
+// worse than no forward number". Runway, bills and the decision are AS OF
+// TODAY. They take a trailing window of complete months and ignore the picker.
+// ---------------------------------------------------------------------------
+describe('cashflowOutlook — the run-rate ignores the date filter', () => {
+  const now = () => new Date(2026, 8, 8); // 8 September 2026
+  const receipts = (fn) =>
+    fn === 'settled_receipts_by_day'
+      ? {
+          data: [
+            { day: '2026-07-15', pence: 16_011_800 },
+            { day: '2026-08-15', pence: 13_308_300 },
+            { day: '2026-09-02', pence: 947_500 },
+          ],
+          error: null,
+        }
+      : { data: [], error: null };
+
+  it('a part-month selection does not become the monthly rate', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, {
+      months: 6, forward: 0, now, from: '2026-09-01', to: '2026-09-08',
+    });
+    expect(r.months.map((m) => m.month)).toEqual(['2026-09']);
+    expect(r.runway.monthlyReceiptsPence).toBe(9_773_367);
+    expect(r.runway.monthlyReceiptsPence).not.toBe(947_500);
+  });
+
+  it('the run-rate is identical whichever window is on screen', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = receipts;
+    const narrow = await svc.cashflowOutlook(ORG_A, {
+      months: 6, forward: 0, now, from: '2026-09-01', to: '2026-09-08',
+    });
+    supaRec.rpcProvider = receipts;
+    const wide = await svc.cashflowOutlook(ORG_A, {
+      months: 6, forward: 0, now, from: '2026-06-01', to: '2026-08-31',
+    });
+    expect(narrow.runway.monthlyReceiptsPence).toBe(wide.runway.monthlyReceiptsPence);
+  });
+
+  it('with no range at all it behaves exactly as before', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 6, forward: 0, now });
+    expect(r.runway.monthlyReceiptsPence).toBe(9_773_367);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// The chart needs a SERIES, and the date filter does not provide one.
+//
+// The months table follows the picker, which is usually a single month — so the
+// chart drawn from it was one bar, on its own, in an empty plot. A trend with
+// one point is not a trend.
+//
+// `trend` is the same trailing window the run-rate already uses: complete
+// months ending today, whatever the picker says. The table stays exact and
+// windowed; the chart gets something worth drawing.
+// ---------------------------------------------------------------------------
+describe('cashflowOutlook — a trailing trend for the chart, whatever the filter says', () => {
+  const now = () => new Date(2026, 8, 8); // 8 September 2026
+  const receipts = (fn) =>
+    fn === 'settled_receipts_by_day'
+      ? {
+          data: [
+            { day: '2026-07-15', pence: 16_011_800 },
+            { day: '2026-08-15', pence: 13_308_300 },
+            { day: '2026-09-02', pence: 947_500 },
+          ],
+          error: null,
+        }
+      : { data: [], error: null };
+
+  it('a one-month selection still returns a full trend', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, {
+      months: 6, forward: 0, now, from: '2026-09-01', to: '2026-09-08',
+    });
+    expect(r.months).toHaveLength(1);          // the table follows the picker
+    expect(r.trend).toHaveLength(6);           // the chart does not
+    expect(r.trend.at(-1).month).toBe('2026-09');
+    expect(r.trend.find((m) => m.month === '2026-07').inPence).toBe(16_011_800);
+  });
+
+  it('the trend is the same series whichever window is selected', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = receipts;
+    const a = await svc.cashflowOutlook(ORG_A, { months: 6, forward: 0, now, from: '2026-09-01', to: '2026-09-08' });
+    supaRec.rpcProvider = receipts;
+    const b = await svc.cashflowOutlook(ORG_A, { months: 6, forward: 0, now, from: '2026-06-01', to: '2026-08-31' });
+    expect(a.trend.map((m) => m.month)).toEqual(b.trend.map((m) => m.month));
+    expect(a.trend.map((m) => m.inPence)).toEqual(b.trend.map((m) => m.inPence));
+  });
+
+  it('with no range the trend and the table are the same months', async () => {
+    supaRec.resultProvider = () => ({ data: [], error: null });
+    supaRec.rpcProvider = receipts;
+    const r = await svc.cashflowOutlook(ORG_A, { months: 6, forward: 0, now });
+    expect(r.trend.map((m) => m.month)).toEqual(
+      r.months.filter((m) => !m.projected).map((m) => m.month),
+    );
   });
 });

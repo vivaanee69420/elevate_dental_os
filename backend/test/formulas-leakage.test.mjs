@@ -20,7 +20,12 @@ describe('calculateRevenueLeakage', () => {
     acceptedPlanPence: 30_000_00, // £20,000 lost plans
     appointments: 1000,
     noShows: 100, // 10% FTA
-    cashCollectedPence: 90_000_00, // £10,000 uncollected
+    cashCollectedPence: 90_000_00,
+    // The unpaid invoice BALANCE, read from the invoices feed. This used to be
+    // derived as revenue - cashCollected, but the service passes the same
+    // settled-receipts figure as both, so that subtraction was zero for every
+    // organisation forever while real unpaid invoices sat in the ledger.
+    outstandingPence: 10_000_00,
   };
 
   it('computes each pool at the default rates', () => {
@@ -33,7 +38,7 @@ describe('calculateRevenueLeakage', () => {
     expect(pools.recall).toBe(Math.round(100_000_00 * LEAKAGE_HYGIENE_SHARE * 0.25 * 0.6));
     // lapsed: 100,000_00 * 0.06 * 40% = 2,400_00
     expect(pools.lapsed).toBe(Math.round(100_000_00 * LEAKAGE_LAPSED_SHARE * 0.4));
-    // collect: 10,000_00 * 70% = 7,000_00
+    // collect: the £10,000 outstanding balance * 70% = 7,000_00
     expect(pools.collect).toBe(7_000_00);
   });
 

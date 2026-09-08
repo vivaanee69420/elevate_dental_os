@@ -96,6 +96,9 @@ export const PAGE_SECTION = {
   'cashflow': 'finance.view',
   'workbench': 'finance.view',
   'profit': 'finance.view',
+  // Split out of /profit onto its own route; same finance gate, so Reception
+  // (CRM only, project rule 5) never reaches it.
+  'profit-benchmark': 'finance.view',
   'financial': 'finance.view',
   'payments': 'finance.view',
   'quickbooks': 'finance.view',

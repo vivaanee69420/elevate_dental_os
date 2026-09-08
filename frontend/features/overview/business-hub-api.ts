@@ -50,6 +50,17 @@ export interface BusinessHub {
     revenueTargetPence: number;        // the annual goal PRO-RATED to this window
     revenueTargetAnnualPence: number;  // the owner's stated annual goal, unscaled
     marginPct: number;
+    /**
+     * The revenue and cost totals the margin was computed from, so a card can
+     * show its working. Null when no P&L feed is connected. Covers the trailing
+     * 12 ledger months ORG-WIDE — never the selected window or practice.
+     */
+    marginInputs: {
+      revenuePence: number;
+      totalCostsPence: number;
+      netProfitPence: number;
+      monthsCovered: number;
+    } | null;
     marginBasis: 'trailing_12m';       // margin covers the last 12 ledger months, NOT the window
     appointments: number;
     noShows: number;

@@ -16,6 +16,7 @@ import {
   type MonthlyFinancialInput,
   type FinanceSeriesOpts,
   type DateRange,
+  type CostBasis,
   type FinanceSource,
 } from './api';
 
@@ -45,17 +46,30 @@ export function useQboAccounts() {
   });
 }
 
-export function useCashflow(weeks = 13, practiceId: string | null = null, range?: DateRange | null) {
+export function useCashflow(
+  weeks = 13,
+  practiceId: string | null = null,
+  range?: DateRange | null,
+  basis: CostBasis = 'cash',
+) {
   return useQuery({
-    queryKey: ['cashflow', weeks, practiceId, range?.from ?? null, range?.to ?? null],
-    queryFn: () => getCashflow(weeks, practiceId, range),
+    queryKey: ['cashflow', weeks, practiceId, range?.from ?? null, range?.to ?? null, basis],
+    queryFn: () => getCashflow(weeks, practiceId, range, basis),
   });
 }
 
-export function useCashflowOutlook(months = 4, forward = 2, practiceId: string | null = null) {
+export function useCashflowOutlook(
+  months = 4,
+  forward = 2,
+  practiceId: string | null = null,
+  range?: DateRange | null,
+  basis: CostBasis = 'cash',
+) {
   return useQuery({
-    queryKey: ['cashflow-outlook', months, forward, practiceId],
-    queryFn: () => getCashflowOutlook(months, forward, practiceId),
+    // The range and the basis MUST be in the key: without them the first
+    // result is served for every subsequent one and the controls look broken.
+    queryKey: ['cashflow-outlook', months, forward, practiceId, range?.from ?? null, range?.to ?? null, basis],
+    queryFn: () => getCashflowOutlook(months, forward, practiceId, range, basis),
   });
 }
 

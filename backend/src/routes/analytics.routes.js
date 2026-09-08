@@ -75,6 +75,12 @@ router.post('/ai-ask', aiLimiter, fin, (0, async_handler_1.asyncHandler)(analyti
 router.get('/compute/treatment-models', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentModels));
 router.get('/treatment-fee-benchmarks', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentFeeBenchmarks));
 router.post('/compute/treatment-economics', fin, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.treatmentEconomics));
+// Saved models. Reads sit with the rest of the workbench on finance.view;
+// WRITES need finance.edit, so Reception (CRM only, project rule 5) never
+// reaches them and a viewer cannot rewrite the practice's economics. These are
+// NOT under /compute/, so they are audited like every other mutation.
+router.put('/treatment-models/:key', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.saveTreatmentModel));
+router.delete('/treatment-models/:key', finEdit, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.deleteTreatmentModel));
 // Value & Growth — driver-based valuation + Sale Planner (pure compute,
 // audit-exempt /compute/ path, valuation.view gate same as GET /valuation).
 router.post('/compute/valuation', val, (0, async_handler_1.asyncHandler)(analytics_controller_1.analyticsController.valuationCompute));

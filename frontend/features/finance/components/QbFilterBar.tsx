@@ -56,7 +56,10 @@ export default function QbFilterBar({ value, onChange }: Props) {
   const field: React.CSSProperties = {
     padding: '5px 8px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 6,
   };
-  const label: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--ink-muted)', textTransform: 'uppercase', marginRight: 2 };
+  // minWidth matches FILTER_LABEL_WIDTH in ProfitSourceBar so Source, Practice,
+  // Period and Method line up in one column instead of each starting wherever
+  // its own word happens to end.
+  const label: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: 'var(--ink-muted)', textTransform: 'uppercase', minWidth: 58 };
   const set = (patch: Partial<QbFilters>) => onChange({ ...value, ...patch });
 
   function pickPreset(pp: PeriodPreset) {

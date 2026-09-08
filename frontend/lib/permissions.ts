@@ -62,6 +62,9 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // Finance
   cashflow: 'finance.view',
   profit: 'finance.view',
+  // Same gate as the P&L it was split out of: finance figures, so Reception
+  // (CRM only, project rule 5) never sees it.
+  'profit-benchmark': 'finance.view',
   workbench: 'finance.view',
   financial: 'finance.view',
   payments: 'finance.view',

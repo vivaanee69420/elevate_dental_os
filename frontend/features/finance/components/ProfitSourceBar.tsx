@@ -13,16 +13,29 @@ const SOURCES: { key: FinanceSource; label: string }[] = [
   { key: 'quickbooks', label: 'QuickBooks' },
 ];
 
+/** Label column width shared with QbFilterBar so the rows line up. */
+export const FILTER_LABEL_WIDTH = 58;
+
 export default function ProfitSourceBar({
   source,
   onSourceChange,
   accountId,
   onAccountChange,
+  inlineLabel = false,
+  disabledSources,
 }: {
   source: FinanceSource;
   onSourceChange: (s: FinanceSource) => void;
   accountId: string | null;
   onAccountChange: (id: string | null) => void;
+  /** Put the label BESIDE the pills, matching the Period / Method rows. */
+  inlineLabel?: boolean;
+  /**
+   * Sources this page cannot use, mapped to WHY. Offering a control that always
+   * fails is a trap: the benchmark page let you pick Dentally and land on an
+   * empty screen, when the backend hard-returns nothing for it by design.
+   */
+  disabledSources?: Partial<Record<FinanceSource, string>>;
 }) {
   const { data } = useQboAccounts();
   const accounts = (data?.accounts ?? []).filter((a) => a.status === 'active');
@@ -39,26 +52,40 @@ export default function ProfitSourceBar({
   });
 
   return (
-    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
-      <div>
-        <div className="text-xs text-ink-muted uppercase" style={{ marginBottom: 6, letterSpacing: 0.3 }}>
-          Data source
+    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: inlineLabel ? 0 : 16 }}>
+      <div style={inlineLabel ? { display: 'flex', alignItems: 'center', gap: 8 } : undefined}>
+        {/* Inline mode matches the Period / Method rows beside it. Stacked in
+            one block, a label ABOVE its pills next to two labels BESIDE theirs
+            read as three unrelated controls rather than one filter set. */}
+        <div
+          className="text-ink-muted uppercase"
+          style={inlineLabel
+            ? { fontSize: 11, fontWeight: 700, letterSpacing: 0.3, minWidth: FILTER_LABEL_WIDTH }
+            : { marginBottom: 6, letterSpacing: 0.3, fontSize: 12 }}
+        >
+          Source
         </div>
         <div style={{ display: 'inline-flex', borderRadius: 8, overflow: 'hidden' }}>
-          {SOURCES.map((s, i) => (
+          {SOURCES.map((s, i) => {
+            const why = disabledSources?.[s.key];
+            return (
             <button
               key={s.key}
               type="button"
-              onClick={() => onSourceChange(s.key)}
+              disabled={!!why}
+              title={why}
+              onClick={() => { if (!why) onSourceChange(s.key); }}
               style={{
                 ...seg(source === s.key),
+                ...(why ? { opacity: 0.45, cursor: 'not-allowed' } : null),
                 borderRadius: i === 0 ? '8px 0 0 8px' : i === SOURCES.length - 1 ? '0 8px 8px 0' : 0,
                 borderLeft: i === 0 ? '1px solid var(--border)' : 'none',
               }}
             >
               {s.label}
             </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 

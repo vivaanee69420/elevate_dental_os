@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## READ FIRST, EVERY SESSION
+
+@rules.md
+
+`rules.md` holds the owner's non-negotiable working rules — multi-tenant by
+default, fix it for every account not just the reported one, ask agency vs
+sub-account vs both BEFORE building, thorough review with every edge case
+handled, no keys in any file, and no reading patient records without
+permission. It is imported above so it loads with this file, and a
+`SessionStart` hook prints it as well. Where `rules.md` and anything below
+disagree, `rules.md` wins.
+
 ## What this is
 
 Multi-tenant SaaS for UK dental practice groups. Two apps: a Fastify-style **Express backend** (`backend/`, deploy Railway) and a **Next.js 14 frontend** (`frontend/`, deploy Railway via `frontend/Dockerfile`, service `web`). Postgres + RLS on Supabase. Target launch Fri 30 May 2026.

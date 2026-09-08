@@ -94,7 +94,7 @@ export default function PaymentsScreen() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div>
       <div className="flex justify-between items-start gap-4 flex-wrap">
         <PageHeader title="Patient Payments" subtitle="All transactions" />
         <button

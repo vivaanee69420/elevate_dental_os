@@ -88,3 +88,58 @@ describe('businessHub — invoice totals (Dentally Invoice Timeline)', () => {
         expect(res.group.invoiceSettledPence).toBe(0);
     });
 });
+
+// ============================================================================
+// The margin card has to be able to show its working.
+//
+// `marginPct` is a percentage over the trailing TWELVE ledger months, org-wide,
+// and it used to arrive on the cashflow page as a bare number that the page
+// then multiplied by the selected window's billed work and labelled "Profit".
+// Two different periods, presented as one figure, with nothing on screen a
+// reader could check it against.
+//
+// The inputs now travel with it. These assertions are the reconciliation the
+// proof panel makes visible: the rows it prints must add up to the percentage
+// printed above them, or the panel is decoration.
+// ============================================================================
+describe('business hub — the margin carries the numbers behind it', () => {
+    const now = () => new Date(2026, 4, 15);
+
+    it('revenue less costs equals net profit, and that is the margin', async () => {
+        supaRec.resultProvider = (q) =>
+            q.table === 'monthly_financials'
+                ? {
+                    data: [
+                        { period: '2026-04', dental_bucket: 'revenue', amount_pence: 10_000_000, source: 'quickbooks', practice_id: null },
+                        { period: '2026-04', dental_bucket: 'staff', amount_pence: 4_000_000, source: 'quickbooks', practice_id: null },
+                        { period: '2026-04', dental_bucket: 'lab', amount_pence: 1_000_000, source: 'quickbooks', practice_id: null },
+                    ],
+                    error: null,
+                }
+                : { data: [], error: null };
+        supaRec.rpcProvider = () => ({ data: [], error: null });
+        svc.invalidateBusinessHub();
+        const r = await svc.businessHub(ORG, { days: 30, now });
+        const mi = r.group.marginInputs;
+        expect(mi).not.toBeNull();
+        // The identity the panel renders as Revenue / Less all costs / Net profit.
+        expect(mi.revenuePence - mi.totalCostsPence).toBe(mi.netProfitPence);
+        // And the headline percentage is that net profit over that revenue —
+        // not a figure arrived at any other way.
+        expect(Math.round((mi.netProfitPence / mi.revenuePence) * 1000) / 10)
+            .toBe(Math.round(r.group.marginPct * 10) / 10);
+        expect(mi.monthsCovered).toBeGreaterThan(0);
+    });
+
+    it('no P&L feed → null inputs, never a zeroed set of rows', async () => {
+        // A proof panel showing "Revenue £0.00 / Less costs £0.00" would be a
+        // statement that the practice earned nothing, which is not what "no
+        // accounting feed connected" means.
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        supaRec.rpcProvider = () => ({ data: [], error: null });
+        svc.invalidateBusinessHub();
+        const r = await svc.businessHub(ORG, { days: 30, now });
+        expect(r.group.marginInputs).toBeNull();
+        expect(r.group.marginPct).toBe(0);
+    });
+});

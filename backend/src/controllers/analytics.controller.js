@@ -40,11 +40,11 @@ export const analyticsController = {
     },
     async cashflowOutlook(req, res) {
         const q = analytics_model_1.outlookQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.cashflowOutlook(req.user.organisation_id, { months: q.months, forward: q.forward, practiceId: q.practice_id }));
+        res.json(await analytics_service_1.analyticsService.cashflowOutlook(req.user.organisation_id, { months: q.months, forward: q.forward, practiceId: q.practice_id, from: q.from, to: q.to, accountingMethod: q.accounting_method }));
     },
     async cashflow(req, res) {
         const q = analytics_model_1.weeksQuerySchema.parse(req.query);
-        res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks, practiceId: q.practice_id, from: q.from, to: q.to }));
+        res.json(await analytics_service_1.analyticsService.cashflow(req.user.organisation_id, { weeks: q.weeks, practiceId: q.practice_id, from: q.from, to: q.to, accountingMethod: q.accounting_method }));
     },
     async financial(req, res) {
         const q = analytics_model_1.financialQuerySchema.parse(req.query);
@@ -132,7 +132,18 @@ export const analyticsController = {
             const v = Number(req.query['rate_' + k]);
             if (Number.isFinite(v)) rates[k] = v;
         }
-        res.json(await analytics_service_1.analyticsService.revenueLeakage(req.user.organisation_id, { days, since, until, rates }));
+        // THE PRACTICE FILTER. The page has always sent `scope` (either 'all'
+        // or a practice uuid) and this controller never read it, so every
+        // practice pill returned the group figure while looking like it had
+        // filtered. The service implements scoping fully — it narrows revenue,
+        // appointments and invoices, and withholds the plans pool because
+        // treatment_plans carry no practice_id — it was simply never called
+        // with one.
+        const scope = typeof req.query.scope === 'string' ? req.query.scope.trim() : 'all';
+        const practiceId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(scope)
+            ? scope
+            : null;
+        res.json(await analytics_service_1.analyticsService.revenueLeakage(req.user.organisation_id, { days, since, until, rates, practiceId }));
     },
     async dataQuality(req, res) {
         res.json(await analytics_service_1.analyticsService.dataQuality(req.user.organisation_id));
@@ -236,12 +247,28 @@ export const analyticsController = {
     // Real case-fee benchmarks (from Dentally invoice_items) to seed the
     // workbench. Patient fee only; costs stay owner-entered.
     async treatmentFeeBenchmarks(req, res) {
-        const months = Math.max(1, Math.min(36, Number(req.query.months) || 12));
-        res.json(await analytics_service_1.analyticsService.treatmentFeeBenchmarks(req.user.organisation_id, { months }));
+        const q = analytics_model_1.feeBenchmarkQuerySchema.parse(req.query);
+        res.json(await analytics_service_1.analyticsService.treatmentFeeBenchmarks(req.user.organisation_id, {
+            months: q.months, practiceId: q.practice_id ?? null, since: q.since ?? null, until: q.until ?? null,
+        }));
     },
     // Pure compute (audit-exempt via /compute/ path) — see Arch #3.
-    treatmentModels(req, res) {
-        res.json(analytics_service_1.analyticsService.treatmentModels());
+    async treatmentModels(req, res) {
+        res.json(await analytics_service_1.analyticsService.treatmentModels(req.user.organisation_id));
+    },
+    // Save one model. The org comes from the session, the key from the path;
+    // neither is ever read from the body.
+    async saveTreatmentModel(req, res) {
+        const { key } = analytics_model_1.treatmentModelKeySchema.parse(req.params);
+        const model = analytics_model_1.treatmentModelSaveSchema.parse(req.body);
+        res.json(await analytics_service_1.analyticsService.saveTreatmentModel(req.user.organisation_id, key, model));
+    },
+    // Delete one model. A built-in key reverts to its default; a custom one is
+    // removed. Returns the full resulting set so the page re-renders from one
+    // source of truth rather than patching its own copy.
+    async deleteTreatmentModel(req, res) {
+        const { key } = analytics_model_1.treatmentModelKeySchema.parse(req.params);
+        res.json(await analytics_service_1.analyticsService.deleteTreatmentModel(req.user.organisation_id, key));
     },
     treatmentEconomics(req, res) {
         const model = analytics_model_1.treatmentModelSchema.parse(req.body);

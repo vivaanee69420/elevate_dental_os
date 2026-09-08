@@ -2,13 +2,19 @@
 
 // Revenue Leakage (GM Intelligence OS). "Money left on the table" this window,
 // annualised — five recoverable pools with a tunable recoverable-rate each, and
-// a one-click "＋ Task" that pushes a recovery job into the live Task Manager.
+// Each figure opens its own working; every pool says whether it is measured or
+// modelled.
 //
 // WIRED: GET /api/analytics/leakage (scope/period + rate reactive). Real settled
 // turnover, FTA no-shows, treatment-plan value and banked receipts. recall +
 // lapsed are modelled shares of revenue until patient-level Dentally cohorts
-// land. Money is integer PENCE. "＋ Task" is Owner-only (POST /api/tasks 403s
-// otherwise) — the button surfaces the error rather than hiding.
+// land. Money is integer PENCE.
+//
+// A one-click "+ Task" used to sit on every row, posting a recovery job into
+// the Task Manager. Removed: it created a task from a figure the page itself
+// could not stand behind — three of the five pools are planning models, and the
+// biggest was an open-plans upper bound with no acceptance signal underneath
+// it. Turning that into an assigned job made an assumption look like work.
 
 import { useState } from 'react';
 import { PageHeader, KpiTile, EmptyState, SkeletonKpiRow, SkeletonTable } from '@/components/ui';
@@ -16,8 +22,9 @@ import { formatPence } from '@/lib/format';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { Panel, PanelHead, NoteFoot, Pill } from './os-ui';
 import { useLeakage } from '../leakage-hooks';
+import { DetailModal } from '@/features/marketing/_shared/DetailModal';
+import { buildLeakageProof, buildTotalProof, type Proof } from '../leakage-proof';
 import type { Leakage, LeakageLine, LeakageRates } from '../leakage-api';
-import { createTask } from '@/features/overview/tasks-api';
 
 const gbp = (p: number) => formatPence(p);
 
@@ -73,28 +80,53 @@ function LeakageBody({
   rates: Partial<LeakageRates>;
   setRates: (r: Partial<LeakageRates>) => void;
 }) {
-  const biggest = data.lines[0];
+  // Which figure's working is open. Every number on this page is either an
+  // observation or a model, and a reader cannot tell which without being shown.
+  const [proof, setProof] = useState<Proof | null>(null);
+
+  // The biggest MEASURED leak. Leading with the biggest line overall meant
+  // leading with the modelled open-plans figure, which was 93% of the old
+  // headline and is not money anyone has lost.
+  const biggestMeasured = data.lines.find((l) => l.basis === 'measured');
+  const measuredPct = data.inputs.revenuePence > 0
+    ? Math.round((data.measuredAnnualPence / (data.inputs.revenuePence * (365 / Math.max(1, data.windowDays)))) * 1000) / 10
+    : 0;
   return (
     <>
-      {/* KPI strip */}
+      {/* KPI strip. MEASURED leads; the modelled pools are shown beside it and
+          never folded into it — the page used to sum the two and call the
+          result recoverable, which read as 77% of turnover. */}
       <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
         <KpiTile
-          label="Recoverable / year"
-          value={gbp(data.annualTotalPence)}
-          delta={`${gbp(data.monthlyTotalPence)}/mo across all sites`}
+          onClick={() => setProof(buildTotalProof('measured', data))}
+          label="Recoverable / year — measured"
+          value={gbp(data.measuredAnnualPence)}
+          delta={`${gbp(Math.round(data.measuredAnnualPence / 12))}/mo · from real no-shows and unpaid invoices`}
           deltaTone="down"
         />
         <KpiTile
-          label="As % of turnover"
-          value={`${data.asPctOfRevenue}%`}
-          delta="of window turnover"
+          onClick={() => setProof(buildTotalProof('modelled', data))}
+          label="Modelled opportunity"
+          value={gbp(data.modelledAnnualPence)}
+          delta="planning estimate — open plans, recall and lapsed shares"
         />
         <KpiTile
-          label="Biggest single leak"
-          value={biggest ? biggest.label : '—'}
-          delta={biggest ? `${gbp(biggest.annualPence)}/yr` : ''}
+          onClick={biggestMeasured ? () => setProof(buildLeakageProof(biggestMeasured, data)) : undefined}
+          label="Biggest measured leak"
+          value={biggestMeasured ? biggestMeasured.label : '—'}
+          delta={biggestMeasured ? `${gbp(biggestMeasured.annualPence)}/yr · ${measuredPct}% of turnover` : 'nothing measurable in this window'}
         />
       </div>
+
+      {data.planCompletionPct !== null && data.planCompletionPct < 15 && (
+        <div className="text-sm rounded-lg p-3" style={{ background: '#FEF3C7', color: '#78350F' }}>
+          <b>Open plans are an upper bound, not lost money.</b> Only {data.planCompletionPct}% of
+          presented plan value is marked completed in your feed, and Dentally sends no acceptance
+          state at all — so &ldquo;still open&rdquo; counts work in progress and work booked ahead
+          alongside anything genuinely lost. Treat it as the size of the follow-up list, not a
+          shortfall.
+        </div>
+      )}
 
       <Panel>
         <PanelHead
@@ -125,59 +157,91 @@ function LeakageBody({
       </Panel>
 
       <Panel>
-        <PanelHead title="Where the money leaks" sub="Annualised from the selected window. ＋ Task pushes a recovery job into the Task Manager (Owner only)." />
+        <PanelHead title="Where the money leaks" sub="Annualised from the selected window. Tap any figure to see how it was worked out." />
         <div className="flex flex-col divide-y divide-line">
           {data.lines.map((l) => (
-            <LeakRow key={l.key} line={l} />
+            <LeakRow key={l.key} line={l} onProof={() => setProof(buildLeakageProof(l, data))} />
           ))}
         </div>
         <NoteFoot>
-          Recall and reactivation pools are modelled shares of revenue — wire Dentally for patient-level
-          exact figures. FTA rate this window: {data.ftaRatePct}%.
+          Tap any figure to see how it was worked out. Recall and reactivation are modelled shares of
+          revenue — wire Dentally for patient-level exact figures. FTA rate this window: {data.ftaRatePct}%.
         </NoteFoot>
       </Panel>
+
+      <DetailModal
+        open={proof !== null}
+        title={proof?.title ?? ''}
+        subtitle={proof?.means}
+        onClose={() => setProof(null)}
+      >
+        {proof && (
+          <div style={{ fontSize: 13 }}>
+            <p className="text-ink-muted mb-4">{proof.basis}</p>
+            <table className="w-full">
+              <tbody>
+                {proof.rows.map((r) => (
+                  <tr key={r.name} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td className={r.muted ? 'text-ink-muted' : ''} style={{ padding: '8px 4px' }}>{r.name}</td>
+                    <td
+                      className={'text-right tabular-nums ' + (r.muted ? 'text-ink-muted' : '')}
+                      style={{ padding: '8px 4px' }}
+                    >
+                      {r.value}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: '2px solid var(--border)' }}>
+                  <td className="font-semibold" style={{ padding: '10px 4px' }}>{proof.total.name}</td>
+                  <td className="text-right font-semibold tabular-nums" style={{ padding: '10px 4px' }}>
+                    {proof.total.value}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+            {proof.caveat && (
+              <p className="text-ink-muted" style={{ fontSize: 12, marginTop: 16, lineHeight: 1.55 }}>
+                {proof.caveat}
+              </p>
+            )}
+          </div>
+        )}
+      </DetailModal>
     </>
   );
 }
 
-function LeakRow({ line }: { line: LeakageLine }) {
-  const [state, setState] = useState<'idle' | 'saving' | 'done' | 'error'>('idle');
-  const [msg, setMsg] = useState('');
-
-  async function addTask() {
-    setState('saving');
-    setMsg('');
-    try {
-      await createTask({
-        title: `Recover: ${line.label}`,
-        description: `${line.sub}. Recoverable value ~${gbp(line.annualPence)}/yr. Owner: ${line.owner}.`,
-        priority: 'high',
-      });
-      setState('done');
-    } catch (e) {
-      setState('error');
-      setMsg((e as Error)?.message ?? 'Failed');
-    }
-  }
-
+function LeakRow({ line, onProof }: { line: LeakageLine; onProof: () => void }) {
   return (
     <div className="flex items-center gap-3 py-3">
       <div className="flex-1">
-        <div className="text-[13.5px] font-semibold text-ink">{line.label}</div>
-        <div className="text-[12px] text-ink-muted">{line.sub} · owner: {line.owner}</div>
+        <div className="text-[13.5px] font-semibold text-ink">
+          {line.label}
+          {/* Measured or modelled, on the row itself. Four of these five lines
+              were assumptions and only the footnote said so. */}
+          <span
+            className="ml-2 text-[10px] font-semibold rounded px-1.5 py-0.5 align-middle"
+            style={line.basis === 'measured'
+              ? { background: 'var(--success-50, #DCFCE7)', color: 'var(--success)' }
+              : { background: 'var(--bg)', color: 'var(--ink-muted)' }}
+          >
+            {line.basis === 'measured' ? 'measured' : 'modelled'}
+          </span>
+        </div>
+        <div className="text-[12px] text-ink-muted">{line.sub}</div>
       </div>
       <div className="text-right">
-        <div className="text-[14px] font-semibold tabular-nums text-danger">{gbp(line.annualPence)}</div>
+        <button
+          type="button"
+          onClick={onProof}
+          className="text-[14px] font-semibold tabular-nums text-danger underline decoration-dotted underline-offset-4"
+        >
+          {gbp(line.annualPence)}
+        </button>
         <div className="text-[11px] text-ink-muted">{gbp(line.monthlyPence)}/mo</div>
       </div>
-      <button
-        onClick={addTask}
-        disabled={state === 'saving' || state === 'done'}
-        className="text-[12px] px-2.5 py-1 rounded-md border border-line hover:bg-surface-2 disabled:opacity-50"
-        title={state === 'error' ? msg : 'Create a recovery task'}
-      >
-        {state === 'done' ? '✓ Added' : state === 'saving' ? 'Adding…' : state === 'error' ? 'Retry' : '＋ Task'}
-      </button>
     </div>
   );
 }

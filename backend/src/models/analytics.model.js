@@ -84,6 +84,38 @@ export const treatmentModelSchema = zod_1.z.object({
     })).max(50).default([]),
 });
 
+// Real case-fee + volume benchmarks. A practice and an explicit window, because
+// the fee genuinely differs by site and the workbench previously had a start
+// date and no end at all.
+export const feeBenchmarkQuerySchema = zod_1.z.object({
+    months: zod_1.z.coerce.number().int().min(1).max(36).default(12),
+    practice_id: zod_1.z.string().uuid().optional(),
+    since: dateStr,
+    until: dateStr,
+}).refine((q) => !(q.since && q.until) || q.since <= q.until, {
+    message: 'since must not be after until',
+    path: ['since'],
+});
+
+// Saving a workbench model. Stricter than treatmentModelSchema above, which
+// only has to survive a pure compute: these bounds mirror the CHECK constraints
+// on treatment_models exactly. A body that passes Zod and then fails a database
+// constraint is a 500 where the user deserved a 400 naming the field.
+export const treatmentModelSaveSchema = treatmentModelSchema.extend({
+    label: zod_1.z.string().trim().min(1).max(60),
+    // Throughput divides into per-case figures, so zero is a division by zero.
+    surgeries: zod_1.z.coerce.number().int().min(1).max(100).default(1),
+    casesPerSurgery: zod_1.z.coerce.number().int().min(1).max(1000).default(1),
+    implantsPerPatient: zod_1.z.coerce.number().int().min(1).max(100).default(1),
+});
+
+// The slug in the path. Matches treatment_models_key_shape, so a key the table
+// would refuse is rejected at the edge with a readable message instead of a
+// constraint violation.
+export const treatmentModelKeySchema = zod_1.z.object({
+    key: zod_1.z.string().regex(/^[a-z0-9][a-z0-9_-]{0,48}$/, 'key must be a lowercase slug'),
+});
+
 // Group Valuation state (POST /compute/valuation body). All money in integer
 // pence; multiples/factors are plain numbers (the classification/region/tier
 // tables live client-side and the resolved values are sent here — the formula
@@ -141,6 +173,18 @@ export const outlookQuerySchema = zod_1.z.object({
     months: zod_1.z.coerce.number().int().min(1).max(24).default(4),
     forward: zod_1.z.coerce.number().int().min(0).max(12).default(2),
     practice_id: zod_1.z.string().uuid().optional(),
+    // The page's date filter. Both must be set for the range to take effect.
+    from: dateStr,
+    to: dateStr,
+    // Cash vs accrual cost base. Defaults to CASH here — this is a cashflow
+    // view — where every other finance endpoint defaults to accrual.
+    accounting_method: zod_1.z.enum(['accrual', 'cash']).default('cash'),
+}).refine((q) => !(q.from && q.to) || q.from <= q.to, {
+    // An inverted range used to reach the window builder unfiltered, match
+    // nothing, and report a fully synced tenant as having no data — the same
+    // silent-empty-state bug the Facebook report was fixed for.
+    message: 'from must not be after to',
+    path: ['from'],
 });
 
 export const seriesQuerySchema = zod_1.z.object({
@@ -169,6 +213,14 @@ export const weeksQuerySchema = zod_1.z.object({
     practice_id: zod_1.z.string().uuid().optional(),
     from: dateStr,
     to: dateStr,
+    // Cash vs accrual cost base. Defaults to CASH here — this is a cashflow
+    // view — where every other finance endpoint defaults to accrual.
+    accounting_method: zod_1.z.enum(['accrual', 'cash']).default('cash'),
+}).refine((q) => !(q.from && q.to) || q.from <= q.to, {
+    // An inverted range makes the week count collapse to 1 and the window end
+    // before it starts — an empty panel on a tenant with plenty of receipts.
+    message: 'from must not be after to',
+    path: ['from'],
 });
 
 // /financial — owner-editable balance-sheet assumptions (the estimated BS is

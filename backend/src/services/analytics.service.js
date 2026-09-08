@@ -4,6 +4,8 @@
 // 200 status (NOT an error) — preserved exactly from the original.
 // ============================================================================
 import * as analytics_repository_1 from "../repositories/analytics.repository.js";
+import * as treatment_model_repository_1 from "../repositories/treatment-model.repository.js";
+import { modelFromRow, rowFromModel } from "../lib/treatment-model-mapping.js";
 import { integrationRepository as integration_repository_1 } from "../repositories/integration.repository.js";
 import * as formulas_1 from "../lib/formulas.js";
 import * as claude_1 from "../lib/gemini.js";
@@ -41,6 +43,40 @@ import { createTtlCache } from "../lib/ttl-cache.js";
 // promptly and long enough to collapse a burst into one computation.
 const businessHubCache = createTtlCache({ ttlMs: 60_000, max: 300 });
 
+// Human names for the data feeds behind a money figure. Module-level because
+// the weekly view and the outlook both name them and two copies would be two
+// vocabularies — the Dashboard already calls the bank figure "indicative"
+// while the cashflow page called it "real".
+const FEED_LABELS = { dentally: 'Dentally', quickbooks: 'QuickBooks', xero: 'Xero', manual: 'manual entry', stripe: 'Stripe', gocardless: 'GoCardless' };
+function labelFeeds(slugs) {
+    const names = [...new Set((slugs || []).map((x) => FEED_LABELS[x] || x))];
+    return names.length ? names.join(' + ') : null;
+}
+
+// COSTS ON THE BASIS THE READER ASKED FOR — cash or accrual, both offered.
+//
+// QuickBooks is pulled twice, once on each basis, and both land in
+// monthly_financials under `accounting_method`. The cashflow endpoints used to
+// take the 'accrual' default and describe the result as "an accrual proxy for
+// cash out", while the cash figures sat in the same table.
+//
+// The fallback is the part that matters for other tenants: bucketsByPeriod
+// surfaces ONLY explicit cash rows, so a Xero or manual-entry org has none.
+// Honouring a cash request literally would drop its entire cost side — cash
+// out, net, runway, the tax estimate — from a feed that is working perfectly.
+// So: try what was asked, fall back to the other, and report which is on screen.
+async function resolveCostBasis(svc, orgId, practiceId, requested) {
+    const other = requested === 'cash' ? 'accrual' : 'cash';
+    const hasCosts = (b) => b.hasAny && Object.entries(b.annual)
+        .some(([bucket, v]) => bucket !== 'revenue' && (v || 0) > 0);
+    const first = await svc._actualsBundle(orgId, practiceId, { accountingMethod: requested });
+    if (hasCosts(first)) return { basis: requested, actuals: first, fellBack: false };
+    const second = await svc._actualsBundle(orgId, practiceId, { accountingMethod: other });
+    if (hasCosts(second)) return { basis: other, actuals: second, fellBack: true };
+    // Neither basis has a cost row: no feed, not a basis problem.
+    return { basis: null, actuals: first, fellBack: false };
+}
+
 // Shape version for the cached payload. BUMP THIS whenever a field is added to,
 // removed from, or redefined in the businessHub response.
 //
@@ -56,7 +92,7 @@ const businessHubCache = createTtlCache({ ttlMs: 60_000, max: 300 });
 // the Marketing cards. A cached v3 payload has none of them, and a card reading
 // `undefined` for its prior renders exactly the "213.2% vs undefined" this key
 // exists to prevent.
-export const HUB_PAYLOAD_VERSION = 'v4';
+export const HUB_PAYLOAD_VERSION = 'v5';
 export const analyticsService = {
     // Turn a validated scope param into a concrete entity filter. Single source
     // (CQ2) so the 6-branch switch isn't copy-pasted across controllers. Only
@@ -547,10 +583,61 @@ export const analyticsService = {
     treatmentEconomics(model) {
         return (0, formulas_1.computeServiceEconomics)(model);
     },
-    // Seed default workbench models (owner-editable client-side; persisted
-    // overrides are a later slice).
-    treatmentModels() {
-        return formulas_1.DEFAULT_SERVICE_MODELS;
+    // Workbench models: the built-in defaults, with this ORGANISATION'S saved
+    // rows laid over them.
+    //
+    // A saved row keyed to a built-in REPLACES it; deleting that row restores
+    // the default, which is the whole reset mechanism — no flag, no second code
+    // path. Any other key is a treatment this org invented and is returned
+    // alongside them, marked isCustom so the UI offers "delete" rather than
+    // "reset to default" (offering reset on a treatment with no default would
+    // simply make it vanish).
+    //
+    // A failed read falls back to the defaults rather than an empty workbench:
+    // the page is a calculator, and a calculator with no models is broken where
+    // a calculator with the standard ones is merely not yet personalised.
+    async treatmentModels(orgId) {
+        const defaults = formulas_1.DEFAULT_SERVICE_MODELS;
+        if (!orgId) return defaults;
+        let rows = [];
+        try {
+            rows = await treatment_model_repository_1.treatmentModelRepository.listForOrg(orgId);
+        } catch {
+            return defaults;
+        }
+        const out = {};
+        for (const [key, m] of Object.entries(defaults)) out[key] = { ...m, isCustom: false };
+        for (const r of rows) {
+            // The repository already filters by org; this refuses a foreign row
+            // even if a future caller forgets to. Isolation is worth asserting
+            // twice when serviceClient bypasses RLS.
+            if (r.organisation_id !== orgId) continue;
+            out[r.key] = modelFromRow(r);
+        }
+        return out;
+    },
+
+    /** Create or replace one model for this org. */
+    async saveTreatmentModel(orgId, key, model) {
+        const isBuiltIn = Object.prototype.hasOwnProperty.call(formulas_1.DEFAULT_SERVICE_MODELS, key);
+        const row = rowFromModel(model);
+        // is_custom is DERIVED from whether a default exists, never taken from
+        // the client. A body claiming is_custom:false on an invented treatment
+        // would make it un-deletable and offer a reset to a default that is not
+        // there.
+        row.is_custom = !isBuiltIn;
+        const saved = await treatment_model_repository_1.treatmentModelRepository.upsert(orgId, key, row);
+        return modelFromRow(saved);
+    },
+
+    /**
+     * Delete one model. A built-in key reverts to its default; a custom one is
+     * gone. Returns the resulting full set so the caller re-renders from one
+     * source of truth rather than patching its own copy.
+     */
+    async deleteTreatmentModel(orgId, key) {
+        await treatment_model_repository_1.treatmentModelRepository.remove(orgId, key);
+        return this.treatmentModels(orgId);
     },
     // Real case-fee benchmarks for the Treatment Economics Workbench, derived
     // from Dentally invoice_items over a trailing window. Per workbench category
@@ -560,18 +647,59 @@ export const analyticsService = {
     // COST is never in the Dentally feed, so the workbench keeps owner-entered
     // costs and only the case fee is seeded. Returns null per category with no
     // matching invoices; the UI then keeps the hardcoded default for that one.
-    async treatmentFeeBenchmarks(orgId, { months = 12, now = () => new Date() } = {}) {
-        const since = new Date(now());
-        since.setUTCMonth(since.getUTCMonth() - months);
-        const invoices = await analytics_repository_1.analyticsRepository.invoiceCaseRollup(orgId, since.toISOString());
-        const fees = (0, formulas_1.classifyCaseFees)(invoices);
+    async treatmentFeeBenchmarks(orgId, { months = 12, now = () => new Date(), practiceId = null, since = null, until = null } = {}) {
+        // Window: an explicit [since, until] from the page's filter, else the
+        // trailing `months`. Dates, not instants — invoiced_on is a DATE.
+        const ref = now();
+        const from = since || (() => {
+            const d = new Date(ref);
+            d.setMonth(d.getMonth() - months);
+            return d.toISOString().slice(0, 10);
+        })();
+        const to = until || null;
+
+        const rows = await analytics_repository_1.analyticsRepository.invoiceCaseStats(orgId, {
+            since: from,
+            until: to,
+            practiceId,
+            rules: (0, formulas_1.caseRulesForSql)(),
+        });
+
+        // Months the window actually spans, so a case COUNT can be turned into a
+        // monthly rate honestly. A 40-day window is 1.3 months, not 1.
+        const spanEnd = to ? new Date(`${to}T00:00:00Z`) : ref;
+        const spanDays = Math.max(1, Math.round((spanEnd - new Date(`${from}T00:00:00Z`)) / 86400000));
+        const monthsCovered = Math.max(0.1, Math.round((spanDays / 30.44) * 10) / 10);
+
+        const benchmarks = {};
+        for (const key of Object.keys(formulas_1.TREATMENT_CASE_RULES)) benchmarks[key] = null;
+        for (const r of rows) {
+            if (!r.sampleSize) continue;
+            benchmarks[r.key] = {
+                feePence: r.feePence,
+                sampleSize: r.sampleSize,
+                // WHAT THIS PRACTICE ACTUALLY DOES, which the workbench never
+                // knew: its throughput was a hardcoded 1 surgery x 2 cases a
+                // month for every tenant. Measured here so the modelled figure
+                // can be shown against the real one.
+                casesPerMonth: Math.round((r.sampleSize / monthsCovered) * 10) / 10,
+                firstInvoiced: r.firstInvoiced,
+                lastInvoiced: r.lastInvoiced,
+            };
+        }
         return {
             windowMonths: months,
-            invoicesAnalysed: invoices.length,
-            // { fullarch|implant|invisalign : { feePence, sampleSize } | null }
-            benchmarks: fees,
+            since: from,
+            until: to,
+            monthsCovered,
+            practiceId,
+            // Total invoices analysed is no longer meaningful (the aggregation
+            // happens in SQL over all of them, not a slice we counted), so the
+            // per-treatment sampleSize above is the honest measure.
+            benchmarks,
         };
     },
+
     // Group Valuation (Arch #3 pure compute, Value & Growth view). The UI posts
     // the driver state (debounced); this returns the three-buyer result plus the
     // ranked value-uplift levers. No DB, no persistence. NOTE: this is the
@@ -753,23 +881,47 @@ export const analyticsService = {
         // carries data (revenue>0 across the window). A single-month window keeps
         // basis 'month'; a multi-month window sums to basis 'annual'. When the
         // window has no actuals, fall back to the trailing ≤12mo annual sum.
-        const resolveBuckets = (rows) => {
+        // ONE KEY'S MISSING MONTH MUST NOT PULL IN A DIFFERENT MONTH.
+        //
+        // This used to fall back to a key's OWN trailing twelve months whenever
+        // the selected window held nothing for it — applied per key, so inside
+        // an otherwise-monthly group one entity silently contributed another
+        // period while the rest sat on the chosen month.
+        //
+        // Measured live, September 2026: the four companies on screen summed to
+        // £42,876.59 while the Total read £57,674.16. The £14,797.57 gap was the
+        // one untagged row set in the ledger, whose only data is JUNE, being
+        // resolved by that fallback and added to September. Revenue read 34.5%
+        // high; net profit 41% high.
+        //
+        // The fallback is still here and still needed — an annual filer, or a
+        // window that predates any monthly data — but it is a decision about the
+        // WHOLE statement, taken once below, not per key.
+        const resolveInWindow = (rows) => {
             const byPeriod = bucketsByPeriod(rows, { accountingMethod: method });
             const hit = windowMonths.filter((mk) => byPeriod.has(mk));
-            if (hit.length > 0) {
-                const summed = {};
-                for (const mk of hit)
-                    for (const [k, v] of Object.entries(byPeriod.get(mk))) summed[k] = (summed[k] || 0) + v;
-                if ((summed.revenue || 0) > 0) {
-                    return { buckets: summed, basis: multiMonth ? 'annual' : 'month', periodsCovered: hit.length, periodsUsed: hit };
-                }
-            }
+            if (hit.length === 0) return null;
+            const summed = {};
+            for (const mk of hit)
+                for (const [k, v] of Object.entries(byPeriod.get(mk))) summed[k] = (summed[k] || 0) + v;
+            if ((summed.revenue || 0) <= 0) return null;
+            return { buckets: summed, basis: multiMonth ? 'annual' : 'month', periodsCovered: hit.length, periodsUsed: hit };
+        };
+        const resolveTrailing = (rows) => {
+            const byPeriod = bucketsByPeriod(rows, { accountingMethod: method });
             const periods = [...byPeriod.keys()].sort().slice(-12);
             const annual = {};
             for (const p of periods)
                 for (const [k, v] of Object.entries(byPeriod.get(p))) annual[k] = (annual[k] || 0) + v;
             return { buckets: annual, basis: 'annual', periodsCovered: periods.length, periodsUsed: periods };
         };
+        // Does ANY key have data in the window? If so every key is read on the
+        // window and a key with nothing contributes nothing — its absence is a
+        // real fact about that month. Only when nothing at all lands in the
+        // window does the whole statement fall back to trailing actuals.
+        const anyInWindow = [...byKey.values()].some((rows) => resolveInWindow(rows) !== null);
+        const resolveBuckets = (rows) =>
+            anyInWindow ? resolveInWindow(rows) : resolveTrailing(rows);
 
         // Which summary P&L line each monthly_financials bucket rolls into — drives
         // the drill-down: a clicked summary row expands to the account_code lines
@@ -817,10 +969,15 @@ export const analyticsService = {
         // before resolving (that would let one practice's synced row suppress
         // another's manual row). The group statement is the SUM of per-key lines.
         const entities = [];
+        let orgRow = null;
         const groupLine = { revPence: 0, labMaterialsPence: 0, grossPence: 0, staffPence: 0, otherOpexPence: 0, netPence: 0 };
         let anyMonth = false, anyAnnual = false, groupPeriods = 0;
         for (const [key, rows] of byKey) {
-            const { buckets, basis, periodsCovered, periodsUsed } = resolveBuckets(rows);
+            const resolved = resolveBuckets(rows);
+            // Nothing in the selected window for this key. It contributes
+            // nothing rather than borrowing another period.
+            if (!resolved) continue;
+            const { buckets, basis, periodsCovered, periodsUsed } = resolved;
             const line = plLineFromBuckets(buckets);
             if (line.revPence <= 0 && line.netPence === 0) continue;
             // Accumulate into the group statement (all in-scope keys, incl. __org__).
@@ -829,7 +986,17 @@ export const analyticsService = {
             addBreakdown(rows, periodsUsed);
             if (basis === 'month') anyMonth = true; else anyAnnual = true;
             groupPeriods = Math.max(groupPeriods, periodsCovered);
-            if (key === '__org__') continue; // org-level stays in the total, not a row
+            if (key === '__org__') {
+                // Held back, then shown ONLY if other rows exist — see below.
+                orgRow = {
+                    id: key,
+                    name: 'Not assigned to a company',
+                    kind: 'company',
+                    region: 'Group-level ledger rows',
+                    basis, periodsCovered, ...line,
+                };
+                continue;
+            }
             if (key.startsWith('qbo:')) {
                 // QuickBooks company entity (no practice mapping).
                 const iaid = key.slice(4);
@@ -851,6 +1018,15 @@ export const analyticsService = {
                 basis, periodsCovered, ...line,
             });
         }
+        // The untagged ledger rows become a VISIBLE row whenever there are other
+        // rows beside them, because a Total is a claim that the rows above it
+        // add up — and this bucket was counted in the total while being left off
+        // the list, so September's Total read £57,674.16 over £42,876.59 of
+        // visible rows with nothing on screen explaining the £14,797.57.
+        //
+        // When it is the ONLY bucket there is nothing to reconcile against and a
+        // lone row restating the total is noise, so it stays out.
+        if (orgRow && entities.length > 0) entities.push(orgRow);
         entities.sort((a, b) => b.revPence - a.revPence);
 
         const statement = {
@@ -2104,7 +2280,7 @@ export const analyticsService = {
     // bank / stale sync); closing is the running balance. No projected receipts,
     // no cost line, no baseline comparison — only real money in. practiceId
     // scopes the receipts to one practice. basis is always 'actuals'.
-    async cashflow(orgId, { weeks = 13, now = () => new Date(), practiceId = null, from = null, to = null } = {}) {
+    async cashflow(orgId, { weeks = 13, now = () => new Date(), practiceId = null, from = null, to = null, accountingMethod = 'cash' } = {}) {
         const ref = now();
         const DAY = 86400000, WEEK = 7 * DAY;
         // All date math in local time, and day strings parsed as local midnight,
@@ -2145,21 +2321,36 @@ export const analyticsService = {
             if (wk < 0 || wk >= weeks) continue;
             byWeek.set(wk, (byWeek.get(wk) || 0) + Number(r.pence || 0));
         }
-        const openingStart = bank.totalPence || 0;
-        let opening = openingStart;
+        // RECEIPTS ONLY. NO WEEKLY BALANCE. This loop used to seed the opening
+        // balance thirteen weeks ago with TODAY's bank figure and add receipts
+        // forward with paymentsPence hardcoded to 0, so the final "closing
+        // balance" was today's-balance + every receipt in the window. Measured
+        // on live data when it was found: a real position of £783,422 rendered
+        // as £1,846,524, £1,063,102 of it invented — displayed in a column
+        // headed Closing, directly below an outlook card anchoring the SAME day
+        // to the real balance. One page, two answers for today's cash.
+        //
+        // A weekly balance is not computable for ANY tenant and this is not a
+        // gap awaiting a feed: bank_transactions is empty for every
+        // organisation and no code reads it, so there is no per-week outflow
+        // anywhere in this system. Receipts are real. A running total of
+        // receipts is real. A balance is not, so it is not reported here — the
+        // bank figure is returned ONCE, as itself, for the cards that legitimately
+        // show a position.
+        const bankBalancePence = bank.totalPence || 0;
+        let cumulative = 0;
         const out = [];
         for (let wi = 0; wi < weeks; wi++) {
             const d = new Date(startMs + wi * WEEK);
             const receiptsPence = byWeek.get(wi) || 0;
-            const closingBalancePence = opening + receiptsPence;
+            cumulative += receiptsPence;
             out.push({
                 weekStartDate: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-                openingBalancePence: opening,
                 receiptsPence,
-                paymentsPence: 0,
-                closingBalancePence,
+                // Money in so far across the weeks shown — a real quantity with
+                // a definition anyone can check, unlike the old closing figure.
+                cumulativeReceiptsPence: cumulative,
             });
-            opening = closingBalancePence;
         }
         const STALE_MS = 7 * DAY;
         const bankStale = !bank.lastSyncedAt ||
@@ -2175,7 +2366,8 @@ export const analyticsService = {
         const monthlyReceiptsPence = weeks > 0
             ? Math.round((totalReceiptsPence * 52) / (weeks * 12))
             : 0;
-        const actuals = await this._actualsBundle(orgId, practiceId);
+        const costBasis = await resolveCostBasis(this, orgId, practiceId, accountingMethod);
+        const actuals = costBasis.actuals;
         let monthlyCostsPence = 0;
         let costsAvailable = false;
         let costsBasis = 'none';
@@ -2201,12 +2393,18 @@ export const analyticsService = {
                 }
             }
         }
+        // Same rule as the outlook: the bank total is the ORGANISATION's, so a
+        // practice scope has no cash on hand and therefore no free cash and no
+        // runway. See the outlook's bankAttributable comment.
+        const bankAttributable = !practiceId;
+        const runwayBase = (0, formulas_1.calculateRunway)({
+            cashOnHandPence: bankBalancePence,
+            monthlyReceiptsPence,
+            monthlyCostsPence,
+        });
         const runway = {
-            ...(0, formulas_1.calculateRunway)({
-                cashOnHandPence: openingStart,
-                monthlyReceiptsPence,
-                monthlyCostsPence,
-            }),
+            ...runwayBase,
+            ...(bankAttributable ? {} : { freeCashPence: null, runwayMonths: null }),
             costsAvailable,
             costsBasis,
             billsToPlanPence: null, // no payables / scheduled-bill source
@@ -2217,7 +2415,18 @@ export const analyticsService = {
             bankConnected: bank.count > 0,
             bankStale,
             lastSyncedAt: bank.lastSyncedAt,
-            openingBalancePence: openingStart,
+            // The real bank total, named for what it is. It is NOT a starting
+            // point for the weekly series and must never be added to receipts,
+            // and on a practice scope it is the GROUP's figure — see
+            // bankAttributable.
+            bankBalancePence,
+            bankAttributable,
+            bankSource: labelFeeds(bank.sources),
+            // Same three fields as the outlook, so one page cannot show a cash
+            // burn rate beside an accrual cash-out figure.
+            costsAccountingBasis: costsAvailable ? costBasis.basis : null,
+            costsBasisRequested: accountingMethod,
+            costsBasisFellBack: costsAvailable ? costBasis.fellBack : false,
             totalReceiptsPence,
             weeks: out,
             runway,
@@ -2234,7 +2443,7 @@ export const analyticsService = {
     //     month closes at the real bank balance, earlier months are reconstructed
     //     from it (balancesReconstructed:true), later months projected forward.
     //   • Bills are tax ESTIMATES from profit; no payables/scheduled-bill source.
-    async cashflowOutlook(orgId, { months = 4, forward = 2, now = () => new Date(), practiceId = null } = {}) {
+    async cashflowOutlook(orgId, { months = 4, forward = 2, now = () => new Date(), practiceId = null, from = null, to = null, accountingMethod = 'cash' } = {}) {
         const ref = now();
         // Cash IN must be EXACT settled receipts (real money landed), per this
         // view's contract. financeSeries.revenue prefers BILLED production
@@ -2243,28 +2452,101 @@ export const analyticsService = {
         // billed-but-not-yet-collected gap (e.g. £378k billed vs £309k settled).
         // So source IN from settled receipts directly and use financeSeries ONLY
         // for the cost (OUT) buckets.
-        const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, null, null);
+        // The page's date filter reaches here. It used to be hardcoded to
+        // (null, null) — the helper has always accepted a range — so picking a
+        // month moved the weekly panel and left every card and table on this
+        // endpoint showing the trailing months to today, silently.
+        const { keys, sinceISO, untilISO } = this._monthWindow(ref, months, from, to);
+        // Which basis this org can actually answer on, resolved once and then
+        // used for BOTH the month series and the run-rate below.
+        const costBasis = await resolveCostBasis(this, orgId, practiceId, accountingMethod);
         const [series, bank, settledDays, inSrcSlugs, outSrcSlugs] = await Promise.all([
-            this.financeSeries(orgId, { months, now, practiceId }),
+            this.financeSeries(orgId, { months, now, practiceId, from, to, accountingMethod: costBasis.basis ?? accountingMethod }),
             analytics_repository_1.analyticsRepository.bankSummary(orgId),
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
             analytics_repository_1.analyticsRepository.settledReceiptSources(orgId, sinceISO, practiceId, untilISO).catch(() => []),
             monthlyFinancial_repository_1.monthlyFinancialRepository.distinctSources(orgId).catch(() => []),
         ]);
         const settledByMonth = this._monthlyRevenueFromDays(settledDays);
-        const anchorBank = bank.totalPence || 0;
-        const costsByMonth = new Map(series.months.map((m) => [m.month, m]));
-        const real = keys.map((month) => {
-            const c = costsByMonth.get(month);
+        // One builder, used for BOTH the display window and the run-rate window
+        // below. Two copies of this mapping would be two definitions of what a
+        // month's cash in and out mean, free to drift apart.
+        const currentMonthKey = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+        const buildMonths = (monthKeys, settledMap, costMap) => monthKeys.map((month) => {
+            const c = costMap.get(month);
             const out = c ? (c.associatePay || 0) + (c.staffCosts || 0) + (c.labMaterials || 0) + (c.opex || 0) : 0;
-            // Prefer real settled cash. Fall back to financeSeries revenue ONLY when
-            // there is no settled-receipts feed for the month (e.g. a QBO-only org
-            // with no Dentally payments) so cash-in doesn't drop to 0 there; an
-            // active Dentally org always has settled receipts and uses them.
-            const settled = settledByMonth.get(month) || 0;
+            const settled = settledMap.get(month) || 0;
             const inPence = settled > 0 ? settled : (c ? (c.revenue || 0) : 0);
-            return { month, inPence, outPence: out, costsAvailable: !!(c && c.costsAvailable), projected: false };
+            const inBasis = settled > 0 ? 'settled' : inPence > 0 ? 'billed' : 'none';
+            const costsAvailable = !!(c && c.costsAvailable);
+            // THE COSTS OF A MONTH THAT HAS NOT ENDED ARE NOT ITS COSTS.
+            // Receipts land daily; payroll, rent and lab bills post in batches
+            // and late. Measured live on 9 Sep 2026: fourteen cost accounts had
+            // posted for September against 65-72 in each prior month, £13,448
+            // against £298k-£428k — subtracted from nine days of takings and
+            // rendered as "Net cash this month +£62,518" in confident green.
+            // No threshold is needed to know this: the month has not ended.
+            // 'partial' means SOME of it has posted, so a month with no cost
+            // feed at all is deliberately not flagged — that is a different
+            // state, and it already has its own.
+            const costsPartial = costsAvailable && month === currentMonthKey;
+            return { month, inPence, inBasis, outPence: out, costsAvailable, costsPartial, projected: false };
         });
+        const anchorBank = bank.totalPence || 0;
+        // THE BANK BALANCE BELONGS TO THE ORGANISATION, NEVER TO A PRACTICE.
+        // bank_accounts has no practice_id and there is nowhere to put one, so a
+        // practice-level cash position does not exist. It used to be anchored
+        // into every month's closing balance, carried into runway, and handed to
+        // freeCashDecision regardless of scope — so one practice of five showed
+        // the WHOLE GROUP's £783,422 as its own free and sweepable cash.
+        //
+        // Same fact as costs, handled the same way: report that it is org-level
+        // rather than print a number that belongs to someone else.
+        const bankAttributable = !practiceId;
+        // THE ANCHOR IS TODAY, SO THE TRAIL ONLY WORKS WHILE THE WINDOW ENDS
+        // TODAY. Closing balances are reconstructed backwards from the real
+        // bank figure at the LAST month of the window. Ask for March and that
+        // would staple September's balance onto March's closing row and push
+        // the error back through every month behind it. A past window therefore
+        // gets its real in/out/net and no balances at all.
+        const windowEndsToday = keys.length > 0 && keys[keys.length - 1] === currentMonthKey;
+        const balancesAvailable = bankAttributable && windowEndsToday;
+        // The bank reason wins when both apply: it is the more fundamental of
+        // the two and it is the one the user can act on.
+        const balancesUnavailableReason = !bankAttributable ? 'org-level-bank'
+            : !windowEndsToday ? 'past-window'
+            : null;
+        const costsByMonth = new Map(series.months.map((m) => [m.month, m]));
+        // The months ON SCREEN — these follow the page's date filter.
+        //
+        // Cash IN prefers real settled cash and falls back to financeSeries
+        // revenue ONLY where a month has no settled receipts at all (a QBO-only
+        // org with no Dentally payments), so cash-in does not read £0 there.
+        // `inBasis` travels with the row saying which it was: 'settled' has
+        // landed in the bank, 'billed' has not, and a cash view must not
+        // present them as the same thing.
+        const real = buildMonths(keys, settledByMonth, costsByMonth);
+
+        // THE RUN-RATE WINDOW, WHICH IS A DIFFERENT WINDOW.
+        //
+        // Runway, the free-cash decision and the tax estimate are all AS OF
+        // TODAY, so they take a trailing window of complete months and ignore
+        // the picker entirely. Deriving them from the selected range made a
+        // 1–8 September view report eight days of spending as a monthly burn
+        // rate and call the practice self-funding on the strength of it.
+        let runReal = real;
+        if (from && to) {
+            const rw = this._monthWindow(ref, months, null, null);
+            const [runSeries, runSettled] = await Promise.all([
+                this.financeSeries(orgId, { months, now, practiceId, accountingMethod: costBasis.basis ?? accountingMethod }),
+                analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, rw.sinceISO, practiceId, rw.untilISO),
+            ]);
+            runReal = buildMonths(
+                rw.keys,
+                this._monthlyRevenueFromDays(runSettled),
+                new Map(runSeries.months.map((m) => [m.month, m])),
+            );
+        }
 
         // Run-rate: average of recent COMPLETE months.
         //
@@ -2276,14 +2558,13 @@ export const analyticsService = {
         // cost side too, so the two errors did not cancel: they made a burning
         // practice look self-funding. A forward number that is most wrong at the
         // start of every month is worse than no forward number.
-        const currentKey = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
-        const isComplete = (m) => m.month !== currentKey;
+        const isComplete = (m) => m.month !== currentMonthKey;
         // Fall back to whatever exists only when NO month is complete (a brand
         // new org in its first month) — a rough figure beats a zero there.
-        const completeReal = real.filter(isComplete).length ? real.filter(isComplete) : real;
+        const completeReal = runReal.filter(isComplete).length ? runReal.filter(isComplete) : runReal;
         const recentIn = completeReal.slice(-3);
         const inRunRate = recentIn.length ? Math.round(recentIn.reduce((s, m) => s + m.inPence, 0) / recentIn.length) : 0;
-        const costMonthsAll = real.filter((m) => m.costsAvailable);
+        const costMonthsAll = runReal.filter((m) => m.costsAvailable);
         const costMonths = costMonthsAll.filter(isComplete).length
             ? costMonthsAll.filter(isComplete)
             : costMonthsAll;
@@ -2311,16 +2592,23 @@ export const analyticsService = {
         // source (Dentally / Stripe / GoCardless); when a month fell back to
         // financeSeries revenue (no settled receipts), it came from the cost
         // source instead. Cash OUT = the cost source (QuickBooks / Xero / manual).
-        const SOURCE_LABELS = { dentally: 'Dentally', quickbooks: 'QuickBooks', xero: 'Xero', manual: 'manual entry', stripe: 'Stripe', gocardless: 'GoCardless' };
-        const labelSources = (slugs) => {
-            const names = [...new Set((slugs || []).map((s) => SOURCE_LABELS[s] || s))];
-            return names.length ? names.join(' + ') : null;
-        };
-        const outSource = costsBasis === 'actuals' ? labelSources(outSrcSlugs)
+        const outSource = costsBasis === 'actuals' ? labelFeeds(outSrcSlugs)
             : costsBasis === 'baseline' ? 'business baseline (estimate)'
             : null;
-        const hasSettled = real.some((m) => m.inPence > 0 && (settledByMonth.get(m.month) || 0) > 0);
-        const inSource = (hasSettled && labelSources(inSrcSlugs)) || outSource || null;
+        const hasSettled = real.some((m) => m.inBasis === 'settled');
+        // NULL, not the cost feed's name. inSource is the label on a line that
+        // reads "settled patient payments", so borrowing the accounting feed's
+        // name put "QuickBooks" behind a cash claim for money that had only
+        // been BILLED. The fallback feed is named separately, and only the
+        // months that actually used it are labelled with it.
+        const inSource = hasSettled ? labelFeeds(inSrcSlugs) : null;
+        // Named from the ACCOUNTING feed's own slugs, not from `outSource` —
+        // that one is null whenever costsBasis is 'none', which is exactly the
+        // case a billed fallback tends to occur in. Null when we cannot name
+        // the feed; the UI then says "billed work" rather than inventing one.
+        const inFallbackSource = real.some((m) => m.inBasis === 'billed')
+            ? labelFeeds(outSrcSlugs)
+            : null;
 
         // Forward projected months (next `forward` calendar months).
         const pad = (n) => String(n).padStart(2, '0');
@@ -2332,16 +2620,27 @@ export const analyticsService = {
             projected.push({
                 month: `${d.getFullYear()}-${pad(d.getMonth() + 1)}`,
                 inPence: inRunRate,
+                // A forecast is neither settled nor billed — it has not happened.
+                inBasis: 'forecast',
                 outPence: outRunRate,
                 costsAvailable,
+                costsPartial: false,
                 projected: true,
             });
         }
 
-        const all = [...real, ...projected].map((m) => ({ ...m, netPence: m.inPence - m.outPence }));
+        const all = [...real, ...projected].map((m) => ({
+            ...m,
+            netPence: m.inPence - m.outPence,
+            // Null until anchored. A practice scope never anchors, so these stay
+            // null and the UI shows the month's in/out without pretending to
+            // know a balance behind them.
+            openingPence: null,
+            closingPence: null,
+        }));
         const currentIdx = real.length - 1; // last real month closes at the real bank balance
         // Anchor closing[currentIdx] = anchorBank; reconstruct earlier, project later.
-        if (currentIdx >= 0) {
+        if (balancesAvailable && currentIdx >= 0) {
             all[currentIdx].closingPence = anchorBank;
             all[currentIdx].openingPence = anchorBank - all[currentIdx].netPence;
             for (let i = currentIdx - 1; i >= 0; i--) {
@@ -2353,7 +2652,30 @@ export const analyticsService = {
                 all[i].closingPence = all[i].openingPence + all[i].netPence;
             }
         }
-        const lowestProjectedPence = all.length ? Math.min(...all.map((m) => m.closingPence ?? anchorBank)) : anchorBank;
+        // TWO DIFFERENT LOWS, AND CONFLATING THEM COST REAL MONEY.
+        //
+        // `lowestInWindow` is context for the table footnote: the lowest closing
+        // balance across the months on screen. Null when there are no balances.
+        //
+        // `lowestProjected` is a CONSTRAINT — freeCashDecision refuses to call
+        // cash sweepable unless the low still clears the operating buffer. That
+        // is only meaningful for months that have been FORECAST. It used to be
+        // the minimum over the whole trail, and since closings are reconstructed
+        // backwards from today the minimum is always the OLDEST month on a
+        // growing practice, so the card answered "what could you have swept last
+        // spring?" — withholding £302,676 of a £783,422 position on the strength
+        // of a balance that no longer exists.
+        //
+        // A past low constrains nothing. With no projected months this is null,
+        // and freeCashDecision then falls back to cash on hand, which is the
+        // right answer when nothing has been forecast.
+        const closingsOf = (rows) => rows
+            .map((m) => m.closingPence)
+            .filter((v) => v != null);
+        const windowClosings = balancesAvailable ? closingsOf(all) : [];
+        const lowestInWindowPence = windowClosings.length ? Math.min(...windowClosings) : null;
+        const projectedClosings = balancesAvailable ? closingsOf(all.filter((m) => m.projected)) : [];
+        const lowestProjectedPence = projectedClosings.length ? Math.min(...projectedClosings) : null;
 
         // Annual profit for the tax estimate: real (sum of months with costs,
         // annualised) when available, else baseline-derived; else 0 (no estimate).
@@ -2372,17 +2694,28 @@ export const analyticsService = {
             ? [{ item: 'Corporation tax', type: 'tax', window: 'annual estimate', amountPence: corpTaxPence, estimated: true }]
             : [];
 
-        const decision = (0, formulas_1.freeCashDecision)({
-            cashOnHandPence: anchorBank,
-            monthlyCostsPence: outRunRate,
-            lowestProjectedPence,
-            bufferWeeks: 2,
-        });
-        const runway = (0, formulas_1.calculateRunway)({
+        // Every figure here is cash-on-hand arithmetic, so none of it can be
+        // answered for a practice. 'unavailable' is a distinct action from
+        // 'hold' — hold means we measured and there is nothing to sweep.
+        const decision = bankAttributable
+            ? (0, formulas_1.freeCashDecision)({
+                cashOnHandPence: anchorBank,
+                monthlyCostsPence: outRunRate,
+                lowestProjectedPence,
+                bufferWeeks: 2,
+            })
+            : { bufferPence: null, freeCashPence: null, sweepablePence: null, lowClearsBuffer: false, action: 'unavailable' };
+        const runwayBase = (0, formulas_1.calculateRunway)({
             cashOnHandPence: anchorBank,
             monthlyReceiptsPence: inRunRate,
             monthlyCostsPence: outRunRate,
         });
+        // Months of cash left is cash ÷ burn. Without a practice-level cash
+        // figure the answer is unknowable, which is null — never a comfortable
+        // default of 'healthy' with a number beside it.
+        const runwayScoped = bankAttributable
+            ? runwayBase
+            : { ...runwayBase, freeCashPence: null, runwayMonths: null };
 
         return {
             basis: series.basis,
@@ -2390,6 +2723,12 @@ export const analyticsService = {
             anchorBankPence: anchorBank,
             costsAvailable,
             costsBasis,
+            // Cash or accrual — which one these cost figures are on, what was
+            // asked for, and whether the request could be honoured. A toggle
+            // that silently shows the other basis is worse than no toggle.
+            costsAccountingBasis: costsAvailable ? costBasis.basis : null,
+            costsBasisRequested: accountingMethod,
+            costsBasisFellBack: costsAvailable ? costBasis.fellBack : false,
             // WHY cash out is missing, so the screen stops telling an owner to
             // connect a feed they already connected.
             //
@@ -2401,13 +2740,36 @@ export const analyticsService = {
             // Do not "fix" this by adding a practice mapping.
             costsUnavailableReason: costsAvailable ? null
                 : (outSrcSlugs?.length ? (practiceId ? 'org-level-costs' : 'no-rows') : 'no-feed'),
-            inSource,  // human label for the cash-in feed (e.g. 'Dentally')
+            inSource,  // settled-cash feed (e.g. 'Dentally'); null when no month is cash
+            inFallbackSource, // feed behind any BILLED month, named separately
             outSource, // human label for the cash-out feed (e.g. 'QuickBooks')
-            balancesReconstructed: currentIdx >= 1, // historical closings derived from today's balance
+            bankSource: labelFeeds(bank.sources), // where the balance itself comes from
+            // >= 0, not >= 1. The anchored month's own OPENING is derived
+            // backwards from today's bank balance too, so a single-month view
+            // was presenting a computed opening as an observed one.
+            balancesReconstructed: balancesAvailable && currentIdx >= 0,
+            // Whether a balance trail could be drawn at all, and why not.
+            balancesAvailable,
+            balancesUnavailableReason,
+            // The bank position is always the ORGANISATION's. On a practice
+            // scope the UI must label it as the group's, not the practice's.
+            bankAttributable,
+            bankScope: 'organisation',
+            bankUnavailableReason: bankAttributable ? null : 'org-level-bank',
             months: all,
+            // The chart's series. The months table above follows the page's
+            // date picker, which is usually ONE month — a chart drawn from it
+            // was a single bar alone in an empty plot. This is the same
+            // trailing window the run-rate uses: complete months ending today,
+            // whatever the picker says. Exact figures stay windowed; the trend
+            // stays a trend.
+            trend: runReal,
             currentIndex: currentIdx,
+            // The forecast constraint (null when nothing is forecast) and the
+            // on-screen context figure. They are NOT the same number.
             lowestProjectedPence,
-            runway: { ...runway, costsAvailable, costsBasis },
+            lowestInWindowPence,
+            runway: { ...runwayScoped, costsAvailable, costsBasis, bankAttributable },
             bills,
             billsBasis: profitBasis, // how the tax estimate was derived
             billsNote: 'Committed bills (VAT, PAYE, supplier invoices) need an accounting/payables feed — not connected. Dental treatment income is largely VAT-exempt.',
@@ -2712,12 +3074,16 @@ export const analyticsService = {
         const untilISO = until || null;
         const windowEndMs = untilISO ? Date.parse(untilISO) : nowMs;
         const windowDays = Math.max(1, Math.round((windowEndMs - Date.parse(sinceISO)) / 86400000));
-        const [revRowsAll, apptRowsAll, planVal, cashRows] = await Promise.all([
+        const [revRowsAll, apptRowsAll, planVal, cashRows, invRowsAll] = await Promise.all([
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.appointmentsRollupByPractice(orgId, sinceISO, untilISO),
             analytics_repository_1.analyticsRepository.treatmentPlanValueByStatus(orgId, sinceISO, untilISO),
             // cashRows pre-filtered in SQL when scoped (p_practice).
             analytics_repository_1.analyticsRepository.settledReceiptsByDay(orgId, sinceISO, practiceId, untilISO),
+            // The REAL unpaid balance. The collections pool used to be
+            // revenue - cashCollected, and both of those were the same settled
+            // receipts figure, so it was zero for every org forever.
+            analytics_repository_1.analyticsRepository.invoiceTotalsByPractice(orgId, sinceISO, untilISO).catch(() => []),
         ]);
         // Practice scope: narrow the per-practice feeds to the selected practice.
         // treatment_plans carry no practice_id, so the plans pool can't be
@@ -2731,6 +3097,8 @@ export const analyticsService = {
         const appointments = apptRows.reduce((s, r) => s + num(r.total), 0);
         const noShows = apptRows.reduce((s, r) => s + num(r.no_shows), 0);
         const cashCollectedPence = cashRows.reduce((s, r) => s + num(r.pence), 0);
+        const invRows = practiceId ? (invRowsAll || []).filter(mine) : (invRowsAll || []);
+        const outstandingPence = invRows.reduce((s, r) => s + num(r.outstanding_pence), 0);
         const result = formulas_1.calculateRevenueLeakage(
             {
                 revenuePence,
@@ -2738,27 +3106,35 @@ export const analyticsService = {
                 acceptedPlanPence: scopedPlanVal.acceptedPence,
                 appointments,
                 noShows,
-                cashCollectedPence,
+                outstandingPence,
             },
             rates,
         );
         // Annualise the window total + each pool (window may not be a clean month).
         const annualise = (p) => Math.round((p * 365) / windowDays);
         const LINE_META = {
-            plans: { label: 'Unaccepted / lost treatment plans', sub: 'Presented but not closed — TCO follow-up', owner: 'COO' },
+            plans: { label: 'Treatment plans still open', sub: 'Presented and not yet completed — includes work in progress · owner: COO', owner: 'COO' },
             fta: { label: 'Failed appointments (FTA)', sub: 'Lost chair time from no-shows', owner: 'Site managers' },
             recall: { label: 'Unbooked hygiene recalls', sub: 'Recurring revenue not rebooked', owner: 'Reception' },
             lapsed: { label: 'Lapsed patients (>12 mo)', sub: 'Reactivation campaign opportunity', owner: 'Marketing' },
-            collect: { label: 'Uncollected / open balances', sub: 'Completed work not yet paid', owner: 'Accounts' },
+            collect: { label: 'Uncollected / open balances', sub: 'Unpaid invoice balance — owner: Accounts', owner: 'Accounts' },
         };
         const lines = Object.entries(result.pools).map(([k, windowPence]) => ({
             key: k,
             ...LINE_META[k],
+            // Whether this line is an observation or a planning model. The page
+            // summed the two and called the result recoverable.
+            basis: result.basisByPool[k],
             windowPence,
             annualPence: annualise(windowPence),
             monthlyPence: Math.round(annualise(windowPence) / 12),
         })).sort((a, b) => b.annualPence - a.annualPence);
-        const annualTotalPence = lines.reduce((s, l) => s + l.annualPence, 0);
+        const sumAnnual = (basis) => lines
+            .filter((l) => l.basis === basis)
+            .reduce((s, l) => s + l.annualPence, 0);
+        const measuredAnnualPence = sumAnnual('measured');
+        const modelledAnnualPence = sumAnnual('modelled');
+        const annualTotalPence = measuredAnnualPence + modelledAnnualPence;
         return {
             windowDays,
             since: sinceISO,
@@ -2767,11 +3143,26 @@ export const analyticsService = {
             ftaRatePct: result.ftaRatePct,
             windowTotalPence: result.windowTotalPence,
             annualTotalPence,
+            // The headline the page should lead with: pools built from real
+            // observations. The modelled total is offered beside it, never
+            // folded into it.
+            measuredAnnualPence,
+            modelledAnnualPence,
+            planCompletionPct: result.planCompletionPct,
             monthlyTotalPence: Math.round(annualTotalPence / 12),
             asPctOfRevenue: revenuePence > 0
                 ? formulas_1.pct((result.windowTotalPence / revenuePence) * 100)
                 : 0,
-            inputs: { revenuePence, appointments, noShows, cashCollectedPence, ...scopedPlanVal },
+            // Everything a proof panel needs to show its working, including the
+            // MODELLED constants — a reader cannot judge a flat share of
+            // revenue without being told what the share is.
+            inputs: {
+                revenuePence, appointments, noShows, cashCollectedPence,
+                outstandingPence, windowDays,
+                hygieneSharePct: formulas_1.LEAKAGE_HYGIENE_SHARE * 100,
+                lapsedSharePct: formulas_1.LEAKAGE_LAPSED_SHARE * 100,
+                ...scopedPlanVal,
+            },
             lines,
         };
     },
@@ -3311,9 +3702,23 @@ export const analyticsService = {
         const revenueTargetPence = revenueTargetAnnualPence
             ? Math.round((revenueTargetAnnualPence * windowDays) / 365)
             : 0;
-        const marginPct = (actuals.hasAny && (actuals.annual.revenue || 0) > 0)
-            ? formulas_1.calculatePL(plInputFromBuckets(actuals.annual)).marginPct
-            : 0;
+        // The margin, and THE NUMBERS BEHIND IT. A percentage a reader cannot
+        // decompose is a percentage they have to take on trust, and this one is
+        // easy to misread: it covers the trailing 12 ledger months, org-wide,
+        // whatever window or practice the page is showing. Returning its inputs
+        // lets the card show its own working rather than assert a figure.
+        const marginPl = (actuals.hasAny && (actuals.annual.revenue || 0) > 0)
+            ? formulas_1.calculatePL(plInputFromBuckets(actuals.annual))
+            : null;
+        const marginPct = marginPl ? marginPl.marginPct : 0;
+        const marginInputs = marginPl
+            ? {
+                revenuePence: Math.round(actuals.annual.revenue || 0),
+                totalCostsPence: Math.round(marginPl.totalCosts),
+                netProfitPence: Math.round(marginPl.netProfit),
+                monthsCovered: actuals.periodsCovered,
+            }
+            : null;
 
         // Profit contribution by line. Real cost comes from the P&L feed
         // (monthly_financials — Xero/QuickBooks, manual override); Dentally has no
@@ -3337,6 +3742,10 @@ export const analyticsService = {
                 revenueTargetPence,          // pro-rated to THIS window
                 revenueTargetAnnualPence,    // the owner's stated annual goal
                 marginPct,
+                // The revenue and cost totals the margin was computed from, so a
+                // card can show its working instead of asserting a percentage.
+                // Null when there is no P&L feed at all.
+                marginInputs,
                 // Margin is a TRAILING-12-MONTH figure from the P&L ledger
                 // (_actualsBundle is called with no window), not this window's.
                 // It sits beside windowed revenue, so the UI must say so rather

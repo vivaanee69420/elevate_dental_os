@@ -91,7 +91,7 @@ export default function FinancialScreen() {
   const isEst = (k: string) => bs[k]?.estimated ?? true;
 
   return (
-    <div className="container max-w-7xl mx-auto">
+    <div>
       <div className="mb-6">
         <h1 className="display text-3xl font-bold">Financial Statements</h1>
         <p className="text-sm text-ink-muted">

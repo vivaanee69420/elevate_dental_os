@@ -1,8 +1,11 @@
 import { api } from '@/lib/api';
 
 // Treatment Economics Workbench (Intelligence OS). Money fields are integer
-// pence; *Pct are ratios. The model is owner-editable client-side and posted to
-// the pure compute endpoint (no persistence yet — Arch #3).
+// pence; *Pct are ratios. Edits post to a pure compute endpoint for the live
+// figures, and are SAVED separately to treatment_models — the lab bill,
+// component prices, surgery run cost and utilities exist in no feed (Dentally
+// sends patient fees only, QuickBooks is company-level), so before persistence
+// a page refresh destroyed the only copy of them.
 
 export interface WorkbenchComponent {
   name: string;
@@ -28,6 +31,9 @@ export interface TreatmentModel {
   casesPerSurgery: number;
   implantsPerPatient: number;
   components: WorkbenchComponent[];
+  /** True for a treatment this organisation invented; false for a built-in
+   *  (which can be RESET to its default rather than deleted). */
+  isCustom?: boolean;
 }
 
 export interface TreatmentEconomics {
@@ -35,6 +41,16 @@ export interface TreatmentEconomics {
   label?: string;
   unit: 'case' | 'implant';
   pricePence: number;
+  // The inputs, echoed back by the compute. Declared so a proof panel can show
+  // the working from SERVER figures rather than re-deriving them in the
+  // browser — a second copy of the arithmetic is a second thing to get wrong.
+  cbctPence: number;
+  utilitiesPence: number;
+  surgeryRunCostPence: number;
+  labBillPence: number;
+  compRetailPence: number;
+  compCostPence: number;
+  monthlyRevenuePence: number;
   marketingPence: number;
   labProfitPence: number;
   compProfitPence: number;
@@ -71,13 +87,63 @@ export function computeTreatmentEconomics(model: TreatmentModel): Promise<Treatm
 // Real case-fee benchmarks from Dentally invoice_items. Per workbench category,
 // the mean invoice total for invoices containing that procedure (patient FEE
 // only — costs stay owner-entered). null per category when no matching invoices.
-export interface FeeBenchmark { feePence: number; sampleSize: number }
+export interface FeeBenchmark {
+  feePence: number;
+  sampleSize: number;
+  /** Cases actually invoiced per month over the window — the REAL throughput,
+   *  against which the workbench's own surgeries x cases figure is a guess. */
+  casesPerMonth: number;
+  firstInvoiced: string | null;
+  lastInvoiced: string | null;
+}
 export interface TreatmentFeeBenchmarks {
   windowMonths: number;
-  invoicesAnalysed: number;
+  since: string;
+  until: string | null;
+  /** Months the window really spans (40 days is 1.3, not 1). */
+  monthsCovered: number;
+  practiceId: string | null;
   benchmarks: Partial<Record<'fullarch' | 'implant' | 'invisalign', FeeBenchmark | null>>;
 }
 
-export function fetchTreatmentFeeBenchmarks(): Promise<TreatmentFeeBenchmarks> {
-  return api<TreatmentFeeBenchmarks>('/api/analytics/treatment-fee-benchmarks');
+export function fetchTreatmentFeeBenchmarks(opts: {
+  months?: number; practiceId?: string | null; since?: string | null; until?: string | null;
+} = {}): Promise<TreatmentFeeBenchmarks> {
+  const qs = new URLSearchParams();
+  if (opts.months) qs.set('months', String(opts.months));
+  if (opts.practiceId) qs.set('practice_id', opts.practiceId);
+  if (opts.since && opts.until) { qs.set('since', opts.since); qs.set('until', opts.until); }
+  const q = qs.toString();
+  return api<TreatmentFeeBenchmarks>(`/api/analytics/treatment-fee-benchmarks${q ? `?${q}` : ''}`);
+}
+
+// --- Saving --------------------------------------------------------------
+// The key lives in the PATH and the organisation comes from the session, so
+// neither can be set from a request body.
+
+export function saveTreatmentModel(key: string, model: TreatmentModel): Promise<TreatmentModel> {
+  return api<TreatmentModel>(`/api/analytics/treatment-models/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    body: JSON.stringify(model),
+  });
+}
+
+/**
+ * Remove a saved model. A BUILT-IN key reverts to its default (the override row
+ * is simply gone); a custom treatment is removed for good. Returns the full
+ * resulting set, so the page re-renders from one source of truth rather than
+ * patching its own copy and drifting from the server.
+ */
+export function deleteTreatmentModel(key: string): Promise<Record<string, TreatmentModel>> {
+  return api<Record<string, TreatmentModel>>(`/api/analytics/treatment-models/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+  });
+}
+
+/** A slug the API and the table will both accept, derived from a typed name. */
+export function slugifyTreatmentKey(label: string): string {
+  return label.toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'treatment';
 }

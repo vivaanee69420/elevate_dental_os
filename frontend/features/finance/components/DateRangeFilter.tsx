@@ -20,6 +20,13 @@ export function thisMonthRange(ref = new Date()): DateRange {
     to: fmt(new Date(ref.getFullYear(), ref.getMonth() + 1, 0)),
   };
 }
+/** The last COMPLETE calendar month. */
+export function lastMonthRange(ref = new Date()): DateRange {
+  return {
+    from: fmt(new Date(ref.getFullYear(), ref.getMonth() - 1, 1)),
+    to: fmt(new Date(ref.getFullYear(), ref.getMonth(), 0)),
+  };
+}
 export function thisYearRange(ref = new Date()): DateRange {
   return { from: `${ref.getFullYear()}-01-01`, to: `${ref.getFullYear()}-12-31` };
 }
@@ -32,12 +39,18 @@ function monthToRange(ym: string): DateRange {
 interface Props {
   value: DateRange;
   onChange: (r: DateRange) => void;
+  /**
+   * Which pill starts selected. The mode was internal state fixed at 'month',
+   * so a page opening on any other window highlighted "This month" while
+   * showing something else — a control misreporting its own state.
+   */
+  initialMode?: Mode;
 }
 
-type Mode = 'month' | 'year' | 'pick-month' | 'custom';
+type Mode = 'month' | 'last-month' | 'year' | 'pick-month' | 'custom';
 
-export default function DateRangeFilter({ value, onChange }: Props) {
-  const [mode, setMode] = useState<Mode>('month');
+export default function DateRangeFilter({ value, onChange, initialMode = 'month' }: Props) {
+  const [mode, setMode] = useState<Mode>(initialMode);
 
   const btn = (active: boolean): React.CSSProperties => ({
     padding: '5px 11px',
@@ -57,6 +70,7 @@ export default function DateRangeFilter({ value, onChange }: Props) {
   function pick(m: Mode) {
     setMode(m);
     if (m === 'month') onChange(thisMonthRange());
+    else if (m === 'last-month') onChange(lastMonthRange());
     else if (m === 'year') onChange(thisYearRange());
     // 'pick-month' and 'custom' wait for input below
   }
@@ -64,6 +78,7 @@ export default function DateRangeFilter({ value, onChange }: Props) {
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
       <button style={btn(mode === 'month')} onClick={() => pick('month')}>This month</button>
+      <button style={btn(mode === 'last-month')} onClick={() => pick('last-month')}>Last month</button>
       <button style={btn(mode === 'year')} onClick={() => pick('year')}>This year</button>
       <button style={btn(mode === 'pick-month')} onClick={() => pick('pick-month')}>Pick month</button>
       <button style={btn(mode === 'custom')} onClick={() => pick('custom')}>Custom</button>

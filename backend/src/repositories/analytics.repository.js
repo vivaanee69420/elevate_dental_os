@@ -282,7 +282,12 @@ export const analyticsRepository = {
     async bankSummary(orgId) {
         const { data, error } = await supabase_1.serviceClient
             .from('bank_accounts')
-            .select('balance_pence, last_synced_at')
+            // `source` so the UI can NAME the feed. The same figure is labelled
+            // "indicative" on the Dashboard (it sums chart-of-accounts bank
+            // accounts, card and clearing included) and was called a "real bank
+            // balance" on the cashflow page, whose empty state then told owners
+            // to connect open banking — while the live feed is QuickBooks.
+            .select('balance_pence, last_synced_at, source')
             .eq('organisation_id', orgId)
             .limit(LIMIT_GUARD);
         if (error)
@@ -294,7 +299,8 @@ export const analyticsRepository = {
             .filter(Boolean)
             .sort()
             .pop() || null;
-        return { totalPence, lastSyncedAt, count: rows.length };
+        const sources = [...new Set(rows.map((a) => a.source).filter(Boolean))];
+        return { totalPence, lastSyncedAt, count: rows.length, sources };
     },
     // EXACT settled-payment revenue, summed in Postgres (RPC) so it is never
     // truncated by the 1000-row read cap. Returns [{ day:'YYYY-MM-DD', pence }]
@@ -909,6 +915,36 @@ export const analyticsRepository = {
     // Per-invoice rollup (names[] + total fee) for the workbench real-fee seed.
     // RPC only (no fallback): a JS array_agg-equivalent scan would be heavy and
     // this is a non-critical enhancement — returns [] if the RPC is absent.
+    // Per-treatment case fee AND case COUNT, aggregated in Postgres.
+    //
+    // Replaces the per-invoice read below for the workbench. That one returns
+    // one row per invoice and PostgREST caps a set-returning function at 1000
+    // rows exactly as it caps a table — with no ORDER BY — so the workbench was
+    // averaging an ARBITRARY 1,000 of 8,816 invoices and calling it 'the case
+    // fee from real Dentally invoices': 11 full arches at a mean of £7,785
+    // against the true 163 at £6,028, a 29% overstatement.
+    //
+    // The match rules are passed IN so formulas.TREATMENT_CASE_RULES stays the
+    // single, unit-tested definition of what a full arch is.
+    async invoiceCaseStats(orgId, { since, until = null, practiceId = null, rules }) {
+        if (await pmsHidden(orgId)) return [];
+        const { data, error } = await supabase_1.serviceClient.rpc('invoice_case_stats', {
+            p_org: orgId,
+            p_since: since,
+            p_until: until,
+            p_practice: practiceId,
+            p_rules: rules,
+        });
+        if (error || !Array.isArray(data)) return [];
+        return data.map((r) => ({
+            key: r.key,
+            sampleSize: Number(r.sample_size) || 0,
+            feePence: Number(r.fee_pence) || 0,
+            totalPence: Number(r.total_pence) || 0,
+            firstInvoiced: r.first_invoiced ?? null,
+            lastInvoiced: r.last_invoiced ?? null,
+        }));
+    },
     async invoiceCaseRollup(orgId, sinceISO) {
         if (await pmsHidden(orgId)) return [];
         const { data, error } = await supabase_1.serviceClient.rpc('invoice_case_rollup', {

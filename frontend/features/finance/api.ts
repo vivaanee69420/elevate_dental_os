@@ -3,8 +3,16 @@ import { api } from '@/lib/api';
 // Backend returns integer pence; the finance screens work in whole pounds
 // (matches the prototype arithmetic + ../mock formatters). Convert here only.
 const p = (pence: number) => Math.round((pence || 0) / 100);
+// Null-preserving. `p` turns null into 0, which is right for a genuine zero and
+// WRONG for an unknowable figure — a cash position that does not exist at this
+// scope must reach the UI as null so it renders an em dash, not a confident £0.
+const pn = (pence: number | null | undefined) =>
+  pence == null ? null : Math.round(pence / 100);
 
 export interface DateRange { from: string | null; to: string | null }
+
+/** Cash vs accrual cost base. The cashflow views default to CASH. */
+export type CostBasis = 'cash' | 'accrual';
 // from/to only take effect when BOTH are set (backend overrides its rolling
 // window only then); otherwise an empty string → default window.
 const rangeQS = (r?: DateRange | null) =>
@@ -70,18 +78,24 @@ export async function getFinanceSeries(
   };
 }
 
+// One week of money in. There is deliberately NO balance here: no tenant has a
+// per-week outflow feed (bank_transactions is empty everywhere and nothing
+// reads it), so a weekly bank balance cannot be computed and must not be shown.
+// `cumulativeReceipts` is a running total of `receipts` — it starts at zero, not
+// at the bank balance.
 export interface CashflowWeek {
   weekStartDate: string;
-  opening: number;
   receipts: number;
-  closing: number;
+  cumulativeReceipts: number;
 }
 
 // Cash runway derived from the real bank balance + P&L cost base (FORMULAS §14).
 // All money in pounds (converted from the pence the backend returns). runwayMonths
 // is null when cash-positive (no finite runway — not a missing value).
 export interface CashRunway {
-  freeCash: number;
+  // null when there is no cash-on-hand figure at this scope (a practice: the
+  // bank balance is the organisation's and cannot be split).
+  freeCash: number | null;
   monthlyReceipts: number;
   monthlyCosts: number;
   monthlyNet: number;
@@ -91,37 +105,44 @@ export interface CashRunway {
   status: 'healthy' | 'warning' | 'critical';
   costsAvailable: boolean;
   costsBasis: 'actuals' | 'baseline' | 'none';
+  bankAttributable: boolean;
 }
 
 // Real backward 13-week cash view: each week = settled payments received that
 // week (no projection). baselineWeeklyRunRate is a comparison target only.
-export async function getCashflow(weeks = 13, practiceId?: string | null, range?: DateRange | null): Promise<{
+export async function getCashflow(
+  weeks = 13,
+  practiceId?: string | null,
+  range?: DateRange | null,
+  basis: CostBasis = 'cash',
+): Promise<{
   bankConnected: boolean;
   bankStale: boolean;
   lastSyncedAt: string | null;
-  openingBalance: number;
+  bankBalance: number;
+  bankSource: string | null;
   totalReceipts: number;
   weeks: CashflowWeek[];
   runway: CashRunway | null;
 }> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
-  const r = await api(`/api/analytics/cashflow?weeks=${weeks}${pp}${rangeQS(range)}`);
+  const r = await api(`/api/analytics/cashflow?weeks=${weeks}${pp}${rangeQS(range)}&accounting_method=${basis}`);
   const rw = r.runway;
   return {
     bankConnected: !!r.bankConnected,
     bankStale: !!r.bankStale,
     lastSyncedAt: r.lastSyncedAt ?? null,
-    openingBalance: p(r.openingBalancePence),
+    bankBalance: p(r.bankBalancePence),
+    bankSource: r.bankSource ?? null,
     totalReceipts: p(r.totalReceiptsPence),
     weeks: (r.weeks ?? []).map((w: any) => ({
       weekStartDate: w.weekStartDate,
-      opening: p(w.openingBalancePence),
       receipts: p(w.receiptsPence),
-      closing: p(w.closingBalancePence),
+      cumulativeReceipts: p(w.cumulativeReceiptsPence),
     })),
     runway: rw
       ? {
-          freeCash: p(rw.freeCashPence),
+          freeCash: pn(rw.freeCashPence),
           monthlyReceipts: p(rw.monthlyReceiptsPence),
           monthlyCosts: p(rw.monthlyCostsPence),
           monthlyNet: p(rw.monthlyNetPence),
@@ -131,6 +152,7 @@ export async function getCashflow(weeks = 13, practiceId?: string | null, range?
           status: rw.status ?? 'healthy',
           costsAvailable: !!rw.costsAvailable,
           costsBasis: rw.costsBasis ?? 'none',
+          bankAttributable: rw.bankAttributable !== false,
         }
       : null,
   };
@@ -142,10 +164,24 @@ export interface OutlookMonth {
   in: number;
   out: number;
   net: number;
-  opening: number;
-  closing: number;
+  // null on a practice scope: the bank balance is org-level, so there is no
+  // balance trail to open or close a practice's month with.
+  opening: number | null;
+  closing: number | null;
   costsAvailable: boolean;
+  /**
+   * True while this month is still running: some costs have posted, but not
+   * the ones that land late (payroll, rent, lab bills). Its Out and Net are
+   * "so far", never the month's trading.
+   */
+  costsPartial: boolean;
   projected: boolean;
+  /**
+   * Where this month's cash-in figure came from. 'settled' has landed in the
+   * bank; 'billed' is accrual turnover used only where a month has no settled
+   * receipts at all; 'forecast' has not happened.
+   */
+  inBasis: 'settled' | 'billed' | 'forecast' | 'none';
 }
 export interface OutlookBill {
   item: string;
@@ -166,22 +202,49 @@ costsBasis: 'actuals' | 'baseline' | 'none';
    * mapped to a practice, so costs live only at org level.
    */
   costsUnavailableReason: 'no-feed' | 'org-level-costs' | 'no-rows' | null;
-  inSource: string | null;  // feed behind cash-in (e.g. 'Dentally')
+  /** Which basis these cost figures are actually on. Null when there is no feed. */
+  costsAccountingBasis: CostBasis | null;
+  costsBasisRequested: CostBasis;
+  /** True when the requested basis had no rows and the other one is on screen. */
+  costsBasisFellBack: boolean;
+  inSource: string | null;  // settled-cash feed (e.g. 'Dentally'); null when no month is cash
+  inFallbackSource: string | null; // feed behind any BILLED month
   outSource: string | null; // feed behind cash-out (e.g. 'QuickBooks')
+  bankSource: string | null; // where the balance itself comes from
   balancesReconstructed: boolean;
+  /** The bank position is the ORGANISATION's; false when a practice is selected. */
+  bankAttributable: boolean;
+  bankUnavailableReason: 'org-level-bank' | null;
+  /**
+   * Whether a closing-balance trail could be built. The trail is anchored to
+   * TODAY's bank balance, so it needs both an org scope and a window that ends
+   * in the current month.
+   */
+  balancesAvailable: boolean;
+  balancesUnavailableReason: 'org-level-bank' | 'past-window' | null;
   months: OutlookMonth[];
+  /**
+   * The CHART's series: complete months trailing today, independent of the date
+   * filter. `months` follows the picker and is usually one month, which is not
+   * a trend.
+   */
+  trend: OutlookMonth[];
   currentIndex: number;
-  lowestProjected: number;
+  /** Lowest FORECAST closing balance — null when nothing has been forecast. */
+  lowestProjected: number | null;
+  /** Lowest closing balance across the months on screen. Context, not a constraint. */
+  lowestInWindow: number | null;
   runway: CashRunway;
   bills: OutlookBill[];
   billsBasis: string;
   billsNote: string;
   decision: {
-    buffer: number;
-    freeCash: number;
-    sweepable: number;
+    // All null when the cash position is not attributable to this scope.
+    buffer: number | null;
+    freeCash: number | null;
+    sweepable: number | null;
     lowClearsBuffer: boolean;
-    action: 'build_buffer' | 'sweep' | 'hold';
+    action: 'build_buffer' | 'sweep' | 'hold' | 'unavailable';
   };
 }
 
@@ -189,9 +252,13 @@ export async function getCashflowOutlook(
   months = 4,
   forward = 2,
   practiceId?: string | null,
+  range?: DateRange | null,
+  basis: CostBasis = 'cash',
 ): Promise<CashflowOutlook> {
   const pp = practiceId ? `&practice_id=${practiceId}` : '';
-  const r = await api(`/api/analytics/cashflow-outlook?months=${months}&forward=${forward}${pp}`);
+  const r = await api(
+    `/api/analytics/cashflow-outlook?months=${months}&forward=${forward}${pp}${rangeQS(range)}&accounting_method=${basis}`,
+  );
   const d = r.decision ?? {};
   return {
     basis: r.basis ?? 'revenue-only',
@@ -200,23 +267,47 @@ export async function getCashflowOutlook(
     costsAvailable: !!r.costsAvailable,
     costsBasis: r.costsBasis ?? 'none',
     costsUnavailableReason: r.costsUnavailableReason ?? null,
+    costsAccountingBasis: r.costsAccountingBasis ?? null,
+    costsBasisRequested: r.costsBasisRequested ?? 'cash',
+    costsBasisFellBack: !!r.costsBasisFellBack,
     inSource: r.inSource ?? null,
+    inFallbackSource: r.inFallbackSource ?? null,
     outSource: r.outSource ?? null,
+    bankSource: r.bankSource ?? null,
     balancesReconstructed: !!r.balancesReconstructed,
     months: (r.months ?? []).map((m: any) => ({
       month: m.month,
       in: p(m.inPence),
       out: p(m.outPence),
       net: p(m.netPence),
-      opening: p(m.openingPence ?? 0),
-      closing: p(m.closingPence ?? 0),
+      opening: pn(m.openingPence),
+      closing: pn(m.closingPence),
       costsAvailable: !!m.costsAvailable,
+      costsPartial: !!m.costsPartial,
       projected: !!m.projected,
+      inBasis: m.inBasis ?? 'none',
     })),
+    trend: (r.trend ?? []).map((m: any) => ({
+      month: m.month,
+      in: p(m.inPence),
+      out: p(m.outPence),
+      net: p(m.inPence) - p(m.outPence),
+      opening: null,
+      closing: null,
+      costsAvailable: !!m.costsAvailable,
+      costsPartial: !!m.costsPartial,
+      projected: !!m.projected,
+      inBasis: m.inBasis ?? 'none',
+    })),
+    bankAttributable: r.bankAttributable !== false,
+    bankUnavailableReason: r.bankUnavailableReason ?? null,
+    balancesAvailable: r.balancesAvailable !== false,
+    balancesUnavailableReason: r.balancesUnavailableReason ?? null,
     currentIndex: r.currentIndex ?? -1,
-    lowestProjected: p(r.lowestProjectedPence),
+    lowestProjected: pn(r.lowestProjectedPence),
+    lowestInWindow: pn(r.lowestInWindowPence),
     runway: {
-      freeCash: p(r.runway?.freeCashPence),
+      freeCash: pn(r.runway?.freeCashPence),
       monthlyReceipts: p(r.runway?.monthlyReceiptsPence),
       monthlyCosts: p(r.runway?.monthlyCostsPence),
       monthlyNet: p(r.runway?.monthlyNetPence),
@@ -226,6 +317,7 @@ export async function getCashflowOutlook(
       status: r.runway?.status ?? 'healthy',
       costsAvailable: !!r.runway?.costsAvailable,
       costsBasis: r.runway?.costsBasis ?? 'none',
+      bankAttributable: r.runway?.bankAttributable !== false,
     },
     bills: (r.bills ?? []).map((b: any) => ({
       item: b.item,
@@ -237,9 +329,9 @@ export async function getCashflowOutlook(
     billsBasis: r.billsBasis ?? 'none',
     billsNote: r.billsNote ?? '',
     decision: {
-      buffer: p(d.bufferPence),
-      freeCash: p(d.freeCashPence),
-      sweepable: p(d.sweepablePence),
+      buffer: pn(d.bufferPence),
+      freeCash: pn(d.freeCashPence),
+      sweepable: pn(d.sweepablePence),
       lowClearsBuffer: !!d.lowClearsBuffer,
       action: d.action ?? 'hold',
     },
