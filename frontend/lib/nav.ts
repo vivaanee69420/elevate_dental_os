@@ -53,7 +53,11 @@ export const NAV: NavSection[] = [
     { id: 'clinicians', label: 'Clinicians', isNew: true },
     { id: 'staff', label: 'Staff Scheduling' },
     { id: 'pay', label: 'Associate Pay' },
-    { id: 'chair', label: 'Chair Utilisation' },
+    // Two entries, because the two pages are gated differently: Efficiency is
+    // a finance surface, entry is an operations one. One combined page hid the
+    // entry screen from anyone without finance access.
+    { id: 'chair', label: 'Chair Efficiency' },
+    { id: 'chair-utilisation', label: 'Chair Utilisation' },
     { id: 'treatments', label: 'Treatments' },
     { id: 'uda', label: 'UDA Tracker' },
   ]},
