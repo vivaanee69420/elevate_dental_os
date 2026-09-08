@@ -18,7 +18,7 @@
 //            → POST /api/integrations/:provider/callback { apiKey }
 
 import { ReactNode, useEffect, useMemo, useState } from 'react';
-import { Chip } from '@/components/ui';
+import { AlertDialog, Chip, DialogButton } from '@/components/ui';
 import { useMe } from '@/hooks/useMe';
 import {
   useIntegrations,
@@ -73,6 +73,7 @@ import {
   GOOGLE_SERVICE_IDS,
   GOOGLE_SERVICE_LABELS,
   PROVIDER_COPY,
+  providerLabel,
 } from '@/features/integrations/provider-copy';
 import { useSyncToast } from '@/features/integrations/sync-toast';
 import { AdReconciliationPanel } from '@/features/marketing/components/AdReconciliationPanel';
@@ -95,7 +96,7 @@ const FEATURE_KEY: Record<string, string> = {
 // Map an OAuth callback error code to a human title + message. Known codes get
 // specific guidance; anything else falls back to the raw message.
 function explainOauthError(code: string, provider: string): { title: string; message: string } {
-  const name = provider || 'the provider';
+  const name = provider ? providerLabel(provider) : 'the provider';
   if (code === 'NO_AD_ACCOUNT') {
     return {
       title: 'No Google Ads account on that email',
@@ -186,6 +187,9 @@ export default function IntegrationsScreen() {
     kind: 'error' | 'success';
     title: string;
     message: string;
+    // Which integration this is about, so the dialog can show its own mark
+    // rather than a generic tick. Null for anything not provider-specific.
+    provider?: string;
   } | null>(null);
 
   // OAuth providers redirect back to /integrations with ?connected=<provider> on
@@ -197,13 +201,19 @@ export default function IntegrationsScreen() {
     const err = params.get('error');
     const provider = params.get('provider') ?? connected ?? '';
     if (connected) {
-      setNotice({ kind: 'success', title: 'Connected', message: `${connected} is now connected.` });
+      const label = providerLabel(connected);
+      setNotice({
+        kind: 'success',
+        provider: connected,
+        title: `${label} is connected`,
+        message: `We'll start pulling ${label} data now. The first sync can take a few minutes — figures appear across the app as it lands.`,
+      });
       // GoHighLevel's consent authorises ONE location, and the new subaccount
       // still needs mapping to a practice — so land the owner on the panel
       // that shows it rather than on a tile they have to find and open.
       if (connected === 'gohighlevel') setOpenTile('gohighlevel');
     } else if (err) {
-      setNotice({ kind: 'error', ...explainOauthError(err, provider) });
+      setNotice({ kind: 'error', provider, ...explainOauthError(err, provider) });
     }
     if (connected || err) {
       window.history.replaceState(null, '', window.location.pathname);
@@ -245,7 +255,11 @@ export default function IntegrationsScreen() {
         });
       }
     } catch (err) {
-      setNotice({ kind: 'error', title: `Could not connect ${p.label}`, message: (err as Error).message });
+      setNotice({
+        kind: 'error', provider: p.id,
+        title: `Could not connect ${p.label}`,
+        message: (err as Error).message,
+      });
     }
   }
 
@@ -772,165 +786,135 @@ export default function IntegrationsScreen() {
         </IntegrationModal>
       )}
 
+      {/* Three dialogs, one shell. Each carries the PROVIDER'S OWN LABEL —
+          these used to print the database key, so an owner who had just
+          connected Facebook and Instagram was told "meta_ads is now
+          connected". */}
       {notice && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
-          }}
-          onClick={() => setNotice(null)}
-        >
-          <div
-            className="card-padded"
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: 'white', maxWidth: 460, width: '90%' }}
-          >
-            <h3
-              style={{
-                fontSize: 16, fontWeight: 700, marginBottom: 8,
-                color: notice.kind === 'error' ? 'var(--danger, #b91c1c)' : 'var(--ink, #111)',
-              }}
-            >
-              {notice.title}
-            </h3>
-            <p className="text-ink-muted" style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 16 }}>
-              {notice.message}
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setNotice(null)}
+        <AlertDialog
+          tone={notice.kind === 'error' ? 'danger' : 'success'}
+          title={notice.title}
+          description={notice.message}
+          badge={notice.provider && notice.kind === 'success'
+            ? (
+              <span
                 style={{
-                  padding: '8px 14px', background: 'var(--brand)', color: 'white',
-                  border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 10, marginBottom: 16,
+                  padding: '7px 12px 7px 8px', borderRadius: 999,
+                  background: 'var(--brand-50)', color: 'var(--brand)',
+                  fontSize: 12, fontWeight: 600,
                 }}
               >
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
+                <ProviderIcon id={notice.provider} label={notice.title} size={26} />
+                Connected
+              </span>
+            )
+            : undefined}
+          onClose={() => setNotice(null)}
+          actions={<DialogButton variant="primary" onClick={() => setNotice(null)}>Done</DialogButton>}
+        />
       )}
+
       {confirmDisconnect && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
-          }}
-          onClick={() => setConfirmDisconnect(null)}
-        >
-          <div
-            className="card-padded"
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: 'white', maxWidth: 440, width: '90%' }}
-          >
-            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
-              Disconnect {confirmDisconnect}?
-            </h3>
-            <p className="text-ink-muted" style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 16 }}>
+        <AlertDialog
+          tone="danger"
+          title={`Disconnect ${providerLabel(confirmDisconnect)}?`}
+          description={(
+            <>
               This stops syncing and hides all data from this integration across the app.
-              Your synced records are kept — reconnecting restores them. Manually-entered data
-              is not affected.
-            </p>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setConfirmDisconnect(null)}
-                style={{
-                  padding: '8px 14px', border: '1px solid var(--border)',
-                  borderRadius: 6, fontSize: 12, background: 'white', cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
+              Your synced records are kept — reconnecting restores them. Manually-entered
+              data is not affected.
+            </>
+          )}
+          onClose={() => setConfirmDisconnect(null)}
+          actions={(
+            <>
+              <DialogButton onClick={() => setConfirmDisconnect(null)}>Cancel</DialogButton>
+              <DialogButton
+                variant="danger"
+                disabled={revoke.isPending}
                 onClick={() => {
                   const provider = confirmDisconnect;
                   setConfirmDisconnect(null);
                   revoke.mutate(provider);
                 }}
-                disabled={revoke.isPending}
-                style={{
-                  padding: '8px 14px', background: 'var(--danger, #b91c1c)',
-                  color: 'white', border: 'none', borderRadius: 6,
-                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                }}
               >
                 {revoke.isPending ? 'Disconnecting…' : 'Disconnect'}
-              </button>
-            </div>
-          </div>
-        </div>
+              </DialogButton>
+            </>
+          )}
+        />
       )}
+
       {brokerModal && (
-        <div
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
-          }}
-          onClick={() => setBrokerModal(null)}
-        >
-          <div
-            className="card-padded"
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: 'white', maxWidth: 480, width: '90%' }}
-          >
-            <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
-              Connect {brokerModal.provider}
-            </h3>
-            <p className="text-ink-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-              {brokerModal.hint}
-            </p>
-            <input
-              type="password"
-              autoFocus
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              placeholder="API key"
-              style={{
-                width: '100%', padding: '8px 10px',
-                border: '1px solid var(--border)', borderRadius: 6,
-                fontSize: 13, marginBottom: 12,
-              }}
-            />
-            {brokerModal.requiresLocationId && (
-              <input
-                type="text"
-                value={locInput}
-                onChange={(e) => setLocInput(e.target.value)}
-                placeholder="Location ID"
-                style={{
-                  width: '100%', padding: '8px 10px',
-                  border: '1px solid var(--border)', borderRadius: 6,
-                  fontSize: 13, marginBottom: 12,
-                }}
-              />
-            )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setBrokerModal(null)}
-                style={{
-                  padding: '8px 14px', border: '1px solid var(--border)',
-                  borderRadius: 6, fontSize: 12, background: 'white', cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
+        <AlertDialog
+          tone="neutral"
+          width={480}
+          title={`Connect ${providerLabel(brokerModal.provider)}`}
+          description={brokerModal.hint}
+          badge={(
+            <span style={{ display: 'inline-flex', marginBottom: 16 }}>
+              <ProviderIcon id={brokerModal.provider} label={providerLabel(brokerModal.provider)} size={40} />
+            </span>
+          )}
+          onClose={() => setBrokerModal(null)}
+          actions={(
+            <>
+              <DialogButton onClick={() => setBrokerModal(null)}>Cancel</DialogButton>
+              <DialogButton
+                variant="primary"
                 onClick={handleBrokerSubmit}
                 disabled={!keyInput || (brokerModal.requiresLocationId && !locInput) || submitKey.isPending}
-                style={{
-                  padding: '8px 14px', background: 'var(--brand)',
-                  color: 'white', border: 'none', borderRadius: 6,
-                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                }}
               >
                 {submitKey.isPending ? 'Saving…' : 'Save key'}
-              </button>
-            </div>
-            <p className="text-ink-muted" style={{ fontSize: 10, marginTop: 10 }}>
-              Stored encrypted at rest. Never displayed again.
+              </DialogButton>
+            </>
+          )}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase' }}>
+                API key
+              </span>
+              <input
+                type="password"
+                autoFocus
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder="Paste the key"
+                className="input"
+                style={{ fontSize: 13 }}
+              />
+            </label>
+            {brokerModal.requiresLocationId && (
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <span className="text-ink-muted" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase' }}>
+                  Location ID
+                </span>
+                <input
+                  type="text"
+                  value={locInput}
+                  onChange={(e) => setLocInput(e.target.value)}
+                  placeholder="e.g. 7xK2..."
+                  className="input"
+                  style={{ fontSize: 13 }}
+                />
+              </label>
+            )}
+            <p
+              className="text-ink-muted"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, margin: '2px 0 0', fontSize: 11.5,
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="11" width="18" height="11" rx="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              Stored encrypted at rest, and never displayed again.
             </p>
           </div>
-        </div>
+        </AlertDialog>
       )}
     </div>
   );

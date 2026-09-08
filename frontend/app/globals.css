@@ -180,3 +180,19 @@ h1, h2, h3, .display { font-family: var(--font-display), serif; }
   outline-offset: -2px;
 }
 @media (prefers-reduced-motion: reduce) { .crm-thread-row { transition: none; } }
+
+/* Dialog motion — used by components/ui/AlertDialog. A modal that simply
+   appears is read as a page change; a short rise reads as something opening
+   on top of the page, which is what it is. Kept here rather than inline so
+   the reduced-motion opt-out lives beside it and cannot be forgotten. */
+@keyframes dialog-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialog-rise {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dialog-backdrop { animation: dialog-fade 140ms ease-out; }
+.dialog-card { animation: dialog-rise 180ms cubic-bezier(.16,.84,.44,1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-backdrop, .dialog-card { animation: none; }
+}

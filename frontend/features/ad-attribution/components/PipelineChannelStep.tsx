@@ -11,11 +11,18 @@
 // no leads at all, so the list is grouped by subaccount, sorted by lead volume
 // and filterable. A flat board would bury the pipelines that matter.
 //
-// NO INFERENCE: a pipeline with no channel is Unassigned and stays that way
-// until somebody sets it. The old name-matching heuristic classified the three
-// largest pipelines ("Open Day Archive - IMPLANTS" and friends, 1122/990/873
-// leads) as 'other' while catching only the 33-lead pipeline that happened to
-// have "Google" in its name.
+// NEVER INFERRED FROM THE NAME. The old heuristic classified the three largest
+// pipelines ("Open Day Archive - IMPLANTS" and friends, 1122/990/873 leads) as
+// 'other' while catching only the 33-lead pipeline that happened to have
+// "Google" in its name.
+//
+// Pipelines CAN now arrive pre-filled, but from the attribution their own leads
+// carry — an ad id, a gclid, a campaign id that resolves inside this org's own
+// ad_metrics — never from a word in the title (migration 000180). Those rows
+// are labelled "detected" with the evidence beside them, because a channel the
+// owner never chose, shown as though they had, is exactly the quiet assumption
+// this screen exists to remove. Changing one makes it theirs, permanently:
+// detection never overwrites a human, including a human who chose Unassigned.
 import { useMemo, useState } from 'react';
 import { Card } from '@/components/ui';
 import { useSetPipelineChannel } from '../hooks';
@@ -237,7 +244,23 @@ export default function PipelineChannelStep({ config, openDays, openDayAssignedT
               <tbody>
                 {g.rows.map((p) => (
                   <tr key={pipelineKey(p.accountId, p.pipelineId)} className="border-b border-slate-100">
-                    <td className="py-2 pr-3 text-slate-800">{p.pipelineName}</td>
+                    <td className="py-2 pr-3 text-slate-800">
+                      {p.pipelineName}
+                      {/* Shown only while the guess still stands: the moment
+                          the owner picks a channel the row becomes theirs and
+                          the badge goes, so the screen never credits a person
+                          with a machine's decision or the reverse. */}
+                      {p.channelSource === 'auto' && p.channel !== null && (
+                        <span
+                          className="ml-2 inline-flex items-center rounded-md bg-brand-50 px-1.5 py-0.5 text-[11px] font-semibold text-brand align-middle"
+                          title={p.detectedShare !== null && p.detectedLeads !== null
+                            ? `Detected from this pipeline's own leads: ${Math.round(p.detectedShare * 100)}% of ${p.detectedLeads.toLocaleString('en-GB')} carried this channel's attribution. Change it and it stays changed.`
+                            : 'Detected from the attribution this pipeline\u2019s leads carry.'}
+                        >
+                          Detected
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 pr-3 text-right text-slate-500">
                       {p.leadCount.toLocaleString('en-GB')} leads
                     </td>

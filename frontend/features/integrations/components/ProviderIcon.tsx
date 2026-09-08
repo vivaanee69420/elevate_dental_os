@@ -121,7 +121,11 @@ export default function ProviderIcon({
   label: string;
   size?: number;
 }) {
-  const mark = MARKS[id];
+  // The three Google CONNECTIONS (Ads, and the two Sheets scopes) have no
+  // tile of their own — the grid shows one Google tile — so a dialog naming
+  // one of them by provider key would fall through to a "GA" monogram beside
+  // the words "Google Ads". They are Google; they get the Google mark.
+  const mark = MARKS[id] ?? (id.startsWith('google') ? MARKS.google : undefined);
   return (
     <div
       aria-hidden="true"
