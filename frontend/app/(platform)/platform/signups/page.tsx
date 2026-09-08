@@ -1,47 +1,32 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { PageHeader, DataTable, type Column } from '@/components/ui';
-import { platformApi } from '@/lib/platform-api';
-
-type Signup = {
-  id: string;
-  email: string;
-  full_name: string;
-  organisation_id: string;
-  organisation_name: string | null;
-  organisation_slug: string | null;
-  status: string;
-  created_at: string;
-};
+import { useSignups, useActOnSignup } from '@/features/platform/hooks';
+import type { Signup } from '@/features/platform/api';
 
 export default function PlatformSignupsPage() {
-  const [rows, setRows]     = useState<Signup[]>([]);
-  const [error, setError]   = useState<string | null>(null);
-  const [busy, setBusy]     = useState<string | null>(null);
-  const [loading, setLoad]  = useState(true);
+  const { data, isPending: loading, error: loadError } = useSignups();
+  const rows = data ?? [];
+  const actM = useActOnSignup();
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  function load() {
-    setLoad(true);
-    platformApi<Signup[]>('/signups')
-      .then((d) => { setRows(d); setError(null); })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoad(false));
-  }
-
-  useEffect(load, []);
+  const error = actionError ?? (loadError ? (loadError as Error).message : null);
 
   async function act(id: string, action: 'approve' | 'reject') {
     if (action === 'reject' && !window.confirm('Reject this signup? The owner will never be able to log in.')) {
       return;
     }
     setBusy(id);
+    setActionError(null);
     try {
-      await platformApi(`/signups/${id}/${action}`, { method: 'POST' });
-      // Drop the row locally — it leaves the pending queue either way.
-      setRows((prev) => prev.filter((r) => r.id !== id));
-    } catch (e: any) {
-      setError(e.message);
+      // Refetches the queue rather than dropping the row locally. Approving
+      // also creates a user and touches the org, and the mutation invalidates
+      // those lists too — the Users page used to stay stale until a reload.
+      await actM.mutateAsync({ id, action });
+    } catch (e) {
+      setActionError((e as Error).message);
     } finally {
       setBusy(null);
     }

@@ -7,96 +7,73 @@
 // stores credentials but does not yet validate or pull — the Business Hub
 // "Treatments Accepted" card stays a placeholder until ingest is wired.
 
-import { useCallback, useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Chip } from '@/components/ui';
 import PanelCard from './PanelCard';
-import { useSetWebhookSecret } from '../hooks';
+import {
+  useSetWebhookSecret, useEmergentStatus,
+  useConnectEmergent, useDisconnectEmergent, useSyncEmergent,
+} from '../hooks';
 
-interface EmergentStatus {
-  connected: boolean;
-  status: string | null;
-  baseUrl: string | null;
-  keyHint: string | null;
-  webhookUrl: string | null;
-  webhookSecretSet: boolean;
-  lastSyncAt: string | null;
-}
+// The status read and every mutation go through the SHARED ['emergent-status']
+// query the Integrations tile also reads. This panel used to fetch and mutate
+// that endpoint privately, so connecting in here left the tile behind the
+// dialog still showing "Not connected" from its own cache.
 
 export default function EmergentPanel() {
-  const [data, setData] = useState<EmergentStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data, isPending } = useEmergentStatus();
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  
+
+  const qc = useQueryClient();
   const saveWebhook = useSetWebhookSecret('emergent');
+  const connectM = useConnectEmergent();
+  const disconnectM = useDisconnectEmergent();
+  const syncM = useSyncEmergent();
   const [secret, setSecret] = useState('');
 
-  const load = useCallback(async () => {
-    try {
-      const res = await api<EmergentStatus>('/api/integrations/emergent');
-      setData(res);
-      if (res.baseUrl) setBaseUrl(res.baseUrl);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const busy = connectM.isPending || disconnectM.isPending;
+  const syncing = syncM.isPending;
 
-  useEffect(() => { load(); }, [load]);
+  // Seeding a FORM FIELD from server data, which is a legitimate effect — it is
+  // not data fetching. Only seeds while the field is untouched, so it cannot
+  // overwrite what the owner is typing when the query refetches.
+  useEffect(() => {
+    if (data?.baseUrl) setBaseUrl((current) => (current === '' ? data.baseUrl! : current));
+  }, [data?.baseUrl]);
 
   async function connect() {
     setErr(null);
-    setBusy(true);
     try {
-      const res = await api<EmergentStatus>('/api/integrations/emergent', {
-        method: 'POST',
-        body: JSON.stringify({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim() }),
-      });
-      setData(res);
+      await connectM.mutateAsync({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim() });
       setApiKey('');
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
-      setBusy(false);
     }
   }
 
   async function disconnect() {
-    setBusy(true);
     setErr(null);
     try {
-      await api('/api/integrations/emergent', { method: 'DELETE' });
-      await load();
+      await disconnectM.mutateAsync();
       setApiKey('');
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
-      setBusy(false);
     }
   }
 
   async function runSync(full: boolean) {
-    setSyncing(true);
     setSyncMsg(null);
     setErr(null);
     try {
-      const res = await api<{ synced: number }>('/api/integrations/emergent/sync', {
-        method: 'POST',
-        body: JSON.stringify({ full }),
-      });
+      const res = await syncM.mutateAsync(full);
       setSyncMsg(`Synced ${res.synced} accepted treatment${res.synced === 1 ? '' : 's'}.`);
-      await load();
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
-      setSyncing(false);
     }
   }
 
@@ -113,13 +90,17 @@ export default function EmergentPanel() {
     try {
       await saveWebhook.mutateAsync(secret.trim());
       setSecret('');
-      await load();
+      // useSetWebhookSecret is provider-generic and only invalidates
+      // ['webhook-info']. The "secret is set" label on THIS panel comes from
+      // the emergent status query, so it needs refreshing too — without this
+      // the label stays stale until something else refetches.
+      qc.invalidateQueries({ queryKey: ['emergent-status'] });
     } catch (e) {
       setErr((e as Error).message);
     }
   }
 
-  if (loading) return null;
+  if (isPending) return null;
 
   const connected = data?.connected;
 

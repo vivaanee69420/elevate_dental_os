@@ -677,6 +677,24 @@ export function getEmergentStatus() {
   return api<EmergentStatus>('/api/integrations/emergent');
 }
 
+export function connectEmergent(input: { baseUrl: string; apiKey: string }) {
+  return api<EmergentStatus>('/api/integrations/emergent', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function disconnectEmergent() {
+  return api<{ ok?: boolean }>('/api/integrations/emergent', { method: 'DELETE' });
+}
+
+export function syncEmergent(full: boolean) {
+  return api<{ synced: number }>('/api/integrations/emergent/sync', {
+    method: 'POST',
+    body: JSON.stringify({ full }),
+  });
+}
+
 // --- Dentally site selection ------------------------------------------------
 // A Dentally OAuth grant covers the whole group, so an organisation must say
 // which of its sites it pulls before the first sync runs. `awaiting` is true

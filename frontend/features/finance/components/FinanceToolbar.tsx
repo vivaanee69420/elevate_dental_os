@@ -4,8 +4,8 @@
 // breakdown component, dropped into every screen — keeps the four tabs in
 // lock-step without duplicating logic.
 
-import { useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import { useState } from 'react';
+import { usePractices } from '@/features/integrations/hooks';
 import ManualPaymentModal from './ManualPaymentModal';
 import SourceBreakdownCard from './SourceBreakdownCard';
 
@@ -19,13 +19,23 @@ export default function FinanceToolbar({ sourceDays = 30 }: {
   sourceDays?: number;
 } = {}) {
   const [showModal, setShowModal] = useState(false);
-  const [practices, setPractices] = useState<Array<{ id: string; name: string }>>([]);
+  // The shared cached query, not a private fetch. This used to load practices
+  // in a useEffect whose .catch collapsed a FAILED request into an empty
+  // array — so a backend hiccup was indistinguishable from "this org has no
+  // practices", and the button silently disabled itself with no explanation.
+  const { data, isPending, isError } = usePractices();
+  const practices = data?.practices ?? [];
 
-  useEffect(() => {
-    api<{ practices: Array<{ id: string; name: string }> }>('/api/practices')
-      .then((r) => setPractices(r.practices ?? []))
-      .catch(() => setPractices([]));
-  }, []);
+  // Three states, not two: still loading, genuinely failed, and genuinely
+  // empty. Only the last is a reason to say the org has no practices.
+  const disabled = isPending || isError || practices.length === 0;
+  const title = isPending
+    ? 'Loading practices…'
+    : isError
+      ? 'Could not load practices — reload to try again'
+      : practices.length === 0
+        ? 'No practices set up yet'
+        : undefined;
 
   return (
     <>
@@ -37,17 +47,26 @@ export default function FinanceToolbar({ sourceDays = 30 }: {
         <div className="flex-1 min-w-0">
           <SourceBreakdownCard days={sourceDays} />
         </div>
+        {/* A failed practices load is said out loud rather than left to read
+            as "this org has no practices" — the button alone cannot tell the
+            two apart. */}
+        {isError && (
+          <span style={{ fontSize: 12, color: 'var(--danger)', whiteSpace: 'nowrap', alignSelf: 'center' }}>
+            Could not load practices.
+          </span>
+        )}
         <button
           type="button"
           onClick={() => setShowModal(true)}
-          disabled={practices.length === 0}
+          disabled={disabled}
+          title={title}
           className="font-semibold"
           style={{
             padding: '8px 14px', fontSize: 13, whiteSpace: 'nowrap',
             border: '1px solid var(--border)', borderRadius: 6,
             background: 'white', color: 'var(--ink)',
-            opacity: practices.length === 0 ? 0.5 : 1,
-            cursor: practices.length === 0 ? 'default' : 'pointer',
+            opacity: disabled ? 0.5 : 1,
+            cursor: disabled ? 'default' : 'pointer',
           }}
         >+ Add payment</button>
       </div>

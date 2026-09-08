@@ -1,64 +1,46 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { PageHeader, DataTable, type Column } from '@/components/ui';
-import { platformApi } from '@/lib/platform-api';
-
-type Org = {
-  id: string;
-  name: string;
-  slug: string;
-  plan: string | null;
-  created_at: string;
-};
-
-type CreatedOwner = {
-  organisation_id: string;
-  owner_id: string;
-  email: string;
-  temp_password: string;
-};
+import { useOrgs, useCreateOrgWithOwner } from '@/features/platform/hooks';
+import type { OrgRow as Org, CreatedOwner } from '@/features/platform/api';
 
 export default function PlatformOrgsPage() {
   const [q, setQ]           = useState('');
-  const [rows, setRows]     = useState<Org[]>([]);
-  const [total, setTotal]   = useState(0);
-  const [error, setError]   = useState<string | null>(null);
-  const [refresh, setRefresh] = useState(0);
 
   // Create-owner form state.
   const [showForm, setShowForm] = useState(false);
   const [form, setForm]   = useState({ email: '', full_name: '', organisation_name: '' });
-  const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedOwner | null>(null);
 
-  useEffect(() => {
-    const params = new URLSearchParams({ limit: '100' });
-    if (q) params.set('q', q);
-    platformApi<{ rows: Org[]; total: number }>(`/orgs?${params}`)
-      .then((d) => { setRows(d.rows); setTotal(d.total); })
-      .catch((e) => setError(e.message));
-  }, [q, refresh]);
+  const params = useMemo(() => {
+    const p = new URLSearchParams({ limit: '100' });
+    if (q) p.set('q', q);
+    return p;
+  }, [q]);
+
+  const { data, error: loadError } = useOrgs(params);
+  const rows = data?.rows ?? [];
+  const total = data?.total ?? 0;
+  const error = loadError ? (loadError as Error).message : null;
+
+  // The mutation invalidates the org list itself, so the manual refresh
+  // counter this replaces is no longer needed.
+  const createM = useCreateOrgWithOwner();
+  const creating = createM.isPending;
 
   async function createOwner(e: React.FormEvent) {
     e.preventDefault();
-    setCreating(true);
     setFormError(null);
     setCreated(null);
     try {
-      const out = await platformApi<CreatedOwner>('/orgs', {
-        method: 'POST',
-        body: JSON.stringify(form),
-      });
+      const out = await createM.mutateAsync(form);
       setCreated(out);
       setForm({ email: '', full_name: '', organisation_name: '' });
-      setRefresh((n) => n + 1);
-    } catch (e: any) {
-      setFormError(e.message);
-    } finally {
-      setCreating(false);
+    } catch (e) {
+      setFormError((e as Error).message);
     }
   }
 

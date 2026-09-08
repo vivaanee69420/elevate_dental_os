@@ -25,6 +25,9 @@ import {
   syncGhlAccount,
   getEmergentPractices,
   getEmergentStatus,
+  connectEmergent,
+  disconnectEmergent,
+  syncEmergent,
   setEmergentPractice,
   getDailyReportSettings,
   saveDailyReportSettings,
@@ -519,4 +522,34 @@ export function useEmergentStatus() {
     queryFn: getEmergentStatus,
     staleTime: 30_000,
   });
+}
+
+// Connect / disconnect / sync all invalidate the SAME ['emergent-status'] key
+// the tile reads. The panel used to fetch and mutate that endpoint privately,
+// so connecting inside the dialog left the tile behind it still reading
+// "Not connected" from its own cache until something else refetched.
+// 'integrations' goes too — the tile list carries its own connected state.
+function useEmergentMutation<TArgs, TResult>(fn: (args: TArgs) => Promise<TResult>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['emergent-status'] });
+      qc.invalidateQueries({ queryKey: ['integrations'] });
+    },
+  });
+}
+
+export function useConnectEmergent() {
+  return useEmergentMutation(connectEmergent);
+}
+
+// Explicitly void-argument, so callers write mutateAsync() rather than being
+// forced to pass an argument the mutation does not take.
+export function useDisconnectEmergent() {
+  return useEmergentMutation<void, { ok?: boolean }>(() => disconnectEmergent());
+}
+
+export function useSyncEmergent() {
+  return useEmergentMutation((full: boolean) => syncEmergent(full));
 }

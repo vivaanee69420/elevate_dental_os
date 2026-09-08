@@ -1,17 +1,9 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { PageHeader, KpiTile } from '@/components/ui';
-import { platformApi } from '@/lib/platform-api';
-
-type Overview = {
-  total_orgs: number;
-  total_users: number;
-  new_orgs_window: number;
-  new_users_window: number;
-  window_days: number;
-};
+import { usePlatformOverview } from '@/features/platform/hooks';
 
 export default function PlatformOverviewPage() {
   return (
@@ -24,14 +16,7 @@ export default function PlatformOverviewPage() {
 function OverviewBody() {
   const params = useSearchParams();
   const forceChange = params.get('force_change') === '1';
-  const [data, setData]   = useState<Overview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    platformApi<Overview>('/metrics/overview?days=30')
-      .then(setData)
-      .catch((e) => setError(e.message));
-  }, []);
+  const { data, error } = usePlatformOverview(30);
 
   return (
     <div className="space-y-4">
@@ -44,7 +29,7 @@ function OverviewBody() {
         </div>
       )}
 
-      {error && <div className="text-sm text-danger">{error}</div>}
+      {error && <div className="text-sm text-danger">{(error as Error).message}</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <KpiTile label="Organisations"   value={data ? String(data.total_orgs)        : '—'} delta="all tenants" />
