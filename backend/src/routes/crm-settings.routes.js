@@ -9,7 +9,8 @@ import * as auth_1 from "../middleware/auth.js";
 import { crmSettingsController } from "../controllers/crmSettings.controller.js";
 
 const router = (0, express_1.Router)();
-const manage = (0, auth_1.requireRole)('owner', 'practice_manager');
+// crm.manage — the key its nav item uses. See crm-templates.routes.js.
+const manage = (0, auth_1.requirePermission)('crm.manage');
 
 router.get('/', manage, (0, async_handler_1.asyncHandler)(crmSettingsController.get));
 router.put('/', manage, (0, async_handler_1.asyncHandler)(crmSettingsController.update));

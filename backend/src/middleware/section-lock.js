@@ -103,6 +103,28 @@ export const SECTIONS = [
   { prefix: '/marketing', keys: ['marketing.view'] },
   { prefix: '/debt', keys: ['intelligence.view'] },
 
+  // Settings, and the endpoints other sections legitimately read from it.
+  // These four were in UNLISTED_BY_DESIGN as "role-gated per route, needs its
+  // own pass" — that pass is this change: every route below now carries a
+  // permission gate naming the same key its nav item does, so the mount can be
+  // locked without the two contradicting each other.
+  //
+  // /integrations is several keys because it is genuinely read from outside
+  // Settings: Call Reporting reads google-sheets status (growth.view), the GHL
+  // dashboard reads gohighlevel/dashboard (crm.view), Finance reads the
+  // QuickBooks account list (finance.view), and the Marketing pages read ad
+  // accounts (marketing.view). One key would 403 a page that has every right
+  // to the data; the ROUTE's own gate still picks the specific key.
+  {
+    prefix: '/integrations',
+    keys: ['system.manage', 'growth.view', 'crm.view', 'finance.view', 'marketing.view'],
+  },
+  { prefix: '/imports', keys: ['system.manage'] },
+  { prefix: '/crm/templates', keys: ['crm.manage'] },
+  { prefix: '/crm/settings', keys: ['crm.manage'] },
+  { prefix: '/call-reporting', keys: ['growth.view'] },
+  { prefix: '/ad-attribution', keys: ['marketing.view', 'growth.view'] },
+
   // /analytics is one router serving nearly every section, gated per route on
   // finance/valuation/growth/system. The lock only decides whether the caller
   // belongs to ANY section that reads it; the route's own gate picks the key.
@@ -120,12 +142,6 @@ export const SECTIONS = [
 // analysts are denied by default. Recorded here so the coverage test can tell
 // "considered and excluded" apart from "forgotten".
 export const UNLISTED_BY_DESIGN = {
-  '/integrations': 'Owner/PM role-gated per route, and shared components read it from pages in other sections; locking it on system.manage would 403 those. Needs its own pass.',
-  '/imports': 'Owner/PM role-gated; no nav item of its own beyond Data Hub (system.manage).',
-  '/crm/templates': 'Owner/PM role-gated; not in nav.',
-  '/crm/settings': 'Owner/PM role-gated; not in nav.',
-  '/ad-attribution': 'Owner/PM role-gated; nav says growth.view. Real mismatch, left for its own change so the role list is not widened blind.',
-  '/call-reporting': 'Owner/PM role-gated; nav says growth.view. Same as above.',
   '/reviews': 'Owner-only; its screen is not wired to a route yet.',
   '/billing': 'Owner-only; no nav item.',
   '/admin/permissions': 'Owner-only by design (grant-ceiling: editing the matrix must not be delegable).',

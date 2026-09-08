@@ -198,9 +198,42 @@ describe('shell infrastructure and prefix safety', () => {
 
 describe('unlisted mounts: deny-by-default for the analyst, unchanged for the rest', () => {
   it('the analyst cannot reach a mount nobody has reviewed', () => {
-    for (const p of ['/integrations', '/imports', '/billing', '/files', '/ad-attribution']) {
+    // /integrations, /imports and /ad-attribution have MOVED OUT of this list:
+    // they are reviewed, listed in SECTIONS, and every route beneath them now
+    // carries a permission gate. They are asserted below instead.
+    for (const p of ['/billing', '/files']) {
       expect(allowed('GET', p, { 'data.export': true, 'system.manage': true }, 'analyst')).toBe(false);
     }
+  });
+
+  // THE BUG THE WHOLE MATRIX EXISTS TO PREVENT, from the other direction.
+  // Denying an analyst who HOLDS the key was the stopgap while these mounts
+  // were role-gated per route: the nav granted by key, the API answered by
+  // role, and an owner who ticked a tab for an analyst got a page that
+  // rendered and then said "Insufficient permissions" to every request it
+  // made. A grant that the API ignores is not a permission system.
+  it('an analyst reaches a reviewed mount when the owner has granted its key', () => {
+    expect(allowed('GET', '/integrations', { 'system.manage': true }, 'analyst')).toBe(true);
+    expect(allowed('GET', '/imports', { 'system.manage': true }, 'analyst')).toBe(true);
+    expect(allowed('GET', '/call-reporting', { 'growth.view': true }, 'analyst')).toBe(true);
+    expect(allowed('GET', '/ad-attribution', { 'marketing.view': true }, 'analyst')).toBe(true);
+    expect(allowed('GET', '/crm/settings', { 'crm.manage': true }, 'analyst')).toBe(true);
+  });
+
+  it('and is refused the same mount without it', () => {
+    expect(allowed('GET', '/integrations', { 'data.export': true }, 'analyst')).toBe(false);
+    expect(allowed('GET', '/imports', { 'data.export': true }, 'analyst')).toBe(false);
+    expect(allowed('GET', '/call-reporting', { 'data.export': true }, 'analyst')).toBe(false);
+    // Reception is CRM-only (project rule 5): growth.view is not theirs, so
+    // Call Reporting stays shut whatever else they hold.
+    expect(allowed('GET', '/call-reporting', { 'crm.view': true }, 'reception')).toBe(false);
+    // The /integrations MOUNT opens on crm.view, and deliberately: the GHL
+    // dashboard lives under Elevate CRM, its nav key IS crm.view, and
+    // Reception holds it — so the nav has always offered that page while the
+    // API refused it by role. The mount opening is not a grant; the route's
+    // own gate still decides, and every Settings route under it needs
+    // system.manage, which Reception does not have.
+    expect(allowed('GET', '/integrations', { 'crm.view': true }, 'reception')).toBe(true);
   });
 
   it('other roles fall through to the router own gate, so nothing narrows', () => {

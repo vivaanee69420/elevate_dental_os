@@ -20,6 +20,7 @@
 // mapper, so nothing is inferred from what we already hold.
 // ============================================================================
 import { describe, it, expect } from 'vitest';
+import { defaultPermissionsForRole } from '../src/lib/permissions.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -104,10 +105,19 @@ describe('the repair is owner-only and tenant-scoped', () => {
   const routes = readFileSync(join(SRC, 'routes', 'integrations.routes.js'), 'utf8');
   const controller = readFileSync(join(SRC, 'controllers', 'integration.controller.js'), 'utf8');
 
-  it('is owner-only — it rewrites financial rows', () => {
+  // It rewrites financial rows, so it must not be reachable by holding an
+  // ordinary section key. system.manage is an owner-only DEFAULT — the gate is
+  // now a permission rather than a role so an owner can delegate Settings
+  // deliberately, which is the whole point of the matrix; what it must never
+  // be is open to crm.view or growth.view.
+  it('is gated on system.manage — no section key reaches it', () => {
     const line = routes.split('\n').find((l) => l.includes('dentally/repair-payments'));
     expect(line).toBeTruthy();
-    expect(line).toMatch(/requireRole\)\('owner'\)/);
+    expect(line).toMatch(/requirePermission\)\('system\.manage'\)/);
+    expect(defaultPermissionsForRole('practice_manager')['system.manage']).not.toBe(true);
+    expect(defaultPermissionsForRole('reception')['system.manage']).not.toBe(true);
+    expect(defaultPermissionsForRole('analyst')['system.manage']).not.toBe(true);
+    expect(defaultPermissionsForRole('owner')['system.manage']).toBe(true);
   });
 
   it('takes the org from the session, never from the body', () => {

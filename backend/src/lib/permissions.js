@@ -267,6 +267,34 @@ export function resolveEffectivePermissions(rolePermissionRows, userOverrides, r
       ? explicitPages[pageId]
       : !!effective[sectionKey];
   }
+
+  // 6. A GRANTED TAB CARRIES ITS SECTION'S READ KEY.
+  //
+  // The Team screen grants a tab at a time and writes only page:<id> keys.
+  // Every API gate — requirePermission and sectionLock alike — reads the
+  // SECTION key. So ticking "Call Reporting" for an analyst put the tab in
+  // their nav and left growth.view false, and the page rendered and then
+  // answered "Insufficient permissions" to every request it made. A grant the
+  // API ignores is not a permission; it is a decoration.
+  //
+  // Done AFTER the page values above, deliberately: raising the section key
+  // first would make every OTHER tab in that section inherit true and appear
+  // in the nav, which is the opposite of granting one tab. Ticking one tab
+  // shows one tab, and opens the data behind it.
+  //
+  // WHAT THIS DOES AND DOES NOT PROMISE. Most sections serve their screens
+  // from one endpoint (Finance's all read /api/analytics, Growth's all read
+  // /api/growth), so the API cannot tell one of their tabs from another — the
+  // section key is the finest boundary that exists there, and opening it is
+  // the honest consequence of granting any tab within it. The tabs whose
+  // endpoint belongs to them alone stay individually enforced through
+  // PAGE_OWNED in section-lock.js; the Team screen labels the rest "nav only"
+  // rather than implying a boundary that is not there.
+  for (const [pageId, sectionKey] of Object.entries(PAGE_SECTION)) {
+    if (explicitPages[pageId] === true && sectionKey in effective) {
+      effective[sectionKey] = true;
+    }
+  }
   return effective;
 }
 
