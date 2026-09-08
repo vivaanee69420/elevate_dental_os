@@ -259,14 +259,36 @@ Optional `search=<3-80 chars>` filters by **patient name, email or phone** in on
 ### `POST /api/appointments` — create
 ### `PATCH /api/appointments/:id` — reschedule/cancel
 
-## Chair utilisation (manual)  — owner / practice_manager
+## Chair utilisation
 
-- `GET  /api/chair-utilisation?practice_id=<uuid>` — list manual records.
-- `GET  /api/chair-utilisation/grid?practice_id=<uuid>` — aggregated weekday×slot heatmap. Optional `&asOf=YYYY-MM-DD` (with `practice_id`) replays the historical grid as it was on that date (000055 history)
-  `{ days:[1..7], slots:['morning','midday','afternoon','evening'], grid, kpis }`.
-- `POST /api/chair-utilisation` — body `{ practice_id, chair_name, weekday(1-7), slot, booked_minutes, available_minutes, notes? }`.
-- `PATCH /api/chair-utilisation/:id` — partial update (practice_id immutable).
-- `DELETE /api/chair-utilisation/:id`.
+**Reads** are gated on `operations.view`. **Writes** are gated on `operations.edit` **OR** agency-actor status (`requirePermissionOrAgencyActor`). Chair data is a *both* feature: the sub-account's own owner or practice manager maintains it, and an agency actor switched into that sub-account may edit it too. `requireAgencyActor` alone would leave a tenant unable to maintain their own operational data.
+
+`operations.edit` is a separate key because `operations.view` used to grant both — anyone who could read a practice's chair grid could overwrite its whole week.
+
+**Capacity is derived, never typed.** A cell's available minutes are the overlap between its slot and the practice's opening hours (`practice_opening_hours`, synced from Dentally `/sites` and hand-editable). `chair_utilisation.available_minutes` is deprecated by migration 000180 and is no longer read or written. The client is sent the slot keys and every cell's available minutes, and defines neither itself.
+
+- `GET  /api/chair-utilisation/week?practice_id=<uuid>` — the editable week:
+  `{ chairs:[{id,name,displayOrder}], openingHours, slots, weekByChair, coverage:{openCells,enteredCells,coveragePct} }`.
+  `weekByChair[chairId][weekday][slot]` is `{ availableMinutes, bookedMinutes, revenuePence, associateId, notes, overbooked }`. `bookedMinutes`, `revenuePence` and `associateId` are **null** when nothing has been entered — an empty cell is unknown, not a booked zero. `clinicians` lists the **active** associates whose `primary_practice_id` is this practice (the roster holds every practitioner Dentally ever sent — 76 against 16 active for one practice — and a dropdown of leavers is one nobody scrolls).
+- `PUT  /api/chair-utilisation/week` — body `{ practice_id, chair_id, cells:[{weekday(1-7), slot, booked_minutes, revenue_pence, associate_id?, notes?}] }` (max 28 = one chair's week). One upsert, one snapshot. The chair **and every `associate_id`** are verified to belong to the caller's organisation before anything is written — both ids arrive in the request body, so without that a caller could stamp another tenant's clinician onto their own chair time and read the name back out of the per-clinician rollup. `associate_id: null` **clears** a previously-set clinician rather than leaving a stale one attached.
+- `GET  /api/chair-utilisation/chairs?practice_id=<uuid>`
+- `POST /api/chair-utilisation/chairs` — body `{ practice_id, name, display_order? }`. Returns **409** if the practice already has a chair with that name, compared case- and whitespace-insensitively: the chair count used to be `DISTINCT chair_name`, so `"Surgery 1"` and `"Surgery 1 "` were two chairs and capacity silently doubled.
+- `PATCH /api/chair-utilisation/chairs/:id` — `{ name?, display_order?, active? }`. Renaming keeps the chair's history.
+- `DELETE /api/chair-utilisation/chairs/:id`
+- `GET  /api/chair-utilisation/opening-hours?practice_id=<uuid>`
+- `PUT  /api/chair-utilisation/opening-hours` — body `{ practice_id, days:[{weekday(1-7), openMinute, closeMinute}] }`. Minutes from **local midnight** (wall-clock times, never instants — as instants they shift across the BST boundary). Both `null` means closed that day. Saved rows are stamped `source='manual'` and are **never** overwritten by a later Dentally sync.
+- `GET  /api/chair-utilisation?practice_id=<uuid>` — raw cell rows.
+- `GET  /api/chair-utilisation/grid?practice_id=<uuid>` — legacy weekday×slot heatmap; `&asOf=YYYY-MM-DD` replays the historical snapshot (000055).
+
+The per-record `POST /`, `PATCH /:id` and `DELETE /:id` write routes were **removed**: they keyed a cell by free-text chair name and rewrote the practice's whole snapshot on every cell, so saving one chair's 28-cell week meant 28 list-and-rewrite cycles.
+
+### `GET /api/analytics/chair` — Chair Efficiency (`finance.view`)
+
+Occupancy and money come from the **same cell set**: the open cells that have an entry. They used not to — occupancy came from the entered cells while cost-of-empty and recoverable came from `chair_config`'s full-year capacity, so one practice's 28-hour week was valued as an 80-hour one and reported £230,041 recoverable off 14% coverage.
+
+`clinicians[]` gives utilisation per clinician — `{ id, name, cells, practices, availableMinutesWk, bookedMinutesWk, emptyMinutesWk, revenuePence, occupancyPct, revPerBookedHrPence }` — measured over the **same** open cells as the practice rows, so the two grains cannot contradict each other. Rows are busiest-first, except a trailing `id: null` **"Not assigned"** bucket for chair time recorded without naming anyone; it is kept rather than dropped so the per-clinician hours still add up to the practice's. Hours are per typical **week**, deliberately not annualised — a yearly figure per clinician would invite comparison with Associate Pay, which is derived from real Dentally activity rather than this hand-entered grid, and two sources for one number drift apart.
+
+Every practice row and the group rollup carry `openCells`, `enteredCells`, `coveragePct`, `closedCellEntries`, `overbookedCells` and `hasOpeningHours`. **`hasOpeningHours` is not `openCells > 0`**: a practice with real hours but no chairs yet has zero open cells, and conflating the two made it report "no opening hours set" — false, and pointing the owner at the wrong screen. Below `coverageThresholdPct` (50), `lostPotentialYrPence` and `recoverRevYrPence` are **null**, not `0` — a zero reads as "nothing is being lost". `occupancyPct` is null when nothing has been entered, and `recovery` is null when no practice has an occupancy to climb from. `config.openHrs` and `config.daysWk` no longer feed capacity; `weeksYr` still does.
 
 ## Associates  — owner / practice_manager
 

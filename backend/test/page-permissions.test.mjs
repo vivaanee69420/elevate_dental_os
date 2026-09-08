@@ -73,9 +73,24 @@ describe('a page inherits its section until it is overridden', () => {
 
   it('granting the section grants every page under it — unchanged behaviour', () => {
     const eff = resolve([{ permission_key: 'operations.view', allowed: true }]);
-    for (const page of ['appointments', 'associates', 'staff', 'chair', 'treatments', 'uda']) {
+    for (const page of ['appointments', 'associates', 'staff', 'chair-utilisation', 'treatments', 'uda']) {
       expect(eff[pageKey(page)], `${page} did not inherit`).toBe(true);
     }
+  });
+
+  it('Chair EFFICIENCY follows finance, not operations — it shows money', () => {
+    // The page sits in the Operations nav group but reads /api/analytics/chair,
+    // a finance mount, and its figures are cost-of-empty-chairs and recoverable
+    // revenue. Rule 5 makes a practice manager's finance access owner-toggled,
+    // so operations.view alone must NOT open it. Listing it under operations
+    // previously put it in the nav and then 403'd on open.
+    const ops = resolve([{ permission_key: 'operations.view', allowed: true }]);
+    expect(ops[pageKey('chair')]).not.toBe(true);
+
+    const fin = resolve([{ permission_key: 'finance.view', allowed: true }]);
+    expect(fin[pageKey('chair')]).toBe(true);
+    // ...and finance alone does not hand over the data-entry page.
+    expect(fin[pageKey('chair-utilisation')]).not.toBe(true);
   });
 
   it('a page override switches ONE page off inside a granted section', () => {

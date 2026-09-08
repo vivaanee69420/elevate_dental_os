@@ -84,7 +84,14 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // Payroll has its own key: approving a pay run moves money, so it is not
   // bundled into operations.view. Owner-only by default.
   pay: 'payrun.manage',
-  chair: 'operations.view',
+  // Chair Efficiency reads GET /api/analytics/chair, which requires
+  // finance.view. It was listed as operations.view, so it appeared in a
+  // practice manager's nav and then 403'd — nav and API must name the SAME key.
+  chair: 'finance.view',
+  // Data entry is an operations surface, and deliberately reachable by someone
+  // with no finance access at all: the people who know how full the chairs
+  // were are not usually the people who see the money.
+  'chair-utilisation': 'operations.view',
   treatments: 'operations.view',
   uda: 'operations.view',
 
@@ -242,7 +249,7 @@ export function featureAllowsRoute(
  * "nav only" rather than implying a boundary that is not there.
  */
 export const PAGE_ENFORCED = new Set([
-  'appointments', 'associates', 'staff', 'chair', 'treatments', 'pay',
+  'appointments', 'associates', 'staff', 'chair', 'chair-utilisation', 'treatments', 'pay',
   'contacts', 'inbox', 'workflows', 'task-manager', 'p4g-ai', 'cockpit',
 ]);
 

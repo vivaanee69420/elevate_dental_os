@@ -3,8 +3,49 @@
 // RLS, so every query carries the explicit organisation_id tenant filter.
 // ============================================================================
 import * as supabase_1 from "../lib/supabase.js";
+import { pageAll } from "../lib/paged-select.js";
 
 export const chairUtilisationRepository = {
+    // Whole-org cell read for the analytics rollup. Paged, because a 50-chair
+    // group is 1,400 rows and PostgREST truncates at 1000 without saying so.
+    listAll(orgId) {
+        return pageAll(() => supabase_1.serviceClient
+            .from('chair_utilisation')
+            .select('id, practice_id, chair_id, chair_name, associate_id, weekday, slot, booked_minutes, revenue_pence')
+            .eq('organisation_id', orgId));
+    },
+
+    // One chair's whole week in a single statement. The per-record API path
+    // this replaces fired one POST -- and one full snapshot rewrite -- per
+    // cell, so saving a 56-cell week meant 56 list-and-rewrite cycles.
+    //
+    // available_minutes is deliberately NOT written: capacity is derived from
+    // practice_opening_hours, and storing a second copy would let the two
+    // drift, which is the defect this rebuild exists to remove.
+    async bulkUpsertChairWeek(orgId, { practice_id, chair_id, chair_name, cells }) {
+        if (!cells?.length) return [];
+        const payload = cells.map((c) => ({
+            organisation_id: orgId,
+            practice_id,
+            chair_id,
+            chair_name,
+            weekday: Number(c.weekday),
+            slot: c.slot,
+            // null is meaningful: a slot may be recorded without naming who
+            // worked it, so this is cleared rather than left stale on re-save.
+            associate_id: c.associate_id ?? null,
+            booked_minutes: Math.max(0, Number(c.booked_minutes) || 0),
+            revenue_pence: Math.max(0, Number(c.revenue_pence) || 0),
+            notes: c.notes ?? null,
+        }));
+        const { data, error } = await supabase_1.serviceClient
+            .from('chair_utilisation')
+            .upsert(payload, { onConflict: 'organisation_id,practice_id,chair_id,weekday,slot' })
+            .select();
+        if (error) throw new Error(error.message);
+        return data ?? [];
+    },
+
     async list(orgId, practiceId) {
         let query = supabase_1.serviceClient
             .from('chair_utilisation')

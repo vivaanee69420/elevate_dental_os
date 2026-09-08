@@ -496,6 +496,13 @@ Source of truth: `backend/src/lib/chair-utilisation.js` (`aggregateGrid`), unit-
 
 ## 11. Chair economics (Intelligence OS — Chair Efficiency view)
 
+> **Superseded for the Chair Efficiency screen (migration 000180).** The screen
+> now computes its figures in `backend/src/lib/chair-metrics.js`
+> (`practiceChairMetrics`, `rollupChairMetrics`), tested in
+> `backend/test/chair-metrics.test.mjs`. See **11a** below. `calculateChairStats`
+> remains documented here because it is still exported and still tested, but
+> `analyticsService.chairAnalytics` no longer calls it.
+
 Source: `backend/src/lib/formulas.js` (`calculateChairStats`, `calculateOcpspd`,
 `profitPerChairHour`, `chairRecovery`); tested in `backend/test/formulas-chair.test.mjs`.
 All money is integer pence; all hour figures are annual.
@@ -523,6 +530,55 @@ the saved row over these defaults):
     occVariancePct      = utilPct - benchOccPct
 
 Guards: 0 chairs -> all-zero (no division by zero); util >= benchmark -> recoverable clamps to 0.
+
+### 11a. Coverage-aware chair metrics (current — migration 000180)
+
+Source: `backend/src/lib/chair-slots.js` + `backend/src/lib/chair-metrics.js`;
+tested in `backend/test/chair-slots.test.mjs` and `backend/test/chair-metrics.test.mjs`.
+
+**Why this replaced 11's capacity.** Occupancy came from the cells an owner had
+entered, but `capHrsYr` came from `chair_config` (`chairs × openHrs ×
+workDaysYr`) and never read those cells. The two described different practices.
+Measured on live data 2026-09-08: Ashford's grid described **28 open hours a
+week**, the config asserted **80**, and the money was computed off the 80 —
+producing **£230,041 "recoverable"** from **14% coverage**. Barnet reported
+**100% occupancy and £0 cost of empty chairs** from a single Monday-morning cell.
+
+**A cell's available minutes are derived, not entered:**
+
+    dayOpen, dayClose    = practice_opening_hours[weekday]   (minutes from LOCAL midnight)
+    slot boundaries      = [dayOpen, 11:00, 14:00, 17:00, dayClose]
+    availableMinutes     = overlap(slot window, [dayOpen, dayClose])
+
+The first and last slots are open-ended (they start at the day's open and end at
+its close) so `Σ slot minutes == dayClose − dayOpen` for **any** opening hours. A
+fixed 08:00–20:00 envelope silently loses capacity for a practice opening at
+07:00, and the loss reads as low occupancy rather than as a bug.
+
+**Practice metrics** — over ACTIVE chairs, and over the OPEN cells that have an
+entry (`booked` clamped to `available`; an entry in a zero-available slot is
+counted as `closedCellEntries` and excluded):
+
+    openCells       = (active chairs) × (weekday, slot) pairs with availableMinutes > 0
+    coveragePct     = 100 × enteredCells / openCells            (null if openCells = 0)
+    occupancyPct    = 100 × Σ booked / Σ available              (null if Σ available = 0)
+    emptyMinutesWk  = max(0, Σ available − Σ booked)
+    revPerBookedHrPence = Σ revenue / (Σ booked / 60)           (null if Σ booked = 0)
+    capHrsYr        = (Σ available / 60) × weeksYr
+    lostPotentialYrPence = (emptyMinutesWk / 60) × weeksYr × benchRevHrPence
+    recoverRevYrPence    = (Σ available / 60) × weeksYr × max(0, benchOccPct − occupancyPct)/100
+                           × revPerBookedHrPence
+
+**COVERAGE_THRESHOLD_PCT = 50.** Below it, `lostPotentialYrPence` and
+`recoverRevYrPence` are **null**, not `0`. A zero reads as "nothing is being
+lost"; null is "not enough of the week has been described to say". Occupancy is
+still shown, carrying its coverage. `openHrs` and `daysWk` no longer feed
+capacity — they were an assumption standing in for a fact now read from Dentally
+— but `weeksYr` still does, because holiday allowance is a genuine assumption.
+
+The group rollup sums the entered-cell **minutes** across practices and
+re-derives every ratio from those sums, never averaging the practice averages
+(which would weight a one-cell practice equally with a fully-entered one).
 
 **calculateOcpspd** (operating cost per surgery per day/hour) — `{ annualOpexPence, surgeryDaysYr, config? }`.
 `annualOpexPence` = fixed run cost (staff + premises + admin), EXCLUDING clinician pay, lab, marketing:

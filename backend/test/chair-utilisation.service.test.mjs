@@ -40,25 +40,54 @@ describe('chairUtilisationService.grid', () => {
     });
 });
 
-describe('chairUtilisationService.create', () => {
-    it('injects organisation_id and throws a 400 AppError when the insert fails', async () => {
-        supaRec.resultProvider = () => ({ data: null, error: { message: 'duplicate cell' } });
-        await expect(svc.create(ORG, { practice_id: 'prac-1', chair_name: 'S1' }))
-            .rejects.toMatchObject({ message: 'duplicate cell', statusCode: 400 });
-        expect(supaRec.last.insertVals).toMatchObject({ organisation_id: ORG, practice_id: 'prac-1', chair_name: 'S1' });
+describe('chairUtilisationService.createChair', () => {
+    it('injects organisation_id and explains a duplicate name in words', async () => {
+        supaRec.resultProvider = () => ({
+            data: null,
+            error: { message: 'duplicate key value violates unique constraint "uq_practice_chairs_norm_name"' },
+        });
+        // The owner needs to know they already have that chair, not to read a
+        // Postgres constraint name.
+        await expect(svc.createChair(ORG, { practice_id: 'prac-1', name: 'Surgery 1' }))
+            .rejects.toMatchObject({
+                message: 'A chair with that name already exists at this practice',
+                statusCode: 409,
+            });
+        expect(supaRec.last.insertVals).toMatchObject({
+            organisation_id: ORG, practice_id: 'prac-1', name: 'Surgery 1',
+        });
+    });
+
+    it('surfaces any other insert failure as a 400', async () => {
+        supaRec.resultProvider = () => ({ data: null, error: { message: 'null value in column' } });
+        await expect(svc.createChair(ORG, { practice_id: 'prac-1', name: 'Surgery 1' }))
+            .rejects.toMatchObject({ statusCode: 400 });
     });
 });
 
-describe('chairUtilisationService.update / remove not-found', () => {
-    it('update throws a 404 AppError when no row matches the org + id', async () => {
+describe('chairUtilisationService chair not-found', () => {
+    it('updateChair throws 404 when no row matches the org + id', async () => {
         supaRec.resultProvider = () => ({ data: null, error: null });
-        await expect(svc.update(ORG, 'missing-id', { booked_minutes: 30 }))
-            .rejects.toMatchObject({ message: 'Record not found', statusCode: 404 });
+        await expect(svc.updateChair(ORG, 'missing-id', { name: 'Surgery 2' }))
+            .rejects.toMatchObject({ message: 'Chair not found', statusCode: 404 });
     });
 
-    it('remove throws a 404 AppError when nothing was deleted', async () => {
+    it('removeChair throws 404 when nothing was deleted', async () => {
         supaRec.resultProvider = () => ({ data: null, error: null });
-        await expect(svc.remove(ORG, 'missing-id'))
-            .rejects.toMatchObject({ message: 'Record not found', statusCode: 404 });
+        await expect(svc.removeChair(ORG, 'missing-id'))
+            .rejects.toMatchObject({ message: 'Chair not found', statusCode: 404 });
+    });
+});
+
+describe('chairUtilisationService.saveWeek', () => {
+    it('refuses a chair that does not belong to the practice', async () => {
+        // chair_id arrives in the request BODY, so without this check a caller
+        // could name another tenant's chair and write cells against it.
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        await expect(svc.saveWeek(ORG, {
+            practice_id: 'prac-1',
+            chair_id: 'someone-elses-chair',
+            cells: [{ weekday: 1, slot: 'morning', booked_minutes: 60, revenue_pence: 0 }],
+        })).rejects.toMatchObject({ message: 'Chair not found at this practice', statusCode: 404 });
     });
 });

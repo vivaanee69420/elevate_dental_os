@@ -36,7 +36,10 @@ export const PAGE_OWNED = {
   '/appointments': 'appointments',
   '/associates': 'associates',
   '/staff': 'staff',
-  '/chair-utilisation': 'chair',
+  // Owned by the ENTRY page, not by Chair Efficiency. Efficiency reads
+  // /analytics/chair (a finance mount); this mount is the data-entry page's,
+  // and the two are separately gated for that reason.
+  '/chair-utilisation': 'chair-utilisation',
   '/treatments': 'treatments',
   '/pay-runs': 'pay',
   '/contacts': 'contacts',
