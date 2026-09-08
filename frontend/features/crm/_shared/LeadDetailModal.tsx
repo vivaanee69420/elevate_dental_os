@@ -59,7 +59,7 @@ export function LeadDetailModal({ lead, onClose }: { lead: Lead; onClose: () => 
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="absolute right-3 top-2.5 rounded-md px-1.5 text-xl leading-none text-ink-muted transition-colors hover:bg-bg hover:text-ink"
+          className="absolute right-3 top-2.5 rounded-md px-1.5 text-xl leading-none text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink"
         >
           ×
         </button>

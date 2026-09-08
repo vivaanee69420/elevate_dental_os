@@ -13,6 +13,11 @@
   --ink-muted: #566B62;
   --ink-soft: #5F7268;        /* darkened from prototype #84958C to pass WCAG 4.5:1 (D4) */
   --brand: #1D6E5F;
+  /* Referenced as `var(--surface-muted, #f6f7f9)` on the Cashflow screen. The
+     variable was never defined, so that panel fell back to a cool grey that
+     belongs to no part of this palette. Defined here to match the muted
+     ground the Tailwind `surface-muted` token uses. */
+  --surface-muted: #EEF3EF;
   --brand-50: #E2EFE9;
   --brand-100: #C7E0D6;
   --brand-600: #175C50;
