@@ -45,8 +45,12 @@ export interface UtilPractitioner {
   days: UtilPractitionerDay[];
 }
 
+/** Which derived denominator the figures were divided by. */
+export type UtilBasis = 'span' | 'clinical';
+
 export interface PractitionerUtilisation {
   window: { since: string; until: string };
+  basis: UtilBasis;
   totals: {
     utilisationPct: number | null;
     availableHours: number;
@@ -74,9 +78,11 @@ export function getPractitionerUtilisation(opts: {
   since: string;
   until: string;
   practiceId?: string | null;
+  basis?: UtilBasis;
 }): Promise<PractitionerUtilisation> {
   const params = new URLSearchParams({ since: opts.since, until: opts.until });
   if (opts.practiceId) params.set('practice_id', opts.practiceId);
+  if (opts.basis) params.set('basis', opts.basis);
   // The "?" is added here and never baked into the query string — a helper
   // that returned one without it produced a silently-404ing URL elsewhere in
   // this codebase.

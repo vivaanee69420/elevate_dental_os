@@ -64,7 +64,20 @@ function perHour(pence, secs) {
 }
 
 export const practitionerUtilisationService = {
-    async overview(orgId, { since, until, practiceId = null }) {
+    // `basis` chooses the DENOMINATOR, and the page says which one is in use.
+    //
+    //   'span'     first to last of anything in the diary. Wide: a block at
+    //              either end stretches it.
+    //   'clinical' first to last appointment that saw a patient. Excludes the
+    //              leading and trailing blocks that inflate the span.
+    //
+    // Neither is Dentally's own figure, which comes from a rota its API does
+    // not expose - ten candidate endpoints 404 and the one that exists refuses
+    // a past date. Measured over September on this organisation: 55.9% on the
+    // span, 75.6% on the clinical window. The contracted-hours baseline on the
+    // chart is the third option and the only one that is declared rather than
+    // inferred.
+    async overview(orgId, { since, until, practiceId = null, basis = 'clinical' }) {
         const rows = await practitionerUtilisationRepository.daily(orgId, { since, until, practiceId });
 
         const norm = rows.map((r) => ({
@@ -72,7 +85,13 @@ export const practitionerUtilisationService = {
             practitionerName: r.practitioner_name,
             practiceId: r.practice_id ?? null,
             day: r.day,
-            availableSecs: Number(r.available_secs) || 0,
+            spanSecs: Number(r.available_secs) || 0,
+            clinicalSecs: Number(r.clinical_secs) || 0,
+            // The denominator actually in use, chosen once here so every
+            // figure below - cards, chart, grid - divides by the same thing.
+            availableSecs: basis === 'span'
+                ? (Number(r.available_secs) || 0)
+                : (Number(r.clinical_secs) || 0),
             utilisedSecs: Number(r.utilised_secs) || 0,
             patientAppts: Number(r.patient_appts) || 0,
             blockAppts: Number(r.block_appts) || 0,
@@ -177,6 +196,7 @@ export const practitionerUtilisationService = {
 
         return {
             window: { since, until },
+            basis,
             totals: {
                 utilisationPct,
                 availableHours: Math.round((availableSecs / HOUR) * 10) / 10,

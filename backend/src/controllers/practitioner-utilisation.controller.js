@@ -10,6 +10,7 @@ export const practitionerUtilisationController = {
             since: q.since,
             until: q.until,
             practiceId: q.practice_id ?? null,
+            basis: q.basis,
         }));
     },
 };

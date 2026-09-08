@@ -30,7 +30,7 @@ import { usePractitionerUtilisation } from '../practitioner-utilisation-hooks';
 import { usePractices } from '@/features/integrations/hooks';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { useScopePeriod, londonYmd } from '@/features/_shared/scope-context';
-import type { UtilPractitioner, UtilPractitionerDay } from '../practitioner-utilisation-api';
+import type { UtilBasis, UtilPractitioner, UtilPractitionerDay } from '../practitioner-utilisation-api';
 
 // Dentally's own bands, so a practice reading both sees the same colours mean
 // the same thing. Purple is over-booked, not "best".
@@ -128,6 +128,11 @@ export default function PractitionerUtilisationScreen() {
   // it is paying for. 0 turns the baseline off entirely.
   const [hoursPerWeek, setHoursPerWeek] = useState<number>(0);
 
+  // WHICH DENOMINATOR. Dentally's own "total time" comes from a rota its API
+  // does not expose, so neither option below is their figure — they are the two
+  // honest things the diary can tell us, and the page names the one in use.
+  const [basis, setBasis] = useState<UtilBasis>('clinical');
+
   // `win.until` is EXCLUSIVE and this endpoint takes an INCLUSIVE date, so step
   // back one MILLISECOND to land on the last day actually inside the window.
   // Stepping back a whole day would be wrong on a window that is not
@@ -146,7 +151,7 @@ export default function PractitionerUtilisationScreen() {
     [practices],
   );
 
-  const { data, isLoading, error, isFetching } = usePractitionerUtilisation({ since, until, practiceId });
+  const { data, isLoading, error, isFetching } = usePractitionerUtilisation({ since, until, practiceId, basis });
 
   const t = data?.totals;
   const days = data?.days ?? [];
@@ -307,12 +312,37 @@ export default function PractitionerUtilisationScreen() {
           rather than saying it is not connected. */}
       <ScopePeriodBar dentallyOnly />
 
-      <div className="text-ink-muted flex flex-wrap items-center gap-2 text-[11px]">
-        <span>{win.label}</span>
-        <span>·</span>
-        <span className="tabular-nums">{since} → {until}</span>
-        {isFetching && <span>· updating…</span>}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-panel border border-border bg-card px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="util-basis">Available time</label>
+          <select
+            id="util-basis"
+            value={basis}
+            onChange={(e) => setBasis(e.target.value as UtilBasis)}
+            className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+          >
+            <option value="clinical">Clinical window — first to last patient</option>
+            <option value="span">Diary span — first to last of anything</option>
+          </select>
+        </div>
+        <span className="text-ink-muted text-[11px]">
+          {basis === 'clinical'
+            ? 'Blocks before the first patient and after the last do not count as available.'
+            : 'Every block in the diary counts as available, so this reads lower.'}
+        </span>
+        <span className="text-ink-muted ml-auto text-[11px]">
+          {win.label} · <span className="tabular-nums">{since} → {until}</span>
+          {isFetching ? ' · updating…' : ''}
+        </span>
       </div>
+
+      {/* Said once, plainly, rather than left for someone to discover by
+          comparing against Dentally — which is how it was found. */}
+      <p className="text-ink-muted text-[11px]">
+        Dentally shows a third figure, its own rostered hours. Its API does not expose them
+        (ten candidate endpoints return 404), so the two options above are what the diary
+        can tell us. For a declared figure, set contracted hours on the chart below.
+      </p>
 
       {error && (
         // A named failure, never a silent empty state.

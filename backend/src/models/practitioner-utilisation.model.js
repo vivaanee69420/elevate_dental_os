@@ -11,6 +11,10 @@ export const practitionerUtilisationQuerySchema = zod_1.z.object({
     since: zod_1.z.string().regex(YMD, 'since must be YYYY-MM-DD'),
     until: zod_1.z.string().regex(YMD, 'until must be YYYY-MM-DD'),
     practice_id: zod_1.z.string().uuid().optional(),
+    // Which derived denominator to divide by. Defaults to the clinical window:
+    // the diary span counts leading and trailing blocks as available time and
+    // reads ~20 points lower for it.
+    basis: zod_1.z.enum(['span', 'clinical']).optional().default('clinical'),
 }).refine((q) => q.since <= q.until, {
     // An inverted range matches nothing and would render an empty screen to a
     // practice with a full diary — reported elsewhere in this product as
