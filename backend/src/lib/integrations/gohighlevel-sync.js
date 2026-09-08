@@ -314,7 +314,7 @@ export async function fetchLocation(accessToken, locationId) {
 // (/contacts uses locationId; /opportunities/search uses location_id). onPage
 // receives (page, totalPages|null, runningCount) for live progress. Bounded by
 // maxPages so a foreground pull stays finite. Returns the flat array.
-async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationParam = 'location_id', maxPages = MAX_PAGES, onPage = null } = {}) {
+export async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationParam = 'location_id', maxPages = MAX_PAGES, onPage = null } = {}) {
     const out = [];
     let url = new URL(`${API_BASE}${path}`);
     if (locationId) url.searchParams.set(locationParam, locationId);
@@ -332,8 +332,35 @@ async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationPa
         const next = body.meta?.nextPageUrl;
         const startAfter = body.meta?.startAfter;
         const startAfterId = body.meta?.startAfterId;
-        const done = items.length < PER_PAGE || (!next && startAfterId == null);
-        if (done) break;
+
+        // STOP ON AN EMPTY PAGE, NEVER A SHORT ONE.
+        //
+        // This used to break on `items.length < PER_PAGE`. GoHighLevel returns
+        // SHORT pages mid-collection — it filters server-side after taking the
+        // page — so a page of 22 ended the walk with rows still to come, and
+        // nothing said so. Measured on gm dental Rochester: the location holds
+        // 9,487 contacts, we pulled 9,422 (94 full pages of 100, then a page of
+        // 22 that stopped it), and the owner found the 65 by counting in
+        // GoHighLevel by hand.
+        //
+        // `meta.total` is GoHighLevel's own count. It was already being read
+        // here — for a progress bar — while the completeness decision ignored
+        // it. Now it is the primary answer to "are we done".
+        const reachedTotal = Number.isFinite(total) && total > 0 && out.length >= total;
+        const noCursor = !next && startAfterId == null;
+        if (items.length === 0 || reachedTotal || noCursor) {
+            // Say it when the walk ends short of what the API said exists.
+            // A truncated pull that reports nothing is indistinguishable from a
+            // complete one, which is exactly how 65 contacts went missing for
+            // long enough for someone to notice by hand.
+            if (Number.isFinite(total) && total > 0 && out.length < total) {
+                console.warn(
+                    `[gohighlevel] ${path}: walk ended with ${out.length} of ${total} rows `
+                    + `(page ${page}, ${items.length} items, cursor ${noCursor ? 'exhausted' : 'present'})`,
+                );
+            }
+            break;
+        }
         if (page >= maxPages) {
             console.warn(`[gohighlevel] ${path}: hit ${maxPages}-page cap (${out.length} rows), stopping this run`);
             break;
