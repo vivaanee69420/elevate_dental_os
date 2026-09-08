@@ -152,7 +152,8 @@ export default function PipelineScreen() {
   // would collapse nothing and, worse, silently keep a stale id around.
   useEffect(() => { setCollapsed(new Set()); }, [selectedId]);
 
-  const { data: summary } = usePipelineSummary(selectedId, accountId, { since, until });
+  const { data: summary, isLoading: summaryLoading, error: summaryError } =
+    usePipelineSummary(selectedId, accountId, { since, until });
   const totals = summary?.totals ?? null;
   const byStage = new Map((summary?.stages ?? []).map((s) => [s.stage_id ?? '', s]));
   const selectedPipeline = pipelines.find((p) => p.id === selectedId) ?? null;
@@ -193,34 +194,64 @@ export default function PipelineScreen() {
 
   return (
     <div className="mx-auto w-full" style={{ maxWidth: 1760 }}>
-      <div className="mb-6 flex" style={{ justifyContent: 'space-between', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap' }}>
-        <div>
-          <h1 className="display font-bold" style={{ fontSize: 28 }}>Pipeline</h1>
-          <p className="text-ink-muted" style={{ fontSize: 13 }}>
-            {isLoading ? 'Loading pipeline…' : (
-              <>
-                {headerCount === null ? DASH : headerCount.toLocaleString('en-GB')} leads
-                {' · '}
-                {money(headerValue)}
-                {/* Say what the money covers. Most leads carry no estimated
-                    value, so a total without this reads as the value of every
-                    lead on the board rather than of the few that have one. */}
-                {headerValue !== null && headerCount ? (
-                  <span> across {headerValued.toLocaleString('en-GB')} of {headerCount.toLocaleString('en-GB')}</span>
-                ) : null}
-                {openCount !== null ? (
-                  <span> · {openCount.toLocaleString('en-GB')} still open, {money(openValue)}</span>
-                ) : null}
-              </>
-            )}
-          </p>
-        </div>
+      {/* Title and the figures it summarises. Controls live in their own
+          toolbar below, rather than floating between the title and the
+          pipeline picker with nothing aligning them. */}
+      <div className="mb-3">
+        <h1 className="display font-bold" style={{ fontSize: 28 }}>Pipeline</h1>
+        <p className="text-ink-muted" style={{ fontSize: 13 }}>
+          {isLoading || summaryLoading ? 'Loading pipeline…' : summaryError ? (
+            // A failed summary used to render as "— leads · —", which reads as
+            // "this pipeline is empty" rather than "this request failed". It
+            // hid a real 500 on this very screen.
+            <span className="text-danger">Could not load pipeline figures — {(summaryError as Error).message}</span>
+          ) : (
+            <>
+              {headerCount === null ? DASH : headerCount.toLocaleString('en-GB')} leads
+              {' · '}
+              {money(headerValue)}
+              {/* Say what the money covers. Most leads carry no estimated
+                  value, so a total without this reads as the value of every
+                  lead on the board rather than of the few that have one. */}
+              {headerValue !== null && headerCount ? (
+                <span> across {headerValued.toLocaleString('en-GB')} of {headerCount.toLocaleString('en-GB')}</span>
+              ) : null}
+              {openCount !== null ? (
+                <span> · {openCount.toLocaleString('en-GB')} still open, {money(openValue)}</span>
+              ) : null}
+            </>
+          )}
+        </p>
+      </div>
+
+      {/* Toolbar: everything that changes what the board shows, on one line,
+          in one bordered strip — pipeline and window on the left because they
+          filter, export on the right because it acts. */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-panel border border-border bg-card px-3 py-2.5">
+        {pipelines.length > 0 && (
+          <div className="flex min-w-0 items-center gap-2">
+            <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="pipeline-select">Pipeline</label>
+            <select
+              id="pipeline-select"
+              value={selectedId ?? ''}
+              onChange={(e) => setPicked(e.target.value)}
+              className="min-w-0 max-w-[320px] truncate rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+            >
+              {pipelines.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {typeof p.lead_count === 'number' ? `${p.name} (${p.lead_count})` : p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Created-at window. The SAME pair of instants goes to the card list,
+            the stage aggregate and the CSV export — filtering the cards alone
+            would leave the column counts describing leads no longer on the
+            board. */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Created-at window. The SAME pair of instants goes to the card
-              list, the stage aggregate and the CSV export — filtering the
-              cards alone would leave the column counts describing leads that
-              are no longer on the board. */}
-          <label className="text-ink-muted text-xs font-semibold" htmlFor="pipeline-range">Created</label>
+          <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="pipeline-range">Created</label>
           <select
             id="pipeline-range"
             value={range}
@@ -249,24 +280,33 @@ export default function PipelineScreen() {
                 aria-label="To date"
                 className="rounded-lg border border-border bg-card px-2 py-1.5 text-[13px]"
               />
+              {/* A custom range with only one end filled is a half-set filter.
+                  Say so, rather than quietly applying an open-ended window the
+                  user did not intend. */}
+              {(!customFrom || !customTo) && (
+                <span className="text-ink-muted text-[11px]">
+                  {!customFrom && !customTo ? 'Pick both dates' : 'Open-ended until both dates are set'}
+                </span>
+              )}
             </>
+          )}
+
+          {/* A window that is not "all time" is worth showing as a removable
+              chip: a filtered board that looks unfiltered is how someone
+              concludes a pipeline is empty. */}
+          {range !== 'all' && (
+            <button
+              type="button"
+              onClick={() => { setRange('all'); setCustomFrom(''); setCustomTo(''); }}
+              className="rounded-full border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand transition-colors hover:bg-brand-100"
+              aria-label="Clear date filter"
+            >
+              Filtered · clear ×
+            </button>
           )}
         </div>
 
-        {pipelines.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label className="text-ink-muted" style={{ fontSize: 12, fontWeight: 600 }}>Pipeline</label>
-            <select
-              value={selectedId ?? ''}
-              onChange={(e) => setPicked(e.target.value)}
-              style={{ padding: '6px 10px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 6, background: 'white' }}
-            >
-              {pipelines.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {typeof p.lead_count === 'number' ? `${p.name} (${p.lead_count})` : p.name}
-                </option>
-              ))}
-            </select>
+        <div className="ml-auto flex items-center gap-2">
             {/* Hidden (never disabled) with no pipeline selected — an export
                 must carry the same filter as the board, never an ambiguous
                 "everything". Server-side and unpaginated: it pages past
@@ -277,21 +317,18 @@ export default function PipelineScreen() {
               <a
                 href={leadsExportUrl({ ghl_pipeline_id: selectedId, integration_account_id: accountId, since, until })}
                 download
-                style={{
-                  padding: '6px 12px',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: 'white',
-                  background: CRM_TEAL,
-                  borderRadius: 6,
-                  textDecoration: 'none',
-                }}
+                // Says what it will contain. The export carries the board's
+                // pipeline AND its date window, so the file matches the screen
+                // it was launched from rather than quietly returning more.
+                title={range === 'all'
+                  ? 'Every lead in this pipeline'
+                  : 'Only the leads in the current date window'}
+                className="rounded-lg bg-brand px-3 py-1.5 text-[13px] font-semibold text-white no-underline transition-colors hover:bg-brand-600"
               >
-                Export CSV
+                Export CSV{range !== 'all' ? ' (filtered)' : ''}
               </a>
             )}
-          </div>
-        )}
+        </div>
       </div>
 
       {ghlData && ghlData.accounts.length > 0 && (
