@@ -163,6 +163,22 @@ describe('edge cases', () => {
         expect(m.lostPotentialYrPence).toBeNull();
     });
 
+    it('opening hours but NO chairs is a different state from no opening hours', () => {
+        // Live case: Rochester and Bexleyheath have real Dentally hours but no
+        // chairs entered yet. Deriving hasOpeningHours from openCells would make
+        // them report "no opening hours set", which is false and points the
+        // owner at the wrong fix.
+        const m = practiceChairMetrics({
+            chairs: [],
+            openingHours: [{ weekday: 1, openMinute: 540, closeMinute: 1020 }],
+            cells: [], ...CFG,
+        });
+        expect(m.hasOpeningHours).toBe(true);
+        expect(m.chairs).toBe(0);
+        expect(m.openCells).toBe(0);
+        expect(m.occupancyPct).toBeNull();
+    });
+
     it('retired chairs contribute no capacity and no coverage denominator', () => {
         const m = practiceChairMetrics({
             chairs: [{ id: 'live', active: true }, { id: 'gone', active: false }],

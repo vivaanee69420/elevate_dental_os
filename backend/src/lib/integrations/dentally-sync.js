@@ -550,6 +550,17 @@ async function loadSiteMap(orgId) {
     return map;
 }
 
+// Opening-hours-only sync — one unpaged request, so it can be run on demand
+// (a "refresh hours" action, or right after the 000180 migration) without the
+// heavy patients/appointments/invoice phases.
+export async function syncOpeningHoursOnly(orgId, integration) {
+    const base = integration.config?.base_url ?? DEFAULT_BASE;
+    const auth = await resolveDentallyAuth(orgId, integration);
+    if (!auth) return { error: 'no_auth' };
+    const siteMap = await loadSiteMap(orgId);
+    return pullOpeningHours(orgId, base, auth, siteMap);
+}
+
 // Opening hours from /sites — the capacity source behind Chair Utilisation.
 //
 // Sites are mapped to practices by pms_site_id, NEVER by name: two tenants can

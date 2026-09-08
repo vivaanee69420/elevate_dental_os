@@ -54,7 +54,11 @@ export function practiceChairMetrics({
         for (const m of mins) if (m > 0) openSlotsPerChair++;
     }
     const openCells = openSlotsPerChair * activeChairs.length;
-    const hasOpeningHours = openCells > 0;
+    // Deliberately NOT `openCells > 0`. A practice with real opening hours but
+    // no chairs yet has zero open cells, and deriving this from that would make
+    // it report "no opening hours set" — false, and pointing the owner at the
+    // wrong fix. The two states are distinct and the UI says which is which.
+    const hasOpeningHours = openSlotsPerChair > 0;
 
     const activeIds = new Set(activeChairs.map((c) => c.id));
     let enteredCells = 0;

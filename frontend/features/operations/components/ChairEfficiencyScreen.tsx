@@ -53,9 +53,13 @@ export function ChairEfficiencyScreen() {
         <div>
           <span className="font-semibold">{r.name}</span>
           <div className="text-ink-muted text-[11px] mt-0.5">
+            {/* Three distinct states, three different fixes. Collapsing them
+                would send an owner to the wrong screen. */}
             {!r.hasOpeningHours
               ? 'No opening hours set'
-              : `${r.enteredCells} of ${r.openCells} slots entered`}
+              : r.chairs === 0
+                ? 'No chairs added yet'
+                : `${r.enteredCells} of ${r.openCells} slots entered`}
           </div>
         </div>
       ),
@@ -69,8 +73,11 @@ export function ChairEfficiencyScreen() {
   ];
 
   const noHours = (data?.practices ?? []).filter((p) => !p.hasOpeningHours);
+  // Hours but no chairs: a different problem with a different fix, so it gets
+  // its own banner rather than being folded into "no opening hours".
+  const noChairs = (data?.practices ?? []).filter((p) => p.hasOpeningHours && p.chairs === 0);
   const thin = (data?.practices ?? []).filter(
-    (p) => p.hasOpeningHours && (p.coveragePct ?? 0) < threshold,
+    (p) => p.hasOpeningHours && p.chairs > 0 && (p.coveragePct ?? 0) < threshold,
   );
   const overbooked = (data?.practices ?? []).filter((p) => p.overbookedCells > 0);
   const closedEntries = (data?.practices ?? []).filter((p) => p.closedCellEntries > 0);
@@ -109,6 +116,13 @@ export function ChairEfficiencyScreen() {
               tone="warn"
               title={`${noHours.length} practice${noHours.length > 1 ? 's have' : ' has'} no opening hours`}
               body={`Without opening hours there is no chair time to measure against, so ${noHours.map((p) => p.name).join(', ')} ${noHours.length > 1 ? 'read' : 'reads'} as blank rather than zero. Set them in Chair Utilisation, or connect the practice to Dentally and they arrive automatically.`}
+            />
+          )}
+          {noChairs.length > 0 && (
+            <AlertRow
+              tone="info"
+              title={`${noChairs.length} practice${noChairs.length > 1 ? 's have' : ' has'} opening hours but no chairs yet`}
+              body={`${noChairs.map((p) => p.name).join(', ')} — we know when they are open, but not how many surgeries they run, so there is no capacity to measure. Add the chairs in Chair Utilisation.`}
             />
           )}
           {thin.length > 0 && (
