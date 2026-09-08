@@ -76,18 +76,14 @@ describe('importSummaryRepository.summary', () => {
     it('filters the imported tables, and does NOT filter the provisioned ones', async () => {
         await importSummaryRepository.summary(ORG, 'dentally');
         const byTable = Object.fromEntries(calls.list.map((c) => [c.table, c.filters]));
-        // CONTACTS ARE COUNTED BY THEIR LINK, NOT BY `source`.
+        // EACH PROVIDER IS COUNTED BY ITS OWN `source`.
         //
-        // `source` records which system CREATED a row. A contact written by
-        // GoHighLevel and later matched by Dentally keeps source='gohighlevel'
-        // while carrying a real pms_external_id, so counting the Dentally tile
-        // by source under-reports it. Measured on live data: 19,641 by source
-        // against 22,922 actually linked on one org, and the owner reported the
-        // mirror image of it on the GoHighLevel tile.
-        expect(byTable.contacts.source).toBeUndefined();
-        expect(byTable.contacts.notNull).toBe('pms_external_id');
-        // Appointments are written by Dentally alone, so `source` is still the
-        // right discriminator there.
+        // Dentally patients and GoHighLevel contacts are different
+        // populations. Rows carrying both a pms_external_id and a
+        // ghl_contact_id are MAPPED for conversion attribution; the mapping
+        // does not make one population part of the other.
+        expect(byTable.contacts.source).toBe('dentally');
+        expect(byTable.contacts.notNull).toBeUndefined();
         expect(byTable.appointments.source).toBe('dentally');
         // These are provisioned from the PMS rather than imported and carry no
         // `source` column — filtering on one would return zero for everything.
@@ -95,17 +91,24 @@ describe('importSummaryRepository.summary', () => {
         expect(byTable.practices.source).toBeUndefined();
     });
 
-    it('counts GoHighLevel contacts by their GHL id, and opportunities by theirs', async () => {
+    // The GoHighLevel tile must NOT count rows that merely carry a
+    // ghl_contact_id. Rochester holds 9,422 GoHighLevel contacts and 415
+    // Dentally patients mapped to a GHL contact for conversion. GoHighLevel's
+    // own count for that location is 9,487 — so counting the mapped rows in
+    // would show 9,837 and turn a 65-row shortfall into a surplus, hiding a
+    // real truncated-pagination bug. A count that flatters the number is worse
+    // than one that is merely narrow.
+    it('counts GoHighLevel rows by source, never by the conversion mapping', async () => {
         await importSummaryRepository.summary(ORG, 'gohighlevel');
         // `leads` is read TWICE — once to count it, once for the date span —
         // so match on the COUNT call (the one carrying select opts). Keying by
         // table alone lets the span overwrite the count and the assertion then
         // describes the wrong query.
         const countFor = (t) => calls.list.find((c) => c.table === t && c.opts)?.filters;
-        expect(countFor('contacts').notNull).toBe('ghl_contact_id');
-        expect(countFor('contacts').source).toBeUndefined();
-        expect(countFor('leads').notNull).toBe('ghl_opportunity_id');
-        expect(countFor('leads').source).toBeUndefined();
+        expect(countFor('contacts').source).toBe('gohighlevel');
+        expect(countFor('contacts').notNull).toBeUndefined();
+        expect(countFor('leads').source).toBe('gohighlevel');
+        expect(countFor('leads').notNull).toBeUndefined();
     });
 
     it('reads counts only — never row bodies', async () => {
