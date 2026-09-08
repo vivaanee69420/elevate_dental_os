@@ -26,6 +26,7 @@ import { londonDaysAgo, londonYmd } from "../tz.js";
 // imports — a dynamic import on every insights request for a constant.
 import { syncMetaDeep, LEVEL_FIELDS } from "./meta-ads-deep-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
+import { applyAccountSelection } from "./ad-account-selection.js";
 // Shared window constant lives with the Google deep-sync module (its
 // sibling) so both providers' nightly wiring read the SAME value — see
 // google-ads-sync.js for the matching import. Two providers must not drift
@@ -275,6 +276,28 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
             console.error('[meta_ads] sync ad_accounts refresh failed:', err.message);
         }
 
+        // Honour the tick boxes. `accountIds` is everything the credential can
+        // REACH; is_selected is everything the org has asked us to report on,
+        // and until this filter existed the two were treated as the same set —
+        // so an org that ticked one of four accounts still pulled, stored and
+        // reported all four. See ad-account-selection.js for the measurement.
+        // Kept before the filter: "reachable" and "selected" are different
+        // questions, and the mapped-account health check below asks the first
+        // one. Comparing a mapped account against the SELECTED set would tell
+        // an owner to reconnect their Meta login because they had unticked an
+        // account on purpose.
+        const reachableIds = accountIds.map(String);
+        const selection = applyAccountSelection(
+            accountIds,
+            await integrationRepository.selectedAdAccountIds(orgId, 'meta_ads'),
+        );
+        if (selection.excluded.length) {
+            console.log('[meta_ads] %d account(s) excluded by selection: %s',
+                selection.excluded.length, selection.excluded.join(', '));
+        }
+        if (selection.warning) console.warn('[meta_ads] %s', selection.warning);
+        accountIds = selection.ids;
+
         // Pull each ad account; skip the ones that error (a disabled account, or
         // one the user lost access to) so one bad account doesn't sink the sync.
         const all = [];
@@ -392,8 +415,12 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
             console.error('[meta_ads] mapped-account check skipped:', err.message);
         }
         const unreachable = knownAccounts.filter((a) => a.practice_id
-            && !accountIds.map(String).includes(String(a.customer_id)));
+            && a.is_selected !== false
+            && !reachableIds.includes(String(a.customer_id)));
         const warnings = [];
+        // Surfaced, not just logged. A pull that fetched nothing because the
+        // selection matched nothing must not present as a clean run.
+        if (selection.warning) warnings.push(selection.warning);
         if (unreachable.length) {
             warnings.push(`${unreachable.length} mapped account(s) not reachable by this login: ${unreachable.map((a) => a.name || a.customer_id).join(', ')} — reconnect with a Meta account that can see them.`);
         }
