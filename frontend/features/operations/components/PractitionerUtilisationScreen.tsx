@@ -22,7 +22,7 @@
 
 import { useMemo, useState } from 'react';
 import {
-  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { Card, DataTable, EmptyState, KpiTile, PageHeader, Skeleton, type Column } from '@/components/ui';
 import { money, DASH } from '@/features/marketing/_shared/format';
@@ -76,6 +76,28 @@ const ddmmyyyy = (iso: string) => {
   return `${d}/${m}/${y}`;
 };
 
+/** Monday of the London week containing `iso`, as YYYY-MM-DD. Weeks are the
+ *  unit a contracted-hours figure is expressed in, so the buckets have to line
+ *  up with them or the comparison is meaningless. */
+function weekStart(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  const dow = (d.getDay() + 6) % 7;      // Monday = 0
+  d.setDate(d.getDate() - dow);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** "Mon 08 Sep" — a bucket label short enough for an axis. */
+function bucketLabel(iso: string, bucket: 'day' | 'week'): string {
+  const d = new Date(`${iso}T12:00:00`);
+  const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+  const mon = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()];
+  const dd = String(d.getDate()).padStart(2, '0');
+  return bucket === 'week' ? `w/c ${dd} ${mon}` : `${dow} ${dd} ${mon}`;
+}
+
 type HoverCell = {
   practitionerName: string;
   practiceName: string | null;
@@ -93,6 +115,18 @@ export default function PractitionerUtilisationScreen() {
   // survives navigation (it lives in the URL).
   const { win, scope } = useScopePeriod();
   const [hover, setHover] = useState<HoverCell | null>(null);
+
+  // Chart-local controls. These narrow and annotate the CHART only — the date
+  // stays global at the top, so it drives every panel on the page at once.
+  const [chartPractitioner, setChartPractitioner] = useState<string>('all');
+  const [bucket, setBucket] = useState<'day' | 'week'>('week');
+  // Contracted hours per practitioner per week. This is the honest answer to a
+  // problem the diary cannot solve: Dentally exposes no rota, so "available"
+  // is otherwise inferred from the booked day span. A contracted figure is
+  // DECLARED rather than inferred, and comparing used hours against it says
+  // something the span never can — whether the practice is getting the hours
+  // it is paying for. 0 turns the baseline off entirely.
+  const [hoursPerWeek, setHoursPerWeek] = useState<number>(0);
 
   // `win.until` is EXCLUSIVE and this endpoint takes an INCLUSIVE date, so step
   // back one MILLISECOND to land on the last day actually inside the window.
@@ -137,6 +171,58 @@ export default function PractitionerUtilisationScreen() {
     }
     return m;
   }, [practitioners]);
+
+  // THE CHART SERIES, derived from the SAME per-practitioner rows the grid
+  // uses — not a second fetch and not a second definition. Filtering by
+  // practitioner and bucketing by week are presentation choices, so they
+  // belong here; the numbers underneath are the server's.
+  const chartSeries = useMemo(() => {
+    const rows = chartPractitioner === 'all'
+      ? practitioners
+      : practitioners.filter((p) => p.practitionerId === chartPractitioner);
+
+    type Bucket = { key: string; used: number; available: number; heads: Set<string>; days: Set<string> };
+    const buckets = new Map<string, Bucket>();
+    for (const p of rows) {
+      for (const d of p.days) {
+        const key = bucket === 'week' ? weekStart(d.day) : d.day;
+        const b = buckets.get(key) ?? { key, used: 0, available: 0, heads: new Set(), days: new Set() };
+        b.used += d.utilisedHours;
+        b.available += d.availableHours;
+        b.heads.add(p.practitionerId);
+        b.days.add(d.day);
+        buckets.set(key, b);
+      }
+    }
+
+    return [...buckets.values()]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((b) => {
+        // Contracted hours apply PER PRACTITIONER PER WEEK, so a weekly bucket
+        // multiplies by the heads who actually worked in it. In a daily bucket
+        // there is no honest divisor — nobody works a flat seven-day week — so
+        // the baseline is only offered weekly, and the control says so.
+        const contracted = hoursPerWeek > 0 && bucket === 'week'
+          ? Math.round(hoursPerWeek * b.heads.size * 10) / 10
+          : null;
+        return {
+          key: b.key,
+          label: bucketLabel(b.key, bucket),
+          usedHours: Math.round(b.used * 10) / 10,
+          // Diary-derived availability, minus what was used. Never negative on
+          // the chart: a stacked band cannot render a negative segment, and an
+          // over-booked day is shown by the contracted line instead.
+          unusedHours: Math.round(Math.max(0, b.available - b.used) * 10) / 10,
+          availableHours: Math.round(b.available * 10) / 10,
+          contractedHours: contracted,
+          // Used minus contracted. Positive is more hours worked than
+          // contracted, negative is a shortfall — the number this filter
+          // exists to surface.
+          differenceHours: contracted === null ? null : Math.round((b.used - contracted) * 10) / 10,
+          practitioners: b.heads.size,
+        };
+      });
+  }, [practitioners, chartPractitioner, bucket, hoursPerWeek]);
 
   // Daily total: a RATIO OF SUMS from the server, not a mean of the cells
   // above it. Averaging the column would let a 45-minute list count as much as
@@ -260,34 +346,162 @@ export default function PractitionerUtilisationScreen() {
           <p className="text-ink-muted text-[12px]">
             Green is time with a patient in the chair; the band above it is available time left empty.
           </p>
+
+          {/* Chart-local filters. The DATE stays global at the top so it drives
+              every panel at once; these narrow only this chart. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div className="flex items-center gap-2">
+              <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="chart-pract">Practitioner</label>
+              <select
+                id="chart-pract"
+                value={chartPractitioner}
+                onChange={(e) => setChartPractitioner(e.target.value)}
+                className="max-w-[220px] truncate rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+              >
+                <option value="all">All practitioners</option>
+                {practitioners.map((p) => (
+                  <option key={p.practitionerId} value={p.practitionerId}>{p.practitionerName}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="chart-bucket">Group by</label>
+              <select
+                id="chart-bucket"
+                value={bucket}
+                onChange={(e) => setBucket(e.target.value as 'day' | 'week')}
+                className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+              >
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="chart-contract">Working</label>
+              <input
+                id="chart-contract"
+                type="number"
+                min={0}
+                max={80}
+                step={1}
+                value={hoursPerWeek || ''}
+                placeholder="off"
+                onChange={(e) => setHoursPerWeek(Math.max(0, Math.min(80, Number(e.target.value) || 0)))}
+                className="w-[74px] rounded-lg border border-border bg-card px-2 py-1.5 text-[13px]"
+              />
+              <span className="text-ink-muted text-xs">hours per week, per practitioner</span>
+            </div>
+          </div>
+
+          {hoursPerWeek > 0 && bucket === 'day' && (
+            // Refusing to divide rather than inventing a divisor. Nobody works
+            // a flat seven-day week, and any daily split of a weekly contract
+            // would be a number we made up.
+            <p className="text-ink-muted mt-1.5 text-[11px]">
+              A contracted figure is weekly, so the baseline shows on the <strong>Week</strong> grouping only.
+            </p>
+          )}
         </div>
+
         <div className="p-3" style={{ height: 320 }}>
           {isLoading ? (
             <Skeleton className="h-full w-full" />
-          ) : days.length === 0 ? (
+          ) : chartSeries.length === 0 ? (
             <EmptyState message="No working days in this window." />
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={days} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+              <ComposedChart data={chartSeries} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke="var(--ink-muted)" minTickGap={24} />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="var(--ink-muted)" minTickGap={16} />
                 <YAxis tick={{ fontSize: 11 }} stroke="var(--ink-muted)"
                   label={{ value: 'Hours', angle: -90, position: 'insideLeft', style: { fontSize: 11 } }} />
                 <Tooltip
-                  formatter={(v: number, name: string) => [`${v}h`, name]}
+                  formatter={(v: number, name: string) => [v === null ? DASH : `${v}h`, name]}
                   contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--border)' }}
                 />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
                 {/* Stacked: used + unused = available, so the top of the band
                     IS the available line. Drawing availability as its own
                     overlapping area would let the two disagree visually. */}
-                <Area type="monotone" dataKey="utilisedHours" name="Used" stackId="1"
+                <Area type="monotone" dataKey="usedHours" name="Used" stackId="1"
                   stroke="#1B9C8A" fill="#1B9C8A" fillOpacity={0.85} />
                 <Area type="monotone" dataKey="unusedHours" name="Unused" stackId="1"
-                  stroke="#F0A93B" fill="#F0A93B" fillOpacity={0.55} />
-              </AreaChart>
+                  stroke="#F0A93B" fill="#F0A93B" fillOpacity={0.5} />
+                {/* The contracted baseline is a LINE, not a band: it is a
+                    different kind of quantity from the diary-derived areas —
+                    declared, not observed — and stacking it with them would
+                    imply they add up. */}
+                {hoursPerWeek > 0 && bucket === 'week' && (
+                  <Line type="monotone" dataKey="contractedHours" name="Contracted"
+                    stroke="#C25F4D" strokeWidth={2} strokeDasharray="5 4" dot={false} />
+                )}
+              </ComposedChart>
             </ResponsiveContainer>
           )}
         </div>
+
+        {/* Dentally's Used / Available / Difference table, which is the part
+            people actually read the numbers off. */}
+        {!isLoading && chartSeries.length > 0 && (
+          <div className="crm-board-scroll overflow-x-auto border-t border-border px-3 pb-3 pt-2">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr>
+                  <th className="text-ink-muted sticky left-0 bg-card py-1 pr-3 text-left font-semibold" style={{ minWidth: 150 }} />
+                  {chartSeries.map((b) => (
+                    <th key={b.key} className="whitespace-nowrap px-2 py-1 text-right font-semibold">{b.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3 font-semibold">Used hours</td>
+                  {chartSeries.map((b) => (
+                    <td key={b.key} className="px-2 py-1 text-right tabular-nums">{b.usedHours}</td>
+                  ))}
+                </tr>
+                <tr>
+                  <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3 font-semibold">
+                    {hoursPerWeek > 0 && bucket === 'week' ? 'Contracted hours' : 'Available hours'}
+                  </td>
+                  {chartSeries.map((b) => (
+                    <td key={b.key} className="px-2 py-1 text-right tabular-nums">
+                      {hoursPerWeek > 0 && bucket === 'week'
+                        ? (b.contractedHours ?? DASH)
+                        : b.availableHours}
+                    </td>
+                  ))}
+                </tr>
+                {hoursPerWeek > 0 && bucket === 'week' && (
+                  <tr>
+                    <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3 font-semibold">Difference</td>
+                    {chartSeries.map((b) => (
+                      <td
+                        key={b.key}
+                        className="px-2 py-1 text-right font-semibold tabular-nums"
+                        // Colour by DIRECTION, not by good or bad: more hours
+                        // than contracted is not automatically good, and fewer
+                        // is not automatically a failure. The sign is the fact.
+                        style={{ color: b.differenceHours === null ? undefined : b.differenceHours < 0 ? 'var(--danger)' : 'var(--success)' }}
+                      >
+                        {b.differenceHours === null ? DASH
+                          : `${b.differenceHours > 0 ? '+' : ''}${b.differenceHours}`}
+                      </td>
+                    ))}
+                  </tr>
+                )}
+                <tr>
+                  <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3">Practitioners</td>
+                  {chartSeries.map((b) => (
+                    <td key={b.key} className="text-ink-muted px-2 py-1 text-right tabular-nums">{b.practitioners}</td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       <Card>
