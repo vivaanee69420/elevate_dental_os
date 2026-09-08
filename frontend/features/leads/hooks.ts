@@ -3,10 +3,17 @@ import { getEnquiries, getLeadFunnel, getLeadReport, getPipelineSummary, getToda
 
 // Board counts and value for one pipeline, computed in SQL over every lead in
 // it rather than over the page the board happens to have fetched.
-export function usePipelineSummary(pipelineId: string | null, accountId?: string | null) {
+export function usePipelineSummary(
+  pipelineId: string | null,
+  accountId?: string | null,
+  window?: { since?: string | null; until?: string | null },
+) {
   return useQuery({
-    queryKey: ['pipeline-summary', pipelineId, accountId ?? null],
-    queryFn: () => getPipelineSummary({ pipelineId: pipelineId as string, accountId }),
+    queryKey: ['pipeline-summary', pipelineId, accountId ?? null, window?.since ?? null, window?.until ?? null],
+    queryFn: () => getPipelineSummary({
+      pipelineId: pipelineId as string, accountId,
+      since: window?.since ?? null, until: window?.until ?? null,
+    }),
     enabled: !!pipelineId,
     staleTime: 30_000,
     placeholderData: (prev) => prev,

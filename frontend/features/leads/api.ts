@@ -59,6 +59,8 @@ export interface LeadsListFilters {
   integration_account_id?: string;
   assigned_to?: string;
   since?: string;
+  /** Inclusive end of the created-at window. */
+  until?: string;
   ghl_pipeline_id?: string;
   limit?: number;
 }
@@ -70,6 +72,7 @@ export function listLeads(filters: LeadsListFilters = {}): Promise<LeadsListResp
   if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
   if (filters.assigned_to) params.set('assigned_to', filters.assigned_to);
   if (filters.since) params.set('since', filters.since);
+  if (filters.until) params.set('until', filters.until);
   if (filters.ghl_pipeline_id) params.set('ghl_pipeline_id', filters.ghl_pipeline_id);
   params.set('limit', String(filters.limit ?? 100));
   return api<LeadsListResponse>(`/api/leads?${params.toString()}`);
@@ -87,12 +90,18 @@ const PROXY = '/api/backend';
 export interface LeadsExportFilters {
   ghl_pipeline_id?: string | null;
   integration_account_id?: string | null;
+  since?: string | null;
+  until?: string | null;
 }
 
 export function leadsExportUrl(filters: LeadsExportFilters = {}): string {
   const params = new URLSearchParams();
   if (filters.ghl_pipeline_id) params.set('ghl_pipeline_id', filters.ghl_pipeline_id);
   if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
+  // The export carries the board's window too. A CSV that ignored the date
+  // filter would hand back rows the screen never showed.
+  if (filters.since) params.set('since', filters.since);
+  if (filters.until) params.set('until', filters.until);
   return `${PROXY}/api/leads/export.csv?${params.toString()}`;
 }
 
@@ -151,9 +160,15 @@ export interface PipelineSummary {
 export function getPipelineSummary(opts: {
   pipelineId: string;
   accountId?: string | null;
+  since?: string | null;
+  until?: string | null;
 }): Promise<PipelineSummary> {
   const params = new URLSearchParams({ ghl_pipeline_id: opts.pipelineId });
   if (opts.accountId) params.set('integration_account_id', opts.accountId);
+  // The SAME window the card list is asked for. If these two ever diverge the
+  // column headers stop describing the cards under them.
+  if (opts.since) params.set('since', opts.since);
+  if (opts.until) params.set('until', opts.until);
   return api<PipelineSummary>(`/api/leads/pipeline-summary?${params.toString()}`);
 }
 

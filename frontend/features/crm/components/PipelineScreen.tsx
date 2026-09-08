@@ -29,12 +29,52 @@ const FALLBACK_STAGES: { key: string; label: string; colour: string; byStatus: L
   { key: 'treatment_started', label: 'In treatment', colour: 'var(--success)', byStatus: 'treatment_started' },
 ];
 
-// Colour palette cycled across dynamic GHL stages.
-// Board viewport height. Fixed so the horizontal scrollbar is always on
-// screen; the columns scroll inside it.
-const BOARD_HEIGHT = 620;
+// Board viewport height.
+//
+// Viewport-relative, not a fixed 620px. A fixed height left the PAGE
+// scrollable too: scrolling down slid the stage headers off the top while
+// leaving dead space below the board, so you lost track of which column you
+// were reading. Sized to the space actually left under the page header, the
+// board is the only thing that scrolls and its headers stay put.
+// clamp() keeps it usable on a short laptop screen and stops it stretching
+// absurdly on a tall monitor.
+const BOARD_HEIGHT = 'clamp(380px, calc(100vh - 290px), 900px)';
 
 const STAGE_COLOURS = ['#3B82F6', 'var(--warning)', '#8B5CF6', '#06B6D4', '#0891B2', 'var(--success)', 'var(--ink-muted)', '#DC2626', '#7C3AED', '#EA580C'];
+
+// Created-at windows for the board. `all` is the default: a pipeline is a
+// standing view of work in progress, and defaulting to a window would hide
+// older open leads without saying so.
+type RangeKey = 'all' | '7d' | '30d' | '90d' | '12m' | 'custom';
+const RANGES: { key: RangeKey; label: string; days: number | null }[] = [
+  { key: 'all', label: 'All time', days: null },
+  { key: '7d', label: 'Last 7 days', days: 7 },
+  { key: '30d', label: 'Last 30 days', days: 30 },
+  { key: '90d', label: 'Last 90 days', days: 90 },
+  { key: '12m', label: 'Last 12 months', days: 365 },
+  { key: 'custom', label: 'Custom…', days: null },
+];
+
+/** Local midnight N days back, as an instant. */
+function startOfDaysAgo(days: number): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - days);
+  return d.toISOString();
+}
+/** A yyyy-mm-dd from a date input, as the FIRST instant of that local day. */
+function dayStart(ymd: string): string | null {
+  if (!ymd) return null;
+  const d = new Date(`${ymd}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+/** …and the LAST instant of it, so the end date is included rather than
+ *  silently excluding everything logged on the day the user picked. */
+function dayEnd(ymd: string): string | null {
+  if (!ymd) return null;
+  const d = new Date(`${ymd}T23:59:59.999`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 function minutesSince(iso: string): number {
   const t = new Date(iso).getTime();
@@ -69,6 +109,19 @@ export default function PipelineScreen() {
   // a refetch but resets when a different pipeline is chosen — a stage id from
   // one pipeline means nothing in another.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  // Created-at window. ONE pair of instants, handed to the card list, the
+  // stage aggregate AND the CSV export, so all three describe the same leads.
+  const [range, setRange] = useState<RangeKey>('all');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const { since, until } = (() => {
+    if (range === 'custom') {
+      return { since: dayStart(customFrom), until: dayEnd(customTo) };
+    }
+    const days = RANGES.find((r) => r.key === range)?.days ?? null;
+    return { since: days === null ? null : startOfDaysAgo(days), until: null };
+  })();
   const toggleCollapsed = (key: string) => setCollapsed((prev) => {
     const next = new Set(prev);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -88,6 +141,8 @@ export default function PipelineScreen() {
   const { data, isLoading, error } = useLeads({
     ...(selectedId ? { ghl_pipeline_id: selectedId } : {}),
     ...(accountId ? { integration_account_id: accountId } : {}),
+    ...(since ? { since } : {}),
+    ...(until ? { until } : {}),
     limit: CARD_PAGE,
   });
   const leads: Lead[] = data?.leads ?? [];
@@ -97,7 +152,7 @@ export default function PipelineScreen() {
   // would collapse nothing and, worse, silently keep a stale id around.
   useEffect(() => { setCollapsed(new Set()); }, [selectedId]);
 
-  const { data: summary } = usePipelineSummary(selectedId, accountId);
+  const { data: summary } = usePipelineSummary(selectedId, accountId, { since, until });
   const totals = summary?.totals ?? null;
   const byStage = new Map((summary?.stages ?? []).map((s) => [s.stage_id ?? '', s]));
   const selectedPipeline = pipelines.find((p) => p.id === selectedId) ?? null;
@@ -160,6 +215,44 @@ export default function PipelineScreen() {
             )}
           </p>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Created-at window. The SAME pair of instants goes to the card
+              list, the stage aggregate and the CSV export — filtering the
+              cards alone would leave the column counts describing leads that
+              are no longer on the board. */}
+          <label className="text-ink-muted text-xs font-semibold" htmlFor="pipeline-range">Created</label>
+          <select
+            id="pipeline-range"
+            value={range}
+            onChange={(e) => setRange(e.target.value as RangeKey)}
+            className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+          >
+            {RANGES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+          </select>
+
+          {range === 'custom' && (
+            <>
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || undefined}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                aria-label="From date"
+                className="rounded-lg border border-border bg-card px-2 py-1.5 text-[13px]"
+              />
+              <span className="text-ink-muted text-xs">to</span>
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                onChange={(e) => setCustomTo(e.target.value)}
+                aria-label="To date"
+                className="rounded-lg border border-border bg-card px-2 py-1.5 text-[13px]"
+              />
+            </>
+          )}
+        </div>
+
         {pipelines.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <label className="text-ink-muted" style={{ fontSize: 12, fontWeight: 600 }}>Pipeline</label>
@@ -182,7 +275,7 @@ export default function PipelineScreen() {
                 here) would. */}
             {selectedId && (
               <a
-                href={leadsExportUrl({ ghl_pipeline_id: selectedId, integration_account_id: accountId })}
+                href={leadsExportUrl({ ghl_pipeline_id: selectedId, integration_account_id: accountId, since, until })}
                 download
                 style={{
                   padding: '6px 12px',

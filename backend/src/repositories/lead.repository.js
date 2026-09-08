@@ -33,6 +33,13 @@ export const leadRepository = {
             query = query.eq('ghl_pipeline_id', q.ghl_pipeline_id);
         if (q.since)
             query = query.gte('created_at', q.since);
+        // INCLUSIVE of the end date. The caller sends the instant that ends
+        // the window (the London end-of-day), so this is `lte`, matching the
+        // aggregate's `<=` — a board whose cards used a half-open window while
+        // its column counts used a closed one would disagree on the last day
+        // of every range, silently.
+        if (q.until)
+            query = query.lte('created_at', q.until);
         const { data, error } = await query;
         if (error)
             throw new Error(error.message);
@@ -86,6 +93,12 @@ export const leadRepository = {
                 query = query.eq('ghl_pipeline_id', q.ghl_pipeline_id);
             if (q.since)
                 query = query.gte('created_at', q.since);
+            // The export must carry the SAME window as the board it was
+            // launched from. Accepting `until` in the schema but not applying
+            // it here would hand back rows the screen never showed — a CSV
+            // that quietly disagrees with the page that produced it.
+            if (q.until)
+                query = query.lte('created_at', q.until);
             const { data, error } = await query;
             reads += 1;
             if (error)
@@ -154,10 +167,11 @@ export const leadRepository = {
     // worth £1,421,317 and rendered "500 leads · £0.00", because every valued
     // lead in it was older than that page. One row per stage (a pipeline has
     // a handful) cannot be capped, however many leads accumulate.
-    async pipelineStageSummary(orgId, pipelineId, accountId = null) {
+    async pipelineStageSummary(orgId, pipelineId, accountId = null, since = null, until = null) {
         const { data, error } = await supabase_1.serviceClient
             .rpc('crm_pipeline_stage_summary', {
                 p_org: orgId, p_pipeline: pipelineId, p_account: accountId,
+                p_since: since, p_until: until,
             });
         if (error)
             throw new Error(error.message);

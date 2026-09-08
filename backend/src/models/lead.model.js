@@ -60,6 +60,11 @@ export const leadListQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
     since: zod_1.z.string().optional(),
+    // Inclusive end of the created-at window. The Pipeline board's date filter
+    // sends both ends, and the SAME pair goes to crm_pipeline_stage_summary —
+    // filtering the cards without filtering the aggregate would put the column
+    // counts back out of step with the cards under them.
+    until: zod_1.z.string().optional(),
     // Filter to one GoHighLevel pipeline (drives the Pipeline screen — fetch only
     // the selected pipeline's leads server-side instead of slicing client-side).
     ghl_pipeline_id: zod_1.z.string().optional(),
@@ -75,6 +80,7 @@ export const leadExportQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
     since: zod_1.z.string().optional(),
+    until: zod_1.z.string().optional(),
     ghl_pipeline_id: zod_1.z.string().optional(),
 });
 // Pipeline definitions are per GHL Location — scope them to one subaccount.
@@ -88,6 +94,10 @@ export const pipelinesQuerySchema = zod_1.z.object({
 export const pipelineSummaryQuerySchema = zod_1.z.object({
     ghl_pipeline_id: zod_1.z.string().min(1).max(100),
     integration_account_id: zod_1.z.string().uuid().optional(),
+    // The board's date window. Must be the SAME pair the card list is asked
+    // for, or the column counts stop describing the cards beneath them.
+    since: zod_1.z.string().optional(),
+    until: zod_1.z.string().optional(),
 });
 
 export const enquiriesQuerySchema = zod_1.z.object({

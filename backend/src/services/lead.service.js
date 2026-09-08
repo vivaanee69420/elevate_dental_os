@@ -128,10 +128,10 @@ export const leadService = {
     // about. `value_pence` is null when nothing in the bucket carries a value,
     // and `valued_count` always travels beside it so the screen can say what
     // share of the bucket the money covers instead of implying all of it.
-    async pipelineSummary(orgId, { pipelineId, accountId = null }) {
+    async pipelineSummary(orgId, { pipelineId, accountId = null, since = null, until = null }) {
         if (!pipelineId) return { stages: [], totals: null };
         const rows = await lead_repository_1.leadRepository
-            .pipelineStageSummary(orgId, pipelineId, accountId);
+            .pipelineStageSummary(orgId, pipelineId, accountId, since, until);
         const stages = rows.map((r) => {
             const valued = Number(r.valued_count) || 0;
             const openValued = Number(r.open_valued_count) || 0;

@@ -115,6 +115,32 @@ describe('leadService.pipelineSummary', () => {
         expect(r.totals).toBeNull();
     });
 
+    // THE WINDOW MUST REACH THE AGGREGATE.
+    //
+    // The board's date filter narrows the cards. If the same window did not
+    // also narrow this, the column headers would go on counting leads that are
+    // no longer on the board — the exact defect this whole file exists to
+    // remove, walked back in through a new feature.
+    it('passes the date window to SQL', async () => {
+        supaRec.rpcProvider = () => ({ data: stages, error: null });
+        await leadService.pipelineSummary(ORG, {
+            pipelineId: 'p1',
+            since: '2026-08-01T00:00:00.000Z',
+            until: '2026-08-31T23:59:59.999Z',
+        });
+        const { params } = supaRec.rpcCalls[0];
+        expect(params.p_since).toBe('2026-08-01T00:00:00.000Z');
+        expect(params.p_until).toBe('2026-08-31T23:59:59.999Z');
+    });
+
+    it('sends nulls, not undefined, for an unbounded window', async () => {
+        supaRec.rpcProvider = () => ({ data: stages, error: null });
+        await leadService.pipelineSummary(ORG, { pipelineId: 'p1' });
+        const { params } = supaRec.rpcCalls[0];
+        expect(params.p_since).toBeNull();
+        expect(params.p_until).toBeNull();
+    });
+
     // MULTI-TENANCY: the org reaches SQL as p_org and nothing else does.
     it('scopes the aggregate to the caller organisation', async () => {
         supaRec.rpcProvider = () => ({ data: stages, error: null });

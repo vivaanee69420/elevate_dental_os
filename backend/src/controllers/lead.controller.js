@@ -65,6 +65,8 @@ export const leadController = {
         res.json(await lead_service_1.leadService.pipelineSummary(req.user.organisation_id, {
             pipelineId: q.ghl_pipeline_id,
             accountId: q.integration_account_id ?? null,
+            since: q.since ?? null,
+            until: q.until ?? null,
         }));
     },
     async enquiries(req, res) {
