@@ -121,6 +121,7 @@ export const PAGE_SECTION = {
   // finance access: the people who know how full the chairs were are not
   // usually the people who see the money.
   'chair-utilisation': 'operations.view',
+  'practitioner-utilisation': 'operations.view',
   'treatments': 'operations.view',
   'uda': 'operations.view',
   'patients': 'growth.view',

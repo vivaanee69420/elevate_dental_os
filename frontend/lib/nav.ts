@@ -58,6 +58,7 @@ export const NAV: NavSection[] = [
     // entry screen from anyone without finance access.
     { id: 'chair', label: 'Chair Efficiency' },
     { id: 'chair-utilisation', label: 'Chair Utilisation' },
+    { id: 'practitioner-utilisation', label: 'Practitioner Utilisation', isNew: true },
     { id: 'treatments', label: 'Treatments' },
     { id: 'uda', label: 'UDA Tracker' },
   ]},

@@ -92,6 +92,9 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // with no finance access at all: the people who know how full the chairs
   // were are not usually the people who see the money.
   'chair-utilisation': 'operations.view',
+  // Same gate as the chair grid: the people who maintain it are the people who
+  // need to see who is filling the chairs. Reception stays out (rule 5).
+  'practitioner-utilisation': 'operations.view',
   treatments: 'operations.view',
   uda: 'operations.view',
 
@@ -249,7 +252,7 @@ export function featureAllowsRoute(
  * "nav only" rather than implying a boundary that is not there.
  */
 export const PAGE_ENFORCED = new Set([
-  'appointments', 'associates', 'staff', 'chair', 'chair-utilisation', 'treatments', 'pay',
+  'appointments', 'associates', 'staff', 'chair', 'chair-utilisation', 'practitioner-utilisation', 'treatments', 'pay',
   'contacts', 'inbox', 'workflows', 'task-manager', 'p4g-ai', 'cockpit',
 ]);
 
