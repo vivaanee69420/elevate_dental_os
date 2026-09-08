@@ -16,16 +16,41 @@
 import * as supabase_1 from "../lib/supabase.js";
 
 // What each provider writes, and how its rows are told apart from other
-// providers' rows in the same table. `source` and `provider` are the two
-// discriminator columns actually in use (verified against live data); a
-// resource with neither is written by one provider only.
+// providers' rows in the same table. `source`, `provider` and `notNull` are the
+// discriminators in use (verified against live data); a resource with none is
+// written by one provider only.
+//
+// WHY `notNull` EXISTS, and why `source` is wrong for a shared table.
+//
+// `source` records which system CREATED a row, not which systems it belongs to.
+// A contact is routinely written by one integration and later matched by
+// another: the GoHighLevel sync stamps `ghl_contact_id` on a patient Dentally
+// created, and the Dentally sync stamps `pms_external_id` on a contact
+// GoHighLevel created. `source` keeps whichever wrote it first, so counting by
+// it under-reports BOTH providers on any org that runs both. Measured on live
+// data before this changed:
+//
+//                       contacts by `source`   by actual link
+//   GM Dental Group  GHL      30,083            30,112
+//                    Dentally 19,641            22,922
+//   gm dental Roch.  GHL       9,422             9,837
+//                    Dentally  3,854             4,526
+//   developer        Dentally 28,437            30,431
+//
+// The owner noticed this as "GoHighLevel says 9,487 contacts, our app says
+// 9,422". The app was not missing contacts — it was declining to count 415 it
+// already held, because Dentally happened to create them first.
+//
+// A resource in a table that only ONE provider ever writes keeps using
+// `source`/`provider`; the link column is only correct where the row can
+// legitimately belong to both.
 //
 // Labels are what the OWNER calls the thing, not the table name: a Dentally
 // contact is a patient, a GoHighLevel contact is a contact.
 export const PROVIDER_RESOURCES = {
     dentally: [
         { table: 'practices', label: 'Practices' },
-        { table: 'contacts', label: 'Patients', source: 'dentally' },
+        { table: 'contacts', label: 'Patients', notNull: 'pms_external_id' },
         { table: 'appointments', label: 'Appointments', source: 'dentally' },
         { table: 'payments', label: 'Payments', source: 'dentally' },
         { table: 'invoices', label: 'Invoices', source: 'dentally' },
@@ -36,8 +61,8 @@ export const PROVIDER_RESOURCES = {
         { table: 'staff', label: 'Staff' },
     ],
     gohighlevel: [
-        { table: 'contacts', label: 'Contacts', source: 'gohighlevel' },
-        { table: 'leads', label: 'Leads', source: 'gohighlevel' },
+        { table: 'contacts', label: 'Contacts', notNull: 'ghl_contact_id' },
+        { table: 'leads', label: 'Opportunities', notNull: 'ghl_opportunity_id' },
         { table: 'communications', label: 'Conversations' },
         { table: 'ghl_appointments', label: 'Calendar bookings' },
     ],
@@ -77,7 +102,7 @@ export const PROVIDER_RESOURCES = {
 // expected actually arrived, which is the question they are really asking.
 const PROVIDER_SPAN = {
     dentally: { table: 'appointments', column: 'starts_at', source: 'dentally', label: 'Appointments' },
-    gohighlevel: { table: 'leads', column: 'created_at', source: 'gohighlevel', label: 'Leads' },
+    gohighlevel: { table: 'leads', column: 'created_at', notNull: 'ghl_opportunity_id', label: 'Opportunities' },
     quickbooks: { table: 'monthly_financials', column: 'period', source: 'quickbooks', label: 'Financials' },
     xero: { table: 'monthly_financials', column: 'period', source: 'xero', label: 'Financials' },
     google_ads: { table: 'ad_metrics', column: 'metric_date', provider: 'google_ads', label: 'Metrics' },
@@ -96,6 +121,7 @@ export const importSummaryRepository = {
             .eq('organisation_id', orgId);
         if (res.source) q = q.eq('source', res.source);
         if (res.provider) q = q.eq('provider', res.provider);
+        if (res.notNull) q = q.not(res.notNull, 'is', null);
         const { count, error } = await q;
         // A renamed column or a table this deployment does not have must not
         // blank the whole panel. Null reads as "not known" in the UI, where a 0
@@ -111,6 +137,7 @@ export const importSummaryRepository = {
             .eq('organisation_id', orgId);
         if (span.source) q = q.eq('source', span.source);
         if (span.provider) q = q.eq('provider', span.provider);
+        if (span.notNull) q = q.not(span.notNull, 'is', null);
         const { data, error } = await q
             .not(span.column, 'is', null)
             .order(span.column, { ascending })

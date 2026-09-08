@@ -22,7 +22,14 @@ vi.mock('../src/lib/supabase.js', () => {
             _table: table, _filters: {},
             select(_cols, opts) { this._opts = opts; return this; },
             eq(col, val) { this._filters[col] = val; return this; },
-            not() { return this; },
+            // Records the IS NOT NULL discriminator instead of swallowing it.
+            // It used to return `this` and drop its arguments, so a test could
+            // assert nothing about which column a count was keyed on — and the
+            // counts were keyed on the wrong column for months.
+            not(col, op, val) {
+                if (op === 'is' && val === null) this._filters.notNull = col;
+                return this;
+            },
             order(col, opts) { this._order = { col, ...opts }; return this; },
             limit() { return this; },
             maybeSingle() {
@@ -66,17 +73,39 @@ describe('importSummaryRepository.summary', () => {
         for (const c of calls.list) expect(c.filters.organisation_id).toBe(ORG);
     });
 
-    it('filters the imported tables by source, and does NOT filter the provisioned ones', async () => {
+    it('filters the imported tables, and does NOT filter the provisioned ones', async () => {
         await importSummaryRepository.summary(ORG, 'dentally');
         const byTable = Object.fromEntries(calls.list.map((c) => [c.table, c.filters]));
-        // An org with both Dentally and GoHighLevel contacts must see the
-        // Dentally figure on the Dentally tile, not a combined total.
-        expect(byTable.contacts.source).toBe('dentally');
+        // CONTACTS ARE COUNTED BY THEIR LINK, NOT BY `source`.
+        //
+        // `source` records which system CREATED a row. A contact written by
+        // GoHighLevel and later matched by Dentally keeps source='gohighlevel'
+        // while carrying a real pms_external_id, so counting the Dentally tile
+        // by source under-reports it. Measured on live data: 19,641 by source
+        // against 22,922 actually linked on one org, and the owner reported the
+        // mirror image of it on the GoHighLevel tile.
+        expect(byTable.contacts.source).toBeUndefined();
+        expect(byTable.contacts.notNull).toBe('pms_external_id');
+        // Appointments are written by Dentally alone, so `source` is still the
+        // right discriminator there.
         expect(byTable.appointments.source).toBe('dentally');
         // These are provisioned from the PMS rather than imported and carry no
         // `source` column — filtering on one would return zero for everything.
         expect(byTable.associates.source).toBeUndefined();
         expect(byTable.practices.source).toBeUndefined();
+    });
+
+    it('counts GoHighLevel contacts by their GHL id, and opportunities by theirs', async () => {
+        await importSummaryRepository.summary(ORG, 'gohighlevel');
+        // `leads` is read TWICE — once to count it, once for the date span —
+        // so match on the COUNT call (the one carrying select opts). Keying by
+        // table alone lets the span overwrite the count and the assertion then
+        // describes the wrong query.
+        const countFor = (t) => calls.list.find((c) => c.table === t && c.opts)?.filters;
+        expect(countFor('contacts').notNull).toBe('ghl_contact_id');
+        expect(countFor('contacts').source).toBeUndefined();
+        expect(countFor('leads').notNull).toBe('ghl_opportunity_id');
+        expect(countFor('leads').source).toBeUndefined();
     });
 
     it('reads counts only — never row bodies', async () => {
@@ -114,8 +143,8 @@ describe('the provider registry', () => {
             for (const r of resources) {
                 if (shared.includes(r.table)) {
                     expect(
-                        Boolean(r.source || r.provider),
-                        `${provider}.${r.table} shares a table and needs a source/provider filter`,
+                        Boolean(r.source || r.provider || r.notNull),
+                        `${provider}.${r.table} shares a table and needs a source/provider/notNull filter`,
                     ).toBe(true);
                 }
             }
