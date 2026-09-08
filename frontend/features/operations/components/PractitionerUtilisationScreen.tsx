@@ -27,7 +27,8 @@ import {
 import { Card, DataTable, EmptyState, KpiTile, PageHeader, Skeleton, type Column } from '@/components/ui';
 import { money, DASH } from '@/features/marketing/_shared/format';
 import { usePractitionerUtilisation } from '../practitioner-utilisation-hooks';
-import type { UtilPractitioner } from '../practitioner-utilisation-api';
+import { usePractices } from '@/features/integrations/hooks';
+import type { UtilPractitioner, UtilPractitionerDay } from '../practitioner-utilisation-api';
 
 // Dentally's own bands, so a practice reading both sees the same colours mean
 // the same thing. Purple is over-booked, not "best".
@@ -70,6 +71,31 @@ function dayLabel(iso: string): { dow: string; dom: string } {
 }
 
 const pct = (v: number | null) => (v === null ? DASH : `${v.toFixed(0)}%`);
+
+/** "7h 15m" — hours and minutes, the way a diary is read. Negative bookable
+ *  time is real (an over-booked day) and keeps its sign rather than clamping,
+ *  because clamping would hide double-booking. */
+function hm(hours: number): string {
+  const neg = hours < 0;
+  const total = Math.round(Math.abs(hours) * 60);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${neg ? '-' : ''}${h}h ${m}m`;
+}
+
+/** A long date, as Dentally writes it: 25/09/2026. */
+const ddmmyyyy = (iso: string) => {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+};
+
+type HoverCell = {
+  practitionerName: string;
+  practiceName: string | null;
+  day: UtilPractitionerDay;
+  x: number;
+  y: number;
+};
 const hrs = (v: number | null | undefined) =>
   (v === null || v === undefined ? DASH : `${v.toLocaleString('en-GB', { maximumFractionDigits: 1 })}h`);
 
@@ -77,6 +103,18 @@ export default function PractitionerUtilisationScreen() {
   const [range, setRange] = useState<RangeKey>('30d');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
+  // Practice-wise. Null = every practice this organisation has; the filter is
+  // passed to SQL, so the cards, the chart and the grid all narrow together
+  // rather than the grid alone.
+  const [practiceId, setPracticeId] = useState<string | null>(null);
+  const [hover, setHover] = useState<HoverCell | null>(null);
+
+  const { data: practicesData } = usePractices();
+  const practices = practicesData?.practices ?? [];
+  const practiceName = useMemo(
+    () => new Map(practices.map((p: { id: string; name: string }) => [p.id, p.name])),
+    [practices],
+  );
 
   const { since, until } = useMemo(() => {
     if (range === 'custom' && customFrom && customTo) return { since: customFrom, until: customTo };
@@ -84,7 +122,7 @@ export default function PractitionerUtilisationScreen() {
     return { since: daysAgo(days), until: daysAgo(0) };
   }, [range, customFrom, customTo]);
 
-  const { data, isLoading, error, isFetching } = usePractitionerUtilisation({ since, until });
+  const { data, isLoading, error, isFetching } = usePractitionerUtilisation({ since, until, practiceId });
 
   const t = data?.totals;
   const days = data?.days ?? [];
@@ -99,10 +137,13 @@ export default function PractitionerUtilisationScreen() {
     return [...set].sort();
   }, [practitioners, days]);
 
+  // The whole day row, not just its percentage: the hover card reports used,
+  // bookable and total time, and re-deriving those from a percentage would
+  // lose the minutes.
   const cells = useMemo(() => {
-    const m = new Map<string, Map<string, number | null>>();
+    const m = new Map<string, Map<string, UtilPractitionerDay>>();
     for (const p of practitioners) {
-      m.set(p.practitionerId, new Map(p.days.map((d) => [d.day, d.utilisationPct])));
+      m.set(p.practitionerId, new Map(p.days.map((d) => [d.day, d])));
     }
     return m;
   }, [practitioners]);
@@ -117,6 +158,19 @@ export default function PractitionerUtilisationScreen() {
 
   const leagueColumns: Column<UtilPractitioner>[] = useMemo(() => [
     { header: 'Practitioner', render: (p) => <strong className="text-[13px]">{p.practitionerName}</strong> },
+    // The site they worked most in this window. Shown only when the
+    // organisation has more than one, and never blank: an unmapped day says so
+    // rather than leaving a gap that reads as missing data.
+    ...(practices.length > 1
+      ? [{
+          header: 'Practice',
+          render: (p: UtilPractitioner) => (
+            <span className="text-ink-muted">
+              {p.practiceId ? (practiceName.get(p.practiceId) ?? 'Unknown site') : 'Not mapped'}
+            </span>
+          ),
+        } as Column<UtilPractitioner>]
+      : []),
     {
       header: 'Utilisation',
       render: (p) => (
@@ -133,7 +187,7 @@ export default function PractitionerUtilisationScreen() {
     // has no rate, and "£0.00/h" would be a figure nobody recorded.
     { header: 'Fees', render: (p) => <span className="tabular-nums">{money(p.revenuePence)}</span> },
     { header: 'Per used hour', render: (p) => <span className="tabular-nums">{money(p.revenuePerUtilisedHourPence)}</span> },
-  ], []);
+  ], [practices.length, practiceName]);
 
   return (
     <div className="mx-auto w-full space-y-4" style={{ maxWidth: 1600 }}>
@@ -170,6 +224,26 @@ export default function PractitionerUtilisationScreen() {
             )}
           </>
         )}
+        {/* PRACTICE-WISE. Only offered when the organisation actually has more
+            than one site — a lone "All practices" pill is a control with
+            nothing to control. */}
+        {practices.length > 1 && (
+          <>
+            <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="util-practice">Practice</label>
+            <select
+              id="util-practice"
+              value={practiceId ?? ''}
+              onChange={(e) => setPracticeId(e.target.value || null)}
+              className="max-w-[260px] truncate rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+            >
+              <option value="">All practices</option>
+              {practices.map((p: { id: string; name: string }) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </>
+        )}
+
         <span className="text-ink-muted ml-auto text-[11px]">
           {since} → {until}{isFetching ? ' · updating…' : ''}
         </span>
@@ -276,61 +350,122 @@ export default function PractitionerUtilisationScreen() {
         ) : practitioners.length === 0 ? (
           <EmptyState message="No practitioner activity in this window." />
         ) : (
-          <div className="crm-board-scroll overflow-x-auto p-3">
-            <table className="border-separate" style={{ borderSpacing: 2 }}>
-              <thead>
-                <tr>
-                  <th className="text-ink-muted sticky left-0 z-10 bg-card px-2 text-right text-[11px] font-semibold"
-                    style={{ minWidth: 150 }}>Practitioner</th>
-                  {allDays.map((d) => {
-                    const { dow, dom } = dayLabel(d);
-                    return (
-                      <th key={d} className="text-ink-muted px-1 text-center text-[10px] font-semibold" style={{ minWidth: 30 }}>
-                        <div>{dow}</div><div className="tabular-nums">{dom}</div>
-                      </th>
-                    );
-                  })}
-                </tr>
-              </thead>
-              <tbody>
-                {practitioners.map((p) => (
-                  <tr key={p.practitionerId}>
-                    <td className="sticky left-0 z-10 truncate bg-card px-2 text-right text-[12px] font-medium"
-                      title={p.practitionerName} style={{ maxWidth: 190 }}>
-                      {p.practitionerName}
+          <div className="relative p-3">
+            {/* The grid SCROLLS, in both directions, with the practitioner
+                column, the date header and the Total row all frozen. A month
+                of columns across forty practitioners is neither a wide table
+                nor a tall one — it is both, and losing either axis while
+                reading a cell makes the cell meaningless. */}
+            <div
+              className="crm-board-scroll overflow-auto"
+              style={{ maxHeight: 460 }}
+              onMouseLeave={() => setHover(null)}
+            >
+              <table className="border-separate" style={{ borderSpacing: 2 }}>
+                <thead>
+                  <tr>
+                    <th
+                      className="text-ink-muted sticky left-0 top-0 z-30 bg-card px-2 text-right text-[11px] font-semibold"
+                      style={{ minWidth: 160 }}
+                    >
+                      Practitioner
+                    </th>
+                    {allDays.map((d) => {
+                      const { dow, dom } = dayLabel(d);
+                      return (
+                        <th
+                          key={d}
+                          className="text-ink-muted sticky top-0 z-20 bg-card px-1 text-center text-[10px] font-semibold"
+                          style={{ minWidth: 32 }}
+                        >
+                          <div>{dow}</div>
+                          <div className="tabular-nums">{dom}</div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {practitioners.map((p) => (
+                    <tr key={p.practitionerId}>
+                      <td
+                        className="sticky left-0 z-10 truncate bg-card px-2 text-right text-[12px] font-medium"
+                        title={p.practitionerName}
+                        style={{ maxWidth: 200 }}
+                      >
+                        {p.practitionerName}
+                      </td>
+                      {allDays.map((d) => {
+                        const cell = cells.get(p.practitionerId)?.get(d) ?? null;
+                        const c = bandColour(cell?.utilisationPct ?? null);
+                        return (
+                          <td key={d} className="text-center" style={{ width: 32, height: 28 }}>
+                            <div
+                              // Hover AND focus: the grid is keyboard-navigable,
+                              // and a card only a mouse can open is a card half
+                              // the people here cannot read.
+                              tabIndex={cell ? 0 : -1}
+                              onMouseEnter={(e) => {
+                                if (!cell) return setHover(null);
+                                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setHover({
+                                  practitionerName: p.practitionerName,
+                                  practiceName: practiceName.get(cell.practiceId ?? '') ?? null,
+                                  day: cell,
+                                  x: r.left + r.width / 2,
+                                  y: r.top,
+                                });
+                              }}
+                              onFocus={(e) => {
+                                if (!cell) return;
+                                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setHover({
+                                  practitionerName: p.practitionerName,
+                                  practiceName: practiceName.get(cell.practiceId ?? '') ?? null,
+                                  day: cell,
+                                  x: r.left + r.width / 2,
+                                  y: r.top,
+                                });
+                              }}
+                              onBlur={() => setHover(null)}
+                              className="flex h-[28px] w-full cursor-default items-center justify-center rounded text-[9px] font-bold transition-shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+                              style={{
+                                background: c ?? 'var(--bg)',
+                                color: c ? 'white' : 'var(--ink-muted)',
+                              }}
+                            >
+                              {cell === null ? '\u00d7' : ''}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  {/* Frozen to the bottom, like the header to the top: the
+                      daily total is the row people scan against, and it is
+                      useless once it has scrolled away. */}
+                  <tr>
+                    <td className="sticky bottom-0 left-0 z-30 bg-card px-2 text-right text-[11px] font-bold">
+                      Total utilisation %
                     </td>
                     {allDays.map((d) => {
-                      const v = cells.get(p.practitionerId)?.get(d) ?? null;
-                      const c = bandColour(v);
+                      const v = dailyTotal.get(d) ?? null;
                       return (
-                        <td key={d} className="text-center" style={{ width: 30, height: 26 }}>
-                          <div
-                            title={v === null
-                              ? `${p.practitionerName} — ${d}: no patient appointments`
-                              : `${p.practitionerName} — ${d}: ${v.toFixed(0)}%`}
-                            className="flex h-[26px] w-full items-center justify-center rounded text-[9px] font-bold"
-                            style={{
-                              background: c ?? 'var(--bg)',
-                              color: c ? 'white' : 'var(--ink-muted)',
-                            }}
-                          >
-                            {v === null ? '×' : ''}
-                          </div>
+                        <td
+                          key={d}
+                          className="sticky bottom-0 z-20 bg-card text-center text-[10px] font-semibold tabular-nums"
+                          style={{ width: 32 }}
+                        >
+                          {v === null ? DASH : v.toFixed(0)}
                         </td>
                       );
                     })}
                   </tr>
-                ))}
-                <tr>
-                  <td className="sticky left-0 z-10 bg-card px-2 text-right text-[11px] font-bold">Total utilisation</td>
-                  {allDays.map((d) => (
-                    <td key={d} className="text-center text-[10px] font-semibold tabular-nums" style={{ width: 30 }}>
-                      {dailyTotal.get(d) == null ? DASH : dailyTotal.get(d)!.toFixed(0)}
-                    </td>
-                  ))}
-                </tr>
-              </tbody>
-            </table>
+                </tfoot>
+              </table>
+            </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px]">
               {BANDS.map((b) => (
@@ -340,10 +475,61 @@ export default function PractitionerUtilisationScreen() {
                 </span>
               ))}
               <span className="flex items-center gap-1.5">
-                <span className="inline-block h-3 w-3 rounded text-center text-[9px] leading-3" style={{ background: 'var(--bg)' }}>×</span>
-                No patient appointments
+                <span className="text-ink-muted inline-block h-3 w-3 rounded text-center text-[9px] leading-3" style={{ background: 'var(--bg)' }}>
+                  &times;
+                </span>
+                Practitioner unavailable
               </span>
             </div>
+
+            {/* The hover card, positioned against the viewport so it is never
+                clipped by the scroller it sits inside. `pointer-events-none`
+                so it can never steal the hover that produced it. */}
+            {hover && (
+              <div
+                role="tooltip"
+                className="pointer-events-none fixed z-50 rounded-panel border border-border bg-card px-3 py-2 text-[12px] shadow-panel"
+                style={{
+                  left: Math.min(Math.max(hover.x - 130, 8), (typeof window !== 'undefined' ? window.innerWidth : 1200) - 268),
+                  top: Math.max(hover.y - 118, 8),
+                  width: 260,
+                }}
+              >
+                <div className="font-semibold">
+                  {hover.practitionerName}
+                  {hover.practiceName ? ` (${hover.practiceName})` : ''}
+                </div>
+                <div className="text-ink-muted mb-1.5 text-[11px]">{ddmmyyyy(hover.day.day)}</div>
+                <dl className="space-y-0.5">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Utilised time</dt>
+                    <dd className="font-semibold tabular-nums">{hm(hover.day.utilisedHours)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Bookable time</dt>
+                    {/* Total minus utilised. Negative on an over-booked day,
+                        and it keeps the sign — clamping at zero would hide
+                        double-booking, which is the thing worth seeing. */}
+                    <dd className="font-semibold tabular-nums"
+                      style={{ color: hover.day.availableHours - hover.day.utilisedHours < 0 ? 'var(--danger)' : undefined }}>
+                      {hm(hover.day.availableHours - hover.day.utilisedHours)}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Total time</dt>
+                    <dd className="font-semibold tabular-nums">{hm(hover.day.availableHours)}</dd>
+                  </div>
+                  <div className="mt-1 flex justify-between gap-3 border-t border-border pt-1">
+                    <dt className="text-ink-muted">Patients</dt>
+                    <dd className="font-semibold tabular-nums">{hover.day.patientAppts}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Fees</dt>
+                    <dd className="font-semibold tabular-nums">{money(hover.day.revenuePence)}</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
           </div>
         )}
       </Card>

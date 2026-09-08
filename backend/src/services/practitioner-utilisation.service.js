@@ -34,6 +34,19 @@ import { practitionerUtilisationRepository } from "../repositories/practitioner-
 
 const HOUR = 3600;
 
+/** The value appearing most often, or null when there is none. */
+function mostCommon(values) {
+    const counts = new Map();
+    for (const v of values) {
+        if (v == null) continue;
+        counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    let best = null;
+    let bestN = 0;
+    for (const [v, n] of counts) if (n > bestN) { best = v; bestN = n; }
+    return best;
+}
+
 /** Pence per hour, or null when there are no hours to divide by. */
 function perHour(pence, secs) {
     if (!secs || pence == null) return null;
@@ -113,6 +126,9 @@ export const practitionerUtilisationService = {
             if (r.revenuePence != null) { p.revenuePence += r.revenuePence; p.hasRevenue = true; }
             p.days.push({
                 day: r.day,
+                // The practice this day was worked at. A practitioner can move
+                // between sites, so it belongs to the DAY, not to the person.
+                practiceId: r.practiceId,
                 utilisationPct: r.availableSecs > 0
                     ? Math.round((r.utilisedSecs / r.availableSecs) * 1000) / 10
                     : null,
@@ -127,6 +143,10 @@ export const practitionerUtilisationService = {
             .map((p) => ({
                 practitionerId: p.practitionerId,
                 practitionerName: p.practitionerName,
+                // The site they worked most days at in this window — a label
+                // for the row, never a claim that every day was there. The
+                // per-day practice above is the accurate one.
+                practiceId: mostCommon(p.days.map((d) => d.practiceId)),
                 daysWorked: p.days.length,
                 availableHours: Math.round((p.availableSecs / HOUR) * 10) / 10,
                 utilisedHours: Math.round((p.utilisedSecs / HOUR) * 10) / 10,

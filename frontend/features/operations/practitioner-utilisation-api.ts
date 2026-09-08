@@ -21,6 +21,8 @@ export interface UtilDay {
 
 export interface UtilPractitionerDay {
   day: string;
+  /** The site this day was worked at — a practitioner can move between them. */
+  practiceId: string | null;
   utilisationPct: number | null;
   availableHours: number;
   utilisedHours: number;
@@ -31,6 +33,8 @@ export interface UtilPractitionerDay {
 export interface UtilPractitioner {
   practitionerId: string;
   practitionerName: string;
+  /** The site worked most days in this window; the per-day one is exact. */
+  practiceId: string | null;
   daysWorked: number;
   availableHours: number;
   utilisedHours: number;

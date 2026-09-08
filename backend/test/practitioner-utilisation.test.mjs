@@ -160,6 +160,35 @@ describe('multi-tenancy', () => {
         expect(JSON.stringify(supaRec.rpcCalls[0].params)).not.toContain(OTHER);
     });
 
+    // PRACTICE-WISE means the filter reaches SQL, so the cards, the chart and
+    // the grid all narrow together. A filter applied only to the grid would
+    // leave the headline describing practices no longer on screen — the same
+    // defect as a date filter that misses its aggregate.
+    it('carries the practice into every figure, not just the grid', async () => {
+        supaRec.rpcProvider = () => ({ data: [row({ practice_id: 'prac-1' })], error: null });
+        const r = await practitionerUtilisationService.overview(ORG, {
+            since: '2026-09-01', until: '2026-09-01', practiceId: 'prac-1',
+        });
+        expect(supaRec.rpcCalls[0].params.p_practice).toBe('prac-1');
+        // …and the practice travels back out, per day, so a hover card can name
+        // the site a clinician was actually at.
+        expect(r.practitioners[0].days[0].practiceId).toBe('prac-1');
+        expect(r.practitioners[0].practiceId).toBe('prac-1');
+    });
+
+    // A practitioner who moved sites mid-window gets the one they worked most,
+    // as a row label only — the per-day value stays exact.
+    it('labels a row with the site worked most, keeping each day exact', async () => {
+        supaRec.rpcProvider = () => ({ data: [
+            row({ day: '2026-09-01', practice_id: 'prac-a' }),
+            row({ day: '2026-09-02', practice_id: 'prac-b' }),
+            row({ day: '2026-09-03', practice_id: 'prac-b' }),
+        ], error: null });
+        const r = await practitionerUtilisationService.overview(ORG, { since: '2026-09-01', until: '2026-09-03' });
+        expect(r.practitioners[0].practiceId).toBe('prac-b');
+        expect(r.practitioners[0].days.map((d) => d.practiceId)).toEqual(['prac-a', 'prac-b', 'prac-b']);
+    });
+
     it('passes the window and practice through untouched', async () => {
         supaRec.rpcProvider = () => ({ data: [], error: null });
         await practitionerUtilisationService.overview(ORG, {
