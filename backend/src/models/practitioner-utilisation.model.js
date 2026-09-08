@@ -14,7 +14,7 @@ export const practitionerUtilisationQuerySchema = zod_1.z.object({
     // Which derived denominator to divide by. Defaults to the clinical window:
     // the diary span counts leading and trailing blocks as available time and
     // reads ~20 points lower for it.
-    basis: zod_1.z.enum(['span', 'clinical']).optional().default('clinical'),
+    basis: zod_1.z.enum(['span', 'clinical', 'rota']).optional().default('clinical'),
 }).refine((q) => q.since <= q.until, {
     // An inverted range matches nothing and would render an empty screen to a
     // practice with a full diary — reported elsewhere in this product as

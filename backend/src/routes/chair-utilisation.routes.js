@@ -8,6 +8,8 @@ import * as auth_1 from "../middleware/auth.js";
 import { requirePermissionOrAgencyActor } from "../middleware/agency.js";
 import { chairUtilisationController } from "../controllers/chair-utilisation.controller.js";
 import { practitionerUtilisationController } from "../controllers/practitioner-utilisation.controller.js";
+import { practitionerScheduleController } from "../controllers/practitioner-schedule.controller.js";
+import { practitionerPerformanceController } from "../controllers/practitioner-performance.controller.js";
 
 const router = (0, express_1.Router)();
 // Gated on the `operations.view` PERMISSION, not on a role list. A role list
@@ -42,6 +44,22 @@ router.delete('/chairs/:id', gateEdit, (0, async_handler_1.asyncHandler)(chairUt
 // this router: the people who maintain the chair grid are the people who need
 // to see who is filling their chairs.
 router.get('/practitioners', gate, (0, async_handler_1.asyncHandler)(practitionerUtilisationController.overview));
+
+// Practitioner performance - time, treatment volume and money for the same
+// people, in one row each. A READ, same `operations.view` gate: it is the
+// utilisation figures with the clinical and financial columns beside them, not
+// a new class of data, so a reader allowed one is allowed the other.
+router.get('/practitioners/performance', gate, (0, async_handler_1.asyncHandler)(practitionerPerformanceController.overview));
+
+// Practitioner schedules — the rota Dentally holds but does not publish, typed
+// in by the practice. READS take operations.view like the rest of this router;
+// WRITES take operations.edit or agency-actor status, the same split the chair
+// grid uses, because entering a schedule changes what every utilisation figure
+// on the product divides by.
+router.get('/schedules', gate, (0, async_handler_1.asyncHandler)(practitionerScheduleController.overview));
+router.get('/schedules/overrides', gate, (0, async_handler_1.asyncHandler)(practitionerScheduleController.overrides));
+router.put('/schedules/week', gateEdit, (0, async_handler_1.asyncHandler)(practitionerScheduleController.saveWeek));
+router.put('/schedules/override', gateEdit, (0, async_handler_1.asyncHandler)(practitionerScheduleController.saveOverride));
 
 router.get('/opening-hours', gate, (0, async_handler_1.asyncHandler)(chairUtilisationController.openingHours));
 router.put('/opening-hours', gateEdit, (0, async_handler_1.asyncHandler)(chairUtilisationController.saveOpeningHours));

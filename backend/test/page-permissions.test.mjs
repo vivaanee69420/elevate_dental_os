@@ -73,7 +73,12 @@ describe('a page inherits its section until it is overridden', () => {
 
   it('granting the section grants every page under it — unchanged behaviour', () => {
     const eff = resolve([{ permission_key: 'operations.view', allowed: true }]);
-    for (const page of ['appointments', 'associates', 'staff', 'chair-utilisation', 'treatments', 'uda']) {
+    // 'chair-utilisation' was the manual per-chair entry page, retired when the
+    // Dentally rota made a real utilisation denominator available; its name
+    // moved to 'practitioner-utilisation', which is what that report always
+    // measured. The mount stayed — it now serves three pages — so this asserts
+    // the page id that still exists.
+    for (const page of ['appointments', 'associates', 'staff', 'practitioner-utilisation', 'treatments', 'uda']) {
       expect(eff[pageKey(page)], `${page} did not inherit`).toBe(true);
     }
   });

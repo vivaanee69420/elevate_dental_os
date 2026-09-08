@@ -36,10 +36,12 @@ export const PAGE_OWNED = {
   '/appointments': 'appointments',
   '/associates': 'associates',
   '/staff': 'staff',
-  // Owned by the ENTRY page, not by Chair Efficiency. Efficiency reads
-  // /analytics/chair (a finance mount); this mount is the data-entry page's,
-  // and the two are separately gated for that reason.
-  '/chair-utilisation': 'chair-utilisation',
+  // NOT page-owned any more. This mount now serves THREE nav pages - Chair
+  // Utilisation, Practitioner Performance and Practitioner Schedules - so no
+  // request on it identifies a single page, and a per-page override could not
+  // be enforced honestly. It falls through to the section rule below, which is
+  // what a shared mount is entitled to. (It was owned by the manual chair
+  // entry page, which is retired.)
   '/treatments': 'treatments',
   '/pay-runs': 'pay',
   '/contacts': 'contacts',

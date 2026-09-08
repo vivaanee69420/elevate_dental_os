@@ -70,13 +70,18 @@ export const practitionerUtilisationService = {
     //              either end stretches it.
     //   'clinical' first to last appointment that saw a patient. Excludes the
     //              leading and trailing blocks that inflate the span.
+    //   'rota'     the hours Dentally actually rostered the practitioner for.
+    //              This IS Dentally's own denominator, and it reconciles: for
+    //              practitioner 201099 on 21 September, Dentally showed 4h15
+    //              utilised against a total of 3h00 (142%) while the clinical
+    //              basis showed the same 4h15 against 9h30 (45%). The rota says
+    //              3h00. A previous note here claimed the rota was unreachable;
+    //              that was wrong, and only because GET
+    //              /rota_practitioner_diaries needs `after` and `before`.
     //
-    // Neither is Dentally's own figure, which comes from a rota its API does
-    // not expose - ten candidate endpoints 404 and the one that exists refuses
-    // a past date. Measured over September on this organisation: 55.9% on the
-    // span, 75.6% on the clinical window. The contracted-hours baseline on the
-    // chart is the third option and the only one that is declared rather than
-    // inferred.
+    // Measured over September on this organisation: 55.9% on the span, 75.6%
+    // on the clinical window. On the rota, over closed months: 43.4% (Nov 25),
+    // 46.0% (Feb), 38.8% (Apr), 44.3% (Jun), 42.7% (Aug).
     async overview(orgId, { since, until, practiceId = null, basis = 'clinical' }) {
         const rows = await practitionerUtilisationRepository.daily(orgId, { since, until, practiceId });
 
@@ -87,11 +92,23 @@ export const practitionerUtilisationService = {
             day: r.day,
             spanSecs: Number(r.available_secs) || 0,
             clinicalSecs: Number(r.clinical_secs) || 0,
+            // NULL, not 0, all the way through: null means "no rostered window
+            // for this day", which a zero would turn into an infinite
+            // utilisation the moment anything divided by it.
+            rotaSecs: r.rota_secs == null ? null : Number(r.rota_secs),
+            rotaBreakSecs: r.rota_break_secs == null ? null : Number(r.rota_break_secs),
+            // Three states. true = rostered and working, false = rostered OFF,
+            // null = no rota row at all. The last two must not be collapsed:
+            // one says the practice declared a day off, the other says we have
+            // no rota for them.
+            rostered: r.rostered == null ? null : r.rostered === true,
             // The denominator actually in use, chosen once here so every
             // figure below - cards, chart, grid - divides by the same thing.
             availableSecs: basis === 'span'
                 ? (Number(r.available_secs) || 0)
-                : (Number(r.clinical_secs) || 0),
+                : basis === 'rota'
+                    ? (r.rota_secs == null ? 0 : Number(r.rota_secs))
+                    : (Number(r.clinical_secs) || 0),
             utilisedSecs: Number(r.utilised_secs) || 0,
             patientAppts: Number(r.patient_appts) || 0,
             blockAppts: Number(r.block_appts) || 0,
@@ -101,8 +118,41 @@ export const practitionerUtilisationService = {
         }));
 
         // Decision 1. Kept separately rather than filtered away silently.
-        const working = norm.filter((r) => r.patientAppts > 0);
-        const blockOnly = norm.filter((r) => r.patientAppts === 0);
+        //
+        // On the span and clinical bases a day with no patient has no window to
+        // measure, so it is set aside. On the ROTA basis it is the opposite: a
+        // rostered day where nobody was seen is exactly the unused capacity the
+        // report exists to find, and dropping it would inflate every figure.
+        // So the rota basis selects by PERSON over the window, then by whether
+        // each day was rostered.
+        let working;
+        let blockOnly;
+        let offRota = [];
+        let noRota = [];
+        if (basis === 'rota') {
+            // A clinician is someone who treated at least one patient in this
+            // window. Structural, not a threshold: the rota rosters every
+            // member of staff, and this group has twenty rostered people who
+            // treat nobody, each carrying about 235 hours a month. Divide by
+            // all of them and August reads 16.8% instead of 42.7% - a
+            // fabricated collapse, not a finding. A cut like "more than five
+            // hours" would be a magic number that moves every figure on the
+            // page depending on where it is set.
+            const clinicians = new Set(norm.filter((r) => r.patientAppts > 0).map((r) => r.practitionerId));
+            const theirs = norm.filter((r) => clinicians.has(r.practitionerId));
+            working = theirs.filter((r) => r.rostered === true);
+            // Real patient time on a day the rota calls off, and days we hold
+            // no rota for. Both are REPORTED rather than folded into the ratio:
+            // counting them in the numerator with no denominator would flatter
+            // the figure, and dropping them silently would hide real work.
+            // Measured at roughly 3% of used time (23.5h of 768h in August).
+            offRota = theirs.filter((r) => r.rostered === false);
+            noRota = theirs.filter((r) => r.rostered === null);
+            blockOnly = norm.filter((r) => !clinicians.has(r.practitionerId));
+        } else {
+            working = norm.filter((r) => r.patientAppts > 0);
+            blockOnly = norm.filter((r) => r.patientAppts === 0);
+        }
 
         const sum = (list, key) => list.reduce((a, r) => a + (r[key] ?? 0), 0);
         const availableSecs = sum(working, 'availableSecs');
@@ -134,6 +184,8 @@ export const practitionerUtilisationService = {
                 availableHours: Math.round((d.availableSecs / HOUR) * 10) / 10,
                 utilisedHours: Math.round((d.utilisedSecs / HOUR) * 10) / 10,
                 unusedHours: Math.round(((d.availableSecs - d.utilisedSecs) / HOUR) * 10) / 10,
+                availableSecs: d.availableSecs,
+                utilisedSecs: d.utilisedSecs,
                 utilisationPct: d.availableSecs > 0
                     ? Math.round((d.utilisedSecs / d.availableSecs) * 1000) / 10
                     : null,
@@ -163,11 +215,76 @@ export const practitionerUtilisationService = {
                     : null,
                 availableHours: Math.round((r.availableSecs / HOUR) * 10) / 10,
                 utilisedHours: Math.round((r.utilisedSecs / HOUR) * 10) / 10,
+                // EXACT seconds, carried alongside the rounded hours because a
+                // figure rounded twice drifts. The grid tooltip prints hours
+                // and minutes, and deriving those from a 1-decimal hour turned
+                // a real 4h15m (255 min, which is what Dentally shows) into
+                // 4.3h and then into "4h 18m" - three minutes invented by the
+                // rounding, on every cell. Rendered units finer than the
+                // rounding must come from here, never from the hours above.
+                availableSecs: r.availableSecs,
+                utilisedSecs: r.utilisedSecs,
                 patientAppts: r.patientAppts,
                 revenuePence: r.revenuePence,
             });
             byPract.set(r.practitionerId, p);
         }
+        // Practitioners the report measures NOTHING for in this window: their
+        // diary held only blocks, meetings or holidays. They are kept out of
+        // every total (including them is what drags the group figure to 16.8%),
+        // but they are LISTED, because "rostered and saw nobody" is the finding
+        // this report exists to surface and dropping them hides it.
+        //
+        // Dentally lists them too: its picker offers everyone assigned to the
+        // site. Nadia Reinolds has two ids - one at Barnet that treated six
+        // patients, one at Rochester that treated none in eleven weeks - and
+        // the Rochester one is exactly this case. Selecting her should show a
+        // flat zero against the contracted line, not an absence from the menu.
+        const otherByPract = new Map();
+        for (const r of blockOnly) {
+            const p = otherByPract.get(r.practitionerId) ?? {
+                practitionerId: r.practitionerId,
+                practitionerName: r.practitionerName,
+                practices: [],
+                availableSecs: 0,
+                days: [],
+            };
+            p.practices.push(r.practiceId);
+            p.availableSecs += r.availableSecs;
+            p.days.push({
+                day: r.day,
+                practiceId: r.practiceId,
+                // Zero used, and a REAL zero: they were in the diary and saw
+                // nobody. Distinct from the nulls elsewhere, which mean "no
+                // window to measure".
+                utilisationPct: r.availableSecs > 0 ? 0 : null,
+                availableHours: Math.round((r.availableSecs / HOUR) * 10) / 10,
+                utilisedHours: 0,
+                availableSecs: r.availableSecs,
+                utilisedSecs: 0,
+                patientAppts: 0,
+                revenuePence: r.revenuePence,
+            });
+            otherByPract.set(r.practitionerId, p);
+        }
+        const otherPractitioners = [...otherByPract.values()]
+            .map((p) => ({
+                practitionerId: p.practitionerId,
+                practitionerName: p.practitionerName,
+                practiceId: mostCommon(p.practices),
+                daysWorked: 0,
+                availableHours: Math.round((p.availableSecs / HOUR) * 10) / 10,
+                utilisedHours: 0,
+                availableSecs: p.availableSecs,
+                utilisedSecs: 0,
+                utilisationPct: p.availableSecs > 0 ? 0 : null,
+                patientAppts: 0,
+                revenuePence: null,
+                revenuePerUtilisedHourPence: null,
+                days: p.days.sort((a, b) => a.day.localeCompare(b.day)),
+            }))
+            .sort((a, b) => a.practitionerName.localeCompare(b.practitionerName));
+
         const practitioners = [...byPract.values()]
             .map((p) => ({
                 practitionerId: p.practitionerId,
@@ -179,6 +296,8 @@ export const practitionerUtilisationService = {
                 daysWorked: p.days.length,
                 availableHours: Math.round((p.availableSecs / HOUR) * 10) / 10,
                 utilisedHours: Math.round((p.utilisedSecs / HOUR) * 10) / 10,
+                availableSecs: p.availableSecs,
+                utilisedSecs: p.utilisedSecs,
                 utilisationPct: p.availableSecs > 0
                     ? Math.round((p.utilisedSecs / p.availableSecs) * 1000) / 10
                     : null,
@@ -222,9 +341,23 @@ export const practitionerUtilisationService = {
                 blockOnlyDays: blockOnly.length,
                 blockOnlyHours: Math.round((sum(blockOnly, 'availableSecs') / HOUR) * 10) / 10,
                 practitioners: new Set(blockOnly.map((r) => r.practitionerId)).size,
+                // Rota basis only, and zero on the others by construction. Named
+                // so the panel reconciles instead of quietly absorbing the
+                // difference: rostered hours, plus work done off the rota, plus
+                // days we hold no rota for, account for everything.
+                offRotaDays: offRota.length,
+                offRotaUtilisedHours: Math.round((sum(offRota, 'utilisedSecs') / HOUR) * 10) / 10,
+                noRotaDays: noRota.length,
+                noRotaUtilisedHours: Math.round((sum(noRota, 'utilisedSecs') / HOUR) * 10) / 10,
+                // Breaks sit INSIDE the rostered window above, so the headline
+                // is gross of them - which is what reconciled against Dentally.
+                // Stated here so net can be read off without a second query.
+                rotaBreakHours: Math.round((working.reduce((a, r) => a + (r.rotaBreakSecs ?? 0), 0) / HOUR) * 10) / 10,
             },
             days,
             practitioners,
+            // Listed but never counted — see the note where this is built.
+            otherPractitioners,
         };
     },
 };

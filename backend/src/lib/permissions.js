@@ -117,11 +117,9 @@ export const PAGE_SECTION = {
   // Listing it as operations.view put it in a practice manager's nav and then
   // 403'd on open — nav and API must name the SAME key.
   'chair': 'finance.view',
-  // Data entry is an operations surface, deliberately reachable with no
-  // finance access: the people who know how full the chairs were are not
-  // usually the people who see the money.
-  'chair-utilisation': 'operations.view',
+  'practitioner-performance': 'operations.view',
   'practitioner-utilisation': 'operations.view',
+  'practitioner-schedules': 'operations.view',
   'treatments': 'operations.view',
   'uda': 'operations.view',
   'patients': 'growth.view',
