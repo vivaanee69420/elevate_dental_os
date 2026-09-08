@@ -28,6 +28,8 @@ import { Card, DataTable, EmptyState, KpiTile, PageHeader, Skeleton, type Column
 import { money, DASH } from '@/features/marketing/_shared/format';
 import { usePractitionerUtilisation } from '../practitioner-utilisation-hooks';
 import { usePractices } from '@/features/integrations/hooks';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { useScopePeriod, londonYmd } from '@/features/_shared/scope-context';
 import type { UtilPractitioner, UtilPractitionerDay } from '../practitioner-utilisation-api';
 
 // Dentally's own bands, so a practice reading both sees the same colours mean
@@ -45,21 +47,6 @@ function bandColour(pct: number | null): string | null {
   if (pct === null) return null;
   return BANDS.find((b) => pct > b.min || (b.min === 0 && pct >= 0))?.colour ?? BANDS[BANDS.length - 1].colour;
 }
-
-const ymd = (d: Date) => d.toISOString().slice(0, 10);
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setHours(12, 0, 0, 0); // midday: immune to DST shifting the date
-  d.setDate(d.getDate() - n);
-  return ymd(d);
-}
-
-const RANGES = [
-  { key: '7d', label: 'Last 7 days', days: 7 },
-  { key: '30d', label: 'Last 30 days', days: 30 },
-  { key: '90d', label: 'Last 90 days', days: 90 },
-] as const;
-type RangeKey = (typeof RANGES)[number]['key'] | 'custom';
 
 /** Short day label for a column header: "M 08". */
 function dayLabel(iso: string): { dow: string; dom: string } {
@@ -100,14 +87,23 @@ const hrs = (v: number | null | undefined) =>
   (v === null || v === undefined ? DASH : `${v.toLocaleString('en-GB', { maximumFractionDigits: 1 })}h`);
 
 export default function PractitionerUtilisationScreen() {
-  const [range, setRange] = useState<RangeKey>('30d');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
-  // Practice-wise. Null = every practice this organisation has; the filter is
-  // passed to SQL, so the cards, the chart and the grid all narrow together
-  // rather than the grid alone.
-  const [practiceId, setPracticeId] = useState<string | null>(null);
+  // Scope and period come from the SHARED control every analytics view uses —
+  // This month / This year / Pick month / Custom, plus the practice pills — so
+  // this page filters the same way as the rest of the product and the choice
+  // survives navigation (it lives in the URL).
+  const { win, scope } = useScopePeriod();
   const [hover, setHover] = useState<HoverCell | null>(null);
+
+  // `win.until` is EXCLUSIVE and this endpoint takes an INCLUSIVE date, so step
+  // back one MILLISECOND to land on the last day actually inside the window.
+  // Stepping back a whole day would be wrong on a window that is not
+  // day-aligned, and leaving it alone would silently add a day to every range.
+  const since = londonYmd(win.since);
+  const until = londonYmd(new Date(Date.parse(win.until) - 1).toISOString());
+
+  // 'all' is the sentinel for every practice; it is not a practice id and must
+  // never be sent as one.
+  const practiceId = scope && scope !== 'all' ? scope : null;
 
   const { data: practicesData } = usePractices();
   const practices = practicesData?.practices ?? [];
@@ -115,12 +111,6 @@ export default function PractitionerUtilisationScreen() {
     () => new Map(practices.map((p: { id: string; name: string }) => [p.id, p.name])),
     [practices],
   );
-
-  const { since, until } = useMemo(() => {
-    if (range === 'custom' && customFrom && customTo) return { since: customFrom, until: customTo };
-    const days = RANGES.find((r) => r.key === range)?.days ?? 30;
-    return { since: daysAgo(days), until: daysAgo(0) };
-  }, [range, customFrom, customTo]);
 
   const { data, isLoading, error, isFetching } = usePractitionerUtilisation({ since, until, practiceId });
 
@@ -199,54 +189,18 @@ export default function PractitionerUtilisationScreen() {
             + `${hrs(t.utilisedHours)} of ${hrs(t.availableHours)} used`}
       />
 
-      <div className="flex flex-wrap items-center gap-2 rounded-panel border border-border bg-card px-3 py-2.5">
-        <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="util-range">Period</label>
-        <select
-          id="util-range"
-          value={range}
-          onChange={(e) => setRange(e.target.value as RangeKey)}
-          className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
-        >
-          {RANGES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
-          <option value="custom">Custom…</option>
-        </select>
-        {range === 'custom' && (
-          <>
-            <input type="date" value={customFrom} max={customTo || undefined}
-              onChange={(e) => setCustomFrom(e.target.value)} aria-label="From date"
-              className="rounded-lg border border-border bg-card px-2 py-1.5 text-[13px]" />
-            <span className="text-ink-muted text-xs">to</span>
-            <input type="date" value={customTo} min={customFrom || undefined}
-              onChange={(e) => setCustomTo(e.target.value)} aria-label="To date"
-              className="rounded-lg border border-border bg-card px-2 py-1.5 text-[13px]" />
-            {(!customFrom || !customTo) && (
-              <span className="text-ink-muted text-[11px]">Pick both dates</span>
-            )}
-          </>
-        )}
-        {/* PRACTICE-WISE. Only offered when the organisation actually has more
-            than one site — a lone "All practices" pill is a control with
-            nothing to control. */}
-        {practices.length > 1 && (
-          <>
-            <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="util-practice">Practice</label>
-            <select
-              id="util-practice"
-              value={practiceId ?? ''}
-              onChange={(e) => setPracticeId(e.target.value || null)}
-              className="max-w-[260px] truncate rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
-            >
-              <option value="">All practices</option>
-              {practices.map((p: { id: string; name: string }) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </>
-        )}
+      {/* The product's shared Scope + Period control: practice pills and
+          This month / This year / Pick month / Custom. `dentallyOnly` because
+          every figure on this page comes from the Dentally diary — offering a
+          practice with no Dentally site would render a confident empty grid
+          rather than saying it is not connected. */}
+      <ScopePeriodBar dentallyOnly />
 
-        <span className="text-ink-muted ml-auto text-[11px]">
-          {since} → {until}{isFetching ? ' · updating…' : ''}
-        </span>
+      <div className="text-ink-muted flex flex-wrap items-center gap-2 text-[11px]">
+        <span>{win.label}</span>
+        <span>·</span>
+        <span className="tabular-nums">{since} → {until}</span>
+        {isFetching && <span>· updating…</span>}
       </div>
 
       {error && (
