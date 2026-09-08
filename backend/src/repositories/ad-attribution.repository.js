@@ -102,6 +102,21 @@ export const adAttributionRepository = {
     // would keep scoping spend to the OLD practice until the nightly sync
     // happened to re-cut that window. Same instant-backfill contract as
     // Emergent's restampPractice. Returns the number of rows restamped.
+    // A GHL contact/lead takes its practice from the subaccount that fetched
+    // it, so changing that mapping has to reach the rows already stored. The
+    // RPC applies the SAME rule the sync applies (row practice = its
+    // integration account's practice), so poll and restamp cannot drift.
+    async restampGhlPractices(orgId) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('restamp_ghl_practices', { p_org: orgId });
+        if (error) throw new Error(`restamp_ghl_practices: ${error.message}`);
+        const r = Array.isArray(data) ? data[0] : data;
+        return {
+            contacts: Number(r?.contacts_updated ?? 0),
+            leads: Number(r?.leads_updated ?? 0),
+        };
+    },
+
     async restampAdMetricsPractices(orgId) {
         const { data, error } = await supabase_1.serviceClient
             .rpc('restamp_ad_metrics_practices', { p_org: orgId });

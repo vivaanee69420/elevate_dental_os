@@ -13,6 +13,11 @@
   --ink-muted: #566B62;
   --ink-soft: #5F7268;        /* darkened from prototype #84958C to pass WCAG 4.5:1 (D4) */
   --brand: #1D6E5F;
+  /* Referenced as `var(--surface-muted, #f6f7f9)` on the Cashflow screen. The
+     variable was never defined, so that panel fell back to a cool grey that
+     belongs to no part of this palette. Defined here to match the muted
+     ground the Tailwind `surface-muted` token uses. */
+  --surface-muted: #EEF3EF;
   --brand-50: #E2EFE9;
   --brand-100: #C7E0D6;
   --brand-600: #175C50;
@@ -82,3 +87,138 @@ h1, h2, h3, .display { font-family: var(--font-display), serif; }
 .table td.right { text-align: right; }
 .table tbody tr { cursor: pointer; }
 .table tbody tr:hover { background: var(--bg); }
+
+/* CRM board scrolling.
+   ---------------------------------------------------------------------------
+   The Pipeline kanban scrolls sideways. On macOS, overlay scrollbars are
+   hidden until you actually scroll, so a horizontal scrollbar on a wide board
+   is invisible until you already know it is there — and the board's columns
+   used to grow to full page height, putting it thousands of pixels below the
+   fold. These rules keep it visible and give it a real track, so the board
+   reads as scrollable at a glance.
+
+   Firefox uses scrollbar-width/color; WebKit and Chromium use the
+   ::-webkit-scrollbar pseudo-elements. Both are set: neither alone covers the
+   browsers this product is used in. */
+.crm-board-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  scroll-behavior: smooth;
+  /* Momentum scrolling on trackpads/touch rather than an abrupt stop. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+.crm-board-scroll::-webkit-scrollbar { height: 12px; }
+.crm-board-scroll::-webkit-scrollbar-track {
+  background: var(--bg);
+  border-radius: 7px;
+}
+.crm-board-scroll::-webkit-scrollbar-thumb {
+  background: #9BAAA1;
+  border-radius: 7px;
+  border: 3px solid var(--bg);
+  background-clip: padding-box;
+}
+.crm-board-scroll::-webkit-scrollbar-thumb:hover { background: #7C8D83; background-clip: padding-box; }
+
+/* Each column scrolls vertically inside the fixed-height board. Thinner, and
+   it stays out of the way until the column is hovered — a permanent bar in
+   every column at once is visual noise. */
+.crm-col-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  overscroll-behavior-y: contain;
+  transition: scrollbar-color 0.2s ease;
+}
+.crm-col-scroll:hover { scrollbar-color: #C7D2CB transparent; }
+.crm-col-scroll::-webkit-scrollbar { width: 8px; }
+.crm-col-scroll::-webkit-scrollbar-track { background: transparent; }
+.crm-col-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background 0.2s ease;
+}
+.crm-col-scroll:hover::-webkit-scrollbar-thumb {
+  background: #C7D2CB;
+  background-clip: padding-box;
+}
+
+/* Respect a reduced-motion preference: smooth scrolling and the dialog's
+   fade are motion, and some people have that turned off for a reason. */
+@media (prefers-reduced-motion: reduce) {
+  .crm-board-scroll { scroll-behavior: auto; }
+  .crm-col-scroll { transition: none; }
+}
+
+/* Dialog entry. Written as real keyframes because tailwindcss-animate is NOT
+   installed here (tailwind.config.ts has `plugins: []`), so `animate-in
+   fade-in` would be dead classes that silently do nothing. */
+@keyframes crm-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes crm-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+.crm-overlay { animation: crm-overlay-in 0.14s ease-out; }
+.crm-dialog  { animation: crm-dialog-in 0.16s cubic-bezier(0.16, 1, 0.3, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .crm-overlay, .crm-dialog { animation: none; }
+}
+
+/* Inbox thread rows: a settled hover rather than an instant colour swap, and
+   a visible keyboard focus ring — these are buttons, and the list is long
+   enough to be navigated with the keyboard. */
+.crm-thread-row {
+  transition: background-color 0.12s ease, border-left-color 0.12s ease;
+}
+.crm-thread-row:hover { background: var(--bg) !important; }
+.crm-thread-row:focus-visible {
+  /* --brand-rgb does not exist in this stylesheet; use the real token. */
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+@media (prefers-reduced-motion: reduce) { .crm-thread-row { transition: none; } }
+
+/* Dialog motion — used by components/ui/AlertDialog. A modal that simply
+   appears is read as a page change; a short rise reads as something opening
+   on top of the page, which is what it is. Kept here rather than inline so
+   the reduced-motion opt-out lives beside it and cannot be forgotten. */
+@keyframes dialog-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialog-rise {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dialog-backdrop { animation: dialog-fade 140ms ease-out; }
+.dialog-card { animation: dialog-rise 180ms cubic-bezier(.16,.84,.44,1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-backdrop, .dialog-card { animation: none; }
+}
+
+/* Team → permission rows. The whole row is the hit target, so it needs to say
+   so on hover; without it a 15px checkbox is the only thing that looks
+   clickable and the row reads as static text. Reveal is on the section body,
+   which opens and closes as tabs are granted. */
+.perm-row {
+  transition: background 120ms ease;
+}
+.perm-row:hover { background: var(--bg); }
+.perm-row:has(input:focus-visible) {
+  background: var(--bg);
+  box-shadow: 0 0 0 2px var(--brand-100);
+}
+.perm-reset { transition: background 120ms ease, border-color 120ms ease; }
+.perm-row:hover .perm-reset { border-color: var(--brand-100); }
+.perm-reset:hover { background: var(--brand-50); color: var(--brand); }
+
+@keyframes perm-reveal {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.perm-reveal { animation: perm-reveal 140ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .perm-reveal { animation: none; }
+}

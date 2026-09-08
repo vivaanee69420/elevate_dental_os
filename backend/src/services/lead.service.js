@@ -120,6 +120,103 @@ export const leadService = {
                 .sort((a, b) => b.lead_count - a.lead_count),
         };
     },
+    // Per-stage counts and value for one pipeline board, plus the board totals.
+    //
+    // NULL IS NOT ZERO. Only 22.5% of this group's leads carry an
+    // estimated_value_pence at all, so a stage of 753 leads with 69 valued is
+    // not "worth £78,487" — it is worth at least that, across the 69 we know
+    // about. `value_pence` is null when nothing in the bucket carries a value,
+    // and `valued_count` always travels beside it so the screen can say what
+    // share of the bucket the money covers instead of implying all of it.
+    async pipelineSummary(orgId, { pipelineId, accountId = null, since = null, until = null }) {
+        if (!pipelineId) return { stages: [], totals: null };
+        const rows = await lead_repository_1.leadRepository
+            .pipelineStageSummary(orgId, pipelineId, accountId, since, until);
+        const stages = rows.map((r) => {
+            const valued = Number(r.valued_count) || 0;
+            const openValued = Number(r.open_valued_count) || 0;
+            return {
+                stage_id: r.stage_id || null,
+                lead_count: Number(r.lead_count) || 0,
+                valued_count: valued,
+                value_pence: valued > 0 ? Number(r.value_pence) || 0 : null,
+                open_count: Number(r.open_count) || 0,
+                open_valued_count: openValued,
+                open_value_pence: openValued > 0 ? Number(r.open_value_pence) || 0 : null,
+            };
+        });
+        const sum = (key) => stages.reduce((s, x) => s + (x[key] ?? 0), 0);
+        const valuedTotal = sum('valued_count');
+        const openValuedTotal = sum('open_valued_count');
+        return {
+            stages,
+            totals: {
+                lead_count: sum('lead_count'),
+                valued_count: valuedTotal,
+                value_pence: valuedTotal > 0 ? sum('value_pence') : null,
+                open_count: sum('open_count'),
+                open_valued_count: openValuedTotal,
+                open_value_pence: openValuedTotal > 0 ? sum('open_value_pence') : null,
+            },
+        };
+    },
+    // Enquiries: one page plus the totals it sits inside.
+    //
+    // There is deliberately no `treatment` here. The mock screen showed one,
+    // read from leads.treatment — which is GoHighLevel's raw opportunity name
+    // and carries patient contact details, not a treatment. The honest source
+    // is Dentally's treatment-plan lines, and a lead resolves to one for 152 of
+    // 23,031 leads (0.7%), because a GHL lead and a Dentally patient are
+    // separate contact records. A column empty 99.3% of the time is worse than
+    // no column.
+    async enquiries(orgId, q = {}) {
+        const [rows, summary] = await Promise.all([
+            lead_repository_1.leadRepository.enquiries(orgId, q),
+            lead_repository_1.leadRepository.enquiriesSummary(orgId, q.integration_account_id ?? null),
+        ]);
+        const valued = Number(summary?.valued_count) || 0;
+        return {
+            enquiries: rows.map((r) => ({
+                lead_id: r.lead_id,
+                created_at: r.created_at,
+                contact_first_name: r.contact_first_name,
+                contact_last_name: r.contact_last_name,
+                contact_email: r.contact_email,
+                stage_name: r.stage_name,
+                status: r.status,
+                // Null, not 0: 77.5% of leads carry no estimated value, and
+                // "£0.00" states a figure nobody recorded.
+                estimated_value_pence: r.estimated_value_pence == null
+                    ? null
+                    : Number(r.estimated_value_pence),
+                source: r.source,
+                practice_name: r.practice_name,
+                age_days: Number(r.age_days) || 0,
+            })),
+            total: rows.length > 0 ? Number(rows[0].total_count) : 0,
+            limit: q.limit ?? 50,
+            offset: q.offset ?? 0,
+            summary: {
+                open_count: Number(summary?.open_count) || 0,
+                valued_count: valued,
+                // Same rule as the pipeline board: no value recorded anywhere
+                // means there is no total to state.
+                value_pence: valued > 0 ? Number(summary?.value_pence) || 0 : null,
+                stale_count: Number(summary?.stale_count) || 0,
+                oldest_age_days: Number(summary?.oldest_age_days) || 0,
+            },
+        };
+    },
+    // Today's four counters, over the whole population rather than a page.
+    async todayCounters(orgId, { since = null, accountId = null } = {}) {
+        const row = await lead_repository_1.leadRepository.todayCounters(orgId, since, accountId);
+        return {
+            new_leads: Number(row?.new_leads) || 0,
+            follow_ups: Number(row?.follow_ups) || 0,
+            active_leads: Number(row?.active_leads) || 0,
+            inbound_messages: Number(row?.inbound_messages) || 0,
+        };
+    },
     async getById(orgId, id) {
         const { data, error } = await lead_repository_1.leadRepository.getById(orgId, id);
         if (error || !data)

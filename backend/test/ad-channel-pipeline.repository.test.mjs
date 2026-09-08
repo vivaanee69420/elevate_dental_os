@@ -51,13 +51,27 @@ describe('setChannel', () => {
     expect(supaRec.last.upsertVals.pipeline_name).toBe('Open Day');
   });
 
-  it('deletes the row when channel is null, scoped by org', async () => {
-    // Unassigned is the ABSENCE of a row, so clearing must delete rather than
-    // write a sentinel value.
+  it('writes an explicit null-channel row when cleared, rather than deleting', async () => {
+    // This USED to delete, and deleting was right while a human was the only
+    // writer: absence meant unassigned and nothing could disagree. Automatic
+    // detection (migration 000180) fills pipelines that have NO row, so a
+    // deleted row would be re-detected and reassigned on the next sync — the
+    // owner's decision undone by morning, silently. The null row IS the
+    // decision, and detection skips any pipeline that carries a row.
     await adChannelPipelineRepository.setChannel(ORG, 'acc1', 'p1', 'Open Day', null);
-    expect(supaRec.last.op).toBe('delete');
-    expect(orgFilter(supaRec.last)).toEqual({ col: 'organisation_id', val: ORG });
-    expect(supaRec.last.eqs).toContainEqual({ col: 'integration_account_id', val: 'acc1' });
-    expect(supaRec.last.eqs).toContainEqual({ col: 'ghl_pipeline_id', val: 'p1' });
+    expect(supaRec.last.op).toBe('upsert');
+    expect(supaRec.last.upsertVals.organisation_id).toBe(ORG);
+    expect(supaRec.last.upsertVals.channel).toBeNull();
+    // 'owner' is what makes it stick: detection never touches a human's row.
+    expect(supaRec.last.upsertVals.source).toBe('owner');
+  });
+
+  it('marks a channel the owner chose as theirs, not a detection', async () => {
+    await adChannelPipelineRepository.setChannel(ORG, 'acc1', 'p1', 'Open Day', 'meta_ads');
+    expect(supaRec.last.upsertVals.source).toBe('owner');
+    // A previous automatic guess's evidence must not survive a human overruling
+    // it — a share of 0.92 beside a channel nobody detected is a lie.
+    expect(supaRec.last.upsertVals.detected_leads).toBeNull();
+    expect(supaRec.last.upsertVals.detected_share).toBeNull();
   });
 });

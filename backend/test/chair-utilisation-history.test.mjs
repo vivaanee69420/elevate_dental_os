@@ -19,27 +19,39 @@ describe('chair history capture on change', () => {
         if (q.op === 'insert') { snapWrites.push(q.insertVals); return { data: q.insertVals, error: null }; }
         return { data: null, error: null };
       }
+      if (q.table === 'practice_chairs') {
+        return { data: [{ id: 'chair-1', practice_id: 'prac-9', name: 'S1', active: true }], error: null };
+      }
       if (q.table === 'chair_utilisation') {
-        // .select() after .update() flips q.op to 'select'; the update chain is
-        // the one carrying updateVals.
-        if (q.updateVals) return { data: { id: 'cell-1', practice_id: 'prac-9' }, error: null };
         if (q.op === 'select') return { data: [
-          { chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180, revenue_pence: 45000 },
+          { chair_id: 'chair-1', chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180, revenue_pence: 45000 },
         ], error: null };
+        return { data: [], error: null };
       }
       return { data: [], error: null };
     };
   });
 
-  it('update() snapshots the practice grid for today', async () => {
-    await svc.update(ORG, 'cell-1', { booked_minutes: 90 });
+  it('saveWeek() snapshots the practice grid ONCE for the whole week', async () => {
+    // The per-record path this replaces re-listed the practice and rewrote the
+    // snapshot on EVERY cell, so a 56-cell week meant 56 rewrites.
+    await svc.saveWeek(ORG, {
+      practice_id: 'prac-9',
+      chair_id: 'chair-1',
+      cells: [
+        { weekday: 1, slot: 'morning', booked_minutes: 90, revenue_pence: 45000 },
+        { weekday: 1, slot: 'midday', booked_minutes: 120, revenue_pence: 60000 },
+        { weekday: 2, slot: 'morning', booked_minutes: 60, revenue_pence: 30000 },
+      ],
+    });
     expect(snapWrites.length).toBe(1);
     expect(snapWrites[0].organisation_id).toBe(ORG);
     expect(snapWrites[0].practice_id).toBe('prac-9');
-    // revenue_pence carries into the snapshot — it drives yield/hr on the
-    // Chair Efficiency grid, so a snapshot without it replays a £0 past.
+    // chair_id carries into the snapshot so a replayed past grid can still tell
+    // its chairs apart after a rename; revenue_pence carries because it drives
+    // yield/hr, and a snapshot without it replays a GBP 0 past.
     expect(snapWrites[0].cells).toEqual([
-      { chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180, revenue_pence: 45000 },
+      { chair_id: 'chair-1', chair_name: 'S1', weekday: 1, slot: 'morning', booked_minutes: 90, available_minutes: 180, revenue_pence: 45000 },
     ]);
   });
 });

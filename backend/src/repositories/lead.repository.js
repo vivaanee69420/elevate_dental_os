@@ -33,6 +33,13 @@ export const leadRepository = {
             query = query.eq('ghl_pipeline_id', q.ghl_pipeline_id);
         if (q.since)
             query = query.gte('created_at', q.since);
+        // INCLUSIVE of the end date. The caller sends the instant that ends
+        // the window (the London end-of-day), so this is `lte`, matching the
+        // aggregate's `<=` — a board whose cards used a half-open window while
+        // its column counts used a closed one would disagree on the last day
+        // of every range, silently.
+        if (q.until)
+            query = query.lte('created_at', q.until);
         const { data, error } = await query;
         if (error)
             throw new Error(error.message);
@@ -86,6 +93,12 @@ export const leadRepository = {
                 query = query.eq('ghl_pipeline_id', q.ghl_pipeline_id);
             if (q.since)
                 query = query.gte('created_at', q.since);
+            // The export must carry the SAME window as the board it was
+            // launched from. Accepting `until` in the schema but not applying
+            // it here would hand back rows the screen never showed — a CSV
+            // that quietly disagrees with the page that produced it.
+            if (q.until)
+                query = query.lte('created_at', q.until);
             const { data, error } = await query;
             reads += 1;
             if (error)
@@ -145,6 +158,60 @@ export const leadRepository = {
         if (error)
             throw new Error(error.message);
         return data ?? [];
+    },
+    // Per-stage counts and value for ONE pipeline, aggregated in SQL.
+    //
+    // The board used to reduce over a `limit: 500` page of leads, so every
+    // column header and the board total were computed from at most the newest
+    // 500 rows. Measured on live data: pipeline r2preQuq… holds 2,092 leads
+    // worth £1,421,317 and rendered "500 leads · £0.00", because every valued
+    // lead in it was older than that page. One row per stage (a pipeline has
+    // a handful) cannot be capped, however many leads accumulate.
+    async pipelineStageSummary(orgId, pipelineId, accountId = null, since = null, until = null) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_pipeline_stage_summary', {
+                p_org: orgId, p_pipeline: pipelineId, p_account: accountId,
+                p_since: since, p_until: until,
+            });
+        if (error)
+            throw new Error(error.message);
+        return data ?? [];
+    },
+    // The four Today counters in one round trip. `since` is an ISO instant or
+    // null for all-time; it is passed in rather than derived here so the
+    // counter and the list beneath it cannot disagree about the window.
+    // One page of enquiries plus the full matching count, and the open-enquiry
+    // headline figures. Both aggregate in SQL — the screen they replace was
+    // built entirely on a hardcoded array of invented patients.
+    async enquiries(orgId, q = {}) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_enquiries', {
+                p_org: orgId,
+                p_account: q.integration_account_id ?? null,
+                p_search: q.search ?? null,
+                p_stage: q.stage ?? null,
+                p_valued_only: q.valued_only ?? false,
+                p_open_only: q.open_only ?? true,
+                p_limit: q.limit ?? 50,
+                p_offset: q.offset ?? 0,
+            });
+        if (error) throw new Error(error.message);
+        return data ?? [];
+    },
+    async enquiriesSummary(orgId, accountId = null) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_enquiries_summary', { p_org: orgId, p_account: accountId });
+        if (error) throw new Error(error.message);
+        return data?.[0] ?? null;
+    },
+    async todayCounters(orgId, since = null, accountId = null) {
+        const { data, error } = await supabase_1.serviceClient
+            .rpc('crm_today_counters', {
+                p_org: orgId, p_since: since, p_account: accountId,
+            });
+        if (error)
+            throw new Error(error.message);
+        return data?.[0] ?? null;
     },
     // Per-status lead counts for a window, aggregated IN SQL.
     //

@@ -16,9 +16,31 @@
 import * as supabase_1 from "../lib/supabase.js";
 
 // What each provider writes, and how its rows are told apart from other
-// providers' rows in the same table. `source` and `provider` are the two
-// discriminator columns actually in use (verified against live data); a
-// resource with neither is written by one provider only.
+// providers' rows in the same table. `source`, `provider` and `notNull` are the
+// discriminators in use (verified against live data); a resource with none is
+// written by one provider only.
+//
+// COUNT EACH PROVIDER BY ITS OWN `source`. DO NOT COUNT BY THE LINK COLUMN.
+//
+// Dentally patients and GoHighLevel contacts are DIFFERENT POPULATIONS. Some
+// rows carry both a `pms_external_id` and a `ghl_contact_id`, but that mapping
+// exists to attribute CONVERSION — did this lead become a patient — and it does
+// not make one population a member of the other. Owner's rule, and these tiles
+// answer "how much has this integration pulled", which is a question about the
+// provider's own rows.
+//
+// This was briefly changed to count by the link column (`ghl_contact_id is not
+// null`) on the theory that `source` under-reports. It does differ — Rochester
+// reads 9,422 by source against 9,837 by link — but the link count is not the
+// same question, and using it here was actively harmful: GoHighLevel's own
+// figure for that location is 9,487, so a link-based tile would have shown
+// 9,837, turning a 65-row SHORTFALL into an apparent surplus and hiding the
+// truncated-pagination bug the owner found by counting in GoHighLevel by hand.
+//
+// A count that flatters the number is worse than one that is merely narrow.
+//
+// `notNull` stays available as a discriminator for a resource that genuinely
+// needs one; nothing uses it today.
 //
 // Labels are what the OWNER calls the thing, not the table name: a Dentally
 // contact is a patient, a GoHighLevel contact is a contact.
@@ -37,7 +59,7 @@ export const PROVIDER_RESOURCES = {
     ],
     gohighlevel: [
         { table: 'contacts', label: 'Contacts', source: 'gohighlevel' },
-        { table: 'leads', label: 'Leads', source: 'gohighlevel' },
+        { table: 'leads', label: 'Opportunities', source: 'gohighlevel' },
         { table: 'communications', label: 'Conversations' },
         { table: 'ghl_appointments', label: 'Calendar bookings' },
     ],
@@ -77,7 +99,7 @@ export const PROVIDER_RESOURCES = {
 // expected actually arrived, which is the question they are really asking.
 const PROVIDER_SPAN = {
     dentally: { table: 'appointments', column: 'starts_at', source: 'dentally', label: 'Appointments' },
-    gohighlevel: { table: 'leads', column: 'created_at', source: 'gohighlevel', label: 'Leads' },
+    gohighlevel: { table: 'leads', column: 'created_at', source: 'gohighlevel', label: 'Opportunities' },
     quickbooks: { table: 'monthly_financials', column: 'period', source: 'quickbooks', label: 'Financials' },
     xero: { table: 'monthly_financials', column: 'period', source: 'xero', label: 'Financials' },
     google_ads: { table: 'ad_metrics', column: 'metric_date', provider: 'google_ads', label: 'Metrics' },
@@ -96,6 +118,7 @@ export const importSummaryRepository = {
             .eq('organisation_id', orgId);
         if (res.source) q = q.eq('source', res.source);
         if (res.provider) q = q.eq('provider', res.provider);
+        if (res.notNull) q = q.not(res.notNull, 'is', null);
         const { count, error } = await q;
         // A renamed column or a table this deployment does not have must not
         // blank the whole panel. Null reads as "not known" in the UI, where a 0
@@ -111,6 +134,7 @@ export const importSummaryRepository = {
             .eq('organisation_id', orgId);
         if (span.source) q = q.eq('source', span.source);
         if (span.provider) q = q.eq('provider', span.provider);
+        if (span.notNull) q = q.not(span.notNull, 'is', null);
         const { data, error } = await q
             .not(span.column, 'is', null)
             .order(span.column, { ascending })

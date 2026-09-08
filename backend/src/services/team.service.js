@@ -22,6 +22,15 @@ import { membershipRepository } from '../repositories/membership.repository.js';
 import { AppError } from '../middleware/errors.js';
 import { permissionsService } from './permissions.service.js';
 import { authService, canManageTarget, assertGrantCeiling } from './auth.service.js';
+import { PERMISSION_CATALOG } from '../lib/permissions.js';
+
+// Catalog keys that are ACTIONS rather than sections. A `*.view` key is what a
+// nav tab already grants, so listing it beside the tabs would offer the same
+// thing twice under two names; everything else is a capability the tabs cannot
+// express — approving payroll, exporting raw data, editing the team.
+const ACTION_PERMISSIONS = Object.entries(PERMISSION_CATALOG)
+  .filter(([key]) => !key.endsWith('.view'))
+  .map(([key, label]) => ({ key, label }));
 import { isValidPermission } from '../lib/permissions.js';
 
 /** The orgs this request administers. See the header for the rule. */
@@ -210,6 +219,17 @@ export const teamService = {
       effective,
       role_defaults: roleDefaults,
       accounts,
+      // The grantable CAPABILITY keys, with their labels, sent from the
+      // catalog rather than restated in the frontend.
+      //
+      // The editor could only ever grant TABS (page:<id> keys), so every
+      // action key the catalog defines — users.manage, finance.edit,
+      // data.export, payrun.manage and the rest — was ungrantable through the
+      // product: the matrix had the words and no screen could say them, which
+      // is why several routes were still gated on the owner ROLE. Sent as data
+      // so a key added to the catalog appears here without a second edit, and
+      // no list can drift out of step with it.
+      catalog: ACTION_PERMISSIONS,
     };
   },
 
@@ -232,13 +252,48 @@ export const teamService = {
       throw new AppError('You cannot assign a role above your own', 403);
     }
 
-    // You cannot change your own role. canManageTarget('owner', …) is
-    // unconditionally true, so without this an owner could demote themselves
-    // and lose access on the very next request — a self-lockout if they are
-    // the only owner. Same reasoning as the self guards on setMemberPassword
-    // and removeMember. Profile fields are still yours to edit.
-    if (caller.id === userId && body.role !== undefined && body.role !== target.role) {
-      throw new AppError('You cannot change your own role', 400);
+    // YOU DO NOT EDIT YOURSELF HERE, AT ALL.
+    //
+    // It began as "not your own role" (canManageTarget('owner', …) is
+    // unconditionally true, so an owner could demote themselves into a
+    // lockout), then "not your own permissions" (assertGrantCeiling returns
+    // early for an owner, so an admin could tick anything on their own row).
+    // Both were the same rule discovered twice: the person a change is ABOUT
+    // must not be the person making it, and an admin who can edit their own
+    // row is not administered by anyone.
+    //
+    // So the whole row, not a list of fields — a field-by-field rule is a list
+    // somebody eventually adds to and forgets. removeMember and
+    // setMemberPassword already refused self; this is save catching up.
+    //
+    // Consequence, stated rather than discovered: an admin cannot change their
+    // own name or phone number here either. That is the cost of the rule, and
+    // it is somebody else's job in the same way their permissions are — an
+    // agency administrator, or a fellow admin.
+    if (caller.id === userId) {
+      throw new AppError(
+        'You cannot edit your own account — ask an account administrator',
+        403,
+      );
+    }
+
+    // AN ADMIN SITS BELOW THE AGENCY. An organisation's own owner administers
+    // the people under them; who administers the OWNERS is the agency, so
+    // owner-on-owner permission changes are an agency-actor power. Without
+    // this, two admins in one organisation can grant each other anything, and
+    // the hierarchy exists in the nav only.
+    //
+    // Deliberately narrow: it fires only for permission or role changes on a
+    // fellow owner, so an owner still edits every non-owner in their account.
+    // (Self is already refused above, so this can only be a FELLOW owner.) An organisation with no agency above
+    // it is unaffected in practice — its owner already holds every key, so
+    // there is nothing an owner-on-owner grant could add.
+    const touchingRights = body.permissions !== undefined || body.role !== undefined;
+    if (touchingRights && target.role === 'owner' && !scope.agencyWide) {
+      throw new AppError(
+        'Only an agency administrator can change an owner\u2019s role or permissions',
+        403,
+      );
     }
 
     for (const key of Object.keys(body.permissions || {})) {

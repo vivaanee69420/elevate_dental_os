@@ -59,6 +59,8 @@ export interface LeadsListFilters {
   integration_account_id?: string;
   assigned_to?: string;
   since?: string;
+  /** Inclusive end of the created-at window. */
+  until?: string;
   ghl_pipeline_id?: string;
   limit?: number;
 }
@@ -70,6 +72,7 @@ export function listLeads(filters: LeadsListFilters = {}): Promise<LeadsListResp
   if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
   if (filters.assigned_to) params.set('assigned_to', filters.assigned_to);
   if (filters.since) params.set('since', filters.since);
+  if (filters.until) params.set('until', filters.until);
   if (filters.ghl_pipeline_id) params.set('ghl_pipeline_id', filters.ghl_pipeline_id);
   params.set('limit', String(filters.limit ?? 100));
   return api<LeadsListResponse>(`/api/leads?${params.toString()}`);
@@ -87,12 +90,18 @@ const PROXY = '/api/backend';
 export interface LeadsExportFilters {
   ghl_pipeline_id?: string | null;
   integration_account_id?: string | null;
+  since?: string | null;
+  until?: string | null;
 }
 
 export function leadsExportUrl(filters: LeadsExportFilters = {}): string {
   const params = new URLSearchParams();
   if (filters.ghl_pipeline_id) params.set('ghl_pipeline_id', filters.ghl_pipeline_id);
   if (filters.integration_account_id) params.set('integration_account_id', filters.integration_account_id);
+  // The export carries the board's window too. A CSV that ignored the date
+  // filter would hand back rows the screen never showed.
+  if (filters.since) params.set('since', filters.since);
+  if (filters.until) params.set('until', filters.until);
   return `${PROXY}/api/leads/export.csv?${params.toString()}`;
 }
 
@@ -116,6 +125,132 @@ export interface GhlPipeline {
 export function listPipelines(accountId?: string | null) {
   const qs = accountId ? `?integration_account_id=${encodeURIComponent(accountId)}` : '';
   return api<{ pipelines: GhlPipeline[] }>(`/api/leads/pipelines${qs}`);
+}
+
+// ---------------------------------------------------------------------------
+// Board figures, aggregated in SQL.
+//
+// The board used to sum a `limit: 500` page of leads in the browser. Measured
+// on live data, a pipeline holding 2,092 leads worth £1,421,317 rendered
+// "500 leads · £0.00" — every valued lead was older than that page.
+//
+// `value_pence` is NULL, never 0, when nothing in the bucket carries a value.
+// Only 22.5% of this group's leads have an estimated value at all, so £0.00
+// would state a fact nobody recorded. `valued_count` says what share of the
+// bucket the money actually covers.
+// ---------------------------------------------------------------------------
+export interface PipelineStageSummary {
+  stage_id: string | null;
+  lead_count: number;
+  valued_count: number;
+  value_pence: number | null;
+  open_count: number;
+  open_valued_count: number;
+  open_value_pence: number | null;
+}
+
+export type PipelineTotals = Omit<PipelineStageSummary, 'stage_id'>;
+
+export interface PipelineSummary {
+  stages: PipelineStageSummary[];
+  /** null when no pipeline was asked for — not a zeroed board. */
+  totals: PipelineTotals | null;
+}
+
+export function getPipelineSummary(opts: {
+  pipelineId: string;
+  accountId?: string | null;
+  since?: string | null;
+  until?: string | null;
+}): Promise<PipelineSummary> {
+  const params = new URLSearchParams({ ghl_pipeline_id: opts.pipelineId });
+  if (opts.accountId) params.set('integration_account_id', opts.accountId);
+  // The SAME window the card list is asked for. If these two ever diverge the
+  // column headers stop describing the cards under them.
+  if (opts.since) params.set('since', opts.since);
+  if (opts.until) params.set('until', opts.until);
+  return api<PipelineSummary>(`/api/leads/pipeline-summary?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Enquiries.
+//
+// No `treatment` field, deliberately. The screen this replaces showed one read
+// from leads.treatment, which is GoHighLevel's raw opportunity name and carries
+// patient names, emails and phone numbers. The honest source is Dentally's
+// treatment-plan lines, which resolve for 0.7% of leads.
+// ---------------------------------------------------------------------------
+export interface Enquiry {
+  lead_id: string;
+  created_at: string;
+  contact_first_name: string | null;
+  contact_last_name: string | null;
+  contact_email: string | null;
+  stage_name: string | null;
+  status: string;
+  /** null when no value was recorded — never 0. */
+  estimated_value_pence: number | null;
+  source: string | null;
+  /** null when the lead is not mapped to a practice. */
+  practice_name: string | null;
+  age_days: number;
+}
+
+export interface EnquiriesResponse {
+  enquiries: Enquiry[];
+  /** Enquiries matching the current filters — what the pager counts. */
+  total: number;
+  limit: number;
+  offset: number;
+  summary: {
+    open_count: number;
+    valued_count: number;
+    /** null when nothing carries a value. */
+    value_pence: number | null;
+    stale_count: number;
+    oldest_age_days: number;
+  };
+}
+
+export interface EnquiriesFilters {
+  accountId?: string | null;
+  search?: string;
+  stage?: string;
+  valuedOnly?: boolean;
+  openOnly?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export function getEnquiries(f: EnquiriesFilters = {}): Promise<EnquiriesResponse> {
+  const params = new URLSearchParams();
+  if (f.accountId) params.set('integration_account_id', f.accountId);
+  if (f.search) params.set('search', f.search);
+  if (f.stage) params.set('stage', f.stage);
+  if (f.valuedOnly) params.set('valued_only', 'true');
+  if (f.openOnly === false) params.set('open_only', 'false');
+  if (f.limit != null) params.set('limit', String(f.limit));
+  if (f.offset != null) params.set('offset', String(f.offset));
+  const qs = params.toString();
+  return api<EnquiriesResponse>(`/api/leads/enquiries${qs ? `?${qs}` : ''}`);
+}
+
+export interface TodayCounters {
+  new_leads: number;
+  follow_ups: number;
+  active_leads: number;
+  inbound_messages: number;
+}
+
+export function getTodayCounters(opts: {
+  since?: string | null;
+  accountId?: string | null;
+} = {}): Promise<TodayCounters> {
+  const params = new URLSearchParams();
+  if (opts.since) params.set('since', opts.since);
+  if (opts.accountId) params.set('integration_account_id', opts.accountId);
+  const qs = params.toString();
+  return api<TodayCounters>(`/api/leads/today-counters${qs ? `?${qs}` : ''}`);
 }
 
 export interface LeadUpdateInput {

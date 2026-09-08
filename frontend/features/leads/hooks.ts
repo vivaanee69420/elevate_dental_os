@@ -1,5 +1,42 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getLeadFunnel, getLeadReport, listLeads, listPipelines, updateLead, type LeadsListFilters, type LeadUpdateInput } from './api';
+import { getEnquiries, getLeadFunnel, getLeadReport, getPipelineSummary, getTodayCounters, listLeads, listPipelines, updateLead, type EnquiriesFilters, type LeadsListFilters, type LeadUpdateInput } from './api';
+
+// Board counts and value for one pipeline, computed in SQL over every lead in
+// it rather than over the page the board happens to have fetched.
+export function usePipelineSummary(
+  pipelineId: string | null,
+  accountId?: string | null,
+  window?: { since?: string | null; until?: string | null },
+) {
+  return useQuery({
+    queryKey: ['pipeline-summary', pipelineId, accountId ?? null, window?.since ?? null, window?.until ?? null],
+    queryFn: () => getPipelineSummary({
+      pipelineId: pipelineId as string, accountId,
+      since: window?.since ?? null, until: window?.until ?? null,
+    }),
+    enabled: !!pipelineId,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useEnquiries(filters: EnquiriesFilters = {}) {
+  return useQuery({
+    queryKey: ['enquiries', filters],
+    queryFn: () => getEnquiries(filters),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useTodayCounters(opts: { since?: string | null; accountId?: string | null } = {}) {
+  return useQuery({
+    queryKey: ['today-counters', opts.since ?? null, opts.accountId ?? null],
+    queryFn: () => getTodayCounters(opts),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
 
 export function useLeads(filters: LeadsListFilters = {}) {
   return useQuery({

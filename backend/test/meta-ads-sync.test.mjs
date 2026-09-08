@@ -6,7 +6,7 @@ import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn() },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), selectedAdAccountIds: vi.fn(async () => null), getByProvider: vi.fn(), upsertAdAccounts: vi.fn() },
 }));
 
 const { syncOneOrg, syncAllOrgs, __test } = await import('../src/lib/integrations/meta-ads-sync.js');
@@ -310,6 +310,53 @@ describe('syncOneOrg', () => {
         expect(rpc).toBeTruthy();
         expect(rpc.params.p_customer_ids).toEqual(['2220000000']);   // only the account that returned rows
         expect(integrationRepository.markSynced).toHaveBeenCalled();       // partial success still active
+    });
+
+    // The reported bug. An owner ticked one of four ad accounts on the
+    // Integrations panel and the sync pulled, stored and reported all four —
+    // is_selected was written by that panel and read by nothing.
+    it('pulls ONLY the ad accounts ticked on the Integrations panel', async () => {
+        integrationRepository.selectedAdAccountIds.mockResolvedValueOnce(['2220000000']);
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        const asked = [];
+        global.fetch = vi.fn(async (url) => {
+            asked.push(String(url));
+            return { ok: true, status: 200, json: async () => ({ data: [
+                { campaign_id: 7, campaign_name: 'Brand', date_start: '2026-05-10',
+                  spend: '3.00', impressions: '500', clicks: '20', actions: [] }], paging: {} }) };
+        });
+
+        const res = await syncOneOrg('org-1', freshCreds(['1110000000', '2220000000']));
+        expect(res.accounts).toBe(1);
+        expect(asked.some((u) => u.includes('act_2220000000'))).toBe(true);
+        // The excluded account is never even ASKED FOR — the point is not to
+        // hide it downstream but to stop paying the pull for it.
+        expect(asked.some((u) => u.includes('act_1110000000'))).toBe(false);
+        // ...and the replace can only delete within the accounts it pulled, so
+        // the untouched account's stored rows are not collateral damage.
+        const rpc = supaRec.rpcCalls.find((c) => c.fn === 'ad_metrics_replace_window');
+        expect(rpc.params.p_customer_ids).toEqual(['2220000000']);
+    });
+
+    // A first connect has discovered nothing, so nothing can be ticked yet.
+    it('pulls every reachable account when the org has no ad_accounts rows yet', async () => {
+        integrationRepository.selectedAdAccountIds.mockResolvedValueOnce(null);
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: [], paging: {} }) }));
+        const res = await syncOneOrg('org-1', freshCreds(['1110000000', '2220000000']));
+        expect(res.accounts).toBe(2);
+    });
+
+    // A run that pulled nothing because the selection matched nothing must not
+    // read as a clean run — that is the silent-green failure this codebase has
+    // been bitten by before.
+    it('warns on the integration when the selection excludes everything', async () => {
+        integrationRepository.selectedAdAccountIds.mockResolvedValueOnce([]);
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: [], paging: {} }) }));
+        await syncOneOrg('org-1', freshCreds(['1110000000']));
+        const warning = integrationRepository.markSynced.mock.calls.at(-1)[2];
+        expect(warning).toMatch(/unticked/i);
     });
 });
 

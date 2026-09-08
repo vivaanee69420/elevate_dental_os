@@ -34,9 +34,23 @@ const config: Config = {
           soft: '#5F7268',
         },
         bg: '#EEF3EF',
-        surface: '#FFFFFF',
+        surface: {
+          DEFAULT: '#FFFFFF',
+          // The muted ground used for hover states and banded rows. Screens
+          // have referenced `bg-surface-muted` and `bg-surface-2` since the
+          // theme migration, but neither token was ever defined — so those
+          // classes produced NO CSS and the hovers and row banding simply did
+          // not exist. Both name the same thing, and both are kept because
+          // both are already written across the product.
+          muted: '#EEF3EF',
+          2: '#EEF3EF',
+        },
         card: '#FFFFFF',
         border: '#DCE4DF',
+        // Alias of `border`, for the `border-line` spelling used across the
+        // Intelligence screens. Undefined until now, so ten buttons that were
+        // written to have a border rendered with none.
+        line: '#DCE4DF',
       },
       // Panel-scale radius/shadow for the new primitives (KpiCard, PanelHeader).
       // Named distinctly so the base `rounded`/`shadow` scale is untouched —

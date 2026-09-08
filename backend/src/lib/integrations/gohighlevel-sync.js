@@ -36,6 +36,8 @@ import { exchangeRefreshToken, ensureAgencyToken, mintLocationToken } from './go
 import { GoHighLevelProvider } from './gohighlevel-provider.js';
 import { syncConversations } from './gohighlevel-conversations.js';
 import { extractAttribution } from './ghl-attribution.js';
+import { pipelineChannelDetectService } from '../../services/pipeline-channel-detect.service.js';
+import { singlePracticeMapService } from '../../services/single-practice-map.service.js';
 import * as supabase_1 from '../supabase.js';
 // Capture is a no-op when Sentry was never init'd (no SENTRY_DSN, e.g. local
 // and tests), so this is safe to import unconditionally.
@@ -314,7 +316,7 @@ export async function fetchLocation(accessToken, locationId) {
 // (/contacts uses locationId; /opportunities/search uses location_id). onPage
 // receives (page, totalPages|null, runningCount) for live progress. Bounded by
 // maxPages so a foreground pull stays finite. Returns the flat array.
-async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationParam = 'location_id', maxPages = MAX_PAGES, onPage = null } = {}) {
+export async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationParam = 'location_id', maxPages = MAX_PAGES, onPage = null } = {}) {
     const out = [];
     let url = new URL(`${API_BASE}${path}`);
     if (locationId) url.searchParams.set(locationParam, locationId);
@@ -332,8 +334,35 @@ async function ghlFetchAll(path, accessToken, locationId, { arrayKey, locationPa
         const next = body.meta?.nextPageUrl;
         const startAfter = body.meta?.startAfter;
         const startAfterId = body.meta?.startAfterId;
-        const done = items.length < PER_PAGE || (!next && startAfterId == null);
-        if (done) break;
+
+        // STOP ON AN EMPTY PAGE, NEVER A SHORT ONE.
+        //
+        // This used to break on `items.length < PER_PAGE`. GoHighLevel returns
+        // SHORT pages mid-collection — it filters server-side after taking the
+        // page — so a page of 22 ended the walk with rows still to come, and
+        // nothing said so. Measured on gm dental Rochester: the location holds
+        // 9,487 contacts, we pulled 9,422 (94 full pages of 100, then a page of
+        // 22 that stopped it), and the owner found the 65 by counting in
+        // GoHighLevel by hand.
+        //
+        // `meta.total` is GoHighLevel's own count. It was already being read
+        // here — for a progress bar — while the completeness decision ignored
+        // it. Now it is the primary answer to "are we done".
+        const reachedTotal = Number.isFinite(total) && total > 0 && out.length >= total;
+        const noCursor = !next && startAfterId == null;
+        if (items.length === 0 || reachedTotal || noCursor) {
+            // Say it when the walk ends short of what the API said exists.
+            // A truncated pull that reports nothing is indistinguishable from a
+            // complete one, which is exactly how 65 contacts went missing for
+            // long enough for someone to notice by hand.
+            if (Number.isFinite(total) && total > 0 && out.length < total) {
+                console.warn(
+                    `[gohighlevel] ${path}: walk ended with ${out.length} of ${total} rows `
+                    + `(page ${page}, ${items.length} items, cursor ${noCursor ? 'exhausted' : 'present'})`,
+                );
+            }
+            break;
+        }
         if (page >= maxPages) {
             console.warn(`[gohighlevel] ${path}: hit ${maxPages}-page cap (${out.length} rows), stopping this run`);
             break;
@@ -1222,6 +1251,24 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
             const r = await upsertOpportunity(orgId, opp, account.practice_id, stageMappings, supabase_1.serviceClient, oppContactMap, stageNameMap, accountId);
             if (r.ok) synced++;
         }
+        // STAMP COMPLETION HERE, before the defensive phases.
+        //
+        // Contacts and opportunities are written and durable at this point, and
+        // everything below is explicitly allowed to fail with a warning. A
+        // phase that may fail silently must not also be able to withhold the
+        // completion stamp — that is the worst of both, and it is what happened
+        // on gm dental Rochester: `updated_at` moved to 11:20 today while
+        // `last_sync_at` stayed on 7 September, because the run wrote its
+        // contacts, its opportunities and its config, then died somewhere in
+        // the long appointments/conversations phases and reached neither
+        // markSynced nor markFailed.
+        //
+        // The consequence was not lost data — `since` is last_sync_at minus 24h,
+        // so a stuck stamp only ever widens the window and re-fetches — but the
+        // Integrations tile reported a sync that was days stale while the data
+        // beneath it was current, which is its own kind of wrong answer.
+        await integrationAccountRepository.markSynced(orgId, accountId);
+
         // Phase 3: calendar appointments — DEFENSIVE. A missing calendars scope
         // on the PIT (404/401) must never break contacts+opportunities sync.
         let apptResult = { appointments: 0 };
@@ -1249,7 +1296,6 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
         } catch (err) {
             console.warn(`[gohighlevel] account ${accountId} conversations phase skipped: ${err?.message || err}`);
         }
-        await integrationAccountRepository.markSynced(orgId, accountId);
         return {
             contacts: contactsSynced, opportunities: synced, total: opportunities.length,
             appointments: apptResult.appointments,
@@ -1267,7 +1313,20 @@ export async function syncAccount(orgId, accountId, onProgress = () => {}, { ful
 }
 
 export async function bootstrapAccount(orgId, accountId, onProgress = () => {}) {
-    return syncAccount(orgId, accountId, onProgress, { recent: true });
+    const r = await syncAccount(orgId, accountId, onProgress, { recent: true });
+    // Map the pipelines the moment their leads land, rather than waiting for
+    // someone to find the settings screen. The pipeline map is what decides
+    // which report a lead belongs to (000171/000178/000179), so an org that has
+    // never been mapped shows real ad spend beside zero leads — and reads as
+    // broken when nothing is broken. Non-fatal: a connect that pulled its data
+    // has succeeded whether or not the guess could be made.
+    // A subaccount mapped to no practice stamps every contact and lead it
+    // fetches with a null practice, so a practice filter returns nothing.
+    // Ordered before channel detection only because it restamps the rows the
+    // sync has just written; the two are independent.
+    await singlePracticeMapService.runQuietly(orgId, 'gohighlevel connect');
+    await pipelineChannelDetectService.runQuietly(orgId, 'gohighlevel connect');
+    return r;
 }
 
 export async function detectPipelinesForToken(accessToken, locationId) {
@@ -1308,6 +1367,16 @@ export async function syncAllOrgs() {
             console.error(`[gohighlevel] account ${acc.id} (${acc.label ?? 'unlabelled'}) sync failed: ${err.message}`);
             results.push({ orgId: acc.organisation_id, accountId: acc.id, error: err.message });
         }
+    }
+    // Once per ORG, not per account: the detection reads the whole
+    // organisation's leads, so running it per subaccount would ask the same
+    // question of the same rows N times. Re-run nightly rather than only on
+    // connect, because the evidence grows — a pipeline below the confidence
+    // floor this month can cross it next, and an org that connected GHL before
+    // its ad platform has no campaign ids to resolve against on day one.
+    for (const orgId of new Set(accounts.map((a) => a.organisation_id))) {
+        await singlePracticeMapService.runQuietly(orgId, 'gohighlevel nightly');
+        await pipelineChannelDetectService.runQuietly(orgId, 'gohighlevel nightly');
     }
     return results;
 }

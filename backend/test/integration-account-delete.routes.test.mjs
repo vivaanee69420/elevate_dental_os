@@ -12,6 +12,7 @@
 // tell one from the other or prove either is wired at all.
 // ============================================================================
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { defaultPermissionsForRole } from '../src/lib/permissions.js';
 
 vi.mock('../src/services/integration-account-delete.service.js', () => ({
     deleteAccountPermanently: vi.fn(async () => ({ deleted: true, cascade: {}, detach: {} })),
@@ -33,7 +34,9 @@ const layersFor = (method, path) => router.stack
     .flatMap((l) => l.route.stack.map((s) => s.handle));
 
 const req = (over = {}) => ({
-    user: { id: 'u1', organisation_id: 'org-a', role: 'owner' },
+    // A real request always carries the resolved permission map; the
+  // gates read that, never the bare role.
+  user: { id: 'u1', organisation_id: 'org-a', role: 'owner', permissions: defaultPermissionsForRole('owner') },
     params: { id: ACCOUNT_ID }, body: {}, query: {}, ...over,
 });
 const res = () => { const r = { json: vi.fn(), status: vi.fn(() => r) }; return r; };
@@ -81,7 +84,7 @@ describe('permanent account deletion routes', () => {
     it('is owner-only on every provider — a practice manager cannot delete an account', async () => {
         for (const path of Object.values(PATHS)) {
             vi.clearAllMocks();
-            const response = await run(path, req({ user: { id: 'u2', organisation_id: 'org-a', role: 'practice_manager' } }));
+            const response = await run(path, req({ user: { id: 'u2', organisation_id: 'org-a', role: 'practice_manager', permissions: defaultPermissionsForRole('practice_manager') } }));
             expect(deleteAccountPermanently).not.toHaveBeenCalled();
             expect(response.status).toHaveBeenCalledWith(403);
         }

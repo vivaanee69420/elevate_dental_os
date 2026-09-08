@@ -9,7 +9,11 @@ import * as auth_1 from "../middleware/auth.js";
 import { crmTemplateController } from "../controllers/crmTemplate.controller.js";
 
 const router = (0, express_1.Router)();
-const manage = (0, auth_1.requireRole)('owner', 'practice_manager');
+// crm.manage — the key its nav item uses (ROUTE_PERMISSION 'crm-settings'
+// covers the templates and settings screens alike). A role list here meant an
+// owner could grant CRM management to someone and the API would still refuse
+// them; a practice manager holds crm.manage by default, so nobody loses it.
+const manage = (0, auth_1.requirePermission)('crm.manage');
 
 router.get('/', (0, async_handler_1.asyncHandler)(crmTemplateController.list));
 router.post('/', manage, (0, async_handler_1.asyncHandler)(crmTemplateController.create));

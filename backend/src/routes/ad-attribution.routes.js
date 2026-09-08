@@ -9,7 +9,14 @@ import { requireAgencyActor, requireOwnerOrAgencyActor } from "../middleware/age
 import { adAttributionController } from "../controllers/ad-attribution.controller.js";
 const router = (0, express_1.Router)();
 
-const gate = (0, auth_1.requireRole)('owner', 'practice_manager');
+// The keys its READERS use in the nav: the Marketing pages (marketing.view)
+// and the Growth section (growth.view). It was a role list, which section-lock
+// recorded as a real mismatch — the nav grants by key, the API answered by
+// role, and a user granted the page got "Insufficient permissions" from every
+// request it made. Both roles that held it before hold one of these keys, so
+// this widens to the matrix rather than to anyone new; the mapping WRITES
+// below keep their own agency-actor gates.
+const gate = (0, auth_1.requireAnyPermission)('marketing.view', 'growth.view');
 
 router.get('/config', gate, (0, async_handler_1.asyncHandler)(adAttributionController.config));
 router.get('/performance', gate, (0, async_handler_1.asyncHandler)(adAttributionController.performance));

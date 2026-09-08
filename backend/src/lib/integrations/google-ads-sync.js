@@ -25,6 +25,9 @@ import { londonDaysAgo, londonYmd } from "../tz.js";
 import { syncGoogleDeep, DEEP_WINDOW_DAYS, CAMPAIGN_SHARE_METRICS } from "./google-ads-deep-sync.js";
 import { syncGoogleClicks } from "./google-ads-clicks-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
+import { applyAccountSelection } from "./ad-account-selection.js";
+import { pipelineChannelDetectService } from "../../services/pipeline-channel-detect.service.js";
+import { singlePracticeMapService } from "../../services/single-practice-map.service.js";
 
 const INCREMENTAL_DAYS = 90;  // nightly cron window: trailing 3 months (product rule)
 const FULL_DAYS = 183;        // on-connect / reconnect backfill window: 6 months (product rule)
@@ -332,10 +335,30 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
             console.error('[google_ads] account re-resolution failed, using stored set:', err.message);
         }
 
-        const customerIds = allCustomerIds.filter((cid) => !permanent.has(String(cid)));
-        if (customerIds.length === 0) {
+        // Reachable = the credential can pull it. Kept separate from the
+        // selected set below because the mapped-account health check asks the
+        // reachable question, and answering it with the selected set would tell
+        // an owner to reconnect over an account they unticked themselves.
+        const reachableIds = allCustomerIds.filter((cid) => !permanent.has(String(cid))).map(String);
+        if (reachableIds.length === 0) {
             throw new Error(`no usable Google Ads customers — all ${allCustomerIds.length} are manager or deactivated accounts`);
         }
+
+        // Honour the tick boxes on the Integrations panel. Until this filter
+        // existed, is_selected was written by that panel and read by nothing,
+        // so an org reporting on 3 of its 10 Google accounts was still pulling
+        // and storing all 10 — GBP 87,925.62 of another brand's spend, against
+        // GBP 82,873.42 of its own. See ad-account-selection.js.
+        const selection = applyAccountSelection(
+            reachableIds,
+            await integrationRepository.selectedAdAccountIds(orgId, 'google_ads'),
+        );
+        if (selection.excluded.length) {
+            console.log('[google_ads] %d account(s) excluded by selection: %s',
+                selection.excluded.length, selection.excluded.join(', '));
+        }
+        if (selection.warning) console.warn('[google_ads] %s', selection.warning);
+        const customerIds = selection.ids;
 
         // Full backfill pulls 6mo; the nightly cron pulls the trailing 3mo.
         const windowDays = opts.full ? FULL_DAYS : INCREMENTAL_DAYS;
@@ -522,9 +545,13 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
         // in the other direction, and would put a reconnect prompt in front of
         // an owner whose credentials are fine.
         const unreachable = knownAccounts.filter((a) => a.practice_id
+            && a.is_selected !== false
             && !permanent.has(String(a.customer_id))
-            && !customerIds.map(String).includes(String(a.customer_id)));
+            && !reachableIds.includes(String(a.customer_id)));
         const warnings = [];
+        // Surfaced, not merely logged — a run that pulled nothing because the
+        // selection matched nothing must not report as clean.
+        if (selection.warning) warnings.push(selection.warning);
         if (unreachable.length) {
             warnings.push(`${unreachable.length} mapped account(s) not reachable by this login: ${unreachable.map((a) => a.name || a.customer_id).join(', ')} — reconnect with a Google account that can see them, or link them under a manager it can.`);
         }
@@ -573,6 +600,17 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
         // Scoped status write (won't resurrect a row revoked mid-sync).
         await integrationRepository.markSynced(orgId, 'google_ads',
             warnings.length ? warnings.join(' | ').slice(0, 500) : null);
+        // A pipeline is classed as Meta or Google partly by whether its leads'
+        // campaign ids resolve inside THIS org's ad_metrics — which only exist
+        // once this sync has written them. An org that connected its CRM before
+        // its ad platform therefore has no evidence to detect on until now, so
+        // the detection is re-run here as well as after the CRM sync.
+        // A single-practice org has nothing to choose, so an ad account left
+        // unmapped there is a step that exists only to be forgotten — and an
+        // unmapped account makes every practice-scoped figure read zero. Runs
+        // AFTER this sync's rows landed, so the restamp reaches them too.
+        await singlePracticeMapService.runQuietly(orgId, 'google_ads sync');
+        await pipelineChannelDetectService.runQuietly(orgId, 'google_ads sync');
         return { rows: all.length, customers: customerIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), permanentlySkipped: [...permanent], deep, clicks };
     } catch (err) {
         await integrationRepository.markFailed(orgId, 'google_ads', String(err.message).slice(0, 500));

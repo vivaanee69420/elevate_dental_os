@@ -31,6 +31,10 @@ export const PERMISSION_CATALOG = {
   'valuation.edit': 'Edit valuation inputs (EBITDA, drivers, sale plan)',
   'businesshealth.manage': 'Manage Business Health setup & targets',
   'operations.view': 'View operations (associates, staff, chair, UDA)',
+  // Viewing operations and REWRITING them are different powers. Until this key
+  // existed, operations.view granted both, so anyone who could read a
+  // practice's chair grid could also overwrite its whole week.
+  'operations.edit': 'Edit operations data (chair utilisation, chairs, opening hours)',
   // The Overview tabs that are NOT finance surfaces (Task Manager,
   // Mastermind AI). The finance-backed Overview tabs (Command Centre,
   // Business Hub, Daily Cockpit, Practice Deep Dive, AI Analyst, Day)
@@ -55,6 +59,17 @@ export const PERMISSION_CATALOG = {
   // an owner can hand out the rest of Operations without handing out payroll.
   // Owner-only by default (owner holds every key; no other role lists it).
   'payrun.manage': 'View & approve pay runs (payroll)',
+  // ACTIONS INSIDE A SECTION SOMEONE MAY ONLY READ. Each of these gated a
+  // route that said requireRole('owner') — which made it undelegable: the
+  // matrix could say yes and the route still answered no, and no amount of
+  // ticking could move it. They are owner-only DEFAULTS (owner holds every
+  // key and no other role lists them), so today's access is unchanged; what
+  // changes is that an owner can now hand one out.
+  'tasks.manage': 'Create, assign and delete tasks',
+  'wealth.edit': 'Edit wealth inputs (net worth, property, pensions)',
+  'tax.manage': 'Edit tax settings and treatment VAT liability',
+  'marketing.manage': 'Manage open days and campaign grouping',
+  'growth.manage': 'Manage review sources (add, map to a practice, sync)',
 };
 
 export const PERMISSION_KEYS = Object.keys(PERMISSION_CATALOG);
@@ -112,7 +127,13 @@ export const PAGE_SECTION = {
   'clinicians': 'operations.view',
   'staff': 'operations.view',
   'pay': 'payrun.manage',
-  'chair': 'operations.view',
+  // Chair Efficiency reads /api/analytics/chair, which requires finance.view.
+  // Listing it as operations.view put it in a practice manager's nav and then
+  // 403'd on open — nav and API must name the SAME key.
+  'chair': 'finance.view',
+  'practitioner-performance': 'operations.view',
+  'practitioner-utilisation': 'operations.view',
+  'practitioner-schedules': 'operations.view',
   'treatments': 'operations.view',
   'uda': 'operations.view',
   'patients': 'growth.view',
@@ -150,7 +171,10 @@ export const PAGE_SECTION = {
   'training-onetoone': 'training.view',
   'integrations': 'system.manage',
   'data-hub': 'system.manage',
-  'team-permissions': 'permissions.manage',
+  // users.manage, matching the routes (/admin/team) and the nav. All three
+  // named different things before: nav said permissions.manage, the routes
+  // checked the owner ROLE, and the key being enforced was neither.
+  'team-permissions': 'users.manage',
   'settings': 'system.manage',
   'data-summaries': 'data.export',
   'data-dentally': 'data.export',
@@ -192,6 +216,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   owner: PERMISSION_KEYS.reduce((m, k) => ((m[k] = true), m), {}),
   practice_manager: {
     'operations.view': true,
+    'operations.edit': true,
     'overview.view': true,
     'growth.view': true,
     'marketing.view': true,
@@ -269,6 +294,34 @@ export function resolveEffectivePermissions(rolePermissionRows, userOverrides, r
     effective[pageKey(pageId)] = Object.prototype.hasOwnProperty.call(explicitPages, pageId)
       ? explicitPages[pageId]
       : !!effective[sectionKey];
+  }
+
+  // 6. A GRANTED TAB CARRIES ITS SECTION'S READ KEY.
+  //
+  // The Team screen grants a tab at a time and writes only page:<id> keys.
+  // Every API gate — requirePermission and sectionLock alike — reads the
+  // SECTION key. So ticking "Call Reporting" for an analyst put the tab in
+  // their nav and left growth.view false, and the page rendered and then
+  // answered "Insufficient permissions" to every request it made. A grant the
+  // API ignores is not a permission; it is a decoration.
+  //
+  // Done AFTER the page values above, deliberately: raising the section key
+  // first would make every OTHER tab in that section inherit true and appear
+  // in the nav, which is the opposite of granting one tab. Ticking one tab
+  // shows one tab, and opens the data behind it.
+  //
+  // WHAT THIS DOES AND DOES NOT PROMISE. Most sections serve their screens
+  // from one endpoint (Finance's all read /api/analytics, Growth's all read
+  // /api/growth), so the API cannot tell one of their tabs from another — the
+  // section key is the finest boundary that exists there, and opening it is
+  // the honest consequence of granting any tab within it. The tabs whose
+  // endpoint belongs to them alone stay individually enforced through
+  // PAGE_OWNED in section-lock.js; the Team screen labels the rest "nav only"
+  // rather than implying a boundary that is not there.
+  for (const [pageId, sectionKey] of Object.entries(PAGE_SECTION)) {
+    if (explicitPages[pageId] === true && sectionKey in effective) {
+      effective[sectionKey] = true;
+    }
   }
   return effective;
 }

@@ -22,7 +22,14 @@ vi.mock('../src/lib/supabase.js', () => {
             _table: table, _filters: {},
             select(_cols, opts) { this._opts = opts; return this; },
             eq(col, val) { this._filters[col] = val; return this; },
-            not() { return this; },
+            // Records the IS NOT NULL discriminator instead of swallowing it.
+            // It used to return `this` and drop its arguments, so a test could
+            // assert nothing about which column a count was keyed on — and the
+            // counts were keyed on the wrong column for months.
+            not(col, op, val) {
+                if (op === 'is' && val === null) this._filters.notNull = col;
+                return this;
+            },
             order(col, opts) { this._order = { col, ...opts }; return this; },
             limit() { return this; },
             maybeSingle() {
@@ -66,17 +73,42 @@ describe('importSummaryRepository.summary', () => {
         for (const c of calls.list) expect(c.filters.organisation_id).toBe(ORG);
     });
 
-    it('filters the imported tables by source, and does NOT filter the provisioned ones', async () => {
+    it('filters the imported tables, and does NOT filter the provisioned ones', async () => {
         await importSummaryRepository.summary(ORG, 'dentally');
         const byTable = Object.fromEntries(calls.list.map((c) => [c.table, c.filters]));
-        // An org with both Dentally and GoHighLevel contacts must see the
-        // Dentally figure on the Dentally tile, not a combined total.
+        // EACH PROVIDER IS COUNTED BY ITS OWN `source`.
+        //
+        // Dentally patients and GoHighLevel contacts are different
+        // populations. Rows carrying both a pms_external_id and a
+        // ghl_contact_id are MAPPED for conversion attribution; the mapping
+        // does not make one population part of the other.
         expect(byTable.contacts.source).toBe('dentally');
+        expect(byTable.contacts.notNull).toBeUndefined();
         expect(byTable.appointments.source).toBe('dentally');
         // These are provisioned from the PMS rather than imported and carry no
         // `source` column — filtering on one would return zero for everything.
         expect(byTable.associates.source).toBeUndefined();
         expect(byTable.practices.source).toBeUndefined();
+    });
+
+    // The GoHighLevel tile must NOT count rows that merely carry a
+    // ghl_contact_id. Rochester holds 9,422 GoHighLevel contacts and 415
+    // Dentally patients mapped to a GHL contact for conversion. GoHighLevel's
+    // own count for that location is 9,487 — so counting the mapped rows in
+    // would show 9,837 and turn a 65-row shortfall into a surplus, hiding a
+    // real truncated-pagination bug. A count that flatters the number is worse
+    // than one that is merely narrow.
+    it('counts GoHighLevel rows by source, never by the conversion mapping', async () => {
+        await importSummaryRepository.summary(ORG, 'gohighlevel');
+        // `leads` is read TWICE — once to count it, once for the date span —
+        // so match on the COUNT call (the one carrying select opts). Keying by
+        // table alone lets the span overwrite the count and the assertion then
+        // describes the wrong query.
+        const countFor = (t) => calls.list.find((c) => c.table === t && c.opts)?.filters;
+        expect(countFor('contacts').source).toBe('gohighlevel');
+        expect(countFor('contacts').notNull).toBeUndefined();
+        expect(countFor('leads').source).toBe('gohighlevel');
+        expect(countFor('leads').notNull).toBeUndefined();
     });
 
     it('reads counts only — never row bodies', async () => {
@@ -114,8 +146,8 @@ describe('the provider registry', () => {
             for (const r of resources) {
                 if (shared.includes(r.table)) {
                     expect(
-                        Boolean(r.source || r.provider),
-                        `${provider}.${r.table} shares a table and needs a source/provider filter`,
+                        Boolean(r.source || r.provider || r.notNull),
+                        `${provider}.${r.table} shares a table and needs a source/provider/notNull filter`,
                     ).toBe(true);
                 }
             }

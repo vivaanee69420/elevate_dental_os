@@ -60,6 +60,11 @@ export const leadListQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
     since: zod_1.z.string().optional(),
+    // Inclusive end of the created-at window. The Pipeline board's date filter
+    // sends both ends, and the SAME pair goes to crm_pipeline_stage_summary —
+    // filtering the cards without filtering the aggregate would put the column
+    // counts back out of step with the cards under them.
+    until: zod_1.z.string().optional(),
     // Filter to one GoHighLevel pipeline (drives the Pipeline screen — fetch only
     // the selected pipeline's leads server-side instead of slicing client-side).
     ghl_pipeline_id: zod_1.z.string().optional(),
@@ -75,12 +80,44 @@ export const leadExportQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),
     assigned_to: zod_1.z.string().uuid().optional(),
     since: zod_1.z.string().optional(),
+    until: zod_1.z.string().optional(),
     ghl_pipeline_id: zod_1.z.string().optional(),
 });
 // Pipeline definitions are per GHL Location — scope them to one subaccount.
 export const pipelinesQuerySchema = zod_1.z.object({
     integration_account_id: zod_1.z.string().uuid().optional(),
 });
+// Board summary for ONE pipeline. ghl_pipeline_id is required: a summary with
+// no pipeline would silently aggregate every pipeline in the org into one
+// meaningless total, which is the sort of confident wrong number this whole
+// change exists to remove.
+export const pipelineSummaryQuerySchema = zod_1.z.object({
+    ghl_pipeline_id: zod_1.z.string().min(1).max(100),
+    integration_account_id: zod_1.z.string().uuid().optional(),
+    // The board's date window. Must be the SAME pair the card list is asked
+    // for, or the column counts stop describing the cards beneath them.
+    since: zod_1.z.string().optional(),
+    until: zod_1.z.string().optional(),
+});
+
+export const enquiriesQuerySchema = zod_1.z.object({
+    integration_account_id: zod_1.z.string().uuid().optional(),
+    search: zod_1.z.string().trim().max(200).optional(),
+    stage: zod_1.z.string().max(200).optional(),
+    valued_only: zod_1.z.coerce.boolean().optional().default(false),
+    open_only: zod_1.z.coerce.boolean().optional().default(true),
+    // Capped server-side: the browser may choose a page size, not an
+    // unbounded one.
+    limit: zod_1.z.coerce.number().int().min(1).max(100).default(50),
+    offset: zod_1.z.coerce.number().int().min(0).default(0),
+});
+
+export const todayCountersQuerySchema = zod_1.z.object({
+    // ISO instant marking the start of the screen's window; omitted = all time.
+    since: zod_1.z.string().datetime({ offset: true }).optional(),
+    integration_account_id: zod_1.z.string().uuid().optional(),
+});
+
 export const leadCreateSchema = zod_1.z.object({
     contact_id: zod_1.z.string().uuid().optional(),
     contact: zod_1.z.object({

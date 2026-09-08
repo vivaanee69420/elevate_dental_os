@@ -247,3 +247,21 @@ export function requirePermission(permissionKey) {
   };
 }
 
+// The same gate for an endpoint that more than one section legitimately reads.
+//
+// Not laxity, and not a way to avoid choosing a key: some endpoints genuinely
+// belong to two sections at once. /integrations/gohighlevel/dashboard is a
+// Settings endpoint AND the data behind an Elevate CRM page; a single key
+// would have to deny one of the two people whose job it is to look at it.
+// Mirrors sectionLock's "a prefix opens when the caller holds ANY ONE of its
+// keys", so the mount and the route cannot disagree about who may read it.
+export function requireAnyPermission(...permissionKeys) {
+  return (req, res, next) => {
+    const held = req.user?.permissions;
+    if (!held || !permissionKeys.some((k) => held[k] === true)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+}
+

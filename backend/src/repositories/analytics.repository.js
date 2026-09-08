@@ -4,6 +4,7 @@
 import * as supabase_1 from "../lib/supabase.js";
 import { revokedProviders, groupReceiptExcludedSources, pmsHidden, crmHidden, emergentConnected } from "../lib/integration-gating.js";
 import { fetchAllRpc } from "../lib/paged-rpc.js";
+import { pageAll } from "../lib/paged-select.js";
 
 // Max rows we read for an in-Node aggregate. Realistic per-org practice +
 // settled-payment counts sit far below this; if it ever trips, the service
@@ -399,14 +400,20 @@ export const analyticsRepository = {
     // Exact per-practice rollups (Postgres GROUP BY via RPC — no 1000-row cap).
     // Manual chair-utilisation grid rows (the intentional, owner-maintained
     // occupancy source). Small table; aggregated per practice in the service.
-    async chairUtilisationRows(orgId) {
-        const { data, error } = await supabase_1.serviceClient
+    // Paged, and selecting chair_id rather than chair_name: the chair count now
+    // comes from practice_chairs, so a stray space in a name can no longer
+    // invent a second chair and double a practice's capacity. LIMIT_GUARD was
+    // not protection here -- PostgREST caps the response regardless of the
+    // limit asked for, and does it silently, so a 50-chair group would have
+    // aggregated a truncated read into a confidently wrong capacity.
+    //
+    // available_minutes is deliberately NOT selected: capacity is derived from
+    // practice_opening_hours (migration 000180) and that column is dead.
+    chairUtilisationRows(orgId) {
+        return pageAll(() => supabase_1.serviceClient
             .from('chair_utilisation')
-            .select('practice_id, chair_name, booked_minutes, available_minutes, revenue_pence')
-            .eq('organisation_id', orgId)
-            .limit(LIMIT_GUARD);
-        if (error) throw new Error(error.message);
-        return data || [];
+            .select('id, practice_id, chair_id, associate_id, weekday, slot, booked_minutes, revenue_pence')
+            .eq('organisation_id', orgId));
     },
     async settledRevenueByPractice(orgId, sinceISO, untilISO = null) {
         const { data, error } = await supabase_1.serviceClient.rpc('settled_revenue_by_practice', {

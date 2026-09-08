@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { permissionsService } from '../services/permissions.service.js';
 import { ROLES } from '../lib/permissions.js';
+import { AppError } from '../middleware/errors.js';
 
 const roleDefaultSchema = z.object({
   role: z.enum(ROLES),
@@ -24,6 +25,32 @@ const userOverrideSchema = z.object({
   allowed: z.boolean().nullable(),
 });
 
+// The three rules the Team screen enforces, applied here too — this is the
+// OTHER door into the same data, and a rule that only one door honours is
+// not a rule. Editing the owner row of the matrix, or your own override, is
+// granting yourself; a key you do not hold is not yours to hand out.
+//
+// isAgencyActor is resolved server-side in authenticate (req.agencyOrgId is
+// only set for a real agency admin), never taken from the request.
+function assertMayGrant(req, { role, userId, permissionKey }) {
+  const caller = req.user;
+  const isAgencyActor = Boolean(req.agencyOrgId);
+  if (!isAgencyActor) {
+    if (role === 'owner') {
+      throw new AppError('Only an agency administrator can change what an owner may do', 403);
+    }
+    if (userId && userId === caller.id) {
+      throw new AppError('You cannot change your own permissions', 403);
+    }
+  }
+  // You cannot hand out what you do not hold — including as an owner, whose
+  // grant ceiling is otherwise unbounded. An agency actor administering a
+  // sub-account is exempt: that is the role that exists to set these.
+  if (!isAgencyActor && caller.permissions?.[permissionKey] !== true) {
+    throw new AppError(`You cannot grant a permission you do not hold: ${permissionKey}`, 403);
+  }
+}
+
 const permissionsController = {
   // GET /api/admin/permissions — full matrix for the Team Permissions UI.
   async getMatrix(req, res) {
@@ -33,6 +60,7 @@ const permissionsController = {
   // PUT /api/admin/permissions/role — set a role's default for one key.
   async setRoleDefault(req, res) {
     const body = roleDefaultSchema.parse(req.body);
+    assertMayGrant(req, { role: body.role, permissionKey: body.permission_key });
     res.json(
       await permissionsService.setRoleDefault(
         req.user.organisation_id,
@@ -46,6 +74,7 @@ const permissionsController = {
   // PUT /api/admin/permissions/user — set/clear a per-user override.
   async setUserOverride(req, res) {
     const body = userOverrideSchema.parse(req.body);
+    assertMayGrant(req, { userId: body.user_id, permissionKey: body.permission_key });
     res.json(
       await permissionsService.setUserOverride(
         req.user.organisation_id,

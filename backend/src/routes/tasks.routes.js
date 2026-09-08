@@ -2,7 +2,8 @@
 // Tasks routes — Express Router. Mounted at /api/tasks (auth upstream).
 //
 // Read is open to every authenticated role; ALL mutations are Owner-only
-// (requireRole('owner')) — "only admin can add tasks, others can only see".
+// (tasks.manage) — "only admin can add tasks, others can only see", now as a
+// permission the owner can hand out rather than a role nobody can move.
 // The UI also hides write controls for non-owners, but THIS is the boundary.
 // ============================================================================
 import * as express_1 from "express";
@@ -17,7 +18,10 @@ const router = (0, express_1.Router)();
 // and changes nothing for them.
 router.use((0, auth_1.requirePermission)('overview.view'));
 
-const ownerOnly = auth_1.requireRole('owner');
+// tasks.manage, not the owner role: creating and assigning work is exactly
+// the kind of thing an owner delegates, and a role list made that impossible.
+// Owner-only by default, so nothing changes until somebody is granted it.
+const ownerOnly = (0, auth_1.requirePermission)('tasks.manage');
 
 router.get('/', (0, async_handler_1.asyncHandler)(task_controller_1.taskController.list));
 router.post('/', ownerOnly, (0, async_handler_1.asyncHandler)(task_controller_1.taskController.create));

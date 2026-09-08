@@ -22,23 +22,23 @@ const bindProvider = (provider) => (req, _res, next) => { req.accountProvider = 
 const emergentFeature = (0, features_1.requireFeature)('emergent');
 const callReportingFeature = (0, features_1.requireFeature)('call_reporting');
 const sheetExportFeature = (0, features_1.requireFeature)('sheet_export');
-router.get('/', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.list));
-router.post('/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.connect));
-router.post('/sync-all', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.syncAll));
-router.get('/gohighlevel/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountsList));
-router.get('/gohighlevel/dashboard', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlDashboard));
-router.get('/gohighlevel/daily-report', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.getSettings));
-router.put('/gohighlevel/daily-report', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.saveSettings));
-router.post('/gohighlevel/daily-report/preview', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.preview));
-router.post('/gohighlevel/daily-report/send', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.send));
-router.post('/gohighlevel/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountCreate));
-router.patch('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountUpdate));
-router.delete('/gohighlevel/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountRemove));
-router.get('/gohighlevel/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
-router.delete('/gohighlevel/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
-router.post('/gohighlevel/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountSync));
-router.get('/gohighlevel/accounts/:id/pipelines', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountPipelines));
-router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountStageMappings));
+router.get('/', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.list));
+router.post('/connect', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.connect));
+router.post('/sync-all', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.syncAll));
+router.get('/gohighlevel/accounts', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountsList));
+router.get('/gohighlevel/dashboard', (0, auth_1.requireAnyPermission)('crm.view', 'system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlDashboard));
+router.get('/gohighlevel/daily-report', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.getSettings));
+router.put('/gohighlevel/daily-report', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.saveSettings));
+router.post('/gohighlevel/daily-report/preview', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.preview));
+router.post('/gohighlevel/daily-report/send', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(daily_report_controller_1.dailyReportController.send));
+router.post('/gohighlevel/accounts', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountCreate));
+router.patch('/gohighlevel/accounts/:id', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountUpdate));
+router.delete('/gohighlevel/accounts/:id', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountRemove));
+router.get('/gohighlevel/accounts/:id/delete-impact', (0, auth_1.requirePermission)('system.manage'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
+router.delete('/gohighlevel/accounts/:id/permanent', (0, auth_1.requirePermission)('system.manage'), bindProvider('gohighlevel'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
+router.post('/gohighlevel/accounts/:id/sync', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountSync));
+router.get('/gohighlevel/accounts/:id/pipelines', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountPipelines));
+router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.ghlAccountStageMappings));
 // One-off historical repair: re-pull a payment-date window from Dentally and
 // re-apply the corrected status mapper. Owner-only — it walks a remote API and
 // rewrites financial rows.
@@ -53,72 +53,72 @@ router.post('/gohighlevel/accounts/:id/stage-mappings', (0, auth_1.requireRole)(
 // How much has actually landed, per provider. Practice managers see it too:
 // "is the data here yet" is not an owner-only question, and it returns counts
 // only — no row bodies are read to render it.
-router.get('/:provider/import-summary', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.importSummary));
+router.get('/:provider/import-summary', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.importSummary));
 // Continue a first pull a restart killed. Owner-only: it starts work.
-router.post('/:provider/resume-import', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.resumeImport));
-router.get('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySites));
-router.post('/dentally/sites', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySelectSites));
-router.post('/dentally/repair-payments', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyRepairPayments));
-router.get('/emergent', emergentFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentGet));
-router.post('/emergent', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentConnect));
-router.post('/emergent/sync', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSync));
-router.delete('/emergent', emergentFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentDisconnect));
-router.get('/emergent/practices', emergentFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentPractices));
+router.post('/:provider/resume-import', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.resumeImport));
+router.get('/dentally/sites', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySites));
+router.post('/dentally/sites', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallySelectSites));
+router.post('/dentally/repair-payments', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.dentallyRepairPayments));
+router.get('/emergent', emergentFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentGet));
+router.post('/emergent', emergentFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentConnect));
+router.post('/emergent/sync', emergentFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSync));
+router.delete('/emergent', emergentFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentDisconnect));
+router.get('/emergent/practices', emergentFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentPractices));
 // Emergent business→practice mapping is an agency-actor power (A2).
-router.post('/emergent/practices', emergentFeature, (0, auth_1.requireRole)('owner'), requireAgencyActor, (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSetPractice));
-router.get('/google-sheets/status', callReportingFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetsController.status));
-router.get('/google-sheets/picker-config', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.pickerConfig));
-router.post('/google-sheets/sources', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.addSource));
-router.get('/google-sheets/sources/:id/preview', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.preview));
-router.put('/google-sheets/sources/:id/mapping', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.saveMapping));
-router.post('/google-sheets/sources/:id/sync', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.sync));
-router.delete('/google-sheets/sources/:id', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.removeSource));
-router.delete('/google-sheets', callReportingFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetsController.disconnect));
-router.get('/google-sheets-writer/status', sheetExportFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetExportController.status));
-router.get('/google-sheets-writer/activity', sheetExportFeature, (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(sheetExportController.activity));
-router.post('/google-sheets-writer/destination', sheetExportFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.setDestination));
-router.post('/google-sheets-writer/drain', sheetExportFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.drain));
-router.delete('/google-sheets-writer', sheetExportFeature, (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(sheetExportController.disconnect));
-router.get('/quickbooks/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountsList));
-router.post('/quickbooks/accounts/connect', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountConnect));
-router.post('/quickbooks/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountSync));
-router.delete('/quickbooks/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountRemove));
-router.get('/quickbooks/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
-router.delete('/quickbooks/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
+router.post('/emergent/practices', emergentFeature, (0, auth_1.requirePermission)('system.manage'), requireAgencyActor, (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.emergentSetPractice));
+router.get('/google-sheets/status', callReportingFeature, (0, auth_1.requireAnyPermission)('growth.view', 'system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.status));
+router.get('/google-sheets/picker-config', callReportingFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.pickerConfig));
+router.post('/google-sheets/sources', callReportingFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.addSource));
+router.get('/google-sheets/sources/:id/preview', callReportingFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.preview));
+router.put('/google-sheets/sources/:id/mapping', callReportingFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.saveMapping));
+router.post('/google-sheets/sources/:id/sync', callReportingFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.sync));
+router.delete('/google-sheets/sources/:id', callReportingFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.removeSource));
+router.delete('/google-sheets', callReportingFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetsController.disconnect));
+router.get('/google-sheets-writer/status', sheetExportFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetExportController.status));
+router.get('/google-sheets-writer/activity', sheetExportFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetExportController.activity));
+router.post('/google-sheets-writer/destination', sheetExportFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetExportController.setDestination));
+router.post('/google-sheets-writer/drain', sheetExportFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetExportController.drain));
+router.delete('/google-sheets-writer', sheetExportFeature, (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(sheetExportController.disconnect));
+router.get('/quickbooks/accounts', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountsList));
+router.post('/quickbooks/accounts/connect', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountConnect));
+router.post('/quickbooks/accounts/:id/sync', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountSync));
+router.delete('/quickbooks/accounts/:id', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.qbAccountRemove));
+router.get('/quickbooks/accounts/:id/delete-impact', (0, auth_1.requirePermission)('system.manage'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
+router.delete('/quickbooks/accounts/:id/permanent', (0, auth_1.requirePermission)('system.manage'), bindProvider('quickbooks'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
 // CallRail — provider-level status/sync/disconnect (Task 3) plus the
 // per-company /accounts routes (Task 4). STATIC paths: must stay above the
 // generic /:provider/* routes below, or '/callrail'/'/callrail/sync'
 // are swallowed by '/:id' and '/:provider/sync' respectively. practiceId on
 // create/update is agency-actor-gated in the CONTROLLER (not here) — the
-// route itself stays requireRole('owner') so a non-agency owner can still
+// route itself stays on system.manage (an owner-only default) so a
 // add/update an (unmapped) company.
-router.get('/callrail', (0, auth_1.requireRole)('owner', 'practice_manager'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailGet));
-router.post('/callrail/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailSync));
-router.delete('/callrail', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDisconnect));
+router.get('/callrail', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailGet));
+router.post('/callrail/sync', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailSync));
+router.delete('/callrail', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDisconnect));
 // Add-company step 1 (key-only discovery) — ONE API key reveals every
 // account and company it can reach; no account id typed by hand. POST (not
 // GET+query): the API key belongs in a body, never a URL.
-router.post('/callrail/discover', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDiscover));
+router.post('/callrail/discover', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailDiscover));
 // Add-company step 2 — connect several discovered companies in one request.
-router.post('/callrail/accounts/bulk', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailBulkConnect));
-router.post('/callrail/accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountCreate));
-router.patch('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountUpdate));
-router.delete('/callrail/accounts/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountRemove));
-router.get('/callrail/accounts/:id/delete-impact', (0, auth_1.requireRole)('owner'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
-router.delete('/callrail/accounts/:id/permanent', (0, auth_1.requireRole)('owner'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
-router.post('/callrail/accounts/:id/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountSync));
-router.get('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
-router.post('/:provider/callback', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
-router.post('/:provider/refresh', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.refresh));
-router.post('/:provider/sync', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.sync));
-router.get('/:provider/site-ids', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.siteIds));
-router.get('/:provider/pipelines', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.pipelines));
-router.post('/:provider/stage-mappings', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setStageMappings));
-router.get('/:provider/sync-progress', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.syncProgress));
-router.get('/:provider/webhook-info', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.webhookInfo));
-router.post('/:provider/webhook-secret', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setWebhookSecret));
-router.post('/:provider/revoke', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.revoke));
-router.get('/:provider/ad-accounts', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.adAccounts));
-router.post('/:provider/ad-accounts/selection', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setAdAccountSelection));
-router.delete('/:id', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.remove));
+router.post('/callrail/accounts/bulk', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailBulkConnect));
+router.post('/callrail/accounts', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountCreate));
+router.patch('/callrail/accounts/:id', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountUpdate));
+router.delete('/callrail/accounts/:id', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountRemove));
+router.get('/callrail/accounts/:id/delete-impact', (0, auth_1.requirePermission)('system.manage'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeleteImpact));
+router.delete('/callrail/accounts/:id/permanent', (0, auth_1.requirePermission)('system.manage'), bindProvider('callrail'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.accountDeletePermanently));
+router.post('/callrail/accounts/:id/sync', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callrailAccountSync));
+router.get('/:provider/callback', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
+router.post('/:provider/callback', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.callback));
+router.post('/:provider/refresh', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.refresh));
+router.post('/:provider/sync', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.sync));
+router.get('/:provider/site-ids', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.siteIds));
+router.get('/:provider/pipelines', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.pipelines));
+router.post('/:provider/stage-mappings', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setStageMappings));
+router.get('/:provider/sync-progress', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.syncProgress));
+router.get('/:provider/webhook-info', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.webhookInfo));
+router.post('/:provider/webhook-secret', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setWebhookSecret));
+router.post('/:provider/revoke', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.revoke));
+router.get('/:provider/ad-accounts', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.adAccounts));
+router.post('/:provider/ad-accounts/selection', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.setAdAccountSelection));
+router.delete('/:id', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(integration_controller_1.integrationController.remove));
 export default router;

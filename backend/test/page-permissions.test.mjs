@@ -73,9 +73,34 @@ describe('a page inherits its section until it is overridden', () => {
 
   it('granting the section grants every page under it — unchanged behaviour', () => {
     const eff = resolve([{ permission_key: 'operations.view', allowed: true }]);
-    for (const page of ['appointments', 'associates', 'staff', 'chair', 'treatments', 'uda']) {
+    // 'chair-utilisation' was the manual per-chair entry page, retired when the
+    // Dentally rota made a real utilisation denominator available; its name
+    // moved to 'practitioner-utilisation', which is what that report always
+    // measured. The mount stayed — it now serves three pages — so this asserts
+    // the page id that still exists.
+    for (const page of ['appointments', 'associates', 'staff', 'practitioner-utilisation', 'treatments', 'uda']) {
       expect(eff[pageKey(page)], `${page} did not inherit`).toBe(true);
     }
+  });
+
+  it('Chair EFFICIENCY follows finance, not operations — it shows money', () => {
+    // The page sits in the Operations nav group but reads /api/analytics/chair,
+    // a finance mount, and its figures are cost-of-empty-chairs and recoverable
+    // revenue. Rule 5 makes a practice manager's finance access owner-toggled,
+    // so operations.view alone must NOT open it. Listing it under operations
+    // previously put it in the nav and then 403'd on open.
+    const ops = resolve([{ permission_key: 'operations.view', allowed: true }]);
+    expect(ops[pageKey('chair')]).not.toBe(true);
+
+    const fin = resolve([{ permission_key: 'finance.view', allowed: true }]);
+    expect(fin[pageKey('chair')]).toBe(true);
+    // ...and finance alone does not hand over the operations report beside it.
+    // This named 'chair-utilisation' until that page was retired, at which
+    // point the assertion became VACUOUS: pageKey() of a page that no longer
+    // exists resolves to undefined, and `undefined` is not `true`, so it
+    // passed while testing nothing. Pointed at the page that inherited its
+    // job.
+    expect(fin[pageKey('practitioner-utilisation')]).not.toBe(true);
   });
 
   it('a page override switches ONE page off inside a granted section', () => {
@@ -88,11 +113,22 @@ describe('a page inherits its section until it is overridden', () => {
     expect(eff[pageKey('associates')]).toBe(false);
   });
 
-  it('a page override switches ONE page on inside a section that is off', () => {
+  // CHANGED DELIBERATELY. This used to assert that granting a page left the
+  // section key FALSE — which is exactly the state an owner reported as "I
+  // gave the permission and it says insufficient permission": the tab appeared
+  // in the nav and every request the page made was refused, because every API
+  // gate reads the section key and nothing had set it.
+  //
+  // Granting a tab now carries its section's READ key. What must NOT change,
+  // and is asserted below, is the nav: the other tabs in that section stay off,
+  // so ticking one tab still shows one tab.
+  it('a page override switches ONE page on, and opens the data behind it', () => {
     const eff = resolve([{ permission_key: 'page:appointments', allowed: true }]);
-    expect(eff['operations.view']).toBe(false);
     expect(eff[pageKey('appointments')]).toBe(true);
+    expect(eff['operations.view']).toBe(true);
+    // The tab granted is the only tab shown.
     expect(eff[pageKey('associates')]).toBe(false);
+    expect(eff[pageKey('staff')]).toBe(false);
   });
 
   it('a per-user override beats the role-level page override', () => {

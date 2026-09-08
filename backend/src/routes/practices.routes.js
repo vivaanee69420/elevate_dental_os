@@ -71,7 +71,9 @@ const createSchema = zod_1.z.object({
 // Create a practice (owner). Used by setup + the "create from Dentally sites"
 // flow. Guards against duplicate pms_site_id within the org (one practice per
 // Dentally site).
-router.post('/', (0, auth_1.requireRole)('owner'), (0, async_handler_1.asyncHandler)(async (req, res) => {
+// Creating a practice is a Settings action; system.manage is its key and is
+// owner-only by default, so this is the same access it had — delegable now.
+router.post('/', (0, auth_1.requirePermission)('system.manage'), (0, async_handler_1.asyncHandler)(async (req, res) => {
     const body = createSchema.parse(req.body);
     if (body.pms_site_id) {
         const { data: existing } = await supabase_1.serviceClient
@@ -101,8 +103,12 @@ const pmsSiteIdSchema = zod_1.z.object({
     pms_site_id: zod_1.z.string().trim().max(64).nullable(),
 });
 
-// Dentally site→practice mapping is an agency-actor power (A2).
-router.patch('/:id/pms-site-id', (0, auth_1.requireRole)('owner'), requireAgencyActor, (0, async_handler_1.asyncHandler)(async (req, res) => {
+// Dentally site→practice mapping is an agency-actor power (A2). The
+// requireAgencyActor gate is the real boundary here and is a different axis
+// from the permission matrix — an agency admin may sit in another org
+// entirely. system.manage replaces the role list beside it so the two gates
+// read the same way as everywhere else: agency actor AND Settings.
+router.patch('/:id/pms-site-id', (0, auth_1.requirePermission)('system.manage'), requireAgencyActor, (0, async_handler_1.asyncHandler)(async (req, res) => {
     const { id } = idParamSchema.parse(req.params);
     const { pms_site_id } = pmsSiteIdSchema.parse(req.body);
     const value = pms_site_id ? pms_site_id : null; // '' -> null (clears mapping)

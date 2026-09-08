@@ -58,6 +58,28 @@ export const leadController = {
         const q = lead_model_1.pipelinesQuerySchema.parse(req.query);
         res.json(await lead_service_1.leadService.pipelines(req.user.organisation_id, q));
     },
+    // Board figures for one pipeline. The organisation is always the caller's
+    // own; a pipeline id in the query only narrows within it.
+    async pipelineSummary(req, res) {
+        const q = lead_model_1.pipelineSummaryQuerySchema.parse(req.query);
+        res.json(await lead_service_1.leadService.pipelineSummary(req.user.organisation_id, {
+            pipelineId: q.ghl_pipeline_id,
+            accountId: q.integration_account_id ?? null,
+            since: q.since ?? null,
+            until: q.until ?? null,
+        }));
+    },
+    async enquiries(req, res) {
+        const q = lead_model_1.enquiriesQuerySchema.parse(req.query);
+        res.json(await lead_service_1.leadService.enquiries(req.user.organisation_id, q));
+    },
+    async todayCounters(req, res) {
+        const q = lead_model_1.todayCountersQuerySchema.parse(req.query);
+        res.json(await lead_service_1.leadService.todayCounters(req.user.organisation_id, {
+            since: q.since ?? null,
+            accountId: q.integration_account_id ?? null,
+        }));
+    },
     async getById(req, res) {
         const { id } = idParamSchema.parse(req.params);
         const data = await lead_service_1.leadService.getById(req.user.organisation_id, id);

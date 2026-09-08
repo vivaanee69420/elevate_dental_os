@@ -1,5 +1,5 @@
 import express from 'express';
-import { requirePermission, requireRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/auth.js';
 import { requireOwnerOrAgencyActor } from '../middleware/agency.js';
 import { openDayController } from '../controllers/open-day.controller.js';
 import {
@@ -35,16 +35,16 @@ router.get('/facebook/lead-performance', requirePermission('marketing.view'), ge
 // Open days (000168) — named events and the campaigns that promoted them.
 //
 // Reads sit behind the report's own permission so a practice manager can see
-// the events behind the numbers. Writes are requireRole('owner') rather than
+// the events behind the numbers. Writes are requirePermission('marketing.manage') rather than
 // requireAgencyActor, which is the gate every OTHER mapping mutation in this
 // codebase uses: an open day is the tenant's own event, and making them ask
 // their agency to record one would make the feature useless. Deliberate
 // exception — see open-day.service.js's header before "fixing" it.
 router.get('/facebook/open-days', requirePermission('marketing.view'), openDayController.list);
-router.post('/facebook/open-days', requireRole('owner'), openDayController.create);
-router.patch('/facebook/open-days/:id', requireRole('owner'), openDayController.update);
-router.delete('/facebook/open-days/:id', requireRole('owner'), openDayController.remove);
-router.put('/facebook/open-days/:id/campaigns', requireRole('owner'), openDayController.setCampaigns);
+router.post('/facebook/open-days', requirePermission('marketing.manage'), openDayController.create);
+router.patch('/facebook/open-days/:id', requirePermission('marketing.manage'), openDayController.update);
+router.delete('/facebook/open-days/:id', requirePermission('marketing.manage'), openDayController.remove);
+router.put('/facebook/open-days/:id/campaigns', requirePermission('marketing.manage'), openDayController.setCampaigns);
 // One campaign at a time, for the always-visible campaign list — moving a
 // single row must not require replacing its whole event's set. Safe next to
 // the two routes either side despite the shared '/facebook/open-days/' stem:
@@ -53,7 +53,7 @@ router.put('/facebook/open-days/:id/campaigns', requireRole('owner'), openDayCon
 // below is a different literal ('pipelines') — none of the three can swallow
 // another regardless of registration order, but it is kept beside its
 // nearest relative anyway.
-router.put('/facebook/open-days/campaigns', requireRole('owner'), openDayController.setCampaign);
+router.put('/facebook/open-days/campaigns', requirePermission('marketing.manage'), openDayController.setCampaign);
 // Mapping a GHL pipeline to an open day is owner-OR-agency-actor, not
 // owner-only like the routes above: an agency admin need not be an owner of
 // the sub-account they administer, and owner-only would lock them out. See

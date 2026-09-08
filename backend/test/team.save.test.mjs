@@ -106,21 +106,29 @@ describe('teamService.save', () => {
     });
   });
 
-  it('refuses a caller changing their own role', async () => {
-    authRepository.getUserInOrgs.mockResolvedValueOnce({ ...TARGET, id: 'caller', role: 'owner' });
-    await expect(teamService.save(SCOPE, OWNER, 'caller', { role: 'reception' }))
-      .rejects.toThrow(/own role/i);
+  // WIDENED FROM "not your own role" TO "not your own row".
+  //
+  // It was already refused for role, and later for permissions, which were the
+  // same rule found twice: the person a change is ABOUT must not be the person
+  // making it. Profile was the remaining exception and it is gone — an admin
+  // who can still edit part of their own row is administered by nobody, and
+  // "except my own name" is exactly how the exception list grows back.
+  // removeMember and setMemberPassword already refused self; save has caught up.
+  it('refuses ANY edit to the caller’s own row', async () => {
+    for (const body of [
+      { role: 'reception' },
+      { permissions: { 'finance.view': true } },
+      { full_name: 'New Name' },
+      // Even a no-op role restate, which used to be the way through.
+      { full_name: 'New Name', role: 'owner' },
+    ]) {
+      authRepository.getUserInOrgs.mockResolvedValueOnce({ ...TARGET, id: 'caller', role: 'owner' });
+      await expect(
+        teamService.save(SCOPE, OWNER, 'caller', body),
+        JSON.stringify(body),
+      ).rejects.toThrow(/your own account/i);
+    }
     expect(authRepository.updateMember).not.toHaveBeenCalled();
-  });
-
-  it('allows a caller saving their own profile with their role unchanged', async () => {
-    authRepository.getUserInOrgs.mockResolvedValueOnce({ ...TARGET, id: 'caller', role: 'owner' });
-    const out = await teamService.save(SCOPE, OWNER, 'caller', { full_name: 'New Name', role: 'owner' });
-    expect(authRepository.updateMember).toHaveBeenCalledWith('org-1', 'caller', {
-      full_name: 'New Name',
-      role: 'owner',
-    });
-    expect(out.success).toBe(true);
   });
 
   it('allows a caller changing someone else’s role', async () => {

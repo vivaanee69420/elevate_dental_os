@@ -218,11 +218,20 @@ export async function syncConversations(orgId, integration, {
         inserted += await upsertMessages(perConvRows.flat());
         onProgress?.({ phase: 'conversations', pct: 99, count: convCount, page: convCount, totalPages: null });
         if (hitStaleTail) break;
-        // Advance the cursor to the oldest thread on this page. Stop on a short
-        // page (account exhausted) or a missing cursor.
+        // Advance the cursor to the oldest thread on this page.
+        //
+        // STOP ON AN EMPTY PAGE, NEVER A SHORT ONE. This read
+        // `conversations.length < limit`, the same stop that lost 65 of gm
+        // dental Rochester's 9,487 contacts in ghlFetchAll: GoHighLevel filters
+        // server-side AFTER taking a page, so a short page arrives with threads
+        // still behind it and the walk ends early in silence.
+        //
+        // The other two exits are unchanged and are the real ends: no cursor to
+        // advance, and `hitStaleTail` (everything on this page older than the
+        // incremental window).
         const last = conversations[conversations.length - 1];
         const next = last?.sort?.[0] ?? last?.lastMessageDate ?? null;
-        if (next == null || conversations.length < limit) break;
+        if (next == null || conversations.length === 0) break;
         cursor = next;
     }
     return { conversations: convCount, messages: inserted };

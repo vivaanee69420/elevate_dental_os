@@ -25,3 +25,21 @@ export function formatTime12h(hhmm: string): string {
   h = h % 12 || 12;
   return `${h}:${m}${ampm}`;
 }
+
+/**
+ * "1 company", "3 companies" — a count with its noun agreeing with it.
+ *
+ * Written down once because "1 companies connected" appeared on a live
+ * Integrations tile, and the same panel three lines away got it right with its
+ * own inline ternary. Every place that counts things is a place to forget it,
+ * and English plurals are irregular enough (company/companies, practice/
+ * practices) that the -s default has to be overridable rather than assumed.
+ */
+export function plural(n: number, singular: string, pluralForm?: string): string {
+  return n === 1 ? singular : (pluralForm ?? `${singular}s`);
+}
+
+/** The count and the noun together: countOf(1, 'company', 'companies'). */
+export function countOf(n: number, singular: string, pluralForm?: string): string {
+  return `${formatNumber(n)} ${plural(n, singular, pluralForm)}`;
+}

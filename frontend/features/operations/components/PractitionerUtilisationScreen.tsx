@@ -1,0 +1,969 @@
+'use client';
+// Practitioner Utilisation — how full the chairs are, and what that is worth.
+//
+// Three views of ONE server-side aggregate, so they cannot contradict each
+// other: headline cards, the availability-vs-usage area chart, and the
+// practitioner × day grid.
+//
+// WHAT THE NUMBERS MEAN, because two of the decisions behind them are
+// judgement calls and the screen says so rather than hoping nobody asks:
+//
+//   available   the practitioner's booked day span, first appointment to last.
+//               Dentally exposes no roster (probed: no working hours on
+//               /practitioners, ten candidate endpoints 404, and the one that
+//               exists refuses a past date), so this is a proxy — a good one,
+//               averaging 7.9 hours, which is a working day.
+//   utilised    appointments with a PATIENT attached. Blocks, meetings and
+//               holidays are unused time, per Dentally's own definition.
+//   unavailable a day whose diary held ONLY blocks. 180 of 234 such days in a
+//               sample week carried 1,440 of 1,837 "available" hours; counting
+//               them reads 15.3% where the working days read 70.7%. A
+//               clinician who was not in is not one who sat idle.
+
+import { useMemo, useState } from 'react';
+import {
+  Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from 'recharts';
+import { Card, DataTable, EmptyState, KpiTile, PageHeader, Skeleton, type Column } from '@/components/ui';
+import { money, DASH } from '@/features/marketing/_shared/format';
+import { usePractitionerUtilisation } from '../practitioner-utilisation-hooks';
+import { usePractices } from '@/features/integrations/hooks';
+import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
+import { useScopePeriod, londonYmd } from '@/features/_shared/scope-context';
+import type { UtilBasis, UtilPractitioner, UtilPractitionerDay } from '../practitioner-utilisation-api';
+
+// Dentally's own bands, so a practice reading both sees the same colours mean
+// the same thing. Purple is over-booked, not "best".
+const BANDS = [
+  { min: 100, label: '> 100%', colour: '#3B1E54' },
+  { min: 80, label: '> 80% – 100%', colour: '#2E6E8E' },
+  { min: 60, label: '> 60% – 80%', colour: '#1B9C8A' },
+  { min: 40, label: '> 40% – 60%', colour: '#4FBF7F' },
+  { min: 20, label: '> 20% – 40%', colour: '#8FD14F' },
+  { min: 0, label: '0% – 20%', colour: '#F5D547' },
+];
+
+function bandColour(pct: number | null): string | null {
+  if (pct === null) return null;
+  return BANDS.find((b) => pct > b.min || (b.min === 0 && pct >= 0))?.colour ?? BANDS[BANDS.length - 1].colour;
+}
+
+/** Short day label for a column header: "M 08". */
+function dayLabel(iso: string): { dow: string; dom: string } {
+  const d = new Date(`${iso}T12:00:00`);
+  return {
+    dow: ['S', 'M', 'T', 'W', 'T', 'F', 'S'][d.getDay()],
+    dom: String(d.getDate()).padStart(2, '0'),
+  };
+}
+
+const pct = (v: number | null) => (v === null ? DASH : `${v.toFixed(0)}%`);
+
+/** "7h 15m" — hours and minutes, the way a diary is read. Negative bookable
+ *  time is real (an over-booked day) and keeps its sign rather than clamping,
+ *  because clamping would hide double-booking.
+ *
+ *  TAKES SECONDS, not hours, and that is the whole point. It used to take the
+ *  rounded 1-decimal hour the API already publishes, so a genuine 255-minute
+ *  day (4h 15m — exactly what Dentally prints) became 4.3h and rendered as
+ *  "4h 18m". Three minutes invented by rounding, on every cell in the grid,
+ *  and the bookable line inherited it: -1h 15m read as -1h 18m. A unit finer
+ *  than the rounding must never be derived from the rounded value. */
+function hm(seconds: number): string {
+  const neg = seconds < 0;
+  const total = Math.round(Math.abs(seconds) / 60);
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${neg ? '-' : ''}${h}h ${m}m`;
+}
+
+/** A long date, as Dentally writes it: 25/09/2026. */
+const ddmmyyyy = (iso: string) => {
+  const [y, m, d] = iso.split('-');
+  return `${d}/${m}/${y}`;
+};
+
+/** Monday of the London week containing `iso`, as YYYY-MM-DD. Weeks are the
+ *  unit a contracted-hours figure is expressed in, so the buckets have to line
+ *  up with them or the comparison is meaningless. */
+/** Every bucket key the window spans, whether or not anything happened in it.
+ *
+ *  THE POINT OF THE CHART IS THE EMPTY WEEKS. Buckets used to be built from the
+ *  data, so a week in which a practitioner saw nobody produced no bucket and
+ *  the line simply jumped over it — Gaurav Mehta's w/c 10 Aug and w/c 31 Aug
+ *  vanished, and 7.5 hours joined straight to 9.0 as though the fortnight
+ *  between were busy. Dentally draws those weeks at zero against a -30
+ *  difference, which is the finding, not an absence of data. */
+function bucketKeysBetween(since: string, until: string, unit: 'day' | 'week'): string[] {
+  const out: string[] = [];
+  const end = Date.parse(`${until}T12:00:00Z`);
+  let cursor = Date.parse(`${unit === 'week' ? weekStart(since) : since}T12:00:00Z`);
+  // A hard ceiling: a mis-ordered window would otherwise spin here forever.
+  for (let i = 0; cursor <= end && i < 800; i++) {
+    out.push(new Date(cursor).toISOString().slice(0, 10));
+    cursor += (unit === 'week' ? 7 : 1) * 86400000;
+  }
+  return out;
+}
+
+/** The Sunday closing the London week that contains `iso`. */
+function weekEnd(iso: string): string {
+  const start = Date.parse(`${weekStart(iso)}T12:00:00Z`);
+  return new Date(start + 6 * 86400000).toISOString().slice(0, 10);
+}
+
+function weekStart(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  const dow = (d.getDay() + 6) % 7;      // Monday = 0
+  d.setDate(d.getDate() - dow);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** "Mon 08 Sep" — a bucket label short enough for an axis. */
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const dm = (d: Date) => `${String(d.getDate()).padStart(2, '0')} ${MON[d.getMonth()]}`;
+
+/**
+ * A weekly bucket is labelled with THE SPAN IT ACTUALLY COVERS, clipped to the
+ * selected window — "28 Jul – 2 Aug", not a single date the reader has to
+ * interpret.
+ *
+ * This exists because Dentally's own headers cannot be taken at face value.
+ * Its column headed "Tue 04 Aug 26" reads 11 used hours for this practitioner;
+ * the 4–10 August window holds 5.00, while Monday 3 – Sunday 9 August holds
+ * exactly 11.00. Its buckets are Monday weeks, but the headers print
+ * `From + 7n` — the From date happened to be a Tuesday — so every column is
+ * labelled a day later than the week it summarises. Every one of our figures
+ * matches theirs once that is allowed for (they also TRUNCATE to whole hours:
+ * our 8.5 is their 8, our 7.5 their 7, our 17.5 their 17, our 2.8 their 2).
+ *
+ * A single anchor date is what made that ambiguity possible, so we print both
+ * ends and let the reader see the seven days for themselves. A clipped first or
+ * last week is visibly shorter, which is why its figure is lower — rather than
+ * looking like a quiet week.
+ */
+function bucketLabel(iso: string, bucket: 'day' | 'week', since?: string, until?: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  if (bucket !== 'week') return `${DOW[d.getDay()]} ${dm(d)}`;
+  const startMs = Math.max(d.getTime(), since ? Date.parse(`${since}T12:00:00`) : -Infinity);
+  const endMs = Math.min(d.getTime() + 6 * 86400000, until ? Date.parse(`${until}T12:00:00`) : Infinity);
+  const a = new Date(startMs);
+  const b = new Date(endMs);
+  return endMs <= startMs ? dm(a) : `${dm(a)} \u2013 ${dm(b)}`;
+}
+
+type HoverCell = {
+  practitionerName: string;
+  practiceName: string | null;
+  day: UtilPractitionerDay;
+  x: number;
+  y: number;
+};
+const hrs = (v: number | null | undefined) =>
+  (v === null || v === undefined ? DASH : `${v.toLocaleString('en-GB', { maximumFractionDigits: 1 })}h`);
+
+export default function PractitionerUtilisationScreen() {
+  // Scope and period come from the SHARED control every analytics view uses —
+  // This month / This year / Pick month / Custom, plus the practice pills — so
+  // this page filters the same way as the rest of the product and the choice
+  // survives navigation (it lives in the URL).
+  const { win, scope } = useScopePeriod();
+  const [hover, setHover] = useState<HoverCell | null>(null);
+
+  // Chart-local controls. These narrow and annotate the CHART only — the date
+  // stays global at the top, so it drives every panel on the page at once.
+  const [chartPractitioner, setChartPractitioner] = useState<string>('all');
+  const [bucket, setBucket] = useState<'day' | 'week'>('week');
+  // Contracted hours per practitioner per week. This is the honest answer to a
+  // problem the diary cannot solve: Dentally exposes no rota, so "available"
+  // is otherwise inferred from the booked day span. A contracted figure is
+  // DECLARED rather than inferred, and comparing used hours against it says
+  // something the span never can — whether the practice is getting the hours
+  // it is paying for. 0 turns the baseline off entirely.
+  const [hoursPerWeek, setHoursPerWeek] = useState<number>(0);
+
+  // WHICH DENOMINATOR. Dentally's own "total time" comes from a rota its API
+  // does not expose, so neither option below is their figure — they are the two
+  // honest things the diary can tell us, and the page names the one in use.
+  const [basis, setBasis] = useState<UtilBasis>('clinical');
+
+  // `win.until` is EXCLUSIVE and this endpoint takes an INCLUSIVE date, so step
+  // back one MILLISECOND to land on the last day actually inside the window.
+  // Stepping back a whole day would be wrong on a window that is not
+  // day-aligned, and leaving it alone would silently add a day to every range.
+  const since = londonYmd(win.since);
+  const until = londonYmd(new Date(Date.parse(win.until) - 1).toISOString());
+
+  // 'all' is the sentinel for every practice; it is not a practice id and must
+  // never be sent as one.
+  const practiceId = scope && scope !== 'all' ? scope : null;
+
+  // WEEK GROUPING READS WHOLE WEEKS, which means a SECOND window.
+  //
+  // A week bucket clipped by the date picker understates itself: a range
+  // starting Tuesday 28 July drops Monday the 27th, and that Monday held 1.75
+  // of the practitioner's hours - so the first column read 0 against Dentally's
+  // 1, and looked like an idle week rather than a short one. Dentally expands
+  // the range to whole weeks; grouped by week, so do we.
+  //
+  // It is a SECOND CALL to the same endpoint rather than a widening of the
+  // first, because the cards, the grid and the daily totals must keep the
+  // window the user actually chose - widening that one would quietly change
+  // every headline on the page to answer a question nobody asked.
+  const weekWindow = useMemo(
+    () => ({ since: weekStart(since), until: weekEnd(until) }),
+    [since, until],
+  );
+  const weekAligned = bucket === 'week'
+    && (weekWindow.since !== since || weekWindow.until !== until);
+  const { data: weekData } = usePractitionerUtilisation({
+    since: weekWindow.since, until: weekWindow.until, practiceId, basis,
+    // Never fires when the chosen window is already whole weeks - that request
+    // would be byte-identical to the one above.
+    enabled: weekAligned,
+  });
+
+  const { data: practicesData } = usePractices();
+  const practices = practicesData?.practices ?? [];
+  const practiceName = useMemo(
+    () => new Map(practices.map((p: { id: string; name: string }) => [p.id, p.name])),
+    [practices],
+  );
+
+  const { data, isLoading, error, isFetching } = usePractitionerUtilisation({ since, until, practiceId, basis });
+
+  const t = data?.totals;
+  const days = data?.days ?? [];
+  const practitioners = data?.practitioners ?? [];
+  const otherPractitioners = data?.otherPractitioners ?? [];
+
+  // The PICKER offers everyone in the window — those who treated patients and
+  // those who were in the diary and saw nobody — sorted by name, because a
+  // menu ordered by utilisation announces who is worst before you have chosen
+  // anything. The grid and every total still read `practitioners` alone.
+  const pickerPractitioners = useMemo(
+    () => [...practitioners, ...otherPractitioners]
+      .sort((a, b) => a.practitionerName.localeCompare(b.practitionerName)),
+    [practitioners, otherPractitioners],
+  );
+
+  // Every day that appears anywhere, so the grid's columns are the window and
+  // not just the days one practitioner happened to work.
+  const allDays = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of practitioners) for (const d of p.days) set.add(d.day);
+    for (const d of days) set.add(d.day);
+    return [...set].sort();
+  }, [practitioners, days]);
+
+  // The whole day row, not just its percentage: the hover card reports used,
+  // bookable and total time, and re-deriving those from a percentage would
+  // lose the minutes.
+  const cells = useMemo(() => {
+    const m = new Map<string, Map<string, UtilPractitionerDay>>();
+    for (const p of practitioners) {
+      m.set(p.practitionerId, new Map(p.days.map((d) => [d.day, d])));
+    }
+    return m;
+  }, [practitioners]);
+
+  // ONE PERSON, SEVERAL ROWS — and that is the data, not a bug.
+  //
+  // Dentally models a practitioner as a person AT A SITE, so a clinician who
+  // works at three practices holds three practitioner records with three ids.
+  // Measured on this organisation: 218 practitioner records for 193 people,
+  // and of the 15 people holding more than one, EVERY set is at distinct sites
+  // (one holds four). Merging them would be wrong — a chair at Ashford is not
+  // a chair at Barnet, and summing a person's day spans across two sites would
+  // invent availability they never had.
+  //
+  // So the rows stay separate and the SITE is appended, but only where the
+  // name alone is ambiguous. Labelling all 41 rows with a site nobody needed
+  // would be noise; labelling the three that repeat is the whole fix.
+  const rowLabel = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const p of [...practitioners, ...otherPractitioners]) {
+      seen.set(p.practitionerName, (seen.get(p.practitionerName) ?? 0) + 1);
+    }
+    return (p: UtilPractitioner): string => {
+      if ((seen.get(p.practitionerName) ?? 0) < 2) return p.practitionerName;
+      const site = p.practiceId ? practiceName.get(p.practiceId) : null;
+      return site ? `${p.practitionerName} · ${site}` : p.practitionerName;
+    };
+  }, [practitioners, otherPractitioners, practiceName]);
+
+  // THE CHART SERIES. The numbers underneath are the server's; filtering by
+  // practitioner and bucketing are presentation choices, so they belong here.
+  //
+  // On a week grouping it reads the week-aligned window above (falling back to
+  // the primary one until that lands, so the chart never blanks); on a day
+  // grouping it reads exactly what the rest of the page reads.
+  const chartSeries = useMemo(() => {
+    const source = weekAligned
+      ? [...(weekData?.practitioners ?? practitioners), ...(weekData?.otherPractitioners ?? otherPractitioners)]
+      : [...practitioners, ...otherPractitioners];
+    const from = weekAligned && weekData ? weekWindow.since : since;
+    const to = weekAligned && weekData ? weekWindow.until : until;
+    const rows = chartPractitioner === 'all'
+      // "All" means all CLINICIANS. Folding in the block-only practitioners
+      // here would divide real treatment time by reception hours — the same
+      // collapse the service guards its totals against.
+      ? (weekAligned ? (weekData?.practitioners ?? practitioners) : practitioners)
+      : source.filter((p) => p.practitionerId === chartPractitioner);
+
+    type Bucket = { key: string; usedSecs: number; availableSecs: number; heads: Set<string> };
+    const buckets = new Map<string, Bucket>();
+    // Seed EVERY bucket the window covers, so an idle week is a zero rather
+    // than a gap the line hops over.
+    for (const key of bucketKeysBetween(from, to, bucket)) {
+      buckets.set(key, { key, usedSecs: 0, availableSecs: 0, heads: new Set() });
+    }
+    for (const p of rows) {
+      for (const d of p.days) {
+        const key = bucket === 'week' ? weekStart(d.day) : d.day;
+        const b = buckets.get(key);
+        // A day outside the seeded window (the API's window and the picker's
+        // can differ by a boundary day) still belongs somewhere.
+        if (!b) {
+          buckets.set(key, {
+            key, usedSecs: d.utilisedSecs, availableSecs: d.availableSecs,
+            heads: new Set([p.practitionerId]),
+          });
+          continue;
+        }
+        // SECONDS, then round ONCE at the end. Summing the per-day rounded
+        // hours drifted: five days totalling 8.5 hours rendered as 8.6, and
+        // 17.5 as 17.6, against Dentally's 8 and 17.
+        b.usedSecs += d.utilisedSecs;
+        b.availableSecs += d.availableSecs;
+        b.heads.add(p.practitionerId);
+      }
+    }
+
+    // Contracted hours are a COMMITMENT, not a record of attendance, so the
+    // head count is the practitioners in view — not the ones who happened to
+    // work that week. Counting only those who worked made an idle week's
+    // contracted figure 0 and its shortfall 0, which reads as "nothing was
+    // owed and nothing was missed" for the very week the chart exists to show.
+    // Dentally holds it at 30 with a -30 difference; so do we.
+    const headsInView = chartPractitioner === 'all' ? rows.length : Math.min(rows.length, 1);
+
+    return [...buckets.values()]
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((b) => {
+        const used = b.usedSecs / 3600;
+        const available = b.availableSecs / 3600;
+        // In a daily bucket there is no honest divisor — nobody works a flat
+        // seven-day week — so the baseline is offered weekly only, and the
+        // control says so.
+        const contracted = hoursPerWeek > 0 && bucket === 'week' && headsInView > 0
+          ? Math.round(hoursPerWeek * headsInView * 10) / 10
+          : null;
+        return {
+          key: b.key,
+          label: bucketLabel(b.key, bucket, from, to),
+          usedHours: Math.round(used * 10) / 10,
+          // Diary-derived availability, minus what was used. Never negative on
+          // the chart: a stacked band cannot render a negative segment, and an
+          // over-booked day is shown by the contracted line instead.
+          unusedHours: Math.round(Math.max(0, available - used) * 10) / 10,
+          availableHours: Math.round(available * 10) / 10,
+          contractedHours: contracted,
+          // Used minus contracted. Positive is more hours worked than
+          // contracted, negative is a shortfall — the number this filter
+          // exists to surface.
+          differenceHours: contracted === null ? null : Math.round((used - contracted) * 10) / 10,
+          practitioners: b.heads.size,
+        };
+      });
+  }, [practitioners, otherPractitioners, weekData, weekAligned, weekWindow,
+      chartPractitioner, bucket, hoursPerWeek, since, until]);
+
+  // Daily total: a RATIO OF SUMS from the server, not a mean of the cells
+  // above it. Averaging the column would let a 45-minute list count as much as
+  // a nine-hour one.
+  const dailyTotal = useMemo(
+    () => new Map(days.map((d) => [d.day, d.utilisationPct])),
+    [days],
+  );
+
+  const leagueColumns: Column<UtilPractitioner>[] = useMemo(() => [
+    { header: 'Practitioner', render: (p) => <strong className="text-[13px]">{p.practitionerName}</strong> },
+    // The league table already carries its own Practice column below, so the
+    // name needs no suffix here.
+    // The site they worked most in this window. Shown only when the
+    // organisation has more than one, and never blank: an unmapped day says so
+    // rather than leaving a gap that reads as missing data.
+    ...(practices.length > 1
+      ? [{
+          header: 'Practice',
+          render: (p: UtilPractitioner) => (
+            <span className="text-ink-muted">
+              {p.practiceId ? (practiceName.get(p.practiceId) ?? 'Unknown site') : 'Not mapped'}
+            </span>
+          ),
+        } as Column<UtilPractitioner>]
+      : []),
+    {
+      header: 'Utilisation',
+      render: (p) => (
+        <span className="font-semibold tabular-nums" style={{ color: bandColour(p.utilisationPct) ?? 'var(--ink-muted)' }}>
+          {pct(p.utilisationPct)}
+        </span>
+      ),
+    },
+    { header: 'Days', render: (p) => <span className="tabular-nums">{p.daysWorked}</span> },
+    { header: 'Used', render: (p) => <span className="tabular-nums">{hrs(p.utilisedHours)}</span> },
+    { header: 'Available', render: (p) => <span className="tabular-nums">{hrs(p.availableHours)}</span> },
+    { header: 'Patients', render: (p) => <span className="tabular-nums">{p.patientAppts.toLocaleString('en-GB')}</span> },
+    // money() renders null as an em dash — a practitioner with no invoicing
+    // has no rate, and "£0.00/h" would be a figure nobody recorded.
+    { header: 'Fees', render: (p) => <span className="tabular-nums">{money(p.revenuePence)}</span> },
+    { header: 'Per used hour', render: (p) => <span className="tabular-nums">{money(p.revenuePerUtilisedHourPence)}</span> },
+  ], [practices.length, practiceName]);
+
+  return (
+    <div className="mx-auto w-full space-y-4" style={{ maxWidth: 1600 }}>
+      <PageHeader
+        title="Practitioner utilisation"
+        subtitle={isLoading || !t
+          ? 'Loading utilisation…'
+          : `${t.practitioners} practitioners · ${t.daysWorked.toLocaleString('en-GB')} working days · `
+            + `${hrs(t.utilisedHours)} of ${hrs(t.availableHours)} used`}
+      />
+
+      {/* The product's shared Scope + Period control: practice pills and
+          This month / This year / Pick month / Custom. `dentallyOnly` because
+          every figure on this page comes from the Dentally diary — offering a
+          practice with no Dentally site would render a confident empty grid
+          rather than saying it is not connected. */}
+      <ScopePeriodBar dentallyOnly />
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-panel border border-border bg-card px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="util-basis">Available time</label>
+          <select
+            id="util-basis"
+            value={basis}
+            onChange={(e) => setBasis(e.target.value as UtilBasis)}
+            className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+          >
+            <option value="rota">Rostered hours — Dentally's own rota</option>
+            <option value="clinical">Clinical window — first to last patient</option>
+            <option value="span">Diary span — first to last of anything</option>
+          </select>
+        </div>
+        <span className="text-ink-muted text-[11px]">
+          {basis === 'rota'
+            ? 'The hours each practitioner was actually rostered for. This is the figure Dentally divides by.'
+            : basis === 'clinical'
+              ? 'Blocks before the first patient and after the last do not count as available.'
+              : 'Every block in the diary counts as available, so this reads lower.'}
+        </span>
+        <span className="text-ink-muted ml-auto text-[11px]">
+          {win.label} · <span className="tabular-nums">{since} → {until}</span>
+          {isFetching ? ' · updating…' : ''}
+        </span>
+      </div>
+
+      {/* Said once, plainly, rather than left for someone to discover by
+          comparing against Dentally — which is how it was found. */}
+      <p className="text-ink-muted text-[11px]">
+        {basis === 'rota'
+          ? 'Rostered hours come from Dentally\u2019s rota and match its own utilisation figure. '
+            + 'A practitioner with no rota for a day is left out of the ratio rather than counted as idle, '
+            + 'and any work done outside the rota is listed separately below.'
+          : 'Dentally divides by its own rostered hours, which you can select above. '
+            + 'These two options are what the diary alone can tell us, and both read differently.'}
+      </p>
+
+      {error && (
+        // A named failure, never a silent empty state.
+        <div className="card" style={{ padding: 12, background: '#FEF2F2', border: '1px solid #FECACA', color: '#991B1B', fontSize: 12 }}>
+          Could not load utilisation: {(error as Error).message}
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiTile
+          label="Chair utilisation"
+          value={t ? pct(t.utilisationPct) : DASH}
+          delta={t ? `${hrs(t.utilisedHours)} used of ${hrs(t.availableHours)}` : undefined}
+          info="Patient-appointment time divided by the practitioners' booked day span, pooled across every working day in the window. A ratio of sums, not an average of daily percentages — averaging lets a 45-minute list count as much as a nine-hour one."
+        />
+        <KpiTile
+          label="Unused chair time"
+          value={t ? hrs(t.unusedHours) : DASH}
+          delta={t && t.unusedHoursValuePence !== null
+            ? `worth ~${money(t.unusedHoursValuePence)} at your own rate`
+            : undefined}
+          deltaTone="down"
+          info="Available time with no patient in it. Valued at the fees this practice actually achieves per used hour — an arithmetic restatement of the gap, not a target or a promise."
+        />
+        <KpiTile
+          label="Fees per used hour"
+          value={t ? money(t.revenuePerUtilisedHourPence) : DASH}
+          delta={t && t.revenuePerAvailableHourPence !== null
+            ? `${money(t.revenuePerAvailableHourPence)} per available hour`
+            : undefined}
+          info="Fees invoiced by these practitioners in the window, divided by the hours they spent with patients. The second figure spreads the same fees across all available hours, which is what the practice actually earns on the time it opens."
+        />
+        <KpiTile
+          label="Patient appointments"
+          value={t ? t.patientAppts.toLocaleString('en-GB') : DASH}
+          delta={t && t.revenuePence !== null ? `${money(t.revenuePence)} invoiced` : undefined}
+          info="Appointments with a patient attached. Blocks, meetings and holidays are excluded — they are unused time, not utilisation."
+        />
+      </div>
+
+      {/* The exclusion, stated. A headline that quietly dropped four fifths of
+          the diary would be indistinguishable from one that did not. */}
+      {data && basis !== 'rota' && data.excluded.blockOnlyDays > 0 && (
+        <div className="text-ink-muted rounded-panel border border-border bg-card px-3 py-2 text-[12px]">
+          <strong>{data.excluded.blockOnlyDays.toLocaleString('en-GB')}</strong> practitioner-days
+          {' '}({hrs(data.excluded.blockOnlyHours)} across {data.excluded.practitioners} practitioners)
+          {' '}held only blocks, meetings or holidays and no patients. On this basis they are counted
+          {' '}as <strong>not working</strong> rather than 0% utilised: a diary with no patients in it
+          {' '}cannot tell us whether the clinician was rostered. Switch to rostered hours, which can.
+        </div>
+      )}
+
+      {/* The rota basis reconciles out loud: rostered hours, plus work done off
+          the rota, plus people the rota does not cover. Absorbing any of these
+          into the ratio would flatter it; dropping them silently would hide
+          real work. */}
+      {data && basis === 'rota' && (
+        <div className="text-ink-muted space-y-1 rounded-panel border border-border bg-card px-3 py-2 text-[12px]">
+          <div>
+            Measured over <strong>{data.totals.daysWorked.toLocaleString('en-GB')}</strong> rostered
+            {' '}practitioner-days ({hrs(data.totals.availableHours)}), of which
+            {' '}{hrs(data.excluded.rotaBreakHours)} are rostered breaks — the figure above is gross
+            {' '}of them, which is how Dentally counts it.
+          </div>
+          {data.excluded.offRotaDays > 0 && (
+            <div>
+              <strong>{data.excluded.offRotaDays.toLocaleString('en-GB')}</strong> further
+              {' '}practitioner-days fell on a day the rota marks as off, carrying
+              {' '}{hrs(data.excluded.offRotaUtilisedHours)} of patient time. That work is real but has
+              {' '}no rostered window to divide by, so it is listed here rather than counted.
+            </div>
+          )}
+          {data.excluded.noRotaDays > 0 && (
+            <div>
+              <strong>{data.excluded.noRotaDays.toLocaleString('en-GB')}</strong> practitioner-days have
+              {' '}no rota entry at all ({hrs(data.excluded.noRotaUtilisedHours)} of patient time).
+              {' '}Nothing is assumed for them.
+            </div>
+          )}
+          {data.excluded.practitioners > 0 && (
+            <div>
+              {data.excluded.practitioners} rostered {data.excluded.practitioners === 1 ? 'person' : 'people'}
+              {' '}treated no patients in this window and are excluded entirely. The rota covers all staff,
+              {' '}not only clinicians, and counting them would divide real treatment time by reception hours.
+            </div>
+          )}
+        </div>
+      )}
+
+      <Card>
+        <div className="border-b border-border px-4 py-3">
+          <h2 className="text-[15px] font-semibold">Chair time availability and usage</h2>
+          <p className="text-ink-muted text-[12px]">
+            Green is time with a patient in the chair; the band above it is available time left empty.
+          </p>
+
+          {/* Chart-local filters. The DATE stays global at the top so it drives
+              every panel at once; these narrow only this chart. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div className="flex items-center gap-2">
+              <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="chart-pract">Practitioner</label>
+              <select
+                id="chart-pract"
+                value={chartPractitioner}
+                onChange={(e) => setChartPractitioner(e.target.value)}
+                className="max-w-[220px] truncate rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+              >
+                <option value="all">All practitioners</option>
+                {pickerPractitioners.map((p) => (
+                  <option key={p.practitionerId} value={p.practitionerId}>{rowLabel(p)}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="chart-bucket">Group by</label>
+              <select
+                id="chart-bucket"
+                value={bucket}
+                onChange={(e) => setBucket(e.target.value as 'day' | 'week')}
+                className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-[13px] transition-colors hover:border-brand-200"
+              >
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label className="text-ink-muted shrink-0 text-xs font-semibold" htmlFor="chart-contract">Working</label>
+              <input
+                id="chart-contract"
+                type="number"
+                min={0}
+                max={80}
+                step={1}
+                value={hoursPerWeek || ''}
+                placeholder="off"
+                onChange={(e) => setHoursPerWeek(Math.max(0, Math.min(80, Number(e.target.value) || 0)))}
+                className="w-[74px] rounded-lg border border-border bg-card px-2 py-1.5 text-[13px]"
+              />
+              <span className="text-ink-muted text-xs">hours per week, per practitioner</span>
+            </div>
+          </div>
+
+          {hoursPerWeek > 0 && bucket === 'day' && (
+            // Refusing to divide rather than inventing a divisor. Nobody works
+            // a flat seven-day week, and any daily split of a weekly contract
+            // would be a number we made up.
+            <p className="text-ink-muted mt-1.5 text-[11px]">
+              A contracted figure is weekly, so the baseline shows on the <strong>Week</strong> grouping only.
+            </p>
+          )}
+        </div>
+
+        <div className="p-3" style={{ height: 320 }}>
+          {isLoading ? (
+            <Skeleton className="h-full w-full" />
+          ) : chartSeries.length === 0 ? (
+            <EmptyState message="No working days in this window." />
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartSeries} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="var(--ink-muted)" minTickGap={16} />
+                <YAxis tick={{ fontSize: 11 }} stroke="var(--ink-muted)"
+                  label={{ value: 'Hours', angle: -90, position: 'insideLeft', style: { fontSize: 11 } }} />
+                <Tooltip
+                  formatter={(v: number, name: string) => [v === null ? DASH : `${v}h`, name]}
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid var(--border)' }}
+                />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                {/* Stacked: used + unused = available, so the top of the band
+                    IS the available line. Drawing availability as its own
+                    overlapping area would let the two disagree visually. */}
+                <Area type="monotone" dataKey="usedHours" name="Used" stackId="1"
+                  stroke="#1B9C8A" fill="#1B9C8A" fillOpacity={0.85} />
+                <Area type="monotone" dataKey="unusedHours" name="Unused" stackId="1"
+                  stroke="#F0A93B" fill="#F0A93B" fillOpacity={0.5} />
+                {/* The contracted baseline is a LINE, not a band: it is a
+                    different kind of quantity from the diary-derived areas —
+                    declared, not observed — and stacking it with them would
+                    imply they add up. */}
+                {hoursPerWeek > 0 && bucket === 'week' && (
+                  <Line type="monotone" dataKey="contractedHours" name="Contracted"
+                    stroke="#C25F4D" strokeWidth={2} strokeDasharray="5 4" dot={false} />
+                )}
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* Dentally's Used / Available / Difference table, which is the part
+            people actually read the numbers off. */}
+        {!isLoading && chartSeries.length > 0 && (
+          <div className="crm-board-scroll overflow-x-auto border-t border-border px-3 pb-3 pt-2">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr>
+                  <th className="text-ink-muted sticky left-0 bg-card py-1 pr-3 text-left font-semibold" style={{ minWidth: 150 }} />
+                  {chartSeries.map((b) => (
+                    <th key={b.key} className="whitespace-nowrap px-2 py-1 text-right font-semibold">{b.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3 font-semibold">Used hours</td>
+                  {chartSeries.map((b) => (
+                    <td key={b.key} className="px-2 py-1 text-right tabular-nums">{b.usedHours}</td>
+                  ))}
+                </tr>
+                <tr>
+                  <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3 font-semibold">
+                    {hoursPerWeek > 0 && bucket === 'week' ? 'Contracted hours' : 'Available hours'}
+                  </td>
+                  {chartSeries.map((b) => (
+                    <td key={b.key} className="px-2 py-1 text-right tabular-nums">
+                      {hoursPerWeek > 0 && bucket === 'week'
+                        ? (b.contractedHours ?? DASH)
+                        : b.availableHours}
+                    </td>
+                  ))}
+                </tr>
+                {hoursPerWeek > 0 && bucket === 'week' && (
+                  <tr>
+                    <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3 font-semibold">Difference</td>
+                    {chartSeries.map((b) => (
+                      <td
+                        key={b.key}
+                        className="px-2 py-1 text-right font-semibold tabular-nums"
+                        // Colour by DIRECTION, not by good or bad: more hours
+                        // than contracted is not automatically good, and fewer
+                        // is not automatically a failure. The sign is the fact.
+                        style={{ color: b.differenceHours === null ? undefined : b.differenceHours < 0 ? 'var(--danger)' : 'var(--success)' }}
+                      >
+                        {b.differenceHours === null ? DASH
+                          : `${b.differenceHours > 0 ? '+' : ''}${b.differenceHours}`}
+                      </td>
+                    ))}
+                  </tr>
+                )}
+                <tr>
+                  <td className="text-ink-muted sticky left-0 bg-card py-1 pr-3">Practitioners</td>
+                  {chartSeries.map((b) => (
+                    <td key={b.key} className="text-ink-muted px-2 py-1 text-right tabular-nums">{b.practitioners}</td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="border-b border-border px-4 py-3">
+          <h2 className="text-[15px] font-semibold">Utilisation by practitioner and day</h2>
+          <p className="text-ink-muted text-[12px]">
+            {practiceId
+              ? 'A blank cell means the practitioner had no patient appointments that day.'
+              : 'Pick a practice above to see this grid.'}
+          </p>
+        </div>
+        {isLoading ? (
+          <div className="space-y-2 p-3">
+            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+          </div>
+        ) : !practiceId ? (
+          // ONE PRACTICE AT A TIME, deliberately.
+          //
+          // Dentally models a practitioner as a person AT A SITE, so a
+          // clinician working at three practices holds three practitioner
+          // records. Across all practices this grid repeated the same person
+          // once per site — 218 records for 193 people on this organisation —
+          // which reads as duplicated data rather than as what it is.
+          //
+          // It is also the wrong question. A chair at Ashford is not a chair
+          // at Barnet, and a row-per-person-per-site grid spanning every site
+          // has no single "Total utilisation" worth printing under it. The
+          // cards and the chart above stay group-wide; this grid is per site.
+          <EmptyState message="Choose a single practice in the bar above to see utilisation per practitioner. Across every practice the same clinician appears once for each site they work at, which makes the grid unreadable." />
+        ) : practitioners.length === 0 ? (
+          <EmptyState message="No practitioner activity at this practice in this window." />
+        ) : (
+          <div className="relative p-3">
+            {/* The grid SCROLLS, in both directions, with the practitioner
+                column, the date header and the Total row all frozen. A month
+                of columns across forty practitioners is neither a wide table
+                nor a tall one — it is both, and losing either axis while
+                reading a cell makes the cell meaningless. */}
+            <div
+              className="crm-board-scroll overflow-auto"
+              style={{ maxHeight: 460 }}
+              onMouseLeave={() => setHover(null)}
+            >
+              <table className="border-separate" style={{ borderSpacing: 2 }}>
+                <thead>
+                  <tr>
+                    <th
+                      className="text-ink-muted sticky left-0 top-0 z-30 bg-card px-2 text-right text-[11px] font-semibold"
+                      style={{ minWidth: 160 }}
+                    >
+                      Practitioner
+                    </th>
+                    {allDays.map((d) => {
+                      const { dow, dom } = dayLabel(d);
+                      return (
+                        <th
+                          key={d}
+                          className="text-ink-muted sticky top-0 z-20 bg-card px-1 text-center text-[10px] font-semibold"
+                          style={{ minWidth: 32 }}
+                        >
+                          <div>{dow}</div>
+                          <div className="tabular-nums">{dom}</div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {practitioners.map((p) => (
+                    <tr key={p.practitionerId}>
+                      <td
+                        className="sticky left-0 z-10 truncate bg-card px-2 text-right text-[12px] font-medium"
+                        title={rowLabel(p)}
+                        style={{ maxWidth: 220 }}
+                      >
+                        {rowLabel(p)}
+                      </td>
+                      {allDays.map((d) => {
+                        const cell = cells.get(p.practitionerId)?.get(d) ?? null;
+                        const c = bandColour(cell?.utilisationPct ?? null);
+                        return (
+                          <td key={d} className="text-center" style={{ width: 32, height: 28 }}>
+                            <div
+                              // Hover AND focus: the grid is keyboard-navigable,
+                              // and a card only a mouse can open is a card half
+                              // the people here cannot read.
+                              tabIndex={cell ? 0 : -1}
+                              onMouseEnter={(e) => {
+                                if (!cell) return setHover(null);
+                                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setHover({
+                                  practitionerName: rowLabel(p),
+                                  practiceName: practiceName.get(cell.practiceId ?? '') ?? null,
+                                  day: cell,
+                                  x: r.left + r.width / 2,
+                                  y: r.top,
+                                });
+                              }}
+                              onFocus={(e) => {
+                                if (!cell) return;
+                                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                                setHover({
+                                  practitionerName: rowLabel(p),
+                                  practiceName: practiceName.get(cell.practiceId ?? '') ?? null,
+                                  day: cell,
+                                  x: r.left + r.width / 2,
+                                  y: r.top,
+                                });
+                              }}
+                              onBlur={() => setHover(null)}
+                              className="flex h-[28px] w-full cursor-default items-center justify-center rounded text-[9px] font-bold transition-shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50"
+                              style={{
+                                background: c ?? 'var(--bg)',
+                                color: c ? 'white' : 'var(--ink-muted)',
+                              }}
+                            >
+                              {cell === null ? '\u00d7' : ''}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  {/* Frozen to the bottom, like the header to the top: the
+                      daily total is the row people scan against, and it is
+                      useless once it has scrolled away. */}
+                  <tr>
+                    <td className="sticky bottom-0 left-0 z-30 bg-card px-2 text-right text-[11px] font-bold">
+                      Total utilisation %
+                    </td>
+                    {allDays.map((d) => {
+                      const v = dailyTotal.get(d) ?? null;
+                      return (
+                        <td
+                          key={d}
+                          className="sticky bottom-0 z-20 bg-card text-center text-[10px] font-semibold tabular-nums"
+                          style={{ width: 32 }}
+                        >
+                          {v === null ? DASH : v.toFixed(0)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px]">
+              {BANDS.map((b) => (
+                <span key={b.label} className="flex items-center gap-1.5">
+                  <span className="inline-block h-3 w-3 rounded" style={{ background: b.colour }} />
+                  {b.label}
+                </span>
+              ))}
+              <span className="flex items-center gap-1.5">
+                <span className="text-ink-muted inline-block h-3 w-3 rounded text-center text-[9px] leading-3" style={{ background: 'var(--bg)' }}>
+                  &times;
+                </span>
+                Practitioner unavailable
+              </span>
+            </div>
+
+            {/* The hover card, positioned against the viewport so it is never
+                clipped by the scroller it sits inside. `pointer-events-none`
+                so it can never steal the hover that produced it. */}
+            {hover && (
+              <div
+                role="tooltip"
+                className="pointer-events-none fixed z-50 rounded-panel border border-border bg-card px-3 py-2 text-[12px] shadow-panel"
+                style={{
+                  left: Math.min(Math.max(hover.x - 130, 8), (typeof window !== 'undefined' ? window.innerWidth : 1200) - 268),
+                  top: Math.max(hover.y - 118, 8),
+                  width: 260,
+                }}
+              >
+                <div className="font-semibold">
+                  {hover.practitionerName}
+                  {hover.practiceName ? ` (${hover.practiceName})` : ''}
+                </div>
+                <div className="text-ink-muted mb-1.5 text-[11px]">{ddmmyyyy(hover.day.day)}</div>
+                <dl className="space-y-0.5">
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Utilised time</dt>
+                    <dd className="font-semibold tabular-nums">{hm(hover.day.utilisedSecs)}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Bookable time</dt>
+                    {/* Total minus utilised. Negative on an over-booked day,
+                        and it keeps the sign — clamping at zero would hide
+                        double-booking, which is the thing worth seeing. */}
+                    <dd className="font-semibold tabular-nums"
+                      style={{ color: hover.day.availableSecs - hover.day.utilisedSecs < 0 ? 'var(--danger)' : undefined }}>
+                      {hm(hover.day.availableSecs - hover.day.utilisedSecs)}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Total time</dt>
+                    <dd className="font-semibold tabular-nums">{hm(hover.day.availableSecs)}</dd>
+                  </div>
+                  <div className="mt-1 flex justify-between gap-3 border-t border-border pt-1">
+                    <dt className="text-ink-muted">Patients</dt>
+                    <dd className="font-semibold tabular-nums">{hover.day.patientAppts}</dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-muted">Fees</dt>
+                    <dd className="font-semibold tabular-nums">{money(hover.day.revenuePence)}</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="border-b border-border px-4 py-3">
+          <h2 className="text-[15px] font-semibold">Practitioner performance</h2>
+          <p className="text-ink-muted text-[12px]">
+            Ordered by utilisation. Fees are what each practitioner invoiced in this window.
+          </p>
+        </div>
+        {isLoading ? (
+          <div className="space-y-2 p-3">
+            {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
+          </div>
+        ) : practitioners.length === 0 ? (
+          <EmptyState message="No practitioner activity in this window." />
+        ) : (
+          <DataTable columns={leagueColumns} rows={practitioners} rowKey={(p) => p.practitionerId} />
+        )}
+      </Card>
+    </div>
+  );
+}

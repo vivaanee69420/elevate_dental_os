@@ -17,7 +17,7 @@ import { londonDaysAgo, londonYmd } from '../src/lib/tz.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
     integrationRepository: {
-        upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(),
+        upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), selectedAdAccountIds: vi.fn(async () => null), getByProvider: vi.fn(),
         upsertAdAccounts: vi.fn(), markAdAccountStatus: vi.fn(), listAdAccounts: vi.fn(async () => []),
     },
 }));

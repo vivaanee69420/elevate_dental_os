@@ -419,9 +419,20 @@ export default function TeamListScreen() {
                         className="inline-flex gap-3 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
                         style={{ fontSize: 12.5 }}
                       >
-                        <Link href={`/team-permissions/${m.id}`} className="text-brand">
-                          Edit
-                        </Link>
+                        {/* Nobody edits their own row — not their permissions,
+                            not their role, not their name. The server refuses
+                            it, so offering the link would only teach the admin
+                            to expect an edit that fails at save. Remove was
+                            already hidden on self for the same reason. */}
+                        {!isSelf ? (
+                          <Link href={`/team-permissions/${m.id}`} className="text-brand">
+                            Edit
+                          </Link>
+                        ) : (
+                          <span className="text-ink-muted" title="Your own account is edited by another administrator">
+                            You
+                          </span>
+                        )}
                         {!isSelf && (
                           <button
                             type="button"

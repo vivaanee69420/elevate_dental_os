@@ -1,5 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
+import { leaveSession } from '@/lib/session-boundary';
 import { useMe } from '@/hooks/useMe';
 import { NotificationBell } from '@/features/notifications/components/NotificationBell';
 import { GlobalRefresh } from '@/components/layout/global-refresh';
@@ -32,8 +33,10 @@ export function TopBar() {
   // Clear the session cookie server-side, then return to the login page.
   async function signOut() {
     await fetch('/auth/logout', { method: 'POST' });
-    router.push('/login');
-    router.refresh();
+    // Full document navigation, not router.push: a client-side one leaves the
+    // React root — and with it every cached query from this session — alive
+    // for whoever signs in next. See lib/session-boundary.ts.
+    leaveSession('/login');
   }
 
   return (

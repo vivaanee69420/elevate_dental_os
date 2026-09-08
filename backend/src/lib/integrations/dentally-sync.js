@@ -25,6 +25,8 @@
 import { integrationRepository } from "../../repositories/integration.repository.js";
 import { markBootstrapStarted, markBootstrapFinished } from './bootstrap-recovery.js';
 import { decryptSecret } from "../crypto.js";
+import { parseOpeningHours } from "../dentally-opening-hours.js";
+import { practiceOpeningHoursRepository } from "../../repositories/practice-opening-hours.repository.js";
 import * as supabase_1 from "../supabase.js";
 
 const DEFAULT_BASE = 'https://api.dentally.co/v1';
@@ -546,6 +548,220 @@ async function loadSiteMap(orgId) {
     const map = new Map();
     for (const p of data ?? []) map.set(String(p.pms_site_id), p.id);
     return map;
+}
+
+// Opening-hours-only sync — one unpaged request, so it can be run on demand
+// (a "refresh hours" action, or right after the 000180 migration) without the
+// heavy patients/appointments/invoice phases.
+export async function syncOpeningHoursOnly(orgId, integration) {
+    const base = integration.config?.base_url ?? DEFAULT_BASE;
+    const auth = await resolveDentallyAuth(orgId, integration);
+    if (!auth) return { error: 'no_auth' };
+    const siteMap = await loadSiteMap(orgId);
+    return pullOpeningHours(orgId, base, auth, siteMap);
+}
+
+// ---- practitioner rota ------------------------------------------------------
+
+// How far the nightly pull reaches. BACKWARDS, because utilisation is reported
+// over months that have already finished and a denominator covering only the
+// future would be no denominator at all; forwards, because a part-finished
+// month still needs one for the days already booked.
+export const ROTA_BACK_DAYS = 45;
+export const ROTA_FORWARD_DAYS = 60;
+// The one-time reach for history, run once per org and then recorded. 400 days
+// covers the twelve months the appointment pull already holds, plus slack.
+export const ROTA_BACKFILL_DAYS = 400;
+// The rota emits ONE ROW PER PRACTITIONER PER DAY whether they worked or not,
+// so its volume is days x roster, not days x activity: a 460-day backfill for
+// a 55-practitioner group is ~25,300 rows, or 253 pages, and an org with no
+// mapped sites pulls all of that in one pass. The shared MAX_PAGES of 100
+// would have stopped a third of the way through, logged a warning nobody
+// reads, and RETURNED NORMALLY — the backfill would then have stamped itself
+// complete over a partial history that no later run would ever go back for.
+// (The same 100-page cap silently truncated the appointment reconciler; see
+// WINDOW_RECON_MAX_PAGES.) 600 leaves room for a group twice this size.
+export const ROTA_MAX_PAGES = 600;
+
+/** `n` days from today as YYYY-MM-DD, at midday so a DST shift cannot move the date. */
+export function rotaDay(n, now = new Date()) {
+    const d = new Date(now);
+    d.setUTCHours(12, 0, 0, 0);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+}
+
+/**
+ * One Dentally rota row -> one practitioner_rota_days row.
+ *
+ * `unavailable: true` arrives with NULL times and is KEPT as a row, not
+ * dropped: a rostered day off and no rota at all are different states, and
+ * collapsing them would make an absent rota read as a day nobody worked.
+ */
+export function rotaRow(orgId, r, practiceId, siteId) {
+    const pid = r?.practitioner_id;
+    if (pid === null || pid === undefined || !r?.day) return null;
+    const off = r.unavailable === true || !r.start_time || !r.end_time;
+    let breakSecs = 0;
+    if (!off) {
+        for (const b of Array.isArray(r.breaks) ? r.breaks : []) {
+            const from = Date.parse(b?.start_time);
+            const to = Date.parse(b?.end_time);
+            if (Number.isFinite(from) && Number.isFinite(to) && to > from) {
+                breakSecs += Math.round((to - from) / 1000);
+            }
+        }
+    }
+    return {
+        organisation_id: orgId,
+        pms_practitioner_id: String(pid),
+        day: r.day,
+        practice_id: practiceId ?? null,
+        pms_site_id: siteId ?? null,
+        starts_at: off ? null : r.start_time,
+        ends_at: off ? null : r.end_time,
+        break_secs: breakSecs,
+        unavailable: off,
+        rota_external_id: r.id ? String(r.id) : null,
+        synced_at: new Date().toISOString(),
+    };
+}
+
+/**
+ * The rota, from GET /rota_practitioner_diaries.
+ *
+ * `after` and `before` are REQUIRED. Without them the endpoint returns 400
+ * with an empty body, which is what made it look absent through 29 candidate
+ * paths and 48 parameter combinations.
+ *
+ * Fetched ONCE PER MAPPED SITE, because a rota row carries no site_id in its
+ * body while site_id IS a query filter. That is only sound because the sites
+ * partition the feed, which was measured rather than assumed: per-site counts
+ * summed to 1,705 against an unfiltered 1,705, union 1,705, no orphans. An org
+ * with no mapped sites falls back to ONE unfiltered pull and leaves
+ * practice_id null, which reads as "group-wide" and never as a practice.
+ *
+ * `include_inactive_practitioners` is ON, and not to pull in more people: a
+ * clinician who left mid-year is inactive today but still holds the rostered
+ * days behind last spring's numbers, and without the flag those days vanish
+ * from history (measured: 47 of 62 practitioners covered without it, 57 with).
+ * The staff it adds who never treat a patient are excluded at REPORT time,
+ * where the whole window is in hand, not here.
+ */
+/**
+ * `meta.total` for a rota window, in one request. Returns null when Dentally
+ * omits it — an absent total is unknown, and unknown must not be compared
+ * against as if it were zero.
+ */
+async function fetchRotaTotal(orgId, base, auth, params) {
+    const url = new URL(`${base}/rota_practitioner_diaries`);
+    for (const [k, v] of Object.entries({ ...params, page: 1, per_page: 1 })) {
+        url.searchParams.set(k, String(v));
+    }
+    const { res } = await dentallyFetchWithRefresh(orgId, auth, url);
+    if (!res.ok) throw new Error(`Dentally /rota_practitioner_diaries -> HTTP ${res.status}`);
+    const total = (await res.json())?.meta?.total;
+    return Number.isFinite(total) ? total : null;
+}
+
+async function pullRota(orgId, base, auth, siteMap, { since, until } = {}) {
+    const after = since ?? rotaDay(-ROTA_BACK_DAYS);
+    const before = until ?? rotaDay(ROTA_FORWARD_DAYS);
+    const targets = siteMap.size
+        ? [...siteMap.entries()].map(([siteId, practiceId]) => ({ siteId, practiceId }))
+        : [{ siteId: null, practiceId: null }];
+
+    let synced = 0;
+    let fetched = 0;
+    const problems = [];
+
+    for (const { siteId, practiceId } of targets) {
+        const params = { after, before, include_inactive_practitioners: 'true' };
+        if (siteId) params.site_id = siteId;
+        let rows;
+        let expected = null;
+        try {
+            // What the server says the window holds, BEFORE walking it. One
+            // extra request per site, and the only way to know a walk finished:
+            // the pager stops at its page cap by logging and returning
+            // normally, so a truncated pull is indistinguishable from a
+            // complete one at this level.
+            expected = await fetchRotaTotal(orgId, base, auth, params);
+            rows = await fetchAllPages(orgId, base, '/rota_practitioner_diaries', auth, params, null, ROTA_MAX_PAGES);
+        } catch (err) {
+            // Reported, never silently treated as "this site has no rota" — an
+            // empty result and a failed request must not look the same.
+            problems.push(`site ${siteId ?? 'all'}: ${err?.message || err}`);
+            continue;
+        }
+        // Short of what the server promised: store what came back, but SAY SO,
+        // so the caller does not record a partial history as backfilled.
+        if (expected !== null && rows.length < expected) {
+            problems.push(`site ${siteId ?? 'all'}: fetched ${rows.length} of ${expected} rows`);
+        }
+        fetched += rows.length;
+        const mapped = rows.map((r) => rotaRow(orgId, r, practiceId, siteId)).filter(Boolean);
+        if (mapped.length) {
+            synced += await upsertChunked(
+                'practitioner_rota_days', mapped,
+                'organisation_id,pms_practitioner_id,day',
+            );
+        }
+    }
+
+    if (problems.length) console.warn('[dentally] rota pull problems:', problems.join('; '));
+    return { since: after, until: before, fetched, synced, problems };
+}
+
+/**
+ * Rota-only sync, so history can be backfilled or one window refreshed without
+ * the heavy patients/appointments/invoice phases. Mirrors syncOpeningHoursOnly.
+ */
+export async function syncRotaOnly(orgId, integration, window = {}) {
+    const base = integration.config?.base_url ?? DEFAULT_BASE;
+    const auth = await resolveDentallyAuth(orgId, integration);
+    if (!auth) return { error: 'no_auth' };
+    const siteMap = await loadSiteMap(orgId);
+    return pullRota(orgId, base, auth, siteMap, window);
+}
+
+// Opening hours from /sites — the capacity source behind Chair Utilisation.
+//
+// Sites are mapped to practices by pms_site_id, NEVER by name: two tenants can
+// name a practice the same thing, and one tenant can rename one.
+//
+// A weekday the owner has hand-corrected (source='manual') is left alone. A
+// correction that tonight's sync silently undid would be worse than no editor
+// at all.
+async function pullOpeningHours(orgId, base, auth, siteMap) {
+    const sites = await fetchOnePage(base, '/sites', auth, {}).catch(() => []);
+    let practices = 0;
+    let days = 0;
+    const problems = [];
+
+    for (const site of sites) {
+        const practiceId = siteMap.get(String(site?.id));
+        if (!practiceId) continue; // site not mapped to a practice — nothing to attribute to
+
+        const { rows, errors } = parseOpeningHours(site?.opening_hours);
+        for (const e of errors) {
+            // Surfaced, not swallowed: an unparseable time renders as closed, so
+            // without this an upstream format change would look like a practice
+            // that simply shut down.
+            problems.push(`site ${site?.id} ${e.day}: ${e.reason}`);
+        }
+
+        const manual = await practiceOpeningHoursRepository.manualWeekdays(orgId, practiceId);
+        const writable = rows.filter((r) => !manual.has(r.weekday));
+        if (!writable.length) continue;
+
+        await practiceOpeningHoursRepository.upsertWeek(orgId, practiceId, writable, 'dentally');
+        practices++;
+        days += writable.length;
+    }
+
+    if (problems.length) console.warn('[dentally] opening-hours parse problems:', problems.join('; '));
+    return { practices, days, problems };
 }
 
 // Build { dentally practitioner id -> associates.id } for an org so appointments
@@ -2342,6 +2558,42 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         onProgress({ expectedPhases });
 
         const siteMap = await loadSiteMap(orgId);
+        // Opening hours: one unpaged request, so it runs on every sync rather
+        // than only on connect. It feeds Chair Utilisation's capacity, and it
+        // is wrapped because a failure here must never fail a clinical pull —
+        // a stale opening hour is a smaller problem than a missing patient.
+        try {
+            await pullOpeningHours(orgId, base, auth, siteMap);
+        } catch (err) {
+            console.warn(`[dentally] opening-hours pull failed (non-fatal): ${err?.message || err}`);
+        }
+        // The practitioner rota: the denominator behind every utilisation
+        // figure on the product. Wrapped for the same reason as opening hours,
+        // and like it run on EVERY sync rather than only on connect, because
+        // /rota_practitioner_diaries offers no updated_after — the window has
+        // to be re-read rather than topped up.
+        //
+        // The first run for an org reaches back a year instead of six weeks,
+        // and records that it did. Utilisation is reported over months that
+        // have already closed, so an org whose rota only began yesterday would
+        // show every past month as "no rota" — which on screen is
+        // indistinguishable from a practice where nobody worked.
+        try {
+            const firstRota = !integration.config?.rota_backfilled_at;
+            const rota = await pullRota(orgId, base, auth, siteMap,
+                firstRota ? { since: rotaDay(-ROTA_BACKFILL_DAYS) } : {});
+            // Only recorded when the deep pull came back CLEAN. A partial
+            // backfill that stamped itself done would leave a permanent hole
+            // no later run would ever go back for.
+            if (firstRota && !rota.problems.length) {
+                await integrationRepository.mergeConfig(orgId, 'dentally', {
+                    rota_backfilled_at: new Date().toISOString(),
+                    rota_backfilled_since: rota.since,
+                });
+            }
+        } catch (err) {
+            console.warn(`[dentally] rota pull failed (non-fatal): ${err?.message || err}`);
+        }
         // Practitioners first (cheap, no separate progress phase) so the
         // appointment pull can resolve associate_id. ALWAYS pull the FULL roster
         // (no updated_after filter): the practitioner set is tiny (a handful of

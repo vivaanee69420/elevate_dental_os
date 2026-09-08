@@ -59,6 +59,16 @@ function makeAccount(overrides = {}) {
   };
 }
 
+// next_page is a COMPLETE URL in CallRail's real responses, not an opaque page
+// token. This fixture used to emit 'p2'/'p3', which quietly agreed with the
+// bug: the code assigned next_page to a `page` query PARAMETER, and a bare
+// token in a page= parameter looks perfectly reasonable. A live 183-day pull
+// therefore sent page=https://api.callrail.com/... and CallRail answered 400,
+// losing the WHOLE pull while every test passed. The fixture now carries the
+// shape the vendor actually sends (rules.md rule 11).
+const nextUrlFor = (n) =>
+  `https://api.callrail.com/v3/a/ACC1/calls.json?company_id=ACT1&page=${n}&per_page=250&relative_pagination=true`;
+
 function page(rows, { hasNext = false, next = null } = {}) {
   return { has_next_page: hasNext, next_page: next, calls: rows };
 }
@@ -83,8 +93,8 @@ describe('fetchAllCalls — pagination', () => {
 
   it('follows next_page across a short-then-full-then-short run and stops the instant has_next_page is false (asserts REQUEST COUNT)', async () => {
     const pages = [
-      page([{ id: 'C1' }], { hasNext: true, next: 'p2' }), // SHORT page, has_next_page true -> must continue
-      page(Array.from({ length: 250 }, (_, i) => ({ id: `C2-${i}` })), { hasNext: true, next: 'p3' }), // FULL (per_page) page, still has_next_page true -> must continue
+      page([{ id: 'C1' }], { hasNext: true, next: nextUrlFor(2) }), // SHORT page, has_next_page true -> must continue
+      page(Array.from({ length: 250 }, (_, i) => ({ id: `C2-${i}` })), { hasNext: true, next: nextUrlFor(3) }), // FULL (per_page) page, still has_next_page true -> must continue
       page([{ id: 'C3' }], { hasNext: false, next: null }), // has_next_page false -> must stop HERE, regardless of row count
     ];
     let n = 0;
@@ -95,6 +105,48 @@ describe('fetchAllCalls — pagination', () => {
     expect(requests).toBe(3);
     expect(global.fetch).toHaveBeenCalledTimes(3);
     expect(calls.length).toBe(1 + 250 + 1);
+  });
+
+  // THE REGRESSION. The first page always worked, so this only ever bit a
+  // company whose window held more than one page of 250 — the busier
+  // practices, and every 183-day reconnect — and it lost the entire pull, not
+  // the extra page.
+  it('follows the next_page URL itself, never stuffing it into a page= parameter', async () => {
+    const pages = [
+      page([{ id: 'C1' }], { hasNext: true, next: nextUrlFor(2) }),
+      page([{ id: 'C2' }], { hasNext: false, next: null }),
+    ];
+    let n = 0;
+    const urls = [];
+    global.fetch = vi.fn(async (u) => { urls.push(String(u)); return { ok: true, status: 200, json: async () => pages[n++] }; });
+
+    await fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' });
+
+    expect(urls[1]).toBe(nextUrlFor(2));
+    // The shape CallRail rejected: a whole URL as the value of page=.
+    expect(new URL(urls[1]).searchParams.get('page')).toBe('2');
+    expect(urls[1]).not.toMatch(/page=https/);
+  });
+
+  // A URL out of an API response, followed unexamined, is a request to
+  // wherever that response says — with this account's Authorization attached.
+  it('refuses a next_page that points off the CallRail API host', async () => {
+    const pages = [page([{ id: 'C1' }], { hasNext: true, next: 'https://evil.example.com/steal' })];
+    global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => pages[0] }));
+    await expect(fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' }))
+      .rejects.toThrow(/outside the API host/);
+  });
+
+  // "HTTP 400" is what an owner saw for the pager bug above; CallRail had said
+  // why, in the body, and the message threw it away.
+  it('puts CallRail\u2019s own explanation in the error, not just the status', async () => {
+    global.fetch = vi.fn(async () => ({
+      ok: false, status: 400,
+      text: async () => '{"error":"invalid page"}',
+      json: async () => ({}),
+    }));
+    await expect(fetchAllCalls('key', 'ACC1', 'ACT1', { startDate: '2026-06-01', endDate: '2026-09-01' }))
+      .rejects.toThrow(/HTTP 400 — .*invalid page/);
   });
 
   it('does NOT keep paging just because a page was full — stops on the FIRST page when has_next_page is false even at max per_page', async () => {
@@ -110,7 +162,7 @@ describe('fetchAllCalls — pagination', () => {
 
   it('does NOT stop early just because a page was short — has_next_page true keeps it going', async () => {
     const pages = [
-      page([{ id: 'C1' }], { hasNext: true, next: 'p2' }), // only 1 row, but more pages exist
+      page([{ id: 'C1' }], { hasNext: true, next: nextUrlFor(2) }), // only 1 row, but more pages exist
       page([], { hasNext: false, next: null }), // CallRail's own empty-but-final page
     ];
     let n = 0;
@@ -136,7 +188,7 @@ describe('fetchAllCalls — pagination', () => {
     // is still fast (no real network/timers).
     global.fetch = vi.fn(async () => ({
       ok: true, status: 200,
-      json: async () => page([{ id: 'C' }], { hasNext: true, next: 'still-more' }),
+      json: async () => page([{ id: 'C' }], { hasNext: true, next: nextUrlFor(9) }),
     }));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 

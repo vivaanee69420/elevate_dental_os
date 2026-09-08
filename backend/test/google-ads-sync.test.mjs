@@ -6,7 +6,7 @@ import { supaRec } from './setup.js';
 import { encryptSecret } from '../src/lib/crypto.js';
 
 vi.mock('../src/repositories/integration.repository.js', () => ({
-    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), getByProvider: vi.fn(), upsertAdAccounts: vi.fn(), markAdAccountStatus: vi.fn(), listAdAccounts: vi.fn(async () => []), mergeConfig: vi.fn() },
+    integrationRepository: { upsert: vi.fn(), markFailed: vi.fn(), markSynced: vi.fn(), selectedAdAccountIds: vi.fn(async () => null), getByProvider: vi.fn(), upsertAdAccounts: vi.fn(), markAdAccountStatus: vi.fn(), listAdAccounts: vi.fn(async () => []), mergeConfig: vi.fn() },
 }));
 
 const { syncOneOrg, syncAllOrgs, __test } = await import('../src/lib/integrations/google-ads-sync.js');
@@ -559,5 +559,59 @@ describe('a partial pull is never recorded as a clean one', () => {
         // it teaches the owner to ignore the field.
         const [, , warning] = integrationRepository.markSynced.mock.calls.at(-1);
         expect(warning).toBeNull();
+    });
+});
+
+// The Integrations panel's tick boxes govern the pull on BOTH ad platforms —
+// this is the Google half of the same fix. Measured before it existed: one org
+// reported on 3 of its 10 Google accounts and pulled all 10, carrying
+// GBP 87,925.62 of excluded brands' spend into its own figures.
+describe('ad account selection', () => {
+    it('queries ONLY the customers ticked on the Integrations panel', async () => {
+        integrationRepository.selectedAdAccountIds.mockResolvedValueOnce(['2220000000']);
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        const asked = [];
+        global.fetch = vi.fn(async (url) => {
+            asked.push(String(url));
+            return { ok: true, status: 200, json: async () => ([{ results: [{
+                campaign: { id: 1, name: 'Brand' }, segments: { date: '2026-05-10' },
+                metrics: { costMicros: 1_000_000, impressions: 1, clicks: 1, conversions: 0 },
+            }] }]) };
+        });
+
+        const res = await syncOneOrg('org-1', freshCreds(['1110000000', '2220000000']));
+        expect(res.customers).toBe(1);
+        // Metrics only. The account-DISCOVERY calls still touch every id, and
+        // must: the panel cannot offer a tick box for an account it has never
+        // heard of. It is the expensive per-account metrics pull that the
+        // selection governs.
+        const metrics = asked.filter((u) => u.includes('searchStream'));
+        expect(metrics.some((u) => u.includes('2220000000'))).toBe(true);
+        expect(metrics.some((u) => u.includes('1110000000'))).toBe(false);
+    });
+
+    it('pulls every reachable customer when nothing has been discovered yet', async () => {
+        integrationRepository.selectedAdAccountIds.mockResolvedValueOnce(null);
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ([{ results: [] }]) }));
+        const res = await syncOneOrg('org-1', freshCreds(['1110000000', '2220000000']));
+        expect(res.customers).toBe(2);
+    });
+
+    // A practice-mapped account the owner UNTICKED must not raise "reconnect
+    // with a Google account that can see them" — they can see it; it was
+    // excluded on purpose. Reachability and selection are different questions.
+    it('does not tell the owner to reconnect over an account they unticked', async () => {
+        integrationRepository.selectedAdAccountIds.mockResolvedValueOnce(['2220000000']);
+        integrationRepository.listAdAccounts.mockResolvedValueOnce([
+            { customer_id: '1110000000', name: 'Other brand', practice_id: 'p-1', is_selected: false },
+            { customer_id: '2220000000', name: 'Ours', practice_id: 'p-2', is_selected: true },
+        ]);
+        supaRec.resultProvider = () => ({ data: [], error: null });
+        global.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ([{ results: [] }]) }));
+
+        await syncOneOrg('org-1', freshCreds(['1110000000', '2220000000']));
+        const warning = integrationRepository.markSynced.mock.calls.at(-1)[2];
+        expect(warning ?? '').not.toMatch(/not reachable by this login/i);
     });
 });

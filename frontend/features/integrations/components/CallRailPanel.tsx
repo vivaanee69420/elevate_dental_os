@@ -34,6 +34,7 @@ import {
   useDeleteAccountPermanently,
   usePractices,
 } from '../hooks';
+import { countOf } from '@/lib/format';
 import PanelCard from './PanelCard';
 
 const STATUS_CHIP: Record<IntegrationStatus, ChipColour> = {
@@ -195,7 +196,7 @@ export default function CallRailPanel() {
       if (failed.length === 0) {
         resetAddForm();
         setShowAdd(false);
-        setNotice(`Connected ${okCount} compan${okCount === 1 ? 'y' : 'ies'} — pulling recent call history now. Refresh in a moment, or use Sync now.`);
+        setNotice(`Connected ${countOf(okCount, 'company', 'companies')} — pulling recent call history now. Refresh in a moment, or use Sync now.`);
       } else {
         const companyName = (id: string) => discovered?.flatMap((a) => a.companies).find((c) => c.id === id)?.name ?? id;
         const detail = failed.map((f) => `${companyName(f.companyId)}: ${f.error}`).join(' · ');
@@ -475,17 +476,25 @@ export default function CallRailPanel() {
           )}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <button
-              onClick={onSyncAll}
-              disabled={syncAll.isPending}
-              style={{
-                padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none',
-                background: 'var(--brand)', color: 'white',
-                cursor: syncAll.isPending ? 'default' : 'pointer', opacity: syncAll.isPending ? 0.6 : 1,
-              }}
-            >
-              {syncAll.isPending ? 'Syncing…' : 'Sync now — every company'}
-            </button>
+            {/* "Every company" is a control with nothing to control when there
+                is one company: it duplicates the Sync button on that row, and
+                offering the same action twice under two names invites the
+                reader to look for a difference that is not there. The same
+                reasoning removed the lone "All practices" pill from the scope
+                bar of an org with a single practice. */}
+            {accounts.length > 1 && (
+              <button
+                onClick={onSyncAll}
+                disabled={syncAll.isPending}
+                style={{
+                  padding: '6px 12px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: 'none',
+                  background: 'var(--brand)', color: 'white',
+                  cursor: syncAll.isPending ? 'default' : 'pointer', opacity: syncAll.isPending ? 0.6 : 1,
+                }}
+              >
+                {syncAll.isPending ? 'Syncing…' : `Sync now — all ${accounts.length} companies`}
+              </button>
+            )}
           </div>
 
           <table className="w-full">

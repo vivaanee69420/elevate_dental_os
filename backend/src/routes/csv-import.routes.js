@@ -13,7 +13,11 @@ import * as auth_1 from "../middleware/auth.js";
 import { csvImportController } from "../controllers/csv-import.controller.js";
 
 const router = (0, express_1.Router)();
-const gate = (0, auth_1.requireRole)('owner', 'practice_manager');
+// system.manage — the key the Data Hub / Imports nav item uses. A practice
+// manager has no route to this screen, so aligning the API with the nav is the
+// point rather than a side effect: it was reachable by URL to a role the
+// matrix never granted it to.
+const gate = (0, auth_1.requirePermission)('system.manage');
 
 router.post('/', gate, (0, async_handler_1.asyncHandler)(csvImportController.upload));
 router.get('/', gate, (0, async_handler_1.asyncHandler)(csvImportController.list));
