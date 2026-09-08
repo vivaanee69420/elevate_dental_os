@@ -130,6 +130,11 @@ export const SECTIONS = [
     keys: ['system.manage', 'growth.view', 'crm.view', 'finance.view', 'marketing.view'],
   },
   { prefix: '/imports', keys: ['system.manage'] },
+  // Team administration. Locked on the keys its own routes require and its nav
+  // item names — all three used to disagree. Deliberately NOT module-gated
+  // elsewhere: an organisation with every module switched off must still be
+  // able to administer its own people.
+  { prefix: '/admin/team', keys: ['users.manage', 'users.invite'] },
   { prefix: '/crm/templates', keys: ['crm.manage'] },
   { prefix: '/crm/settings', keys: ['crm.manage'] },
   { prefix: '/call-reporting', keys: ['growth.view'] },
@@ -158,7 +163,6 @@ export const SECTIONS = [
 export const UNLISTED_BY_DESIGN = {
   '/billing': 'system.manage at the route; no nav item of its own, so there is no nav key to mirror.',
   '/admin/permissions': 'Owner-only by design (grant-ceiling: editing the matrix must not be delegable).',
-  '/admin/team': 'Team administration; must stay reachable for an org whose modules are off.',
   '/admin/logs': 'Agency-actor only; process-wide log files carry every tenant\'s data.',
   '/agency': 'Agency-actor only, gated inside the router.',
   '/files': 'Upload/download used from many sections; no single owning key.',

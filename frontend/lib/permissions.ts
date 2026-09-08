@@ -155,7 +155,12 @@ export const ROUTE_PERMISSION: Record<string, PermissionKey> = {
   // System
   integrations: 'system.manage',
   'data-hub': 'system.manage',
-  'team-permissions': 'permissions.manage',
+  // users.manage, matching what the API now requires. It said
+  // permissions.manage while the routes checked the owner ROLE, so the two
+  // named different things and neither was the one being enforced. Owner-only
+  // by default, so in a sub-account the admin is the only person who sees it —
+  // and the only one who can be given it.
+  'team-permissions': 'users.manage',
   settings: 'system.manage',
 
   // Data Room — raw source rows for the analyst role (owner also holds the key)

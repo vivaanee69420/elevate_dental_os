@@ -5,7 +5,8 @@
 // left the section key false, and the page rendered and then answered
 // "Insufficient permissions" to every request it made — reported by the owner
 // as "I gave the permission and it says insufficient permission".
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
+import './setup.js';
 import {
   resolveEffectivePermissions, defaultPermissionsForRole, pageKey, PAGE_SECTION,
 } from '../src/lib/permissions.js';
@@ -113,3 +114,52 @@ describe('action permissions are grantable and owner-only by default', () => {
     expect(p['finance.view']).toBe(false);
   });
 })
+
+// Who may grant what. An admin ticking their own boxes is not administration.
+//
+// The repository is stubbed to a fellow OWNER as the target, because that is
+// the case the new rule is about: an org's own admin may still administer
+// everyone below them, and it is owner-on-owner that becomes an agency power.
+vi.mock('../src/repositories/auth.repository.js', () => ({
+  authRepository: {
+    getUserInOrgs: vi.fn(async (_orgIds, id) => ({
+      id, organisation_id: 'org-1', role: 'owner', permissions: {},
+    })),
+  },
+}));
+
+describe('an admin cannot grant to themselves, and sits below the agency', () => {
+  let teamService;
+  const caller = () => ({ id: 'me', role: 'owner', permissions: { 'finance.view': true } });
+  const scope = (agencyWide = false) => ({ orgIds: ['org-1'], agencyWide, agencyOrgId: null });
+  const body = { permissions: { 'finance.view': true } };
+
+  beforeAll(async () => { ({ teamService } = await import('../src/services/team.service.js')); });
+
+  // The hole this closes: assertGrantCeiling returns early for an owner and
+  // canManageTarget('owner','owner') is true, so an admin could open their own
+  // row and tick anything at all.
+  it('refuses a permission change on your own row', async () => {
+    await expect(teamService.save(scope(), caller(), 'me', body))
+      .rejects.toThrow(/your own permissions/i);
+  });
+
+  // Same call twice, only agencyWide differing, so it cannot pass for some
+  // unrelated reason in the fixture.
+  it('refuses one admin changing another admin unless the caller is the agency', async () => {
+    await expect(teamService.save(scope(false), caller(), 'other-owner', body))
+      .rejects.toThrow(/agency administrator/i);
+    await expect(teamService.save(scope(true), caller(), 'other-owner', body))
+      .rejects.not.toThrow(/agency administrator/i);
+  });
+
+  // Narrow on purpose: an admin still administers everyone below them.
+  it('still lets an admin edit a non-owner', async () => {
+    const { authRepository } = await import('../src/repositories/auth.repository.js');
+    authRepository.getUserInOrgs.mockResolvedValueOnce({
+      id: 'u9', organisation_id: 'org-1', role: 'reception', permissions: {},
+    });
+    await expect(teamService.save(scope(false), caller(), 'u9', body))
+      .rejects.not.toThrow(/agency administrator|your own permissions/i);
+  });
+});

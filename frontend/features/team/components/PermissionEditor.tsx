@@ -16,6 +16,7 @@
 import { useMemo, useState } from 'react';
 import { NAV } from '@/lib/nav';
 import { pageKey, PAGE_ENFORCED } from '@/lib/permissions';
+import { useMe, isAgencyActor } from '@/hooks/useMe';
 
 export interface PermissionEditorProps {
   /** Fully resolved map for this person, before any unsaved edits. */
@@ -176,9 +177,37 @@ export function PermissionEditor({
   // whose tabs are all off can still be opened and granted one tab.
   const [forcedOpen, setForcedOpen] = useState<Record<string, boolean>>({});
 
+  // YOU CANNOT OFFER WHAT YOU DO NOT HOLD. The server refuses a grant above
+  // the caller's own ceiling, but a screen that shows the checkbox anyway
+  // teaches the admin to expect it and then fails them at save time — and a
+  // list of everything the product can do is itself a disclosure to somebody
+  // who holds none of it. So the row is not rendered at all.
+  //
+  // An agency actor is exempt: administering a sub-account's people is the
+  // power that role exists for, and their own home-org grants say nothing
+  // about what the sub-account may do.
+  const { data: me } = useMe();
+  const unrestricted = isAgencyActor(me);
+  const mayGrant = (key: string) =>
+    unrestricted
+    // Permissions is a Partial<Record<PermissionKey, …>>; page:<id> keys are
+    // resolved by the server and are not in that union, so this reads the map
+    // as the string-keyed object it is on the wire.
+    || (me?.permissions as Record<string, boolean> | undefined)?.[key] === true;
+
   const sections = useMemo(
-    () => NAV.map((s) => ({ label: s.label, tabs: s.items.map((i) => ({ id: i.id, label: i.label })) })),
-    [],
+    () => NAV
+      .map((s) => ({
+        label: s.label,
+        tabs: s.items
+          .filter((i) => mayGrant(pageKey(i.id)))
+          .map((i) => ({ id: i.id, label: i.label })),
+      }))
+      // A section whose every tab is hidden is not an empty section, it is a
+      // section this admin has no business seeing.
+      .filter((s) => s.tabs.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [me?.permissions, unrestricted],
   );
 
   /** Current value of a tab key, unsaved edits first. */
@@ -199,9 +228,9 @@ export function PermissionEditor({
 
   // The same search box filters the actions, so a person looking for "export"
   // finds it without knowing whether it is a tab or a capability.
-  const actionRows = (actions ?? []).filter(
-    (a) => !q || a.label.toLowerCase().includes(q) || a.key.toLowerCase().includes(q),
-  );
+  const actionRows = (actions ?? [])
+    .filter((a) => mayGrant(a.key))
+    .filter((a) => !q || a.label.toLowerCase().includes(q) || a.key.toLowerCase().includes(q));
 
   return (
     <div>

@@ -158,7 +158,10 @@ export const PAGE_SECTION = {
   'training-onetoone': 'training.view',
   'integrations': 'system.manage',
   'data-hub': 'system.manage',
-  'team-permissions': 'permissions.manage',
+  // users.manage, matching the routes (/admin/team) and the nav. All three
+  // named different things before: nav said permissions.manage, the routes
+  // checked the owner ROLE, and the key being enforced was neither.
+  'team-permissions': 'users.manage',
   'settings': 'system.manage',
   'data-summaries': 'data.export',
   'data-dentally': 'data.export',

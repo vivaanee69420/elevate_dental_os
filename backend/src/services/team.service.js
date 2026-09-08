@@ -261,6 +261,35 @@ export const teamService = {
       throw new AppError('You cannot change your own role', 400);
     }
 
+    // NOR YOUR OWN PERMISSIONS. assertGrantCeiling below returns early for an
+    // owner, and canManageTarget('owner', 'owner') is true, so an admin could
+    // open their own row in the Team screen and tick anything they liked.
+    // Granting yourself a permission is not administration, it is the absence
+    // of it: whatever the answer, the person deciding must not be the person
+    // it is about. Profile and password stay yours.
+    if (caller.id === userId && body.permissions !== undefined) {
+      throw new AppError('You cannot change your own permissions — ask an account administrator', 403);
+    }
+
+    // AN ADMIN SITS BELOW THE AGENCY. An organisation's own owner administers
+    // the people under them; who administers the OWNERS is the agency, so
+    // owner-on-owner permission changes are an agency-actor power. Without
+    // this, two admins in one organisation can grant each other anything, and
+    // the hierarchy exists in the nav only.
+    //
+    // Deliberately narrow: it fires only for permission or role changes on a
+    // fellow owner, so an owner still edits every non-owner in their account,
+    // and every profile field on anyone. An organisation with no agency above
+    // it is unaffected in practice — its owner already holds every key, so
+    // there is nothing an owner-on-owner grant could add.
+    const touchingRights = body.permissions !== undefined || body.role !== undefined;
+    if (touchingRights && target.role === 'owner' && caller.id !== userId && !scope.agencyWide) {
+      throw new AppError(
+        'Only an agency administrator can change an owner\u2019s role or permissions',
+        403,
+      );
+    }
+
     for (const key of Object.keys(body.permissions || {})) {
       if (!isValidPermission(key)) throw new AppError(`Unknown permission: ${key}`, 400);
     }
