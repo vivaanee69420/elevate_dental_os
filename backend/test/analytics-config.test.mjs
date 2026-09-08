@@ -103,21 +103,48 @@ describe('chair_config', () => {
     expect(c.isDefault).toBe(false);
   });
 
-  it('chairAnalytics honours saved openHrs/weeks in capacity', async () => {
+  it('chairAnalytics annualises with saved weeksYr, and IGNORES openHrs/daysWk', async () => {
+    // Capacity now comes from the practice's REAL opening hours x its chairs,
+    // so openHrs and daysWk no longer feed it: they were an assumption standing
+    // in for a fact we can now read from Dentally. weeksYr still applies —
+    // holiday allowance IS a genuine assumption.
+    //
+    // openHrs is deliberately set to an absurd 10 here: under the old lineage
+    // it would have produced 6 chairs x 10 h x 230 days = 13,800 h/yr. It must
+    // now change nothing.
     const PRACTICES = [{ id: 'p1', name: 'A', kind: 'practice', chairs: 6, assumed_util_pct: 80 }];
+    const PAGED = new Set(['practice_chairs', 'practice_opening_hours', 'chair_utilisation']);
+    const reads = new Map();
     supaRec.rpcProvider = () => ({ data: [], error: null });
     supaRec.resultProvider = (q) => {
+      const n = reads.get(q.table) ?? 0;
+      reads.set(q.table, n + 1);
+      const page = (rows) => ({ data: PAGED.has(q.table) && n > 0 ? [] : rows, error: null });
       if (q.table === 'practices') return { data: PRACTICES, error: null };
-      // p1 needs a manual grid to be "live" (empty grid -> zero capacity).
-      if (q.table === 'chair_utilisation') return { data: [{ practice_id: 'p1', booked_minutes: 1000, available_minutes: 2000 }], error: null };
+      if (q.table === 'practice_chairs') return page([{ id: 'c1', practice_id: 'p1', active: true }]);
+      if (q.table === 'practice_opening_hours') {
+        // Open Monday 09:00-17:00 only -> 480 min/wk of capacity.
+        return page([{ id: 'h1', practice_id: 'p1', weekday: 1, open_minute: 540, close_minute: 1020 }]);
+      }
+      if (q.table === 'chair_utilisation') {
+        // All three open slots entered -> 100% coverage, so money is computed.
+        return page([
+          { id: 'u1', practice_id: 'p1', chair_id: 'c1', weekday: 1, slot: 'morning', booked_minutes: 60, revenue_pence: 0 },
+          { id: 'u2', practice_id: 'p1', chair_id: 'c1', weekday: 1, slot: 'midday', booked_minutes: 90, revenue_pence: 0 },
+          { id: 'u3', practice_id: 'p1', chair_id: 'c1', weekday: 1, slot: 'afternoon', booked_minutes: 90, revenue_pence: 0 },
+        ]);
+      }
       if (q.table === 'chair_config') return { data: { open_hrs: 10, weeks_yr: 46, days_wk: 5, bench_occ_pct: 88, bench_rev_hr_pence: 30000 }, error: null };
       return { data: [], error: null };
     };
     const r = await svc.chairAnalytics(ORG, { scope: 'all', now: () => new Date(Date.UTC(2026, 4, 15)) });
     expect(r.applicable).toBe(true);
-    // capHrsYr = chairs(6) * openHrs(10) * workDays(46*5=230) = 13800
-    expect(r.practices[0].capHrsYr).toBe(13800);
+    // 480 available min/wk = 8 h -> 8 x weeksYr(46) = 368 h/yr. NOT 13,800.
+    expect(r.practices[0].capHrsYr).toBe(368);
+    expect(r.practices[0].coveragePct).toBe(100);
+    // The saved config is still returned — weeksYr and the benchmarks are read.
     expect(r.config.openHrs).toBe(10);
+    expect(r.config.weeksYr).toBe(46);
   });
 });
 

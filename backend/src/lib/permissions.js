@@ -31,6 +31,10 @@ export const PERMISSION_CATALOG = {
   'valuation.edit': 'Edit valuation inputs (EBITDA, drivers, sale plan)',
   'businesshealth.manage': 'Manage Business Health setup & targets',
   'operations.view': 'View operations (associates, staff, chair, UDA)',
+  // Viewing operations and REWRITING them are different powers. Until this key
+  // existed, operations.view granted both, so anyone who could read a
+  // practice's chair grid could also overwrite its whole week.
+  'operations.edit': 'Edit operations data (chair utilisation, chairs, opening hours)',
   // The Overview tabs that are NOT finance surfaces (Task Manager,
   // Mastermind AI). The finance-backed Overview tabs (Command Centre,
   // Business Hub, Daily Cockpit, Practice Deep Dive, AI Analyst, Day)
@@ -189,6 +193,7 @@ export const DEFAULT_ROLE_PERMISSIONS = {
   owner: PERMISSION_KEYS.reduce((m, k) => ((m[k] = true), m), {}),
   practice_manager: {
     'operations.view': true,
+    'operations.edit': true,
     'overview.view': true,
     'growth.view': true,
     'marketing.view': true,

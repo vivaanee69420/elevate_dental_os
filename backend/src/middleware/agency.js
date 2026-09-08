@@ -54,6 +54,31 @@ export const requireAgencyOwner = gate('requireAgencyOwner');
 //
 // Subaccount -> practice and ad account -> practice stay requireAgencyActor:
 // those decide how an agency's client data is attributed.
+// Chair utilisation is a BOTH feature. The sub-account's own owner or practice
+// manager maintains their operational data, and an agency actor switched into
+// that sub-account may edit it too. requireAgencyActor alone would leave a
+// tenant unable to maintain their own week; requirePermission alone would stop
+// an agency admin helping a client who has granted them no role.
+//
+// Named, because requirePermission and requireRole both return ANONYMOUS
+// closures — a structural route test cannot tell two anonymous gates apart, so
+// a route can silently carry the wrong one.
+export function requirePermissionOrAgencyActor(permissionKey) {
+    const fn = async (req, res, next) => {
+        if (req.user?.permissions?.[permissionKey] === true) return next();
+        try {
+            if (await isAgencyActor(req)) return next();
+        } catch (err) {
+            req.log?.warn({ err }, 'permission-or-agency gate lookup failed');
+        }
+        return res.status(403).json({ error: 'Insufficient permissions' });
+    };
+    Object.defineProperty(fn, 'name', {
+        value: `requirePermissionOrAgencyActor:${permissionKey}`,
+    });
+    return fn;
+}
+
 export async function requireOwnerOrAgencyActor(req, res, next) {
     if (req.user?.role === 'owner') return next();
     try {

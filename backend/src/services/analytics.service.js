@@ -13,6 +13,8 @@ import * as associate_repository_1 from "../repositories/associate.repository.js
 import * as payRun_repository_1 from "../repositories/pay-run.repository.js";
 import * as valuationInputs_repository_1 from "../repositories/valuationInputs.repository.js";
 import * as chairConfig_repository_1 from "../repositories/chairConfig.repository.js";
+import * as chair_capacity_service_1 from "./chair-capacity.service.js";
+import * as chair_metrics_1 from "../lib/chair-metrics.js";
 import * as plSheet_repository_1 from "../repositories/plSheet.repository.js";
 import { boardReportRepository } from "../repositories/boardReport.repository.js";
 import { marketingRepository as marketing_repository_1 } from "../repositories/marketing.repository.js";
@@ -82,13 +84,21 @@ export const analyticsService = {
     //
     // DATA LINEAGE:
     //   revenue   = REAL (trailing-12mo settled receipts per practice).
-    //   occupancy = the MANUAL chair-utilisation grid (booked/available minutes,
-    //               owner-maintained — intentional single source of truth).
-    //               No grid data for a practice -> blank: zero capacity/occupancy/
-    //               cost (no assumption), flagged occupancySource='none'. The
-    //               practice goes live only once its grid is filled.
-    //   occupancySource: 'manual' (grid) | 'none' (empty grid).
-    // Cost-of-empty / recoverable are modelled off occupancy + chair capacity.
+    //   capacity  = the practice's REAL opening hours (practice_opening_hours,
+    //               synced from Dentally /sites, hand-editable) x its chairs
+    //               (practice_chairs). Not chair_config's 8h x 5 days.
+    //   occupancy = booked minutes over DERIVED available minutes, across the
+    //               cells that have actually been entered.
+    //   occupancySource: 'grid' (opening hours known) | 'none' (no hours -> every
+    //               figure null, never a confident zero).
+    //
+    // Occupancy and money come from the SAME cell set. They used not to:
+    // occupancy came from the entered cells while cost-of-empty and recoverable
+    // came from chair_config's full-year capacity, so Ashford's 28-hour week was
+    // valued as an 80-hour one and reported GBP 230,041 recoverable off 14%
+    // coverage. Every figure now carries its coverage, and the money is withheld
+    // (null) below COVERAGE_THRESHOLD_PCT.
+    //
     // OCPSPD + profit-per-chair-hour still deferred.
     async chairAnalytics(orgId, { scope = 'all', recoverPctPoints = 10, since: winSince, until: winUntil, now = () => new Date() } = {}) {
         const resolved = await this.resolveScope(orgId, scope);
@@ -112,85 +122,70 @@ export const analyticsService = {
             s.setUTCFullYear(s.getUTCFullYear() - 1);
             sinceIso = s.toISOString();
         }
-        const [revRows, gridRows, config] = await Promise.all([
+        const config = await this.getChairConfig(orgId);
+        const [revRows, metricsBy] = await Promise.all([
             analytics_repository_1.analyticsRepository.settledRevenueByPractice(orgId, sinceIso, untilIso),
-            analytics_repository_1.analyticsRepository.chairUtilisationRows(orgId),
-            this.getChairConfig(orgId),
+            chair_capacity_service_1.chairCapacityService.metricsByPractice(orgId, practices.map((p) => p.id), config),
         ]);
         const revByPractice = new Map(revRows.map((r) => [r.practice_id, Number(r.pence) || 0]));
-        // Per-practice manual occupancy = Σ booked / Σ available. The chair count
-        // is the DISTINCT chair_name in the grid (the owner-maintained source of
-        // truth) — not the stale practices.chairs field, so adding a surgery row
-        // scales capacity immediately.
-        const grid = new Map(); // practiceId -> { booked, available, revenue, chairs:Set }
-        for (const g of gridRows) {
-            const a = grid.get(g.practice_id) || { booked: 0, available: 0, revenue: 0, chairs: new Set() };
-            a.booked += g.booked_minutes || 0;
-            a.available += g.available_minutes || 0;
-            a.revenue += g.revenue_pence || 0;
-            if (g.chair_name) a.chairs.add(g.chair_name);
-            grid.set(g.practice_id, a);
-        }
-        // Yield per booked chair-hour from the owner-entered grid revenue
-        // (Σ revenue / Σ booked hrs — period-independent £/hr). The manual source
-        // of truth, replacing the settled-receipts-derived yield on this screen.
-        const yieldPerHrPence = (gm) => {
-            const bookedHrs = gm.booked / 60;
-            return bookedHrs > 0 ? Math.round(gm.revenue / bookedHrs) : 0;
-        };
 
+        // Annualise the ENTERED-cell week. Capacity used to come from
+        // chair_config (chairs x openHrs x weeksYr x daysWk) while occupancy
+        // came from the entered cells, so the two described different practices
+        // and the money was computed off the larger one. Both now come from the
+        // same cells, which is what makes the figures reconcile.
+        const hrsYr = (minutesWk) => Math.round((minutesWk / 60) * config.weeksYr);
+        const toRow = (m) => ({
+            chairs: m.chairs,
+            occupancyPct: m.occupancyPct,
+            capHrsYr: hrsYr(m.availableMinutesWk),
+            bookedHrsYr: hrsYr(m.bookedMinutesWk),
+            emptyHrsYr: hrsYr(m.emptyMinutesWk),
+            revPerBookedHrPence: m.revPerBookedHrPence,
+            lostPotentialYrPence: m.lostPotentialYrPence,
+            recoverRevYrPence: m.recoverRevYrPence,
+            // Coverage travels with every figure, so a reader can see whether a
+            // practice has described its whole week or one Monday morning.
+            openCells: m.openCells,
+            enteredCells: m.enteredCells,
+            coveragePct: m.coveragePct,
+            closedCellEntries: m.closedCellEntries,
+            overbookedCells: m.overbookedCells,
+            hasOpeningHours: m.hasOpeningHours,
+        });
         const rows = practices.map((p) => {
-            const annualRevenuePence = revByPractice.get(p.id) || 0;
-            const gm = grid.get(p.id);
-            const hasManual = !!gm && gm.available > 0;
-            if (!hasManual) {
-                // No manual chair-utilisation grid -> honest blank: zero capacity,
-                // occupancy and cost (no 80% fallback). The practice only becomes
-                // "live" once its grid is filled in Chair Utilisation. Real revenue
-                // is preserved on the row but yields nothing without booked hours.
-                const stats = (0, formulas_1.calculateChairStats)({ chairs: 0, utilPct: 0, annualRevenuePence, config });
-                return { id: p.id, name: p.name, utilAssumed: false, occupancySource: 'none', annualRevenuePence, ...stats };
-            }
-            const utilPct = Math.min(100, Math.round((gm.booked / gm.available) * 1000) / 10);
-            // Distinct chairs in the grid is the live chair count; fall back to the
-            // practices.chairs field only if no chair_name was recorded.
-            const chairs = gm.chairs.size || p.chairs || 0;
-            const stats = (0, formulas_1.calculateChairStats)({
-                chairs, utilPct, annualRevenuePence,
-                revPerBookedHrPence: yieldPerHrPence(gm), config,
-            });
-            return { id: p.id, name: p.name, utilAssumed: false, occupancySource: 'manual', annualRevenuePence, ...stats };
+            const m = metricsBy.get(p.id);
+            return {
+                id: p.id,
+                name: p.name,
+                utilAssumed: false,
+                // 'none' means no opening hours at all — capacity is unknown,
+                // so every figure on the row is null rather than a confident £0.
+                occupancySource: m.hasOpeningHours ? 'grid' : 'none',
+                annualRevenuePence: revByPractice.get(p.id) || 0,
+                ...toRow(m),
+            };
         });
 
-        // Group rollup — sum hours/£, blended occupancy + yield/hr. Blended yield
-        // comes from the grid revenue across in-scope practices (Σ revenue / Σ
-        // booked hrs), matching the per-practice manual yield.
-        const sum = (f) => rows.reduce((s, r) => s + f(r), 0);
-        const capHrsYr = sum((r) => r.capHrsYr);
-        const bookedHrsYr = sum((r) => r.bookedHrsYr);
-        const annualRevenuePence = sum((r) => r.annualRevenuePence);
-        const groupOccupancyPct = capHrsYr > 0 ? Math.round((bookedHrsYr / capHrsYr) * 1000) / 10 : 0;
-        let groupGridRevenue = 0, groupGridBookedMin = 0;
-        for (const p of practices) {
-            const gm = grid.get(p.id);
-            if (gm && gm.available > 0) { groupGridRevenue += gm.revenue; groupGridBookedMin += gm.booked; }
-        }
-        const blendedRevPerBookedHrPence = groupGridBookedMin > 0
-            ? Math.round(groupGridRevenue / (groupGridBookedMin / 60)) : 0;
+        // Group rollup sums the entered-cell MINUTES and re-derives the blended
+        // figures from those sums — never an average of averages, which would
+        // weight a one-cell practice equally with a fully-entered one.
+        const groupMetrics = (0, chair_metrics_1.rollupChairMetrics)(
+            practices.map((p) => metricsBy.get(p.id)), config,
+        );
         const group = {
-            chairs: sum((r) => r.chairs),
-            capHrsYr,
-            bookedHrsYr,
-            emptyHrsYr: sum((r) => r.emptyHrsYr),
-            occupancyPct: groupOccupancyPct,
-            lostPotentialYrPence: sum((r) => r.lostPotentialYrPence),
-            recoverRevYrPence: sum((r) => r.recoverRevYrPence),
-            revPotentialYrPence: sum((r) => r.revPotentialYrPence),
-            blendedRevPerBookedHrPence,
+            ...toRow(groupMetrics),
+            blendedRevPerBookedHrPence: groupMetrics.revPerBookedHrPence,
         };
-        const recovery = (0, formulas_1.chairRecovery)({
-            capHrsYr, upliftPctPoints: recoverPctPoints,
-            revPerBookedHrPence: blendedRevPerBookedHrPence, currentOccupancyPct: groupOccupancyPct,
+
+        // Recovery is unknowable without an occupancy to climb from. Returning
+        // zeros here would read as "there is nothing to win back", which is the
+        // opposite of "we do not yet know".
+        const recovery = groupMetrics.occupancyPct == null ? null : (0, formulas_1.chairRecovery)({
+            capHrsYr: group.capHrsYr,
+            upliftPctPoints: recoverPctPoints,
+            revPerBookedHrPence: groupMetrics.revPerBookedHrPence ?? 0,
+            currentOccupancyPct: groupMetrics.occupancyPct,
         });
 
         return {
@@ -200,6 +195,7 @@ export const analyticsService = {
             practices: rows,
             group,
             recovery,
+            coverageThresholdPct: chair_metrics_1.COVERAGE_THRESHOLD_PCT,
             // Deferred: need per-practice opex + treatment-minute sourcing.
             ocpspd: null,
             profitPerChairHour: null,

@@ -25,6 +25,8 @@
 import { integrationRepository } from "../../repositories/integration.repository.js";
 import { markBootstrapStarted, markBootstrapFinished } from './bootstrap-recovery.js';
 import { decryptSecret } from "../crypto.js";
+import { parseOpeningHours } from "../dentally-opening-hours.js";
+import { practiceOpeningHoursRepository } from "../../repositories/practice-opening-hours.repository.js";
 import * as supabase_1 from "../supabase.js";
 
 const DEFAULT_BASE = 'https://api.dentally.co/v1';
@@ -546,6 +548,45 @@ async function loadSiteMap(orgId) {
     const map = new Map();
     for (const p of data ?? []) map.set(String(p.pms_site_id), p.id);
     return map;
+}
+
+// Opening hours from /sites — the capacity source behind Chair Utilisation.
+//
+// Sites are mapped to practices by pms_site_id, NEVER by name: two tenants can
+// name a practice the same thing, and one tenant can rename one.
+//
+// A weekday the owner has hand-corrected (source='manual') is left alone. A
+// correction that tonight's sync silently undid would be worse than no editor
+// at all.
+async function pullOpeningHours(orgId, base, auth, siteMap) {
+    const sites = await fetchOnePage(base, '/sites', auth, {}).catch(() => []);
+    let practices = 0;
+    let days = 0;
+    const problems = [];
+
+    for (const site of sites) {
+        const practiceId = siteMap.get(String(site?.id));
+        if (!practiceId) continue; // site not mapped to a practice — nothing to attribute to
+
+        const { rows, errors } = parseOpeningHours(site?.opening_hours);
+        for (const e of errors) {
+            // Surfaced, not swallowed: an unparseable time renders as closed, so
+            // without this an upstream format change would look like a practice
+            // that simply shut down.
+            problems.push(`site ${site?.id} ${e.day}: ${e.reason}`);
+        }
+
+        const manual = await practiceOpeningHoursRepository.manualWeekdays(orgId, practiceId);
+        const writable = rows.filter((r) => !manual.has(r.weekday));
+        if (!writable.length) continue;
+
+        await practiceOpeningHoursRepository.upsertWeek(orgId, practiceId, writable, 'dentally');
+        practices++;
+        days += writable.length;
+    }
+
+    if (problems.length) console.warn('[dentally] opening-hours parse problems:', problems.join('; '));
+    return { practices, days, problems };
 }
 
 // Build { dentally practitioner id -> associates.id } for an org so appointments
@@ -2342,6 +2383,15 @@ export async function syncOneOrg(orgId, integration, onProgress = () => {}, { fu
         onProgress({ expectedPhases });
 
         const siteMap = await loadSiteMap(orgId);
+        // Opening hours: one unpaged request, so it runs on every sync rather
+        // than only on connect. It feeds Chair Utilisation's capacity, and it
+        // is wrapped because a failure here must never fail a clinical pull —
+        // a stale opening hour is a smaller problem than a missing patient.
+        try {
+            await pullOpeningHours(orgId, base, auth, siteMap);
+        } catch (err) {
+            console.warn(`[dentally] opening-hours pull failed (non-fatal): ${err?.message || err}`);
+        }
         // Practitioners first (cheap, no separate progress phase) so the
         // appointment pull can resolve associate_id. ALWAYS pull the FULL roster
         // (no updated_after filter): the practitioner set is tiny (a handful of
