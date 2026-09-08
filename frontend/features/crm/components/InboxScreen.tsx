@@ -498,49 +498,37 @@ export default function InboxScreen() {
           {/* Pager. The list is bounded and SAYS so, with the real total
               beside it — the difference between showing a page and quietly
               being a page. */}
+          {/* A compact pager: the conversation list is a narrow column, so the
+              full shared Pagination (numbered pages plus a size picker) would
+              not fit beside it. It still states the real total, which is the
+              part that matters — this list used to BE a page in silence. */}
           {matchingTotal > 0 && (
-            <div
-              className="flex"
-              style={{
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 10px',
-                borderTop: '1px solid var(--border)',
-                fontSize: 11,
-              }}
-            >
-              <span className="text-ink-muted">
+            <div className="flex items-center justify-between gap-2 border-t border-border px-2.5 py-2 text-[11px]">
+              <span className="text-ink-muted tabular-nums">
                 {(page * PAGE_SIZE + 1).toLocaleString('en-GB')}–
                 {Math.min((page + 1) * PAGE_SIZE, matchingTotal).toLocaleString('en-GB')}
                 {' of '}
                 {matchingTotal.toLocaleString('en-GB')}
                 {isFetching ? ' · updating…' : ''}
               </span>
-              <span style={{ display: 'flex', gap: 6 }}>
+              <span className="flex gap-1.5">
                 <button
+                  type="button"
                   onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  disabled={page === 0}
-                  style={{
-                    padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-                    border: '1px solid var(--border)', background: 'white',
-                    cursor: page === 0 ? 'not-allowed' : 'pointer',
-                    opacity: page === 0 ? 0.45 : 1,
-                  }}
+                  disabled={page === 0 || isFetching}
+                  aria-label="Previous page"
+                  className="rounded-lg border border-border bg-card px-2.5 py-1 font-medium transition-colors hover:border-brand-200 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Previous
+                  ‹ Prev
                 </button>
                 <button
+                  type="button"
                   onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                  disabled={page >= pageCount - 1}
-                  style={{
-                    padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-                    border: '1px solid var(--border)', background: 'white',
-                    cursor: page >= pageCount - 1 ? 'not-allowed' : 'pointer',
-                    opacity: page >= pageCount - 1 ? 0.45 : 1,
-                  }}
+                  disabled={page >= pageCount - 1 || isFetching}
+                  aria-label="Next page"
+                  className="rounded-lg border border-border bg-card px-2.5 py-1 font-medium transition-colors hover:border-brand-200 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  Next
+                  Next ›
                 </button>
               </span>
             </div>

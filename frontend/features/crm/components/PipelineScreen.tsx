@@ -212,11 +212,21 @@ export default function PipelineScreen() {
           return (
             <div key={stage.key} style={{ background: 'var(--bg)', borderRadius: 10, minHeight: 480, borderTop: `4px solid ${stage.colour}` }}>
               <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 1 }}>
-                <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong style={{ fontSize: 13, color: stage.colour }}>{stage.label}</strong>
-                  <span style={{ fontSize: 11, padding: '1px 8px', background: 'white', borderRadius: 10, fontWeight: 700 }}>{stageCount.toLocaleString('en-GB')}</span>
+                <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                  <strong style={{ fontSize: 13, color: stage.colour }} title={stage.label}>{stage.label}</strong>
+                  <span className="tabular-nums" style={{ fontSize: 11, padding: '1px 8px', background: 'white', borderRadius: 10, fontWeight: 700, flexShrink: 0 }}>
+                    {stageCount.toLocaleString('en-GB')}
+                  </span>
                 </div>
-                <div className="text-ink-muted" style={{ fontSize: 10, marginTop: 2 }}>{money(stageValue)}</div>
+                <div className="text-ink-muted tabular-nums" style={{ fontSize: 10, marginTop: 2 }}>
+                  {money(stageValue)}
+                  {/* Say what the money covers, per column as well as overall.
+                      A stage of 753 leads showing £78,487 with no qualifier
+                      reads as the worth of all 753, when 684 carry no value. */}
+                  {agg && agg.valued_count > 0 && agg.valued_count < agg.lead_count && (
+                    <span> · {agg.valued_count.toLocaleString('en-GB')} valued</span>
+                  )}
+                </div>
               </div>
               <div style={{ padding: 8, display: 'grid', gap: 6 }}>
                 {isLoading ? (

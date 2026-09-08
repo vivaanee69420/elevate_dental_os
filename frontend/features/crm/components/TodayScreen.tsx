@@ -13,6 +13,7 @@ import type { Communication } from '../api';
 import { agoLabel } from '../data';
 import { formatPence } from '@/lib/format';
 import { DASH } from '@/features/marketing/_shared/format';
+import { KpiTile, PageHeader } from '@/components/ui';
 
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
@@ -108,26 +109,28 @@ export default function TodayScreen() {
   const windowLabel = WINDOWS.find((w) => w.key === windowKey)?.label ?? 'Recent';
   // Every figure here is server-aggregated. `newLeads.length` and friends are
   // the lengths of bounded lists and must never be presented as counts.
-  const counterCards = [
-    { label: `New leads · ${windowLabel}`, value: counters?.new_leads, colour: '#3B82F6' },
-    { label: 'Needs follow-up', value: counters?.follow_ups, colour: 'var(--warning)' },
-    { label: `Messages in · ${windowLabel}`, value: counters?.inbound_messages, colour: '#8B5CF6' },
-    { label: 'Active leads', value: counters?.active_leads, colour: 'var(--success)' },
+  const counterCards: { label: string; value: number | undefined; info: string }[] = [
+    { label: `New leads · ${windowLabel}`, value: counters?.new_leads,
+      info: 'Open leads created inside the selected window. Counted in SQL over every lead, not the page listed below.' },
+    { label: 'Needs follow-up', value: counters?.follow_ups,
+      info: 'Open leads older than the window that are still at new, contact attempted or contact made. The list shows the oldest 25; this counts all of them.' },
+    { label: `Messages in · ${windowLabel}`, value: counters?.inbound_messages,
+      info: 'Inbound messages received inside the selected window, across every channel.' },
+    { label: 'Active leads', value: counters?.active_leads,
+      info: 'Every open lead, regardless of when it arrived — not marked not-proceeding, treatment-completed or failed-to-attend.' },
   ];
 
   return (
     <div className="mx-auto space-y-4" style={{ maxWidth: 1280 }}>
       <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
-        <div>
-          <h1 className="display font-bold" style={{ fontSize: 28 }}>Today</h1>
-          <p className="text-ink-muted" style={{ fontSize: 13 }}>
-            {isLoading || !counters
-              ? 'Loading…'
-              : `${counters.new_leads.toLocaleString('en-GB')} new leads · `
-                + `${counters.follow_ups.toLocaleString('en-GB')} to follow up · `
-                + `${counters.inbound_messages.toLocaleString('en-GB')} messages in`}
-          </p>
-        </div>
+        <PageHeader
+          title="Today"
+          subtitle={isLoading || !counters
+            ? 'Loading…'
+            : `${counters.new_leads.toLocaleString('en-GB')} new leads · `
+              + `${counters.follow_ups.toLocaleString('en-GB')} to follow up · `
+              + `${counters.inbound_messages.toLocaleString('en-GB')} messages in`}
+        />
         <select
           value={windowKey}
           onChange={(e) => setWindowKey(e.target.value as WindowKey)}
@@ -152,17 +155,20 @@ export default function TodayScreen() {
         />
       )}
 
-      <div className="grid gap-3 mb-5" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      {/* KpiTile: the product-wide headline card, so Today matches every other
+          section instead of carrying its own stat styling. Each tile explains
+          what it counts, because three of these four numbers were wrong for
+          months and looked entirely plausible. */}
+      <div className="grid gap-3 mb-5 sm:grid-cols-2 lg:grid-cols-4">
         {counterCards.map((s) => (
-          <div key={s.label} className="card-padded" style={{ borderLeft: `3px solid ${s.colour}` }}>
-            <div className="text-ink-muted uppercase font-bold" style={{ fontSize: 10, letterSpacing: '0.05em' }}>{s.label}</div>
-            <div className="display font-bold" style={{ fontSize: 28, color: s.colour, marginTop: 4 }}>
-              {/* An em dash while the count is loading, never a placeholder 0 —
-                  a zero that later becomes 17,778 was a wrong answer, not a
-                  loading state. */}
-              {s.value === undefined ? DASH : s.value.toLocaleString('en-GB')}
-            </div>
-          </div>
+          <KpiTile
+            key={s.label}
+            label={s.label}
+            // An em dash while loading, never a placeholder 0 — a zero that
+            // later becomes 17,778 was a wrong answer, not a loading state.
+            value={s.value === undefined ? DASH : s.value.toLocaleString('en-GB')}
+            info={s.info}
+          />
         ))}
       </div>
 

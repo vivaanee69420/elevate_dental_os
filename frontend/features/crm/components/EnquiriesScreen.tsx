@@ -24,14 +24,19 @@
 // how long each enquiry has been sitting there.
 
 import { useEffect, useMemo, useState } from 'react';
-import { Card, DataTable, EmptyState, StatusBadge, Skeleton, type Column } from '@/components/ui';
+import {
+  Card, DataTable, EmptyState, KpiTile, PageHeader, Pagination, Skeleton,
+  StatusBadge, type Column,
+} from '@/components/ui';
 import { useEnquiries } from '@/features/leads/hooks';
 import type { Enquiry } from '@/features/leads/api';
 import { money, DASH } from '@/features/marketing/_shared/format';
 import { useGhlAccounts } from '@/features/integrations/hooks';
 import { SubaccountFilterBar } from '@/features/ghl/components/SubaccountFilterBar';
 
-const PAGE_SIZE = 50;
+// The server caps `limit` at 100, so the picker must not offer more — the
+// shared DEFAULT_PAGE_SIZES ends at 250, which would 400 on selection.
+const PAGE_SIZES = [25, 50, 100];
 // An enquiry untouched for three weeks is the thing this page exists to find.
 const STALE_DAYS = 21;
 
@@ -48,25 +53,6 @@ function ageLabel(days: number): string {
   return months === 1 ? '1 month' : `${months} months`;
 }
 
-/** A headline figure. `value` of undefined renders an em dash, never a 0 that
- *  later turns into 17,778 — a placeholder zero is a wrong answer, not a
- *  loading state. */
-function Stat({ label, value, sub, tone }: {
-  label: string; value: string | undefined; sub?: string; tone?: string;
-}) {
-  return (
-    <div className="card-padded" style={{ borderLeft: `3px solid ${tone ?? 'var(--border)'}` }}>
-      <div className="text-ink-muted uppercase font-bold" style={{ fontSize: 10, letterSpacing: '0.05em' }}>
-        {label}
-      </div>
-      <div className="display font-bold" style={{ fontSize: 26, marginTop: 4, color: tone ?? 'var(--ink)' }}>
-        {value ?? DASH}
-      </div>
-      {sub && <div className="text-ink-muted" style={{ fontSize: 11, marginTop: 2 }}>{sub}</div>}
-    </div>
-  );
-}
-
 export default function EnquiriesScreen() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const { data: ghlData } = useGhlAccounts();
@@ -75,7 +61,9 @@ export default function EnquiriesScreen() {
   const [debounced, setDebounced] = useState('');
   const [valuedOnly, setValuedOnly] = useState(false);
   const [openOnly, setOpenOnly] = useState(true);
-  const [page, setPage] = useState(0);
+  // Pagination is 1-indexed; the API takes an offset.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
 
   // The search runs in SQL over every enquiry, so it is debounced — each
   // keystroke is a real query, not a filter over an array already in memory.
@@ -86,21 +74,20 @@ export default function EnquiriesScreen() {
 
   // Any change to what is being asked for returns to page 1. Keeping the offset
   // lands the user on page 9 of a 2-page result, which reads as "no enquiries".
-  useEffect(() => { setPage(0); }, [debounced, valuedOnly, openOnly, accountId]);
+  useEffect(() => { setPage(1); }, [debounced, valuedOnly, openOnly, accountId, pageSize]);
 
   const { data, isLoading, error, isFetching } = useEnquiries({
     accountId,
     ...(debounced ? { search: debounced } : {}),
     valuedOnly,
     openOnly,
-    limit: PAGE_SIZE,
-    offset: page * PAGE_SIZE,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
   });
 
   const rows = data?.enquiries ?? [];
   const total = data?.total ?? 0;
   const summary = data?.summary;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const columns: Column<Enquiry>[] = useMemo(() => [
     { header: 'Name', render: (e) => <strong style={{ fontSize: 13 }}>{fullName(e)}</strong> },
@@ -145,15 +132,13 @@ export default function EnquiriesScreen() {
 
   return (
     <div className="mx-auto space-y-4" style={{ maxWidth: 1280 }}>
-      <div>
-        <h1 className="display font-bold" style={{ fontSize: 28 }}>Treatment enquiries</h1>
-        <p className="text-ink-muted" style={{ fontSize: 13 }}>
-          {isLoading || !summary
-            ? 'Loading enquiries…'
-            : `${summary.open_count.toLocaleString('en-GB')} open · `
-              + `${total.toLocaleString('en-GB')} matching the current filters`}
-        </p>
-      </div>
+      <PageHeader
+        title="Treatment enquiries"
+        subtitle={isLoading || !summary
+          ? 'Loading enquiries…'
+          : `${summary.open_count.toLocaleString('en-GB')} open · `
+            + `${total.toLocaleString('en-GB')} matching the current filters`}
+      />
 
       {ghlData && ghlData.accounts.length > 0 && (
         <SubaccountFilterBar
@@ -175,33 +160,38 @@ export default function EnquiriesScreen() {
         </div>
       )}
 
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <Stat
+      {/* KpiTile is the section-wide headline primitive — same card, spacing
+          and label treatment as every other screen in the product, rather than
+          a fifth hand-rolled stat card. An undefined value renders an em dash,
+          never a placeholder 0 that later becomes 17,778. */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiTile
           label="Open enquiries"
-          value={summary?.open_count.toLocaleString('en-GB')}
-          tone="#3B82F6"
+          value={summary?.open_count.toLocaleString('en-GB') ?? DASH}
+          info="Leads not marked not-proceeding, treatment-completed or failed-to-attend. Counted in SQL over every lead, not the page on screen."
         />
-        <Stat
+        <KpiTile
           label="Value recorded"
-          value={summary ? money(summary.value_pence) : undefined}
-          // The count travels with the money. Without it, a total reads as the
+          value={summary ? money(summary.value_pence) : DASH}
+          // The count travels with the money. Without it a total reads as the
           // worth of every enquiry rather than of the minority carrying a
           // figure — here 2,772 of 17,778.
-          sub={summary
+          delta={summary
             ? `on ${summary.valued_count.toLocaleString('en-GB')} of ${summary.open_count.toLocaleString('en-GB')}`
             : undefined}
-          tone="var(--success)"
+          info="Sum of estimated value across open enquiries. Most enquiries carry no estimated value at all, so this is the total of the minority that do — never a valuation of the whole pipeline."
         />
-        <Stat
+        <KpiTile
           label={`Waiting ${STALE_DAYS}+ days`}
-          value={summary?.stale_count.toLocaleString('en-GB')}
-          sub={stalePct !== null ? `${stalePct}% of open enquiries` : undefined}
-          tone="var(--warning)"
+          value={summary?.stale_count.toLocaleString('en-GB') ?? DASH}
+          delta={stalePct !== null ? `${stalePct}% of open enquiries` : undefined}
+          deltaTone={stalePct !== null && stalePct >= 50 ? 'down' : 'muted'}
+          info={`Open enquiries created ${STALE_DAYS} or more days ago, in London dates.`}
         />
-        <Stat
+        <KpiTile
           label="Longest wait"
-          value={summary ? ageLabel(summary.oldest_age_days) : undefined}
-          tone="var(--ink-muted)"
+          value={summary ? ageLabel(summary.oldest_age_days) : DASH}
+          info="Age of the oldest enquiry still open."
         />
       </div>
 
@@ -245,36 +235,23 @@ export default function EnquiriesScreen() {
           <DataTable columns={columns} rows={rows} rowKey={(e) => e.lead_id} />
         )}
 
-        {total > 0 && (
-          <div
-            className="flex"
-            style={{ justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--border)', fontSize: 11 }}
-          >
-            <span className="text-ink-muted">
-              {(page * PAGE_SIZE + 1).toLocaleString('en-GB')}–
-              {Math.min((page + 1) * PAGE_SIZE, total).toLocaleString('en-GB')}
-              {' of '}{total.toLocaleString('en-GB')}
-              {isFetching ? ' · updating…' : ''}
-            </span>
-            <span style={{ display: 'flex', gap: 6 }}>
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                style={{ padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600, border: '1px solid var(--border)', background: 'white', cursor: page === 0 ? 'not-allowed' : 'pointer', opacity: page === 0 ? 0.45 : 1 }}
-              >
-                Previous
-              </button>
-              <button
-                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                disabled={page >= pageCount - 1}
-                style={{ padding: '3px 9px', borderRadius: 6, fontSize: 11, fontWeight: 600, border: '1px solid var(--border)', background: 'white', cursor: page >= pageCount - 1 ? 'not-allowed' : 'pointer', opacity: page >= pageCount - 1 ? 0.45 : 1 }}
-              >
-                Next
-              </button>
-            </span>
-          </div>
-        )}
       </Card>
+
+      {/* The shared pager: numbered pages, a size picker and "Showing a–b of
+          N" — the same control the Data Room uses, rather than two bespoke
+          Previous/Next buttons. The sizes stop at 100 because the endpoint
+          rejects anything larger. */}
+      {total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          pageSizes={PAGE_SIZES}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          isFetching={isFetching}
+        />
+      )}
     </div>
   );
 }
