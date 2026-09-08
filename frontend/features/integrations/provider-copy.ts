@@ -74,3 +74,23 @@ export const GOOGLE_SERVICE_LABELS: Record<string, string> = {
 export function copyFor(id: string, fallbackLabel: string): ProviderCopy {
   return PROVIDER_COPY[id] ?? { label: fallbackLabel, description: '' };
 }
+
+// A provider KEY is not a label. `meta_ads`, `google_sheets_writer` and
+// `callrail` are database values, and three dialogs on the Integrations page
+// were printing them straight at the owner ("meta_ads is now connected").
+//
+// The lookup has to cover the OAuth return trip specifically: the provider
+// arrives there as a URL query parameter, so the registry row — which carries
+// its own label — is not necessarily to hand. Order is deliberate: tile copy
+// first (Meta Ads, Software of Excellence), then the three Google services
+// that have no tile of their own, then a humanised fallback so a provider
+// added to the backend tomorrow reads as "New provider", never `new_provider`.
+export function providerLabel(id: string, fallback?: string): string {
+  if (!id) return fallback ?? '';
+  return (
+    PROVIDER_COPY[id]?.label
+    ?? GOOGLE_SERVICE_LABELS[id]
+    ?? fallback
+    ?? id.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())
+  );
+}

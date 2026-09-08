@@ -20,3 +20,4 @@ export {
   SkeletonTable,
 } from './Skeleton';
 export { cx, SecHead, SectionCard, Kpi, DetailPanel, cockpitStyles } from './SectionKit';
+export { AlertDialog, DialogButton, type DialogTone } from './AlertDialog';
