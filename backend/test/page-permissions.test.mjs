@@ -94,8 +94,13 @@ describe('a page inherits its section until it is overridden', () => {
 
     const fin = resolve([{ permission_key: 'finance.view', allowed: true }]);
     expect(fin[pageKey('chair')]).toBe(true);
-    // ...and finance alone does not hand over the data-entry page.
-    expect(fin[pageKey('chair-utilisation')]).not.toBe(true);
+    // ...and finance alone does not hand over the operations report beside it.
+    // This named 'chair-utilisation' until that page was retired, at which
+    // point the assertion became VACUOUS: pageKey() of a page that no longer
+    // exists resolves to undefined, and `undefined` is not `true`, so it
+    // passed while testing nothing. Pointed at the page that inherited its
+    // job.
+    expect(fin[pageKey('practitioner-utilisation')]).not.toBe(true);
   });
 
   it('a page override switches ONE page off inside a granted section', () => {
