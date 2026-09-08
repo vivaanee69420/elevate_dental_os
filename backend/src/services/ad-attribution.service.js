@@ -597,7 +597,23 @@ export const adAttributionService = {
         // integration_accounts directly, so the one-subaccount-per-practice
         // unique index and any provider-side validation stay in one place.
         await integrationAccountRepository.update(orgId, accountId, { practice_id: practiceId ?? null });
-        return { ok: true };
+        // Push it onto the contacts and leads already pulled — the same thing
+        // setAdAccountPractice does for spend, and the reason this line exists.
+        //
+        // Without it the mapping applied to rows fetched AFTERWARDS and to
+        // nothing already stored, and nothing re-fetches history: a subaccount
+        // mapped today left every existing lead practice-null for ever. A live
+        // org had 2,957 leads in that state, so filtering the Marketing pages
+        // to its only practice returned 0 leads beside real spend. Non-fatal,
+        // and reported, so a restamp failure cannot undo the mapping that
+        // already succeeded.
+        let restamped = null;
+        try {
+            restamped = await adAttributionRepository.restampGhlPractices(orgId);
+        } catch (err) {
+            console.error('[ad-attribution] GHL practice restamp failed:', err.message);
+        }
+        return { ok: true, restamped };
     },
 
     async setAdAccountPractice(orgId, adAccountId, practiceId) {

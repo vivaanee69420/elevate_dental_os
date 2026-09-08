@@ -28,6 +28,7 @@ import { syncMetaDeep, LEVEL_FIELDS } from "./meta-ads-deep-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
 import { applyAccountSelection } from "./ad-account-selection.js";
 import { pipelineChannelDetectService } from "../../services/pipeline-channel-detect.service.js";
+import { singlePracticeMapService } from "../../services/single-practice-map.service.js";
 // Shared window constant lives with the Google deep-sync module (its
 // sibling) so both providers' nightly wiring read the SAME value — see
 // google-ads-sync.js for the matching import. Two providers must not drift
@@ -437,6 +438,11 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
         // once this sync has written them. An org that connected its CRM before
         // its ad platform therefore has no evidence to detect on until now, so
         // the detection is re-run here as well as after the CRM sync.
+        // A single-practice org has nothing to choose, so an ad account left
+        // unmapped there is a step that exists only to be forgotten — and an
+        // unmapped account makes every practice-scoped figure read zero. Runs
+        // AFTER this sync's rows landed, so the restamp reaches them too.
+        await singlePracticeMapService.runQuietly(orgId, 'meta_ads sync');
         await pipelineChannelDetectService.runQuietly(orgId, 'meta_ads sync');
         return { rows: all.length, accounts: accountIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), deep };
     } catch (err) {

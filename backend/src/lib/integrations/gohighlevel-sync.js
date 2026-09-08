@@ -37,6 +37,7 @@ import { GoHighLevelProvider } from './gohighlevel-provider.js';
 import { syncConversations } from './gohighlevel-conversations.js';
 import { extractAttribution } from './ghl-attribution.js';
 import { pipelineChannelDetectService } from '../../services/pipeline-channel-detect.service.js';
+import { singlePracticeMapService } from '../../services/single-practice-map.service.js';
 import * as supabase_1 from '../supabase.js';
 // Capture is a no-op when Sentry was never init'd (no SENTRY_DSN, e.g. local
 // and tests), so this is safe to import unconditionally.
@@ -1275,6 +1276,11 @@ export async function bootstrapAccount(orgId, accountId, onProgress = () => {}) 
     // never been mapped shows real ad spend beside zero leads — and reads as
     // broken when nothing is broken. Non-fatal: a connect that pulled its data
     // has succeeded whether or not the guess could be made.
+    // A subaccount mapped to no practice stamps every contact and lead it
+    // fetches with a null practice, so a practice filter returns nothing.
+    // Ordered before channel detection only because it restamps the rows the
+    // sync has just written; the two are independent.
+    await singlePracticeMapService.runQuietly(orgId, 'gohighlevel connect');
     await pipelineChannelDetectService.runQuietly(orgId, 'gohighlevel connect');
     return r;
 }
@@ -1325,6 +1331,7 @@ export async function syncAllOrgs() {
     // floor this month can cross it next, and an org that connected GHL before
     // its ad platform has no campaign ids to resolve against on day one.
     for (const orgId of new Set(accounts.map((a) => a.organisation_id))) {
+        await singlePracticeMapService.runQuietly(orgId, 'gohighlevel nightly');
         await pipelineChannelDetectService.runQuietly(orgId, 'gohighlevel nightly');
     }
     return results;

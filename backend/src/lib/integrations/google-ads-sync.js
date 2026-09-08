@@ -27,6 +27,7 @@ import { syncGoogleClicks } from "./google-ads-clicks-sync.js";
 import { partitionAccountsByCurrency } from "./ad-currency.js";
 import { applyAccountSelection } from "./ad-account-selection.js";
 import { pipelineChannelDetectService } from "../../services/pipeline-channel-detect.service.js";
+import { singlePracticeMapService } from "../../services/single-practice-map.service.js";
 
 const INCREMENTAL_DAYS = 90;  // nightly cron window: trailing 3 months (product rule)
 const FULL_DAYS = 183;        // on-connect / reconnect backfill window: 6 months (product rule)
@@ -604,6 +605,11 @@ export async function syncOneOrg(orgId, integrationArg, onProgress = () => {}, o
         // once this sync has written them. An org that connected its CRM before
         // its ad platform therefore has no evidence to detect on until now, so
         // the detection is re-run here as well as after the CRM sync.
+        // A single-practice org has nothing to choose, so an ad account left
+        // unmapped there is a step that exists only to be forgotten — and an
+        // unmapped account makes every practice-scoped figure read zero. Runs
+        // AFTER this sync's rows landed, so the restamp reaches them too.
+        await singlePracticeMapService.runQuietly(orgId, 'google_ads sync');
         await pipelineChannelDetectService.runQuietly(orgId, 'google_ads sync');
         return { rows: all.length, customers: customerIds.length, skipped, unreachable: unreachable.map((a) => a.customer_id), permanentlySkipped: [...permanent], deep, clicks };
     } catch (err) {
