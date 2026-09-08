@@ -43,6 +43,14 @@ export interface MemberDetail {
    */
   role_defaults: Record<TeamRole, Record<string, boolean>>;
   accounts: TeamAccount[];
+  /**
+   * Grantable ACTION permissions, from the backend catalog. These are the
+   * capabilities the tab list cannot express — approving payroll, exporting
+   * raw data, editing the team — and until this existed the editor could only
+   * grant tabs, so none of them could be handed out at all.
+   * Optional: an older backend does not send it, and the section then hides.
+   */
+  catalog?: Array<{ key: string; label: string }>;
 }
 
 export interface SaveMemberInput {

@@ -446,6 +446,9 @@ export default function UserEditScreen() {
                   // wrong org while the save writes the right one.
                   roleDefaults={detail.role_defaults?.[values.role] ?? {}}
                   patch={patch}
+                  // The action keys, straight from the backend catalog — a key
+                  // added there appears here without a second edit.
+                  actions={detail.catalog}
                   onChange={(key, value) => setPatch((p) => ({ ...p, [key]: value }))}
                   search={search}
                   onSearchChange={setSearch}

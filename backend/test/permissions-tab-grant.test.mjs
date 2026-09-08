@@ -70,3 +70,46 @@ describe('a granted tab carries its section key', () => {
     expect(p['system.manage']).toBe(false);
   });
 });
+
+// The action half of the matrix: keys that are capabilities rather than
+// places. Until the editor could grant these, the catalog defined them, the
+// API checked them, and nothing could hand them out — which is why several
+// routes stayed on requireRole('owner') long after the matrix existed.
+describe('action permissions are grantable and owner-only by default', () => {
+  const ACTIONS = [
+    'tasks.manage', 'wealth.edit', 'tax.manage', 'marketing.manage',
+    'growth.manage', 'payrun.manage', 'users.manage', 'users.invite',
+    'finance.edit', 'data.export',
+  ];
+
+  it('every one of them is a real catalog key', async () => {
+    const { PERMISSION_CATALOG } = await import('../src/lib/permissions.js');
+    for (const key of ACTIONS) expect(PERMISSION_CATALOG[key], key).toBeTruthy();
+  });
+
+  it('an owner holds them all', () => {
+    const owner = defaultPermissionsForRole('owner');
+    for (const key of ACTIONS) expect(owner[key], key).toBe(true);
+  });
+
+  // The point of a default: granting one has to be a deliberate act, not
+  // something a role quietly carries.
+  it('no other built-in role holds any of them by default', () => {
+    for (const role of ['practice_manager', 'reception', 'analyst']) {
+      const p = defaultPermissionsForRole(role);
+      for (const key of ACTIONS) {
+        if (role === 'analyst' && key === 'data.export') continue; // the analyst's whole job
+        expect(p[key], `${role} must not hold ${key}`).not.toBe(true);
+      }
+    }
+    expect(defaultPermissionsForRole('analyst')['data.export']).toBe(true);
+  });
+
+  it('a per-user grant turns exactly one of them on', () => {
+    const p = resolveEffectivePermissions([], { 'payrun.manage': true }, 'practice_manager');
+    expect(p['payrun.manage']).toBe(true);
+    expect(p['users.manage']).toBe(false);
+    // ...and does not drag a section in with it.
+    expect(p['finance.view']).toBe(false);
+  });
+})

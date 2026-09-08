@@ -8,6 +8,7 @@
 // always taken from the authenticated session, never from the request.
 // ============================================================================
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { defaultPermissionsForRole } from '../src/lib/permissions.js';
 
 vi.mock('../src/services/open-day.service.js', () => ({
     openDayService: {
@@ -65,8 +66,19 @@ describe('open-day routes', () => {
         handler({ user, params: {}, body: {}, query: {} }, res, () => resolve({ blocked: false }));
     });
 
-    const PM = { id: 'u2', organisation_id: 'org-a', role: 'practice_manager', permissions: { 'marketing.view': true } };
-    const OWNER = { id: 'u1', organisation_id: 'org-a', role: 'owner', permissions: { 'marketing.view': true } };
+    // Resolved maps, not hand-written ones: production never hands a gate a
+    // role with a single key in it, and a fixture that does answers a question
+    // no real request asks. An owner holds every key; a practice manager holds
+    // marketing.view but NOT marketing.manage, which is the whole point of the
+    // separation these writes now use.
+    const PM = {
+        id: 'u2', organisation_id: 'org-a', role: 'practice_manager',
+        permissions: defaultPermissionsForRole('practice_manager'),
+    };
+    const OWNER = {
+        id: 'u1', organisation_id: 'org-a', role: 'owner',
+        permissions: defaultPermissionsForRole('owner'),
+    };
 
     it('refuses a practice manager on every write', async () => {
         for (const [m, p] of [

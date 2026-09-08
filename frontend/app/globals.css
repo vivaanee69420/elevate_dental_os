@@ -196,3 +196,29 @@ h1, h2, h3, .display { font-family: var(--font-display), serif; }
 @media (prefers-reduced-motion: reduce) {
   .dialog-backdrop, .dialog-card { animation: none; }
 }
+
+/* Team → permission rows. The whole row is the hit target, so it needs to say
+   so on hover; without it a 15px checkbox is the only thing that looks
+   clickable and the row reads as static text. Reveal is on the section body,
+   which opens and closes as tabs are granted. */
+.perm-row {
+  transition: background 120ms ease;
+}
+.perm-row:hover { background: var(--bg); }
+.perm-row:has(input:focus-visible) {
+  background: var(--bg);
+  box-shadow: 0 0 0 2px var(--brand-100);
+}
+.perm-reset { transition: background 120ms ease, border-color 120ms ease; }
+.perm-row:hover .perm-reset { border-color: var(--brand-100); }
+.perm-reset:hover { background: var(--brand-50); color: var(--brand); }
+
+@keyframes perm-reveal {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.perm-reveal { animation: perm-reveal 140ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .perm-reveal { animation: none; }
+}

@@ -68,9 +68,9 @@ export const SECTIONS = [
   { prefix: '/pay-runs', keys: ['payrun.manage'] },
 
   // Overview.
-  { prefix: '/tasks', keys: ['overview.view'] },
+  { prefix: '/tasks', keys: ['overview.view', 'tasks.manage'] },
   { prefix: '/p4g-ai', keys: ['overview.view'] },
-  { prefix: '/cockpit', keys: ['finance.view'] },
+  { prefix: '/cockpit', keys: ['finance.view', 'finance.edit'] },
 
   // Finance.
   { prefix: '/monthly-financials', keys: ['finance.view'] },
@@ -78,15 +78,21 @@ export const SECTIONS = [
   { prefix: '/payments', keys: ['finance.view'] },
   // Tax reads the same revenue and profit the P&L does, so it takes the same
   // key — Reception is CRM-only (rule 5) and must never see a tax position.
-  // Its WRITES are owner-only at the route: entity type and VAT liability are
-  // declarations about the business, not a finance viewer's call.
-  { prefix: '/tax', keys: ['finance.view'] },
+  // Its WRITES carry tax.manage at the route: entity type and VAT liability
+  // are declarations about the business, not a finance viewer's call — but
+  // "not a finance viewer's call" is a permission, not a role, so an owner can
+  // hand it to whoever actually files the returns.
+  { prefix: '/tax', keys: ['finance.view', 'tax.manage'] },
 
   // CROSSOVER: Command Centre is a finance.view page and reads the lead funnel
   // and the setup banner (features/dashboard/components/DashboardScreen.tsx),
   // so finance.view has to open these two alongside their own section key.
   // Without it, gating them would break Command Centre for a finance-only user.
-  { prefix: '/leads', keys: ['crm.view', 'finance.view'] },
+  // data.export is here because /leads/export.csv requires it and the ANALYST
+  // is the person that key exists for. Without it the mount refused them
+  // before the route could allow them — a gate nobody could pass, which is a
+  // worse failure than a missing one because the route reads as if it works.
+  { prefix: '/leads', keys: ['crm.view', 'finance.view', 'data.export'] },
   { prefix: '/health', keys: ['businesshealth.manage', 'finance.view'] },
 
   // finance.view used to open this too, for Practice Deep Dive — the only
@@ -95,12 +101,16 @@ export const SECTIONS = [
   { prefix: '/growth', keys: ['growth.view'] },
 
   { prefix: '/memberships', keys: ['growth.view'] },
+  // Review SOURCE administration is growth.manage, the write half of
+  // growth.view. It was owner-only by role, which made "who looks after our
+  // Google reviews" undelegable.
+  { prefix: '/reviews', keys: ['growth.view', 'growth.manage'] },
   { prefix: '/contacts', keys: ['crm.view'] },
   { prefix: '/comms', keys: ['crm.view'] },
   { prefix: '/workflows', keys: ['crm.view'] },
   { prefix: '/training', keys: ['training.view'] },
-  { prefix: '/wealth', keys: ['wealth.view'] },
-  { prefix: '/marketing', keys: ['marketing.view'] },
+  { prefix: '/wealth', keys: ['wealth.view', 'wealth.edit'] },
+  { prefix: '/marketing', keys: ['marketing.view', 'marketing.manage'] },
   { prefix: '/debt', keys: ['intelligence.view'] },
 
   // Settings, and the endpoints other sections legitimately read from it.
@@ -133,6 +143,10 @@ export const SECTIONS = [
     keys: [
       'finance.view', 'valuation.view', 'growth.view', 'system.manage',
       'crm.view', 'intelligence.view', 'operations.view', 'overview.view',
+      // The EDIT keys, because routes in here require them: a person granted
+      // finance.edit or valuation.edit without the matching .view was refused
+      // at the mount and never reached the route that would have let them in.
+      'finance.edit', 'valuation.edit',
     ],
   },
 ];
@@ -142,8 +156,7 @@ export const SECTIONS = [
 // analysts are denied by default. Recorded here so the coverage test can tell
 // "considered and excluded" apart from "forgotten".
 export const UNLISTED_BY_DESIGN = {
-  '/reviews': 'Owner-only; its screen is not wired to a route yet.',
-  '/billing': 'Owner-only; no nav item.',
+  '/billing': 'system.manage at the route; no nav item of its own, so there is no nav key to mirror.',
   '/admin/permissions': 'Owner-only by design (grant-ceiling: editing the matrix must not be delegable).',
   '/admin/team': 'Team administration; must stay reachable for an org whose modules are off.',
   '/admin/logs': 'Agency-actor only; process-wide log files carry every tenant\'s data.',

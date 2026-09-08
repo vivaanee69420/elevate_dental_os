@@ -55,6 +55,17 @@ export const PERMISSION_CATALOG = {
   // an owner can hand out the rest of Operations without handing out payroll.
   // Owner-only by default (owner holds every key; no other role lists it).
   'payrun.manage': 'View & approve pay runs (payroll)',
+  // ACTIONS INSIDE A SECTION SOMEONE MAY ONLY READ. Each of these gated a
+  // route that said requireRole('owner') — which made it undelegable: the
+  // matrix could say yes and the route still answered no, and no amount of
+  // ticking could move it. They are owner-only DEFAULTS (owner holds every
+  // key and no other role lists them), so today's access is unchanged; what
+  // changes is that an owner can now hand one out.
+  'tasks.manage': 'Create, assign and delete tasks',
+  'wealth.edit': 'Edit wealth inputs (net worth, property, pensions)',
+  'tax.manage': 'Edit tax settings and treatment VAT liability',
+  'marketing.manage': 'Manage open days and campaign grouping',
+  'growth.manage': 'Manage review sources (add, map to a practice, sync)',
 };
 
 export const PERMISSION_KEYS = Object.keys(PERMISSION_CATALOG);

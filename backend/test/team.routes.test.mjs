@@ -51,19 +51,47 @@ describe('/api/admin/team gates', () => {
     }
   });
 
-  it('GET /:id refuses a practice manager who holds users.manage', async () => {
-    const out = await runRoute('get', '/:id', { user: PM, params: { id: 'u9' } });
-    expect(out.status).toBe(403);
+  // CHANGED DELIBERATELY, and the safety it relied on has not moved.
+  //
+  // These three routes were requireRole('owner'), which made users.invite and
+  // users.manage DEAD KEYS: the catalog defines them, the matrix offers them,
+  // and the route refused anyone holding them — so team administration could
+  // never be delegated, however the owner ticked. The catalog's own rule is
+  // that a key the code never checks grants nothing.
+  //
+  // The route was never what stopped privilege escalation; teamService is:
+  //   - canManageTarget(caller.role, target.role) — you cannot touch a member
+  //     at or above your own rank (auth.guard.test.mjs)
+  //   - canManageTarget(caller.role, body.role)   — you cannot hand out a role
+  //     above your own
+  //   - assertGrantCeiling(caller, permissions)   — you cannot grant a
+  //     permission you do not hold (auth.grantceiling.test.mjs)
+  // A practice manager holding users.manage can therefore administer reception
+  // and analyst members and nobody else, and can grant nothing beyond what
+  // they already have.
+  it('admits a practice manager who HOLDS users.manage / users.invite', async () => {
+    expect((await runRoute('get', '/:id', { user: PM, params: { id: 'u9' } })).status).toBe(200);
+    expect((await runRoute('put', '/:id', { user: PM, params: { id: 'u9' }, body: {} })).status).toBe(200);
+    expect((await runRoute('post', '/', { user: PM, body: {} })).status).toBe(200);
   });
 
-  it('PUT /:id refuses a practice manager who holds users.manage', async () => {
-    const out = await runRoute('put', '/:id', { user: PM, params: { id: 'u9' }, body: {} });
-    expect(out.status).toBe(403);
+  it('refuses a practice manager who does NOT hold them', async () => {
+    const plain = { id: 'u3', organisation_id: 'org-1', role: 'practice_manager', permissions: {} };
+    expect((await runRoute('get', '/:id', { user: plain, params: { id: 'u9' } })).status).toBe(403);
+    expect((await runRoute('put', '/:id', { user: plain, params: { id: 'u9' }, body: {} })).status).toBe(403);
+    expect((await runRoute('post', '/', { user: plain, body: {} })).status).toBe(403);
   });
 
-  it('POST / refuses a practice manager who holds users.manage', async () => {
-    const out = await runRoute('post', '/', { user: PM, body: {} });
-    expect(out.status).toBe(403);
+  // The keys are separate on purpose: inviting someone new and editing an
+  // existing member are different powers, and an owner may want to hand out
+  // only the first.
+  it('separates inviting from editing', async () => {
+    const inviter = {
+      id: 'u4', organisation_id: 'org-1', role: 'practice_manager',
+      permissions: { 'users.invite': true },
+    };
+    expect((await runRoute('post', '/', { user: inviter, body: {} })).status).toBe(200);
+    expect((await runRoute('put', '/:id', { user: inviter, params: { id: 'u9' }, body: {} })).status).toBe(403);
   });
 
   it('GET /:id admits an owner', async () => {

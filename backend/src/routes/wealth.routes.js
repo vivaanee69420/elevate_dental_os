@@ -14,7 +14,10 @@ import * as wealth_controller_1 from "../controllers/wealth.controller.js";
 
 const router = (0, express_1.Router)();
 const view = (0, auth_1.requirePermission)('wealth.view');
-const owner = (0, auth_1.requireRole)('owner');
+// wealth.edit — the write half of wealth.view. Owner-only by default; these
+// are the owner's own personal figures, but "only the owner may edit them"
+// should be a permission they can delegate to an accountant, not a role wall.
+const owner = (0, auth_1.requirePermission)('wealth.edit');
 
 // Persisted personal-wealth inputs.
 router.get('/inputs', view, (0, async_handler_1.asyncHandler)(wealth_controller_1.wealthController.getInputs));

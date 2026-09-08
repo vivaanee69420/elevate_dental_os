@@ -30,6 +30,12 @@ export interface PermissionEditorProps {
   /** Unsaved edits. null means "unpin". */
   patch: Record<string, boolean | null>;
   onChange: (key: string, value: boolean | null) => void;
+  /**
+   * Grantable ACTION permissions from the backend catalog — the capabilities
+   * a tab cannot express. Empty/absent hides the section rather than showing
+   * an empty heading.
+   */
+  actions?: Array<{ key: string; label: string }>;
   /** Search text, owned by the parent so the section list can filter with it. */
   search: string;
   onSearchChange: (next: string) => void;
@@ -86,12 +92,83 @@ function Toggle({
   );
 }
 
+// ONE row, used by the tab list and the action list alike. They were written
+// separately at first and immediately drifted — different checkbox spacing,
+// different reset affordance — which is what makes a screen feel assembled
+// rather than designed. The whole row is the hit target, not the 13px label.
+function PermRow({
+  id,
+  label,
+  checked,
+  pinned,
+  note,
+  title,
+  onToggle,
+  onReset,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  pinned: boolean;
+  note?: string;
+  title?: string;
+  onToggle: (next: boolean) => void;
+  onReset: () => void;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      title={title}
+      className="perm-row"
+      style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '6px 8px', margin: '0 -8px', borderRadius: 8,
+        cursor: 'pointer', minWidth: 0,
+      }}
+    >
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onToggle(e.target.checked)}
+        style={{ accentColor: 'var(--brand)', width: 15, height: 15, flexShrink: 0, cursor: 'pointer' }}
+      />
+      <span style={{ fontSize: 13, color: 'var(--ink)', minWidth: 0 }}>{label}</span>
+      {note && (
+        <span className="text-ink-muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+          {note}
+        </span>
+      )}
+      <span style={{ flex: 1 }} />
+      {pinned && (
+        <button
+          type="button"
+          // The label is the row, so a button inside it would toggle the
+          // checkbox on its way to its own handler.
+          onClick={(e) => { e.preventDefault(); onReset(); }}
+          title="Set for this person — reset to follow their role"
+          aria-label={`Reset ${label} to follow the role`}
+          className="perm-reset"
+          style={{
+            border: '1px solid var(--border)', background: 'var(--surface)',
+            borderRadius: 999, padding: '2px 8px', cursor: 'pointer',
+            fontSize: 10.5, color: 'var(--ink-muted)', whiteSpace: 'nowrap', flexShrink: 0,
+          }}
+        >
+          set for this person ↺
+        </button>
+      )}
+    </label>
+  );
+}
+
 export function PermissionEditor({
   effective,
   overrides,
   roleDefaults,
   patch,
   onChange,
+  actions,
   search,
   onSearchChange,
 }: PermissionEditorProps) {
@@ -119,6 +196,12 @@ export function PermissionEditor({
     patch[key] === undefined ? overrides[key] !== undefined : patch[key] !== null;
 
   const q = search.trim().toLowerCase();
+
+  // The same search box filters the actions, so a person looking for "export"
+  // finds it without knowing whether it is a tab or a capability.
+  const actionRows = (actions ?? []).filter(
+    (a) => !q || a.label.toLowerCase().includes(q) || a.key.toLowerCase().includes(q),
+  );
 
   return (
     <div>
@@ -170,53 +253,28 @@ export function PermissionEditor({
             </div>
 
             {open && (
-              <div style={{ marginTop: 10, paddingLeft: 52, display: 'grid', gap: 8 }}>
+              <div className="perm-reveal" style={{ marginTop: 8, paddingLeft: 52, display: 'grid', gap: 2 }}>
                 {matching.map((t) => {
                   const key = pageKey(t.id);
-                  const pinned = isPinned(key);
                   return (
-                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <input
-                        type="checkbox"
-                        id={`perm-${key}`}
-                        checked={valueOf(key)}
-                        onChange={(e) => onChange(key, e.target.checked)}
-                      />
-                      <label htmlFor={`perm-${key}`} style={{ fontSize: 13 }}>
-                        {t.label}
-                      </label>
-                      {!PAGE_ENFORCED.has(t.id) && (
-                        <span
-                          title="This tab shares its data endpoint with others in the section, so turning it off hides the tab but does not block the data."
-                          style={{
-                            fontSize: 9,
-                            padding: '1px 5px',
-                            borderRadius: 3,
-                            background: '#FEF3C7',
-                            color: '#92400E',
-                          }}
-                        >
-                          nav only
-                        </span>
-                      )}
-                      {pinned && (
-                        <button
-                          type="button"
-                          onClick={() => onChange(key, null)}
-                          title="Set for this person — reset to follow their role"
-                          aria-label={`Reset ${t.label} to follow the role`}
-                          style={{
-                            border: 'none',
-                            background: 'none',
-                            cursor: 'pointer',
-                            fontSize: 11,
-                            color: 'var(--ink-muted)',
-                          }}
-                        >
-                          ↺ set for this person
-                        </button>
-                      )}
-                    </div>
+                    <PermRow
+                      key={t.id}
+                      id={`perm-${key}`}
+                      label={t.label}
+                      checked={valueOf(key)}
+                      pinned={isPinned(key)}
+                      // Accurate rather than alarming. Granting this tab DOES
+                      // open the data behind it; what it cannot do is fence
+                      // that data off from the section's other tabs, because
+                      // they share one endpoint and the API cannot tell them
+                      // apart. Only the denial is nav-deep.
+                      note={PAGE_ENFORCED.has(t.id) ? undefined : 'shared data'}
+                      title={PAGE_ENFORCED.has(t.id)
+                        ? undefined
+                        : 'This tab shares its data endpoint with the rest of the section: switching it off hides the tab, but anyone who can open another tab here can still reach the same data.'}
+                      onToggle={(next) => onChange(key, next)}
+                      onReset={() => onChange(key, null)}
+                    />
                   );
                 })}
               </div>
@@ -224,6 +282,49 @@ export function PermissionEditor({
           </div>
         );
       })}
+
+      {/* ACTIONS — the half of the matrix this screen could not reach.
+          A tab grants a place to look; these grant a thing to DO, and several
+          of them (approving payroll, exporting raw data, editing the team)
+          have no tab at all. They were defined in the catalog, checked by the
+          API, and grantable nowhere — which is why routes that needed them
+          were still written as "owner only". They are listed last because
+          most people need none of them. */}
+      {actionRows.length > 0 && (
+        <div id={sectionAnchor('Actions')} style={{ padding: '14px 0', scrollMarginTop: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Toggle
+              on={actionRows.some((a) => valueOf(a.key))}
+              onChange={(next) => { for (const a of actionRows) onChange(a.key, next); }}
+              label="All actions"
+            />
+            <span className="display" style={{ fontSize: 15, fontWeight: 600 }}>Actions</span>
+            <span className="text-ink-muted" style={{ fontSize: 11 }}>
+              {actionRows.filter((a) => valueOf(a.key)).length} of {actionRows.length} granted
+            </span>
+          </div>
+          <p className="text-ink-muted" style={{ fontSize: 12, margin: '6px 0 10px', paddingLeft: 52 }}>
+            Things this person may do, rather than pages they may open — off for
+            everyone but the owner until you grant them.
+          </p>
+          <div style={{ paddingLeft: 52 }}>
+          <div style={{ display: 'grid', gap: 2 }}>
+            {actionRows.map(({ key, label }) => (
+              <PermRow
+                key={key}
+                id={`perm-${key}`}
+                label={label}
+                checked={valueOf(key)}
+                pinned={isPinned(key)}
+                title={key}
+                onToggle={(next) => onChange(key, next)}
+                onReset={() => onChange(key, null)}
+              />
+            ))}
+          </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

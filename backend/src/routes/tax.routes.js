@@ -15,7 +15,10 @@ import { taxController } from "../controllers/tax.controller.js";
 const router = express_1.Router();
 
 const view = (0, auth_1.requirePermission)('finance.view');
-const owner = (0, auth_1.requireRole)('owner');
+// tax.manage — entity type and VAT liability are declarations about the
+// business, so they keep their own key rather than riding on intelligence.view.
+// Owner-only by default.
+const owner = (0, auth_1.requirePermission)('tax.manage');
 
 router.get('/overview', view, (0, async_handler_1.asyncHandler)(taxController.overview));
 router.get('/settings', view, (0, async_handler_1.asyncHandler)(taxController.settings));

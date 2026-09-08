@@ -22,6 +22,15 @@ import { membershipRepository } from '../repositories/membership.repository.js';
 import { AppError } from '../middleware/errors.js';
 import { permissionsService } from './permissions.service.js';
 import { authService, canManageTarget, assertGrantCeiling } from './auth.service.js';
+import { PERMISSION_CATALOG } from '../lib/permissions.js';
+
+// Catalog keys that are ACTIONS rather than sections. A `*.view` key is what a
+// nav tab already grants, so listing it beside the tabs would offer the same
+// thing twice under two names; everything else is a capability the tabs cannot
+// express — approving payroll, exporting raw data, editing the team.
+const ACTION_PERMISSIONS = Object.entries(PERMISSION_CATALOG)
+  .filter(([key]) => !key.endsWith('.view'))
+  .map(([key, label]) => ({ key, label }));
 import { isValidPermission } from '../lib/permissions.js';
 
 /** The orgs this request administers. See the header for the rule. */
@@ -210,6 +219,17 @@ export const teamService = {
       effective,
       role_defaults: roleDefaults,
       accounts,
+      // The grantable CAPABILITY keys, with their labels, sent from the
+      // catalog rather than restated in the frontend.
+      //
+      // The editor could only ever grant TABS (page:<id> keys), so every
+      // action key the catalog defines — users.manage, finance.edit,
+      // data.export, payrun.manage and the rest — was ungrantable through the
+      // product: the matrix had the words and no screen could say them, which
+      // is why several routes were still gated on the owner ROLE. Sent as data
+      // so a key added to the catalog appears here without a second edit, and
+      // no list can drift out of step with it.
+      catalog: ACTION_PERMISSIONS,
     };
   },
 
