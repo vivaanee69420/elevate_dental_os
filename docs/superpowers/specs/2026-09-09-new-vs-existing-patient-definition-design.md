@@ -61,8 +61,17 @@ Formally — a person is **existing** at a cut-off if ANY of:
   union. They cover different people (9,355 vs 7,414 contacts) and erring
   toward *existing* is the conservative direction: over-calling someone new
   inflates apparent acquisition, which is the number acted on.
-- **"Attended" means `status = 'completed'`.** `in_progress` exists but holds
-  20 rows group-wide; it is folded in for completeness, not significance.
+- **"Attended" means `status = 'completed'`, and nothing else.** `in_progress`
+  exists but holds 20 rows group-wide and is an unresolved state, so it is
+  excluded. Every measurement in §5 was taken on `'completed'` alone, so the
+  figures and the rule describe the same thing.
+- **A paid invoice is dated by `dated_on`, which is the invoice date, not the
+  date it was paid.** An invoice raised in March and settled in June counts
+  this person as existing from March. This is a known approximation: `invoices`
+  carries no settlement date, and the settled-payment signal — which does carry
+  `processed_at` — covers the same person correctly in most cases. It only
+  distorts someone whose *only* signal is a paid invoice with no linked
+  payment row.
 - **Family A keeps requiring conversion.** `new_patients` stays
   `converted AND not-existing-before`, so a lead who never became a patient is
   not counted as a new patient. Only the *existing* test changes.
@@ -130,9 +139,10 @@ public.patient_first_activity(p_org uuid)
   RETURNS TABLE (contact_id uuid, first_activity_at timestamptz)
 ```
 
-`first_activity_at` = the earliest of: a completed appointment's `starts_at`, a
-completed non-`base_chart` treatment item's `completed_at`, a settled payment's
-`processed_at`, a paid invoice's `dated_on`.
+`first_activity_at` = the earliest of: an appointment's `starts_at` where
+`status = 'completed'`, a completed non-`base_chart` treatment item's
+`completed_at`, a settled payment's `processed_at`, a paid invoice's
+`dated_on` (see the dating caveat in §2.2).
 
 Both families read that one function, differently:
 
