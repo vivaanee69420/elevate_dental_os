@@ -63,6 +63,10 @@ const COPY: Record<Exclude<FacebookState, 'ok' | 'no_ad_id_coverage'>, { title: 
     title: 'Detail for this tab has not synced yet',
     body: 'Meta Ads spend and campaign totals are complete and up to date. The ad set and ad detail behind them has not been collected yet — it arrives on the nightly sync.',
   },
+  empty_bucket: {
+    title: 'Nothing in this bucket for the selected period',
+    body: 'Meta Ads is connected and there is spend in this period — it just all sits in the other bucket. Switch the filter above back to All, or to the other side of the split, to see it.',
+  },
   no_spend_in_window: {
     title: 'No Meta spend in the selected period',
     body: 'Meta Ads is connected and has delivered data before, so this is not a sync problem — there is simply no spend in the period, practice or campaign selected. Try a wider period, or clear the practice filter.',

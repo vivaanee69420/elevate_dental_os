@@ -45,7 +45,7 @@ import {
     ACCEPTANCE_MIN_PAID_PENCE, practiceLeadPerformance,
     campaignLeadPerformance, sumPracticeRows,
 } from "../lib/marketing/lead-performance.js";
-import { splitByOpenDay } from "../lib/marketing/open-days.js";
+import { splitByOpenDay, campaignBucketFilter, leadBucketFilter } from "../lib/marketing/open-days.js";
 import { openDayRepository } from "../repositories/open-day.repository.js";
 
 // ---------------------------------------------------------------------------
@@ -270,6 +270,23 @@ async function metaAccounts(orgId) {
 // `table` is the CALLING TIER'S OWN deep-grain table — omitted by
 // campaigns(), whose own table already IS ad_metrics, so there is no third
 // state to distinguish at that tier.
+// AN EMPTY BUCKET IS NOT AN EMPTY WINDOW, and must never be reported as one.
+//
+// emptyWindowState below probes whether the tenant has EVER synced, to tell
+// "you are not connected" apart from "you had a quiet fortnight". Neither
+// question is the right one when it was the always-on / open-days filter that
+// emptied the table: the tenant syncs fine and the window has spend, just not
+// in the bucket they picked. Falling through would have told a healthy tenant
+// their ad-set sync had never run — a false alarm about infrastructure,
+// raised by a filter the reader chose and can undo in one click.
+//
+// `hadRowsBeforeFilter` is what separates the two, so the genuinely unsynced
+// tenant is still reported honestly while a bucket is selected.
+function bucketOrWindowState(orgId, { bucket, hadRowsBeforeFilter, table = null }) {
+    if (bucket !== 'all' && hadRowsBeforeFilter) return 'empty_bucket';
+    return emptyWindowState(orgId, table);
+}
+
 async function emptyWindowState(orgId, table = null) {
     if (!(await marketingRepository.hasProviderMetrics(orgId, 'meta_ads'))) return 'never_synced';
     if (!table) return 'no_spend_in_window';
@@ -367,6 +384,12 @@ async function loadMetaCampaignSpend(orgId, since, until, practiceId) {
         if (!row) {
             row = {
                 entity_id: id, entity_name: r.campaign_name ?? null,
+                // The practice the AD ACCOUNT is mapped to. A campaign lives
+                // in exactly one ad account, so this is 1:1 and taking the
+                // first non-null day is safe; it exists so a bucketed view
+                // can rebuild per-practice spend from campaign rows, which
+                // adSpendByPractice cannot be asked to do.
+                practice_id: r.practice_id ?? null,
                 objective: null, spend_pence: 0, impressions: 0, clicks: 0,
                 // Meta's own reported conversions are never requested at this
                 // grain, so this stays 0 and the page reads the CRM funnel
@@ -377,11 +400,43 @@ async function loadMetaCampaignSpend(orgId, since, until, practiceId) {
             byCampaign.set(id, row);
         }
         if (!row.entity_name && r.campaign_name) row.entity_name = r.campaign_name;
+        if (!row.practice_id && r.practice_id) row.practice_id = r.practice_id;
         row.spend_pence += Number(r.spend_pence ?? 0);
         row.impressions += Number(r.impressions ?? 0);
         row.clicks += Number(r.clicks ?? 0);
     }
     return metaCampaignSpendCache.set(key, [...byCampaign.values()]);
+}
+
+// The tabs' bucket filter.
+//
+// campaigns()/adSets()/ads() bucket BOTH sides by CAMPAIGN — spend and leads
+// alike — where the cards bucket leads by pipeline. That is not an
+// inconsistency: a tab row IS a campaign (or something beneath one), so the
+// question it answers is "did THIS campaign's money and THIS campaign's
+// attributed leads belong to an event". The cards answer the different
+// question "did this LEAD come through an event", and its own pipeline is the
+// only honest source for that.
+//
+// Both deep grains carry campaign_id — ad_grain_rollup returns it at every
+// grain — so an ad set and an ad inherit their campaign's event without a
+// migration and without a name match.
+//
+// Returns null on the unfiltered path so the caller can skip the work
+// entirely: 'all' must cost exactly what it cost before this existed.
+async function tabBucketFilter(orgId, bucket) {
+    if (bucket !== 'alwaysOn' && bucket !== 'openDays') return null;
+    const [events, mappings] = await Promise.all([
+        openDayRepository.list(orgId),
+        openDayRepository.mappings(orgId, 'meta_ads'),
+    ]);
+    const eventById = new Map((events ?? []).map((e) => [e.id, e]));
+    const eventByCampaign = new Map();
+    for (const m of mappings ?? []) {
+        const event = eventById.get(m.openDayId);
+        if (event) eventByCampaign.set(m.campaignId, event);
+    }
+    return campaignBucketFilter(bucket, eventByCampaign);
 }
 
 export const facebookReportService = {
@@ -396,7 +451,7 @@ export const facebookReportService = {
     // resolved to any Dentally record — measured live for Jun-Aug 2026 that
     // was 267 "patients" against 230 bookings and 33 who had actually paid,
     // so cost per patient read ~8x cheaper than the Google page beside it.
-    async leadPerformance(orgId, { since, until, practiceId = null } = {}) {
+    async leadPerformance(orgId, { since, until, practiceId = null, bucket = 'all' } = {}) {
         const win = clampWindow(since, until);
         // The 92-day clamp exists for the DEEP-GRAIN tables. ad_metrics holds
         // ~15 months, and leads/appointments/payments have no such cap, so
@@ -454,18 +509,94 @@ export const facebookReportService = {
         // are the SAME practice — the asymmetry that once divided a whole
         // group's spend by one practice's leads.
         const spendRows = practiceId ? spendRowsAll.filter((r) => r.practice_id === practiceId) : spendRowsAll;
-        const ledgerRows = practiceId ? ledgerRowsAll.filter((r) => r.practice_id === practiceId) : ledgerRowsAll;
+        const ledgerRowsWindow = practiceId ? ledgerRowsAll.filter((r) => r.practice_id === practiceId) : ledgerRowsAll;
 
-        if (spendRows.length === 0 && ledgerRows.length === 0) {
+        // --- the always-on / open-days page filter ---------------------------
+        // Computed HERE, above everything that consumes it, because both the
+        // cards and the table below them must be built from the SAME filtered
+        // rows. The map itself is the one this file already built further
+        // down for the split; it simply moved up.
+        const eventById = new Map(openDayEvents.map((e) => [e.id, e]));
+        const eventByCampaign = new Map();
+        for (const m of openDayMappings) {
+            const event = eventById.get(m.openDayId);
+            if (event) eventByCampaign.set(m.campaignId, event);
+        }
+        const keepCampaign = campaignBucketFilter(bucket, eventByCampaign);
+        const keepLead = leadBucketFilter(bucket, new Set(eventById.keys()));
+        const campaignRowsInBucket = campaignRows.filter((r) => keepCampaign(r.entity_id));
+        const ledgerRows = ledgerRowsWindow.filter(keepLead);
+
+        // PER-PRACTICE SPEND UNDER A BUCKET comes from the campaign-grain rows,
+        // because adSpendByPractice is a practice-grain RPC that knows nothing
+        // about campaigns and so cannot be split by one. The unfiltered path
+        // still uses that RPC untouched, so today's numbers do not move; the
+        // partition test asserts the two sources agree, which is what makes
+        // swapping them safe rather than merely plausible.
+        //
+        // Names come from the RPC's rows, which carry them — a practice with
+        // spend but no leads would otherwise render a blank heading, since
+        // campaign rows have no practice_name and practiceLeadPerformance can
+        // only fill one in from a lead.
+        const practiceNames = new Map(spendRows.map((r) => [r.practice_id ?? null, r.practice_name ?? null]));
+        const practiceSpendRows = bucket === 'all' ? spendRows : (() => {
+            const byPractice = new Map();
+            for (const r of campaignRowsInBucket) {
+                const key = r.practice_id ?? null;
+                let row = byPractice.get(key);
+                if (!row) {
+                    row = {
+                        practice_id: key, practice_name: practiceNames.get(key) ?? null,
+                        spend_pence: 0, impressions: 0, clicks: 0,
+                    };
+                    byPractice.set(key, row);
+                }
+                row.spend_pence += Number(r.spend_pence ?? 0);
+                row.impressions += Number(r.impressions ?? 0);
+                row.clicks += Number(r.clicks ?? 0);
+            }
+            return [...byPractice.values()];
+        })();
+
+        // "Is this window empty" is a question about the WINDOW, so it is asked
+        // of the unfiltered rows. Asked of the filtered ones, choosing a
+        // bucket with nothing in it would collapse the whole payload into the
+        // not-connected shape — losing the per-practice rows and the campaign
+        // table — and report a sync state that is about the filter. An empty
+        // bucket inside a populated window flows on normally instead, to
+        // zeroed totals the panel explains in those terms.
+        if (spendRows.length === 0 && ledgerRowsWindow.length === 0) {
             return empty(await emptyWindowState(orgId), {
                 uncategorisedLeads: uncategorised.leads,
                 uncategorisedAttributedLeads: uncategorised.attributed,
             });
         }
 
+        // A BUCKET WITH LEADS AND NO SPEND IS NOT FREE LEADS.
+        //
+        // lead-performance.js's withLeadCosts nulls a cost only on a zero
+        // DENOMINATOR; a zero NUMERATOR still divides to a literal £0.00. On
+        // the unfiltered page that case barely arises, but a bucket makes it
+        // routine: pick "Open days" in a window where the event's campaigns
+        // have stopped spending and every card would read £0.00 — the best
+        // cost per patient in the group, from the bucket with no data.
+        //
+        // This is exactly the guard withOpenDayCosts already applies to the
+        // split rows printed directly beneath these cards, so the two now
+        // agree instead of contradicting each other three lines apart.
+        //
+        // Deliberately NOT pushed down into withLeadCosts itself: that helper
+        // is shared with the Google report, where the same latent £0.00 is
+        // live today, and moving a number on a page nobody asked me to touch
+        // is the owner's call, not a side effect of this one.
+        const nullCostsWithoutSpend = (row) => (row && row.spendPence === 0
+            ? { ...row, cplPence: null, cpbPence: null, cpaPence: null }
+            : row);
+        const priced = bucket === 'all' ? (row) => row : nullCostsWithoutSpend;
+
         const bySpend = (a, b) => b.spendPence - a.spendPence;
-        const practices = practiceLeadPerformance(spendRows, ledgerRows, false).sort(bySpend);
-        const practicesAll = practiceLeadPerformance(spendRows, ledgerRows, true).sort(bySpend);
+        const practices = practiceLeadPerformance(practiceSpendRows, ledgerRows, false).sort(bySpend).map(priced);
+        const practicesAll = practiceLeadPerformance(practiceSpendRows, ledgerRows, true).sort(bySpend).map(priced);
 
         // Unattributed campaigns sort last whatever their spend: the bucket is
         // a statement about coverage, not a campaign competing for budget.
@@ -490,18 +621,15 @@ export const facebookReportService = {
         const campaignLedgerRows = ledgerRows.map((r) => (r.meta_attributed === false
             ? { ...r, campaign_id: null, campaign_name: null }
             : r));
-        const campaigns = campaignLeadPerformance(campaignRows, campaignLedgerRows, false).sort(byCampaignSpend);
-        const campaignsAll = campaignLeadPerformance(campaignRows, campaignLedgerRows, true).sort(byCampaignSpend);
+        const campaigns = campaignLeadPerformance(campaignRowsInBucket, campaignLedgerRows, false).sort(byCampaignSpend);
+        const campaignsAll = campaignLeadPerformance(campaignRowsInBucket, campaignLedgerRows, true).sort(byCampaignSpend);
 
         // --- open days ------------------------------------------------------
         // A campaign absent from this map is always-on; that is the entire
         // definition, which is why "unmapped" needs no storage of its own.
-        const eventById = new Map(openDayEvents.map((e) => [e.id, e]));
-        const eventByCampaign = new Map();
-        for (const m of openDayMappings) {
-            const event = eventById.get(m.openDayId);
-            if (event) eventByCampaign.set(m.campaignId, event);
-        }
+        // eventById / eventByCampaign are built above, before the filtering
+        // that depends on them.
+        //
         // Which practices ran each event. Taken from the AD ACCOUNT that owns
         // each mapped campaign — "which practices ran this open day" is a
         // question about spend, not about where the leads happened to route.
@@ -511,7 +639,10 @@ export const facebookReportService = {
         const practiceByCustomer = new Map(
             accounts.map((a) => [String(a.customer_id), a.practice_id ?? null]),
         );
-        const windowCampaignIds = new Set(campaigns.map((c) => c.campaignId).filter(Boolean));
+        // From the UNFILTERED campaign rows on purpose: "which practices ran
+        // this event" is a fact about the window, and must not shrink to zero
+        // merely because the reader is currently looking at always-on.
+        const windowCampaignIds = new Set(campaignRows.map((r) => r.entity_id).filter(Boolean));
         const practicesByEvent = new Map();
         for (const m of openDayMappings) {
             if (!windowCampaignIds.has(m.campaignId)) continue;
@@ -541,8 +672,8 @@ export const facebookReportService = {
 
         return {
             state: 'ok',
-            practices, total: sumPracticeRows(practices),
-            practicesAll, totalAll: sumPracticeRows(practicesAll),
+            practices, total: priced(sumPracticeRows(practices)),
+            practicesAll, totalAll: priced(sumPracticeRows(practicesAll)),
             campaigns, campaignsAll,
             // Always-on vs named events. Spend reconciles to the SAME campaign
             // rows the table above renders; leads reconcile to the SAME
@@ -560,15 +691,21 @@ export const facebookReportService = {
                 uncategorisedAttributedLeads: uncategorised.attributed,
             },
             // The people behind the numbers, so a card click-through lists
-            // them without a second, potentially-drifted computation.
-            leads: ledgerRows,
+            // them without a second, potentially-drifted computation. The
+            // event NAME is stamped on here rather than looked up in the
+            // browser: the drawer is reachable in the unfiltered view too,
+            // where a row has to say which side of the split it is on.
+            leads: ledgerRows.map((r) => ({
+                ...r,
+                open_day_name: r.open_day_id ? (eventById.get(r.open_day_id)?.name ?? null) : null,
+            })),
             excludedAccounts: excludedAccountsOf(accounts),
             acceptanceMinPaidPence: ACCEPTANCE_MIN_PAID_PENCE,
             effectiveSince: rawSince, windowClamped: false,
         };
     },
 
-    async campaigns(orgId, { since, until, practiceId = null } = {}) {
+    async campaigns(orgId, { since, until, practiceId = null, bucket = 'all' } = {}) {
         const win = clampWindow(since, until);
         const accounts = await metaAccounts(orgId);
         if (accounts.length === 0) {
@@ -595,15 +732,24 @@ export const facebookReportService = {
         // or leads with no spend (leads routed here from an unmapped or
         // differently-mapped account). Do not try to make the two agree — they
         // answer different questions; just know that is why they can differ.
-        const [spendRowsRaw, funnelRows] = await Promise.all([
+        const [spendRowsRaw, funnelRowsAll, keep] = await Promise.all([
             marketingRepository.campaignSpendByProvider(orgId, win.since, win.until, 'meta_ads', null, practiceId),
             loadFunnel(orgId, win.since, win.until, practiceId),
+            tabBucketFilter(orgId, bucket),
         ]);
 
-        const spendRows = collapseByCampaign(spendRowsRaw);
+        // Both sides filtered together. Filtering only the spend side would
+        // leave the other bucket's leads counted as unmatchedLeads — a
+        // coverage warning about rows this view was never meant to show.
+        const funnelRows = keep ? (funnelRowsAll ?? []).filter((r) => keep(r.campaign_id)) : funnelRowsAll;
+        const spendRowsWindow = collapseByCampaign(spendRowsRaw);
+        const spendRows = spendRowsWindow.filter((s) => (keep ? keep(s.campaign_id) : true));
         if (spendRows.length === 0) {
             return {
-                state: await emptyWindowState(orgId), coverage: null, rows: [], excludedAccounts,
+                state: await bucketOrWindowState(orgId, {
+                    bucket, hadRowsBeforeFilter: spendRowsWindow.length > 0,
+                }),
+                coverage: null, rows: [], excludedAccounts,
                 totals: null, unmatchedLeads: null,
                 effectiveSince: win.effectiveSince, windowClamped: win.windowClamped,
             };
@@ -663,7 +809,7 @@ export const facebookReportService = {
         };
     },
 
-    async adSets(orgId, { since, until, practiceId = null, campaignId = null } = {}) {
+    async adSets(orgId, { since, until, practiceId = null, campaignId = null, bucket = 'all' } = {}) {
         const win = clampWindow(since, until);
         const accounts = await metaAccounts(orgId);
         if (accounts.length === 0) {
@@ -673,10 +819,13 @@ export const facebookReportService = {
             };
         }
 
-        const [grainRows, funnelRows] = await Promise.all([
+        const [grainRowsAll, funnelRowsAll, keep] = await Promise.all([
             adGrainRepository.rollup(orgId, 'meta_adset', { since: win.since, until: win.until, practiceId, campaignId }),
             loadFunnel(orgId, win.since, win.until, practiceId),
+            tabBucketFilter(orgId, bucket),
         ]);
+        const grainRows = keep ? (grainRowsAll ?? []).filter((g) => keep(g.campaign_id)) : grainRowsAll;
+        const funnelRows = keep ? (funnelRowsAll ?? []).filter((r) => keep(r.campaign_id)) : funnelRowsAll;
 
         // campaignId is now an OPTIONAL filter: a standalone ad-sets tab calls
         // this with none, and must see every ad set in the window across every
@@ -737,7 +886,10 @@ export const facebookReportService = {
         // of missing ad-id coverage, only a quiet window. Do not drop the
         // leadsTotal > 0 check. And an empty rollup is not evidence of a
         // missing sync either — see emptyWindowState.
-        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId, 'ad_meta_adsets')
+        const state = (grainRows ?? []).length === 0
+            ? await bucketOrWindowState(orgId, {
+                bucket, hadRowsBeforeFilter: (grainRowsAll ?? []).length > 0, table: 'ad_meta_adsets',
+            })
             : coverage.leadsTotal > 0 && coverage.leadsWithAdSet === 0 ? 'no_ad_id_coverage' : 'ok';
         return {
             state, coverage, rows, notIdentified, unmatchedLeads,
@@ -745,7 +897,7 @@ export const facebookReportService = {
         };
     },
 
-    async ads(orgId, { since, until, practiceId = null, adSetId = null, cursor = null } = {}) {
+    async ads(orgId, { since, until, practiceId = null, adSetId = null, cursor = null, bucket = 'all' } = {}) {
         const PAGE = 50;
         const win = clampWindow(since, until);
         const accounts = await metaAccounts(orgId);
@@ -756,12 +908,15 @@ export const facebookReportService = {
             };
         }
 
-        const [grainRows, funnelRows] = await Promise.all([
+        const [grainRowsAll, funnelRowsAll, keep] = await Promise.all([
             adGrainRepository.rollup(orgId, 'meta_ad', { since: win.since, until: win.until, practiceId, parentId: adSetId }),
             // Cached: this is the call every ad-set expansion used to re-run
             // in full. See loadFunnel.
             loadFunnel(orgId, win.since, win.until, practiceId),
+            tabBucketFilter(orgId, bucket),
         ]);
+        const grainRows = keep ? (grainRowsAll ?? []).filter((g) => keep(g.campaign_id)) : grainRowsAll;
+        const funnelRows = keep ? (funnelRowsAll ?? []).filter((r) => keep(r.campaign_id)) : funnelRowsAll;
 
         const byAd = new Map();
         for (const r of funnelRows ?? []) {
@@ -822,7 +977,10 @@ export const facebookReportService = {
         // window before saying so), and zero leads in scope is a quiet
         // window, not a coverage problem — do not drop the leadsTotal > 0
         // check.
-        const state = (grainRows ?? []).length === 0 ? await emptyWindowState(orgId, 'ad_meta_ads')
+        const state = (grainRows ?? []).length === 0
+            ? await bucketOrWindowState(orgId, {
+                bucket, hadRowsBeforeFilter: (grainRowsAll ?? []).length > 0, table: 'ad_meta_ads',
+            })
             : leadsTotal > 0 && leadsWithAdId === 0 ? 'no_ad_id_coverage' : 'ok';
 
         return {

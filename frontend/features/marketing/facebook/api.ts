@@ -23,6 +23,12 @@ import type { SpendFreshness } from '@/features/marketing/_shared/SpendFreshness
 export type FacebookState =
   | 'not_connected'
   | 'never_synced'
+  // The always-on / open-days filter emptied this table, not the sync and not
+  // the window. Distinct from no_spend_in_window on purpose: that one invites
+  // a wider period, which would not help here — the fix is to change the
+  // bucket, and saying "no Meta spend in the selected period" beside a period
+  // that plainly has spend is simply untrue.
+  | 'empty_bucket'
   // The campaign tier (ad_metrics) has real totals for this org, but THIS
   // grain's own deep table (ad_meta_adsets/ad_meta_ads) has never received a
   // row — the deep sync has not run yet, distinct from no_spend_in_window
@@ -228,6 +234,13 @@ export interface FacebookLeadCampaign extends Omit<FacebookLeadPractice, 'practi
 
 export interface FacebookLeadRow {
   contact_id: string | null;
+  /** The event this lead came through, from its GoHighLevel PIPELINE — not
+   *  from the campaign Meta attributed it to. Null means always-on. */
+  open_day_id: string | null;
+  /** Stamped by the server so the drawer can name the event without a second
+   *  lookup, and so a row still says which side of the split it is on in the
+   *  unfiltered view. Null when open_day_id is. */
+  open_day_name: string | null;
   practice_id: string | null;
   practice_name: string | null;
   campaign_id: string | null;

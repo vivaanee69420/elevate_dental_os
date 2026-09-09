@@ -131,3 +131,72 @@ export function splitByOpenDay(campaignRows, ledgerRows, events, {
         events: out,
     };
 }
+
+// ---------------------------------------------------------------------------
+// The page-level always-on / open-days filter.
+//
+// splitByOpenDay above answers "how do these rows divide"; these answer "keep
+// this row or not". They are the SAME rule expressed for a filter, and they
+// live here beside it deliberately: the Facebook page applies the split in
+// five places (cards, per-practice rows, three tabs, the lead drawer), and
+// five copies of "is this an open day" is five chances to disagree about it.
+//
+// The two sides bucket differently, and that is not an oversight. Since
+// migration 000171 a LEAD's event comes from its GoHighLevel PIPELINE while
+// SPEND's event comes from its Meta CAMPAIGN — so an open-day bucket can
+// legitimately hold a lead whose spend sits in always-on, and vice versa.
+// Deriving either from the other is what would put a row in the wrong bucket.
+// ---------------------------------------------------------------------------
+export const AD_BUCKETS = ['all', 'alwaysOn', 'openDays'];
+
+// Anything that is not one of the two real buckets means "do not filter".
+// 'all' is the page's default, and an unrecognised value must fail OPEN — a
+// filter nobody asked for that silently hides rows is worse than no filter.
+function wantEvent(bucket) {
+    if (bucket === 'openDays') return true;
+    if (bucket === 'alwaysOn') return false;
+    return null;
+}
+
+/**
+ * Keep the campaigns (and the ad sets / ads beneath them, via their own
+ * campaign_id) that belong to the selected bucket.
+ *
+ * A campaign absent from eventByCampaign is always-on — that is the whole
+ * definition of always-on, which is why "unmapped" needs no storage of its
+ * own. A NULL campaign id is always-on too rather than dropped: a lead Meta
+ * cannot account for still exists and still cost money, and dropping it from
+ * both buckets would break the partition the page prints as a sum.
+ *
+ * @param bucket           one of AD_BUCKETS.
+ * @param eventByCampaign  Map<campaignId, event>, the spend-side mapping.
+ * @returns (campaignId) => boolean
+ */
+export function campaignBucketFilter(bucket, eventByCampaign) {
+    const want = wantEvent(bucket);
+    if (want === null) return () => true;
+    const map = eventByCampaign ?? new Map();
+    return (campaignId) => (campaignId != null && map.has(campaignId)) === want;
+}
+
+/**
+ * Keep the ledger rows whose GHL pipeline belongs to the selected bucket.
+ *
+ * Guarded on the LIVE event ids, exactly as splitByOpenDay's own
+ * `byEvent.has(id)` is: a lead still pointing at a deleted event counts as
+ * always-on, so it stays in the partition instead of vanishing from both
+ * halves of it.
+ *
+ * @param bucket    one of AD_BUCKETS.
+ * @param eventIds  Set<openDayId> of the org's live events.
+ * @returns (ledgerRow) => boolean
+ */
+export function leadBucketFilter(bucket, eventIds) {
+    const want = wantEvent(bucket);
+    if (want === null) return () => true;
+    const live = eventIds ?? new Set();
+    return (row) => {
+        const id = row?.open_day_id ?? null;
+        return (id != null && live.has(id)) === want;
+    };
+}

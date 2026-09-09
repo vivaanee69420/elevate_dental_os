@@ -45,7 +45,11 @@ const COLUMNS: GridColumn<FacebookOpenDayEvent>[] = [
 ];
 
 export function FacebookOpenDaysTab() {
-  const { data } = useFacebookLeadPerformance();
+  // Deliberately UNFILTERED. This tab IS the per-event breakdown, so it must
+  // list every event in the window whichever bucket the page is showing —
+  // and asking for 'all' shares the cache entry FacebookReportScreen already
+  // fetched to decide whether this tab exists, so it costs no request.
+  const { data } = useFacebookLeadPerformance('all');
   const events = data?.openDays.events ?? [];
   return (
     <DataGrid

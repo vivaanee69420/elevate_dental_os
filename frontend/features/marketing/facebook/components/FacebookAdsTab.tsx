@@ -30,6 +30,7 @@ import { FacebookStateNotice } from './FacebookStateNotice';
 import { useFacebookAds } from '../hooks';
 import type { FacebookRow, FacebookNoticeScope } from '../api';
 import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
+import type { AdBucket } from '../../_shared/AdBucketFilter';
 
 // Calm, factual prose — never an error/warning colour. These are facts about
 // the data, not problems with it.
@@ -65,14 +66,19 @@ const COLUMNS: Column<FacebookRow>[] = [
 
 export function FacebookAdsTab({
   adSetId,
+  bucket = 'all',
 }: {
   /** The active ad-set filter, or null when this tab is listing every ad in
    *  the window unfiltered. */
   adSetId: string | null;
+  /** The page's always-on / open-days filter. An ad inherits its CAMPAIGN's
+   *  event — ad_grain_rollup returns campaign_id at every grain — so this
+   *  needs no ad-level mapping of its own. */
+  bucket?: AdBucket;
 }) {
   const {
     data, isLoading, isError, error, hasNextPage, isFetchingNextPage, fetchNextPage,
-  } = useFacebookAds(adSetId);
+  } = useFacebookAds(adSetId, bucket);
 
   // What this payload's state was actually measured over: ONE ad set when a
   // filter is active, otherwise the same organisation/selection distinction

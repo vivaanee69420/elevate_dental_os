@@ -203,7 +203,13 @@ export const marketingRepository = {
             // Reconciliation still only sums spend_pence and is unaffected.
             let q = supabase_1.serviceClient
                 .from('ad_metrics')
-                .select('id, customer_id, campaign_id, campaign_name, campaign_status, metric_date, impressions, clicks, spend_pence, conversions')
+            // practice_id widened in for the Facebook page's always-on /
+            // open-days filter: a bucketed view rebuilds per-practice spend
+            // from these campaign-grain rows, because the practice-grain RPC
+            // beside it (adSpendByPractice) knows nothing about campaigns and
+            // so cannot be split by one. Selected, never filtered on here —
+            // the practiceId filter below is unchanged.
+                .select('id, customer_id, campaign_id, campaign_name, campaign_status, metric_date, practice_id, impressions, clicks, spend_pence, conversions')
                 .eq('organisation_id', orgId)
                 .eq('provider', provider)
                 .gte('metric_date', since)

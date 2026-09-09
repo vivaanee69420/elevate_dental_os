@@ -1,6 +1,7 @@
 // Marketing controller — parse/validate, call the service, shape the response.
 // No business logic.
 import { z } from 'zod';
+import { AD_BUCKETS } from '../lib/marketing/open-days.js';
 import { marketingService } from '../services/marketing.service.js';
 import { adReconciliationService } from '../services/ad-reconciliation.service.js';
 import { facebookReportService } from '../services/facebook-report.service.js';
@@ -119,6 +120,11 @@ export const FacebookQuerySchema = z.object({
     campaignId: z.string().min(1).max(128).optional(),
     adSetId: z.string().min(1).max(128).optional(),
     cursor: z.string().regex(/^\d{1,9}$/).optional(),
+    // The always-on / open-days page filter. An enum, not free text: it names
+    // a code path, and its two real values are the two halves of a partition
+    // the page prints as a sum. Optional and defaulted at the call site, so a
+    // request that omits it behaves exactly as it did before this existed.
+    bucket: z.enum(AD_BUCKETS).optional(),
 }).strip().refine(
     // Only applies when BOTH are present — either one alone is filled in
     // server-side by windowFrom() and is never inverted against itself. An
@@ -160,7 +166,7 @@ export async function getFacebookCampaigns(req, res, next) {
     try {
         const q = FacebookQuerySchema.parse(req.query);
         const data = await facebookReportService.campaigns(req.user.organisation_id, {
-            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), bucket: q.bucket ?? 'all',
         });
         res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }
@@ -170,7 +176,7 @@ export async function getFacebookAdSets(req, res, next) {
     try {
         const q = FacebookQuerySchema.parse(req.query);
         const data = await facebookReportService.adSets(req.user.organisation_id, {
-            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), campaignId: q.campaignId ?? null,
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), campaignId: q.campaignId ?? null, bucket: q.bucket ?? 'all',
         });
         res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }
@@ -180,7 +186,7 @@ export async function getFacebookAds(req, res, next) {
     try {
         const q = FacebookQuerySchema.parse(req.query);
         const data = await facebookReportService.ads(req.user.organisation_id, {
-            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), adSetId: q.adSetId ?? null, cursor: q.cursor ?? null,
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), adSetId: q.adSetId ?? null, cursor: q.cursor ?? null, bucket: q.bucket ?? 'all',
         });
         res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }
@@ -279,7 +285,7 @@ export async function getFacebookLeadPerformance(req, res, next) {
         // client-side from ONE fetch that carries both, so flipping it costs
         // nothing and the two figures can never be computed differently.
         const data = await facebookReportService.leadPerformance(req.user.organisation_id, {
-            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id),
+            ...windowFrom(q), practiceId: practiceOf(req.query.practice_id), bucket: q.bucket ?? 'all',
         });
         res.json(await withFreshness(data, req.user.organisation_id, 'meta_ads', windowFrom(q).until));
     } catch (err) { next(err); }

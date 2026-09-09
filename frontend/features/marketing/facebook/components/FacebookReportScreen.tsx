@@ -42,6 +42,7 @@ import { PageHeader } from '@/components/ui';
 import { ScopePeriodBar } from '@/features/_shared/ScopePeriodBar';
 import { FacebookPerformancePanel } from './FacebookPerformancePanel';
 import { AdReportTabs, useAdReportTab, type AdReportTab } from '../../_shared/AdReportTabs';
+import { AdBucketFilter, useAdBucket } from '../../_shared/AdBucketFilter';
 import { useFacebookCampaigns, useFacebookAdSets, useFacebookLeadPerformance } from '../hooks';
 import { FacebookCampaignsTab } from './FacebookCampaignsTab';
 import { FacebookAdSetsTab } from './FacebookAdSetsTab';
@@ -79,12 +80,27 @@ function FilterChip({ label, onDismiss }: { label: string; onDismiss: () => void
 }
 
 export default function FacebookReportScreen() {
-  const { data: perf, isPending: perfPending } = useFacebookLeadPerformance();
+  // Read UNFILTERED, and only to decide whether this tenant runs open days at
+  // all. Asking the filtered endpoint that question would be circular: pick
+  // "Always-on" and the answer comes back with no events, the filter and the
+  // tab both disappear, and the reader is stranded in a view they cannot
+  // leave. The panel below fetches its own, bucketed copy; react-query keys
+  // the two separately, so this one is a single extra request that is then
+  // shared by every 'all' consumer on the page.
+  const { data: perf, isPending: perfPending } = useFacebookLeadPerformance('all');
   // Only for tenants that actually run open days. Computed from this
   // tenant's own rows, never assumed — an always-empty tab is noise for
   // every tenant that doesn't map campaigns to events.
   const hasOpenDays = (perf?.openDays.events.length ?? 0) > 0;
-  const TABS = hasOpenDays
+
+  // The page-level always-on / open-days filter. Held in the URL beside
+  // ?tab=, and reported as 'all' for a tenant with nothing mapped.
+  const [bucket, setBucket] = useAdBucket({ available: hasOpenDays, pending: perfPending });
+
+  // The Open days tab breaks the per-event totals out. Under "Always-on"
+  // there are, by definition, no events to break out, so it is not offered —
+  // a tab that could only ever render an empty table.
+  const TABS = hasOpenDays && bucket !== 'alwaysOn'
     ? [...BASE_TABS, { id: 'opendays', label: 'Open days' }]
     : BASE_TABS;
 
@@ -145,9 +161,11 @@ export default function FacebookReportScreen() {
     router.replace(`${pathname}?${sp.toString()}`, { scroll: false });
   }, [params, pathname, router]);
 
-  // Lifted so both can be shared with the Ads tab — see file header.
-  const campaigns = useFacebookCampaigns();
-  const adSets = useFacebookAdSets(campaignId);
+  // Lifted so both can be shared with the Ads tab — see file header. Both
+  // carry the bucket, so the filter-chip name lookups resolve against the
+  // same rows the tables beneath them are showing.
+  const campaigns = useFacebookCampaigns(bucket);
+  const adSets = useFacebookAdSets(campaignId, bucket);
 
   const campaignName = campaignId
     ? (campaigns.data?.rows.find((r) => r.id === campaignId)?.name ?? null)
@@ -167,11 +185,16 @@ export default function FacebookReportScreen() {
           here" rather than "this practice is not connected". */}
       <ScopePeriodBar adProvider="meta_ads" />
 
+      {/* Only for a tenant that maps campaigns or pipelines to an event —
+          a filter with one populated side is a control that cannot do
+          anything, and its absence is the honest state. */}
+      {hasOpenDays && <AdBucketFilter value={bucket} onChange={setBucket} />}
+
       {/* Cost per lead / booking / acquired patient, on the same money-paid
           rule as the Google report (000167). Above the tabs because it is the
           figure to compare across platforms; the Campaigns tab's own patient
           count answers a narrower question. */}
-      <FacebookPerformancePanel />
+      <FacebookPerformancePanel bucket={bucket} />
 
       <AdReportTabs tabs={TABS} active={tab} onChange={setTab} />
 
@@ -195,7 +218,7 @@ export default function FacebookReportScreen() {
         <FacebookAdSetsTab query={adSets} campaignId={campaignId} onSelectAdSet={filterByAdSet} />
       )}
       {tab === 'ads' && (
-        <FacebookAdsTab adSetId={adSetId} />
+        <FacebookAdsTab adSetId={adSetId} bucket={bucket} />
       )}
       {tab === 'opendays' && <FacebookOpenDaysTab />}
     </div>

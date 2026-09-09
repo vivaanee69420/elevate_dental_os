@@ -18,6 +18,21 @@ import { useScopePeriod, scopeKey } from '@/features/_shared/scope-context';
 import {
   ymdWindowParams, ymdWindowParamsFor, londonDateOf, lastInclusiveLondonDay,
 } from '../_shared/window';
+import type { AdBucket } from '../_shared/AdBucketFilter';
+
+// The bucket rides along as a query param, and as a CACHE-KEY DIMENSION.
+//
+// Both matter. Omitted from the URL the server would answer for 'all'; omitted
+// from the key react-query would hand the always-on answer back for the
+// open-days request, from its own cache, with no request made at all — the
+// filter would appear to do nothing on the second click and work on the first.
+//
+// 'all' contributes NOTHING to the query string, so the default page makes
+// byte-identical requests to the ones it made before this filter existed.
+function withBucket(qs: string, bucket: AdBucket): string {
+  if (bucket === 'all') return qs;
+  return qs ? `${qs}&bucket=${bucket}` : `bucket=${bucket}`;
+}
 
 // The selected period as two plain YYYY-MM-DD bounds, both inclusive — what
 // the Compare picker needs to offer "the previous equal-length period".
@@ -46,11 +61,14 @@ import {
 // it IS the primary figure, asked for a different fortnight.
 export function useFacebookLeadPerformanceFor(
   window: { since: string; until: string } | null,
+  bucket: AdBucket = 'all',
 ) {
   const { scope } = useScopePeriod();
-  const qs = window ? ymdWindowParamsFor(scope, window.since, window.until) : '';
+  const qs = window ? withBucket(ymdWindowParamsFor(scope, window.since, window.until), bucket) : '';
   return useQuery<FacebookLeadPerformancePayload>({
-    queryKey: ['marketing', 'facebook', 'lead-performance', 'compare', scope, window?.since, window?.until],
+    // The comparison window must be asked for the SAME bucket as the primary
+    // one, or the arrows compare open days against everything.
+    queryKey: ['marketing', 'facebook', 'lead-performance', 'compare', scope, window?.since, window?.until, bucket],
     queryFn: () => fetchFacebookLeadPerformance(qs),
     enabled: window != null,
     placeholderData: keepPreviousData,
@@ -158,21 +176,21 @@ export function useSetOpenDayPipeline() {
 // The blended cards. One fetch carries BOTH the new-patients-only and the
 // including-existing figures, so the toggle is answered client-side and the
 // two can never be computed differently.
-export function useFacebookLeadPerformance() {
+export function useFacebookLeadPerformance(bucket: AdBucket = 'all') {
   const { scope, win } = useScopePeriod();
-  const qs = ymdWindowParams(scope, win);
+  const qs = withBucket(ymdWindowParams(scope, win), bucket);
   return useQuery<FacebookLeadPerformancePayload>({
-    queryKey: ['marketing', 'facebook', 'lead-performance', scopeKey({ scope, win })],
+    queryKey: ['marketing', 'facebook', 'lead-performance', scopeKey({ scope, win }), bucket],
     queryFn: () => fetchFacebookLeadPerformance(qs),
     placeholderData: keepPreviousData,
   });
 }
 
-export function useFacebookCampaigns() {
+export function useFacebookCampaigns(bucket: AdBucket = 'all') {
   const { scope, win } = useScopePeriod();
-  const qs = ymdWindowParams(scope, win);
+  const qs = withBucket(ymdWindowParams(scope, win), bucket);
   return useQuery<FacebookCampaignsPayload>({
-    queryKey: ['marketing', 'facebook', 'campaigns', scopeKey({ scope, win })],
+    queryKey: ['marketing', 'facebook', 'campaigns', scopeKey({ scope, win }), bucket],
     queryFn: () => fetchFacebookCampaigns(qs),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
@@ -189,12 +207,12 @@ export function useFacebookCampaigns() {
 // its result can double as the source for the Ads tab's filter-chip name
 // lookup — same cache entry, no second request, same "reuse the call the
 // app already made" idiom the old AdSetsScreen used for the campaign name.
-export function useFacebookAdSets(campaignId: string | null) {
+export function useFacebookAdSets(campaignId: string | null, bucket: AdBucket = 'all') {
   const { scope, win } = useScopePeriod();
-  const qs = ymdWindowParams(scope, win);
+  const qs = withBucket(ymdWindowParams(scope, win), bucket);
   const full = campaignId ? `${qs}&campaignId=${encodeURIComponent(campaignId)}` : qs;
   return useQuery<FacebookAdSetsPayload>({
-    queryKey: ['marketing', 'facebook', 'adsets', campaignId ?? 'all', scopeKey({ scope, win })],
+    queryKey: ['marketing', 'facebook', 'adsets', campaignId ?? 'all', scopeKey({ scope, win }), bucket],
     queryFn: () => fetchFacebookAdSets(full),
     placeholderData: keepPreviousData,
     staleTime: 5 * 60_000,
@@ -215,12 +233,12 @@ export function useFacebookAdSets(campaignId: string | null) {
 // No `enabled` flag: this is now a real tab (FacebookAdsTab), not a
 // lazily-expanded row — when it is mounted it is because the tab is active
 // and its data is wanted, matching how the Campaigns/Ad sets tabs behave.
-export function useFacebookAds(adSetId: string | null) {
+export function useFacebookAds(adSetId: string | null, bucket: AdBucket = 'all') {
   const { scope, win } = useScopePeriod();
-  const qs = ymdWindowParams(scope, win);
+  const qs = withBucket(ymdWindowParams(scope, win), bucket);
   const base = adSetId ? `${qs}&adSetId=${encodeURIComponent(adSetId)}` : qs;
   return useInfiniteQuery<FacebookAdsPage>({
-    queryKey: ['marketing', 'facebook', 'ads', adSetId ?? 'all', scopeKey({ scope, win })],
+    queryKey: ['marketing', 'facebook', 'ads', adSetId ?? 'all', scopeKey({ scope, win }), bucket],
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) => {
       const cursor = pageParam as string | null;

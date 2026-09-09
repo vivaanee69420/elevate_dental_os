@@ -39,6 +39,7 @@ import {
 } from '../hooks';
 import { OpenDaySplit } from './OpenDaySplit';
 import type { FacebookLeadPractice, FacebookLeadRow } from '../api';
+import type { AdBucket } from '../../_shared/AdBucketFilter';
 import SpendFreshnessNote from '@/features/marketing/_shared/SpendFreshnessNote';
 
 /** "5 Sep" — a table cell has no room for 05/09/2026, and the year is the same
@@ -78,11 +79,13 @@ const BUCKET_LABEL: Record<Bucket, string> = {
 
 const practiceKey = (id: string | null) => id ?? '__unmapped__';
 
-export function FacebookPerformancePanel() {
-  const { data, isLoading, isError, error } = useFacebookLeadPerformance();
+export function FacebookPerformancePanel({ bucket = 'all' }: { bucket?: AdBucket }) {
+  const { data, isLoading, isError, error } = useFacebookLeadPerformance(bucket);
   const selected = useSelectedYmdWindow();
   const [compare, setCompare] = useState<CompareWindow | null>(null);
-  const { data: previous } = useFacebookLeadPerformanceFor(compare);
+  // The comparison period is asked for the SAME bucket, so the arrows never
+  // compare an open-day fortnight against everything that ran beside it.
+  const { data: previous } = useFacebookLeadPerformanceFor(compare, bucket);
 
   // Both figures arrive in one payload, so this toggle is free and the two can
   // never be the output of two differently-written queries.
@@ -91,6 +94,8 @@ export function FacebookPerformancePanel() {
   const [campaignFilter, setCampaignFilter] = useState<string | null>(null);
   const [showPractices, setShowPractices] = useState(false);
 
+  // This tenant's own events, from its own rows.
+  const hasOpenDays = (data?.openDays.events.length ?? 0) > 0;
   const practices = (includeExisting ? data?.practicesAll : data?.practices) ?? [];
   const campaigns = (includeExisting ? data?.campaignsAll : data?.campaigns) ?? [];
   const total = includeExisting ? data?.totalAll : data?.total;
@@ -152,9 +157,19 @@ export function FacebookPerformancePanel() {
     : null;
 
   if (!total || (total.leads === 0 && total.spendPence === 0)) {
+    // WHICH emptiness this is. Under a bucket the window is very often not
+    // empty at all — it is the filter that emptied it, and telling the reader
+    // "nothing landed in the selected window" beside a window they can see has
+    // spend in it sends them off widening a period that was never the problem.
     return (
       <div className="flex flex-col gap-2">
-        <EmptyState message="No Meta spend and no attributed leads landed in the selected window." />
+        <EmptyState message={
+          bucket === 'openDays'
+            ? 'No open day campaign ran, and no open day lead arrived, in the selected period. Switch the filter to All to see the always-on campaigns.'
+            : bucket === 'alwaysOn'
+              ? 'Every Meta campaign in this period is mapped to an open day, so there is nothing always-on to show. Switch the filter to All or Open days.'
+              : 'No Meta spend and no attributed leads landed in the selected window.'
+        } />
         {coverageNote}
       </div>
     );
@@ -317,6 +332,23 @@ export function FacebookPerformancePanel() {
       render: (r) => r.treatment ?? DASH,
       sortBy: (r) => r.treatment ?? null,
     },
+    // Which side of the split each person came through — the discriminator
+    // the whole filter is built on, so the drawer can be read without
+    // remembering which bucket produced it.
+    //
+    // Dropped under "Always-on", where every row is always-on by definition
+    // and the column could only ever be a page of em dashes; an always-blank
+    // column is worse than no column (the same reasoning that removed the
+    // Reach column from the ad-set tier).
+    ...(hasOpenDays && bucket !== 'alwaysOn' ? [{
+      key: 'openday', header: 'Open day', width: 'w-40',
+      render: (r: FacebookLeadRow) => (r.open_day_name
+        ? <Chip colour="amber">{r.open_day_name}</Chip>
+        : DASH),
+      // Always-on sorts as an empty string so the events group together
+      // rather than scattering through the list.
+      sortBy: (r: FacebookLeadRow) => r.open_day_name ?? '',
+    }] : []),
     {
       key: 'booked', header: 'Booked', width: 'w-24',
       // A tick, not the word "Yes". In a column where every visible row says
@@ -354,6 +386,19 @@ export function FacebookPerformancePanel() {
         />
       </div>
 
+      {/* WHAT THESE CARDS ARE COUNTING, in words, on the cards themselves.
+          The pill row above says it too, but these figures get screenshotted
+          and pasted into messages on their own — "£19.40, 97 leads" with no
+          qualifier reads as the whole account's cost per lead, which under a
+          bucket it is not. */}
+      {bucket !== 'all' && (
+        <p className="text-[12.5px] text-ink-2">
+          {bucket === 'openDays'
+            ? 'Open day campaigns only. Spend is the campaigns mapped to an event; leads are those that came through an open day pipeline.'
+            : 'Always-on campaigns only — everything not mapped to an open day.'}
+        </p>
+      )}
+
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
         {asCards(stats).map((c) => <HeadlineCard key={c.label} c={c} />)}
       </div>
@@ -389,7 +434,13 @@ export function FacebookPerformancePanel() {
           Open days, by practice, and how a patient is counted
         </summary>
         <div className="mt-3 flex flex-col gap-4">
-          {split && <OpenDaySplit split={split} />}
+          {/* Only in the unfiltered view. Its last row is an arithmetic
+              identity — "Always-on + Open days = Meta total" — and under a
+              bucket one side is zero by construction, so the sum would still
+              add up while quietly meaning the bucket rather than the total.
+              Once the reader has picked a side, this table is the thing the
+              filter replaced. */}
+          {split && bucket === 'all' && <OpenDaySplit split={split} />}
 
 
           {coverageNote}
