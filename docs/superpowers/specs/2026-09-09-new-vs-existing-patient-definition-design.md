@@ -94,18 +94,35 @@ is not evidence of what is running.
 | `ad_meta_funnel` | Aggregates the flag |
 | `ad_campaign_funnel` | Aggregates the flag |
 | `ad_account_marketing` | Aggregates both ledgers |
+| `marketing_monthly_rollup` | Own `is_new`: converted AND no prior visit before that **month** |
 
 ### Family B — patient-scoped (no lead, no enquiry day)
 
-| Function | Role |
+**Family B does not have one rule today — it has four.** §1 undercounted this;
+reading the live bodies rather than the summary turned up the rest.
+
+| Function | Rule today |
 |---|---|
-| `growth_practice_performance` | Per-practice new patients |
-| `org_new_patients_count` | Org total |
-| `org_new_patients_registered_by_practice` | Per-practice registrations |
-| `health_patient_actuals` | Feeds `new_patients_month`, **target 220** |
-| `marketing_monthly_rollup` | Monthly marketing rollup |
-| `data_room_practice_day` | Analyst dataset |
-| `data_room_practice_month` | Analyst dataset |
+| `growth_practice_performance` | `pms_registered_at` in window |
+| `org_new_patients_registered_by_practice` | `pms_registered_at` in window |
+| `data_room_practice_day` | `pms_registered_at` in window |
+| `org_new_patients_count` | `coalesce(pms_registered_at, first appointment of ANY status)` |
+| `health_patient_actuals` | First appointment of **any status** in the last 12 months, **÷ 12** — feeds `new_patients_month`, target 220. Never touches `pms_registered_at`. |
+| `data_room_practice_month` | Sums `data_room_practice_day` |
+
+Two corrections this forced, both recorded rather than quietly fixed:
+
+1. **`marketing_monthly_rollup` was misfiled in Family B.** It is lead-scoped —
+   it has its own per-month `prior_visit` — so it belongs in Family A and takes
+   the per-lead cut-off, not the first-activity reading.
+2. **`health_patient_actuals` is a 12-month average, not a month.** The
+   `new_patients_month` KPI divides a 12-month first-appointment count by 12,
+   so the monthly registration figures in §5.2 are **not** what that tile
+   displays. Its own before/after is in §5.2.1.
+
+`health_patient_actuals` is also `STABLE` but **not** `SECURITY DEFINER`, unlike
+every other function here. Out of scope, noted so it is not mistaken for
+something this work introduced.
 
 ### Application consumers
 
@@ -213,7 +230,12 @@ It **rises**, because the change pulls two ways: the per-lead cut-off inspects
 more history (marking more people existing), while requiring real attendance
 marks fewer. Exclusions: 89 attended, 68 paid, 50 treated, 35 invoiced.
 
-### 5.2 Family B — 12 months
+### 5.2 Family B — 12 months, the registration-based functions
+
+Applies to `growth_practice_performance`,
+`org_new_patients_registered_by_practice` and `data_room_practice_day` — the
+three that count `pms_registered_at`. **Not** to `health_patient_actuals`,
+which is measured separately in §5.2.1.
 
 | Month | now | proposed |
 |---|---|---|
@@ -231,10 +253,24 @@ marks fewer. Exclusions: 89 attended, 68 paid, 50 treated, 35 invoiced.
 | Aug 2026 | 387 | 262 |
 | **Total** | **5,981** | **3,790 (−36.6%)** |
 
-Every month falls, between 21% and 43%. This is `new_patients_month` on
-Business Health, whose **target is 220** — that target was set against the old
-definition and should be revisited, but changing it is the owner's call and is
-**not** part of this work.
+Every month falls, between 21% and 43%.
+
+### 5.2.1 The `new_patients_month` KPI — much smaller move
+
+An earlier draft of this spec claimed this tile would read 262 against 387.
+**That was wrong**, and it is corrected here rather than silently: those are
+the registration figures above, and this KPI has never used registration date.
+It counts first appointments of any status over 12 months and divides by 12, so
+it already sits close to a first-activity measure.
+
+| | 12-month count | tile reads |
+|---|---|---|
+| now | 4,088 | **341** / month |
+| proposed | 3,765 | **314** / month |
+
+**−7.9%**, against a target of 220 — which the tile clears either way. The
+target was set against the old definition and arguably wants revisiting, but
+that is the owner's call and **not** part of this work.
 
 ### 5.3 Coverage limits — honest caveats
 
