@@ -54,6 +54,9 @@ export type GridColumn<R> = {
   width?: string;
 };
 
+// A Tailwind max-height class, e.g. 'max-h-[60vh]'. See the `maxHeightClass`
+// prop below for why it lands on the div that already owns overflow-x.
+
 type SortState = { key: string; dir: 'asc' | 'desc' } | null;
 
 // Nulls sort LAST in both directions, always.
@@ -79,6 +82,7 @@ export function DataGrid<R>({
   defaultSort,
   onRowClick,
   rowTone,
+  maxHeightClass,
 }: {
   columns: GridColumn<R>[];
   rows: R[];
@@ -92,6 +96,19 @@ export function DataGrid<R>({
   /** 'muted' greys a row back — used for the "Not attributed" bucket, which
    *  belongs in the table but is not a campaign competing in it. */
   rowTone?: (row: R) => 'default' | 'muted';
+  /**
+   * Cap the table's height and scroll inside it, e.g. 'max-h-[55vh]'. Omitted
+   * (the default) the table is as tall as its rows, which is right for the
+   * page's own tables — the page scrolls.
+   *
+   * IT GOES ON THE DIV THAT ALREADY OWNS overflow-x, and that placement is the
+   * whole point rather than an implementation detail: `overflow-x: auto`
+   * already computes overflow-y to `auto` on that element, so it is the
+   * sticky headers' scrollport. Constraining ANY outer wrapper instead leaves
+   * this div unconstrained, it never scrolls, and `sticky top-0` on the header
+   * silently does nothing — the header simply scrolls away.
+   */
+  maxHeightClass?: string;
 }) {
   const [sort, setSort] = useState<SortState>(defaultSort ?? null);
 
@@ -115,7 +132,7 @@ export function DataGrid<R>({
   };
 
   return (
-    <div className="-mx-1 overflow-x-auto px-1">
+    <div className={`-mx-1 overflow-x-auto px-1 ${maxHeightClass ?? ''}`}>
       <table className="w-full min-w-[640px] border-separate border-spacing-0">
         <thead>
           <tr>

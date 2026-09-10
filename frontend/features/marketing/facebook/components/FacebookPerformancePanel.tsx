@@ -79,6 +79,44 @@ const BUCKET_LABEL: Record<Bucket, string> = {
 
 const practiceKey = (id: string | null) => id ?? '__unmapped__';
 
+// NEWEST ENQUIRY FIRST, because the server's order is not an order.
+//
+// ad_meta_lead_ledger (000171) is `SELECT DISTINCT ON (l.contact_id) ... ORDER
+// BY l.contact_id`, so rows arrive sorted by a UUID — which is to say
+// shuffled. Rendered unsorted, the Enquired column showed the same handful of
+// dates again and again all the way down the list with no order to them, and
+// the reader could not tell whether that was the data or the table. Sorting on
+// the INSTANT (the column's own sortBy), not the printed "5 Sep".
+const LEAD_SORT = { key: 'at', dir: 'desc' } as const;
+
+/** One side of the always-on / open-day split inside the leads dialog. */
+function LeadSection({
+  title, count, rows, columns, maxHeightClass,
+}: {
+  title: string;
+  count: number;
+  rows: FacebookLeadRow[];
+  columns: GridColumn<FacebookLeadRow>[];
+  maxHeightClass: string;
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="flex items-baseline gap-2 text-[13px] font-semibold text-ink">
+        {title}
+        <span className="text-[12px] font-normal tabular-nums text-ink-muted">{num(count)}</span>
+      </h3>
+      <DataGrid
+        columns={columns}
+        rows={rows}
+        rowKey={(r, i) => `${r.contact_id ?? 'x'}-${i}`}
+        emptyState="No leads in this section."
+        defaultSort={LEAD_SORT}
+        maxHeightClass={maxHeightClass}
+      />
+    </section>
+  );
+}
+
 export function FacebookPerformancePanel({ bucket = 'all' }: { bucket?: AdBucket }) {
   const { data, isLoading, isError, error } = useFacebookLeadPerformance(bucket);
   const selected = useSelectedYmdWindow();
@@ -94,8 +132,6 @@ export function FacebookPerformancePanel({ bucket = 'all' }: { bucket?: AdBucket
   const [campaignFilter, setCampaignFilter] = useState<string | null>(null);
   const [showPractices, setShowPractices] = useState(false);
 
-  // This tenant's own events, from its own rows.
-  const hasOpenDays = (data?.openDays.events.length ?? 0) > 0;
   const practices = (includeExisting ? data?.practicesAll : data?.practices) ?? [];
   const campaigns = (includeExisting ? data?.campaignsAll : data?.campaigns) ?? [];
   const total = includeExisting ? data?.totalAll : data?.total;
@@ -115,13 +151,32 @@ export function FacebookPerformancePanel({ bucket = 'all' }: { bucket?: AdBucket
     [campaigns],
   );
 
+  // A LEAD IS A LEAD WHOEVER IT CAME FROM — the new-patient gate belongs on
+  // OUTCOMES only, and applying it to the lead list is what made this drawer
+  // disagree with the card that opened it.
+  //
+  // Measured live (GM Dental Group, Rochester, August 2026): the card read
+  // "342 leads" and the drawer listed 54, because practiceLeadPerformance
+  // counts `row.leads += 1` for every ledger row while this filtered the list
+  // down to is_new_patient first. Same rule as lead-performance.js's own
+  // eligibleForOutcome, whose comment says it in as many words: "Note it gates
+  // OUTCOMES only." Booked and accepted keep the gate, which is why their
+  // cards say "(new patients)" and the leads card does not.
   const leadRows = useMemo(() => {
-    let rows = (data?.leads ?? []).filter((l) => includeExisting || l.is_new_patient);
+    let rows = data?.leads ?? [];
     if (campaignFilter) rows = rows.filter((l) => l.campaign_id === campaignFilter);
-    if (openBucket === 'booked') return rows.filter((l) => l.booked);
-    if (openBucket === 'accepted') return rows.filter((l) => l.accepted);
+    const eligible = (l: FacebookLeadRow) => includeExisting || l.is_new_patient;
+    if (openBucket === 'booked') return rows.filter((l) => l.booked && eligible(l));
+    if (openBucket === 'accepted') return rows.filter((l) => l.accepted && eligible(l));
     return rows;
   }, [data?.leads, openBucket, includeExisting, campaignFilter]);
+
+  // The two sides of the open-day split, as two lists rather than one list
+  // with a column to squint at. The discriminator is the lead's OWN
+  // open_day_id — its GoHighLevel pipeline, the same field the split beneath
+  // the cards buckets on — never the campaign it happens to be attributed to.
+  const alwaysOnRows = useMemo(() => leadRows.filter((l) => !l.open_day_id), [leadRows]);
+  const openDayRows = useMemo(() => leadRows.filter((l) => l.open_day_id), [leadRows]);
 
   if (isLoading) return <SkeletonTable rows={4} />;
   // A FAILED REQUEST MUST SAY SO. `return null` here is what hid a malformed
@@ -312,7 +367,14 @@ export function FacebookPerformancePanel({ bucket = 'all' }: { bucket?: AdBucket
   // name as its second line — they describe the person, they are not separate
   // questions — which halves the width and lets each row sit on one line. Every
   // column is sortable, which is the point of a table over a list.
-  const leadCols: GridColumn<FacebookLeadRow>[] = [
+  //
+  // `withOpenDay` is passed per SECTION, not read from the bucket. Inside the
+  // always-on list every row is always-on by definition and the column could
+  // only ever be a page of em dashes; inside the open-day list it is the one
+  // thing that tells the events apart. Same reasoning that removed the blank
+  // Reach column from the ad-set tier: an always-empty column is worse than
+  // no column.
+  const leadColsFor = (withOpenDay: boolean): GridColumn<FacebookLeadRow>[] => [
     {
       key: 'name', header: 'Person', width: 'w-[34%]',
       render: (r) => <span className="font-medium text-ink">{r.name ?? DASH}</span>,
@@ -332,15 +394,9 @@ export function FacebookPerformancePanel({ bucket = 'all' }: { bucket?: AdBucket
       render: (r) => r.treatment ?? DASH,
       sortBy: (r) => r.treatment ?? null,
     },
-    // Which side of the split each person came through — the discriminator
-    // the whole filter is built on, so the drawer can be read without
-    // remembering which bucket produced it.
-    //
-    // Dropped under "Always-on", where every row is always-on by definition
-    // and the column could only ever be a page of em dashes; an always-blank
-    // column is worse than no column (the same reasoning that removed the
-    // Reach column from the ad-set tier).
-    ...(hasOpenDays && bucket !== 'alwaysOn' ? [{
+    // WHICH event, inside the open-day section. Never rendered in the
+    // always-on one — see leadColsFor's header.
+    ...(withOpenDay ? [{
       key: 'openday', header: 'Open day', width: 'w-40',
       render: (r: FacebookLeadRow) => (r.open_day_name
         ? <Chip colour="amber">{r.open_day_name}</Chip>
@@ -486,12 +542,42 @@ export function FacebookPerformancePanel({ bucket = 'all' }: { bucket?: AdBucket
         subtitle={campaignFilter ? `Campaign: ${campaignFilter}` : undefined}
         onClose={() => { setOpenBucket(null); setCampaignFilter(null); }}
       >
-        <DataGrid
-          columns={leadCols}
-          rows={leadRows}
-          rowKey={(r, i) => `${r.contact_id ?? 'x'}-${i}`}
-          emptyState="No leads in this bucket."
-        />
+        {/* TWO LISTS, NOT ONE WITH A COLUMN. Always-on and open-day leads
+            answer different questions — "what is the standing spend buying"
+            and "what did that event bring in" — and interleaved they could
+            only be told apart by reading a chip on every row.
+
+            Sections appear only when BOTH sides have rows. Under a bucket
+            filter, or for a tenant that has mapped no events, one side is
+            empty by construction and a heading over the whole list plus an
+            empty second heading would be furniture, not structure. */}
+        {alwaysOnRows.length > 0 && openDayRows.length > 0 ? (
+          <div className="flex flex-col gap-6">
+            <LeadSection
+              title="Always-on campaigns"
+              count={alwaysOnRows.length}
+              rows={alwaysOnRows}
+              columns={leadColsFor(false)}
+              maxHeightClass="max-h-[38vh]"
+            />
+            <LeadSection
+              title="Open days"
+              count={openDayRows.length}
+              rows={openDayRows}
+              columns={leadColsFor(true)}
+              maxHeightClass="max-h-[38vh]"
+            />
+          </div>
+        ) : (
+          <DataGrid
+            columns={leadColsFor(openDayRows.length > 0)}
+            rows={leadRows}
+            rowKey={(r, i) => `${r.contact_id ?? 'x'}-${i}`}
+            emptyState="No leads in this bucket."
+            defaultSort={LEAD_SORT}
+            maxHeightClass="max-h-[68vh]"
+          />
+        )}
       </DetailModal>
 
     </div>
